@@ -1,6 +1,6 @@
 use super::{
     ContentScopeValue, DelayProfilePreferredProtocolValue, FillerPolicyValue, ImportModeValue,
-    Long, MediaFacetValue, RecapPolicyValue, RenameCollisionPolicyValue,
+    Long, MediaFacetValue, QualityDecisionGateValue, RecapPolicyValue, RenameCollisionPolicyValue,
     RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
     VerificationDepthValue,
 };
@@ -928,6 +928,11 @@ pub struct QualityProfileCriteriaPayload {
     /// Score a same-tier candidate must beat the current file by to count as
     /// an upgrade. Profiles that never set it report the default, 120.
     pub min_upgrade_score_delta: i32,
+    /// The steps releases are compared on, in order, before the score
+    /// decides. Profiles that never set it report `QUALITY_TIER, REVISION,
+    /// PREFERRED_LANGUAGE, OPTIONAL_LANGUAGES`; an empty list ranks on score
+    /// alone. Never lists `REVISION` while `ignoreProperRepack` is true.
+    pub decision_pipeline: Vec<QualityDecisionGateValue>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1027,6 +1032,14 @@ pub struct MediaSettingsPayload {
     pub root_folders: Vec<RootFolderPayload>,
     /// Effective configured requirements; `original` remains unchanged.
     pub required_audio_languages: Vec<String>,
+    /// Ordered preferred audio languages; the first one a release carries sets
+    /// its rank. Unlike required languages they never reject a release.
+    pub preferred_audio_languages: Vec<String>,
+    /// Optional audio languages; among releases of equal quality, more of them
+    /// rank higher.
+    pub optional_audio_languages: Vec<String>,
+    /// Whether a file missing optional languages stays an upgrade target.
+    pub optional_audio_languages_keep_searching: bool,
     /// Whether episodic titles use season folders.
     pub use_season_folders: bool,
     /// Folder naming template.
@@ -1362,6 +1375,12 @@ pub struct UpdateMediaSettingsInput {
     pub scope: ContentScopeValue,
     /// Optional required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
+    /// Optional ordered preferred audio-language codes; an empty list clears them.
+    pub preferred_audio_languages: Option<Vec<String>>,
+    /// Optional audio-language codes that rank higher when present; an empty list clears them.
+    pub optional_audio_languages: Option<Vec<String>>,
+    /// Whether a file missing optional languages stays an upgrade target.
+    pub optional_audio_languages_keep_searching: Option<bool>,
     /// Whether episodic titles use season folders.
     pub use_season_folders: Option<bool>,
     /// Optional title folder template.
@@ -1712,6 +1731,10 @@ pub struct QualityProfileCriteriaInput {
     /// value, and sending the default (120) stores the profile as using the
     /// default.
     pub min_upgrade_score_delta: Option<i32>,
+    /// Optional decision order; each step at most once. Omitting it keeps the
+    /// stored order, and an empty list ranks on score alone. When sent,
+    /// whether it lists `REVISION` sets `ignoreProperRepack`.
+    pub decision_pipeline: Option<Vec<QualityDecisionGateValue>>,
 }
 
 #[derive(InputObject, Clone)]

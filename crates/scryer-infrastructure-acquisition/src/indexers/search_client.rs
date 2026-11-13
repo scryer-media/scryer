@@ -453,6 +453,9 @@ struct ReusableStrategySelection {
     /// backoff has not yet run out.
     deferred_count: usize,
     replayed_result_count: usize,
+    /// Complete strategies whose finished paged read cannot be replayed: their
+    /// results were ranked by the passes that read them.
+    unreplayed_complete_count: usize,
     /// The earliest instant a held contained strategy becomes due, when any
     /// strategy was held for that reason.
     contained_retry_at: Option<DateTime<Utc>>,
@@ -488,6 +491,7 @@ async fn select_reusable_strategies(
         complete_count: 0,
         deferred_count: 0,
         replayed_result_count: 0,
+        unreplayed_complete_count: 0,
         contained_retry_at: None,
         deferred_open: false,
         page_chains: HashMap::new(),
@@ -501,17 +505,19 @@ async fn select_reusable_strategies(
         };
         let contained_retry_at = state.contained_retry_at();
         let page_chain = background_page_budget.and_then(|_| state.page_chain(now));
+        let finished_chain = state.finished_chain(now);
+        let mut replay_unavailable = state.replay_unavailable;
         if let Some(replay) = state.replay {
             match replay.send(page_sink, indexer_id).await {
                 Ok(ReplayOutcome::Served(count)) => {
                     selection.replayed_result_count =
                         selection.replayed_result_count.saturating_add(count);
                 }
-                Ok(ReplayOutcome::Unavailable) => {
-                    strategy.request.page_cursor = None;
-                    selection.live.push(strategy);
-                    continue;
-                }
+                // Stored pages that cannot all be rebuilt are not replayed,
+                // but they were scored in the pass that read them: the
+                // strategy still waits on its gates below, and a paged read
+                // still resumes where it stopped.
+                Ok(ReplayOutcome::Unavailable) => replay_unavailable = true,
                 Err(error) if error.is_canceled() => return Err(error),
                 Err(error) => {
                     tracing::warn!(%indexer_id, %error, "cached search replay failed; restarting live strategy");
@@ -528,8 +534,15 @@ async fn select_reusable_strategies(
             .background
             .as_ref()
             .is_some_and(|state| state.page_cursor.is_some());
-        if state.completion_state == "complete" && !unfinished {
+        if state.completion_state == "complete" && !unfinished && !replay_unavailable {
             selection.complete_count += 1;
+            continue;
+        }
+        // A paged read that reached its end converged, even though its pages
+        // cannot be replayed; it is read afresh once the reuse window ends.
+        if replay_unavailable && finished_chain {
+            selection.complete_count += 1;
+            selection.unreplayed_complete_count += 1;
             continue;
         }
         // A contained strategy waits out its backoff. The provider cannot
@@ -672,6 +685,11 @@ struct ReusableStrategyState {
     completion_state: String,
     retry_at: Option<DateTime<Utc>>,
     replay: Option<CandidateReplay>,
+    /// Set when the stored pages were found unreplayable before selection
+    /// (a listing's replay), so selection treats them as its own replay's.
+    replay_unavailable: bool,
+    /// The run `completion_state` was read from: the strategy's latest run.
+    completion_run_id: Option<String>,
     /// The strategy's latest background state, which alone decides a
     /// containment backoff: operator and interactive runs never move it.
     background: Option<BackgroundIndexerSearchStrategyState>,
@@ -1123,9 +1141,12 @@ impl ListingProbe {
                         ReplayOutcome::Served(count) => {
                             plan.replayed = plan.replayed.saturating_add(count)
                         }
+                        // The owner keeps its gates and its place in the
+                        // chain; selection reads on from there.
                         ReplayOutcome::Unavailable => {
-                            reusable.remove(&strategy.strategy_id);
-                            strategy.request.page_cursor = None;
+                            if let Some(state) = reusable.get_mut(&strategy.strategy_id) {
+                                state.replay_unavailable = true;
+                            }
                         }
                     }
                     plan.strategies.push(strategy);
@@ -1554,6 +1575,23 @@ impl ReusableStrategyState {
         Some(PageChain {
             cursor: state.page_cursor.clone()?,
             chain_id: state.cursor_chain_id.clone()?,
+        })
+    }
+
+    /// Whether the latest background run ended a paged read inside the
+    /// candidate reuse window: the provider had no page left to give, and the
+    /// pass that read the last page was finalized, so its results were scored.
+    /// A staged run stays `received_*` and is read again.
+    fn finished_chain(&self, now: DateTime<Utc>) -> bool {
+        let finalized = matches!(self.completion_state.as_str(), "complete" | "partial");
+        self.background.as_ref().is_some_and(|state| {
+            state.strategy_state == SEARCH_STRATEGY_CONVERGED
+                && state.page_cursor.is_none()
+                && state.cursor_chain_id.is_some()
+                && state.created_at >= now - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS)
+                && finalized
+                && self.completion_run_id.is_some()
+                && state.chain_run_ids.first() == self.completion_run_id.as_ref()
         })
     }
 }
@@ -1987,6 +2025,8 @@ impl SearchDiagnosticsContext {
                     completion_state: state.completion_state,
                     retry_at: state.retry_at,
                     replay,
+                    replay_unavailable: false,
+                    completion_run_id: Some(state.run_id),
                     background: None,
                 },
             );
@@ -2033,6 +2073,8 @@ impl SearchDiagnosticsContext {
                         completion_state: String::new(),
                         retry_at: None,
                         replay: None,
+                        replay_unavailable: false,
+                        completion_run_id: None,
                         background: None,
                     });
             if state.chain_run_ids.len() >= 2
@@ -7946,6 +7988,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let mut primary_attempted;
                 let mut primary_had_error;
                 let mut primary_usable_result_count = 0_usize;
+                let mut primary_unreplayed_complete = false;
                 let mut batch_had_timeout = false;
                 let mut batch_health = StrategyBatchHealth::default();
                 let mut quota_observation = IndexerQuotaObservation::default();
@@ -8042,6 +8085,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                 contained.note_selection(&primary_selection);
                 primary_usable_result_count = primary_usable_result_count
                     .saturating_add(primary_selection.replayed_result_count);
+                // A finished paged read that cannot be replayed answered the
+                // passes that read it; the title tier is not owed in its place.
+                primary_unreplayed_complete |= primary_selection.unreplayed_complete_count > 0;
                 let primary_live = primary_selection.live;
                 page_chains.extend(primary_selection.page_chains);
                 let mut primary_outcomes = if primary_live.is_empty() {
@@ -8380,6 +8426,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 // An indexer over its query budget is skipped for the rest of
                 // this search: its fallback would be refused the same way.
                 if query_budget_wait.is_none()
+                    && !primary_unreplayed_complete
                     && should_run_fallback_tier(
                         mode,
                         primary_usable_result_count,
@@ -13218,6 +13265,8 @@ mod tests {
                     completion_state: completion.into(),
                     retry_at: Some(Utc::now() + Duration::hours(1)),
                     replay: Some(replay),
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: Some(BackgroundIndexerSearchStrategyState {
                         query_signature: "cached".into(),
                         strategy_state: SEARCH_STRATEGY_CONTAINED.into(),
@@ -13279,6 +13328,8 @@ mod tests {
                     completion_state: "complete".into(),
                     retry_at: None,
                     replay: Some(single_candidate_replay("Synthetic.Complete")),
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: None,
                 },
             ),
@@ -13288,6 +13339,8 @@ mod tests {
                     completion_state: "deferred".into(),
                     retry_at: Some(Utc::now() + Duration::minutes(1)),
                     replay: Some(single_candidate_replay("Synthetic.Deferred")),
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: None,
                 },
             ),
@@ -13297,6 +13350,8 @@ mod tests {
                     completion_state: "partial".into(),
                     retry_at: Some(Utc::now() + Duration::minutes(1)),
                     replay: Some(single_candidate_replay("Synthetic.Partial")),
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: None,
                 },
             ),
@@ -13306,6 +13361,8 @@ mod tests {
                     completion_state: "partial".into(),
                     retry_at: None,
                     replay: Some(single_candidate_replay("Synthetic.PartialDue")),
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: None,
                 },
             ),
@@ -13317,6 +13374,8 @@ mod tests {
                     completion_state: "partial".into(),
                     retry_at: None,
                     replay: Some(single_candidate_replay("Synthetic.Contained")),
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: background(
                         SEARCH_STRATEGY_CONTAINED,
                         Utc::now() + Duration::minutes(30),
@@ -13329,6 +13388,8 @@ mod tests {
                     completion_state: String::new(),
                     retry_at: None,
                     replay: None,
+                    replay_unavailable: false,
+                    completion_run_id: None,
                     background: background(
                         SEARCH_STRATEGY_CONTAINED,
                         Utc::now() - Duration::minutes(1),
@@ -13436,6 +13497,8 @@ mod tests {
                 completion_state: "partial".into(),
                 retry_at: None,
                 replay: None,
+                replay_unavailable: false,
+                completion_run_id: None,
                 background: Some(BackgroundIndexerSearchStrategyState {
                     query_signature: "ids".into(),
                     strategy_state: SEARCH_STRATEGY_CONTAINED.into(),
@@ -13508,6 +13571,8 @@ mod tests {
                         completion_state: "complete".into(),
                         retry_at: None,
                         replay: None,
+                        replay_unavailable: false,
+                        completion_run_id: None,
                         background: Some(BackgroundIndexerSearchStrategyState {
                             query_signature: String::new(),
                             strategy_state: SEARCH_STRATEGY_CONVERGED.into(),
@@ -13555,6 +13620,8 @@ mod tests {
             completion_state: "partial".into(),
             retry_at: None,
             replay: Some(single_candidate_replay("Synthetic.Page")),
+            replay_unavailable: false,
+            completion_run_id: None,
             background: Some(BackgroundIndexerSearchStrategyState {
                 query_signature: String::new(),
                 strategy_state: SEARCH_STRATEGY_OPEN.into(),
@@ -13644,6 +13711,132 @@ mod tests {
             strategy.request.page_cursor.is_none() && strategy.request.page_budget.is_none()
         }));
         assert!(selection.page_chains.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unreplayable_stored_pages_still_wait_on_their_strategys_gates() {
+        // Stored pages whose last result carries a password hint: the replay
+        // reports them unavailable.
+        let unreplayable = || {
+            let mut replay = test_candidate_replay(Arc::new(ReplayTestRepository {
+                calls: StdMutex::new(Vec::new()),
+                fail: false,
+                candidates_per_run: 1,
+            }));
+            replay.run_ids = vec!["plain".into(), "password".into()];
+            replay
+        };
+        let contained = |chain: &str, retry_at: DateTime<Utc>| {
+            Some(BackgroundIndexerSearchStrategyState {
+                query_signature: String::new(),
+                strategy_state: SEARCH_STRATEGY_CONTAINED.into(),
+                retry_at: Some(retry_at),
+                created_at: Utc::now() - Duration::hours(1),
+                page_cursor: Some("offset:200".into()),
+                cursor_chain_id: Some(chain.into()),
+                chain_run_ids: vec!["password".into(), "plain".into()],
+                branch: "ids".into(),
+            })
+        };
+        let mut reusable = HashMap::from([
+            (
+                "contained".to_string(),
+                ReusableStrategyState {
+                    completion_state: "partial".into(),
+                    retry_at: None,
+                    replay: Some(unreplayable()),
+                    replay_unavailable: false,
+                    completion_run_id: None,
+                    background: contained("chain-held", Utc::now() + Duration::minutes(30)),
+                },
+            ),
+            (
+                "deferred".to_string(),
+                ReusableStrategyState {
+                    completion_state: "partial".into(),
+                    retry_at: Some(Utc::now() + Duration::minutes(5)),
+                    replay: Some(unreplayable()),
+                    replay_unavailable: false,
+                    completion_run_id: None,
+                    background: None,
+                },
+            ),
+            (
+                // Found unreplayable before selection, as a listing's replay is.
+                "listing-deferred".to_string(),
+                ReusableStrategyState {
+                    completion_state: "deferred".into(),
+                    retry_at: Some(Utc::now() + Duration::minutes(5)),
+                    replay: None,
+                    replay_unavailable: true,
+                    completion_run_id: None,
+                    background: None,
+                },
+            ),
+            (
+                "contained-due".to_string(),
+                ReusableStrategyState {
+                    completion_state: "partial".into(),
+                    retry_at: None,
+                    replay: Some(unreplayable()),
+                    replay_unavailable: false,
+                    completion_run_id: None,
+                    background: contained("chain-due", Utc::now() - Duration::minutes(1)),
+                },
+            ),
+        ]);
+        let (page_tx, mut page_rx) = tokio::sync::mpsc::channel(8);
+        let page_sink = IndexerSearchPageSink::new(page_tx, 8);
+
+        let selection = select_reusable_strategies(
+            vec![
+                prepared_strategy("contained"),
+                prepared_strategy("deferred"),
+                prepared_strategy("listing-deferred"),
+                prepared_strategy("contained-due"),
+            ],
+            &mut reusable,
+            "indexer-1",
+            &page_sink,
+            Some(BACKGROUND_PAGES_PER_PASS),
+        )
+        .await
+        .expect("strategy reuse should succeed");
+
+        assert_eq!(selection.deferred_count, 3);
+        assert_eq!(selection.complete_count, 0);
+        assert_eq!(selection.replayed_result_count, 0);
+        assert!(page_rx.try_recv().is_err(), "nothing is replayed");
+        assert!(
+            selection
+                .contained_retry_at
+                .is_some_and(|retry_at| retry_at > Utc::now() + Duration::minutes(29))
+        );
+        let live = selection
+            .live
+            .iter()
+            .map(|strategy| {
+                (
+                    strategy.strategy_id.as_str(),
+                    strategy.request.page_cursor.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            live,
+            vec![("contained-due", Some("offset:200"))],
+            "only the strategy that is due is asked, from where its read stopped"
+        );
+        assert_eq!(
+            selection.page_chains,
+            HashMap::from([(
+                "contained-due".to_string(),
+                PageChain {
+                    cursor: "offset:200".into(),
+                    chain_id: "chain-due".into(),
+                },
+            )])
+        );
     }
 
     #[test]
@@ -21929,6 +22122,247 @@ mod tests {
                 .map(|(first, _)| first.id.clone());
             assert_eq!(run.cursor_chain_id, chain_start);
         }
+    }
+
+    /// A search client over a four-page movie listing, one page per pass,
+    /// whose first and third pages each hold a password-hinted result that no
+    /// replay can rebuild, backed by the real search learning store. Once the
+    /// returned switch is set, every request is answered with nothing.
+    async fn unreplayable_paged_client() -> (
+        MultiIndexerSearchClient,
+        StdArc<StdMutex<Vec<RecordedCall>>>,
+        super::super::search_learning::IndexerSearchLearningStore,
+        sqlx::SqlitePool,
+        StdArc<std::sync::atomic::AtomicBool>,
+    ) {
+        let (store, pool) = super::super::search_learning::tests::sqlite_store().await;
+        let answers_empty = StdArc::new(std::sync::atomic::AtomicBool::new(false));
+        let empty = answers_empty.clone();
+        let (client, calls) = scripted_search_client(movie_caps(), move |call| {
+            if empty.load(std::sync::atomic::Ordering::SeqCst) {
+                return response_with_titles(&[]);
+            }
+            let (page, next_cursor) = match call.page_cursor.as_deref() {
+                None => (1, Some("offset:100")),
+                Some("offset:100") => (2, Some("offset:200")),
+                Some("offset:200") => (3, Some("offset:300")),
+                Some("offset:300") => (4, None),
+                Some(other) => panic!("unexpected cursor {other}"),
+            };
+            let plain = format!("Emberfall.2019.Part{page}.1080p.WEB-DL");
+            let hinted = format!("Emberfall.2019.Part{page}.2160p.WEB-DL");
+            let mut response = response_with_titles(&[plain.as_str(), hinted.as_str()])?;
+            if page % 2 == 1 {
+                response.results[1].password_hint = Some("synthetic-hint".into());
+            }
+            response.next_cursor = next_cursor.map(str::to_string);
+            if next_cursor.is_some() {
+                response.completion = IndexerSearchCompletion::Partial {
+                    reason: None,
+                    retry_after: None,
+                };
+            }
+            Ok(response)
+        });
+        let client = client.with_search_learning_repository(StdArc::new(store.clone()));
+        (client, calls, store, pool, answers_empty)
+    }
+
+    async fn emberfall_background_pass(client: &MultiIndexerSearchClient, session: &str) {
+        <MultiIndexerSearchClient as IndexerClient>::search(
+            client,
+            "Emberfall".into(),
+            HashMap::from([("imdb_id".to_string(), "tt0000459".to_string())]),
+            Some("movie".into()),
+            Some("movie".into()),
+            None,
+            None,
+            None,
+            SearchMode::Auto,
+            IndexerErrorOperation::AutomaticSearch,
+            None,
+            None,
+            None,
+            None,
+            vec![],
+            Some(IndexerSearchLearningContext {
+                title_id: "title-emberfall".into(),
+                facet: "movie".into(),
+                subject_kind: ReleaseSearchSubjectKind::Title,
+                search_session_id: session.into(),
+                background_value: None,
+                candidate_reuse_allowed: true,
+                background_pages_per_pass: Some(1),
+            }),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("search should succeed");
+    }
+
+    /// Finalize a pass the way release search does, keeping every result.
+    async fn finalize_pass(
+        store: &super::super::search_learning::IndexerSearchLearningStore,
+        pool: &sqlx::SqlitePool,
+        session: &str,
+    ) {
+        let fingerprints =
+            sqlx::query_scalar::<_, String>("SELECT fingerprint FROM indexer_search_candidates")
+                .fetch_all(pool)
+                .await
+                .expect("candidate fingerprints");
+        store
+            .finalize_search_session(session, &fingerprints)
+            .await
+            .expect("finalize should succeed");
+    }
+
+    /// The (query, ids, cursor) of every call since `from`.
+    fn calls_since(
+        calls: &StdMutex<Vec<RecordedCall>>,
+        from: usize,
+    ) -> Vec<(String, bool, Option<String>)> {
+        calls.lock().expect("calls")[from..]
+            .iter()
+            .map(|call| {
+                (
+                    call.query.clone(),
+                    call.ids.contains_key("imdb_id"),
+                    call.page_cursor.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Read the primary strategy's four pages, one finalized pass each, and
+    /// return the shape of the primary's calls.
+    async fn read_emberfall_to_its_end(
+        client: &MultiIndexerSearchClient,
+        calls: &StdMutex<Vec<RecordedCall>>,
+        store: &super::super::search_learning::IndexerSearchLearningStore,
+        pool: &sqlx::SqlitePool,
+        finalize_last: bool,
+    ) -> Vec<(String, bool, Option<String>)> {
+        let mut primary = Vec::new();
+        for (index, cursor) in [
+            None,
+            Some("offset:100"),
+            Some("offset:200"),
+            Some("offset:300"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let session = format!("background-{}", index + 1);
+            let asked = calls.lock().expect("calls").len();
+            emberfall_background_pass(client, &session).await;
+            let pass = calls_since(calls, asked);
+            assert!(!pass.is_empty(), "{session} asks the indexer");
+            assert!(
+                pass.iter().all(|(_, _, asked)| asked.as_deref() == cursor),
+                "{session} reads on from the stored cursor: {pass:?}"
+            );
+            if index < 3 || finalize_last {
+                finalize_pass(store, pool, &session).await;
+            }
+            primary.extend(pass);
+        }
+        let unreplayable = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM indexer_search_candidate_sources
+              WHERE reusable_until <= first_seen_at",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("unreplayable sources");
+        assert!(
+            unreplayable > 0,
+            "the stored pages hold results no replay can rebuild"
+        );
+        let chains = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT search_session_id, strategy_state, page_cursor FROM indexer_search_runs
+              WHERE search_session_id = 'background-4'",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("last pass runs");
+        assert!(!chains.is_empty());
+        for (_, strategy_state, page_cursor) in chains {
+            assert_eq!(strategy_state.as_deref(), Some(SEARCH_STRATEGY_CONVERGED));
+            assert_eq!(page_cursor, None);
+        }
+        let chain_ids = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT DISTINCT cursor_chain_id FROM indexer_search_runs",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("chain ids");
+        assert_eq!(chain_ids.len(), 1, "one chain: {chain_ids:?}");
+        assert!(chain_ids[0].is_some());
+        primary
+    }
+
+    #[tokio::test]
+    async fn a_paged_read_with_unreplayable_pages_advances_to_its_end_and_stops() {
+        let (client, calls, store, pool, answers_empty) = unreplayable_paged_client().await;
+        let primary = read_emberfall_to_its_end(&client, &calls, &store, &pool, true).await;
+
+        // Inside the reuse window neither the finished strategy nor the title
+        // tier in its place is asked again.
+        let asked = calls.lock().expect("calls").len();
+        for pass in 5..=7 {
+            let session = format!("background-{pass}");
+            emberfall_background_pass(&client, &session).await;
+            finalize_pass(&store, &pool, &session).await;
+        }
+        assert_eq!(
+            calls_since(&calls, asked),
+            Vec::new(),
+            "neither the finished strategy nor its title tier is asked again"
+        );
+
+        // Once the window has passed, the strategy is read live from its first
+        // page. It now answers nothing, so the title tier runs as usual.
+        let aged = (Utc::now() - Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS + 1)).to_rfc3339();
+        sqlx::query("UPDATE indexer_search_runs SET created_at = ?")
+            .bind(aged)
+            .execute(&pool)
+            .await
+            .expect("age the stored runs");
+        answers_empty.store(true, std::sync::atomic::Ordering::SeqCst);
+        let asked = calls.lock().expect("calls").len();
+        emberfall_background_pass(&client, "background-8").await;
+        let after_window = calls_since(&calls, asked);
+        let first_page = primary
+            .iter()
+            .filter(|(_, _, cursor)| cursor.is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            first_page.iter().all(|call| after_window.contains(call)),
+            "the strategy is read live from its first page: {after_window:?}"
+        );
+        assert!(
+            after_window.iter().any(|call| !primary.contains(call)),
+            "the title tier runs for an empty strategy again: {after_window:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unfinalized_last_page_is_read_again_from_the_first_page() {
+        let (client, calls, store, pool, _) = unreplayable_paged_client().await;
+        let primary = read_emberfall_to_its_end(&client, &calls, &store, &pool, false).await;
+
+        // The pass that read the last page was never finalized, so its
+        // results were never scored: the next pass reads live from page one.
+        let asked = calls.lock().expect("calls").len();
+        emberfall_background_pass(&client, "background-5").await;
+        let next = calls_since(&calls, asked);
+        let first_page = primary
+            .iter()
+            .filter(|(_, _, cursor)| cursor.is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(next, first_page, "background-5 reads the first page live");
     }
 
     #[tokio::test]

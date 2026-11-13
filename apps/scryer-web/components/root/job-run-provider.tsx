@@ -7,6 +7,7 @@ import {
 } from "@/lib/utils/episode-subtitle-search";
 import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { jobRunDisplayName } from "@/lib/i18n/native-jobs";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
   acquisitionProgress,
@@ -25,6 +26,7 @@ import { normalizeApplicationUpgradeProgress } from "@/lib/utils/application-upg
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
   isTerminalJobRunStatus,
+  libraryDeletionProgress,
   normalizeJobRun,
   preferJobRunSnapshot,
 } from "@/lib/utils/job-runs";
@@ -460,14 +462,27 @@ export function JobRunProvider({
           ? t("jobs.runSummaryCompleted")
           : t("jobs.runSummaryRunning"));
       const upgradeToast = applicationUpgradeToastDetails(run, t);
-      const subtitleDescription = subtitleBatchProgressText(run, t);
+      const deletionProgress = libraryDeletionProgress(run);
+      const progressDescription =
+        subtitleBatchProgressText(run, t) ??
+        (deletionProgress
+          ? t(
+              deletionProgress.phase === "clearing"
+                ? "settings.libraryDeleteProgressClearing"
+                : "settings.libraryDeleteProgressDeleting",
+              {
+                processed: deletionProgress.processed,
+                total: deletionProgress.total,
+              },
+            )
+          : null);
       const title = isEpisodeSubtitleBatch(run)
         ? t("subtitle.batchSearch")
-        : (upgradeToast?.title ?? run.displayName);
+        : (upgradeToast?.title ?? jobRunDisplayName(run, t));
       const outcomeKey = automaticSearchOutcomeKey(run);
       const searchProgress = acquisitionProgress(run);
       const description =
-        subtitleDescription ??
+        progressDescription ??
         run.errorText ??
         (outcomeKey
           ? t(outcomeKey, {

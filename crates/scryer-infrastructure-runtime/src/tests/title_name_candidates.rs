@@ -831,6 +831,7 @@ async fn assert_index_carries_cour_names(catalog: &TitleStore, shows: &ShowStore
             TitleCatalogAggregates {
                 total_count: true,
                 filter_counts: false,
+                file_state_counts: false,
                 managed_bytes: false,
             },
         )

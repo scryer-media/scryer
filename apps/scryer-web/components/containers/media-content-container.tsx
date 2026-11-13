@@ -77,7 +77,10 @@ import {
   catalogTitlesRefreshDetail,
 } from "@/lib/events/catalog-titles";
 import { isAbortError } from "@/lib/graphql/urql-client";
-import { runIterativeReleaseSearch } from "@/lib/graphql/release-search";
+import {
+  isInteractiveReleaseSearchLifecycleError,
+  runIterativeReleaseSearch,
+} from "@/lib/graphql/release-search";
 import type { InteractiveSearchProgress } from "@/lib/graphql/release-search";
 import { useClient } from "urql";
 import type {
@@ -121,6 +124,7 @@ import {
   releaseQueueScopeInput,
 } from "@/lib/utils/release-queue-scope";
 import { validateLibraryRootPaths } from "@/lib/utils/library-root-validation";
+import { librarySettingsInput } from "@/lib/utils/library-settings-input";
 import {
   catalogRootValidationState,
   configuredCatalogLibraries,
@@ -169,7 +173,12 @@ import { DeletePreviewSummary } from "@/components/common/delete-preview-summary
 import { BulkRenamePreviewSummary } from "@/components/common/bulk-rename-preview-summary";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import {
+  ERROR_REASON_KEYS,
+  userFacingGraphQlErrorMessage,
+} from "@/lib/graphql/error-message";
+import { libraryDeletionFailureReason } from "@/lib/utils/job-runs";
+import { dispatchNavigationBadgesRefresh } from "@/lib/events/navigation-badges";
 import { grabErrorMessage } from "@/lib/utils/http-release-error-message";
 import { reportAutomaticSearchFailure } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -185,6 +194,7 @@ import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { useOverviewWindowScrollRestoration } from "@/lib/hooks/use-overview-window-scroll-restoration";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
+import { useTrackedJobRuns } from "@/lib/hooks/use-tracked-job-runs";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import { titleMatchesOptionUpdates } from "@/lib/utils/title-edit-dialog";
 import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
@@ -488,39 +498,6 @@ function libraryRootsInput(roots: RootFolderOption[]) {
     .filter((root) => root.path.length > 0);
 }
 
-function librarySettingsInput(
-  settings: LibrarySettingsDraft | undefined,
-): LibrarySettingsDraft | undefined {
-  if (!settings) {
-    return undefined;
-  }
-  return {
-    requiredAudioLanguages: settings.requiredAudioLanguages,
-    metadataLanguage: settings.metadataLanguage,
-    useSeasonFolders: settings.useSeasonFolders,
-    qualityProfileId: settings.qualityProfileId,
-    requestQualityProfileIds: settings.requestQualityProfileIds,
-    scoringPersona: settings.scoringPersona,
-    fillerPolicy: settings.fillerPolicy,
-    recapPolicy: settings.recapPolicy,
-    monitorSpecials: settings.monitorSpecials,
-    interSeasonMovies: settings.interSeasonMovies,
-    monitorFillerMovies: settings.monitorFillerMovies,
-    nfoWriteOnImport: settings.nfoWriteOnImport,
-    plexmatchWriteOnImport: settings.plexmatchWriteOnImport,
-    importMode: settings.importMode,
-    setPermissionsLinux: settings.setPermissionsLinux,
-    fileChmod: settings.fileChmod,
-    folderChmod: settings.folderChmod,
-    chownGroup: settings.chownGroup,
-    defaultMovieAvailability: settings.defaultMovieAvailability ?? null,
-    movieReleaseMarket: settings.movieReleaseMarket ?? null,
-    movieAvailabilityDelayDays: settings.movieAvailabilityDelayDays ?? null,
-    indexerRouting: settings.indexerRouting,
-    downloadClientRouting: settings.downloadClientRouting,
-  };
-}
-
 function splitSucceededTitleIds(
   targets: TitleRecord[],
   predicate: (title: TitleRecord, index: number) => boolean,
@@ -663,6 +640,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
   const [alsoExcludeFromLists, setAlsoExcludeFromLists] = React.useState(false);
   const { registerInteractiveJobRun } = useJobRunToasts();
+  const trackJobRun = useTrackedJobRuns();
   const { confirmReplaceConflict, replaceConflictDialog } =
     useDownloadConflictConfirmation();
   const { queueCatalogTitleRefresh, registerReactiveRefresh } =
@@ -1467,7 +1445,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     [canManageTitlesInLibrary, selectedTitleLibraryIds],
   );
   // Moving rewrites files on disk, so it needs the same rights as renaming.
-  const canMoveSelectedTitles = canRenameSelectedTitles;
+  // A move plans against one library's roots, so the action is offered only
+  // while the selection sits in a single library.
+  const canMoveSelectedTitles =
+    canRenameSelectedTitles && selectedTitleLibraryIds.length === 1;
   const [bulkMoveDialogOpen, setBulkMoveDialogOpen] = React.useState(false);
   const bulkMoveLibraries = React.useMemo(
     () =>
@@ -1638,6 +1619,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     categoryQualityProfileOverrides,
     categoryRequiredAudioLanguages,
     saveCategoryRequiredAudioLanguages,
+    categoryAudioLanguagePreferences,
+    saveCategoryAudioLanguagePreferences,
     categoryPersonaSelections,
     categoryFolderTemplates,
     setCategoryFolderTemplates,
@@ -2535,7 +2518,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     openBulkTitleDelete,
   } = useBulkDelete({
     selectedTitles,
-    selectedTitleLibraryIds,
     bulkActionBusy,
     setBulkActionBusy,
     canExcludeFromLists: canManageLists,
@@ -3657,7 +3639,15 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         const results = await runIterativeReleaseSearch(
           client,
           { titleId: title.id },
-          { signal: abortController.signal, onUpdate },
+          {
+            signal: abortController.signal,
+            onUpdate,
+            onError: () => {
+              if (!abortController.signal.aborted) {
+                setGlobalStatus(t("nzb.searchFailed"), { level: "ERROR" });
+              }
+            },
+          },
         );
         if (abortController.signal.aborted) {
           return [];
@@ -3668,7 +3658,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           return [];
         }
         setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("nzb.searchFailed"), t),
+          isInteractiveReleaseSearchLifecycleError(error)
+            ? t("nzb.searchFailed")
+            : userFacingGraphQlErrorMessage(error, t("nzb.searchFailed"), t),
           { level: "ERROR" },
         );
         return [];
@@ -4319,21 +4311,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     };
   }, [client, rootFolderValidationSnapshot]);
 
+  // Edit changes per-title options and tags, saved title by title, so the
+  // selection may span libraries. Only moves are limited to one library.
   const openBulkTitleEdit = React.useCallback(() => {
     if (selectedTitles.length === 0 || bulkActionBusy) {
       return;
     }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
-      return;
-    }
     setBulkEditDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-  ]);
+  }, [bulkActionBusy, selectedTitles.length]);
 
   const openBulkTitleMove = React.useCallback(() => {
     if (
@@ -4343,18 +4328,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ) {
       return;
     }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
-      return;
-    }
     setBulkMoveDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    canMoveSelectedTitles,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-  ]);
+  }, [bulkActionBusy, canMoveSelectedTitles, selectedTitles.length]);
 
   const requestDeleteTitle = React.useCallback(
     (title: TitleRecord) => {
@@ -4785,6 +4760,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           })
           .toPromise();
         if (error) throw error;
+        // The library list and its roots scope the pending import badge.
+        dispatchNavigationBadgesRefresh();
         const library = data?.createLibrary ?? null;
         await refreshLibraries();
         await refreshRootValidationLibraries();
@@ -4845,6 +4822,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           })
           .toPromise();
         if (error) throw error;
+        // The library list and its roots scope the pending import badge.
+        dispatchNavigationBadgesRefresh();
         const library = data?.updateLibrary ?? null;
         await refreshLibraries();
         await refreshRootValidationLibraries();
@@ -4890,22 +4869,60 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setLibrarySettingsSaving(true);
       try {
         const { data, error } = await client
-          .mutation<{ deleteLibrary: { id: string } }>(deleteLibraryMutation, {
+          .mutation<{
+            deleteLibrary?: { id?: string; jobRun?: unknown };
+          }>(deleteLibraryMutation, {
             id: libraryId,
           })
           .toPromise();
         if (error) throw error;
-        if (!data?.deleteLibrary?.id) {
+        const run = normalizeJobRun(data?.deleteLibrary?.jobRun);
+        if (!data?.deleteLibrary?.id || !run) {
           throw new Error(t("settings.libraryDeleteFailed"));
         }
-        setSelectedLibraryIds((current) =>
-          current.filter(
-            (selectedLibraryId) => selectedLibraryId !== libraryId,
-          ),
-        );
-        await refreshLibraries();
-        await refreshRootValidationLibraries();
-        setGlobalStatus(t("settings.libraryDeleted"), { level: "SUCCESS" });
+        trackJobRun(run, (terminalRun) => {
+          const completed = terminalRun.status === "COMPLETED";
+          void Promise.resolve()
+            .then(async () => {
+              if (completed) {
+                // The library list and its roots scope the pending import badge.
+                dispatchNavigationBadgesRefresh();
+                setSelectedLibraryIds((current) =>
+                  current.filter(
+                    (selectedLibraryId) => selectedLibraryId !== libraryId,
+                  ),
+                );
+              }
+              await refreshLibraries();
+              await refreshRootValidationLibraries();
+            })
+            .catch((refreshError: unknown) => {
+              console.error(
+                "[library-settings] refresh after library deletion failed:",
+                refreshError,
+              );
+            })
+            .finally(() => {
+              if (completed) {
+                setGlobalStatus(t("settings.libraryDeleted"), {
+                  level: "SUCCESS",
+                });
+                return;
+              }
+              const reason = libraryDeletionFailureReason(terminalRun);
+              const reasonKey = reason ? ERROR_REASON_KEYS[reason] : undefined;
+              setGlobalStatus(
+                reasonKey
+                  ? t(reasonKey)
+                  : (terminalRun.errorText ??
+                      t("settings.libraryDeleteFailed")),
+                { level: "ERROR" },
+              );
+            });
+        });
+        setGlobalStatus(t("settings.libraryDeleteQueued"), {
+          level: "SUCCESS",
+        });
         return true;
       } catch (error) {
         setGlobalStatus(
@@ -4928,6 +4945,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       setGlobalStatus,
       setSelectedLibraryIds,
       t,
+      trackJobRun,
     ],
   );
 
@@ -5411,6 +5429,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           categoryQualityProfileOverrides,
           categoryRequiredAudioLanguages,
           saveCategoryRequiredAudioLanguages,
+          categoryAudioLanguagePreferences,
+          saveCategoryAudioLanguagePreferences,
           categoryPersonaSelections,
           activeQualityScopeId,
           categoryFolderTemplates,

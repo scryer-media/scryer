@@ -454,6 +454,12 @@ pub struct RequestRuleSampleInput {
     /// Set to true for a sample that asks to keep the title forever. Rejected
     /// together with `leaseDays`.
     pub lease_forever: Option<bool>,
+    /// Audio languages the sample requires. Omit or send null to leave it to
+    /// the library; an empty list asks for no requirement.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Audio languages the sample prefers, in order. Omit or send null to
+    /// leave it to the library.
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 /// Runs one matcher against one hypothetical request without saving anything.

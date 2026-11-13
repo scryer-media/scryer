@@ -649,6 +649,22 @@ const zh_CN: LocaleDictionary = {
   "settings.qualityProfileCatalogInvalid": "质量配置目录不是有效的 JSON。",
   "settings.qualityProfileUnknown": "未知的质量配置文件 ID“{{id}}”。",
   "settings.qualitySettingsSaved": "质量设置已保存。",
+  "settings.audioLanguagePreferences": "音频语言偏好",
+  "settings.audioLanguagePreferencesInfo":
+    "按音频语言对发布排序，但不拒绝任何发布。与必需语言不同，没有这些语言的发布在没有更好选择时仍会被获取，并在出现更好的发布时被替换。",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "此媒体库的单独设置。列表留空或选择继承时使用目录默认值。",
+  "settings.audioPreferredLanguages": "首选语言",
+  "settings.audioPreferredLanguagesHint":
+    "按偏好顺序排列。包含第一种语言的发布排在只包含第二种语言的发布之前，依此类推。不包含其中任何语言的文件仍是升级目标。",
+  "settings.audioPreferredMoveUp": "上移 {{language}}",
+  "settings.audioPreferredMoveDown": "下移 {{language}}",
+  "settings.audioOptionalLanguages": "可选语言",
+  "settings.audioOptionalLanguagesHint":
+    "有则更好。在质量相同的发布中，包含更多这些语言的发布胜出。",
+  "settings.audioOptionalKeepSearching": "继续搜索可选语言",
+  "settings.audioOptionalKeepSearchingHint":
+    "开启后，缺少可选语言的文件仍是升级目标。关闭后，找到此类发布时仍会替换，但不会主动搜索。",
   "settings.downloadClientRoutingSaved": "下载客户端路由已保存。",
   "settings.downloadClientRoutingSavedFor":
     "下载为“{{name}}”保存的客户端路由。",
@@ -1168,6 +1184,17 @@ const zh_CN: LocaleDictionary = {
   "title.monitoredSection": "监控中的 {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "加入最新队列",
+  "search.addConfigRequiredAudio": "必需音频语言",
+  "search.addConfigPreferredAudio": "首选音频语言",
+  "search.addConfigAudioChoose": "选择语言",
+  "search.addConfigAudioRequireNone": "不要求任何语言",
+  "title.preferredAudioLanguages": "首选音频语言",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "Scryer 无法识别该音频语言。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer 无法识别某条路由的音频语言。",
+  "requests.requestedAudioLanguages": "请求的音频语言",
+  "requests.requestedRequiredAudio": "必需：{{languages}}",
+  "requests.requestedPreferredAudio": "首选：{{languages}}",
   "title.requiredAudioLanguages": "必需音频语言",
   "title.originalAudioLanguagePerTitle": "原始语言（按标题）",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1272,6 +1299,11 @@ const zh_CN: LocaleDictionary = {
   "tvdb.searchPrompt": "在上方输入标题以搜索 TVDB。",
   "tvdb.searchByTvdb": "搜索 TVDB",
   "nzb.searchResultsFor": "{{name}} 的 NZB 结果",
+  "nzb.audioLanguagePreferred": "首选语言",
+  "nzb.audioLanguagePreferredRank": "首选语言 #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "无首选语言",
+  "nzb.audioLanguageOptionalHits": "可选 +{{count}}",
+  "nzb.audioLanguageHint": "此发布在音频语言偏好中的排名",
   "nzb.noResultsYet": "暂无版本匹配。",
   "nzb.searchFailed": "发布资源搜索失败。",
   "nzb.queue": "队列",
@@ -1405,6 +1437,17 @@ const zh_CN: LocaleDictionary = {
   "importHistory.passwordPlaceholder": "压缩包密码",
   "importHistory.retrySuccess": "已开始重新导入",
   "system.title": "系统健康",
+  "system.diagnosticsBundle.download": "下载诊断包",
+  "system.diagnosticsBundle.preparing": "正在准备诊断…",
+  "system.diagnosticsBundle.helper":
+    "将日志、指标和设置摘要打包成一个文件发给维护者。名称、地址、路径和密钥会尽力移除；分享前请检查诊断包。",
+  "system.diagnosticsBundle.failed": "无法下载诊断包。",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "请重新登录后下载诊断。",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "下载诊断需要系统设置权限。",
+  "system.diagnosticsBundle.refusal.failed":
+    "无法生成诊断包。详情请查看服务器日志。",
   "system.jobsTitle": "工作机会",
   "system.notLoaded": "系统健康状态未加载。",
   "system.refreshing": "刷新中",
@@ -1923,6 +1966,7 @@ const zh_CN: LocaleDictionary = {
   "wanted.decision.eligible": "可接受",
   "wanted.decision.titleMismatch": "标题不匹配",
   "wanted.decision.qualityBlocked": "被质量规则阻止",
+  "wanted.decision.episodeAvailabilityBlocked": "等待播出日期",
   "wanted.decision.upgradeRejected": "升级被拒绝",
   "wanted.decision.pendingDelay": "等待延迟",
   "wanted.decision.alreadyActive": "已在活动中",
@@ -2803,6 +2847,9 @@ const zh_CN: LocaleDictionary = {
   "indexerSearch.facet.protocol": "协议",
   "indexerSearch.facet.resolution": "分辨率",
   "indexerSearch.facet.source": "来源",
+  "indexerSearch.facet.videoCodec": "视频编码",
+  "indexerSearch.facet.audioCodec": "音频编码",
+  "indexerSearch.facet.audioChannels": "音频声道",
   "indexerSearch.facet.audio": "音频与 HDR",
   "indexerSearch.facet.flags": "标记",
   "indexerSearch.facet.indexer": "索引器",
@@ -3479,6 +3526,54 @@ const zh_CN: LocaleDictionary = {
   "setup.sourceImportState.failed": "失败",
   "setup.sourceImportState.interrupted": "已中断",
   "setup.sourceImportState.skipped": "已跳过",
+  "qualityProfile.decisionOrder": "判定顺序",
+  "qualityProfile.decisionOrderInfo":
+    "当两个发布都符合此配置文件时，Scryer 会从上到下检查这些步骤。第一个能区分它们的步骤做出决定。评分始终最后决定。",
+  "qualityProfile.decisionGateQualityTier": "质量等级",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "在此配置文件的质量偏好中排名更高的等级的发布胜出。",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "在同一等级和同一发布组内，较新的 PROPER 或 REPACK 胜出。",
+  "qualityProfile.decisionGatePreferredLanguage": "首选语言",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "音频在媒体库首选音频语言中排名更高的发布胜出。",
+  "qualityProfile.decisionGateOptionalLanguages": "可选语言",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "包含更多媒体库可选音频语言的发布胜出。",
+  "qualityProfile.decisionGateUnknown": "未知步骤（{{value}}）",
+  "qualityProfile.decisionGateUnknownDescription":
+    "此版本的网页应用无法识别该步骤，它会保留在原位。",
+  "qualityProfile.decisionGateScore": "评分",
+  "qualityProfile.decisionGateScoreDescription":
+    "评分更高者胜出。评分始终是最后一步。",
+  "qualityProfile.decisionScoreLocked": "始终最后",
+  "qualityProfile.decisionStepRemove": "从判定顺序中移除 {{value}}",
+  "qualityProfile.decisionStepAdd": "将 {{value}} 加入判定顺序",
+  "qualityProfile.decisionAvailableSteps": "未使用的步骤",
+  "qualityProfile.decisionAllStepsInUse": "所有步骤均已使用。",
+  "qualityProfile.decisionWarningTierAbsent":
+    "没有质量等级步骤时，较低等级的发布可能替换较高等级的文件，且截止等级不适用。只有截止评分会停止寻找升级；若也没有截止评分，配置文件在有文件后即视为满足。",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "语言步骤位于质量等级之前，因此首选语言的较低等级发布可能替换较高等级的文件。",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "没有 PROPER/REPACK 步骤时，PROPER 和 REPACK 发布不会被自动优先。评分规则仍可为其加分。",
+  "qualityProfile.decisionNoteLanguageGates":
+    "只有当媒体库设置了首选或可选音频语言时，语言步骤才会生效。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "判定顺序中没有质量等级步骤时不适用。",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "在质量配置文件的判定顺序中，每个步骤只能出现一次。",
+  "qualityProfile.qualityPreferenceHelp":
+    "偏好最高的排在最前。发布会在判定顺序的质量等级步骤中按此顺序比较。新等级以最低偏好添加。",
+  "qualityProfile.decidedBy": "决定步骤：{{step}}",
+  "qualityProfile.cutoffScore": "截止评分",
+  "qualityProfile.cutoffScoreInfo":
+    "磁盘上的文件达到此评分后，配置文件将停止寻找升级。留空表示不使用截止评分。",
+  "qualityProfile.cutoffScorePlaceholder": "无截止评分",
+  "qualityProfile.decisionStepDrag": "拖动以重新排序 {{value}}",
+  "qualityProfile.decisionStepMoveUp": "上移 {{value}}",
+  "qualityProfile.decisionStepMoveDown": "下移 {{value}}",
 };
 
 export default zh_CN;

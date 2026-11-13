@@ -163,6 +163,8 @@ pub mod library {
     pub const NAME_TAKEN: &str = "LIBRARY_NAME_TAKEN";
     /// Default libraries cannot be deleted.
     pub const DEFAULT_LIBRARIES_CANNOT_DELETED: &str = "LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED";
+    /// The library is already being deleted by a running job.
+    pub const DELETION_ALREADY_RUNNING: &str = "LIBRARY_DELETION_ALREADY_RUNNING";
     /// Library scan session was not found.
     pub const SCAN_SESSION_NOT_FOUND: &str = "LIBRARY_SCAN_SESSION_NOT_FOUND";
     /// Library scan session is not cancelable.
@@ -217,6 +219,11 @@ pub mod library {
         "LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES";
     /// Pending import id is required.
     pub const PENDING_IMPORT_ID_REQUIRED: &str = "LIBRARY_PENDING_IMPORT_ID_REQUIRED";
+    /// One bulk ignore names more distinct pending imports than it accepts.
+    /// Carries [`PENDING_IMPORT_IGNORE_MAX_IDS_FACT`] and
+    /// [`PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT`].
+    pub const PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE: &str =
+        "LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE";
     /// Pending import was not found.
     pub const PENDING_IMPORT_NOT_FOUND: &str = "LIBRARY_PENDING_IMPORT_NOT_FOUND";
     /// Pending import requires explicit episode binding.
@@ -359,6 +366,8 @@ pub mod library {
     pub const TEMPLATE_OPTIONAL_GROUP_INVALID: &str = "LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID";
     /// The folder is not a valid title boundary for scanning.
     pub const SCAN_FOLDER_BOUNDARY_INVALID: &str = "LIBRARY_SCAN_FOLDER_BOUNDARY_INVALID";
+    /// The requested default monitoring choice is not supported for the library's facet.
+    pub const DEFAULT_MONITOR_TYPE_INVALID: &str = "LIBRARY_DEFAULT_MONITOR_TYPE_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         SCAN_ALREADY_RUNNING,
@@ -375,6 +384,7 @@ pub mod library {
         ROOT_ID_DUPLICATED,
         NAME_TAKEN,
         DEFAULT_LIBRARIES_CANNOT_DELETED,
+        DELETION_ALREADY_RUNNING,
         SCAN_SESSION_NOT_FOUND,
         SCAN_CANCEL_UNAVAILABLE,
         ROOTS_NOT_CONFIGURED,
@@ -400,6 +410,7 @@ pub mod library {
         PENDING_IMPORT_ALREADY_BEING_RESOLVED,
         PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES,
         PENDING_IMPORT_ID_REQUIRED,
+        PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE,
         PENDING_IMPORT_NOT_FOUND,
         PENDING_IMPORT_REQUIRES_EXPLICIT_EPISODE_BINDING,
         TITLE_IDENTITY_REQUIRED,
@@ -459,6 +470,7 @@ pub mod library {
         RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED,
         TEMPLATE_OPTIONAL_GROUP_INVALID,
         SCAN_FOLDER_BOUNDARY_INVALID,
+        DEFAULT_MONITOR_TYPE_INVALID,
     ];
 
     /// Ids of the stored roots an edit drops without listing them as removed.
@@ -467,12 +479,18 @@ pub mod library {
     pub const ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT: &str = "unacknowledgedRootPaths";
     /// Ids listed as removed that the edit keeps or the library does not have.
     pub const ROOT_REMOVAL_MISMATCHED_IDS_FACT: &str = "mismatchedRootIds";
+    /// The most distinct pending imports one bulk ignore accepts.
+    pub const PENDING_IMPORT_IGNORE_MAX_IDS_FACT: &str = "maxPendingImportIds";
+    /// How many distinct pending imports the refused bulk ignore named.
+    pub const PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT: &str = "requestedPendingImportIds";
 
     /// Every refusal fact key this area publishes.
     pub const ALL_FACTS: &[&str] = &[
         ROOT_REMOVAL_UNACKNOWLEDGED_IDS_FACT,
         ROOT_REMOVAL_UNACKNOWLEDGED_PATHS_FACT,
         ROOT_REMOVAL_MISMATCHED_IDS_FACT,
+        PENDING_IMPORT_IGNORE_MAX_IDS_FACT,
+        PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT,
     ];
 
     #[cfg(test)]
@@ -3164,6 +3182,8 @@ pub mod folder_ownership {
     /// Cannot claim a library root as a title folder.
     pub const CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER: &str =
         "FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER";
+    /// The title's recorded folder changed between reading it and writing a new one.
+    pub const TITLE_FOLDER_CHANGED: &str = "FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         TITLE_FOLDER_INVALID,
@@ -3181,6 +3201,7 @@ pub mod folder_ownership {
         FOLDER_ALREADY_OWNED_TITLE,
         TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
         CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER,
+        TITLE_FOLDER_CHANGED,
     ];
 }
 
@@ -3763,10 +3784,18 @@ pub mod settings {
     pub const DELAY_PROFILE_CATALOG_INVALID: &str = "SETTINGS_DELAY_PROFILE_CATALOG_INVALID";
     /// The trusted proxy policy is invalid.
     pub const TRUSTED_PROXY_POLICY_INVALID: &str = "SETTINGS_TRUSTED_PROXY_POLICY_INVALID";
+    /// A required, preferred or optional audio language list names a language
+    /// Scryer does not know.
+    pub const AUDIO_LANGUAGE_UNKNOWN: &str = "SETTINGS_AUDIO_LANGUAGE_UNKNOWN";
+    /// The extension naming the rejected code on an
+    /// [`AUDIO_LANGUAGE_UNKNOWN`] refusal, and on the list route refusal that
+    /// relays it.
+    pub const AUDIO_LANGUAGE_FACT: &str = "audioLanguage";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         DELAY_PROFILE_CATALOG_INVALID,
         TRUSTED_PROXY_POLICY_INVALID,
+        AUDIO_LANGUAGE_UNKNOWN,
         CATALOG_VIEW_COLUMNS_INVALID,
         DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE,
         DASHBOARD_LAYOUT_TOO_MANY_ITEMS,
@@ -4139,6 +4168,10 @@ pub mod media_servers {
     /// Emby user listing requires a saved integration API key.
     pub const EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY: &str =
         "MEDIA_SERVER_EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY";
+    /// Choosing an account from the server's list needs a Jellyfin or Emby
+    /// connection; Plex accounts are linked by signing in with Plex.
+    pub const ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION: &str =
+        "MEDIA_SERVER_ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION";
     /// Emby avatar was not found.
     pub const EMBY_AVATAR_NOT_FOUND: &str = "MEDIA_SERVER_EMBY_AVATAR_NOT_FOUND";
     /// Local Emby setup does not accept Emby Connect credentials.
@@ -4202,6 +4235,7 @@ pub mod media_servers {
         EMBY_CONNECTION_NO_VERIFIED_SERVER_IDENTITY,
         EMBY_USER_LISTING_REQUIRES_EMBY_CONNECTION,
         EMBY_USER_LISTING_REQUIRES_SAVED_INTEGRATION_API_KEY,
+        ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION,
         EMBY_AVATAR_NOT_FOUND,
         LOCAL_EMBY_SETUP_DOES_NOT_ACCEPT_EMBY_CONNECT_CREDENTIALS,
         CHOOSE_EITHER_EMBY_API_KEY_LOCAL_ADMINISTRATOR_CREDENTIALS_NOT_BOTH,
@@ -4528,6 +4562,15 @@ pub mod integration {
     pub const PROXY_TIMEOUT_OUT_OF_RANGE: &str = "INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE";
     /// Download already resolved as the selected value; nothing to ignore.
     pub const DOWNLOAD_ALREADY_RESOLVED: &str = "INTEGRATION_DOWNLOAD_ALREADY_RESOLVED";
+    /// Only blocked imports can be dismissed, and only dismissed imports can be resumed.
+    pub const IMPORT_TRACKING_STATE_NOT_ELIGIBLE: &str =
+        "INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE";
+    /// The client item named in a dismiss or resume request now belongs to another download.
+    pub const IMPORT_TRACKING_DOWNLOAD_CHANGED: &str =
+        "INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED";
+    /// The download was already imported, failed or ignored, so its warning cannot change.
+    pub const IMPORT_TRACKING_ALREADY_RESOLVED: &str =
+        "INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED";
     /// Tracked download was not found.
     pub const TRACKED_DOWNLOAD_NOT_FOUND: &str = "INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND";
     /// Tracked download the selected value is busy processing.
@@ -4725,6 +4768,9 @@ pub mod integration {
         DOWNLOAD_ALREADY_RESOLVED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
+        IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
+        IMPORT_TRACKING_DOWNLOAD_CHANGED,
+        IMPORT_TRACKING_ALREADY_RESOLVED,
         MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE,
         MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM,
         INDEXER_CONFIG_JSON_INVALID,
@@ -5052,6 +5098,8 @@ pub mod jobs {
     pub const TITLE_DELETION_JOBS_INVALID: &str = "JOB_TITLE_DELETION_JOBS_INVALID";
     /// Title rename jobs must be started from the rename mutation.
     pub const TITLE_RENAME_JOBS_INVALID: &str = "JOB_TITLE_RENAME_JOBS_INVALID";
+    /// Library deletion jobs must be started from the library deletion mutation.
+    pub const LIBRARY_DELETION_JOBS_INVALID: &str = "JOB_LIBRARY_DELETION_JOBS_INVALID";
     /// Media file deletion jobs must be started from the media file deletion mutation.
     pub const MEDIA_FILE_DELETION_JOBS_INVALID: &str = "JOB_MEDIA_FILE_DELETION_JOBS_INVALID";
     /// Select files, seasons, or titles to refresh scores.
@@ -5132,6 +5180,7 @@ pub mod jobs {
         BACKGROUND_LIBRARY_REFRESH_TEMPORARILY_DISABLED,
         TITLE_DELETION_JOBS_INVALID,
         TITLE_RENAME_JOBS_INVALID,
+        LIBRARY_DELETION_JOBS_INVALID,
         MEDIA_FILE_DELETION_JOBS_INVALID,
         SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES,
         RECYCLE_RESTORE_JOBS_INVALID,
@@ -6095,6 +6144,56 @@ pub mod scripts {
     pub const ALL: &[&str] = &[SCHEDULE_INVALID];
 }
 
+pub mod arr_custom_formats {
+    /// The pasted custom-format JSON is larger than the import accepts.
+    pub const JSON_TOO_LARGE: &str = "ARR_CUSTOM_FORMAT_JSON_TOO_LARGE";
+    /// The pasted text is not valid JSON.
+    pub const JSON_INVALID: &str = "ARR_CUSTOM_FORMAT_JSON_INVALID";
+    /// The pasted JSON is an empty array.
+    pub const FORMATS_EMPTY: &str = "ARR_CUSTOM_FORMAT_FORMATS_EMPTY";
+    /// The pasted JSON holds more custom formats than one import accepts.
+    pub const FORMATS_TOO_MANY: &str = "ARR_CUSTOM_FORMAT_FORMATS_TOO_MANY";
+    /// Every reason owned by this policy area.
+    pub const ALL: &[&str] = &[
+        JSON_TOO_LARGE,
+        JSON_INVALID,
+        FORMATS_EMPTY,
+        FORMATS_TOO_MANY,
+    ];
+
+    /// The largest accepted paste, in UTF-8 bytes.
+    pub const MAX_BYTES_FACT: &str = "maxBytes";
+    /// The most custom formats one import accepts.
+    pub const MAX_FORMATS_FACT: &str = "maxFormats";
+
+    /// Every refusal fact key this area publishes.
+    pub const ALL_FACTS: &[&str] = &[MAX_BYTES_FACT, MAX_FORMATS_FACT];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        #[test]
+        fn every_fact_key_is_a_distinct_camel_case_extension_name() {
+            let distinct = ALL_FACTS.iter().collect::<BTreeSet<_>>();
+            assert_eq!(
+                distinct.len(),
+                ALL_FACTS.len(),
+                "a fact key is listed twice"
+            );
+            for key in ALL_FACTS {
+                assert!(key.chars().all(|c| c.is_ascii_alphanumeric()), "{key}");
+                assert!(
+                    key.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
+                    "{key}"
+                );
+                assert!(!matches!(*key, "code" | "reason"), "{key}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6140,6 +6239,7 @@ mod tests {
             ("NOTIFICATION_", notifications::ALL),
             ("SERVICES_", services::ALL),
             ("MEDIA_", media::ALL),
+            ("ARR_CUSTOM_FORMAT_", arr_custom_formats::ALL),
         ];
         let mut distinct = std::collections::BTreeSet::new();
         for (prefix, codes) in areas {

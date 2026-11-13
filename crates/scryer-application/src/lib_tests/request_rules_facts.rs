@@ -142,6 +142,8 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             monitor_selection_season_count: None,
             lease_forever: false,
             lease_days: Some(14),
+            required_audio_languages: None,
+            preferred_audio_languages: None,
             list: None,
         },
         snapshot,
@@ -502,6 +504,8 @@ fn list_draft(origin: scryer_domain::MediaRequestOrigin) -> crate::request_rules
         monitor_type: None,
         monitor_selection: None,
         requested_lease_days: None,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
         origin,
         list_rank: Some(3),
     }

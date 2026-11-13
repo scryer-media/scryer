@@ -75,8 +75,8 @@ test("a library save keeps the unsaved-changes guard down until the panel adopts
     "navigation blocking follows that guard",
   );
   assertPanelMatches(
-    /useBlocker\(shouldBlockNavigation\)/,
-    "the router blocker uses it",
+    /useBlocker\([\s\S]*?shouldBlockNavigation &&\s*!isFolderBrowserHistoryStep\(currentLocation, nextLocation\)/,
+    "the router blocker uses it, letting folder browser steps through",
   );
 });
 

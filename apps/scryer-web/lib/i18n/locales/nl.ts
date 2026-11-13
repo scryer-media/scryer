@@ -805,6 +805,22 @@ const nl: LocaleDictionary = {
     "Kwaliteitsprofielcatalogus is geen geldige JSON.",
   "settings.qualityProfileUnknown": 'Onbekend kwaliteitsprofiel-id "{{id}}".',
   "settings.qualitySettingsSaved": "Kwaliteitsinstellingen opgeslagen.",
+  "settings.audioLanguagePreferences": "Voorkeuren audiotaal",
+  "settings.audioLanguagePreferencesInfo":
+    "Rangschikt releases op audiotaal zonder er een af te wijzen. Anders dan bij vereiste talen wordt een release zonder deze talen toch genomen als er niets beters is, en vervangen zodra er een betere verschijnt.",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "Eigen waarden voor deze bibliotheek. Een lege lijst of de keuze overnemen gebruikt de standaard van de catalogus.",
+  "settings.audioPreferredLanguages": "Voorkeurstalen",
+  "settings.audioPreferredLanguagesHint":
+    "In volgorde van voorkeur. Een release met de eerste taal staat boven een release met alleen de tweede, enzovoort. Een bestand zonder een van deze talen blijft een upgradedoel.",
+  "settings.audioPreferredMoveUp": "{{language}} omhoog",
+  "settings.audioPreferredMoveDown": "{{language}} omlaag",
+  "settings.audioOptionalLanguages": "Optionele talen",
+  "settings.audioOptionalLanguagesHint":
+    "Mooi meegenomen. Bij releases van dezelfde kwaliteit wint de release met meer van deze talen.",
+  "settings.audioOptionalKeepSearching": "Blijven zoeken naar optionele talen",
+  "settings.audioOptionalKeepSearchingHint":
+    "Aan: een bestand waarin optionele talen ontbreken blijft een upgradedoel. Uit: zulke releases vervangen het nog steeds als ze gevonden worden, maar er wordt niet naar gezocht.",
   "settings.downloadClientRoutingSaved": "Downloadclient-routing opgeslagen.",
   "settings.downloadClientRoutingSavedFor":
     'Downloadclient-routing opgeslagen voor "{{name}}".',
@@ -1668,6 +1684,18 @@ const nl: LocaleDictionary = {
   "title.monitoredSection": "Gemonitorde {{facet}}",
   "title.searchReleasesAction": "Releases zoeken",
   "title.queueLatest": "Nieuwste in wachtrij",
+  "search.addConfigRequiredAudio": "Vereiste audiotaal",
+  "search.addConfigPreferredAudio": "Voorkeursaudiotaal",
+  "search.addConfigAudioChoose": "Talen kiezen",
+  "search.addConfigAudioRequireNone": "Geen vereisen",
+  "title.preferredAudioLanguages": "Voorkeursaudiotalen",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer herkent die audiotaal niet.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer herkent de audiotaal van een route niet.",
+  "requests.requestedAudioLanguages": "Aangevraagde audiotalen",
+  "requests.requestedRequiredAudio": "Vereist: {{languages}}",
+  "requests.requestedPreferredAudio": "Voorkeur: {{languages}}",
   "title.requiredAudioLanguages": "Vereiste audiotalen",
   "title.originalAudioLanguagePerTitle": "Oorspronkelijke taal (per titel)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1759,6 +1787,12 @@ const nl: LocaleDictionary = {
   "tvdb.searchByTvdb": "Metadata zoeken",
 
   "nzb.searchResultsFor": "NZB-resultaten voor {{name}}",
+  "nzb.audioLanguagePreferred": "Voorkeurstaal",
+  "nzb.audioLanguagePreferredRank": "Voorkeurstaal #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "Geen voorkeurstaal",
+  "nzb.audioLanguageOptionalHits": "+{{count}} optioneel",
+  "nzb.audioLanguageHint":
+    "Hoe deze release scoort tegenover de voorkeuren voor audiotaal",
   "nzb.noResultsYet": "Nog geen release-treffers.",
   "nzb.searchFailed": "Release-zoekopdracht mislukt.",
   "nzb.queue": "In wachtrij",
@@ -1963,6 +1997,17 @@ const nl: LocaleDictionary = {
   "importHistory.retrySuccess": "Import opnieuw gestart",
 
   "system.title": "Systeemstatus",
+  "system.diagnosticsBundle.download": "Diagnosebundel downloaden",
+  "system.diagnosticsBundle.preparing": "Diagnose voorbereiden…",
+  "system.diagnosticsBundle.helper":
+    "Logboeken, metrics en een overzicht van de instellingen in één bestand voor de beheerder. Namen, adressen, paden en geheimen worden zo goed mogelijk verwijderd; controleer de bundel voordat je hem deelt.",
+  "system.diagnosticsBundle.failed": "Kan de diagnosebundel niet downloaden.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Meld je opnieuw aan om de diagnose te downloaden.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Voor het downloaden van de diagnose is de machtiging voor systeeminstellingen nodig.",
+  "system.diagnosticsBundle.refusal.failed":
+    "De diagnosebundel kon niet worden gemaakt. Zie het serverlogboek voor details.",
   "system.jobsTitle": "Taken",
   "system.auditTitle": "Auditlog",
   "system.auditLoaded": "Auditlog geladen.",
@@ -2138,6 +2183,11 @@ const nl: LocaleDictionary = {
     "Geen geldige custom formats gevonden in deze JSON.",
   "settings.arrImportInvalidJson":
     "Plak geldige JSON geëxporteerd door Sonarr of Radarr.",
+  "settings.arrImportRefusalTooLarge":
+    "Plak niet meer dan {{maxBytes}} bytes JSON.",
+  "settings.arrImportRefusalEmpty": "Plak minstens één custom format.",
+  "settings.arrImportRefusalTooMany":
+    "Plak niet meer dan {{maxFormats}} custom formats tegelijk.",
   "settings.arrImportReviewFailed":
     "Deze custom formats kunnen niet worden beoordeeld.",
   "settings.arrImportScore": "Score",
@@ -3154,6 +3204,8 @@ const nl: LocaleDictionary = {
   "profile.linkPlexAccount": "Plex koppelen",
   "profile.linkAccountConnection": "Verbinding",
   "profile.linkAccountUsername": "Gebruikersnaam",
+  "profile.linkAccountChooseAccount": "Kies een account",
+  "profile.linkAccountAlreadyLinked": "{{username}} (al gekoppeld)",
   "profile.linkAccountPassword": "Wachtwoord",
   "profile.linkAccountPasswordlessHint":
     "Laat leeg als dit Jellyfin-account geen wachtwoord heeft. Accounts zonder wachtwoord kunnen worden gekoppeld, maar niet gebruikt om in te loggen op Scryer.",
@@ -3278,6 +3330,7 @@ const nl: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Categorie komt niet overeen",
   "wanted.decision.ambiguousIdentity": "Onduidelijke identiteit",
   "wanted.decision.qualityBlocked": "Geblokkeerd door kwaliteit",
+  "wanted.decision.episodeAvailabilityBlocked": "Wacht op uitzenddatum",
   "wanted.decision.minimumSeeders": "Te weinig seeders",
   "wanted.decision.packBelowMissingThreshold":
     "Pack onder drempel voor ontbrekende items",
@@ -4559,6 +4612,55 @@ const nl: LocaleDictionary = {
   "setup.sourceImportState.failed": "Mislukt",
   "setup.sourceImportState.interrupted": "Onderbroken",
   "setup.sourceImportState.skipped": "Overgeslagen",
+  "qualityProfile.decisionOrder": "Beslisvolgorde",
+  "qualityProfile.decisionOrderInfo":
+    "Als twee releases allebei aan dit profiel voldoen, loopt Scryer deze stappen van boven af na. De eerste stap die ze onderscheidt, beslist. Score beslist altijd als laatste.",
+  "qualityProfile.decisionGateQualityTier": "Kwaliteitsniveau",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "De release in het niveau dat hoger staat in de kwaliteitsvoorkeur van dit profiel wint.",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Binnen hetzelfde niveau en dezelfde releasegroep wint een nieuwere PROPER of REPACK.",
+  "qualityProfile.decisionGatePreferredLanguage": "Voorkeurstaal",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "De release waarvan de audio hoger staat in de voorkeursaudiotalen van de bibliotheek wint.",
+  "qualityProfile.decisionGateOptionalLanguages": "Optionele talen",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "De release met meer optionele audiotalen van de bibliotheek wint.",
+  "qualityProfile.decisionGateUnknown": "Onbekende stap ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Deze versie van de webapp kent deze stap niet. Hij blijft op zijn plaats.",
+  "qualityProfile.decisionGateScore": "Score",
+  "qualityProfile.decisionGateScoreDescription":
+    "De hoogste score wint. Score is altijd de laatste stap.",
+  "qualityProfile.decisionScoreLocked": "Altijd laatst",
+  "qualityProfile.decisionStepRemove":
+    "{{value}} uit de beslisvolgorde verwijderen",
+  "qualityProfile.decisionStepAdd": "{{value}} aan de beslisvolgorde toevoegen",
+  "qualityProfile.decisionAvailableSteps": "Ongebruikte stappen",
+  "qualityProfile.decisionAllStepsInUse": "Alle stappen zijn in gebruik.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Zonder de stap kwaliteitsniveau kan een release van een lager niveau een bestand van een hoger niveau vervangen, en geldt het cutoff-niveau niet. Alleen de cutoff-score stopt het zoeken naar upgrades; zonder cutoff-score is het profiel tevreden zodra er een bestand is.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Een taalstap staat vóór het kwaliteitsniveau, dus een release van een lager niveau in een voorkeurstaal kan een bestand van een hoger niveau vervangen.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Zonder de stap PROPER/REPACK krijgen PROPER- en REPACK-releases geen automatische voorkeur. Scoreregels kunnen ze nog steeds belonen.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Taalstappen hebben alleen effect als de bibliotheek voorkeurs- of optionele audiotalen heeft ingesteld.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Niet van toepassing zonder de stap kwaliteitsniveau in de beslisvolgorde.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Elke stap mag maar één keer voorkomen in de beslisvolgorde van een kwaliteitsprofiel.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Hoogste voorkeur eerst. Releases worden bij de stap kwaliteitsniveau van de beslisvolgorde op deze volgorde vergeleken. Nieuwe niveaus worden met de laagste voorkeur toegevoegd.",
+  "qualityProfile.decidedBy": "Beslist door: {{step}}",
+  "qualityProfile.cutoffScore": "Cutoff-score",
+  "qualityProfile.cutoffScoreInfo":
+    "Zodra het bestand op schijf deze score haalt, zoekt het profiel niet meer naar upgrades. Laat leeg voor geen cutoff-score.",
+  "qualityProfile.cutoffScorePlaceholder": "Geen cutoff-score",
+  "qualityProfile.decisionStepDrag": "Sleep om {{value}} te verplaatsen",
+  "qualityProfile.decisionStepMoveUp": "{{value}} omhoog verplaatsen",
+  "qualityProfile.decisionStepMoveDown": "{{value}} omlaag verplaatsen",
 };
 
 export default nl;

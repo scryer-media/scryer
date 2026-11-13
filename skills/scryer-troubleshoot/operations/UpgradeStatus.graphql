@@ -1,0 +1,18 @@
+# Installed version, available update and who owns upgrades.
+query UpgradeStatus {
+  applicationUpgradeStatus {
+    currentVersion
+    updateVersion
+    updateAvailable
+    installationKind
+    managementOwner
+    eligible
+    eligibilityReason
+    latestRun {
+      status
+      startedAt
+      completedAt
+      errorText
+    }
+  }
+}

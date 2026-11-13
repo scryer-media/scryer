@@ -525,6 +525,47 @@ function SeriesOverviewViewImpl({
   const episodeSelectionEnabled = episodeActions.enabled || canManageTitle;
   const subtitleBatch = useEpisodeSubtitleSearch(onRefreshSubtitles);
 
+  // While episodes are selected, the panel header (and its bulk actions)
+  // sticks to the top of the scroller. `docked` is true once it has left its
+  // natural spot, so it can take the floating bar styling.
+  const episodesCardRef = React.useRef<HTMLElement>(null);
+  const episodesHeaderRef = React.useRef<HTMLDivElement>(null);
+  const episodesHeaderSticky =
+    episodeSelectionEnabled && selectedEpisodeIds.size > 0;
+  const [episodesHeaderDocked, setEpisodesHeaderDocked] = React.useState(false);
+  React.useEffect(() => {
+    if (!episodesHeaderSticky) {
+      setEpisodesHeaderDocked(false);
+      return;
+    }
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const card = episodesCardRef.current;
+      const header = episodesHeaderRef.current;
+      if (!card || !header) return;
+      const naturalTop = card.getBoundingClientRect().top + card.clientTop;
+      setEpisodesHeaderDocked(
+        header.getBoundingClientRect().top - naturalTop > 0.5,
+      );
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    measure();
+    // Capture so scrolls of the inner main scroller are seen as well.
+    window.addEventListener("scroll", schedule, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("resize", schedule, { passive: true });
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule, { capture: true });
+      window.removeEventListener("resize", schedule);
+    };
+  }, [episodesHeaderSticky]);
+
   const searchPrerequisiteNotice =
     canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice ? (
       <TitleSearchDownloadClientNotice />
@@ -1553,8 +1594,16 @@ function SeriesOverviewViewImpl({
         ) : null}
 
         <div>
-          <Card className="relative overflow-hidden max-sm:p-2">
-            <CardHeader className="max-sm:px-1 max-sm:pt-1">
+          <Card
+            ref={episodesCardRef}
+            data-ui="series-episodes"
+            className="relative max-sm:p-2"
+          >
+            <CardHeader
+              ref={episodesHeaderRef}
+              data-sticky={episodesHeaderSticky || undefined}
+              data-docked={episodesHeaderDocked || undefined}
+            >
               {/* min-h matches the action buttons so the header keeps one
                 height whether or not the selection controls are showing. */}
               <div className="flex min-h-9 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

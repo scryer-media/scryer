@@ -71,6 +71,7 @@ enum TitleRecommendationRefreshEnqueueOutcome {
     Queued,
     ReplacedPending,
     QueuedAfterInFlight,
+    SkippedInFlight,
 }
 
 #[derive(Default)]
@@ -108,6 +109,18 @@ impl TitleRecommendationRefreshQueue {
         } else {
             TitleRecommendationRefreshEnqueueOutcome::Queued
         }
+    }
+
+    /// Enqueues like [`Self::enqueue`], except that a title whose refresh is
+    /// already running and has nothing pending gets no follow-up run.
+    fn enqueue_unless_in_flight(
+        &mut self,
+        job: TitleRecommendationRefreshJob,
+    ) -> TitleRecommendationRefreshEnqueueOutcome {
+        if self.in_flight.contains(&job.title.id) && !self.pending.contains_key(&job.title.id) {
+            return TitleRecommendationRefreshEnqueueOutcome::SkippedInFlight;
+        }
+        self.enqueue(job)
     }
 
     fn take_next(&mut self) -> Option<TitleRecommendationRefreshJob> {
@@ -402,6 +415,63 @@ mod title_recommendation_refresh_queue_tests {
     }
 
     #[test]
+    fn due_check_queues_no_follow_up_for_a_running_title() {
+        let mut queue = TitleRecommendationRefreshQueue::default();
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Emberfall")),
+            TitleRecommendationRefreshEnqueueOutcome::Queued
+        );
+        let running = queue.take_next().expect("initial job");
+        assert_eq!(running.title.name, "Emberfall");
+
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Emberfall Again")),
+            TitleRecommendationRefreshEnqueueOutcome::SkippedInFlight
+        );
+        assert!(!queue.has_pending());
+        // Another title still queues while the first one runs.
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-2", "Cinderwake")),
+            TitleRecommendationRefreshEnqueueOutcome::Queued
+        );
+        queue.complete("title-1");
+        assert_eq!(
+            queue.take_next().expect("other title").title.name,
+            "Cinderwake"
+        );
+        assert!(queue.take_next().is_none());
+
+        // Once the run completes, the title queues again.
+        queue.complete("title-2");
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Emberfall Later")),
+            TitleRecommendationRefreshEnqueueOutcome::Queued
+        );
+    }
+
+    #[test]
+    fn due_check_keeps_replacing_a_pending_follow_up() {
+        let mut queue = TitleRecommendationRefreshQueue::default();
+        queue.enqueue(job("title-1", "Ashgrove"));
+        queue.take_next().expect("initial job");
+        // A follow-up queued by hydration while the title runs is kept, and a
+        // due check replaces it as it always has.
+        assert_eq!(
+            queue.enqueue(job("title-1", "Ashgrove Hydrated")),
+            TitleRecommendationRefreshEnqueueOutcome::QueuedAfterInFlight
+        );
+        assert_eq!(
+            queue.enqueue_unless_in_flight(job("title-1", "Ashgrove Due")),
+            TitleRecommendationRefreshEnqueueOutcome::ReplacedPending
+        );
+        queue.complete("title-1");
+        assert_eq!(
+            queue.take_next().expect("follow-up").title.name,
+            "Ashgrove Due"
+        );
+    }
+
+    #[test]
     fn title_more_like_this_refresh_due_after_twenty_four_hours() {
         let now = Utc::now();
 
@@ -414,12 +484,6 @@ mod title_recommendation_refresh_queue_tests {
             now,
             Some(now - chrono::Duration::hours(24))
         ));
-    }
-}
-impl AppUseCase {
-    async fn emit_hydration_completed(&self, title: &Title) {
-        self.emit_metadata_hydration_updated_event(title, MetadataHydrationState::Completed, None)
-            .await;
     }
 }
 impl AppUseCase {
@@ -599,6 +663,8 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<CreateTitleOutcome> {
+        // Refused before anything is created, so a bad language leaves no title.
+        let options_patch = crate::validated_title_audio_patch(options_patch)?;
         let title = self
             .new_title_for_library(actor, request, library_id)
             .await?;
@@ -613,6 +679,13 @@ impl AppUseCase {
         // episode monitoring is decided from this selection.
         self.apply_title_monitor_selection_patch(&created.title, &options_patch)
             .await?;
+        // Likewise before the first search, which reads these overrides.
+        self.store_new_title_audio_language_overrides(
+            &created,
+            &options_patch,
+            Some(actor.id.clone()),
+        )
+        .await;
         if !created.reused_existing {
             // A brand new title is a new matcher identity. Done here as well
             // as through `TitleAdded` so the guarantee does not depend on the
@@ -690,8 +763,16 @@ impl AppUseCase {
 
         if title.metadata_fetched_at.is_some() {
             self.notify_title_image_wakes(title);
-            self.emit_hydration_completed(title).await;
-            self.emit_title_updated_activity(None, title).await;
+            // Completed and TitleUpdated land in one commit, in that order.
+            self.emit_title_activity_events(vec![
+                crate::events::activity_api::metadata_hydration_updated_domain_event(
+                    title,
+                    MetadataHydrationState::Completed,
+                    None,
+                ),
+                crate::events::activity_api::title_updated_domain_event(None, title),
+            ])
+            .await;
             if options.sync_wanted_after_completion {
                 sync_wanted_after_hydration(self, title).await;
             }
@@ -998,8 +1079,23 @@ impl AppUseCase {
                 let mut movie_targets = Vec::new();
                 let mut series_targets = Vec::new();
 
+                // The chunk's Started rows land in one commit, in chunk order,
+                // before any other event for these titles.
+                self.emit_title_activity_events(
+                    chunk
+                        .iter()
+                        .map(|target| {
+                            crate::events::activity_api::metadata_hydration_updated_domain_event(
+                                &target.title,
+                                MetadataHydrationState::Started,
+                                None,
+                            )
+                        })
+                        .collect(),
+                )
+                .await;
+
                 for target in chunk.iter().cloned() {
-                    self.emit_hydration_started(&target.title).await;
                     match target.title.facet {
                         MediaFacet::Movie => {
                             let movie_ref = target
@@ -1744,6 +1840,27 @@ impl AppUseCase {
             return;
         }
 
+        self.queue_title_more_like_this_refresh(
+            title,
+            external_ids,
+            seeded_more_like_this,
+            source,
+            false,
+        )
+        .await;
+    }
+
+    /// Queues a background refresh and wakes a worker. With
+    /// `skip_if_in_flight`, a title whose refresh is already running gets no
+    /// follow-up run. Returns whether a run was queued.
+    async fn queue_title_more_like_this_refresh(
+        &self,
+        title: &Title,
+        external_ids: &[scryer_domain::ExternalId],
+        seeded_more_like_this: &[crate::DiscoveryTitle],
+        source: HydrationSource,
+        skip_if_in_flight: bool,
+    ) -> bool {
         self.ensure_title_recommendation_refresh_workers_started()
             .await;
         let job = TitleRecommendationRefreshJob::new(
@@ -1759,7 +1876,11 @@ impl AppUseCase {
                 .title_recommendation_refresh_queue
                 .lock()
                 .await;
-            queue.enqueue(job)
+            if skip_if_in_flight {
+                queue.enqueue_unless_in_flight(job)
+            } else {
+                queue.enqueue(job)
+            }
         };
 
         match outcome {
@@ -1784,11 +1905,21 @@ impl AppUseCase {
                 seeded_count = seeded_more_like_this.len(),
                 "queued follow-up title recommendations refresh after in-flight refresh"
             ),
+            TitleRecommendationRefreshEnqueueOutcome::SkippedInFlight => {
+                debug!(
+                    hydration_source = source.as_str(),
+                    facet = title.facet.as_str(),
+                    title_id = %title.id,
+                    "title recommendations refresh already running; no follow-up queued"
+                );
+                return false;
+            }
         }
         self.runtime
             .catalog
             .title_recommendation_refresh_wake
             .notify_one();
+        true
     }
 
     pub(crate) async fn queue_title_more_like_this_refresh_if_due(
@@ -1822,9 +1953,15 @@ impl AppUseCase {
             return Ok(false);
         }
 
-        self.refresh_or_queue_title_more_like_this_after_hydration(title, &[], &[], source)
-            .await;
-        Ok(true)
+        if source.refresh_recommendations_inline() {
+            self.refresh_or_queue_title_more_like_this_after_hydration(title, &[], &[], source)
+                .await;
+            return Ok(true);
+        }
+        // A refresh already running for this title answers this check too.
+        Ok(self
+            .queue_title_more_like_this_refresh(title, &[], &[], source, true)
+            .await)
     }
 
     async fn ensure_title_recommendation_refresh_workers_started(&self) {

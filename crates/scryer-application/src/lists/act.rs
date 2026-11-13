@@ -103,6 +103,22 @@ pub trait ListActions: Send + Sync {
     /// worth retrying.
     async fn title_exists(&self, title_id: &str) -> AppResult<bool>;
 
+    /// The ids among `title_ids` whose titles are still in the library, in
+    /// one read where the implementation can. An error answers for the whole
+    /// batch.
+    async fn titles_present(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<std::collections::HashSet<String>> {
+        let mut present = std::collections::HashSet::new();
+        for title_id in title_ids {
+            if self.title_exists(title_id).await? {
+                present.insert(title_id.clone());
+            }
+        }
+        Ok(present)
+    }
+
     /// Record that a title the list added has left it, and which on-leave
     /// action ran. For `Log` this record is the whole action.
     async fn record_departure(

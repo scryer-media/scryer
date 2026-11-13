@@ -4,7 +4,6 @@ import {
   ArrowUp,
   ArrowLeft,
   ArrowRight,
-  GripVertical,
   Edit,
   Plus,
   Trash2,
@@ -38,6 +37,10 @@ import { PERSONA_OVERRIDE_DEFAULTS } from "@/lib/constants/quality-profiles";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DEFAULT_MIN_UPGRADE_SCORE_DELTA } from "@/lib/utils/quality-profiles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
+import type { QualityDecisionGate } from "@/lib/constants/quality-decision-gates";
+import { decisionPipelineUsesTierCutoff } from "@/lib/utils/quality-decision-pipeline";
+import { PointerReorderHandle } from "@/components/common/pointer-reorder-handle";
+import { QualityDecisionOrderEditor } from "@/components/views/settings/quality-decision-order-editor";
 
 const QUALITY_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -57,6 +60,8 @@ const QUALITY_EDITOR_SECTION_BODY_CLASS =
   "border-t border-[var(--scry-border3)] p-4";
 const QUALITY_EDITOR_LIST_CLASS =
   "max-h-60 overflow-auto rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-2";
+const QUALITY_TIER_LIST = "quality-tiers";
+const AVAILABLE_QUALITY_TIER_LIST = "quality-tiers-available";
 const QUALITY_EDITOR_LIST_ITEM_CLASS =
   "mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] px-2 py-1.5 text-[var(--scry-ink2)] hover:bg-[var(--scry-hover)]";
 
@@ -96,7 +101,9 @@ type QualityProfileCriteriaPayload = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  decision_pipeline: QualityDecisionGate[];
 };
 
 type QualityProfileDraft = {
@@ -116,11 +123,12 @@ type QualityProfileDraft = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  ignore_proper_repack: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  decision_pipeline: QualityDecisionGate[];
 };
 
 type QualityProfileListField =
@@ -177,7 +185,7 @@ type SettingsQualityProfilesSectionProps = {
     deniedField: QualityProfileListField,
     value: string,
   ) => void;
-  addQualityTier: (value: string) => void;
+  addQualityTier: (value: string, targetIndex?: number) => void;
   removeQualityTier: (value: string) => void;
   reorderQualityTier: (value: string, targetIndex: number) => void;
   qualityProfileInheritValue: string;
@@ -240,6 +248,7 @@ function cloneQualityProfileDraft(
     audio_codec_blocklist: [...draft.audio_codec_blocklist],
     quality_tiers: [...draft.quality_tiers],
     scoring_overrides: { ...draft.scoring_overrides },
+    decision_pipeline: [...draft.decision_pipeline],
   };
 }
 
@@ -595,6 +604,11 @@ export function SettingsQualityProfilesSection({
   const isProfileDraftDirty =
     JSON.stringify(qualityProfileDraft) !==
     JSON.stringify(qualityProfileDraftBaseline);
+  // Without a tier step the cutoff tier takes no part; its value is kept,
+  // only shown as not applicable.
+  const tierCutoffApplies = decisionPipelineUsesTierCutoff(
+    qualityProfileDraft.decision_pipeline,
+  );
 
   const handleCategoryProfileOverrideChange = React.useCallback(
     (scopeId: ViewCategoryId, rawValue: string) => {
@@ -1019,6 +1033,7 @@ export function SettingsQualityProfilesSection({
                         <div
                           className={QUALITY_EDITOR_LIST_CLASS}
                           data-quality-tier-list
+                          data-reorder-list={QUALITY_TIER_LIST}
                         >
                           {activeQualityProfileTierOptions.length === 0 ? (
                             <p
@@ -1033,50 +1048,28 @@ export function SettingsQualityProfilesSection({
                                   key={qualityTier}
                                   className={QUALITY_EDITOR_LIST_ITEM_CLASS}
                                   data-quality-tier={qualityTier}
+                                  data-reorder-item={qualityTier}
                                 >
-                                  <span
-                                    className="cursor-grab touch-none active:cursor-grabbing"
+                                  <PointerReorderHandle
                                     title={t("qualityProfile.dragQualityTier", {
                                       value: getQualityTierLabel(qualityTier),
                                     })}
-                                    onPointerDown={(event) => {
-                                      if (event.button !== 0) return;
-                                      event.preventDefault();
-                                      event.currentTarget.setPointerCapture(
-                                        event.pointerId,
-                                      );
-                                    }}
-                                    onPointerUp={(event) => {
+                                    onDrop={(target) => {
                                       if (
-                                        !event.currentTarget.hasPointerCapture(
-                                          event.pointerId,
-                                        )
-                                      )
+                                        target.list ===
+                                        AVAILABLE_QUALITY_TIER_LIST
+                                      ) {
+                                        removeQualityTier(qualityTier);
                                         return;
-                                      event.currentTarget.releasePointerCapture(
-                                        event.pointerId,
-                                      );
-                                      const target = document
-                                        .elementFromPoint(
-                                          event.clientX,
-                                          event.clientY,
-                                        )
-                                        ?.closest<HTMLElement>(
-                                          "[data-quality-tier]",
-                                        );
+                                      }
                                       if (
-                                        !target ||
-                                        target.closest(
-                                          "[data-quality-tier-list]",
-                                        ) !==
-                                          event.currentTarget.closest(
-                                            "[data-quality-tier-list]",
-                                          )
+                                        target.list !== QUALITY_TIER_LIST ||
+                                        target.item === null
                                       )
                                         return;
                                       const targetIndex =
                                         activeQualityProfileTierOptions.indexOf(
-                                          target.dataset.qualityTier ?? "",
+                                          target.item,
                                         );
                                       if (targetIndex >= 0)
                                         reorderQualityTier(
@@ -1084,12 +1077,7 @@ export function SettingsQualityProfilesSection({
                                           targetIndex,
                                         );
                                     }}
-                                  >
-                                    <GripVertical
-                                      className="h-4 w-4"
-                                      aria-hidden="true"
-                                    />
-                                  </span>
+                                  />
                                   <span className="flex-1 text-xs">
                                     {getQualityTierLabel(qualityTier)}
                                   </span>
@@ -1171,7 +1159,11 @@ export function SettingsQualityProfilesSection({
                         <Label className="mb-2 block text-[var(--scry-ink2)]">
                           {t("qualityProfile.availableQualityTiers")}
                         </Label>
-                        <div className={QUALITY_EDITOR_LIST_CLASS}>
+                        <div
+                          className={QUALITY_EDITOR_LIST_CLASS}
+                          data-reorder-list={AVAILABLE_QUALITY_TIER_LIST}
+                          data-reorder-unordered
+                        >
                           {availableQualityTiers.length === 0 ? (
                             <p
                               className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
@@ -1183,8 +1175,36 @@ export function SettingsQualityProfilesSection({
                               <div
                                 key={option.value}
                                 className={QUALITY_EDITOR_LIST_ITEM_CLASS}
+                                data-reorder-item={option.value}
                               >
-                                <span className="text-xs">{option.label}</span>
+                                <PointerReorderHandle
+                                  id={selectorId(
+                                    "settings-quality-profile-tier-add-drag",
+                                    option.value,
+                                  )}
+                                  title={t("qualityProfile.addQualityTier", {
+                                    value: option.label,
+                                  })}
+                                  onDrop={(target) => {
+                                    if (target.list !== QUALITY_TIER_LIST)
+                                      return;
+                                    const targetIndex =
+                                      target.item === null
+                                        ? -1
+                                        : activeQualityProfileTierOptions.indexOf(
+                                            target.item,
+                                          );
+                                    addQualityTier(
+                                      option.value,
+                                      targetIndex >= 0
+                                        ? targetIndex
+                                        : undefined,
+                                    );
+                                  }}
+                                />
+                                <span className="flex-1 text-xs">
+                                  {option.label}
+                                </span>
                                 <Button
                                   id={selectorId(
                                     "settings-quality-profile-tier-add",
@@ -1248,6 +1268,13 @@ export function SettingsQualityProfilesSection({
                     </div>
                   </div>
                 </details>
+
+                <QualityDecisionOrderEditor
+                  pipeline={qualityProfileDraft.decision_pipeline}
+                  onChange={(decision_pipeline) =>
+                    updateQualityProfileDraft({ decision_pipeline })
+                  }
+                />
 
                 <details className={QUALITY_EDITOR_SECTION_CLASS} open>
                   <summary className={QUALITY_EDITOR_SECTION_SUMMARY_CLASS}>
@@ -1522,24 +1549,6 @@ export function SettingsQualityProfilesSection({
                           />
                         </span>
                       </label>
-                      <label className="mb-2 flex items-center gap-3">
-                        <Checkbox
-                          id="quality-profile-ignore-proper-repack"
-                          checked={qualityProfileDraft.ignore_proper_repack}
-                          onCheckedChange={(checked) =>
-                            updateQualityProfileDraft({
-                              ignore_proper_repack: checked === true,
-                            })
-                          }
-                        />
-                        <span className="inline-flex items-center gap-2 text-sm">
-                          {t("qualityProfile.ignoreProperRepack")}
-                          <InfoHelp
-                            ariaLabel={t("qualityProfile.ignoreProperRepack")}
-                            text={t("qualityProfile.ignoreProperRepackInfo")}
-                          />
-                        </span>
-                      </label>
                       <div className="grid gap-3 md:grid-cols-2">
                         <label className="space-y-2">
                           <Label className="inline-flex items-center gap-2">
@@ -1550,6 +1559,7 @@ export function SettingsQualityProfilesSection({
                             />
                           </Label>
                           <Select
+                            disabled={!tierCutoffApplies}
                             value={
                               qualityProfileDraft.cutoff_tier || "__none__"
                             }
@@ -1573,6 +1583,46 @@ export function SettingsQualityProfilesSection({
                               ))}
                             </SelectContent>
                           </Select>
+                          {!tierCutoffApplies ? (
+                            <p
+                              id={selectorId(
+                                "settings-quality-profile-cutoff-tier-not-applicable",
+                              )}
+                              className={`text-xs ${QUALITY_MUTED_TEXT_CLASS}`}
+                            >
+                              {t("qualityProfile.cutoffTierNotApplicable")}
+                            </p>
+                          ) : null}
+                        </label>
+
+                        <label className="space-y-2">
+                          <Label className="inline-flex items-center gap-2">
+                            {t("qualityProfile.cutoffScore")}
+                            <InfoHelp
+                              ariaLabel={t("qualityProfile.cutoffScore")}
+                              text={t("qualityProfile.cutoffScoreInfo")}
+                            />
+                          </Label>
+                          <Input
+                            id={selectorId(
+                              "settings-quality-profile-cutoff-score",
+                            )}
+                            {...signedIntegerInputProps}
+                            placeholder={t(
+                              "qualityProfile.cutoffScorePlaceholder",
+                            )}
+                            value={qualityProfileDraft.cutoff_score ?? ""}
+                            onChange={(event) => {
+                              const raw = event.target.value.trim();
+                              const parsed = Number(raw);
+                              updateQualityProfileDraft({
+                                cutoff_score:
+                                  raw === "" || !Number.isInteger(parsed)
+                                    ? null
+                                    : parsed,
+                              });
+                            }}
+                          />
                         </label>
 
                         <label className="space-y-2">

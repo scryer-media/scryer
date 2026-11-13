@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const en: LocaleDictionary = {
+  "settings.defaultMonitorType": "Default monitoring for new titles",
+  "settings.defaultMonitorTypeHelp":
+    "Initial selection when adding or requesting a title. Existing titles and list subscriptions are unchanged.",
   "settings.oauthJellyfinCallbackCopied": "Jellyfin callback URL copied.",
   "settings.oauthClientIdCopied": "OAuth client ID copied.",
   "status.copyFailedSelected":
@@ -240,6 +243,8 @@ const en: LocaleDictionary = {
     "Archive extractor required",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Archive extraction timed out",
+  "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
+    "Title folder needs attention",
 
   "error.reason.LIST_SOURCE_RATE_LIMITED":
     "The list provider asked for fewer requests.",
@@ -1003,6 +1008,8 @@ const en: LocaleDictionary = {
     "Recycle restore path is outside the title's current owned folder; resolve the folder change before restoring.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
     "Title the selected value already owns another folder.",
+  "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
+    "The title's folder changed while this was being saved. Reload and try again.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
     "Title folder must be an absolute path without parent traversal.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":
@@ -1786,6 +1793,8 @@ const en: LocaleDictionary = {
     "Full-hash backfill is shutting down.",
   "error.reason.JOB_LIBRARY_ACCESS_DENIED":
     "You do not have access to this library.",
+  "error.reason.JOB_LIBRARY_DELETION_JOBS_INVALID":
+    "Library deletion jobs must be started by deleting the library.",
   "error.reason.JOB_LOCATION_OPERATIONS_INVALID":
     "Location operations must be started from the location operation mutation.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
@@ -1853,12 +1862,16 @@ const en: LocaleDictionary = {
     "Default libraries cannot be deleted.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
     "Default  library was not found.",
+  "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
+    "Choose a monitoring default supported by this library.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
     "Refusing to delete directory path the selected value from a single-file delete flow.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
     "Refusing to delete the selected value the selected value because it is outside the configured root folders.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
     "Refusing to delete the selected value the selected value because it has no parent directory.",
+  "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
+    "This library is already being deleted.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Destination folder contains an independent or unresolved title boundary.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
@@ -1921,6 +1934,8 @@ const en: LocaleDictionary = {
     "Pending import file is unavailable.",
   "error.reason.LIBRARY_PENDING_IMPORT_ID_REQUIRED":
     "Pending import id is required.",
+  "error.reason.LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE":
+    "Too many pending imports to ignore at once.",
   "error.reason.LIBRARY_PENDING_IMPORT_NOT_FOUND":
     "Pending import was not found.",
   "error.reason.LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES":
@@ -2577,6 +2592,8 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_SELECTED_ROOT_CHANGED": "Selected root changed.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
     "The series movie link could not be found.",
+  "error.reason.MEDIA_SERVER_ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION":
+    "Accounts can only be chosen from a Jellyfin or Emby server; Plex accounts are linked by signing in with Plex.",
   "error.reason.MEDIA_SERVER_BASE_URL_INVALID":
     "Media server base URL must be an HTTP or HTTPS URL.",
   "error.reason.MEDIA_SERVER_BASE_URL_QUERY_OR_FRAGMENT":
@@ -3693,6 +3710,8 @@ const en: LocaleDictionary = {
     "Anime-specific settings require an anime library.",
   "error.reason.SETTINGS_ANIME_SPECIFIC_SETTINGS_REQUIRE_SCOPE_ANIME":
     "Anime-specific settings require scope anime.",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "That audio language is not one Scryer recognizes.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUPS_REQUIRE_BACKUP_KEY":
     "Automatic backups require a backup key.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_CANNOT_CLEARED_WHILE_AUTOMATIC_BACKUPS_DISABLED":
@@ -5210,6 +5229,12 @@ const en: LocaleDictionary = {
   "settings.libraryDeleted": "Library deleted.",
   "settings.librarySaveFailed": "Failed to save library.",
   "settings.libraryDeleteFailed": "Failed to delete library.",
+  "settings.libraryDeleteQueued":
+    "Deleting the library. It stays listed until its titles are removed.",
+  "settings.libraryDeleteProgressClearing":
+    "Clearing title records: {{processed}} of {{total}}",
+  "settings.libraryDeleteProgressDeleting":
+    "Removing titles: {{processed}} of {{total}}",
   "settings.librarySettingsLoadFailed": "Failed to load library settings.",
   "settings.libraryRequiredAudioLabel": "Required audio",
   "settings.libraryEffectiveAudio": "Effective: {{value}}",
@@ -5302,6 +5327,7 @@ const en: LocaleDictionary = {
   "jobs.fullHashBackfillFailures": "Files that could not be hashed",
   "jobs.fullHashBackfillFailuresMore": "…and {{count}} more not listed",
   "jobs.nextRunPrefix": "Next run: {{value}}",
+  "jobs.nothingToDo": "Nothing to do, checked {{value}}",
   "jobs.startedAt": "Started {{value}}",
   "jobs.completedAt": "Completed {{value}}",
   "jobs.failedToTrigger": "Failed to trigger job",
@@ -5379,6 +5405,23 @@ const en: LocaleDictionary = {
     "Quality profile catalog is not valid JSON.",
   "settings.qualityProfileUnknown": 'Unknown quality profile id "{{id}}".',
   "settings.qualitySettingsSaved": "Quality settings saved.",
+  "settings.audioLanguagePreferences": "Audio Language Preferences",
+  "settings.audioLanguagePreferencesInfo":
+    "Rank releases by audio language without rejecting any. Unlike required languages, a release without these languages is still taken when nothing better exists, and replaced once a better one appears.",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "Overrides for this library. An empty list or an inherit choice uses the catalog default.",
+  "settings.audioPreferredLanguages": "Preferred languages",
+  "settings.audioPreferredLanguagesHint":
+    "In order of preference. A release carrying the first language ranks above one carrying only the second, and so on. A file without any of them stays an upgrade target.",
+  "settings.audioPreferredMoveUp": "Move {{language}} up",
+  "settings.audioPreferredMoveDown": "Move {{language}} down",
+  "settings.audioOptionalLanguages": "Optional languages",
+  "settings.audioOptionalLanguagesHint":
+    "Nice to have. Among releases of the same quality, the one carrying more of these languages wins.",
+  "settings.audioOptionalKeepSearching":
+    "Keep searching for optional languages",
+  "settings.audioOptionalKeepSearchingHint":
+    "When on, a file missing optional languages stays an upgrade target. When off, such releases still replace it when found, but none are searched for.",
   "settings.downloadClientRoutingSaved": "Download client routing saved.",
   "settings.downloadClientRoutingSavedFor":
     'Download client routing saved for "{{name}}".',
@@ -6243,6 +6286,10 @@ const en: LocaleDictionary = {
   "search.configureAdd": "Configure add options",
   "search.addConfigLibrary": "Library",
   "search.addConfigQualityProfile": "Quality profile",
+  "search.addConfigRequiredAudio": "Required audio language",
+  "search.addConfigPreferredAudio": "Preferred audio language",
+  "search.addConfigAudioChoose": "Choose languages",
+  "search.addConfigAudioRequireNone": "Require none",
   "search.addConfigInheritLibrary": "Inherit library",
   "search.addConfigRootFolder": "Root folder",
   "search.addConfigSeasonFolder": "Season folder",
@@ -6525,6 +6572,7 @@ const en: LocaleDictionary = {
   "title.monitoredSection": "Monitored {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Queue Latest",
+  "title.preferredAudioLanguages": "Preferred Audio Languages",
   "title.requiredAudioLanguages": "Required Audio Languages",
   "title.originalAudioLanguagePerTitle": "Original language (per title)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -6691,6 +6739,12 @@ const en: LocaleDictionary = {
   "tvdb.searchByTvdb": "Search metadata",
 
   "nzb.searchResultsFor": "NZB results for {{name}}",
+  "nzb.audioLanguagePreferred": "Preferred language",
+  "nzb.audioLanguagePreferredRank": "Preferred language #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "No preferred language",
+  "nzb.audioLanguageOptionalHits": "+{{count}} optional",
+  "nzb.audioLanguageHint":
+    "How this release ranks against the audio language preferences",
   "nzb.noResultsYet": "No release matches yet.",
   "nzb.currentFile": "Current file",
   "nzb.searchFailed": "Release search failed.",
@@ -6814,6 +6868,21 @@ const en: LocaleDictionary = {
   "queue.assignTitleBeforeImport":
     "Assign a title before starting manual import.",
   "queue.ignore": "Ignore",
+  "queue.dismissImportWarning": "Dismiss warning — keep seeding",
+  "queue.resumeImportTracking": "Resume import tracking",
+  "queue.state.importDismissed": "Import warning dismissed",
+  "activity.importFilter.dismissed": "Dismissed warnings",
+  "queue.importTrackingFailed": "Could not change import tracking.",
+  "queue.importDismissedSuccess":
+    "Warning dismissed. The download client entry, seeding and files were left unchanged. Find it under Dismissed warnings to resume tracking.",
+  "queue.importTrackingResumed":
+    "Import tracking resumed. Normal import checks still apply.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
+    "Only a blocked import can be dismissed, and only a dismissed import can be resumed. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
+    "This client item now belongs to a different download. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
+    "This download was already imported, failed or ignored, so its warning can no longer change.",
   "queue.ignoreSuccess": "Download ignored.",
   "queue.ignoreFailed": "Failed to ignore download.",
   "queue.releaseHeldSources": "Release held sources",
@@ -6916,6 +6985,18 @@ const en: LocaleDictionary = {
   "importHistory.retrySuccess": "Import retry started",
 
   "system.title": "System Health",
+  "system.diagnosticsBundle.download": "Download diagnostics bundle",
+  "system.diagnosticsBundle.preparing": "Preparing diagnostics…",
+  "system.diagnosticsBundle.helper":
+    "Logs, metrics and a settings summary in one file for the maintainer. Names, addresses, paths and secrets are removed on a best-effort basis; review the bundle before sharing it.",
+  "system.diagnosticsBundle.failed":
+    "Could not download the diagnostics bundle.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Sign in again to download diagnostics.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Downloading diagnostics requires the system settings permission.",
+  "system.diagnosticsBundle.refusal.failed":
+    "The diagnostics bundle could not be built. Check the server log for details.",
   "system.jobsTitle": "Jobs",
   "system.auditTitle": "Audit",
   "system.auditLoaded": "Audit log loaded.",
@@ -7102,6 +7183,11 @@ const en: LocaleDictionary = {
     "No valid custom formats were found in this JSON.",
   "settings.arrImportInvalidJson":
     "Paste valid JSON exported by Sonarr or Radarr.",
+  "settings.arrImportRefusalTooLarge":
+    "Paste no more than {{maxBytes}} bytes of JSON.",
+  "settings.arrImportRefusalEmpty": "Paste at least one custom format.",
+  "settings.arrImportRefusalTooMany":
+    "Paste no more than {{maxFormats}} custom formats at once.",
   "settings.arrImportReviewFailed": "Unable to review these custom formats.",
   "settings.arrImportScore": "Score",
   "settings.arrImportScoreRequired":
@@ -7711,7 +7797,7 @@ const en: LocaleDictionary = {
     "Quality tiers and archival quality",
   "qualityProfile.qualityPreference": "Quality preference",
   "qualityProfile.qualityPreferenceHelp":
-    "Highest preference first. Tier preference takes priority over score. New tiers are added at the lowest preference.",
+    "Highest preference first. Releases are compared on this order at the quality tier step of the decision order. New tiers are added at the lowest preference.",
   "qualityProfile.moveQualityTierUp": "Move {{value}} up",
   "qualityProfile.moveQualityTierDown": "Move {{value}} down",
   "qualityProfile.dragQualityTier": "Drag to reorder {{value}}",
@@ -7742,9 +7828,6 @@ const en: LocaleDictionary = {
   "qualityProfile.allowBdDiskInfo":
     "Allow BD/Disc image releases (ISO/Blu-ray disk style releases) to pass the profile.",
   "qualityProfile.allowDv": "Dolby Vision",
-  "qualityProfile.ignoreProperRepack": "Ignore PROPER/REPACK",
-  "qualityProfile.ignoreProperRepackInfo":
-    "Let quality and scores decide without automatic revision preference or protection. Scoring rules can still reward PROPER/REPACK releases.",
   "qualityProfile.allowUpgrades": "Upgrades allowed",
   "qualityProfile.allowUpgradesInfo":
     "Allow managed copies to be replaced later by a better match, but never above the selected archival quality.",
@@ -8348,6 +8431,8 @@ const en: LocaleDictionary = {
   "profile.linkPlexAccount": "Link Plex",
   "profile.linkAccountConnection": "Connection",
   "profile.linkAccountUsername": "Username",
+  "profile.linkAccountChooseAccount": "Choose an account",
+  "profile.linkAccountAlreadyLinked": "{{username}} (already linked)",
   "profile.linkAccountPassword": "Password",
   "profile.linkAccountPasswordlessHint":
     "Leave blank if this Jellyfin account has no password. Passwordless accounts can be linked, but cannot be used to sign in to Scryer.",
@@ -8415,6 +8500,9 @@ const en: LocaleDictionary = {
   "requests.cancelRequest": "Cancel request",
   "requests.requesters": "Requesters",
   "requests.requestedQualityProfile": "Requested quality profile",
+  "requests.requestedAudioLanguages": "Requested audio languages",
+  "requests.requestedRequiredAudio": "Required: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferred: {{languages}}",
   "requests.requestedMonitorType": "Requested monitoring",
   "requests.libraryDefaultProfile": "Library default",
   "requests.updated": "Updated",
@@ -8484,6 +8572,7 @@ const en: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Category mismatch",
   "wanted.decision.ambiguousIdentity": "Ambiguous identity",
   "wanted.decision.qualityBlocked": "Quality blocked",
+  "wanted.decision.episodeAvailabilityBlocked": "Waiting for air date",
   "wanted.decision.minimumSeeders": "Too few seeders",
   "wanted.decision.packBelowMissingThreshold": "Pack below missing threshold",
   "wanted.decision.packForSingleEpisode": "Pack for a single episode",
@@ -10258,6 +10347,7 @@ const en: LocaleDictionary = {
   "requests.approvedLease": "Keep for",
   "requests.approvedLeaseKeepForever": "Forever, as asked",
   "requests.approvedLeaseKeepRequested": "{{count}} days, as asked",
+  "requests.approvedAudioLanguages": "Audio languages",
   "requests.approvedTags": "Tags",
   "requests.approvedTagsHelp":
     "Applied to the title when you approve. Prefilled with what the rules emitted; add or remove any tag an administrator has defined in Settings > Tags.",
@@ -10341,6 +10431,10 @@ const en: LocaleDictionary = {
     "True when the requester asked to keep the media forever",
   "settings.refReqRequestLeaseDays":
     "How many days the requester asked to keep it for; absent when they asked for forever",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Audio languages the requester said the title must have. null leaves it to the library; an empty list asks for no requirement",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Audio languages the requester prefers, in order. null leaves it to the library",
   "settings.refReqRequestList":
     "The list that submitted the request; see input.request.list below. Absent for a manual request",
   "settings.refReqSectionExternalIds":
@@ -11012,6 +11106,9 @@ const en: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protocol",
   "indexerSearch.facet.resolution": "Resolution",
   "indexerSearch.facet.source": "Source",
+  "indexerSearch.facet.videoCodec": "Video codec",
+  "indexerSearch.facet.audioCodec": "Audio codec",
+  "indexerSearch.facet.audioChannels": "Audio channels",
   "indexerSearch.facet.audio": "Audio & HDR",
   "indexerSearch.facet.flags": "Flags",
   "indexerSearch.facet.indexer": "Indexer",
@@ -11534,6 +11631,8 @@ const en: LocaleDictionary = {
   "lists.refusal.routeLibraryRequired":
     "Choose a library for every kind of title.",
   "lists.refusal.routeLibraryNotFound": "A chosen library no longer exists.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "A route's audio language is not one Scryer recognizes.",
   "lists.refusal.syncCapInvalid":
     "The most titles per sync must be at least 1.",
   "lists.refusal.disabled": "This list is turned off. Turn it on to sync it.",
@@ -12325,6 +12424,9 @@ const en: LocaleDictionary = {
   "jobs.builtin.TitleDeletion.name": "Title Deletion",
   "jobs.builtin.TitleDeletion.description":
     "Delete selected titles from the catalog.",
+  "jobs.builtin.LibraryDeletion.name": "Library Deletion",
+  "jobs.builtin.LibraryDeletion.description":
+    "Delete a library and remove its titles from the catalog, leaving files on disk.",
   "jobs.builtin.TitleRename.name": "Title Rename",
   "jobs.builtin.TitleRename.description": "Rename files for selected titles.",
   "jobs.builtin.MediaFileRescore.name": "Refresh File Scores",
@@ -12494,6 +12596,53 @@ const en: LocaleDictionary = {
   "routeError.technicalDetails": "Technical details",
   "routeError.retry": "Retry",
   "mediaFile.bitDepthValue": "{{depth}}-bit",
+  "qualityProfile.decisionOrder": "Decision order",
+  "qualityProfile.decisionOrderInfo":
+    "When two releases both pass this profile, Scryer checks these steps from the top. The first step that tells them apart decides. Score always decides last.",
+  "qualityProfile.decisionGateQualityTier": "Quality tier",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "The release in the tier ranked higher in this profile's quality preference wins.",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Within the same tier and release group, a newer PROPER or REPACK wins.",
+  "qualityProfile.decisionGatePreferredLanguage": "Preferred language",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "The release whose audio ranks higher in the library's preferred audio languages wins.",
+  "qualityProfile.decisionGateOptionalLanguages": "Optional languages",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "The release carrying more of the library's optional audio languages wins.",
+  "qualityProfile.decisionGateUnknown": "Unrecognized step ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "This version of the web app does not recognize this step. It stays where it is.",
+  "qualityProfile.decisionGateScore": "Score",
+  "qualityProfile.decisionGateScoreDescription":
+    "The higher score wins. Score is always the final step.",
+  "qualityProfile.decisionScoreLocked": "Always last",
+  "qualityProfile.decisionStepRemove":
+    "Remove {{value}} from the decision order",
+  "qualityProfile.decisionStepAdd": "Add {{value}} to the decision order",
+  "qualityProfile.decisionAvailableSteps": "Steps not in use",
+  "qualityProfile.decisionAllStepsInUse": "Every step is in use.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Without the quality tier step, a lower-tier release can replace a higher-tier file, and the cutoff tier does not apply. Only the cutoff score stops the search for upgrades; with no cutoff score either, the profile is satisfied once it has a file.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "A language step comes before quality tier, so a lower-tier release in a preferred language can replace a higher-tier file.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Without the PROPER/REPACK step, PROPER and REPACK releases get no automatic preference. Scoring rules can still reward them.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Language steps only have an effect when the library has preferred or optional audio languages set.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Not applicable without the quality tier step in the decision order.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Each step can appear only once in a quality profile's decision order.",
+  "qualityProfile.decidedBy": "Decided by: {{step}}",
+  "qualityProfile.cutoffScore": "Cutoff score",
+  "qualityProfile.cutoffScoreInfo":
+    "Once the file on disk reaches this score, the profile stops looking for upgrades. Leave empty for no score cutoff.",
+  "qualityProfile.cutoffScorePlaceholder": "No cutoff score",
+  "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
+  "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
 };
 
 export default en;

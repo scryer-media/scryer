@@ -35,7 +35,8 @@ export type ImportSkipReason =
   | "PERMISSION_DENIED"
   | "PASSWORD_REQUIRED"
   | "ARCHIVE_EXTRACTION_PLUGIN_REQUIRED"
-  | "ARCHIVE_EXTRACTION_TIMED_OUT";
+  | "ARCHIVE_EXTRACTION_TIMED_OUT"
+  | "TITLE_FOLDER_CONFLICT";
 
 export type ImportRecord = {
   id: string;

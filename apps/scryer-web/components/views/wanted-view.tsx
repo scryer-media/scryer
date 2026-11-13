@@ -50,6 +50,7 @@ import { ConvergenceBadge } from "@/components/views/convergence-badge";
 import { CutoffUnmetView } from "@/components/views/cutoff-unmet-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
 import { ScoreLog, ScoreValue } from "@/components/common/score-log";
+import { DecidedByBadge } from "@/components/common/decided-by-badge";
 import type {
   AcquisitionSearchJob,
   PendingReleaseItem,
@@ -147,6 +148,7 @@ function formatWantedDecisionCode(code: string, t: Translate) {
     category_mismatch: "wanted.decision.categoryMismatch",
     ambiguous_identity: "wanted.decision.ambiguousIdentity",
     quality_blocked: "wanted.decision.qualityBlocked",
+    episode_availability_blocked: "wanted.decision.episodeAvailabilityBlocked",
     minimum_seeders: "wanted.decision.minimumSeeders",
     pack_below_missing_threshold: "wanted.decision.packBelowMissingThreshold",
     pack_for_single_episode: "wanted.decision.packForSingleEpisode",
@@ -872,6 +874,13 @@ function WantedItemsCard({
                                     {t("wanted.decDelta")}:{" "}
                                     <ScoreValue score={d.scoreDelta} />
                                   </span>
+                                  <DecidedByBadge
+                                    id={selectorId(
+                                      "wanted-release-decision-decided-by-mobile",
+                                      d.id,
+                                    )}
+                                    step={d.decidedBy}
+                                  />
                                 </div>
                                 <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                                   <span>{formatBytes(d.releaseSizeBytes)}</span>
@@ -1204,7 +1213,16 @@ function WantedItemsCard({
                                           {d.releaseTitle}
                                         </TableCell>
                                         <TableCell className="text-center">
-                                          {decisionBadge(d.decisionCode, t)}
+                                          <div className="flex flex-col items-center gap-1">
+                                            {decisionBadge(d.decisionCode, t)}
+                                            <DecidedByBadge
+                                              id={selectorId(
+                                                "wanted-release-decision-decided-by",
+                                                d.id,
+                                              )}
+                                              step={d.decidedBy}
+                                            />
+                                          </div>
                                         </TableCell>
                                         <TableCodeCell className="text-center">
                                           <ScoreValue

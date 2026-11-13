@@ -1,6 +1,6 @@
 [package]
 name = "scryer-application"
-version = "0.22.2"
+version = "0.22.3"
 edition.workspace = true
 
 [features]
@@ -8,11 +8,13 @@ default = []
 runtime = [
     "runtime-archives",
     "runtime-backups",
+    "runtime-diagnostics",
     "runtime-media-analysis",
     "runtime-plugin-trust",
 ]
 runtime-archives = ["dep:zstd"]
 runtime-backups = ["dep:zstd"]
+runtime-diagnostics = ["dep:zstd"]
 runtime-media-analysis = [
     "dep:chardetng",
     "dep:encoding_rs",

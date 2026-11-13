@@ -101,7 +101,52 @@ fn from_metadata_search_item(
         runtime_minutes: item.runtime_minutes,
         sort_title: item.sort_title,
         existing_title_id: None,
+        present_in_library_ids: Vec::new(),
     }
+}
+
+/// Fills `presentInLibraryIds` for every result of one search response with
+/// one presence read. `groups` pairs each facet with its results.
+async fn attach_library_presence(
+    app: &AppUseCase,
+    actor: &scryer_domain::User,
+    groups: Vec<(
+        scryer_domain::MediaFacet,
+        Vec<scryer_application::RichMetadataSearchItem>,
+    )>,
+) -> GqlResult<Vec<Vec<MetadataSearchItemPayload>>> {
+    let presence = {
+        let items = groups
+            .iter()
+            .flat_map(|(facet, results)| {
+                results
+                    .iter()
+                    .map(move |item| (facet.clone(), item.external_ids.as_slice()))
+            })
+            .collect::<Vec<_>>();
+        app.metadata_search_library_presence(actor, &items)
+            .await
+            .map_err(to_gql_error)?
+    };
+    let mut presence = presence.into_iter();
+    Ok(groups
+        .into_iter()
+        .map(|(_, results)| {
+            results
+                .into_iter()
+                .map(|item| {
+                    let mut payload = from_metadata_search_item(app, item);
+                    payload.present_in_library_ids = presence
+                        .next()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(ID::from)
+                        .collect();
+                    payload
+                })
+                .collect()
+        })
+        .collect())
 }
 
 fn parse_metadata_date(value: String, field: &str) -> GqlResult<Date> {
@@ -152,6 +197,17 @@ impl MetadataQueries {
             )
             .await
             .map_err(to_gql_error)?;
+        if ctx.look_ahead().field("presentInLibraryIds").exists()
+            && let Some(facet) = scryer_domain::MediaFacet::parse(type_hint.as_scope_id())
+        {
+            return Ok(
+                attach_library_presence(&app, &actor, vec![(facet, results)])
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            );
+        }
         Ok(results
             .into_iter()
             .map(|item| from_metadata_search_item(&app, item))
@@ -181,6 +237,28 @@ impl MetadataQueries {
             .search_metadata_multi(&actor, &query, limit, &language)
             .await
             .map_err(to_gql_error)?;
+        let lookahead = ctx.look_ahead();
+        if ["movies", "series", "anime"]
+            .into_iter()
+            .any(|group| lookahead.field(group).field("presentInLibraryIds").exists())
+        {
+            let mut groups = attach_library_presence(
+                &app,
+                &actor,
+                vec![
+                    (scryer_domain::MediaFacet::Movie, result.movies),
+                    (scryer_domain::MediaFacet::Series, result.series),
+                    (scryer_domain::MediaFacet::Anime, result.anime),
+                ],
+            )
+            .await?
+            .into_iter();
+            return Ok(MetadataSearchMultiPayload {
+                movies: groups.next().unwrap_or_default(),
+                series: groups.next().unwrap_or_default(),
+                anime: groups.next().unwrap_or_default(),
+            });
+        }
         Ok(MetadataSearchMultiPayload {
             movies: result
                 .movies
@@ -466,14 +544,23 @@ impl MetadataQueries {
             return Ok(Vec::new());
         }
 
-        let mut title_ids = episodes
+        // Availability and playback links are read only when the query
+        // selects them.
+        let selection = ctx.look_ahead();
+        let wants_availability = selection.field("mediaAvailability").exists();
+        let wants_playback_links = selection.field("playbackLinks").exists();
+
+        // A movie event is keyed by its title, not an episode, so it has no
+        // episode availability to look up.
+        let mut episode_ids = episodes
             .iter()
-            .map(|episode| episode.title_id.clone())
+            .filter(|episode| wants_availability && episode.title_facet != "movie")
+            .map(|episode| episode.id.clone())
             .collect::<Vec<_>>();
-        title_ids.sort_unstable();
-        title_ids.dedup();
+        episode_ids.sort_unstable();
+        episode_ids.dedup();
         let mut availability_by_episode = app
-            .list_episode_media_availability(&actor, &title_ids)
+            .list_episode_media_availability_for_episodes(&actor, &episode_ids)
             .await
             .map_err(to_gql_error)?
             .into_iter()
@@ -482,6 +569,7 @@ impl MetadataQueries {
 
         let playback_entities = episodes
             .iter()
+            .filter(|_| wants_playback_links)
             .map(|episode| {
                 if episode.title_facet == "movie" {
                     (

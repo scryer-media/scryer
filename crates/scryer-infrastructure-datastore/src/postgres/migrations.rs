@@ -602,6 +602,9 @@ async fn run_postgres_rust_hook(
             crate::migrations::delay_profile_tables::import_delay_profile_catalog_postgres(tx)
                 .await
         }
+        "repair_title_folder_keys" => {
+            crate::migrations::title_folder_keys::repair_title_folder_keys_postgres(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

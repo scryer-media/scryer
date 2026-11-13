@@ -121,6 +121,31 @@ impl ScoringLane {
     }
 }
 
+/// A stored setting value as the string readers return it: `None` for empty,
+/// `null` or the inherit marker, the inner text of a JSON string, and the
+/// trimmed raw JSON for anything else.
+pub(crate) fn normalize_setting_string_value(raw_value: &str) -> Option<String> {
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() || trimmed == INHERIT_QUALITY_PROFILE_VALUE {
+        return None;
+    }
+    let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+        return Some(trimmed.to_string());
+    };
+    match parsed {
+        Value::Null => None,
+        Value::String(value) => {
+            let normalized = value.trim();
+            if normalized.is_empty() || normalized == INHERIT_QUALITY_PROFILE_VALUE {
+                None
+            } else {
+                Some(normalized.to_string())
+            }
+        }
+        _ => Some(trimmed.to_string()),
+    }
+}
+
 /// Keeps at most `cap` results, taken a round at a time across indexers in
 /// the order each indexer returned them, so one indexer's long feed cannot
 /// crowd out another's first page. Kept results stay in their original order.
@@ -436,10 +461,11 @@ fn evaluate_candidate(
                 || pack_below_missing_threshold
                 || numbering_ambiguous
                 || !protocol_enabled,
-            tier_index: decision.tier_index.unwrap_or(usize::MAX),
+            side: crate::decision_pipeline::SideFacts::of_decision(Some(&decision)),
             negated_revision: 0,
             negated_score: decision.preference_score.saturating_neg(),
             size_fit_penalty: decision.size_fit_penalty,
+            pipeline: decision.decision_pipeline,
         },
         non_preferred_protocol: !source_kind_matches_preference(
             &result,
@@ -3531,30 +3557,7 @@ impl AppUseCase {
             return Ok(None);
         };
 
-        let trimmed = raw_value.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        if trimmed == INHERIT_QUALITY_PROFILE_VALUE {
-            return Ok(None);
-        }
-
-        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
-            return Ok(Some(trimmed.to_string()));
-        };
-        match parsed {
-            Value::Null => Ok(None),
-            Value::String(value) => {
-                let normalized = value.trim();
-                if normalized.is_empty() || normalized == INHERIT_QUALITY_PROFILE_VALUE {
-                    Ok(None)
-                } else {
-                    Ok(Some(normalized.to_string()))
-                }
-            }
-            _ => Ok(Some(trimmed.to_string())),
-        }
+        Ok(normalize_setting_string_value(&raw_value))
     }
 
     pub(crate) async fn read_setting_string_value_for_scope_explicit(
@@ -3574,30 +3577,7 @@ impl AppUseCase {
             return Ok(None);
         };
 
-        let trimmed = raw_value.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        if trimmed == INHERIT_QUALITY_PROFILE_VALUE {
-            return Ok(None);
-        }
-
-        let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
-            return Ok(Some(trimmed.to_string()));
-        };
-        match parsed {
-            Value::Null => Ok(None),
-            Value::String(value) => {
-                let normalized = value.trim();
-                if normalized.is_empty() || normalized == INHERIT_QUALITY_PROFILE_VALUE {
-                    Ok(None)
-                } else {
-                    Ok(Some(normalized.to_string()))
-                }
-            }
-            _ => Ok(Some(trimmed.to_string())),
-        }
+        Ok(normalize_setting_string_value(&raw_value))
     }
 
     pub(crate) fn quality_profile_scope_id(

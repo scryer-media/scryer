@@ -3,12 +3,22 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import type { Client } from "urql";
+import type * as ReleaseSearch from "./release-search.ts";
 import type {
   InteractiveSearchProgress,
   runIterativeReleaseSearch,
 } from "./release-search.ts";
+import { boundedQuery, QueryTimeoutError } from "./bounded-query.ts";
 
-function runner(): typeof runIterativeReleaseSearch {
+function runner(
+  onSignal?: (signal: AbortSignal) => void,
+): typeof runIterativeReleaseSearch {
+  return releaseSearchModule(onSignal).runIterativeReleaseSearch;
+}
+
+function releaseSearchModule(
+  onSignal?: (signal: AbortSignal) => void,
+): typeof ReleaseSearch {
   const source = readFileSync(
     new URL("./release-search.ts", import.meta.url),
     "utf8",
@@ -26,23 +36,34 @@ function runner(): typeof runIterativeReleaseSearch {
     "./release-search-input": {},
     "./urql-client": {
       isAbortError: () => false,
-      makeAbortableFetch: () => undefined,
+      makeAbortableFetch: (signal: AbortSignal) => {
+        onSignal?.(signal);
+        return undefined;
+      },
     },
+    "./bounded-query": { boundedQuery, QueryTimeoutError },
   };
-  const module = {
-    exports: {} as {
-      runIterativeReleaseSearch: typeof runIterativeReleaseSearch;
-    },
-  };
-  new Function("require", "module", "exports", code)(
+  const module = { exports: {} as typeof ReleaseSearch };
+  new Function("require", "module", "exports", "window", code)(
     (id: string) => {
       assert.ok(id in dependencies, `unexpected dependency ${id}`);
       return dependencies[id];
     },
     module,
     module.exports,
+    { setTimeout, clearTimeout },
   );
-  return module.exports.runIterativeReleaseSearch;
+  return module.exports;
+}
+
+function operation<T>(value: T) {
+  return {
+    toPromise: async () => value,
+    subscribe(next: (result: T) => void) {
+      next(value);
+      return { unsubscribe() {} };
+    },
+  };
 }
 
 test("raw continuation forwards the opaque cursor and keeps aggregate size separate", async () => {
@@ -59,21 +80,19 @@ test("raw continuation forwards the opaque cursor and keeps aggregate size separ
   const client = {
     mutation(document: string, variables: unknown) {
       calls.push({ document, variables });
-      return {
-        toPromise: async () => ({
-          data: {
-            continueInteractiveReleaseSearch: {
-              id: "generation",
-              state: "COMPLETED",
-              results: [result],
-              indexers: [],
-              nextCursor: "next-opaque-cursor",
-              deadlineReached: true,
-              failureReasonCode: null,
-            },
+      return operation({
+        data: {
+          continueInteractiveReleaseSearch: {
+            id: "generation",
+            state: "COMPLETED",
+            results: [result],
+            indexers: [],
+            nextCursor: "next-opaque-cursor",
+            deadlineReached: true,
+            failureReasonCode: null,
           },
-        }),
-      };
+        },
+      });
     },
   } as unknown as Client;
   const rows = await runner()(
@@ -104,21 +123,19 @@ test("an initial raw request forwards both page sizes and preserves coded failur
   const client = {
     mutation(document: string, variables: unknown) {
       calls.push({ document, variables });
-      return {
-        toPromise: async () => ({
-          data: {
-            startInteractiveReleaseSearch: {
-              id: "generation",
-              state: "COMPLETED",
-              results: [],
-              indexers: [],
-              nextCursor: null,
-              deadlineReached: false,
-              failureReasonCode: "RAW_SEARCH_ALL_SOURCES_LIMITED",
-            },
+      return operation({
+        data: {
+          startInteractiveReleaseSearch: {
+            id: "generation",
+            state: "COMPLETED",
+            results: [],
+            indexers: [],
+            nextCursor: null,
+            deadlineReached: false,
+            failureReasonCode: "RAW_SEARCH_ALL_SOURCES_LIMITED",
           },
-        }),
-      };
+        },
+      });
     },
   } as unknown as Client;
   await runner()(client, input, { onUpdate: (update) => updates.push(update) });
@@ -126,3 +143,338 @@ test("an initial raw request forwards both page sizes and preserves coded failur
   assert.equal(updates[0].failureReasonCode, "RAW_SEARCH_ALL_SOURCES_LIMITED");
   assert.equal(updates[0].nextCursor, null);
 });
+
+test(
+  "an evicted session ends progress and retains streamed results",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const started = Promise.withResolvers<void>();
+    const updates: InteractiveSearchProgress[] = [];
+    const failures: unknown[] = [];
+    const result = {
+      title: "Example Movie",
+      source: "fixture",
+      downloadUrl: "https://fixture.invalid/release",
+    };
+    const client = {
+      mutation() {
+        return operation({
+          data: {
+            startInteractiveReleaseSearch: {
+              id: "session-1",
+              state: "RUNNING",
+              results: [result],
+              indexers: [],
+            },
+          },
+        });
+      },
+      query() {
+        return operation({ data: { interactiveReleaseSearch: null } });
+      },
+    } as unknown as Client;
+    const request = runner()(
+      client,
+      { titleId: "movie-1" },
+      {
+        onUpdate(snapshot) {
+          updates.push(snapshot);
+          if (snapshot.state === "RUNNING") started.resolve();
+        },
+        onError: (error) => failures.push(error),
+      },
+    );
+    await started.promise;
+    t.mock.timers.tick(1_000);
+    assert.deepEqual(await request, [result]);
+    assert.equal(updates.at(-1)?.state, "CANCELLED");
+    assert.equal(failures.length, 1);
+  },
+);
+
+test(
+  "a hung poll is bounded and releases the subscription",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const started = Promise.withResolvers<void>();
+    const polling = Promise.withResolvers<void>();
+    const updates: InteractiveSearchProgress[] = [];
+    const failures: unknown[] = [];
+    const partial = { title: "Partial result", source: "fixture" };
+    let unsubscribed = 0;
+    let fetchSignal: AbortSignal | undefined;
+    const client = {
+      mutation(document: string) {
+        return operation({
+          data: {
+            startInteractiveReleaseSearch: {
+              id: "session-2",
+              state: document === "cancel" ? "CANCELLED" : "RUNNING",
+              results: [partial],
+              indexers: [],
+            },
+          },
+        });
+      },
+      query() {
+        polling.resolve();
+        return {
+          toPromise: () => new Promise(() => {}),
+          subscribe() {
+            return {
+              unsubscribe() {
+                unsubscribed++;
+              },
+            };
+          },
+        };
+      },
+    } as unknown as Client;
+    const request = runner((signal) => {
+      fetchSignal = signal;
+    })(
+      client,
+      { titleId: "movie-2" },
+      {
+        onUpdate(snapshot) {
+          updates.push(snapshot);
+          if (snapshot.state === "RUNNING") started.resolve();
+        },
+        onError: (error) => failures.push(error),
+      },
+    );
+    await started.promise;
+    t.mock.timers.tick(1_000);
+    await polling.promise;
+    t.mock.timers.tick(130_000);
+    assert.deepEqual(await request, [partial]);
+    assert.equal(unsubscribed, 1);
+    assert.equal(updates.at(-1)?.state, "CANCELLED");
+    assert.ok(failures[0] instanceof QueryTimeoutError);
+    assert.equal(fetchSignal?.aborted, true);
+  },
+);
+
+test(
+  "a hung start rejects at the same client deadline",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    let unsubscribed = 0;
+    let fetchSignal: AbortSignal | undefined;
+    const client = {
+      mutation() {
+        return {
+          subscribe() {
+            return {
+              unsubscribe() {
+                unsubscribed++;
+              },
+            };
+          },
+        };
+      },
+    } as unknown as Client;
+    const request = runner((signal) => {
+      fetchSignal = signal;
+    })(client, { titleId: "movie-start" });
+    let settled = false;
+    const rejected = assert.rejects(request, QueryTimeoutError);
+    void rejected.finally(() => {
+      settled = true;
+    });
+    // The server ends its job at 120 s; the client must still be waiting then.
+    t.mock.timers.tick(120_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    t.mock.timers.tick(10_000);
+    await rejected;
+    assert.equal(unsubscribed, 1);
+    assert.equal(fetchSignal?.aborted, true);
+  },
+);
+
+test("a start without a session rejects with a lifecycle error, not server text", async () => {
+  const search = releaseSearchModule();
+  const client = {
+    mutation() {
+      return operation({ data: { startInteractiveReleaseSearch: null } });
+    },
+  } as unknown as Client;
+  const failure = await search
+    .runIterativeReleaseSearch(client, { titleId: "movie-none" })
+    .then(
+      () => assert.fail("expected the search to reject"),
+      (error: unknown) => error,
+    );
+  assert.ok(failure instanceof search.InteractiveReleaseSearchError);
+  assert.equal(failure.reason, "NO_SESSION");
+  assert.equal(search.isInteractiveReleaseSearchLifecycleError(failure), true);
+  assert.equal(
+    search.isInteractiveReleaseSearchLifecycleError(new QueryTimeoutError()),
+    true,
+  );
+  assert.equal(
+    search.isInteractiveReleaseSearchLifecycleError(new Error("server text")),
+    false,
+  );
+});
+
+test(
+  "cancellation interrupts a hung poll without reporting a failure",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const started = Promise.withResolvers<void>();
+    const polling = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const failures: unknown[] = [];
+    let unsubscribed = 0;
+    let cancellations = 0;
+    const client = {
+      mutation(document: string) {
+        if (document === "cancel") cancellations++;
+        return operation({
+          data: {
+            startInteractiveReleaseSearch: {
+              id: "session-cancel",
+              state: "RUNNING",
+              results: [],
+              indexers: [],
+            },
+          },
+        });
+      },
+      query() {
+        polling.resolve();
+        return {
+          subscribe() {
+            return {
+              unsubscribe() {
+                unsubscribed++;
+              },
+            };
+          },
+        };
+      },
+    } as unknown as Client;
+    const request = runner()(
+      client,
+      { titleId: "movie-cancel" },
+      {
+        signal: controller.signal,
+        onUpdate(snapshot) {
+          if (snapshot.state === "RUNNING") started.resolve();
+        },
+        onError: (error) => failures.push(error),
+      },
+    );
+    await started.promise;
+    t.mock.timers.tick(1_000);
+    await polling.promise;
+    controller.abort();
+    assert.deepEqual(await request, []);
+    assert.equal(unsubscribed, 1);
+    assert.equal(cancellations, 1);
+    assert.deepEqual(failures, []);
+  },
+);
+
+test(
+  "a terminal poll preserves the server's completed state",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const started = Promise.withResolvers<void>();
+    const updates: InteractiveSearchProgress[] = [];
+    const completed = {
+      id: "session-complete",
+      state: "COMPLETED",
+      results: [{ title: "Final result", source: "fixture" }],
+      indexers: [],
+    };
+    const client = {
+      mutation() {
+        return operation({
+          data: {
+            startInteractiveReleaseSearch: {
+              ...completed,
+              state: "RUNNING",
+              results: [],
+            },
+          },
+        });
+      },
+      query() {
+        return operation({ data: { interactiveReleaseSearch: completed } });
+      },
+    } as unknown as Client;
+    const request = runner()(
+      client,
+      { titleId: "movie-complete" },
+      {
+        onUpdate(snapshot) {
+          updates.push(snapshot);
+          if (snapshot.state === "RUNNING") started.resolve();
+        },
+      },
+    );
+
+    await started.promise;
+    t.mock.timers.tick(1_000);
+    assert.deepEqual(await request, completed.results);
+    assert.equal(updates.at(-1)?.state, "COMPLETED");
+  },
+);
+
+test(
+  "a transient poll failure still recovers on the next poll",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const started = Promise.withResolvers<void>();
+    const retried = Promise.withResolvers<void>();
+    t.mock.method(console, "warn", () => retried.resolve());
+    let polls = 0;
+    const job = {
+      id: "session-retry",
+      state: "RUNNING",
+      results: [],
+      indexers: [],
+    };
+    const client = {
+      mutation() {
+        return operation({ data: { startInteractiveReleaseSearch: job } });
+      },
+      query() {
+        polls++;
+        return operation(
+          polls === 1
+            ? { error: new Error("fixture network failure") }
+            : {
+                data: {
+                  interactiveReleaseSearch: { ...job, state: "COMPLETED" },
+                },
+              },
+        );
+      },
+    } as unknown as Client;
+    const request = runner()(
+      client,
+      { titleId: "movie-retry" },
+      {
+        onUpdate(snapshot) {
+          if (snapshot.state === "RUNNING") started.resolve();
+        },
+      },
+    );
+    await started.promise;
+    t.mock.timers.tick(1_000);
+    await retried.promise;
+    t.mock.timers.tick(1_000);
+    assert.deepEqual(await request, []);
+    assert.equal(polls, 2);
+  },
+);

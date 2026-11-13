@@ -246,7 +246,9 @@ export function useNavigationBadges({
     );
     window.addEventListener("focus", refreshFromFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    // A hidden tab skips the pulse; becoming visible refreshes once above.
     const intervalId = window.setInterval(() => {
+      if (document.hidden) return;
       refreshFromPulse();
     }, 30_000);
     return () => {

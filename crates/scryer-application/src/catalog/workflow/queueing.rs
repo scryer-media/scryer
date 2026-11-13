@@ -190,6 +190,35 @@ async fn episode_ids_for_queue_scope(app: &AppUseCase, scope: &SubmissionScope) 
         }
     }
 }
+/// The episodes `wanted_item_candidates_for_submission_scope` needs for
+/// `scope`: none for a scope that is not episode based, the named episodes of
+/// this title for an episode scope, and every episode of the title for a
+/// collection.
+async fn episodes_for_grab_scope(
+    app: &AppUseCase,
+    title_id: &str,
+    scope: &SubmissionScope,
+) -> AppResult<Vec<Episode>> {
+    let shows = &app.services.catalog.shows;
+    let named = match scope {
+        SubmissionScope::Title | SubmissionScope::SeriesMovie { .. } | SubmissionScope::Orphan => {
+            return Ok(Vec::new());
+        }
+        SubmissionScope::Collection { .. } => return shows.list_episodes_for_title(title_id).await,
+        SubmissionScope::Episode { episode_id } => {
+            shows
+                .get_episodes_by_ids(std::slice::from_ref(episode_id))
+                .await?
+        }
+        SubmissionScope::EpisodeSet { episode_ids } => {
+            shows.get_episodes_by_ids(episode_ids).await?
+        }
+    };
+    Ok(named
+        .into_iter()
+        .filter(|episode| episode.title_id == title_id)
+        .collect())
+}
 fn validate_manual_queue_purpose(
     purpose: DownloadSubmissionPurpose,
     title: &Title,
@@ -740,29 +769,22 @@ impl AppUseCase {
                 "release_listing_json": release_listing_json,
             })
             .to_string();
-            let episodes = self
-                .services
-                .catalog
-                .shows
-                .list_episodes_for_title(&title.id)
-                .await?;
-            let states = &self.services.workflow.acquisition_scope_states;
-            for (mut candidate, _) in
+            let episodes = episodes_for_grab_scope(self, &title.id, &scope).await?;
+            let candidates =
                 wanted_item_candidates_for_submission_scope(&title.id, &scope, &episodes)
-            {
-                candidate.id = Id::new().0;
-                candidate.created_at = grabbed_at.clone();
-                candidate.updated_at = grabbed_at.clone();
-                let id = states.ensure_acquisition_scope_state(&candidate).await?;
-                let existing = states.get_acquisition_scope_state_by_id(&id).await?;
-                states
-                    .transition_acquisition_scope_to_grabbed(&AcquisitionScopeGrabTransition {
-                        id,
-                        last_search_at: existing.and_then(|state| state.last_search_at),
-                        grabbed_release: grabbed_release.clone(),
+                    .into_iter()
+                    .map(|(mut candidate, _)| {
+                        candidate.id = Id::new().0;
+                        candidate.created_at = grabbed_at.clone();
+                        candidate.updated_at = grabbed_at.clone();
+                        candidate
                     })
-                    .await?;
-            }
+                    .collect::<Vec<_>>();
+            self.services
+                .workflow
+                .acquisition_scope_states
+                .ensure_acquisition_scopes_grabbed(&candidates, &grabbed_release)
+                .await?;
         }
         tracing::debug!(
             title_id = %title.id,
@@ -1570,6 +1592,9 @@ mod auto_eligibility_reason_tests {
                 tier_index: None,
                 size_fit_penalty: 0,
                 revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
             }),
             extra: Default::default(),
             response_attributes: Default::default(),

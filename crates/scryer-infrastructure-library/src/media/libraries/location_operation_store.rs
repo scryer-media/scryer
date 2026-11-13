@@ -66,6 +66,45 @@ const VERIFICATION_COLUMNS: &str = "id, operation_id, title_id, media_file_id, s
 /// States an operation can no longer be cancelled or resumed from.
 const TERMINAL_STATES: &str = "'completed', 'completed_with_warnings', 'canceled', 'failed'";
 
+use scryer_infrastructure_sql::compressed_blob::LOCATION_PLAN_MAX_BYTES as PLAN_MAX_BYTES;
+
+/// Compresses a confirmed plan off the async runtime: a large plan is
+/// megabytes of JSON.
+async fn encode_plan(plan_json: String) -> AppResult<Vec<u8>> {
+    tokio::task::spawn_blocking(move || {
+        scryer_infrastructure_sql::compressed_blob::compress_text(&plan_json, PLAN_MAX_BYTES)
+    })
+    .await
+    .map_err(|error| AppError::Repository(format!("plan compression task failed: {error}")))?
+}
+
+/// Restores a stored plan off the async runtime. Plans copied by the
+/// migration are plain JSON bytes; every later one is a zstd frame.
+async fn decode_plan(stored: Vec<u8>) -> AppResult<String> {
+    tokio::task::spawn_blocking(move || {
+        scryer_infrastructure_sql::compressed_blob::decompress_text(&stored, PLAN_MAX_BYTES)
+    })
+    .await
+    .map_err(|error| AppError::Repository(format!("plan decompression task failed: {error}")))?
+}
+
+const CREATE_LOCATION_OPERATION_SQL: &str = "INSERT INTO location_operations
+     (id, operation_type, execution_mode, state, initiated_by_user_id,
+      source_library_id, source_root_id, destination_library_id, destination_root_id,
+      plan_fingerprint, verification_depth, verification_fallback_count,
+      title_total, title_completed_count, title_blocked_count,
+      file_total, file_completed_count, bytes_total, bytes_completed,
+      merge_count, dedup_count, rename_count, no_op_count, unresolved_count,
+      job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
+      failure_reason, reason_code, confirmed_at, started_at, completed_at, created_at,
+      updated_at, recovery_key)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+             {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+
+const PLAN_UPSERT: &str =
+    "INSERT INTO location_operation_plans (operation_id, plan) VALUES ({}, {})
+     ON CONFLICT(operation_id) DO UPDATE SET plan = excluded.plan";
+
 #[derive(Clone)]
 pub struct LocationOperationStore {
     datastore: StoreDatastore,
@@ -190,18 +229,22 @@ impl LocationOperationRepository for LocationOperationStore {
         }
         let work = plan.work();
         let operation_id = operation_id.to_owned();
-        let plan_json = plan_json.to_owned();
+        let fingerprint = blake3::hash(plan_json.as_bytes()).to_hex().to_string();
+        let stored_plan = encode_plan(plan_json.to_owned()).await?;
         SqlRuntime::run_in_transaction(&self.datastore, "replace_recovery_plan", move |tx| {
-            let plan = plan.clone(); let work = work.clone(); let operation_id = operation_id.clone(); let plan_json = plan_json.clone();
+            let plan = plan.clone(); let work = work.clone(); let operation_id = operation_id.clone();
+            let fingerprint = fingerprint.clone(); let stored_plan = stored_plan.clone();
             Box::pin(async move {
         let changed = SqlRuntime::execute(SqlExec::Tx(tx),
-            "UPDATE location_operations SET plan_json = {}, plan_fingerprint = {}, source_root_id = {}, destination_root_id = {}, file_total = {}, bytes_total = {}, updated_at = {} WHERE id = {} AND operation_type = 'title_folder_recovery' AND recovery_committed_at IS NULL AND state IN ('failed', 'canceled')",
-            &[SqlArg::Text(plan_json.clone()), SqlArg::Text(blake3::hash(plan_json.as_bytes()).to_hex().to_string()),
+            "UPDATE location_operations SET plan_fingerprint = {}, source_root_id = {}, destination_root_id = {}, file_total = {}, bytes_total = {}, updated_at = {} WHERE id = {} AND operation_type = 'title_folder_recovery' AND recovery_committed_at IS NULL AND state IN ('failed', 'canceled')",
+            &[SqlArg::Text(fingerprint),
                 SqlArg::Text(plan.title.root_folder_id), SqlArg::OptText(plan.destination_root.map(|root| root.id)),
                 SqlArg::I64(work.files_total()), SqlArg::I64(work.bytes_total()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id.clone())]).await?;
         if changed != 1 {
             return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_NOT_REPLANNABLE, "Recovery cannot be replanned in its current state"));
         }
+        SqlRuntime::execute(SqlExec::Tx(tx), PLAN_UPSERT,
+            &[SqlArg::Text(operation_id.clone()), SqlArg::OptBytes(Some(stored_plan))]).await?;
         // Retain destination bytes and staging evidence, but never let an old
         // receipt skip verification under a newly accepted plan.
         SqlRuntime::execute(SqlExec::Tx(tx), "DELETE FROM location_operation_verifications WHERE operation_id = {}",
@@ -235,17 +278,20 @@ impl LocationOperationRepository for LocationOperationStore {
         let operation_id = operation_id.to_owned();
         let plan = plan.clone();
         let event = event.clone();
-        SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", move |tx| {
+        let scope = crate::media::titles::store::TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", move |tx| {
             let operation_id = operation_id.clone();
             let plan = plan.clone();
             let event = event.clone();
+            let proof = proof.clone();
             Box::pin(async move {
                 // Acquire the write lock before taking the validation snapshot.
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE location_operations SET updated_at = updated_at WHERE id = {}",
                     &[SqlArg::Text(operation_id.clone())]).await?;
                 let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT recovery_committed_at, operation_type, execution_mode, cancel_requested, plan_json FROM location_operations WHERE id = {}",
+                    "SELECT recovery_committed_at, operation_type, execution_mode, cancel_requested FROM location_operations WHERE id = {}",
                     &[SqlArg::Text(operation_id.clone())]).await?
                     .ok_or_else(|| AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_OPERATION_NOT_FOUND, "Recovery operation no longer exists"))?;
                 if row.text("operation_type")? != "title_folder_recovery" || row.text("execution_mode")? != "copy_preserve_sources" {
@@ -253,12 +299,21 @@ impl LocationOperationRepository for LocationOperationStore {
                 }
                 if row.opt_timestamp("recovery_committed_at")?.is_some() { return Ok(None); }
                 if row.bool("cancel_requested")? { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_CANCELED_BEFORE_COMMIT, "Recovery canceled before catalog commit; original mappings preserved")); }
-                let persisted: scryer_application::location::title_folder_recovery::RecoveryPlan = serde_json::from_str(&row.text("plan_json")?)
+                let stored_plan = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT plan FROM location_operation_plans WHERE operation_id = {}",
+                    &[SqlArg::Text(operation_id.clone())]).await?
+                    .and_then(|row| row.opt_bytes("plan").transpose())
+                    .transpose()?
+                    .ok_or_else(|| AppError::Repository(format!("location operation {operation_id} has no stored plan")))?;
+                let persisted: scryer_application::location::title_folder_recovery::RecoveryPlan = serde_json::from_str(&decode_plan(stored_plan).await?)
                     .map_err(|e| AppError::Validation(e.to_string()))?;
                 if persisted != plan || plan.unresolved.is_some() {
                     return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED, "Recovery plan changed or remains unresolved"));
                 }
                 if matches!(tx, crate::queries::sql_runtime::SqlTx::Postgres(_)) {
+                    // The folder write lock comes before the table locks, in the
+                    // order every other folder writer takes it.
+                    crate::media::titles::store::lock_title_folder_writes_tx(tx, &plan.title.id).await?;
                     SqlRuntime::execute(SqlExec::Tx(tx), "LOCK TABLE titles, library_roots, media_files IN SHARE ROW EXCLUSIVE MODE", &[]).await?;
                 }
                 let catalog = recovery_catalog_tx(tx).await?;
@@ -289,9 +344,14 @@ impl LocationOperationRepository for LocationOperationStore {
                           SqlArg::Text(plan.title.id.clone()), SqlArg::Text(file.media.file_path.clone()), SqlArg::I64(file.media.size_bytes)]).await?;
                     if changed != 1 { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_MEDIA_CHANGED, "Media changed during recovery")); }
                 }
+                let folder_write = match plan.destination.clone() {
+                    Some(destination) => scryer_application::TitleFolderWrite::assign(&plan.title.id, destination),
+                    None => scryer_application::TitleFolderWrite::clear(&plan.title.id),
+                };
+                crate::media::titles::store::assign_title_folders_tx(tx, &proof, &[folder_write]).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx),
-                    "UPDATE titles SET folder_path = {}, root_folder_id = {}, updated_at = {} WHERE id = {}",
-                    &[SqlArg::OptText(plan.destination.clone()), SqlArg::Text(root.id.clone()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(plan.title.id.clone())]).await?;
+                    "UPDATE titles SET root_folder_id = {}, updated_at = {} WHERE id = {}",
+                    &[SqlArg::Text(root.id.clone()), SqlArg::Timestamp(Utc::now()), SqlArg::Text(plan.title.id.clone())]).await?;
                 // Only the conflict at the now-authoritatively owned folder is
                 // obsolete. Other pending items and ignored decisions survive.
                 SqlRuntime::execute(SqlExec::Tx(tx),
@@ -303,7 +363,9 @@ impl LocationOperationRepository for LocationOperationStore {
                     &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id)]).await?;
                 Ok(Some(stored))
             })
-        }).await
+        }).await;
+        drop(scope);
+        result
     }
 
     async fn save_file_resolution(
@@ -550,66 +612,72 @@ impl LocationOperationRepository for LocationOperationStore {
         operation: &LocationOperation,
         plan_json: Option<&str>,
     ) -> AppResult<()> {
-        SqlRuntime::execute_write(
-            &self.datastore,
-            "create_location_operation",
-            "INSERT INTO location_operations
-             (id, operation_type, execution_mode, state, initiated_by_user_id,
-              source_library_id, source_root_id, destination_library_id, destination_root_id,
-              plan_fingerprint, plan_json, verification_depth, verification_fallback_count,
-              title_total, title_completed_count, title_blocked_count,
-              file_total, file_completed_count, bytes_total, bytes_completed,
-              merge_count, dedup_count, rename_count, no_op_count, unresolved_count,
-              job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
-              failure_reason, reason_code, confirmed_at, started_at, completed_at, created_at,
-              updated_at, recovery_key)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            vec![
+        let plan_args: Option<std::sync::Arc<[SqlArg]>> = match plan_json {
+            Some(plan_json) => Some(std::sync::Arc::from(vec![
                 SqlArg::Text(operation.id.clone()),
-                SqlArg::Text(operation.operation_type.as_str().to_string()),
-                SqlArg::Text(operation.mode.as_str().to_string()),
-                SqlArg::Text(operation.state.as_str().to_string()),
-                SqlArg::OptText(operation.initiated_by_user_id.clone()),
-                SqlArg::OptText(operation.source_library_id.clone()),
-                SqlArg::OptText(operation.source_root_id.clone()),
-                SqlArg::OptText(operation.destination_library_id.clone()),
-                SqlArg::OptText(operation.destination_root_id.clone()),
-                SqlArg::Text(operation.plan_fingerprint.clone()),
-                SqlArg::OptText(plan_json.map(str::to_string)),
-                SqlArg::Text(operation.verification_depth.as_str().to_string()),
-                SqlArg::I64(operation.verification_fallback_count),
-                SqlArg::I64(operation.counters.titles_total),
-                SqlArg::I64(operation.counters.titles_processed),
-                SqlArg::I64(operation.counters.titles_blocked),
-                SqlArg::I64(operation.counters.files_total),
-                SqlArg::I64(operation.counters.files_processed),
-                SqlArg::I64(operation.counters.bytes_total),
-                SqlArg::I64(operation.counters.bytes_processed),
-                SqlArg::I64(operation.counters.merges),
-                SqlArg::I64(operation.counters.dedups),
-                SqlArg::I64(operation.counters.renames),
-                SqlArg::I64(operation.counters.no_ops),
-                SqlArg::I64(operation.counters.unresolved),
-                SqlArg::OptText(operation.job_run_id.clone()),
-                SqlArg::OptText(operation.workflow_operation_id.clone()),
-                SqlArg::Bool(operation.cancel_requested),
-                SqlArg::OptTimestamp(operation.cancel_requested_at),
-                SqlArg::OptText(operation.detail.clone()),
-                SqlArg::OptText(operation.reason_code.map(|code| code.as_str().to_string())),
-                SqlArg::OptTimestamp(operation.confirmed_at),
-                SqlArg::OptTimestamp(operation.started_at),
-                SqlArg::OptTimestamp(operation.completed_at),
-                SqlArg::Timestamp(operation.created_at),
-                SqlArg::Timestamp(operation.updated_at),
-                SqlArg::OptText(
-                    (operation.operation_type == LocationOperationType::TitleFolderRecovery)
-                        .then(|| operation.id.clone()),
-                ),
-            ],
-        )
-        .await?;
-        Ok(())
+                SqlArg::OptBytes(Some(encode_plan(plan_json.to_owned()).await?)),
+            ])),
+            None => None,
+        };
+        let operation_args: std::sync::Arc<[SqlArg]> = std::sync::Arc::from(vec![
+            SqlArg::Text(operation.id.clone()),
+            SqlArg::Text(operation.operation_type.as_str().to_string()),
+            SqlArg::Text(operation.mode.as_str().to_string()),
+            SqlArg::Text(operation.state.as_str().to_string()),
+            SqlArg::OptText(operation.initiated_by_user_id.clone()),
+            SqlArg::OptText(operation.source_library_id.clone()),
+            SqlArg::OptText(operation.source_root_id.clone()),
+            SqlArg::OptText(operation.destination_library_id.clone()),
+            SqlArg::OptText(operation.destination_root_id.clone()),
+            SqlArg::Text(operation.plan_fingerprint.clone()),
+            SqlArg::Text(operation.verification_depth.as_str().to_string()),
+            SqlArg::I64(operation.verification_fallback_count),
+            SqlArg::I64(operation.counters.titles_total),
+            SqlArg::I64(operation.counters.titles_processed),
+            SqlArg::I64(operation.counters.titles_blocked),
+            SqlArg::I64(operation.counters.files_total),
+            SqlArg::I64(operation.counters.files_processed),
+            SqlArg::I64(operation.counters.bytes_total),
+            SqlArg::I64(operation.counters.bytes_processed),
+            SqlArg::I64(operation.counters.merges),
+            SqlArg::I64(operation.counters.dedups),
+            SqlArg::I64(operation.counters.renames),
+            SqlArg::I64(operation.counters.no_ops),
+            SqlArg::I64(operation.counters.unresolved),
+            SqlArg::OptText(operation.job_run_id.clone()),
+            SqlArg::OptText(operation.workflow_operation_id.clone()),
+            SqlArg::Bool(operation.cancel_requested),
+            SqlArg::OptTimestamp(operation.cancel_requested_at),
+            SqlArg::OptText(operation.detail.clone()),
+            SqlArg::OptText(operation.reason_code.map(|code| code.as_str().to_string())),
+            SqlArg::OptTimestamp(operation.confirmed_at),
+            SqlArg::OptTimestamp(operation.started_at),
+            SqlArg::OptTimestamp(operation.completed_at),
+            SqlArg::Timestamp(operation.created_at),
+            SqlArg::Timestamp(operation.updated_at),
+            SqlArg::OptText(
+                (operation.operation_type == LocationOperationType::TitleFolderRecovery)
+                    .then(|| operation.id.clone()),
+            ),
+        ]);
+        // The operation and its plan land together or not at all.
+        SqlRuntime::run_in_transaction(&self.datastore, "create_location_operation", move |tx| {
+            let operation_args = std::sync::Arc::clone(&operation_args);
+            let plan_args = plan_args.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    CREATE_LOCATION_OPERATION_SQL,
+                    operation_args.as_ref(),
+                )
+                .await?;
+                if let Some(plan_args) = plan_args {
+                    SqlRuntime::execute(SqlExec::Tx(tx), PLAN_UPSERT, plan_args.as_ref()).await?;
+                }
+                Ok(())
+            })
+        })
+        .await
     }
 
     async fn get_location_operation(
@@ -634,12 +702,12 @@ impl LocationOperationRepository for LocationOperationStore {
     ) -> AppResult<Option<String>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT plan_json FROM location_operations WHERE id = {}",
+            "SELECT plan FROM location_operation_plans WHERE operation_id = {}",
             &[SqlArg::Text(operation_id.to_string())],
         )
         .await?;
-        match row {
-            Some(row) => row.opt_text("plan_json"),
+        match row.map(|row| row.opt_bytes("plan")).transpose()?.flatten() {
+            Some(stored) => decode_plan(stored).await.map(Some),
             None => Ok(None),
         }
     }
@@ -696,32 +764,37 @@ impl LocationOperationRepository for LocationOperationStore {
              WHERE id = {{}} AND NOT (state = 'canceled' AND started_at IS NULL)"
         );
 
+        let args = vec![
+            SqlArg::Text(progress.state.as_str().to_string()),
+            SqlArg::I64(progress.counters.titles_total),
+            SqlArg::I64(progress.counters.titles_processed),
+            SqlArg::I64(progress.counters.titles_blocked),
+            SqlArg::I64(progress.counters.files_total),
+            SqlArg::I64(progress.counters.files_processed),
+            SqlArg::I64(progress.counters.bytes_total),
+            SqlArg::I64(progress.counters.bytes_processed),
+            SqlArg::I64(progress.counters.merges),
+            SqlArg::I64(progress.counters.dedups),
+            SqlArg::I64(progress.counters.renames),
+            SqlArg::I64(progress.counters.no_ops),
+            SqlArg::I64(progress.counters.unresolved),
+            SqlArg::I64(progress.verification_fallback_count),
+            SqlArg::OptText(progress.detail.clone()),
+            SqlArg::OptText(progress.reason_code.map(|code| code.as_str().to_string())),
+            SqlArg::OptTimestamp(progress.started_at),
+            SqlArg::OptTimestamp(progress.completed_at),
+            SqlArg::Timestamp(Utc::now()),
+            SqlArg::Text(progress.operation_id.clone()),
+        ];
+
+        // The plan row is left alone: it lives as long as the operation row,
+        // which the foreign key cascade removes it with. A completed
+        // operation's activity detail still lists its files from the plan.
         let updated = SqlRuntime::execute_write(
             &self.datastore,
             "update_location_operation_progress",
             &sql,
-            vec![
-                SqlArg::Text(progress.state.as_str().to_string()),
-                SqlArg::I64(progress.counters.titles_total),
-                SqlArg::I64(progress.counters.titles_processed),
-                SqlArg::I64(progress.counters.titles_blocked),
-                SqlArg::I64(progress.counters.files_total),
-                SqlArg::I64(progress.counters.files_processed),
-                SqlArg::I64(progress.counters.bytes_total),
-                SqlArg::I64(progress.counters.bytes_processed),
-                SqlArg::I64(progress.counters.merges),
-                SqlArg::I64(progress.counters.dedups),
-                SqlArg::I64(progress.counters.renames),
-                SqlArg::I64(progress.counters.no_ops),
-                SqlArg::I64(progress.counters.unresolved),
-                SqlArg::I64(progress.verification_fallback_count),
-                SqlArg::OptText(progress.detail.clone()),
-                SqlArg::OptText(progress.reason_code.map(|code| code.as_str().to_string())),
-                SqlArg::OptTimestamp(progress.started_at),
-                SqlArg::OptTimestamp(progress.completed_at),
-                SqlArg::Timestamp(Utc::now()),
-                SqlArg::Text(progress.operation_id.clone()),
-            ],
+            args,
         )
         .await?;
 
@@ -1174,6 +1247,53 @@ impl LocationOperationRepository for LocationOperationStore {
             Some(row) => row.text("operation_id").map(Some),
             None => Ok(None),
         }
+    }
+
+    async fn location_ownership_holders(
+        &self,
+        entities: &[OwnedEntity],
+    ) -> AppResult<Vec<Option<String>>> {
+        let mut holders = std::collections::HashMap::<(String, String), String>::new();
+        let mut kinds = std::collections::BTreeMap::<&str, Vec<String>>::new();
+        for entity in entities {
+            kinds
+                .entry(entity.kind_str())
+                .or_default()
+                .push(entity.id().to_string());
+        }
+        for (kind, ids) in kinds {
+            // Well under either engine's bind limit per statement.
+            for chunk in ids.chunks(900) {
+                let placeholders = std::iter::repeat_n("{}", chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut args = vec![SqlArg::Text(kind.to_string())];
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                let rows = SqlRuntime::fetch_all(
+                    self.datastore.read_exec(),
+                    &format!(
+                        "SELECT entity_id, operation_id FROM location_operation_owned_entities
+                         WHERE entity_type = {{}} AND entity_id IN ({placeholders})
+                           AND released_at IS NULL"
+                    ),
+                    &args,
+                )
+                .await?;
+                for row in rows {
+                    holders
+                        .entry((kind.to_string(), row.text("entity_id")?))
+                        .or_insert(row.text("operation_id")?);
+                }
+            }
+        }
+        Ok(entities
+            .iter()
+            .map(|entity| {
+                holders
+                    .get(&(entity.kind_str().to_string(), entity.id().to_string()))
+                    .cloned()
+            })
+            .collect())
     }
 
     async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>> {
@@ -2979,6 +3099,326 @@ mod tests {
                 .await
                 .expect("the read should succeed")
                 .is_empty()
+        );
+    }
+
+    async fn stored_plan(store: &LocationOperationStore, operation_id: &str) -> Option<Vec<u8>> {
+        SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT plan FROM location_operation_plans WHERE operation_id = {}",
+            &[SqlArg::Text(operation_id.to_string())],
+        )
+        .await
+        .expect("the plan row read should succeed")
+        .map(|row| {
+            row.opt_bytes("plan")
+                .expect("the plan should decode")
+                .expect("a stored plan is never null")
+        })
+    }
+
+    #[tokio::test]
+    async fn a_plan_is_stored_as_a_zstd_frame_beside_its_operation() {
+        let store = test_store().await;
+        let plan_json = format!(
+            "{{\"titles\":[{}]}}",
+            vec!["{\"title_id\":\"title-synthetic\",\"files\":[]}"; 2_000].join(",")
+        );
+        store
+            .create_location_operation(
+                &operation("op-1", LocationOperationState::Queued),
+                Some(&plan_json),
+            )
+            .await
+            .expect("the operation should persist");
+
+        let stored = stored_plan(&store, "op-1")
+            .await
+            .expect("the plan row should exist");
+        assert!(stored.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]));
+        assert!(stored.len() < plan_json.len() / 10);
+        assert_eq!(
+            store
+                .get_location_operation_plan_json("op-1")
+                .await
+                .expect("the plan read should succeed"),
+            Some(plan_json)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_operation_without_a_plan_stores_no_plan_row() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Queued), None)
+            .await
+            .expect("the operation should persist");
+
+        assert_eq!(stored_plan(&store, "op-1").await, None);
+        assert_eq!(
+            store
+                .get_location_operation_plan_json("op-1")
+                .await
+                .expect("the plan read should succeed"),
+            None
+        );
+        assert_eq!(
+            store
+                .get_location_operation_plan_json("op-missing")
+                .await
+                .expect("the plan read should succeed"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plan_copied_as_plain_bytes_by_the_migration_reads_back() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Queued), None)
+            .await
+            .expect("the operation should persist");
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_legacy_plan",
+            "INSERT INTO location_operation_plans (operation_id, plan) VALUES ({}, {})",
+            vec![
+                SqlArg::Text("op-1".to_string()),
+                SqlArg::OptBytes(Some(b"{\"titles\":[]}".to_vec())),
+            ],
+        )
+        .await
+        .expect("the legacy plan should insert");
+
+        assert_eq!(
+            store
+                .get_location_operation_plan_json("op-1")
+                .await
+                .expect("the plan read should succeed")
+                .as_deref(),
+            Some("{\"titles\":[]}")
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_and_cancel_writes_leave_the_plan_row_alone_and_delete_takes_it() {
+        let store = test_store().await;
+        store
+            .create_location_operation(
+                &operation("op-1", LocationOperationState::Moving),
+                Some("{\"titles\":[]}"),
+            )
+            .await
+            .expect("the operation should persist");
+        // A sentinel no store write produces: any rewrite of the plan row
+        // would replace it.
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_sentinel_plan",
+            "UPDATE location_operation_plans SET plan = {} WHERE operation_id = {}",
+            vec![
+                SqlArg::OptBytes(Some(b"{\"sentinel\":true}".to_vec())),
+                SqlArg::Text("op-1".to_string()),
+            ],
+        )
+        .await
+        .expect("the sentinel should write");
+
+        store
+            .update_location_operation_progress(&LocationOperationProgress {
+                operation_id: "op-1".to_string(),
+                state: LocationOperationState::Moving,
+                counters: LocationOperationCounters {
+                    titles_total: 2,
+                    files_total: 5,
+                    bytes_total: 500,
+                    ..LocationOperationCounters::default()
+                },
+                verification_fallback_count: 0,
+                detail: None,
+                reason_code: None,
+                clear_detail: false,
+                started_at: Some(timestamp()),
+                completed_at: None,
+            })
+            .await
+            .expect("the progress write should succeed");
+        assert!(
+            store
+                .request_location_operation_cancel("op-1")
+                .await
+                .expect("the cancel should succeed")
+        );
+        assert_eq!(
+            stored_plan(&store, "op-1").await.as_deref(),
+            Some(&b"{\"sentinel\":true}"[..])
+        );
+
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "delete_location_operation",
+            "DELETE FROM location_operations WHERE id = {}",
+            vec![SqlArg::Text("op-1".to_string())],
+        )
+        .await
+        .expect("the delete should succeed");
+        assert_eq!(stored_plan(&store, "op-1").await, None);
+    }
+
+    fn terminal_progress(
+        operation_id: &str,
+        state: LocationOperationState,
+    ) -> LocationOperationProgress {
+        LocationOperationProgress {
+            operation_id: operation_id.to_string(),
+            state,
+            counters: LocationOperationCounters {
+                titles_total: 1,
+                titles_processed: 1,
+                ..LocationOperationCounters::default()
+            },
+            verification_fallback_count: 0,
+            detail: None,
+            reason_code: None,
+            clear_detail: true,
+            started_at: Some(timestamp()),
+            completed_at: Some(timestamp()),
+        }
+    }
+
+    #[tokio::test]
+    async fn completing_an_operation_keeps_its_plan_and_its_row() {
+        for state in [
+            LocationOperationState::Completed,
+            LocationOperationState::CompletedWithWarnings,
+        ] {
+            let store = test_store().await;
+            store
+                .create_location_operation(
+                    &operation("op-1", LocationOperationState::Moving),
+                    Some("{\"titles\":[]}"),
+                )
+                .await
+                .expect("the operation should persist");
+
+            store
+                .update_location_operation_progress(&terminal_progress("op-1", state))
+                .await
+                .expect("the terminal write should succeed");
+
+            assert!(stored_plan(&store, "op-1").await.is_some(), "{state:?}");
+            let operation = store
+                .get_location_operation("op-1")
+                .await
+                .expect("the operation read should succeed")
+                .expect("the operation row stays");
+            assert_eq!(operation.state, state);
+            assert!(operation.completed_at.is_some());
+            assert_eq!(
+                store
+                    .get_location_operation_plan_json("op-1")
+                    .await
+                    .expect("the plan read should succeed")
+                    .as_deref(),
+                Some("{\"titles\":[]}"),
+                "{state:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn no_terminal_or_progress_write_drops_the_plan() {
+        let store = test_store().await;
+        let mut multi_source = operation("op-multi-source", LocationOperationState::Moving);
+        multi_source.source_library_id = None;
+        store
+            .create_location_operation(&multi_source, Some("{\"titles\":[]}"))
+            .await
+            .expect("the operation should persist");
+        for id in ["op-failed", "op-canceled", "op-working"] {
+            store
+                .create_location_operation(
+                    &operation(id, LocationOperationState::Moving),
+                    Some("{\"titles\":[]}"),
+                )
+                .await
+                .expect("the operation should persist");
+        }
+
+        store
+            .update_location_operation_progress(&terminal_progress(
+                "op-multi-source",
+                LocationOperationState::Completed,
+            ))
+            .await
+            .expect("the terminal write should succeed");
+        store
+            .update_location_operation_progress(&terminal_progress(
+                "op-failed",
+                LocationOperationState::Failed,
+            ))
+            .await
+            .expect("the terminal write should succeed");
+        store
+            .update_location_operation_progress(&terminal_progress(
+                "op-canceled",
+                LocationOperationState::Canceled,
+            ))
+            .await
+            .expect("the terminal write should succeed");
+        let mut working = terminal_progress("op-working", LocationOperationState::CleaningUp);
+        working.completed_at = None;
+        store
+            .update_location_operation_progress(&working)
+            .await
+            .expect("the progress write should succeed");
+
+        for id in ["op-multi-source", "op-failed", "op-canceled", "op-working"] {
+            assert_eq!(
+                store
+                    .get_location_operation_plan_json(id)
+                    .await
+                    .expect("the plan read should succeed")
+                    .as_deref(),
+                Some("{\"titles\":[]}"),
+                "{id} keeps its plan"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_completion_the_row_refuses_leaves_the_plan() {
+        let store = test_store().await;
+        let mut queued = operation("op-1", LocationOperationState::Queued);
+        queued.started_at = None;
+        store
+            .create_location_operation(&queued, Some("{\"titles\":[]}"))
+            .await
+            .expect("the operation should persist");
+        // Canceled before it started: a late progress write must not land.
+        assert!(
+            store
+                .request_location_operation_cancel("op-1")
+                .await
+                .expect("the cancel should succeed")
+        );
+
+        let refused = store
+            .update_location_operation_progress(&terminal_progress(
+                "op-1",
+                LocationOperationState::Completed,
+            ))
+            .await;
+        assert!(refused.is_err());
+        assert!(stored_plan(&store, "op-1").await.is_some());
+        assert_eq!(
+            store
+                .get_location_operation("op-1")
+                .await
+                .expect("the operation read should succeed")
+                .expect("the operation row stays")
+                .state,
+            LocationOperationState::Canceled
         );
     }
 }

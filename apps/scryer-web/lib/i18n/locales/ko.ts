@@ -689,6 +689,22 @@ const ko: LocaleDictionary = {
     "품질 프로필 카탈로그가 유효한 JSON이 아닙니다.",
   "settings.qualityProfileUnknown": '알 수 없는 품질 프로필 ID "{{id}}".',
   "settings.qualitySettingsSaved": "품질 설정이 저장되었습니다.",
+  "settings.audioLanguagePreferences": "오디오 언어 선호 설정",
+  "settings.audioLanguagePreferencesInfo":
+    "릴리스를 거부하지 않고 오디오 언어로 순위를 매깁니다. 필수 언어와 달리, 이 언어가 없는 릴리스도 더 나은 것이 없으면 받고, 더 나은 릴리스가 나오면 교체합니다.",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "이 라이브러리의 개별 값입니다. 목록을 비우거나 상속을 선택하면 카탈로그 기본값을 사용합니다.",
+  "settings.audioPreferredLanguages": "선호 언어",
+  "settings.audioPreferredLanguagesHint":
+    "선호하는 순서대로 나열합니다. 첫 번째 언어가 있는 릴리스는 두 번째 언어만 있는 릴리스보다 순위가 높습니다. 어느 언어도 없는 파일은 계속 업그레이드 대상입니다.",
+  "settings.audioPreferredMoveUp": "{{language}} 위로 이동",
+  "settings.audioPreferredMoveDown": "{{language}} 아래로 이동",
+  "settings.audioOptionalLanguages": "선택 언어",
+  "settings.audioOptionalLanguagesHint":
+    "있으면 좋은 언어입니다. 품질이 같은 릴리스 중에서는 이 언어를 더 많이 포함한 릴리스가 우선합니다.",
+  "settings.audioOptionalKeepSearching": "선택 언어 계속 검색",
+  "settings.audioOptionalKeepSearchingHint":
+    "켜면 선택 언어가 빠진 파일은 계속 업그레이드 대상입니다. 끄면 그런 릴리스를 발견했을 때 교체는 하지만 검색은 하지 않습니다.",
   "settings.downloadClientRoutingSaved":
     "다운로드 클라이언트 라우팅이 저장되었습니다.",
   "settings.downloadClientRoutingSavedFor":
@@ -1236,6 +1252,18 @@ const ko: LocaleDictionary = {
   "title.monitoredSection": "모니터링 중인 {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "최신 대기열",
+  "search.addConfigRequiredAudio": "필수 오디오 언어",
+  "search.addConfigPreferredAudio": "선호 오디오 언어",
+  "search.addConfigAudioChoose": "언어 선택",
+  "search.addConfigAudioRequireNone": "필수 없음",
+  "title.preferredAudioLanguages": "선호 오디오 언어",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer가 인식하지 못하는 오디오 언어입니다.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "경로의 오디오 언어를 Scryer가 인식하지 못합니다.",
+  "requests.requestedAudioLanguages": "요청한 오디오 언어",
+  "requests.requestedRequiredAudio": "필수: {{languages}}",
+  "requests.requestedPreferredAudio": "선호: {{languages}}",
   "title.requiredAudioLanguages": "필수 오디오 언어",
   "title.originalAudioLanguagePerTitle": "원어(제목별)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1350,6 +1378,11 @@ const ko: LocaleDictionary = {
   "tvdb.searchPrompt": "위에 제목을 입력하여 TVDB를 검색하세요.",
   "tvdb.searchByTvdb": "TVDB 검색",
   "nzb.searchResultsFor": "{{name}}에 대한 NZB 결과",
+  "nzb.audioLanguagePreferred": "선호 언어",
+  "nzb.audioLanguagePreferredRank": "선호 언어 #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "선호 언어 없음",
+  "nzb.audioLanguageOptionalHits": "선택 +{{count}}",
+  "nzb.audioLanguageHint": "오디오 언어 선호 설정에 따른 이 릴리스의 순위",
   "nzb.noResultsYet": "아직 릴리스 매치가 없습니다.",
   "nzb.searchFailed": "릴리스 검색에 실패했습니다.",
   "nzb.queue": "대기열",
@@ -1489,6 +1522,17 @@ const ko: LocaleDictionary = {
   "importHistory.passwordPlaceholder": "아카이브 비밀번호",
   "importHistory.retrySuccess": "가져오기 재시도가 시작되었습니다",
   "system.title": "시스템 상태",
+  "system.diagnosticsBundle.download": "진단 번들 다운로드",
+  "system.diagnosticsBundle.preparing": "진단 준비 중…",
+  "system.diagnosticsBundle.helper":
+    "로그, 메트릭, 설정 요약을 관리자에게 보낼 하나의 파일로 묶습니다. 이름, 주소, 경로, 비밀 값은 최선을 다해 제거되지만 공유하기 전에 번들을 검토하세요.",
+  "system.diagnosticsBundle.failed": "진단 번들을 다운로드하지 못했습니다.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "진단을 다운로드하려면 다시 로그인하세요.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "진단을 다운로드하려면 시스템 설정 권한이 필요합니다.",
+  "system.diagnosticsBundle.refusal.failed":
+    "진단 번들을 만들 수 없습니다. 자세한 내용은 서버 로그를 확인하세요.",
   "system.jobsTitle": "채용 정보",
   "system.notLoaded": "시스템 상태가 로드되지 않았습니다.",
   "system.refreshing": "새로고침 중",
@@ -2037,6 +2081,7 @@ const ko: LocaleDictionary = {
   "wanted.decision.eligible": "적격",
   "wanted.decision.titleMismatch": "제목 불일치",
   "wanted.decision.qualityBlocked": "품질로 차단됨",
+  "wanted.decision.episodeAvailabilityBlocked": "방영일 대기 중",
   "wanted.decision.upgradeRejected": "업그레이드 거부됨",
   "wanted.decision.pendingDelay": "보류 중인 지연",
   "wanted.decision.alreadyActive": "이미 활성 상태",
@@ -2979,6 +3024,9 @@ const ko: LocaleDictionary = {
   "indexerSearch.facet.protocol": "프로토콜",
   "indexerSearch.facet.resolution": "해상도",
   "indexerSearch.facet.source": "소스",
+  "indexerSearch.facet.videoCodec": "비디오 코덱",
+  "indexerSearch.facet.audioCodec": "오디오 코덱",
+  "indexerSearch.facet.audioChannels": "오디오 채널",
   "indexerSearch.facet.audio": "오디오 및 HDR",
   "indexerSearch.facet.flags": "플래그",
   "indexerSearch.facet.indexer": "인덱서",
@@ -3695,6 +3743,54 @@ const ko: LocaleDictionary = {
   "setup.sourceImportState.failed": "실패",
   "setup.sourceImportState.interrupted": "중단됨",
   "setup.sourceImportState.skipped": "건너뜀",
+  "qualityProfile.decisionOrder": "판정 순서",
+  "qualityProfile.decisionOrderInfo":
+    "두 릴리스가 모두 이 프로필을 통과하면 Scryer는 위에서부터 이 단계를 확인합니다. 둘을 처음으로 구분하는 단계가 결정합니다. 점수는 항상 마지막에 결정합니다.",
+  "qualityProfile.decisionGateQualityTier": "품질 등급",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "이 프로필의 품질 선호 순서에서 더 위에 있는 등급의 릴리스가 이깁니다.",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "같은 등급, 같은 릴리스 그룹 안에서는 더 새로운 PROPER 또는 REPACK이 이깁니다.",
+  "qualityProfile.decisionGatePreferredLanguage": "선호 언어",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "라이브러리의 선호 오디오 언어에서 더 위에 있는 오디오를 가진 릴리스가 이깁니다.",
+  "qualityProfile.decisionGateOptionalLanguages": "선택 언어",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "라이브러리의 선택 오디오 언어를 더 많이 포함한 릴리스가 이깁니다.",
+  "qualityProfile.decisionGateUnknown": "알 수 없는 단계 ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "이 버전의 웹 앱은 이 단계를 인식하지 못합니다. 현재 위치에 그대로 유지됩니다.",
+  "qualityProfile.decisionGateScore": "점수",
+  "qualityProfile.decisionGateScoreDescription":
+    "점수가 높은 쪽이 이깁니다. 점수는 항상 마지막 단계입니다.",
+  "qualityProfile.decisionScoreLocked": "항상 마지막",
+  "qualityProfile.decisionStepRemove": "판정 순서에서 {{value}} 제거",
+  "qualityProfile.decisionStepAdd": "판정 순서에 {{value}} 추가",
+  "qualityProfile.decisionAvailableSteps": "사용하지 않는 단계",
+  "qualityProfile.decisionAllStepsInUse": "모든 단계를 사용 중입니다.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "품질 등급 단계가 없으면 낮은 등급의 릴리스가 높은 등급의 파일을 대체할 수 있고, 컷오프 등급은 적용되지 않습니다. 업그레이드 검색은 컷오프 점수로만 멈추며, 컷오프 점수도 없으면 파일이 있는 즉시 프로필이 충족됩니다.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "언어 단계가 품질 등급보다 앞에 있어, 선호 언어의 낮은 등급 릴리스가 높은 등급의 파일을 대체할 수 있습니다.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "PROPER/REPACK 단계가 없으면 PROPER 및 REPACK 릴리스는 자동으로 우선되지 않습니다. 점수 규칙으로는 여전히 가산할 수 있습니다.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "언어 단계는 라이브러리에 선호 또는 선택 오디오 언어가 설정된 경우에만 효과가 있습니다.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "판정 순서에 품질 등급 단계가 없으면 적용되지 않습니다.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "품질 프로필의 판정 순서에서 각 단계는 한 번만 사용할 수 있습니다.",
+  "qualityProfile.qualityPreferenceHelp":
+    "선호도가 가장 높은 항목이 먼저입니다. 릴리스는 판정 순서의 품질 등급 단계에서 이 순서로 비교됩니다. 새 등급은 가장 낮은 선호도로 추가됩니다.",
+  "qualityProfile.decidedBy": "결정 단계: {{step}}",
+  "qualityProfile.cutoffScore": "컷오프 점수",
+  "qualityProfile.cutoffScoreInfo":
+    "디스크의 파일이 이 점수에 도달하면 프로필은 업그레이드 검색을 멈춥니다. 컷오프 점수를 쓰지 않으려면 비워 두세요.",
+  "qualityProfile.cutoffScorePlaceholder": "컷오프 점수 없음",
+  "qualityProfile.decisionStepDrag": "드래그하여 {{value}} 순서 변경",
+  "qualityProfile.decisionStepMoveUp": "{{value}} 위로 이동",
+  "qualityProfile.decisionStepMoveDown": "{{value}} 아래로 이동",
 };
 
 export default ko;

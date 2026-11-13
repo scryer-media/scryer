@@ -233,6 +233,44 @@ async fn graphql_catalog_scroll_has_more_without_aggregates() {
     }
 }
 
+#[tokio::test]
+async fn graphql_catalog_counts_file_states_only_when_selected() {
+    let ctx = TestContext::new().await;
+    add_test_title(&ctx, "Emberfall", "MOVIE").await;
+    let narrow = "{ titles { filterCounts { all monitored unmonitored continuing ended } } }";
+    let full = "{ titles { filterCounts { all monitored unmonitored continuing ended missing partial complete needsAttention } } }";
+
+    let body = gql(&ctx, full, json!({})).await;
+    assert_no_errors(&body);
+    let full_counts = body["data"]["titles"]["filterCounts"].clone();
+    assert_eq!(full_counts["all"], 1);
+    assert_eq!(full_counts["missing"], 1);
+    assert_eq!(full_counts["partial"], 0);
+    assert_eq!(full_counts["complete"], 0);
+    assert_eq!(full_counts["needsAttention"], 0);
+
+    // Only the file-state counts read media_files, so with the table gone a selection
+    // without them must still answer, with the same numbers.
+    sqlx::query("ALTER TABLE media_files RENAME TO unavailable_media_files")
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    let body = gql(&ctx, narrow, json!({})).await;
+    assert_no_errors(&body);
+    let narrow_counts = &body["data"]["titles"]["filterCounts"];
+    for field in ["all", "monitored", "unmonitored", "continuing", "ended"] {
+        assert_eq!(narrow_counts[field], full_counts[field], "{field}");
+    }
+    for field in ["missing", "partial", "complete", "needsAttention"] {
+        let query = format!("{{ titles {{ filterCounts {{ all {field} }} }} }}");
+        let body = gql(&ctx, &query, json!({})).await;
+        assert!(
+            body.get("errors").is_some(),
+            "selecting {field} must still count file states"
+        );
+    }
+}
+
 async fn create_title_catalog_library(
     ctx: &TestContext,
     facet: &str,
@@ -6062,6 +6100,88 @@ async fn graphql_library_search_languages_round_trip_in_order() {
         read["data"]["librarySettings"]["searchLanguages"],
         json!(["swe", "deu"])
     );
+}
+
+/// A library's audio language preferences override its facet's one value at a
+/// time; an omitted value inherits again.
+#[tokio::test]
+async fn graphql_library_audio_language_preferences_inherit_per_value() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    seed_library_settings_definitions(&ctx).await;
+    let facet = gql(
+        &ctx,
+        r#"mutation($input: UpdateMediaSettingsInput!) {
+            updateMediaSettings(input: $input) { scope }
+        }"#,
+        json!({"input": {
+            "scope": "SERIES",
+            "preferredAudioLanguages": ["ger"],
+            "optionalAudioLanguagesKeepSearching": true
+        }}),
+    )
+    .await;
+    assert_no_errors(&facet);
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let read = r#"query($libraryId: ID!) {
+        librarySettings(libraryId: $libraryId) {
+            preferredAudioLanguagesOverride
+            preferredAudioLanguages
+            optionalAudioLanguagesOverride
+            optionalAudioLanguages
+            optionalAudioLanguagesKeepSearchingOverride
+            optionalAudioLanguagesKeepSearching
+        }
+    }"#;
+    let save = |settings: serde_json::Value| {
+        gql(
+            &ctx,
+            r#"mutation($input: UpdateLibraryInput!) {
+                updateLibrary(input: $input) { id }
+            }"#,
+            json!({"input": {"libraryId": library_id, "settings": settings}}),
+        )
+    };
+
+    let update = save(json!({
+        "optionalAudioLanguages": ["en"],
+        "optionalAudioLanguagesKeepSearching": false
+    }))
+    .await;
+    assert_no_errors(&update);
+    let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
+    assert_no_errors(&settings);
+    let settings = &settings["data"]["librarySettings"];
+    assert!(settings["preferredAudioLanguagesOverride"].is_null());
+    assert_eq!(settings["optionalAudioLanguagesOverride"], json!(["eng"]));
+    assert_eq!(
+        settings["optionalAudioLanguagesKeepSearchingOverride"],
+        false
+    );
+    assert_eq!(
+        (
+            &settings["preferredAudioLanguages"],
+            &settings["optionalAudioLanguages"],
+            &settings["optionalAudioLanguagesKeepSearching"],
+        ),
+        (&json!(["deu"]), &json!(["eng"]), &json!(false),),
+        "unset values come from the series facet"
+    );
+
+    let rejected = save(json!({ "preferredAudioLanguages": ["@@"] })).await;
+    assert!(
+        rejected.get("errors").is_some(),
+        "an unknown code is refused: {rejected}"
+    );
+
+    let cleared = save(json!({})).await;
+    assert_no_errors(&cleared);
+    let settings = gql(&ctx, read, json!({ "libraryId": library_id })).await;
+    let settings = &settings["data"]["librarySettings"];
+    assert!(settings["optionalAudioLanguagesOverride"].is_null());
+    assert!(settings["optionalAudioLanguagesKeepSearchingOverride"].is_null());
+    assert_eq!(settings["optionalAudioLanguagesKeepSearching"], true);
 }
 
 /// The per-title override validates against the same picker set as the

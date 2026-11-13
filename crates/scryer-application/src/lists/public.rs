@@ -54,6 +54,75 @@ const MEMBER_POLICY_WINDOW_DAYS: i64 = 30;
 pub(crate) const LIST_CONFIGURATION_RESOURCE_PREFIX: &str = "list_";
 const LIST_EXCLUSION_RESOURCE: &str = "list_exclusion";
 const LIST_MEMBER_POLICY_RESOURCE: &str = "list_member_policy";
+/// How long a chart catalog the gateway returned is served without asking
+/// again.
+const LIST_CHART_CATALOG_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// How long after a failed chart catalog fetch readers are answered without
+/// asking the gateway again, so readers queued behind a failing fetch do not
+/// each wait out their own failure.
+const LIST_CHART_CATALOG_FAILURE_HOLD: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[derive(Default)]
+struct ListChartCatalogState {
+    last_good: Option<(tokio::time::Instant, Vec<ListChartCatalogEntry>)>,
+    last_failure: Option<(tokio::time::Instant, AppError)>,
+}
+
+/// The gateway's last successful chart catalog. Concurrent readers of a stale
+/// or empty cache share one fetch. A failed fetch is never stored as a
+/// catalog: the last successful answer is served instead. For a short hold
+/// after a failure, readers get that same answer (or the same error when
+/// there is no catalog) without a new fetch; after the hold the next read
+/// asks again.
+#[derive(Default)]
+pub(crate) struct ListChartCatalogCache {
+    state: tokio::sync::Mutex<ListChartCatalogState>,
+}
+
+impl ListChartCatalogCache {
+    /// The cached catalog while it is fresh; otherwise the result of `fetch`,
+    /// which replaces it on success. A failed fetch answers with the last
+    /// successful catalog, or with the error when there is none.
+    pub(crate) async fn get<Fetch>(&self, fetch: Fetch) -> AppResult<Vec<ListChartCatalogEntry>>
+    where
+        Fetch: std::future::Future<Output = AppResult<Vec<ListChartCatalogEntry>>>,
+    {
+        let mut state = self.state.lock().await;
+        if let Some((fetched_at, charts)) = state.last_good.as_ref()
+            && fetched_at.elapsed() < LIST_CHART_CATALOG_TTL
+        {
+            return Ok(charts.clone());
+        }
+        if let Some((failed_at, error)) = state.last_failure.as_ref()
+            && failed_at.elapsed() < LIST_CHART_CATALOG_FAILURE_HOLD
+        {
+            return match state.last_good.as_ref() {
+                Some((_, charts)) => Ok(charts.clone()),
+                None => Err(error.clone()),
+            };
+        }
+        match fetch.await {
+            Ok(charts) => {
+                state.last_good = Some((tokio::time::Instant::now(), charts.clone()));
+                state.last_failure = None;
+                Ok(charts)
+            }
+            Err(error) => {
+                state.last_failure = Some((tokio::time::Instant::now(), error.clone()));
+                match state.last_good.as_ref() {
+                    Some((_, charts)) => {
+                        tracing::warn!(
+                            error = %error,
+                            "list chart catalog is unavailable; serving the last catalog"
+                        );
+                        Ok(charts.clone())
+                    }
+                    None => Err(error),
+                }
+            }
+        }
+    }
+}
 
 /// What a new public follow says.
 #[derive(Clone, Debug, Default)]
@@ -208,6 +277,8 @@ pub fn redact_hidden_routes(
         route.use_season_folders = None;
         route.release_numbering = None;
         route.tags = Vec::new();
+        route.required_audio_languages = None;
+        route.preferred_audio_languages = None;
     }
     subscription
 }
@@ -488,6 +559,8 @@ pub(super) fn preview_routes(kinds: &[MediaFacet]) -> Vec<ListRoute> {
             use_season_folders: None,
             release_numbering: None,
             tags: Vec::new(),
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         })
         .collect()
 }
@@ -513,9 +586,14 @@ impl AppUseCase {
     async fn list_chart_catalog(&self) -> Vec<ListChartCatalogEntry> {
         match self
             .services
-            .library
-            .metadata_gateway
-            .list_chart_catalog(LIST_CHART_LANGUAGE)
+            .lists
+            .chart_catalog
+            .get(
+                self.services
+                    .library
+                    .metadata_gateway
+                    .list_chart_catalog(LIST_CHART_LANGUAGE),
+            )
             .await
         {
             Ok(charts) => charts,

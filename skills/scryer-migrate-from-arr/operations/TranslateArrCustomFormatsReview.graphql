@@ -1,0 +1,28 @@
+# Review pass: translate arr custom formats with no scores and inspect diagnostics.
+# Saves nothing. Without scores every format is DISABLED with arr.score.invalid;
+# look at the other diagnostics. Variables: {"input": {"sourceApplication":
+#   "SONARR"|"RADARR", "customFormatJson": "<JSON array as a string>", "scores": []}}
+mutation TranslateArrCustomFormatsReview($input: TranslateArrCustomFormatsInput!) {
+  translateArrCustomFormats(input: $input) {
+    appliedFacets
+    formats {
+      id
+      name
+      status
+      suggestedScores {
+        label
+        score
+      }
+      diagnostics {
+        code
+        severity
+        specificationIndex
+      }
+    }
+    diagnostics {
+      code
+      severity
+      formatId
+    }
+  }
+}

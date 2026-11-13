@@ -899,10 +899,6 @@ file = "postgres/migrations/0159_manual_import_release_evidence.sql"
 engine = "postgres"
 scope = "all"
 
-# 0157 is quarantined (see storage/migrations/known_bad.rs): it is recorded as
-# applied but never executed. 0160 is its non-destructive replacement and runs on
-# every database, including those that already ran 0157.
-
 [[migration]]
 version = 160
 description = "single title folder ownership (non-destructive replacement for 0157)"
@@ -2036,6 +2032,7 @@ scope = "all"
 kind = "sql"
 file = "postgres/migrations/0224_media_request_policy.sql"
 engine = "postgres"
+scope = "all"
 
 [[migration]]
 version = 225
@@ -2046,6 +2043,7 @@ checksum_algo = "blake3"
 kind = "sql"
 file = "migrations/0225_tracked_rule_packs.sql"
 engine = "sqlite"
+scope = "all"
 
 [[migration.steps]]
 kind = "sql"
@@ -3373,7 +3371,6 @@ file = "postgres/migrations/0303_lifecycle_claims_one_operator_keep.sql"
 engine = "postgres"
 scope = "all"
 
-
 [[migration]]
 version = 304
 description = "rules disabled unless experimental"
@@ -3857,12 +3854,211 @@ file = "postgres/migrations/0330_quality_profile_min_upgrade_score_delta.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 331
+description = "store one SMG id per title"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0331_smg_title_external_id_kind.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0331_smg_title_external_id_kind.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 332
+description = "index episodes by air date"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0332_episodes_air_date_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0332_episodes_air_date_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 333
+description = "title folder comparison key and conflict columns"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0333_title_folder_path_key.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0333_title_folder_path_key.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 334
+description = "repair overlapping title folders and fill folder keys"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "repair_title_folder_keys"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 335
+description = "unique title folder key"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0335_titles_folder_path_key_unique.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0335_titles_folder_path_key_unique.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 336
+description = "query audit indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0336_query_audit_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0336_query_audit_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 337
+description = "title delete indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0337_title_delete_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0337_title_delete_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 338
+description = "payload blob tables"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0338_payload_blob_tables.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0338_payload_blob_tables.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 339
+description = "lifecycle action run retention indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0339_lifecycle_action_run_retention_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0339_lifecycle_action_run_retention_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 340
+description = "subtitle search backoffs"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0340_subtitle_search_backoffs.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0340_subtitle_search_backoffs.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 341
+description = "title recycle purges"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0341_title_recycle_purges.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0341_title_recycle_purges.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 342
+description = "requested audio languages"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0342_requested_audio_languages.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0342_requested_audio_languages.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
-through_version = 254
-file = "baselines/0254_baseline.sql"
+through_version = 341
+file = "baselines/0341_baseline.sql"
 engine = "sqlite"
 
 [[baseline]]
-through_version = 254
-file = "postgres/baselines/0254_baseline.sql"
+through_version = 341
+file = "postgres/baselines/0341_baseline.sql"
 engine = "postgres"
+

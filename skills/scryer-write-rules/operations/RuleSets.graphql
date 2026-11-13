@@ -1,0 +1,13 @@
+# All release rule sets, without their source. Variables: none.
+query RuleSets {
+  ruleSets {
+    id
+    name
+    enabled
+    priority
+    appliedFacets
+    isManaged
+    disabledReason
+    updatedAt
+  }
+}

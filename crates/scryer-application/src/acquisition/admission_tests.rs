@@ -5,6 +5,32 @@
 //! written from the gate's contract rather than from either caller.
 
 use super::admission::*;
+use crate::AudioLanguageRank;
+use crate::decision_pipeline::{DecisionGate, DecisionPipeline};
+
+/// The order that compares the preferred language ahead of the quality tier.
+fn language_ahead_of_tier() -> DecisionPipeline {
+    DecisionPipeline::try_from_gates([
+        DecisionGate::PreferredLanguage,
+        DecisionGate::QualityTier,
+        DecisionGate::Revision,
+        DecisionGate::OptionalLanguages,
+    ])
+    .unwrap()
+}
+
+/// The order that compares the quality tier and revision first, then the
+/// languages. The language steps are opt-in, so a test about language
+/// behaviour under a tier-first order chooses this one explicitly.
+fn tier_then_languages() -> DecisionPipeline {
+    DecisionPipeline::try_from_gates([
+        DecisionGate::QualityTier,
+        DecisionGate::Revision,
+        DecisionGate::PreferredLanguage,
+        DecisionGate::OptionalLanguages,
+    ])
+    .unwrap()
+}
 
 fn incumbent(id: &str, score: i32, covers: &[&str]) -> (Incumbent, bool) {
     (
@@ -18,6 +44,7 @@ fn incumbent(id: &str, score: i32, covers: &[&str]) -> (Incumbent, bool) {
             file_path: format!("/data/TV/Show/Season 01/{id}.mkv"),
             release_group: Some("group".into()),
             score,
+            language: Default::default(),
             covers: covers.iter().map(|value| (*value).to_string()).collect(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
         },
@@ -1007,6 +1034,7 @@ fn queued(title: &str, tier_index: Option<usize>, revision: i32, score: i32) -> 
         tier_index,
         revision,
         score,
+        language: Default::default(),
         release_key: crate::admission::release_key(title),
     }
 }
@@ -1043,6 +1071,90 @@ fn missing_grab_history_honors_cutoff_without_changing_live_queue_policy() {
                 "cutoff={at_cutoff}, tier={tier}, revision={revision}, score={score}"
             );
         }
+    }
+}
+
+#[test]
+fn missing_grab_history_at_cutoff_still_yields_to_a_language_step() {
+    let cases = [
+        // (held, candidate, tier, language ahead of the tier, allowed)
+        (
+            AudioLanguageRank::for_test(1, 0),
+            AudioLanguageRank::for_test(0, 0),
+            1,
+            false,
+            true,
+        ),
+        // More optional languages pass only while the grab still wants them,
+        // as they do over a file on disk.
+        (
+            AudioLanguageRank {
+                wanted: true,
+                optional_wanted: true,
+                ..AudioLanguageRank::for_test(0, 0)
+            },
+            AudioLanguageRank::for_test(0, 1),
+            1,
+            false,
+            true,
+        ),
+        (
+            AudioLanguageRank::for_test(0, 0),
+            AudioLanguageRank::for_test(0, 1),
+            1,
+            false,
+            false,
+        ),
+        (
+            AudioLanguageRank::for_test(1, 0),
+            AudioLanguageRank::for_test(0, 0),
+            2,
+            true,
+            true,
+        ),
+        // With the tier ahead, the language step still cannot rescue a lower tier.
+        (
+            AudioLanguageRank::for_test(1, 0),
+            AudioLanguageRank::for_test(0, 0),
+            2,
+            false,
+            false,
+        ),
+        (
+            AudioLanguageRank::for_test(0, 0),
+            AudioLanguageRank::for_test(0, 0),
+            0,
+            false,
+            false,
+        ),
+        (
+            AudioLanguageRank::for_test(0, 0),
+            AudioLanguageRank::for_test(1, 0),
+            0,
+            false,
+            false,
+        ),
+    ];
+    for (held, wanted, tier, language_ahead, allowed) in cases {
+        let mut history = queued("Show.S01E01.1080p.WEB-DL-GRP", Some(1), 0, 900);
+        history.history_cutoff_reached = true;
+        history.language = held;
+        let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![history]);
+        let candidate = CandidateFacts::new(Some(tier), 0, 900)
+            .with_revision_policy(Some("group"), false)
+            .with_language(wanted)
+            .with_pipeline(if language_ahead {
+                language_ahead_of_tier()
+            } else {
+                tier_then_languages()
+            });
+        assert_eq!(
+            evaluate_admission(&subject, candidate, &grab_policy_with_queue(10))
+                .rejection()
+                .is_none(),
+            allowed,
+            "held={held:?}, candidate={wanted:?}, tier={tier}, language_ahead={language_ahead}"
+        );
     }
 }
 
@@ -1453,4 +1565,926 @@ fn a_pack_below_every_members_tier_is_refused_on_the_tier() {
         verdict.rejection().map(|rejection| &rejection.reason),
         Some(AdmissionRejectionReason::FormatCutoffReached { .. })
     ));
+}
+
+// ── Audio language preferences: preferred rank and optional hits ───────────
+
+fn spoken(
+    id: &str,
+    tier_index: Option<usize>,
+    score: i32,
+    language: crate::AudioLanguageRank,
+) -> (Incumbent, bool) {
+    let (mut incumbent, primary) = incumbent(id, score, &[]);
+    incumbent.tier_index = tier_index;
+    incumbent.language = language;
+    (incumbent, primary)
+}
+
+fn title_scope(file: (Incumbent, bool)) -> AdmissionSubject {
+    AdmissionSubject::new(AdmissionScope::Title, [file])
+}
+
+#[test]
+fn a_language_ahead_of_the_tier_replaces_a_better_tier_without_it() {
+    // English 2160p on disk, German 1080p offered, German preferred.
+    let subject = title_scope(spoken(
+        "english-2160p",
+        Some(0),
+        900,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn a_language_ahead_of_the_tier_keeps_it_against_a_better_tier() {
+    let subject = title_scope(spoken(
+        "german-1080p",
+        Some(1),
+        100,
+        AudioLanguageRank::for_test(0, 0),
+    ));
+    let candidate = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 1))
+        .with_pipeline(language_ahead_of_tier());
+    let verdict = evaluate_admission(&subject, candidate, &grab_policy());
+    assert!(matches!(
+        verdict.rejection().map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerLanguagePreference {
+            incumbent_preferred_rank: 0,
+            candidate_preferred_rank: 1,
+        })
+    ));
+}
+
+#[test]
+fn the_default_order_keeps_the_tier_ahead_of_the_preferred_language() {
+    let subject = title_scope(spoken(
+        "english-2160p",
+        Some(0),
+        900,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let candidate =
+        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0));
+    let verdict = evaluate_admission(&subject, candidate, &grab_policy());
+    assert!(matches!(
+        verdict.rejection().map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn a_tier_first_order_upgrades_to_the_preferred_language_within_a_tier() {
+    // Same tier and revision: the preferred language wins over any score.
+    let subject = title_scope(spoken(
+        "english-1080p",
+        Some(1),
+        9_000,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(tier_then_languages());
+    assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn a_language_upgrade_ignores_the_format_cutoff_and_the_churn_threshold() {
+    let subject = title_scope(spoken(
+        "english-1080p",
+        Some(1),
+        9_000,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let policy = AdmissionPolicy {
+        cutoff_score: Some(500),
+        ..auto(5_000)
+    };
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(tier_then_languages());
+    assert!(evaluate_admission(&subject, candidate, &policy).is_admitted());
+}
+
+#[test]
+fn more_optional_languages_upgrade_after_tier_and_revision() {
+    let subject = title_scope(spoken(
+        "german-only",
+        Some(0),
+        9_000,
+        AudioLanguageRank::for_test(0, 0),
+    ));
+    let dual = CandidateFacts::new(Some(0), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 1))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(evaluate_admission(&subject, dual, &grab_policy()).is_admitted());
+
+    let worse_tier_dual = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 1))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(matches!(
+        evaluate_admission(&subject, worse_tier_dual, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn fewer_optional_languages_are_refused_before_the_score() {
+    let subject = title_scope(spoken(
+        "dual",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(0, 1),
+    ));
+    let single = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(matches!(
+        evaluate_admission(&subject, single, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::FewerOptionalLanguages {
+            incumbent_optional_hits: 1,
+            candidate_optional_hits: 0,
+        })
+    ));
+}
+
+#[test]
+fn a_proper_still_beats_more_optional_languages() {
+    let (mut held, primary) = spoken("dual", Some(0), 100, AudioLanguageRank::for_test(0, 1));
+    held.revision = 0;
+    held.release_group = Some("group".into());
+    let subject = title_scope((held, primary));
+    let proper = CandidateFacts::new(Some(0), 1, 100)
+        .with_revision_policy(Some("group"), false)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(evaluate_admission(&subject, proper, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn an_unrelated_proper_does_not_beat_more_optional_languages() {
+    let (mut held, primary) = spoken("dual", Some(0), 100, AudioLanguageRank::for_test(0, 1));
+    held.revision = 0;
+    held.release_group = Some("group".into());
+    let subject = title_scope((held, primary));
+    let proper = CandidateFacts::new(Some(0), 1, 100)
+        .with_revision_policy(Some("other"), false)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(matches!(
+        evaluate_admission(&subject, proper, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::FewerOptionalLanguages { .. })
+    ));
+}
+
+#[test]
+fn a_language_upgrade_respects_a_profile_that_forbids_upgrades() {
+    let subject = title_scope(spoken(
+        "english",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let policy = AdmissionPolicy {
+        allow_upgrades: false,
+        ..auto(0)
+    };
+    let candidate = CandidateFacts::new(Some(0), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(matches!(
+        evaluate_admission(&subject, candidate, &policy)
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::UpgradesDisabled)
+    ));
+}
+
+#[test]
+fn manual_replacement_ignores_the_language_rungs() {
+    let subject = title_scope(spoken(
+        "german",
+        Some(0),
+        100,
+        AudioLanguageRank::for_test(0, 1),
+    ));
+    let candidate = CandidateFacts::new(Some(0), 0, 100)
+        .with_language(AudioLanguageRank::for_test(1, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(evaluate_admission(&subject, candidate, &AdmissionPolicy::manual()).is_admitted());
+}
+
+#[test]
+fn neutral_language_facts_leave_the_ladder_unchanged() {
+    let subject = title_scope(spoken(
+        "held",
+        Some(0),
+        1_000,
+        crate::AudioLanguageRank::default(),
+    ));
+    let lower_tier = CandidateFacts::new(Some(1), 0, 9_000);
+    assert!(matches!(
+        evaluate_admission(&subject, lower_tier, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn a_pack_improves_members_held_without_the_preferred_language() {
+    let (mut english, primary) = incumbent("english-e1", 900, &["ep-1"]);
+    english.language = AudioLanguageRank::for_test(1, 0);
+    let subject = AdmissionSubject::new(episodes(&["ep-1"]), [(english, primary)]).per_member();
+    let german_pack = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(evaluate_admission(&subject, german_pack, &grab_policy()).is_admitted());
+}
+
+#[test]
+fn a_pack_is_refused_when_every_member_has_a_more_preferred_language() {
+    let (mut german, primary) = incumbent("german-e1", 100, &["ep-1"]);
+    german.language = AudioLanguageRank::for_test(0, 0);
+    let subject = AdmissionSubject::new(episodes(&["ep-1"]), [(german, primary)]).per_member();
+    let english_pack = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 0))
+        .with_pipeline(language_ahead_of_tier());
+    assert!(matches!(
+        evaluate_admission(&subject, english_pack, &grab_policy())
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::LowerLanguagePreference { .. })
+    ));
+}
+
+#[test]
+fn a_queued_release_in_the_preferred_language_blocks_a_better_tier_without_it() {
+    let mut german = queued("Movie.2024.German.1080p", Some(1), 0, 100);
+    german.language = AudioLanguageRank::for_test(0, 0);
+    let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![german]);
+    let english = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 0))
+        .with_pipeline(language_ahead_of_tier())
+        .with_release_title("Movie.2024.2160p");
+    assert!(matches!(
+        evaluate_admission(&subject, english, &grab_policy_with_queue(0))
+            .rejection()
+            .map(|r| &r.reason),
+        Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+    ));
+
+    let mut english_queued = queued("Movie.2024.2160p", Some(0), 0, 9_000);
+    english_queued.language = AudioLanguageRank::for_test(1, 0);
+    let subject =
+        AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![english_queued]);
+    let german = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_ahead_of_tier())
+        .with_release_title("Movie.2024.German.1080p");
+    assert!(evaluate_admission(&subject, german, &grab_policy_with_queue(0)).is_admitted());
+}
+
+// ── An order without the tier: the score decides across tiers ─────────────
+
+/// The order that keeps only the revision step ahead of the score.
+fn revision_then_score() -> DecisionPipeline {
+    DecisionPipeline::try_from_gates([DecisionGate::Revision]).unwrap()
+}
+
+fn score_first(candidate: CandidateFacts<'_>) -> CandidateFacts<'_> {
+    candidate.with_pipeline(revision_then_score())
+}
+
+fn rejection_reason(verdict: &AdmissionVerdict) -> Option<&AdmissionRejectionReason> {
+    verdict.rejection().map(|rejection| &rejection.reason)
+}
+
+#[test]
+fn score_first_admits_a_lower_tier_that_scores_higher() {
+    let subject = title_scope(tiered("file-2160p", Some(0), 1_000, &[]));
+    let candidate = score_first(CandidateFacts::new(Some(2), 0, 1_500));
+    assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
+    // The same facts under the default order are refused on the tier.
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(
+            &subject,
+            CandidateFacts::new(Some(2), 0, 1_500),
+            &grab_policy()
+        )),
+        Some(AdmissionRejectionReason::LowerQualityTier)
+    ));
+}
+
+#[test]
+fn score_first_refuses_a_higher_tier_that_scores_lower_as_not_an_upgrade() {
+    let subject = title_scope(tiered("file-1080p", Some(2), 1_500, &[]));
+    for policy in [grab_policy(), AdmissionPolicy::not_a_downgrade()] {
+        let verdict = evaluate_admission(
+            &subject,
+            score_first(CandidateFacts::new(Some(0), 0, 1_000)),
+            &policy,
+        );
+        assert!(
+            matches!(
+                rejection_reason(&verdict),
+                Some(AdmissionRejectionReason::NotAnUpgrade { .. })
+            ),
+            "{verdict:?}"
+        );
+    }
+}
+
+#[test]
+fn score_first_respects_the_churn_threshold_whatever_the_tier() {
+    let subject = title_scope(tiered("file-1080p", Some(1), 1_000, &[]));
+    // +199 against 200, even from a better tier: not enough.
+    for tier in [Some(0), Some(1), Some(2)] {
+        let verdict = evaluate_admission(
+            &subject,
+            score_first(CandidateFacts::new(tier, 0, 1_199)),
+            &grab_policy(),
+        );
+        assert!(
+            matches!(
+                rejection_reason(&verdict),
+                Some(AdmissionRejectionReason::NotAnUpgrade { .. })
+            ),
+            "tier {tier:?}: {verdict:?}"
+        );
+        // +200 clears it from any tier.
+        assert!(
+            evaluate_admission(
+                &subject,
+                score_first(CandidateFacts::new(tier, 0, 1_200)),
+                &grab_policy()
+            )
+            .is_admitted(),
+            "tier {tier:?}"
+        );
+    }
+}
+
+#[test]
+fn score_first_import_ignores_the_tier_at_an_equal_score() {
+    // Without its step the tier does not even break a tie: an equal score
+    // from any tier is not a downgrade.
+    let subject = title_scope(tiered("file-1080p", Some(1), 1_000, &[]));
+    let import = AdmissionPolicy::not_a_downgrade();
+    for tier in [Some(0), Some(1), Some(2)] {
+        assert!(
+            evaluate_admission(
+                &subject,
+                score_first(CandidateFacts::new(tier, 0, 1_000)),
+                &import
+            )
+            .is_admitted(),
+            "tier {tier:?}"
+        );
+    }
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(
+            &subject,
+            score_first(CandidateFacts::new(Some(0), 0, 999)),
+            &import
+        )),
+        Some(AdmissionRejectionReason::NotAnUpgrade { .. })
+    ));
+}
+
+#[test]
+fn score_first_keeps_the_revision_rung_ahead_of_the_score() {
+    let subject = AdmissionSubject::new(episodes(&["ep-01"]), [revised("file-1", 0, 900)]);
+    // A PROPER of what is on disk lands while scoring lower, even with
+    // upgrades disabled.
+    let proper = score_first(
+        CandidateFacts::new(Some(0), 1, 400).with_revision_policy(Some("group"), false),
+    );
+    assert!(evaluate_admission(&subject, proper, &grab_policy()).is_admitted());
+    let no_upgrades = AdmissionPolicy {
+        allow_upgrades: false,
+        ..grab_policy()
+    };
+    assert!(evaluate_admission(&subject, proper, &no_upgrades).is_admitted());
+
+    // …and the original never displaces a PROPER, however it scores.
+    let subject = AdmissionSubject::new(episodes(&["ep-01"]), [revised("file-1", 1, 400)]);
+    let original = score_first(
+        CandidateFacts::new(Some(0), 0, 9_000).with_revision_policy(Some("group"), false),
+    );
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(&subject, original, &grab_policy())),
+        Some(AdmissionRejectionReason::LowerRevision { .. })
+    ));
+}
+
+/// The preferred language, then the revision, then the score.
+fn language_then_score() -> DecisionPipeline {
+    DecisionPipeline::try_from_gates([DecisionGate::PreferredLanguage, DecisionGate::Revision])
+        .unwrap()
+}
+
+#[test]
+fn score_first_keeps_a_language_step_ahead_of_the_score() {
+    let english = title_scope(spoken(
+        "english",
+        Some(0),
+        9_000,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let german = CandidateFacts::new(Some(2), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(language_then_score());
+    assert!(evaluate_admission(&english, german, &grab_policy()).is_admitted());
+
+    let german_file = title_scope(spoken(
+        "german",
+        Some(2),
+        100,
+        AudioLanguageRank::for_test(0, 0),
+    ));
+    let english = CandidateFacts::new(Some(0), 0, 9_000)
+        .with_language(AudioLanguageRank::for_test(1, 0))
+        .with_pipeline(language_then_score());
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(&german_file, english, &grab_policy())),
+        Some(AdmissionRejectionReason::LowerLanguagePreference { .. })
+    ));
+}
+
+#[test]
+fn score_first_without_a_language_step_ignores_the_language() {
+    let english = title_scope(spoken(
+        "english",
+        Some(1),
+        1_000,
+        AudioLanguageRank::for_test(1, 0),
+    ));
+    let german = |score| {
+        score_first(
+            CandidateFacts::new(Some(1), 0, score).with_language(AudioLanguageRank::for_test(0, 0)),
+        )
+    };
+    // A lower score in the preferred language is refused on the score.
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(&english, german(900), &grab_policy())),
+        Some(AdmissionRejectionReason::NotAnUpgrade { .. })
+    ));
+    // Inside the churn band the language does not buy a download.
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(&english, german(1_100), &grab_policy())),
+        Some(AdmissionRejectionReason::NotAnUpgrade { .. })
+    ));
+    // A real score win lands, and a worse language does not stop it.
+    assert!(evaluate_admission(&english, german(1_200), &grab_policy()).is_admitted());
+    let german_file = title_scope(spoken(
+        "german",
+        Some(1),
+        1_000,
+        AudioLanguageRank::for_test(0, 0),
+    ));
+    let english_high = score_first(
+        CandidateFacts::new(Some(1), 0, 1_200).with_language(AudioLanguageRank::for_test(1, 0)),
+    );
+    assert!(evaluate_admission(&german_file, english_high, &grab_policy()).is_admitted());
+    // Without its step the language does not even break a tie: an equal
+    // score imports in either language.
+    let import = AdmissionPolicy::not_a_downgrade();
+    assert!(evaluate_admission(&english, german(1_000), &import).is_admitted());
+    let english_equal = score_first(
+        CandidateFacts::new(Some(1), 0, 1_000).with_language(AudioLanguageRank::for_test(1, 0)),
+    );
+    assert!(evaluate_admission(&german_file, english_equal, &import).is_admitted());
+}
+
+#[test]
+fn score_first_refuses_a_score_win_when_upgrades_are_disabled() {
+    let subject = title_scope(tiered("file", Some(1), 1_000, &[]));
+    let policy = AdmissionPolicy {
+        allow_upgrades: false,
+        ..grab_policy()
+    };
+    for tier in [Some(0), Some(2)] {
+        assert!(matches!(
+            rejection_reason(&evaluate_admission(
+                &subject,
+                score_first(CandidateFacts::new(tier, 0, 9_000)),
+                &policy
+            )),
+            Some(AdmissionRejectionReason::UpgradesDisabled)
+        ));
+    }
+}
+
+#[test]
+fn score_first_stops_at_the_format_cutoff_score() {
+    let policy = AdmissionPolicy {
+        cutoff_score: Some(1_000),
+        ..grab_policy()
+    };
+    let at_cutoff = title_scope(tiered("file", Some(2), 1_000, &[]));
+    for tier in [Some(0), Some(2)] {
+        assert!(matches!(
+            rejection_reason(&evaluate_admission(
+                &at_cutoff,
+                score_first(CandidateFacts::new(tier, 0, 9_000)),
+                &policy
+            )),
+            Some(AdmissionRejectionReason::FormatCutoffReached { .. })
+        ));
+    }
+    let below_cutoff = title_scope(tiered("file", Some(2), 700, &[]));
+    assert!(
+        evaluate_admission(
+            &below_cutoff,
+            score_first(CandidateFacts::new(Some(2), 0, 900)),
+            &policy
+        )
+        .is_admitted()
+    );
+}
+
+#[test]
+fn score_first_queue_compares_score_before_tier() {
+    let queued_2160p = queued("Movie.2024.2160p", Some(0), 0, 1_000);
+    let subject = AdmissionSubject::new(AdmissionScope::Title, []).with_queued(vec![queued_2160p]);
+    let lower_tier_higher =
+        score_first(CandidateFacts::new(Some(2), 0, 1_500).with_release_title("Movie.2024.720p"));
+    assert!(
+        evaluate_admission(&subject, lower_tier_higher, &grab_policy_with_queue(200)).is_admitted()
+    );
+    let higher_tier_lower = score_first(
+        CandidateFacts::new(Some(0), 0, 900).with_release_title("Movie.2024.2160p.Other"),
+    );
+    assert!(matches!(
+        rejection_reason(&evaluate_admission(
+            &subject,
+            higher_tier_lower,
+            &grab_policy_with_queue(200)
+        )),
+        Some(AdmissionRejectionReason::QueuedEqualOrBetter { .. })
+    ));
+}
+
+#[test]
+fn score_first_pack_members_compare_score_before_tier() {
+    let subject = AdmissionSubject::new(
+        episodes(&["ep-01", "ep-02"]),
+        [
+            tiered("file-1", Some(0), 1_000, &["ep-01"]),
+            tiered("file-2", Some(0), 1_000, &["ep-02"]),
+        ],
+    )
+    .per_member();
+    assert!(
+        evaluate_admission(
+            &subject,
+            score_first(CandidateFacts::new(Some(2), 0, 1_500)),
+            &grab_policy()
+        )
+        .is_admitted(),
+        "a lower-tier pack that outscores every member is worth fetching"
+    );
+    assert!(
+        !evaluate_admission(
+            &subject,
+            score_first(CandidateFacts::new(Some(0), 0, 1_100)),
+            &grab_policy()
+        )
+        .is_admitted(),
+        "a lead inside the churn band improves no member"
+    );
+    let no_upgrades = AdmissionPolicy {
+        allow_upgrades: false,
+        ..grab_policy()
+    };
+    assert!(
+        !evaluate_admission(
+            &subject,
+            score_first(CandidateFacts::new(Some(2), 0, 9_000)),
+            &no_upgrades
+        )
+        .is_admitted()
+    );
+}
+
+/// The search lanes walk candidates in `RankHead` order and stop at the first
+/// one admission refuses, so under an order without the tier every
+/// candidate ranked below a refused one must be refused too.
+#[test]
+fn score_first_ranking_order_matches_admission() {
+    use crate::acquisition::scoring::RankHead;
+    let incumbent = spoken("file", Some(1), 1_000, AudioLanguageRank::for_test(1, 0));
+    let subject = title_scope(incumbent);
+    let languages = [
+        AudioLanguageRank::for_test(0, 0),
+        AudioLanguageRank::for_test(1, 0),
+        AudioLanguageRank::for_test(1, 1),
+        AudioLanguageRank::for_test(2, 0),
+    ];
+    for policy in [grab_policy(), AdmissionPolicy::not_a_downgrade()] {
+        let mut candidates = Vec::new();
+        for tier in [Some(0), Some(1), Some(2)] {
+            for score in [700, 1_000, 1_100, 1_199, 1_200, 1_600] {
+                for language in languages {
+                    candidates.push(score_first(
+                        CandidateFacts::new(tier, 0, score).with_language(language),
+                    ));
+                }
+            }
+        }
+        let mut ranked: Vec<_> = candidates
+            .into_iter()
+            .map(|candidate| {
+                let head = RankHead {
+                    side: candidate.facts().side,
+                    negated_revision: revision_preference(candidate, &subject).saturating_neg(),
+                    negated_score: candidate.score.saturating_neg(),
+                    pipeline: revision_then_score(),
+                    ..Default::default()
+                };
+                (head.key(), candidate)
+            })
+            .collect();
+        ranked.sort_by_key(|(key, _)| *key);
+        let mut refused: Option<CandidateFacts> = None;
+        for (_, candidate) in ranked {
+            let admitted = evaluate_admission(&subject, candidate, &policy).is_admitted();
+            if let Some(earlier) = refused {
+                assert!(
+                    !admitted,
+                    "{candidate:?} admitted after {earlier:?} was refused (min_delta {})",
+                    policy.min_delta
+                );
+            } else if !admitted {
+                refused = Some(candidate);
+            }
+        }
+        assert!(refused.is_some(), "the fixture must reach a refusal");
+    }
+}
+
+// ── Frozen oracle: the ladder as it was before orders were configurable ────
+
+/// A reason, without its payload, so the oracle and the gate can be compared.
+fn reason_label(reason: &AdmissionRejectionReason) -> &'static str {
+    match reason {
+        AdmissionRejectionReason::LowerQualityTier => "lower_quality_tier",
+        AdmissionRejectionReason::LowerLanguagePreference { .. } => "lower_language_preference",
+        AdmissionRejectionReason::FewerOptionalLanguages { .. } => "fewer_optional_languages",
+        AdmissionRejectionReason::LowerRevision { .. } => "lower_revision",
+        AdmissionRejectionReason::UpgradesDisabled => "upgrades_disabled",
+        AdmissionRejectionReason::NotAnUpgrade { .. } => "not_an_upgrade",
+        AdmissionRejectionReason::FormatCutoffReached { .. } => "format_cutoff_reached",
+        _ => "other",
+    }
+}
+
+/// A copy of the single-file ladder exactly as it ran before profiles chose
+/// an order, kept here so the two orders it supported can be checked against
+/// the pipeline. `language_first` was the library's audio language priority.
+/// `None` admits.
+fn frozen_ladder(
+    language_first: bool,
+    candidate: (Option<usize>, &str, i32, i32, AudioLanguageRank),
+    incumbent: &Incumbent,
+    policy: &AdmissionPolicy,
+) -> Option<&'static str> {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let (tier, group, revision, score, language) = candidate;
+    let tier_cmp = match (tier, incumbent.tier_index) {
+        (Some(l), Some(r)) => r.cmp(&l),
+        (Some(_), None) => Greater,
+        (None, Some(_)) => Less,
+        (None, None) => Equal,
+    };
+    let preferred_cmp = incumbent
+        .language
+        .matched
+        .preferred_rank
+        .cmp(&language.matched.preferred_rank);
+    let optional_cmp = language
+        .matched
+        .optional_hits
+        .cmp(&incumbent.language.matched.optional_hits);
+    let related = tier == incumbent.tier_index
+        && incumbent
+            .release_group
+            .as_deref()
+            .is_some_and(|held| held.eq_ignore_ascii_case(group));
+    let revision_cmp = if related {
+        revision.cmp(&incumbent.revision)
+    } else {
+        Equal
+    };
+    let step = |ordering: std::cmp::Ordering, lost: &'static str| match ordering {
+        Less => Some(Some(lost)),
+        Greater if !policy.allow_upgrades => Some(Some("upgrades_disabled")),
+        Greater => Some(None),
+        Equal => None,
+    };
+    if language_first && let Some(verdict) = step(preferred_cmp, "lower_language_preference") {
+        return verdict;
+    }
+    if let Some(verdict) = step(tier_cmp, "lower_quality_tier") {
+        return verdict;
+    }
+    match revision_cmp {
+        Greater => return None,
+        Less if !policy.allow_upgrades => return Some("upgrades_disabled"),
+        Less => return Some("lower_revision"),
+        Equal => {}
+    }
+    if !language_first && let Some(verdict) = step(preferred_cmp, "lower_language_preference") {
+        return verdict;
+    }
+    if let Some(verdict) = step(optional_cmp, "fewer_optional_languages") {
+        return verdict;
+    }
+    if !policy.allow_upgrades {
+        return Some("upgrades_disabled");
+    }
+    if policy
+        .cutoff_score
+        .is_some_and(|cutoff| incumbent.score >= cutoff)
+    {
+        return Some("format_cutoff_reached");
+    }
+    (score.saturating_sub(incumbent.score) < policy.min_delta).then_some("not_an_upgrade")
+}
+
+/// Tier, revision, then the languages is the old quality-first ladder, and
+/// the preferred language moved ahead of the tier is the old language-first
+/// one, verdict for verdict, over every combination of tier, group, revision,
+/// language and score the two sides can differ in.
+#[test]
+fn the_tier_first_and_language_ahead_orders_reproduce_the_old_ladder() {
+    let tiers = [Some(0), Some(1), None];
+    let languages = [
+        AudioLanguageRank::for_test(0, 0),
+        AudioLanguageRank::for_test(0, 1),
+        AudioLanguageRank::for_test(1, 0),
+        AudioLanguageRank::for_test(2, 1),
+    ];
+    let policies = [
+        grab_policy(),
+        AdmissionPolicy::not_a_downgrade(),
+        AdmissionPolicy {
+            allow_upgrades: false,
+            ..grab_policy()
+        },
+        AdmissionPolicy {
+            cutoff_score: Some(500),
+            ..grab_policy()
+        },
+    ];
+    let mut compared = 0;
+    for (language_first, pipeline) in [
+        (false, tier_then_languages()),
+        (true, language_ahead_of_tier()),
+    ] {
+        for held_tier in tiers {
+            for held_revision in [0, 1] {
+                for held_language in languages {
+                    let (mut held, primary) = spoken("held", held_tier, 600, held_language);
+                    held.revision = held_revision;
+                    let subject = title_scope((held.clone(), primary));
+                    for tier in tiers {
+                        for group in ["group", "other"] {
+                            for revision in [0, 1] {
+                                for language in languages {
+                                    for score in [300, 600, 700, 900] {
+                                        for policy in &policies {
+                                            let facts = CandidateFacts::new(tier, revision, score)
+                                                .with_revision_policy(Some(group), false)
+                                                .with_language(language)
+                                                .with_pipeline(pipeline);
+                                            let actual =
+                                                evaluate_admission(&subject, facts, policy)
+                                                    .rejection()
+                                                    .map(|rejection| {
+                                                        reason_label(&rejection.reason)
+                                                    });
+                                            let expected = frozen_ladder(
+                                                language_first,
+                                                (tier, group, revision, score, language),
+                                                &held,
+                                                policy,
+                                            );
+                                            assert_eq!(
+                                                actual, expected,
+                                                "language_first={language_first} held=({held_tier:?}, r{held_revision}, {held_language:?}) candidate=({tier:?}, {group}, r{revision}, {language:?}, {score}) policy={policy:?}"
+                                            );
+                                            compared += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(compared, 2 * 3 * 2 * 4 * 3 * 2 * 2 * 4 * 4 * 4);
+}
+
+/// The lanes' walk: candidates in `RankHead` order, passing over every one
+/// admission refuses. Returns the admitted candidates in the order reached.
+/// The tests below pin orders where a refusal ranks above an admissible
+/// release, which is why the walk cannot stop at the first refusal.
+fn walk_ranked_skipping_refusals<'a>(
+    subject: &AdmissionSubject,
+    candidates: Vec<CandidateFacts<'a>>,
+    policy: &AdmissionPolicy,
+) -> Vec<CandidateFacts<'a>> {
+    use crate::acquisition::scoring::RankHead;
+    let mut ranked: Vec<_> = candidates
+        .into_iter()
+        .map(|candidate| {
+            let head = RankHead {
+                side: candidate.facts().side,
+                negated_revision: revision_preference(candidate, subject).saturating_neg(),
+                negated_score: candidate.score.saturating_neg(),
+                pipeline: candidate.pipeline,
+                ..Default::default()
+            };
+            (head.key(), candidate)
+        })
+        .collect();
+    ranked.sort_by_key(|(key, _)| *key);
+    let mut admitted = Vec::new();
+    for (_, candidate) in ranked {
+        if evaluate_admission(subject, candidate, policy).is_admitted() {
+            admitted.push(candidate);
+        }
+    }
+    admitted
+}
+
+/// A lower revision from the held file's own group is refused on the
+/// revision, but ranks as if its revision did not matter, so a high score
+/// sorts it ahead of a release from another group that would be admitted —
+/// and a walk that stops at the first refusal never reaches that one.
+#[test]
+fn a_refused_lower_revision_does_not_hide_an_admissible_release_below_it() {
+    let (mut held, primary) = incumbent("proper-on-disk", 600, &[]);
+    held.tier_index = Some(1);
+    held.revision = 1;
+    held.release_group = Some("GRP".into());
+    let subject = title_scope((held, primary));
+    let original = CandidateFacts::new(Some(1), 0, 9_000).with_revision_policy(Some("GRP"), false);
+    let other_group =
+        CandidateFacts::new(Some(1), 0, 900).with_revision_policy(Some("OTHER"), false);
+    assert!(!evaluate_admission(&subject, original, &grab_policy()).is_admitted());
+    assert!(evaluate_admission(&subject, other_group, &grab_policy()).is_admitted());
+    let reached =
+        walk_ranked_skipping_refusals(&subject, vec![original, other_group], &grab_policy());
+    assert_eq!(
+        reached
+            .iter()
+            .map(|candidate| candidate.score)
+            .collect::<Vec<_>>(),
+        [900],
+        "the admissible release must be reached"
+    );
+}
+
+/// With upgrades off, a better tier is refused while a PROPER of the file on
+/// disk still lands; the better tier must not hide the PROPER from the walk.
+#[test]
+fn a_refused_better_tier_does_not_hide_a_proper_when_upgrades_are_off() {
+    let (mut held, primary) = incumbent("original-on-disk", 600, &[]);
+    held.tier_index = Some(1);
+    held.release_group = Some("GRP".into());
+    let subject = title_scope((held, primary));
+    let policy = AdmissionPolicy {
+        allow_upgrades: false,
+        ..grab_policy()
+    };
+    let better_tier =
+        CandidateFacts::new(Some(0), 0, 9_000).with_revision_policy(Some("OTHER"), false);
+    let proper = CandidateFacts::new(Some(1), 1, 500).with_revision_policy(Some("GRP"), false);
+    assert!(!evaluate_admission(&subject, better_tier, &policy).is_admitted());
+    assert!(evaluate_admission(&subject, proper, &policy).is_admitted());
+    let reached = walk_ranked_skipping_refusals(&subject, vec![better_tier, proper], &policy);
+    assert_eq!(
+        reached
+            .iter()
+            .map(|candidate| candidate.score)
+            .collect::<Vec<_>>(),
+        [500],
+        "the PROPER must be reached"
+    );
 }

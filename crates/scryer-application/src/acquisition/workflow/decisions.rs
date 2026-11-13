@@ -26,6 +26,13 @@ fn annotated_auto_decision_code(candidate: &IndexerSearchResult) -> ReleaseAutoD
             ReleaseAutoDecisionCode::QualityBlocked
         })
 }
+fn candidate_quality_allowed(candidate: &IndexerSearchResult) -> bool {
+    candidate
+        .quality_profile_decision
+        .as_ref()
+        .is_some_and(|decision| decision.allowed)
+}
+
 fn effective_auto_decision_code_for_route(
     candidate: &IndexerSearchResult,
     failed_routes: &[DownloadRouteKey],
@@ -68,6 +75,55 @@ pub(crate) async fn record_release_decision(
     incumbent_bar: Option<i32>,
     now: &DateTime<Utc>,
 ) -> ReleaseDecisionOutcome {
+    let decision_record =
+        release_decision_record(item, title, candidate, decision_code, incumbent_bar, now);
+    let written_id = app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .insert_release_decision(&decision_record)
+        .await;
+    ReleaseDecisionOutcome::of(&decision_record.id, written_id.ok().as_deref())
+}
+
+/// `record_release_decision` for each candidate in order, written together,
+/// each with its own incumbent bar. Outcomes come back in candidate order.
+pub(crate) async fn record_release_decisions(
+    app: &AppUseCase,
+    item: &AcquisitionScopeState,
+    title: &Title,
+    candidates: &[(&IndexerSearchResult, ReleaseAutoDecisionCode, Option<i32>)],
+    now: &DateTime<Utc>,
+) -> Vec<ReleaseDecisionOutcome> {
+    let records = candidates
+        .iter()
+        .map(|(candidate, decision_code, incumbent_bar)| {
+            release_decision_record(item, title, candidate, *decision_code, *incumbent_bar, now)
+        })
+        .collect::<Vec<_>>();
+    let written = app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .insert_release_decisions(&records)
+        .await;
+    records
+        .iter()
+        .zip(written)
+        .map(|(record, written_id)| {
+            ReleaseDecisionOutcome::of(&record.id, written_id.ok().as_deref())
+        })
+        .collect()
+}
+
+fn release_decision_record(
+    item: &AcquisitionScopeState,
+    title: &Title,
+    candidate: &IndexerSearchResult,
+    decision_code: ReleaseAutoDecisionCode,
+    incumbent_bar: Option<i32>,
+    now: &DateTime<Utc>,
+) -> ReleaseDecision {
     let candidate_score = candidate
         .quality_profile_decision
         .as_ref()
@@ -75,7 +131,7 @@ pub(crate) async fn record_release_decision(
         .unwrap_or(0);
     let mut decision_candidate = candidate.clone();
     annotate_auto_decision(&mut decision_candidate, decision_code);
-    let decision_record = ReleaseDecision {
+    ReleaseDecision {
         id: Id::new().0,
         wanted_item_id: item.id.clone(),
         title_id: title.id.clone(),
@@ -90,15 +146,7 @@ pub(crate) async fn record_release_decision(
         score_delta: incumbent_bar.map(|bar| candidate_score - bar),
         explanation_json: serialize_decision_explanation(&decision_candidate),
         created_at: now.to_rfc3339(),
-    };
-
-    let written_id = app
-        .services
-        .workflow
-        .acquisition_scope_states
-        .insert_release_decision(&decision_record)
-        .await;
-    ReleaseDecisionOutcome::of(&decision_record.id, written_id.ok().as_deref())
+    }
 }
 
 /// What the ledger did with a decision, and therefore whether this cycle

@@ -41,6 +41,8 @@ pub mod notification_targets;
 mod pending_release_http_release_upgrade_tests;
 pub mod post_0_16_6_prerelease;
 pub mod post_processing_output;
+#[cfg(test)]
+mod query_audit_indexes_upgrade_tests;
 pub mod release_url_scrub;
 pub mod repair_root_title_folders;
 #[cfg(test)]
@@ -55,6 +57,9 @@ mod synthetic_root_ids_upgrade_tests;
 pub mod title_catalog_sort_keys;
 #[cfg(test)]
 mod title_external_id_value_lookup_upgrade_tests;
+pub mod title_folder_keys;
+#[cfg(test)]
+mod title_folder_keys_upgrade_tests;
 pub mod title_folder_ownership;
 pub mod title_folder_ownership_safe;
 pub mod title_image_blobs;
@@ -981,6 +986,9 @@ async fn run_rust_hook(
         }
         "import_delay_profile_catalog" => {
             delay_profile_tables::import_delay_profile_catalog_sqlite(tx).await
+        }
+        "repair_title_folder_keys" => {
+            title_folder_keys::repair_title_folder_keys_sqlite(tx).await
         }
         #[cfg(test)]
         "test_insert_hook_marker" => {

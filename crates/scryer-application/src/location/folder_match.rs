@@ -382,26 +382,34 @@ impl AppUseCase {
             crate::library_discovery::ensure_existing_title_boundary(&selected_path, &patterns)
                 .await?;
         }
-        for candidate in self
+        let candidates = self
             .services
             .catalog
             .titles
             .list_delete_preview_info()
+            .await?;
+        let selected_folder = {
+            let title_id = title.id.clone();
+            crate::folder_ownership::run_folder_check_blocking(move || {
+                let mut checked = crate::folder_ownership::OverlapLeft::new(&selected_folder);
+                for candidate in candidates {
+                    if candidate.title_id == title_id {
+                        continue;
+                    }
+                    if let Some(folder) = candidate.folder_path
+                        && !crate::stored_paths::folder_paths_match(&selected_folder, &folder)
+                        && checked.overlaps(&folder)?
+                    {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
+                            "selected folder overlaps another title's folder; no ownership was changed",
+                        ));
+                    }
+                }
+                Ok(selected_folder)
+            })
             .await?
-        {
-            if candidate.title_id == title.id {
-                continue;
-            }
-            if let Some(folder) = candidate.folder_path
-                && !crate::stored_paths::folder_paths_match(&selected_folder, &folder)
-                && crate::folder_ownership::title_folders_overlap(&selected_folder, &folder)?
-            {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::location::SELECTED_FOLDER_OVERLAPS_ANOTHER_TITLE_S_FOLDER,
-                    "selected folder overlaps another title's folder; no ownership was changed",
-                ));
-            }
-        }
+        };
 
         let current_root = title_folder_path(&title).and_then(|current| {
             library
@@ -596,28 +604,23 @@ impl AppUseCase {
         result
     }
 
-    /// Write (or clear) a title's owned folder. The single commit primitive every
-    /// path below uses, so compensation is always the same call in reverse.
-    async fn commit_title_folder(&self, title_id: &str, folder: Option<&str>) -> AppResult<()> {
+    /// Write (or clear) titles' owned folders, all or none. The single commit
+    /// primitive every path below uses, so compensation is always the same
+    /// call in reverse.
+    async fn commit_title_folders(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
         let started = std::time::Instant::now();
-        let result = match folder {
-            Some(folder) => {
-                self.services
-                    .catalog
-                    .titles
-                    .set_folder_path(title_id, folder)
-                    .await
-            }
-            None => {
-                self.services
-                    .catalog
-                    .titles
-                    .clear_folder_path(title_id)
-                    .await
-            }
-        };
+        let result = self
+            .services
+            .catalog
+            .titles
+            .assign_title_folders(writes)
+            .await;
+        let title_ids = writes
+            .iter()
+            .map(|write| write.title_id.as_str())
+            .collect::<Vec<_>>();
         tracing::info!(
-            title_id,
+            title_ids = ?title_ids,
             elapsed_ms = started.elapsed().as_millis() as u64,
             succeeded = result.is_ok(),
             "folder ownership write completed"
@@ -625,29 +628,65 @@ impl AppUseCase {
         result
     }
 
-    /// Put a title's folder back and rebuild what the failed attempt detached.
+    /// Put titles' folders back and rebuild what the failed attempt detached.
+    ///
+    /// Each restore is `(title, folder to put back, folder this flow
+    /// assigned)`. A write expects the folder this flow assigned, so a title
+    /// whose folder something else changed while the attempt ran is left as
+    /// it now is.
     ///
     /// Best-effort by construction: it runs while another error is already on
     /// its way to the caller, so a second failure is logged rather than
     /// replacing the original cause.
-    async fn restore_title_folder(&self, actor: &User, title_id: &str, folder: Option<&str>) {
-        if let Err(error) = self.commit_title_folder(title_id, folder).await {
-            tracing::error!(
-                title_id = %title_id,
-                %error,
-                "failed to restore title folder ownership after a folder-match failure"
-            );
-            return;
+    async fn restore_title_folders(
+        &self,
+        actor: &User,
+        restores: &[(&str, Option<&str>, Option<&str>)],
+    ) {
+        let writes = restores
+            .iter()
+            .map(|(title_id, folder, assigned)| {
+                match folder {
+                    Some(folder) => crate::TitleFolderWrite::assign(*title_id, *folder),
+                    None => crate::TitleFolderWrite::clear(*title_id),
+                }
+                .expecting(assigned.map(str::to_string))
+            })
+            .collect::<Vec<_>>();
+        let title_ids = restores
+            .iter()
+            .map(|(title_id, _, _)| *title_id)
+            .collect::<Vec<_>>();
+        match self.commit_title_folders(&writes).await {
+            Ok(()) => {}
+            Err(error) if crate::folder_ownership::title_folder_write_lost(&error) => {
+                tracing::warn!(
+                    title_ids = ?title_ids,
+                    reason = error.validation_reason().unwrap_or_default(),
+                    "not restoring title folders after a folder-match failure: they changed since this attempt assigned them"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::error!(
+                    title_ids = ?title_ids,
+                    %error,
+                    "failed to restore title folder ownership after a folder-match failure"
+                );
+                return;
+            }
         }
-        if folder.is_none() {
-            return;
-        }
-        if let Err(error) = self.reconcile_title_folder(actor, title_id).await {
-            tracing::error!(
-                title_id = %title_id,
-                %error,
-                "restored title folder ownership but could not rebuild its media associations"
-            );
+        for (title_id, folder, _) in restores {
+            if folder.is_none() {
+                continue;
+            }
+            if let Err(error) = self.reconcile_title_folder(actor, title_id).await {
+                tracing::error!(
+                    title_id = %title_id,
+                    %error,
+                    "restored title folder ownership but could not rebuild its media associations"
+                );
+            }
         }
     }
 
@@ -660,8 +699,17 @@ impl AppUseCase {
         let previous_folder = context.current_folder().map(str::to_string);
         let title_id = context.title.id.clone();
 
-        self.commit_title_folder(&title_id, Some(&context.selected_folder))
+        self.commit_title_folders(&[crate::TitleFolderWrite::assign(
+            &title_id,
+            &context.selected_folder,
+        )
+        .expecting(previous_folder.clone())])
             .await?;
+        let restore = [(
+            title_id.as_str(),
+            previous_folder.as_deref(),
+            Some(context.selected_folder.as_str()),
+        )];
 
         let mut detached = 0;
         if let Some(previous) = previous_folder.as_deref() {
@@ -675,8 +723,7 @@ impl AppUseCase {
             {
                 Ok(detached) => detached,
                 Err(error) => {
-                    self.restore_title_folder(actor, &title_id, previous_folder.as_deref())
-                        .await;
+                    self.restore_title_folders(actor, &restore).await;
                     return Err(error);
                 }
             };
@@ -689,16 +736,14 @@ impl AppUseCase {
             .clear_folder_match_unmatched_item(&context, &context.selected_folder)
             .await
         {
-            self.restore_title_folder(actor, &title_id, previous_folder.as_deref())
-                .await;
+            self.restore_title_folders(actor, &restore).await;
             return Err(error);
         }
 
         let scan = match self.reconcile_title_folder(actor, &title_id).await {
             Ok(scan) => scan,
             Err(error) => {
-                self.restore_title_folder(actor, &title_id, previous_folder.as_deref())
-                    .await;
+                self.restore_title_folders(actor, &restore).await;
                 return Err(error);
             }
         };
@@ -760,18 +805,15 @@ impl AppUseCase {
         let title_id = context.title.id.clone();
         let owner_id = owner.id.clone();
 
-        // Commit both sides. A failure on the second write rolls the first back,
-        // so the two titles never both claim one folder.
-        self.commit_title_folder(&title_id, Some(&owner_folder))
-            .await?;
-        if let Err(error) = self
-            .commit_title_folder(&owner_id, Some(&title_folder))
-            .await
-        {
-            self.restore_title_folder(actor, &title_id, Some(&title_folder))
-                .await;
-            return Err(error);
-        }
+        // Both sides commit in one write, so the two titles never both claim
+        // one folder and never end up with only half of the swap.
+        self.commit_title_folders(&[
+            crate::TitleFolderWrite::assign(&title_id, &owner_folder)
+                .expecting(Some(title_folder.clone())),
+            crate::TitleFolderWrite::assign(&owner_id, &title_folder)
+                .expecting(Some(owner_folder.clone())),
+        ])
+        .await?;
 
         let rebuild = self
             .rebuild_swapped_titles(actor, &title_id, &title_folder, &owner_id, &owner_folder)
@@ -779,10 +821,22 @@ impl AppUseCase {
         let (detached, scan, owner_scan) = match rebuild {
             Ok(rebuilt) => rebuilt,
             Err(error) => {
-                self.restore_title_folder(actor, &title_id, Some(&title_folder))
-                    .await;
-                self.restore_title_folder(actor, &owner_id, Some(&owner_folder))
-                    .await;
+                self.restore_title_folders(
+                    actor,
+                    &[
+                        (
+                            title_id.as_str(),
+                            Some(title_folder.as_str()),
+                            Some(owner_folder.as_str()),
+                        ),
+                        (
+                            owner_id.as_str(),
+                            Some(owner_folder.as_str()),
+                            Some(title_folder.as_str()),
+                        ),
+                    ],
+                )
+                .await;
                 return Err(error);
             }
         };
@@ -842,17 +896,14 @@ impl AppUseCase {
         let title_id = context.title.id.clone();
         let owner_id = owner.id.clone();
 
-        // Release before claiming: the intermediate state is "nobody owns it",
-        // never "two titles own it".
-        self.commit_title_folder(&owner_id, None).await?;
-        if let Err(error) = self
-            .commit_title_folder(&title_id, Some(&context.selected_folder))
-            .await
-        {
-            self.restore_title_folder(actor, &owner_id, Some(&owner_folder))
-                .await;
-            return Err(error);
-        }
+        // The release and the claim are one write: there is no moment when
+        // two titles own the folder, or when nobody does.
+        self.commit_title_folders(&[
+            crate::TitleFolderWrite::clear(&owner_id).expecting(Some(owner_folder.clone())),
+            crate::TitleFolderWrite::assign(&title_id, &context.selected_folder)
+                .expecting(previous_folder.clone()),
+        ])
+        .await?;
 
         let rebuild = self
             .rebuild_taken_over_title(
@@ -866,10 +917,18 @@ impl AppUseCase {
         let (detached, scan) = match rebuild {
             Ok(rebuilt) => rebuilt,
             Err(error) => {
-                self.restore_title_folder(actor, &title_id, previous_folder.as_deref())
-                    .await;
-                self.restore_title_folder(actor, &owner_id, Some(&owner_folder))
-                    .await;
+                self.restore_title_folders(
+                    actor,
+                    &[
+                        (
+                            title_id.as_str(),
+                            previous_folder.as_deref(),
+                            Some(context.selected_folder.as_str()),
+                        ),
+                        (owner_id.as_str(), Some(owner_folder.as_str()), None),
+                    ],
+                )
+                .await;
                 return Err(error);
             }
         };

@@ -101,6 +101,10 @@ type ActivityViewState = {
   requestManualImport: (item: DownloadQueueItem) => Promise<void>;
   requestAssignTitle: (item: DownloadQueueItem) => Promise<void>;
   requestIgnore: (item: DownloadQueueItem) => Promise<void>;
+  requestSetImportDismissed: (
+    item: DownloadQueueItem,
+    dismissed: boolean,
+  ) => Promise<void>;
   requestMarkFailed: (
     item: DownloadQueueItem,
     skipReacquire: boolean,
@@ -137,6 +141,12 @@ type ActivityFilterChipOption<T extends string> = {
 };
 
 const importFilterOptions: ActivityFilterChipOption<DownloadImportStatus>[] = [
+  {
+    value: "DISMISSED",
+    labelKey: "activity.importFilter.dismissed",
+    icon: CircleOff,
+    iconClassName: "text-muted-foreground",
+  },
   {
     value: "PENDING",
     labelKey: "activity.importFilter.pending",
@@ -337,6 +347,7 @@ export function ActivityView({
     requestManualImport,
     requestAssignTitle,
     requestIgnore,
+    requestSetImportDismissed,
     requestMarkFailed,
     requestIgnoreItems,
     requestPause,
@@ -1112,6 +1123,15 @@ export function ActivityView({
             );
           });
         },
+        onSetImportDismissed: () => {
+          setRowBusy(rowId, true);
+          void requestSetImportDismissed(
+            queueItem,
+            !row.canResumeImportTracking,
+          ).finally(() => {
+            setRowBusy(rowId, false);
+          });
+        },
         onIgnore: () => {
           setActionLoadingId(rowId);
           setRowBusy(rowId, true);
@@ -1156,6 +1176,7 @@ export function ActivityView({
       expandedItemIds,
       requestAssignTitle,
       requestIgnore,
+      requestSetImportDismissed,
       requestManualImport,
       requestMarkFailed,
       requestPause,

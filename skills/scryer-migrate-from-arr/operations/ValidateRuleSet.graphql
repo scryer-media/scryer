@@ -1,0 +1,12 @@
+# Check a Rego source without saving. Variables: {"input": {"regoSource": "..."}}
+mutation ValidateRuleSet($input: ValidateRuleSetInput!) {
+  validateRuleSet(input: $input) {
+    valid
+    diagnostics {
+      code
+      line
+      column
+      path
+    }
+  }
+}

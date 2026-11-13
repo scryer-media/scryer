@@ -75,6 +75,13 @@ pub(crate) struct AdmittedPendingRelease {
     incumbent_best_score: Option<i32>,
 }
 
+#[cfg(test)]
+impl AdmittedPendingRelease {
+    pub(crate) fn scoring(&self) -> &scryer_domain::GrabScoringSnapshot {
+        &self.scoring
+    }
+}
+
 /// A submission refused without burning its release, reduced to what failure
 /// accounting and refusal logging read (the error itself is not `Clone`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -259,9 +266,10 @@ impl AppUseCase {
     }
 
     /// Order one scope's expired pending releases best-first, on facts derived
-    /// now rather than remembered from when they were parked (BL3).
+    /// now rather than remembered from when they were parked.
     ///
-    /// The key is `RankHead`'s: refused releases last, then tier, then revision,
+    /// The key is `RankHead`'s: refused releases last, then the profile's
+    /// decision order (tier, revision and the audio language steps it lists),
     /// then score, with size fit breaking otherwise equal search preferences.
     /// The admission ladder remains unchanged. A scope whose title
     /// or profile cannot be resolved keeps the stored order: an unorderable
@@ -309,7 +317,7 @@ impl AppUseCase {
 
         let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
         let dl_snapshot = super::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        let mut keys: std::collections::HashMap<String, (bool, usize, i32, i32, i32)> =
+        let mut keys: std::collections::HashMap<String, crate::acquisition::scoring::RankHeadKey> =
             std::collections::HashMap::with_capacity(releases.len());
         for release in releases.iter() {
             let facts = crate::quality::canonical_context::score_parked_release_title(
@@ -355,21 +363,18 @@ impl AppUseCase {
                 facts.revision,
                 facts.score,
             )
-            .with_revision_policy(
-                facts.release_group.as_deref(),
-                profile.criteria.ignore_proper_repack,
-            );
+            .with_profile_policy(facts.release_group.as_deref(), &profile.criteria)
+            .with_language(facts.language);
             let revision_preference = crate::admission::revision_preference(candidate, &admission);
-            keys.insert(
-                release.id.clone(),
-                (
-                    !facts.allowed,
-                    crate::admission::tier_sort_key(facts.tier_index),
-                    revision_preference.saturating_neg(),
-                    facts.score.saturating_neg(),
-                    facts.size_fit_penalty,
-                ),
-            );
+            let rank = crate::acquisition::scoring::RankHead {
+                blocked: !facts.allowed,
+                side: candidate.facts().side,
+                negated_revision: revision_preference.saturating_neg(),
+                negated_score: facts.score.saturating_neg(),
+                size_fit_penalty: facts.size_fit_penalty,
+                pipeline: profile.criteria.decision_pipeline,
+            };
+            keys.insert(release.id.clone(), rank.key());
         }
         releases.sort_by(|left, right| {
             keys.get(&left.id)
@@ -951,17 +956,25 @@ impl AppUseCase {
             .ok_or_else(|| {
                 AppError::Repository(format!("wanted item {} not found", pr.wanted_item_id))
             })?;
-        Ok(matches!(
-            self.try_grab_pending_release(
-                &wanted,
-                &pr,
-                &now,
-                PendingGrabTrigger::Operator,
-                &DomainEventActor::system(),
-            )
-            .await?,
-            PendingGrabOutcome::Grabbed { .. }
-        ))
+        let trigger = PendingGrabTrigger::Operator;
+        let outcome = match self
+            .judge_pending_release_for_title(&wanted, &pr, &now, trigger, Some(title))
+            .await?
+        {
+            PendingJudgement::Decided(outcome) => outcome,
+            PendingJudgement::Admitted(admitted) => {
+                self.grab_admitted_pending_release(
+                    &wanted,
+                    &pr,
+                    &now,
+                    trigger,
+                    *admitted,
+                    &DomainEventActor::system(),
+                )
+                .await?
+            }
+        };
+        Ok(matches!(outcome, PendingGrabOutcome::Grabbed { .. }))
     }
 
     /// Dismiss a pending release (set status to dismissed).
@@ -1110,6 +1123,20 @@ impl AppUseCase {
         now: &chrono::DateTime<Utc>,
         trigger: PendingGrabTrigger,
     ) -> AppResult<PendingJudgement> {
+        self.judge_pending_release_for_title(wanted, pr, now, trigger, None)
+            .await
+    }
+
+    /// [`Self::judge_pending_release`] with the title the caller already
+    /// loaded; `None` reads it here.
+    async fn judge_pending_release_for_title(
+        &self,
+        wanted: &AcquisitionScopeState,
+        pr: &PendingRelease,
+        now: &chrono::DateTime<Utc>,
+        trigger: PendingGrabTrigger,
+        loaded_title: Option<Title>,
+    ) -> AppResult<PendingJudgement> {
         if let Some(denial) = self
             .location_ownership_denial_for_title(
                 &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
@@ -1126,8 +1153,15 @@ impl AppUseCase {
             return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
         }
         // Load title
-        let Some(title) = self.services.catalog.titles.get_by_id(&pr.title_id).await? else {
-            return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
+        let title = match loaded_title {
+            Some(title) => title,
+            None => {
+                let Some(title) = self.services.catalog.titles.get_by_id(&pr.title_id).await?
+                else {
+                    return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
+                };
+                title
+            }
         };
 
         // Check the per-title blocklist (the single, removable exclusion source).
@@ -1410,20 +1444,11 @@ impl AppUseCase {
             }
         }
         let cutoff_scope = self.cutoff_scope_for(&pending_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         // A resolution failure defers rather than errors: the callers expire
         // parked releases on Err, and a possibly transient settings problem
         // must not permanently burn delayed or standby candidates.
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
-                &title,
-                None,
-                analyzed_cutoff_quality,
-            )
+            .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
             .await
         {
             Ok(context) => context,
@@ -1493,6 +1518,8 @@ impl AppUseCase {
                         &facts.scoring_log,
                         &admission,
                         "manual_override",
+                        // An operator's standby grab is compared with nothing.
+                        None,
                     ),
                     title,
                     pending_scope,
@@ -1542,10 +1569,11 @@ impl AppUseCase {
             facts.revision,
             candidate_score,
         )
+        .with_language(facts.language)
         .with_release_title(&pr.release_title)
-        .with_revision_policy(
+        .with_profile_policy(
             facts.release_group.as_deref(),
-            upgrade_context.profile.criteria.ignore_proper_repack,
+            &upgrade_context.profile.criteria,
         );
         // The same candidate-aware cutoff gate the search and RSS lanes run
         // (D15). It used to be a scope-level `if cutoff_reached { return }`
@@ -1560,6 +1588,7 @@ impl AppUseCase {
                 upgrade_context.cutoff_reached,
                 &admission,
                 upgrade_context.profile.criteria.cutoff_score,
+                &upgrade_context.profile.criteria.decision_pipeline,
             ),
             true,
             now,
@@ -1601,6 +1630,7 @@ impl AppUseCase {
                     &facts.scoring_log,
                     &admission,
                     "eligible",
+                    verdict.decided_by(&admission, candidate_facts),
                 ),
                 title,
                 pending_scope,

@@ -75,6 +75,11 @@ pub trait ListSubscriptionRepository: Send + Sync {
     /// are not paused past it, oldest due first. `limit` bounds one tick.
     async fn list_due(&self, now: DateTime<Utc>, limit: usize) -> AppResult<Vec<ListSubscription>>;
 
+    /// Whether [`Self::list_due`] at `now` would return any subscription.
+    async fn has_due(&self, now: DateTime<Utc>) -> AppResult<bool> {
+        Ok(!self.list_due(now, 1).await?.is_empty())
+    }
+
     /// Writes the outcome of one sync: state, timestamps, fingerprint, counts.
     /// It leaves `updated_at` alone: that stamp marks the last settings edit,
     /// and a sync that moved it would make every list look edited since its
@@ -127,6 +132,30 @@ pub trait ListMembershipRepository: Send + Sync {
     async fn upsert_many(&self, memberships: &[ListMembership]) -> AppResult<u64>;
 
     async fn list_by_subscription(&self, subscription_id: &str) -> AppResult<Vec<ListMembership>>;
+
+    /// [`Self::list_by_subscription`] without departed rows (`left_at` set),
+    /// in the same order.
+    async fn list_active_by_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> AppResult<Vec<ListMembership>> {
+        let mut rows = self.list_by_subscription(subscription_id).await?;
+        rows.retain(|row| row.left_at.is_none());
+        Ok(rows)
+    }
+
+    /// [`Self::list_active_by_subscription`] for each subscription in turn,
+    /// concatenated in the order `subscription_ids` gives them.
+    async fn list_active_by_subscriptions(
+        &self,
+        subscription_ids: &[String],
+    ) -> AppResult<Vec<ListMembership>> {
+        let mut rows = Vec::new();
+        for subscription_id in subscription_ids {
+            rows.extend(self.list_active_by_subscription(subscription_id).await?);
+        }
+        Ok(rows)
+    }
 
     /// Every subscription's row for one title, across both scopes. This is the
     /// cross-list guard's read; it carries subscription ids only, so it reveals

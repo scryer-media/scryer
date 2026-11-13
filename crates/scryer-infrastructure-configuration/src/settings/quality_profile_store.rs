@@ -316,36 +316,39 @@ fn decode_quality_profile(
         serde_json::from_value(row_json_or_default(row, "scoring_config", json!({}))?)
             .unwrap_or_default();
 
+    let mut criteria = QualityProfileCriteria {
+        quality_tiers,
+        archival_quality,
+        allow_unknown_quality: row.bool("allow_unknown_quality")?,
+        source_allowlist: parse_release_sources(source_allowlist)?,
+        source_blocklist: parse_release_sources(source_blocklist)?,
+        video_codec_allowlist: parse_video_codecs(video_codec_allowlist)?,
+        video_codec_blocklist: parse_video_codecs(video_codec_blocklist)?,
+        audio_codec_allowlist: parse_audio_codecs(audio_codec_allowlist)?,
+        audio_codec_blocklist: parse_audio_codecs(audio_codec_blocklist)?,
+        atmos_preferred: row.bool("atmos_preferred")?,
+        dolby_vision_allowed: row.bool("dolby_vision_allowed")?,
+        detected_hdr_allowed: row.bool("detected_hdr_allowed")?,
+        prefer_remux: row.bool("prefer_remux")?,
+        allow_bd_disk: row.bool("allow_bd_disk")?,
+        allow_upgrades: row.bool("allow_upgrades")?,
+        ignore_proper_repack: scoring_config.ignore_proper_repack,
+        prefer_dual_audio: row.bool("prefer_dual_audio").unwrap_or(false),
+        required_audio_languages,
+        scoring_persona: scoring_config.scoring_persona,
+        scoring_overrides: scoring_config.scoring_overrides,
+        cutoff_tier: scoring_config.cutoff_tier,
+        min_score_to_grab: scoring_config.min_score_to_grab,
+        cutoff_score: scoring_config.cutoff_score,
+        min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
+        decision_pipeline: scoring_config.decision_pipeline.unwrap_or_default(),
+        facet_persona_overrides: scoring_config.facet_persona_overrides,
+    };
+    criteria.reconcile_revision_gate();
     Ok(QualityProfile {
         id,
         name: row.text("name")?,
-        criteria: QualityProfileCriteria {
-            quality_tiers,
-            archival_quality,
-            allow_unknown_quality: row.bool("allow_unknown_quality")?,
-            source_allowlist: parse_release_sources(source_allowlist)?,
-            source_blocklist: parse_release_sources(source_blocklist)?,
-            video_codec_allowlist: parse_video_codecs(video_codec_allowlist)?,
-            video_codec_blocklist: parse_video_codecs(video_codec_blocklist)?,
-            audio_codec_allowlist: parse_audio_codecs(audio_codec_allowlist)?,
-            audio_codec_blocklist: parse_audio_codecs(audio_codec_blocklist)?,
-            atmos_preferred: row.bool("atmos_preferred")?,
-            dolby_vision_allowed: row.bool("dolby_vision_allowed")?,
-            detected_hdr_allowed: row.bool("detected_hdr_allowed")?,
-            prefer_remux: row.bool("prefer_remux")?,
-            allow_bd_disk: row.bool("allow_bd_disk")?,
-            allow_upgrades: row.bool("allow_upgrades")?,
-            ignore_proper_repack: scoring_config.ignore_proper_repack,
-            prefer_dual_audio: row.bool("prefer_dual_audio").unwrap_or(false),
-            required_audio_languages,
-            scoring_persona: scoring_config.scoring_persona,
-            scoring_overrides: scoring_config.scoring_overrides,
-            cutoff_tier: scoring_config.cutoff_tier,
-            min_score_to_grab: scoring_config.min_score_to_grab,
-            cutoff_score: scoring_config.cutoff_score,
-            min_upgrade_score_delta: scoring_config.min_upgrade_score_delta,
-            facet_persona_overrides: scoring_config.facet_persona_overrides,
-        },
+        criteria,
     })
 }
 
@@ -391,7 +394,9 @@ async fn upsert_quality_profile_tx(
     }
 
     let name = profile.name.trim().to_string();
-    let criteria = profile.criteria;
+    let mut criteria = profile.criteria;
+    criteria.reconcile_revision_gate();
+    let decision_pipeline = criteria.stored_decision_pipeline();
     let archival_quality = criteria
         .archival_quality
         .as_ref()
@@ -414,6 +419,7 @@ async fn upsert_quality_profile_tx(
         min_score_to_grab: criteria.min_score_to_grab,
         cutoff_score: criteria.cutoff_score,
         min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+        decision_pipeline,
         facet_persona_overrides: criteria.facet_persona_overrides,
     })
     .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -986,6 +992,174 @@ mod tests {
             serde_json::from_str::<JsonValue>(&raw).unwrap()["min_upgrade_score_delta"],
             5
         );
+    }
+
+    #[tokio::test]
+    async fn quality_profile_decision_pipeline_round_trips_and_stays_absent_when_implied() {
+        use scryer_application::{DecisionGate, DecisionPipeline};
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "order-profile", "Order Profile", None).await;
+        let mut profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(
+            profiles[0].criteria.decision_pipeline,
+            DecisionPipeline::default_order()
+        );
+        let stored = async || -> JsonValue {
+            let raw: String = sqlx::query_scalar(
+                "SELECT scoring_config FROM quality_profiles WHERE id = 'order-profile'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            serde_json::from_str(&raw).unwrap()
+        };
+
+        // The default order is implied: the key never reaches the stored JSON.
+        store
+            .replace_quality_profiles(SCOPE, None, profiles.clone())
+            .await
+            .unwrap();
+        assert!(stored().await.get("decision_pipeline").is_none());
+
+        // Neither does the default order without its revision gate, which
+        // the revision switch already records.
+        profiles[0].criteria.set_ignore_proper_repack(true);
+        store
+            .replace_quality_profiles(SCOPE, None, profiles.clone())
+            .await
+            .unwrap();
+        let raw = stored().await;
+        assert!(raw.get("decision_pipeline").is_none());
+        assert_eq!(raw["ignore_proper_repack"], true);
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert!(
+            !loaded[0]
+                .criteria
+                .decision_pipeline
+                .contains(DecisionGate::Revision)
+        );
+
+        let language_ahead = DecisionPipeline::try_from_gates([
+            DecisionGate::PreferredLanguage,
+            DecisionGate::QualityTier,
+            DecisionGate::Revision,
+            DecisionGate::OptionalLanguages,
+        ])
+        .unwrap();
+        profiles[0].criteria.set_decision_pipeline(language_ahead);
+        store
+            .replace_quality_profiles(SCOPE, None, profiles.clone())
+            .await
+            .unwrap();
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(loaded[0].criteria.decision_pipeline, language_ahead);
+        assert!(!loaded[0].criteria.ignore_proper_repack);
+        let raw = stored().await;
+        assert_eq!(
+            raw["decision_pipeline"],
+            serde_json::json!([
+                "preferred_language",
+                "quality_tier",
+                "revision",
+                "optional_languages"
+            ])
+        );
+        assert_ne!(raw["ignore_proper_repack"], true);
+
+        // Score only is stored as an empty order and sets the revision switch.
+        profiles[0]
+            .criteria
+            .set_decision_pipeline(DecisionPipeline::score_only());
+        store
+            .replace_quality_profiles(SCOPE, None, profiles)
+            .await
+            .unwrap();
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(
+            loaded[0].criteria.decision_pipeline,
+            DecisionPipeline::score_only()
+        );
+        assert!(loaded[0].criteria.ignore_proper_repack);
+        let raw = stored().await;
+        assert_eq!(raw["decision_pipeline"], serde_json::json!([]));
+
+        // A stored switch wins over a stored revision gate, a retired
+        // ranking mode is ignored, and an unknown gate is dropped.
+        sqlx::query(
+            "UPDATE quality_profiles SET scoring_config = json_set(scoring_config, '$.decision_pipeline', json('[\"revision\",\"some_future_gate\",\"quality_tier\"]'), '$.ignore_proper_repack', json('true'), '$.ranking_mode', 'score_first') WHERE id = 'order-profile'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        store.invalidate_cache();
+        let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        assert_eq!(
+            loaded[0].criteria.decision_pipeline,
+            DecisionPipeline::try_from_gates([DecisionGate::QualityTier]).unwrap()
+        );
+        assert!(loaded[0].criteria.ignore_proper_repack);
+    }
+
+    /// A row written before decision orders existed carries only the
+    /// `ignore_proper_repack` switch. It loads as the default order, without
+    /// the revision gate when the switch is on, and saving it untouched writes
+    /// back exactly what was stored.
+    #[tokio::test]
+    async fn a_profile_stored_before_decision_orders_carries_its_revision_switch_over() {
+        use scryer_application::{DecisionGate, DecisionPipeline};
+        let (store, pool) = fixture().await;
+        insert_profile(&pool, "older-profile", "Older Profile", None).await;
+        let profiles = store.list_quality_profiles(SCOPE, None).await.unwrap();
+        store
+            .replace_quality_profiles(SCOPE, None, profiles)
+            .await
+            .unwrap();
+        let stored = async || -> JsonValue {
+            let raw: String = sqlx::query_scalar(
+                "SELECT scoring_config FROM quality_profiles WHERE id = 'older-profile'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            serde_json::from_str(&raw).unwrap()
+        };
+
+        for ignore in [false, true] {
+            sqlx::query(if ignore {
+                "UPDATE quality_profiles SET scoring_config = json_set(json_remove(scoring_config, '$.decision_pipeline'), '$.ignore_proper_repack', json('true')) WHERE id = 'older-profile'"
+            } else {
+                "UPDATE quality_profiles SET scoring_config = json_remove(scoring_config, '$.decision_pipeline', '$.ignore_proper_repack') WHERE id = 'older-profile'"
+            })
+            .execute(&pool)
+            .await
+            .unwrap();
+            let before = stored().await;
+            assert!(before.get("decision_pipeline").is_none());
+
+            store.invalidate_cache();
+            let loaded = store.list_quality_profiles(SCOPE, None).await.unwrap();
+            let criteria = &loaded[0].criteria;
+            assert_eq!(criteria.ignore_proper_repack, ignore);
+            assert_eq!(criteria.ignores_revision(), ignore);
+            assert_eq!(
+                criteria.decision_pipeline,
+                if ignore {
+                    DecisionPipeline::default_order().without(DecisionGate::Revision)
+                } else {
+                    DecisionPipeline::default_order()
+                }
+            );
+            assert_eq!(criteria.stored_decision_pipeline(), None);
+
+            store
+                .replace_quality_profiles(SCOPE, None, loaded)
+                .await
+                .unwrap();
+            assert_eq!(stored().await, before, "an untouched save rewrote the row");
+        }
     }
 
     #[tokio::test]

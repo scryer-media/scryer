@@ -1069,6 +1069,9 @@ pub(crate) struct CachedWantedProjection {
 pub struct AppRuntimeAcquisitionState {
     pub(crate) titles_in_deletion: Arc<std::sync::RwLock<HashSet<String>>>,
     pub acquisition_wake: Arc<tokio::sync::Notify>,
+    /// Signalled when a queue delete is queued, so the delete poller runs it
+    /// without polling the command table while nothing is queued.
+    pub(crate) download_delete_wake: Arc<tokio::sync::Notify>,
     /// Set when failure handling re-opens a scope; the next background pass
     /// walks even if its own walk is not due, so the scope's saved results are
     /// tried on the next poll tick, as they were before the walk had a cadence
@@ -2548,6 +2551,10 @@ pub(crate) struct NavigationBadgeFactsCache {
     /// logged once per streak instead of once per refresh.
     pub(crate) failing_sections:
         Arc<tokio::sync::Mutex<HashSet<crate::services::NavigationBadgeSection>>>,
+    /// Bumped by every library or root change that recounts the library
+    /// sections itself, so a refresh that counted before the change cannot
+    /// publish its older numbers over the newer ones.
+    pub(crate) library_sections_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The independently refreshed sections of the durable badge facts.
@@ -2662,6 +2669,7 @@ impl AppRuntimeState {
             acquisition: AppRuntimeAcquisitionState {
                 titles_in_deletion: Arc::default(),
                 acquisition_wake: Arc::new(tokio::sync::Notify::new()),
+                download_delete_wake: Arc::new(tokio::sync::Notify::new()),
                 scope_reopened_since_walk: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 process_started_at: chrono::Utc::now(),
                 download_submission_guards: DownloadSubmissionGuardTable::default(),

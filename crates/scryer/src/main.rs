@@ -62,6 +62,7 @@ mod base_path;
 mod bundle_relaunch;
 #[cfg(any(debug_assertions, test, feature = "e2e-harness"))]
 mod dev_api_keys;
+mod diagnostics_routes;
 mod environment_file;
 mod http_error;
 mod http_metrics;
@@ -840,6 +841,10 @@ async fn run_application() {
     let file_logging_path = log_file_writer
         .as_ref()
         .and_then(|_| log_file_config.as_ref().map(|config| config.path.clone()));
+    let diagnostics_process = diagnostics_routes::DiagnosticsProcessFacts {
+        started_at: chrono::Utc::now(),
+        log_file: file_logging_path.clone(),
+    };
 
     let (stdout_writer, _stdout_guard) = log_delivery::LogDelivery::new("stdout", |bytes| {
         use std::io::Write;
@@ -1171,6 +1176,7 @@ async fn run_application() {
                     bootstrap_base_path,
                     application_upgrade_assessment,
                     restore_coordinator.clone(),
+                    diagnostics_process,
                 )
                 .await;
                 match bootstrapped {
@@ -1348,8 +1354,13 @@ async fn bootstrap_application(
     base_path: BasePath,
     application_upgrade_assessment: scryer_application::application_upgrade::InstallationAssessment,
     restore_coordinator: Arc<scryer_application::RestoreCoordinator>,
+    diagnostics_process: diagnostics_routes::DiagnosticsProcessFacts,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
+    let diagnostics_sqlite_path = matches!(datastore_config.engine, DatastoreEngine::Sqlite)
+        .then(|| datastore_config.database_url.strip_prefix("sqlite://"))
+        .flatten()
+        .map(|path| PathBuf::from(path.split('?').next().unwrap_or(path)));
     scryer_application::initialize_archive_workspace_ownership(&data_dir)?;
 
     let t = std::time::Instant::now();
@@ -1955,12 +1966,6 @@ async fn bootstrap_application(
     if let Err(error) = app_use_case.sync_image_cache_runtime_limit().await {
         tracing::warn!(error = %error, "failed to apply configured image cache limit");
     }
-    run_image_cache_maintenance(
-        &app_use_case,
-        image_proxy_runtime.clone(),
-        &restore_workers.shutdown_workers,
-    )
-    .await;
     {
         let source_repository = app_use_case.image_proxy_repository();
         let source_flush_shutdown = restore_workers.shutdown_workers.child_token();
@@ -1990,6 +1995,10 @@ async fn bootstrap_application(
         let maintenance_app = app_use_case.clone();
         let maintenance_shutdown = restore_workers.shutdown_workers.child_token();
         restore_workers.spawn_worker(async move {
+            // The boot pass runs here rather than ahead of serving; requests
+            // for cached images wait on the cache lock while it runs.
+            run_image_cache_maintenance(&maintenance_app, runtime.clone(), &maintenance_shutdown)
+                .await;
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await;
@@ -2555,6 +2564,19 @@ async fn bootstrap_application(
             .all(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty())),
     };
     let ws_auth_state = auth_state.clone();
+    let diagnostics_route_state = diagnostics_routes::DiagnosticsRouteState {
+        auth: auth_state.clone(),
+        host: Arc::new(diagnostics_routes::DiagnosticsHost {
+            process: diagnostics_process,
+            log_ring_buffer: log_ring_buffer.clone(),
+            metrics: metrics_handle.clone(),
+            installation: application_upgrade_assessment,
+            data_dir: data_dir.clone(),
+            listening: bind.listening,
+            base_path_configured: !base_path.is_root(),
+            sqlite_path: diagnostics_sqlite_path,
+        }),
+    };
 
     // WebSocket route must be outside CompressionLayer — compression wraps the
     // 101 upgrade response body and injects Content-Encoding, breaking the
@@ -2596,6 +2618,11 @@ async fn bootstrap_application(
         .route(
             "/api/indexer-search/artifacts",
             post(download_indexer_search_artifacts_handler).with_state(auth_state.clone()),
+        )
+        .route(
+            diagnostics_routes::DIAGNOSTICS_BUNDLE_PATH,
+            get(diagnostics_routes::download_diagnostics_bundle_handler)
+                .with_state(diagnostics_route_state),
         )
         .route(
             "/images/titles/{title_id}/{kind}/{variant}",

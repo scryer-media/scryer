@@ -42,6 +42,50 @@ const MAX_ENTRIES: usize = 500_000;
 /// A 128-bit digest of one derivation's inputs.
 pub(crate) type LandedBarKey = [u8; 16];
 
+/// What one derivation of a stored file's bar yields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LandedBar {
+    /// The canonical landed score.
+    pub score: i32,
+    /// Position in the profile's quality ordering; lower is better.
+    pub tier_index: Option<usize>,
+    /// Standing against the title's audio language preferences.
+    pub language: crate::AudioLanguageRank,
+}
+
+impl LandedBar {
+    /// The stored file as the decision steps read it. The one builder for a
+    /// landed bar; see [`crate::decision_pipeline::SideFacts`].
+    pub(crate) fn side(&self) -> crate::decision_pipeline::SideFacts {
+        crate::decision_pipeline::SideFacts {
+            tier_sort_key: crate::admission::tier_sort_key(self.tier_index),
+            language: self.language,
+        }
+    }
+
+    /// Folds in another file of the same scope. The score is the better of the
+    /// two; the language standing is that of the file the admission ladder
+    /// ranks first, the one the cutoff reads through
+    /// [`crate::admission::AdmissionSubject::best_incumbent_record`].
+    pub(crate) fn with_file(self, other: Self, pipeline: &crate::DecisionPipeline) -> Self {
+        let rank = |bar: &Self| {
+            (
+                crate::admission::incumbent_ladder_key(pipeline, bar.side()),
+                std::cmp::Reverse(bar.score),
+            )
+        };
+        let first = if rank(&other) < rank(&self) {
+            other
+        } else {
+            self
+        };
+        Self {
+            score: self.score.max(other.score),
+            ..first
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct MemoState {
     /// Advanced by every engine swap. A ticket from an older generation may
@@ -59,7 +103,7 @@ struct MemoState {
 
 #[derive(Debug, Clone, Copy)]
 struct MemoEntry {
-    bar: i32,
+    bar: LandedBar,
     pass: u64,
 }
 
@@ -131,7 +175,7 @@ impl LandedBarMemo {
         })
     }
 
-    pub(crate) fn get(&self, ticket: LandedBarMemoTicket, key: &LandedBarKey) -> Option<i32> {
+    pub(crate) fn get(&self, ticket: LandedBarMemoTicket, key: &LandedBarKey) -> Option<LandedBar> {
         let mut state = self.state();
         if state.disabled || state.generation != ticket.generation {
             return None;
@@ -143,7 +187,7 @@ impl LandedBarMemo {
         Some(bar)
     }
 
-    pub(crate) fn fill(&self, ticket: LandedBarMemoTicket, key: LandedBarKey, bar: i32) {
+    pub(crate) fn fill(&self, ticket: LandedBarMemoTicket, key: LandedBarKey, bar: LandedBar) {
         let mut state = self.state();
         if state.disabled || state.generation != ticket.generation {
             return;
@@ -242,26 +286,68 @@ mod tests {
         [byte; 16]
     }
 
+    fn bar(score: i32) -> LandedBar {
+        LandedBar {
+            score,
+            tier_index: None,
+            language: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_scope_takes_its_language_standing_from_the_file_the_ladder_ranks_first() {
+        let file = |score, tier, preferred_rank| LandedBar {
+            score,
+            tier_index: Some(tier),
+            language: crate::AudioLanguageRank::for_test(preferred_rank, 0),
+        };
+        let language_ahead = crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap();
+        // An English 1080p file beside a German 720p one, German preferred.
+        for (pipeline, wanted) in [
+            (crate::DecisionPipeline::default_order(), true),
+            (language_ahead, false),
+        ] {
+            let english = file(900, 0, 1);
+            let german = file(300, 1, 0);
+            for merged in [
+                english.with_file(german, &pipeline),
+                german.with_file(english, &pipeline),
+            ] {
+                assert_eq!(merged.score, 900, "the bar is still the better score");
+                assert_eq!(
+                    merged.language.wanted, wanted,
+                    "{pipeline:?}: the cutoff's file decides"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_filled_bar_is_returned_to_the_same_generation() {
         let memo = LandedBarMemo::default();
         let ticket = memo.ticket().expect("memo is on by default");
         assert_eq!(memo.get(ticket, &key(1)), None);
-        memo.fill(ticket, key(1), 420);
-        assert_eq!(memo.get(ticket, &key(1)), Some(420));
+        memo.fill(ticket, key(1), bar(420));
+        assert_eq!(memo.get(ticket, &key(1)), Some(bar(420)));
     }
 
     #[test]
     fn an_engine_swap_clears_the_memo_and_refuses_stale_tickets() {
         let memo = LandedBarMemo::default();
         let before = memo.ticket().unwrap();
-        memo.fill(before, key(1), 420);
+        memo.fill(before, key(1), bar(420));
 
         memo.reset_for_engine(false);
         assert_eq!(memo.len(), 0);
 
         // A derivation that read the old engine finishes after the swap.
-        memo.fill(before, key(2), 7);
+        memo.fill(before, key(2), bar(7));
         assert_eq!(memo.len(), 0, "a pre-swap result must not install");
 
         let after = memo.ticket().unwrap();
@@ -277,8 +363,8 @@ mod tests {
 
         memo.reset_for_engine(false);
         let ticket = memo.ticket().expect("a pure engine turns it back on");
-        memo.fill(ticket, key(1), 1);
-        assert_eq!(memo.get(ticket, &key(1)), Some(1));
+        memo.fill(ticket, key(1), bar(1));
+        assert_eq!(memo.get(ticket, &key(1)), Some(bar(1)));
     }
 
     #[test]
@@ -286,15 +372,15 @@ mod tests {
         let memo = LandedBarMemo::default();
         let first = memo.begin_pass();
         let ticket = memo.ticket().unwrap();
-        memo.fill(ticket, key(1), 10);
-        memo.fill(ticket, key(2), 20);
+        memo.fill(ticket, key(1), bar(10));
+        memo.fill(ticket, key(2), bar(20));
         memo.finish_pass(first);
         assert_eq!(memo.len(), 2);
 
         // The next pass only sees key 1: key 2's file is gone.
         let second = memo.begin_pass();
         let ticket = memo.ticket().unwrap();
-        assert_eq!(memo.get(ticket, &key(1)), Some(10));
+        assert_eq!(memo.get(ticket, &key(1)), Some(bar(10)));
         let stats = memo.finish_pass(second);
         assert_eq!(memo.len(), 1);
         assert_eq!(stats.hits, 1);
@@ -309,7 +395,7 @@ mod tests {
         let memo = LandedBarMemo::default();
         let stale = memo.begin_pass();
         let ticket = memo.ticket().unwrap();
-        memo.fill(ticket, key(1), 10);
+        memo.fill(ticket, key(1), bar(10));
         let _current = memo.begin_pass();
         memo.finish_pass(stale);
         assert_eq!(memo.len(), 1);

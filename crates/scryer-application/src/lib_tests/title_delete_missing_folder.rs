@@ -565,6 +565,9 @@ async fn title_delete_bulk_read_failure_is_not_catalog_cleanup_failure() {
             .set_delete_operation_log(operations.clone())
             .await;
         let barrier = operations.lock().await;
+        // The job reads its titles by id list twice: once to admit the
+        // request, once when it starts deleting. The second read fails.
+        *fixture.titles.fail_reads_of_title_after.lock().await = Some((later.clone(), 1));
         let accepted = app
             .start_delete_titles_job(
                 &fixture.admin,
@@ -591,7 +594,6 @@ async fn title_delete_bulk_read_failure_is_not_catalog_cleanup_failure() {
                 .contains(&fixture.title_id)
         })
         .await;
-        fixture.titles.fail_get_by_id.store(true, Ordering::SeqCst);
         drop(barrier);
         let run = crate::test_wait::wait_for("specific read-failure batch completes", || async {
             jobs.runs
@@ -610,7 +612,7 @@ async fn title_delete_bulk_read_failure_is_not_catalog_cleanup_failure() {
         );
         assert_eq!(summary["failures"][0]["titleId"], later);
         assert!(summary["failures"][0]["reason"].is_null());
-        fixture.titles.fail_get_by_id.store(false, Ordering::SeqCst);
+        *fixture.titles.fail_reads_of_title_after.lock().await = None;
         assert!(
             app.services
                 .catalog

@@ -204,6 +204,19 @@ pub(crate) fn enrich_candidate(
             continue;
         }
 
+        // A multi-audio marker says several audio tracks ship, the original
+        // language among them. Which others is group-specific: French groups
+        // mean French, German groups German, and only some mean English. It
+        // names no language, so the token keeps its usual handling below.
+        if matches!(token, "MULTIAUDIO" | "MULTI-AUDIO")
+            || (token == "MULTI"
+                && !technical_next.is_some_and(|value| {
+                    matches!(value, "SUB" | "SUBS" | "SUBTITLE" | "SUBTITLES" | "SUBBED")
+                }))
+        {
+            enrichment.is_multi_audio = true;
+        }
+
         if is_10bit_token(token) {
             enrichment.is_10bit = true;
             index += 1;
@@ -465,6 +478,7 @@ pub(crate) fn project_final_metadata(
 
     projected.stereoscopy = enrichment.stereoscopy;
     projected.is_dual_audio = enrichment.is_dual_audio;
+    projected.is_multi_audio = enrichment.is_multi_audio;
     projected.is_atmos = enrichment.is_atmos;
     projected.is_dolby_vision = enrichment.is_dolby_vision;
     projected.detected_hdr = enrichment.detected_hdr;

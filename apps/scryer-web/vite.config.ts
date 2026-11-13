@@ -107,6 +107,10 @@ export default defineConfig(({ command, mode }) => ({
         target: DEV_PROXY_TARGET,
         changeOrigin: true,
       },
+      "/api": {
+        target: DEV_PROXY_TARGET,
+        changeOrigin: true,
+      },
       "/images": {
         target: DEV_PROXY_TARGET,
         changeOrigin: true,

@@ -1,0 +1,14 @@
+# Episode ids of one series or anime title. Variables: {"id": "..."}
+query TitleEpisodes($id: ID!) {
+  title(id: $id) {
+    id
+    collections {
+      episodes {
+        id
+        seasonNumber
+        episodeNumber
+        monitored
+      }
+    }
+  }
+}

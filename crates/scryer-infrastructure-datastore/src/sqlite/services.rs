@@ -21,6 +21,7 @@ const SQLITE_SLOW_STATEMENT_MS: u64 = 2000;
 /// WAL frames into the main database.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 16_384;
 const MAX_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 262_144;
+const SQLITE_CACHE_SIZE_PRAGMA: i64 = -20_000;
 
 fn sqlite_max_connections_from_env() -> u32 {
     std::env::var("SCRYER_SQLITE_MAX_CONNECTIONS")
@@ -41,6 +42,38 @@ fn sqlite_wal_autocheckpoint_pages_from_env() -> u32 {
         Some(0) => 0,
         Some(value) => value.min(MAX_SQLITE_WAL_AUTOCHECKPOINT_PAGES),
         None => DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+    }
+}
+
+/// Refreshes planner statistics once at startup so a restart, or a migration
+/// that added indexes, does not wait for the daily housekeeping run. A failure
+/// is logged and startup continues.
+async fn run_startup_optimize(pool: &sqlx::SqlitePool) {
+    let result: Result<(), sqlx::Error> = async {
+        // Taken out of the pool and closed afterwards, on every path, so the
+        // analysis limit below never reaches a pooled connection and the
+        // daily maintenance ANALYZE stays unbounded.
+        let mut conn = pool.acquire().await?.detach();
+        // Rows sampled per index, so the ANALYZE stays bounded on a large
+        // database.
+        let optimized = match sqlx::query("PRAGMA analysis_limit = 1000")
+            .execute(&mut conn)
+            .await
+        {
+            // 0x10002: analyze every table that may need it, not only the
+            // ones this connection has queried.
+            Ok(_) => sqlx::query("PRAGMA optimize = 0x10002")
+                .execute(&mut conn)
+                .await
+                .map(|_| ()),
+            Err(error) => Err(error),
+        };
+        let closed = sqlx::Connection::close(conn).await;
+        optimized.and(closed)
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(error = %error, "startup PRAGMA optimize failed");
     }
 }
 
@@ -139,6 +172,10 @@ impl SqliteServices {
                 .min_connections(1)
                 .idle_timeout(None)
                 .max_lifetime(None)
+                // An acquire that times out while it is checking the only
+                // connection drops that connection, and the database with it.
+                // Tests that jump the paused clock would trip the default.
+                .acquire_timeout(std::time::Duration::from_secs(24 * 60 * 60))
         } else {
             sqlx::sqlite::SqlitePoolOptions::new()
                 .max_connections(sqlite_max_connections_from_env())
@@ -154,11 +191,13 @@ impl SqliteServices {
         if !is_memory {
             connect_opts = connect_opts
                 .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                // WAL pairs with synchronous=NORMAL to skip one fsync per commit;
-                // power loss may drop the last commit(s), never corrupts; needs
-                // product sign-off to enable.
-                // .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+                // WAL with synchronous=NORMAL skips one fsync per commit; a
+                // power loss (not a process crash) may drop the last commit(s)
+                // but never corrupts the database.
+                .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
                 .busy_timeout(std::time::Duration::from_millis(10_000))
+                // Negative means KiB: 20 MB of page cache per connection.
+                .pragma("cache_size", SQLITE_CACHE_SIZE_PRAGMA.to_string())
                 .pragma(
                     "wal_autocheckpoint",
                     sqlite_wal_autocheckpoint_pages_from_env().to_string(),
@@ -188,6 +227,9 @@ impl SqliteServices {
         .map_err(|err| AppError::Repository(err.to_string()))?;
         if matches!(migration_mode, MigrationMode::Apply) {
             crate::queries::title_search::seed_title_search_projection_if_stale(&pool).await?;
+            if !is_memory {
+                run_startup_optimize(&pool).await;
+            }
         }
 
         Ok(Self {

@@ -1,7 +1,7 @@
 //! Stable refusal and outcome reasons for title deletion.
 
 mod recycle;
-pub use recycle::RecyclePurgeOutcome;
+pub(crate) use recycle::{RecordedTitleRecyclePurges, RecyclePurgeOutcome};
 
 /// Execution-only exclusion. Durable bindings govern observations after it ends.
 pub(crate) struct TitleDeletionGuard {
@@ -75,9 +75,11 @@ pub const ROOT_UNAVAILABLE: &str = "TITLE_DELETE_ROOT_UNAVAILABLE";
 pub const IN_PROGRESS: &str = "TITLE_DELETE_IN_PROGRESS";
 /// Another operation changed the inferred folder claim.
 pub const FOLDER_CLAIM_LOST: &str = "TITLE_DELETE_FOLDER_CLAIM_LOST";
-/// Some recycle entries could not be purged.
+/// Some recycle entries could not be purged. No longer raised: deletion leaves
+/// recycle cleanup to housekeeping. Kept because released codes are API.
 pub const RECYCLE_PURGE_INCOMPLETE: &str = "TITLE_DELETE_RECYCLE_PURGE_INCOMPLETE";
-/// A recycle entry is held by another operation.
+/// A recycle entry is held by another operation. No longer raised: deletion
+/// leaves recycle cleanup to housekeeping. Kept because released codes are API.
 pub const RECYCLE_ENTRY_BUSY: &str = "TITLE_DELETE_RECYCLE_ENTRY_BUSY";
 /// Catalog cleanup did not complete.
 pub const CATALOG_CLEANUP_FAILED: &str = "TITLE_DELETE_CATALOG_CLEANUP_FAILED";

@@ -14,6 +14,9 @@ use super::normalized_base_path;
 
 const MEMORY_SOURCE_LIMIT: usize = 10_000;
 const SOURCE_TOUCH_INTERVAL_HOURS: i64 = 24;
+/// Cache-entry keys per DELETE statement: two binds each, well under every
+/// engine's bind limit.
+const CACHE_ENTRY_DELETE_CHUNK: usize = 400;
 
 #[derive(Default)]
 struct MemorySources {
@@ -253,6 +256,41 @@ impl ImageProxyRepository for ImageProxyStore {
         )
         .await?;
         Ok(())
+    }
+
+    async fn delete_image_proxy_cache_entries(&self, keys: &[(String, String)]) -> AppResult<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        // Key order is the global row-lock order, as for the source flush.
+        let mut keys = keys.to_vec();
+        keys.sort();
+        keys.dedup();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_image_proxy_cache_entries",
+            move |tx| {
+                let keys = keys.clone();
+                Box::pin(async move {
+                    for chunk in keys.chunks(CACHE_ENTRY_DELETE_CHUNK) {
+                        let matches =
+                            std::iter::repeat_n("(token = {} AND variant = {})", chunk.len())
+                                .collect::<Vec<_>>()
+                                .join(" OR ");
+                        let sql = format!("DELETE FROM image_proxy_cache_entries WHERE {matches}");
+                        let args = chunk
+                            .iter()
+                            .flat_map(|(token, variant)| {
+                                [SqlArg::Text(token.clone()), SqlArg::Text(variant.clone())]
+                            })
+                            .collect::<Vec<_>>();
+                        tx.execute(&sql, &args).await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn list_image_proxy_cache_entries_lru(
@@ -1215,5 +1253,91 @@ mod tests {
         let mut expected = written.clone();
         expected.sort();
         assert_eq!(written, expected, "upserts must be issued in token order");
+    }
+
+    #[tokio::test]
+    async fn batched_cache_entry_deletes_remove_exactly_the_named_keys() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("sqlite image proxy test pool");
+        sqlx::query(
+            "CREATE TABLE image_proxy_cache_entries (
+                token TEXT NOT NULL,
+                variant TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                byte_size INTEGER NOT NULL,
+                upstream_etag TEXT,
+                upstream_last_modified TEXT,
+                fetched_at TEXT NOT NULL,
+                last_accessed_at TEXT NOT NULL,
+                PRIMARY KEY (token, variant)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create image proxy cache entries table");
+        let store = ImageProxyStore::new(StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        });
+        let now = Utc::now();
+        let mut all = Vec::new();
+        for number in 0..500 {
+            for variant in ["original", "w250"] {
+                let token = format!("emberfall-{number:04}");
+                store
+                    .upsert_image_proxy_cache_entry(&ImageProxyCacheEntryRecord {
+                        token: token.clone(),
+                        variant: variant.to_string(),
+                        content_type: "image/png".to_string(),
+                        byte_size: 4,
+                        upstream_etag: None,
+                        upstream_last_modified: None,
+                        fetched_at: now,
+                        last_accessed_at: now,
+                    })
+                    .await
+                    .expect("seed cache entry");
+                all.push((token, variant.to_string()));
+            }
+        }
+        // More keys than one statement holds, out of order, with a repeat, a
+        // token whose other variant stays, and a key that does not exist.
+        let mut doomed = all
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| index % 5 != 0)
+            .map(|(_, key)| key.clone())
+            .rev()
+            .collect::<Vec<_>>();
+        doomed.push(doomed[0].clone());
+        doomed.push(("cinderwake-missing".to_string(), "original".to_string()));
+        assert!(doomed.len() > super::CACHE_ENTRY_DELETE_CHUNK);
+
+        store
+            .delete_image_proxy_cache_entries(&doomed)
+            .await
+            .expect("batched delete");
+        store
+            .delete_image_proxy_cache_entries(&[])
+            .await
+            .expect("empty delete");
+
+        let remaining: Vec<(String, String)> = sqlx::query_as(
+            "SELECT token, variant FROM image_proxy_cache_entries ORDER BY token, variant",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read remaining entries");
+        let mut expected = all
+            .iter()
+            .filter(|key| !doomed.contains(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(remaining, expected);
+        assert_eq!(remaining.len(), 200);
     }
 }

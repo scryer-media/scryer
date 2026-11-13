@@ -4825,6 +4825,207 @@ async fn movie_full_scan_title_create_failure_from_search_persists_unmatched_ite
 }
 
 #[tokio::test]
+async fn movie_full_scan_creates_no_title_for_a_folder_it_cannot_claim() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let movie_folder = tempdir.path().join("Emberfall (2020)");
+    std::fs::create_dir(&movie_folder).expect("create movie folder");
+    let movie_path = movie_folder.join("Emberfall.2020.mkv");
+    std::fs::write(&movie_path, b"movie").expect("write movie file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(vec![build_test_library_file(
+            movie_path.to_string_lossy().as_ref(),
+        )])
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user, titles) = bootstrap_with_scan_unmatched_and_metadata_tracking_and_titles(
+        settings,
+        library_scanner,
+        unmatched_items.clone(),
+        Arc::new(FixedBatchSearchMetadataGateway {
+            results: vec![MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Emberfall".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".into(), "exact_year".into()],
+            }],
+        }),
+    );
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile legacy movie root");
+    titles.refuse_folder_checks.store(true, Ordering::SeqCst);
+
+    let summary = app
+        .scan_library(&user, MediaFacet::Movie)
+        .await
+        .expect("movie scan should continue");
+
+    assert_eq!(summary.unmatched, 1);
+    assert!(
+        app.list_titles_unpaged(&user, Some(MediaFacet::Movie), None, None)
+            .await
+            .expect("list titles")
+            .is_empty(),
+        "no title is created for a folder the catalog refuses"
+    );
+    let items = unmatched_items.items().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].reason_code, "title_create_from_search_failed");
+    assert_eq!(items[0].item_path, movie_path.to_string_lossy());
+    assert_eq!(std::fs::read(&movie_path).unwrap(), b"movie");
+}
+
+/// Answers every title search, of any kind, with one fixed match.
+struct FixedSeriesSearchMetadataGateway(FixedBatchSearchMetadataGateway);
+
+#[async_trait]
+impl MetadataGateway for FixedSeriesSearchMetadataGateway {
+    async fn search_titles_batch(
+        &self,
+        queries: &[MetadataSearchQuery],
+        _kind: &str,
+        language: &str,
+        _create_missing: bool,
+    ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
+        self.0.search_tvdb_batch(queries, language).await
+    }
+
+    async fn search_tvdb(
+        &self,
+        query: &str,
+        type_hint: &str,
+        year: Option<i32>,
+    ) -> AppResult<Vec<MetadataSearchItem>> {
+        self.0.search_tvdb(query, type_hint, year).await
+    }
+
+    async fn search_tvdb_batch(
+        &self,
+        queries: &[MetadataSearchQuery],
+        language: &str,
+    ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
+        self.0.search_tvdb_batch(queries, language).await
+    }
+
+    async fn search_tvdb_rich(
+        &self,
+        query: &str,
+        type_hint: &str,
+        limit: i32,
+        language: &str,
+        year: Option<i32>,
+    ) -> AppResult<Vec<RichMetadataSearchItem>> {
+        self.0
+            .search_tvdb_rich(query, type_hint, limit, language, year)
+            .await
+    }
+
+    async fn search_tvdb_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        self.0.search_tvdb_multi(query, limit, language).await
+    }
+
+    async fn get_movie(&self, tvdb_id: i64, language: &str) -> AppResult<MovieMetadata> {
+        self.0.get_movie(tvdb_id, language).await
+    }
+
+    async fn get_metadata_bulk(
+        &self,
+        movie_tvdb_ids: &[i64],
+        series_tvdb_ids: &[i64],
+        language: &str,
+    ) -> AppResult<BulkMetadataResult> {
+        self.0
+            .get_metadata_bulk(movie_tvdb_ids, series_tvdb_ids, language)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn series_full_scan_creates_no_title_for_a_folder_it_cannot_claim() {
+    for refuse in [false, true] {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let series_folder = tempdir.path().join("Emberfall (2020)");
+        std::fs::create_dir(&series_folder).expect("create series folder");
+        let episode_path = series_folder.join("Emberfall - S01E01.mkv");
+        std::fs::write(&episode_path, b"episode").expect("write episode file");
+
+        let settings = Arc::new(StoredSettingsRepo::default());
+        settings
+            .set_value(
+                SETTINGS_SCOPE_MEDIA,
+                "series.path",
+                tempdir.path().to_string_lossy().as_ref(),
+            )
+            .await;
+        let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+        let (app, user, titles) = bootstrap_with_scan_unmatched_and_metadata_tracking_and_titles(
+            settings,
+            Arc::new(MutableLibraryScanner::default()),
+            unmatched_items.clone(),
+            Arc::new(FixedSeriesSearchMetadataGateway(
+                FixedBatchSearchMetadataGateway {
+                    results: vec![MetadataSearchItem {
+                        tvdb_id: "123456".to_string(),
+                        smg_id: None,
+                        primary_source: None,
+                        external_ids: vec![],
+                        name: "Emberfall".to_string(),
+                        year: Some(2020),
+                        auto_match_safe: true,
+                        auto_match_signals: vec!["exact_title".into(), "exact_year".into()],
+                    }],
+                },
+            )),
+        );
+        app.reconcile_default_library_roots()
+            .await
+            .expect("reconcile series root");
+        titles.refuse_folder_checks.store(refuse, Ordering::SeqCst);
+
+        app.scan_library(&user, MediaFacet::Series)
+            .await
+            .expect("series scan should continue");
+
+        let created = app
+            .list_titles_unpaged(&user, Some(MediaFacet::Series), None, None)
+            .await
+            .expect("list titles");
+        if !refuse {
+            assert_eq!(created.len(), 1, "the scan creates the series it matched");
+            continue;
+        }
+        assert!(
+            created.is_empty(),
+            "no title is created for a folder the catalog refuses"
+        );
+        let items = unmatched_items.items().await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].reason_code, "title_create_from_search_failed");
+        assert_eq!(items[0].item_path, series_folder.to_string_lossy());
+        assert_eq!(std::fs::read(&episode_path).unwrap(), b"episode");
+    }
+}
+
+#[tokio::test]
 async fn series_full_scan_persists_unmatched_folders() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(tempdir.path().join("Unknown Show (2020)"))
@@ -8066,6 +8267,248 @@ async fn pending_import_counts_and_items_are_facet_scoped() {
 }
 
 #[tokio::test]
+async fn bulk_ignore_gives_each_id_the_outcome_a_serial_ignore_gives() {
+    async fn seeded() -> (AppUseCase, User, Arc<TrackingLibraryScanUnmatchedItemRepo>) {
+        let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+        let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+            Arc::new(StoredSettingsRepo::default()),
+            Arc::new(MutableLibraryScanner::default()),
+            unmatched_items.clone(),
+            Arc::new(HydratingMovieSearchGateway {
+                search_item: MetadataSearchItem {
+                    tvdb_id: "123456".to_string(),
+                    smg_id: None,
+                    primary_source: None,
+                    external_ids: vec![],
+                    name: "Emberfall".to_string(),
+                    year: Some(2020),
+                    auto_match_safe: true,
+                    auto_match_signals: vec!["exact_title".to_string()],
+                },
+                movie: make_movie_metadata(123456, "Emberfall"),
+            }),
+        );
+        for (id, ignored) in [
+            ("movie-bulk-1", false),
+            ("movie-bulk-2", true),
+            ("movie-bulk-3", false),
+        ] {
+            let mut item = build_test_unmatched_item(
+                id,
+                MediaFacet::Movie,
+                "/movies",
+                &format!("/movies/{id}.mkv"),
+                "Emberfall",
+                "Emberfall",
+                Some(2020),
+            );
+            if ignored {
+                item.status = PendingImportStatus::Ignored;
+            }
+            unmatched_items
+                .upsert_library_scan_unmatched_item(&item)
+                .await
+                .expect("seed pending import");
+        }
+        (app, user, unmatched_items)
+    }
+    async fn statuses(repo: &TrackingLibraryScanUnmatchedItemRepo) -> Vec<(String, String)> {
+        let mut rows = repo
+            .list_library_scan_unmatched_items(None, None, None, i64::MAX, 0)
+            .await
+            .expect("list rows")
+            .into_iter()
+            .map(|item| (item.id, item.status.as_str().to_string()))
+            .collect::<Vec<_>>();
+        rows.sort();
+        rows
+    }
+
+    let requested = [
+        "movie-bulk-1",
+        "",
+        "movie-bulk-2",
+        "movie-absent",
+        "movie-bulk-1",
+        " movie-bulk-3 ",
+    ]
+    .map(str::to_string);
+
+    let (serial_app, serial_user, serial_repo) = seeded().await;
+    let mut seen = std::collections::HashSet::new();
+    let mut serial_ignored = Vec::new();
+    let mut serial_failed = Vec::new();
+    for id in requested
+        .iter()
+        .filter(|id| seen.insert(id.trim().to_string()))
+    {
+        match serial_app.ignore_pending_import(&serial_user, id).await {
+            Ok(result) => serial_ignored.push(format!("{result:?}")),
+            Err(error) => serial_failed.push((id.clone(), format!("{error:?}"))),
+        }
+    }
+
+    let (bulk_app, bulk_user, bulk_repo) = seeded().await;
+    let bulk = bulk_app
+        .ignore_pending_imports(&bulk_user, &requested)
+        .await
+        .expect("bulk ignore");
+    let bulk_ignored = bulk
+        .ignored
+        .iter()
+        .map(|result| format!("{result:?}"))
+        .collect::<Vec<_>>();
+    let bulk_failed = bulk
+        .failed
+        .iter()
+        .map(|(id, error)| (id.clone(), format!("{error:?}")))
+        .collect::<Vec<_>>();
+
+    assert_eq!(bulk_ignored, serial_ignored);
+    assert_eq!(bulk_failed, serial_failed);
+    assert_eq!(bulk_ignored.len(), 3);
+    assert_eq!(bulk_failed.len(), 2);
+    assert_eq!(statuses(&bulk_repo).await, statuses(&serial_repo).await);
+
+    let pending = bulk_app
+        .pending_imports(
+            &bulk_user,
+            MediaFacet::Movie,
+            None,
+            PendingImportStatus::Pending,
+            50,
+            0,
+        )
+        .await
+        .expect("pending after bulk ignore");
+    assert_eq!(pending.total, 0);
+}
+
+#[tokio::test]
+async fn bulk_ignore_refuses_more_distinct_ids_than_the_maximum_and_counts_repeats_once() {
+    use crate::error_reasons::library as reasons;
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+        Arc::new(HydratingMovieSearchGateway {
+            search_item: MetadataSearchItem {
+                tvdb_id: "123456".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Emberfall".to_string(),
+                year: Some(2020),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".to_string()],
+            },
+            movie: make_movie_metadata(123456, "Emberfall"),
+        }),
+    );
+    let seeded = ["movie-cap-1", "movie-cap-2"];
+    for id in seeded {
+        unmatched_items
+            .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
+                id,
+                MediaFacet::Movie,
+                "/movies",
+                &format!("/movies/{id}.mkv"),
+                "Emberfall",
+                "Emberfall",
+                Some(2020),
+            ))
+            .await
+            .expect("seed pending import");
+    }
+    let statuses = || async {
+        let mut rows = unmatched_items
+            .list_library_scan_unmatched_items(None, None, None, i64::MAX, 0)
+            .await
+            .expect("list rows")
+            .into_iter()
+            .map(|item| (item.id, item.status))
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows
+    };
+    let distinct_ids = |count: usize| {
+        seeded
+            .iter()
+            .map(|id| id.to_string())
+            .chain((seeded.len()..count).map(|n| format!("movie-cap-absent-{n}")))
+            .collect::<Vec<_>>()
+    };
+
+    // One past the maximum is refused whole, and nothing changes.
+    let before = statuses().await;
+    let error = app
+        .ignore_pending_imports(&user, &distinct_ids(PENDING_IMPORT_IGNORE_BATCH_MAX + 1))
+        .await
+        .expect_err("one past the maximum is refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(reasons::PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE)
+    );
+    let AppError::ValidationRefused { facts, .. } = &error else {
+        panic!("expected a refusal with facts, got {error:?}");
+    };
+    assert_eq!(
+        facts,
+        &vec![
+            RefusalFact::new(
+                reasons::PENDING_IMPORT_IGNORE_MAX_IDS_FACT,
+                PENDING_IMPORT_IGNORE_BATCH_MAX.to_string(),
+            ),
+            RefusalFact::new(
+                reasons::PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT,
+                (PENDING_IMPORT_IGNORE_BATCH_MAX + 1).to_string(),
+            ),
+        ]
+    );
+    assert_eq!(statuses().await, before);
+    assert!(
+        before
+            .iter()
+            .all(|(_, status)| *status == PendingImportStatus::Pending)
+    );
+
+    // Repeats, including ones that differ only by surrounding space, count
+    // once, so a longer list of exactly the maximum distinct ids is accepted.
+    let mut with_repeats = distinct_ids(PENDING_IMPORT_IGNORE_BATCH_MAX);
+    with_repeats.extend(seeded.iter().map(|id| format!(" {id} ")));
+    with_repeats.extend(seeded.iter().map(|id| id.to_string()));
+    assert!(with_repeats.len() > PENDING_IMPORT_IGNORE_BATCH_MAX);
+    let accepted = app
+        .ignore_pending_imports(&user, &with_repeats)
+        .await
+        .expect("repeats count once");
+    assert_eq!(accepted.ignored.len(), seeded.len());
+    assert_eq!(
+        accepted.failed.len(),
+        PENDING_IMPORT_IGNORE_BATCH_MAX - seeded.len()
+    );
+    assert!(
+        statuses()
+            .await
+            .iter()
+            .all(|(_, status)| *status == PendingImportStatus::Ignored)
+    );
+
+    // Exactly the maximum distinct ids is accepted.
+    let exact = app
+        .ignore_pending_imports(&user, &distinct_ids(PENDING_IMPORT_IGNORE_BATCH_MAX))
+        .await
+        .expect("exactly the maximum is accepted");
+    assert_eq!(
+        exact.ignored.len() + exact.failed.len(),
+        PENDING_IMPORT_IGNORE_BATCH_MAX
+    );
+    assert_eq!(exact.ignored.len(), seeded.len());
+}
+
+#[tokio::test]
 async fn ignore_pending_import_moves_item_out_of_pending_counts() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let library_scanner = Arc::new(MutableLibraryScanner::default());
@@ -8879,6 +9322,109 @@ async fn update_library_removing_root_clears_pending_imports_for_removed_root() 
 
     let items = unmatched_items.items().await;
     assert!(items.is_empty());
+}
+
+/// The navigation badge answers from facts published between recounts. A root
+/// edit clears the removed root's pending imports, so the badge has to drop
+/// them as soon as the edit returns, and keep agreeing with the import page.
+#[tokio::test]
+async fn removing_a_root_recounts_the_pending_import_badge() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    crate::lib_tests::replace_library_roots(
+        &app,
+        &user,
+        &movie_library_id,
+        vec![
+            LibraryRootDraft {
+                id: None,
+                path: "/movies-kept".to_string(),
+                is_default: true,
+            },
+            LibraryRootDraft {
+                id: None,
+                path: "/movies-retired".to_string(),
+                is_default: false,
+            },
+        ],
+    )
+    .await
+    .expect("initial roots should update");
+    for (id, root, file) in [
+        ("movie-kept-root", "/movies-kept", "Quiet.Harbor.2020.mkv"),
+        (
+            "movie-retired-root-a",
+            "/movies-retired",
+            "Amber.Field.2021.mkv",
+        ),
+        (
+            "movie-retired-root-b",
+            "/movies-retired",
+            "Lantern.Row.2022.mkv",
+        ),
+    ] {
+        unmatched_items
+            .upsert_library_scan_unmatched_item(&build_test_unmatched_item(
+                id,
+                MediaFacet::Movie,
+                root,
+                &format!("{root}/{file}"),
+                file,
+                file,
+                None,
+            ))
+            .await
+            .expect("seed pending import");
+    }
+
+    let page_total = |app: AppUseCase, user: User| async move {
+        app.pending_imports(
+            &user,
+            MediaFacet::Movie,
+            None,
+            PendingImportStatus::Pending,
+            50,
+            0,
+        )
+        .await
+        .expect("pending import page")
+        .total
+    };
+    let before = app
+        .navigation_badge_counts(&user)
+        .await
+        .expect("badge counts before the edit");
+    assert_eq!(before.pending_imports.movie, 3);
+    assert_eq!(page_total(app.clone(), user.clone()).await, 3);
+
+    crate::lib_tests::replace_library_roots(
+        &app,
+        &user,
+        &movie_library_id,
+        vec![LibraryRootDraft {
+            id: None,
+            path: "/movies-kept".to_string(),
+            is_default: true,
+        }],
+    )
+    .await
+    .expect("retiring a root should update");
+
+    let after = app
+        .navigation_badge_counts(&user)
+        .await
+        .expect("badge counts after the edit");
+    assert_eq!(after.pending_imports.movie, 1);
+    assert_eq!(
+        page_total(app.clone(), user.clone()).await,
+        after.pending_imports.movie
+    );
 }
 
 #[tokio::test]
@@ -12949,4 +13495,250 @@ async fn scheduled_library_refresh_waits_for_pending_import_after_setup() {
                 .expect("read consumed snapshot state")
         );
     }
+}
+
+#[tokio::test]
+async fn cleared_unmatched_rows_are_removed_together_and_failures_are_only_warned() {
+    use crate::library_scan_unmatched::{
+        ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+        LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE, build_ignored_library_scan_item,
+    };
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let rows = [
+        (
+            MediaFacet::Series,
+            "library-emberfall",
+            "/media/Emberfall/S01E01.mkv",
+        ),
+        (
+            MediaFacet::Series,
+            "library-emberfall",
+            "/media/Emberfall/S01E02.mkv",
+        ),
+        (
+            MediaFacet::Anime,
+            "library-cinderwake",
+            "/media/Cinderwake/01.mkv",
+        ),
+        (
+            MediaFacet::Series,
+            "library-emberfall",
+            "/media/Ashgrove/S01E01.mkv",
+        ),
+        (
+            MediaFacet::Anime,
+            "library-emberfall",
+            "/media/Emberfall/S01E01.mkv",
+        ),
+    ];
+    for (facet, library_id, item_path) in rows {
+        let item = build_ignored_library_scan_item(
+            &facet,
+            library_id,
+            IgnoredLibraryScanItemArgs {
+                title_id: None,
+                session_id: Some("fixture-session"),
+                library_path: "/media",
+                item_path,
+                display_name: item_path,
+                query: item_path,
+                year_hint: None,
+                reason_code: LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
+                error_message: None,
+                size_bytes: None,
+            },
+        );
+        unmatched_items
+            .upsert_library_scan_unmatched_item(&item)
+            .await
+            .expect("seed unmatched item");
+    }
+    let remaining = |items: Vec<LibraryScanUnmatchedItem>| {
+        let mut rows: Vec<_> = items
+            .into_iter()
+            .map(|item| (item.facet, item.library_id, item.item_path))
+            .collect();
+        rows.sort_by(|a, b| (a.0.as_str(), &a.1, &a.2).cmp(&(b.0.as_str(), &b.1, &b.2)));
+        rows
+    };
+
+    // A failing store keeps every row and the walk carries on.
+    let failing_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    for item in unmatched_items.items().await {
+        failing_items
+            .upsert_library_scan_unmatched_item(&item)
+            .await
+            .expect("seed failing unmatched item");
+    }
+    let (failing_app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        failing_items.clone(),
+    );
+    let mut failing = ClearedLibraryScanUnmatchedItems::new(&failing_app, "title-emberfall");
+    failing.push(
+        &MediaFacet::Series,
+        "library-emberfall",
+        "/media/Emberfall/S01E01.mkv",
+    );
+    failing_items
+        .fail_delete("injected unmatched-item cleanup failure")
+        .await;
+    failing.clear().await;
+    assert_eq!(failing_items.items().await.len(), 5);
+
+    let mut cleared = ClearedLibraryScanUnmatchedItems::new(&app, "title-emberfall");
+    cleared.push(
+        &MediaFacet::Series,
+        "library-emberfall",
+        " /media/Emberfall/S01E01.mkv ",
+    );
+    cleared.push(
+        &MediaFacet::Anime,
+        "library-cinderwake",
+        "/media/Cinderwake/01.mkv",
+    );
+    cleared.push(
+        &MediaFacet::Series,
+        "library-emberfall",
+        "/media/Emberfall/S01E02.mkv",
+    );
+    cleared.push(&MediaFacet::Series, "library-emberfall", "   ");
+    cleared.clear().await;
+
+    assert_eq!(
+        remaining(unmatched_items.items().await),
+        vec![
+            (
+                MediaFacet::Anime,
+                "library-emberfall".to_string(),
+                "/media/Emberfall/S01E01.mkv".to_string(),
+            ),
+            (
+                MediaFacet::Series,
+                "library-emberfall".to_string(),
+                "/media/Ashgrove/S01E01.mkv".to_string(),
+            ),
+        ]
+    );
+
+    // A cleared collector is empty, so clearing again removes nothing more.
+    cleared.clear().await;
+    assert_eq!(unmatched_items.items().await.len(), 2);
+}
+
+#[tokio::test]
+async fn cleared_unmatched_row_persisted_again_in_the_same_walk_is_kept_as_new() {
+    use crate::library_scan_unmatched::{
+        ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+        LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE, build_ignored_library_scan_item,
+    };
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let item_path = "/media/Emberfall/S01E03.mkv";
+    let row = |created_at: &str| {
+        let mut item = build_ignored_library_scan_item(
+            &MediaFacet::Series,
+            "library-emberfall",
+            IgnoredLibraryScanItemArgs {
+                title_id: Some("title-emberfall"),
+                session_id: Some("fixture-session"),
+                library_path: "/media",
+                item_path,
+                display_name: item_path,
+                query: item_path,
+                year_hint: None,
+                reason_code: LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
+                error_message: None,
+                size_bytes: None,
+            },
+        );
+        item.created_at = created_at.to_string();
+        item
+    };
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&row("2026-01-01T00:00:00Z"))
+        .await
+        .expect("seed unmatched item");
+
+    // The walk clears the row, then records the same path as unmatched again.
+    // The earlier clear runs first, as the per-row delete did, so the row is
+    // written fresh rather than merged into the old one, and the batch at the
+    // end of the walk leaves it in place.
+    let mut cleared = ClearedLibraryScanUnmatchedItems::new(&app, "title-emberfall");
+    cleared.push(&MediaFacet::Series, "library-emberfall", item_path);
+    cleared
+        .clear_before_persist(&MediaFacet::Series, "library-emberfall", item_path)
+        .await;
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&row("2026-02-01T00:00:00Z"))
+        .await
+        .expect("persist unmatched item again");
+    cleared.clear().await;
+
+    let items = unmatched_items.items().await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].item_path, item_path);
+    assert_eq!(items[0].created_at, "2026-02-01T00:00:00Z");
+}
+
+#[tokio::test]
+async fn cleared_unmatched_rows_of_a_dropped_walk_are_still_removed() {
+    use crate::library_scan_unmatched::{
+        ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+        LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE, build_ignored_library_scan_item,
+    };
+
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, _) = bootstrap_with_scan_unmatched_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let item_path = "/media/Cinderwake/S01E01.mkv";
+    let item = build_ignored_library_scan_item(
+        &MediaFacet::Series,
+        "library-cinderwake",
+        IgnoredLibraryScanItemArgs {
+            title_id: Some("title-cinderwake"),
+            session_id: Some("fixture-session"),
+            library_path: "/media",
+            item_path,
+            display_name: item_path,
+            query: item_path,
+            year_hint: None,
+            reason_code: LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
+            error_message: None,
+            size_bytes: None,
+        },
+    );
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .expect("seed unmatched item");
+
+    // A walk dropped before it ends (its title task aborted) never reaches
+    // its own clear; the rows it already cleared are removed anyway.
+    let mut cleared = ClearedLibraryScanUnmatchedItems::new(&app, "title-cinderwake");
+    cleared.push(&MediaFacet::Series, "library-cinderwake", item_path);
+    drop(cleared);
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !unmatched_items.items().await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropped walk's cleared rows should be removed");
 }

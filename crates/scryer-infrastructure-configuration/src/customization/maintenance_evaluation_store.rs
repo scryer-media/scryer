@@ -1543,6 +1543,31 @@ impl MaintenanceSequenceCompletionRepository for MaintenanceEvaluationStore {
         subject_id: &str,
         released_at: DateTime<Utc>,
     ) -> AppResult<bool> {
+        // Evaluation calls this for every confirmed non-match of a sequence
+        // rule, and almost none has a membership to release. Asking first on
+        // the read side keeps those subjects off the single writer; a
+        // membership that qualifies was created before `released_at`, so it
+        // is already visible to the read.
+        let releasable = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS releasable
+               FROM maintenance_sequence_terminal_memberships
+              WHERE rule_set_id = {} AND revision_number = {} AND subject_kind = {}
+                AND subject_id = {} AND released_at IS NULL AND created_at <= {}
+              LIMIT 1",
+            &[
+                SqlArg::Text(rule_set_id.to_string()),
+                SqlArg::I64(revision_number),
+                SqlArg::Text(subject_kind.to_string()),
+                SqlArg::Text(subject_id.to_string()),
+                SqlArg::Timestamp(released_at),
+            ],
+        )
+        .await?
+        .is_some();
+        if !releasable {
+            return Ok(false);
+        }
         Ok(SqlRuntime::execute_write(
             &self.datastore,
             "release_maintenance_sequence_completion_on_confirmed_non_match",

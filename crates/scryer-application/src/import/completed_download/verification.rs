@@ -247,13 +247,29 @@ async fn verify_import_outcome_with_mode(
         } => count,
         _ => current_visible_video_file_count(app, td, completed).await,
     };
+    // The reconcile reports one success per mapped file that landed, so when
+    // the count reaches the mapping count, every file of this manual pass
+    // landed. A source still left with only a rejection was then not mapped
+    // in this pass: it is the earlier automatic pass's complaint about a file
+    // the operator chose to leave (an extra, a creditless OP, an episode they
+    // did not want), the very complaint that sent the pack to manual import.
+    // It must not keep the download blocked once the operator's mapping
+    // landed. A released hold verifies with no pass of its own and keeps
+    // treating any rejection as blocking.
+    let manual_pass_landed = matches!(
+        mode,
+        ImportVerificationMode::Manual {
+            expected_mapping_count: Some(expected),
+        } if expected > 0 && files_imported_this_pass >= expected
+    );
     let source_video_units = visible_source_episode_units(app, td, &artifacts, completed).await;
-    let visible_sources_terminal = visible_source_files_have_terminal_dispositions(
+    let visible_sources_terminal = visible_source_files_have_terminal_dispositions_in_scope(
         app,
         td,
         &artifacts,
         completed,
         matches!(mode, ImportVerificationMode::Manual { .. }),
+        manual_pass_landed,
     )
     .await;
     if visible_sources_terminal == Some(false) {
@@ -311,14 +327,25 @@ async fn verify_import_outcome_with_mode(
     }
     // A manual mapping is the operator's statement of what this download
     // holds for the title. Once every mapped file landed and nothing recorded
-    // for the download is left rejected or undisposed, episode videos the
-    // operator chose not to map (a seeding pack keeps them in its folder) do
-    // not make the import incomplete. This deliberately accepts less than the
-    // whole advertised pack; it stays a fallback unless every expected
-    // episode did land. A released hold verifies with no pass of its own, so
-    // the pass count is checked only when the reconcile reports one.
+    // for the download is left undisposed, episode videos the operator chose
+    // not to map (a seeding pack keeps them in its folder) do not make the
+    // import incomplete, and neither do earlier rejections of files this pass
+    // did not map. This deliberately accepts less than the whole advertised
+    // pack; it stays a fallback unless every expected episode did land. A
+    // released hold verifies with no pass of its own, so the pass count is
+    // checked only when the reconcile reports one, and there any rejection
+    // still blocks.
+    let manual_members = if manual_pass_landed {
+        artifact_member_completion_with_rejections(
+            &artifacts,
+            td,
+            RejectedSources::NotMappedThisPass,
+        )
+    } else {
+        artifact_members
+    };
     let manual_scope_satisfied = manual_source_coverage == Some(true)
-        && artifact_members == ArtifactMemberCompletion::Terminal
+        && manual_members == ArtifactMemberCompletion::Terminal
         && match mode {
             ImportVerificationMode::Manual {
                 expected_mapping_count: Some(expected),
@@ -710,12 +737,32 @@ pub(super) async fn current_visible_video_file_count(
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 pub(super) async fn visible_source_files_have_terminal_dispositions(
     app: &AppUseCase,
     td: &TrackedDownload,
     artifacts: &[crate::ImportArtifact],
     completed: Option<&CompletedDownload>,
     skip_unrecorded_episode_sources: bool,
+) -> Option<bool> {
+    visible_source_files_have_terminal_dispositions_in_scope(
+        app,
+        td,
+        artifacts,
+        completed,
+        skip_unrecorded_episode_sources,
+        false,
+    )
+    .await
+}
+
+async fn visible_source_files_have_terminal_dispositions_in_scope(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    artifacts: &[crate::ImportArtifact],
+    completed: Option<&CompletedDownload>,
+    skip_unrecorded_episode_sources: bool,
+    skip_rejected_episode_sources: bool,
 ) -> Option<bool> {
     let completed_lookup;
     let completed = match completed {
@@ -761,6 +808,7 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
     // unparseable files without a row, and there that missing row is the only
     // evidence an episode was never imported.
     let skip_unrecorded = skip_unrecorded_episode_sources && !is_movie;
+    let skip_rejected = skip_rejected_episode_sources && !is_movie;
     let mut visible_file_name_counts: HashMap<String, usize> = HashMap::new();
     for file in &files {
         *visible_file_name_counts
@@ -785,6 +833,11 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
             }
             return Some(false);
         };
+        if skip_rejected
+            && artifact_source_disposition(&rows) == ArtifactSourceDisposition::Rejected
+        {
+            continue;
+        }
         if !artifact_source_is_terminal(&rows, td) {
             return Some(false);
         }
@@ -940,9 +993,27 @@ fn artifact_source_episode_units(
     }
 }
 
+/// How member completion treats a source whose rows are only rejections.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RejectedSources {
+    /// The rejection stands: the download is incomplete.
+    Blocking,
+    /// Every mapping of the current manual pass landed, so the rejected
+    /// source was not part of it and is left out of the verdict.
+    NotMappedThisPass,
+}
+
 fn artifact_member_completion(
     artifacts: &[crate::ImportArtifact],
     td: &TrackedDownload,
+) -> ArtifactMemberCompletion {
+    artifact_member_completion_with_rejections(artifacts, td, RejectedSources::Blocking)
+}
+
+fn artifact_member_completion_with_rejections(
+    artifacts: &[crate::ImportArtifact],
+    td: &TrackedDownload,
+    rejected_sources: RejectedSources,
 ) -> ArtifactMemberCompletion {
     let Some(groups) = import_artifact_source_groups(artifacts) else {
         return ArtifactMemberCompletion::Incomplete;
@@ -957,6 +1028,8 @@ fn artifact_member_completion(
             ArtifactSourceDisposition::Successful => all_ignored = false,
             ArtifactSourceDisposition::Ignored
                 if ignored_artifact_rows_match_tracked_title(rows, td) => {}
+            ArtifactSourceDisposition::Rejected
+                if rejected_sources == RejectedSources::NotMappedThisPass => {}
             ArtifactSourceDisposition::Ignored
             | ArtifactSourceDisposition::Rejected
             | ArtifactSourceDisposition::Undisposed => {

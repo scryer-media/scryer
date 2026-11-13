@@ -635,14 +635,28 @@ pub(crate) async fn enrich_download_queue_items_from_submissions_with_original_i
         // onto history-state items, so a live re-grab of a previously ignored
         // identity is never hidden and runtime state is otherwise
         // authoritative.
-        if is_history_download_state(&item.state)
-            && lookup_keys
+        //
+        // A settled outcome (imported or failed) is stamped the same way, but
+        // only when the runtime tracker has nothing to say: once the tracker
+        // lets go of a finished download, this is the only record that Scryer
+        // already decided it, and without it a skipped or failed import record
+        // keeps the row in Import as if it still needed a decision.
+        if is_history_download_state(&item.state) {
+            let durable_state = lookup_keys
                 .iter()
                 .find_map(|key| pass.states.get(key).and_then(Option::as_ref))
-                .and_then(|state| TrackedDownloadState::from_str_opt(state))
-                == Some(TrackedDownloadState::Ignored)
-        {
-            item.tracked_state = Some(TrackedDownloadState::Ignored);
+                .and_then(|state| TrackedDownloadState::from_str_opt(state));
+            match durable_state {
+                Some(TrackedDownloadState::Ignored) => {
+                    item.tracked_state = Some(TrackedDownloadState::Ignored);
+                }
+                Some(state @ (TrackedDownloadState::Imported | TrackedDownloadState::Failed))
+                    if item.tracked_state.is_none() =>
+                {
+                    item.tracked_state = Some(state);
+                }
+                _ => {}
+            }
         }
 
         if let Some(goals) = lookup_keys
@@ -1300,10 +1314,9 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .get_by_ids(&title_ids)
+            .list_library_ids_for_titles(&title_ids)
             .await?
             .into_iter()
-            .map(|title| (title.id, title.library_id))
             .collect::<HashMap<_, _>>();
         let model = std::sync::Arc::new(crate::services::DownloadQueueReadModel::new(
             snapshot.revision,

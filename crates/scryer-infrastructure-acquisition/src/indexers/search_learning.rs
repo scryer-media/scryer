@@ -385,13 +385,55 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         let run = run.clone();
         let candidates = candidates.to_vec();
         let encryption_key = current_encryption_key(&self.encryption_key)?;
+        // Hashing and encryption happen before the write transaction opens.
+        let mut sealed_sources = Vec::with_capacity(candidates.len());
+        for candidate in &candidates {
+            let normalized = &candidate.normalized;
+            let source_reference = normalized
+                .provider_ref
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .or(normalized.download_url.as_deref())
+                .or(normalized.link_url.as_deref())
+                .unwrap_or(normalized.source.as_str())
+                .to_string();
+            let source_identity = blake3_identity_hex(
+                HashDomain::CandidateSessionIdentity,
+                format!("candidate-source-reference\0{source_reference}"),
+            );
+            let source_id = blake3_identity_hex(
+                HashDomain::CandidateSessionIdentity,
+                format!(
+                    "source\0{}\0{}\0{source_identity}",
+                    candidate.session_identity_hash, candidate.indexer_id
+                ),
+            );
+            let encrypted_download_url = encrypt_optional_value(
+                encryption_key.as_ref(),
+                normalized.download_url.as_ref(),
+                "indexer candidate grab URL",
+                true,
+            )?;
+            let encrypted_link_url = encrypt_optional_value(
+                encryption_key.as_ref(),
+                normalized.link_url.as_ref(),
+                "indexer candidate link URL",
+                true,
+            )?;
+            sealed_sources.push((
+                source_identity,
+                source_id,
+                encrypted_download_url,
+                encrypted_link_url,
+            ));
+        }
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "record_indexer_search_diagnostics",
             move |tx| {
                 let run = run.clone();
                 let candidates = candidates.clone();
-                let encryption_key = encryption_key.clone();
+                let sealed_sources = sealed_sources.clone();
                 Box::pin(async move {
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
@@ -425,7 +467,11 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     )
                     .await?;
 
-                    for candidate in candidates {
+                    for (
+                        candidate,
+                        (source_identity, source_id, encrypted_download_url, encrypted_link_url),
+                    ) in candidates.into_iter().zip(sealed_sources)
+                    {
                         let IndexerSearchCandidateWrite {
                             id: _,
                             run_id,
@@ -440,34 +486,6 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             expires_at,
                         } = candidate;
                         let candidate_id = session_identity_hash.clone();
-                        let source_reference = normalized
-                            .provider_ref
-                            .as_deref()
-                            .filter(|value| !value.trim().is_empty())
-                            .or(normalized.download_url.as_deref())
-                            .or(normalized.link_url.as_deref())
-                            .unwrap_or(normalized.source.as_str())
-                            .to_string();
-                        let source_identity = blake3_identity_hex(
-                            HashDomain::CandidateSessionIdentity,
-                            format!("candidate-source-reference\0{source_reference}"),
-                        );
-                        let source_id = blake3_identity_hex(
-                            HashDomain::CandidateSessionIdentity,
-                            format!("source\0{candidate_id}\0{indexer_id}\0{source_identity}"),
-                        );
-                        let encrypted_download_url = encrypt_optional_value(
-                            encryption_key.as_ref(),
-                            normalized.download_url.as_ref(),
-                            "indexer candidate grab URL",
-                            true,
-                        )?;
-                        let encrypted_link_url = encrypt_optional_value(
-                            encryption_key.as_ref(),
-                            normalized.link_url.as_ref(),
-                            "indexer candidate link URL",
-                            true,
-                        )?;
                         SqlRuntime::execute(
                             SqlExec::Tx(tx),
                             "INSERT INTO indexer_search_candidates (
@@ -642,6 +660,25 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                                 .join(", ")
                         )
                     };
+                    // Only what this session linked can be orphaned by it;
+                    // older orphans are the daily cleanup's.
+                    let linked = SqlRuntime::fetch_all(
+                        SqlExec::Tx(tx),
+                        "SELECT DISTINCT rc.source_id, s.candidate_id
+                           FROM indexer_search_run_candidate_sources rc
+                           JOIN indexer_search_candidate_sources s ON s.id = rc.source_id
+                          WHERE rc.search_session_id = {}",
+                        &[SqlArg::Text(search_session_id.clone())],
+                    )
+                    .await?;
+                    let mut linked_sources = Vec::with_capacity(linked.len());
+                    let mut linked_candidates = Vec::with_capacity(linked.len());
+                    for row in &linked {
+                        linked_sources.push(row.text("source_id")?);
+                        linked_candidates.push(row.text("candidate_id")?);
+                    }
+                    linked_candidates.sort_unstable();
+                    linked_candidates.dedup();
                     // A run that reads a shared listing keeps every result:
                     // other scopes of the title are scored from it, and what
                     // this scope rejected may be theirs.
@@ -676,26 +713,42 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                         &[SqlArg::Text(search_session_id)],
                     )
                     .await?;
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "DELETE FROM indexer_search_candidate_sources
-                          WHERE NOT EXISTS (
-                              SELECT 1 FROM indexer_search_run_candidate_sources rc
-                               WHERE rc.source_id = indexer_search_candidate_sources.id
-                          )",
-                        &[],
-                    )
-                    .await?;
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "DELETE FROM indexer_search_candidates
-                          WHERE NOT EXISTS (
-                              SELECT 1 FROM indexer_search_candidate_sources s
-                               WHERE s.candidate_id = indexer_search_candidates.id
-                          )",
-                        &[],
-                    )
-                    .await?;
+                    for chunk in linked_sources.chunks(FINALIZE_ORPHAN_CHUNK) {
+                        let placeholders = std::iter::repeat_n("{}", chunk.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!(
+                                "DELETE FROM indexer_search_candidate_sources
+                                  WHERE id IN ({placeholders})
+                                    AND NOT EXISTS (
+                                      SELECT 1 FROM indexer_search_run_candidate_sources rc
+                                       WHERE rc.source_id = indexer_search_candidate_sources.id
+                                  )"
+                            ),
+                            &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    }
+                    for chunk in linked_candidates.chunks(FINALIZE_ORPHAN_CHUNK) {
+                        let placeholders = std::iter::repeat_n("{}", chunk.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!(
+                                "DELETE FROM indexer_search_candidates
+                                  WHERE id IN ({placeholders})
+                                    AND NOT EXISTS (
+                                      SELECT 1 FROM indexer_search_candidate_sources s
+                                       WHERE s.candidate_id = indexer_search_candidates.id
+                                  )"
+                            ),
+                            &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    }
                     Ok(())
                 })
             },
@@ -1566,17 +1619,6 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             ],
         )
         .await?;
-        SqlRuntime::execute_write(
-            &self.datastore,
-            "cleanup_orphan_indexer_search_candidates",
-            "DELETE FROM indexer_search_candidates
-              WHERE NOT EXISTS (
-                  SELECT 1 FROM indexer_search_candidate_sources s
-                   WHERE s.candidate_id = indexer_search_candidates.id
-              )",
-            vec![],
-        )
-        .await?;
         // A listing whose pages can no longer be replayed is read afresh.
         for (op_name, sql) in [
             (
@@ -1609,6 +1651,30 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                 ORDER BY created_at ASC LIMIT {}
              )",
             vec![SqlArg::Timestamp(run_cutoff), SqlArg::I64(limit)],
+        )
+        .await?;
+        // Results no run refers to any more, including those whose runs
+        // were just aged out; a finalized session only removes its own.
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "cleanup_orphan_indexer_search_candidate_sources",
+            "DELETE FROM indexer_search_candidate_sources
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM indexer_search_run_candidate_sources rc
+                   WHERE rc.source_id = indexer_search_candidate_sources.id
+              )",
+            vec![],
+        )
+        .await?;
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "cleanup_orphan_indexer_search_candidates",
+            "DELETE FROM indexer_search_candidates
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM indexer_search_candidate_sources s
+                   WHERE s.candidate_id = indexer_search_candidates.id
+              )",
+            vec![],
         )
         .await?;
         Ok(deleted_candidates
@@ -1835,6 +1901,10 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
 /// Writers are the searches of one indexer for one facet, so a conflict is
 /// rare and a second round almost always lands.
 const FACET_LEARNING_WRITE_ATTEMPTS: usize = 5;
+
+/// Ids per statement when a finalized session removes what it orphaned,
+/// well inside both engines' bound-parameter limits.
+const FINALIZE_ORPHAN_CHUNK: usize = 500;
 
 impl IndexerSearchLearningStore {
     async fn facet_learning_state(
@@ -4186,5 +4256,83 @@ pub(crate) mod tests {
             listing_steps.iter().all(|detail| detail.contains("INDEX")),
             "plan: {plan:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_finalize_removes_only_what_its_session_orphaned() {
+        let (store, pool) = sqlite_store().await;
+        let now = Utc::now();
+        let run = background_run("run-emberfall", "session-1", "sig-1", None, None, now);
+        let elsewhere = background_run("run-cinderwake", "session-2", "sig-2", None, None, now);
+        store
+            .record_search_diagnostics(
+                &run,
+                &[
+                    listing_candidate(&run, "E01", now),
+                    listing_candidate(&run, "E02", now),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .record_search_diagnostics(&elsewhere, &[listing_candidate(&elsewhere, "E05", now)])
+            .await
+            .unwrap();
+        // An orphan left by something other than this session.
+        sqlx::query("DELETE FROM indexer_search_run_candidate_sources WHERE run_id = ?")
+            .bind("run-cinderwake")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let present = |reference: &'static str| {
+            let pool = &pool;
+            async move {
+                let sources: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM indexer_search_candidate_sources WHERE provider_ref = ?",
+                )
+                .bind(reference)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                let candidates: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM indexer_search_candidates WHERE fingerprint = ?",
+                )
+                .bind(format!("hash-{reference}"))
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                (sources, candidates)
+            }
+        };
+        assert_eq!(present("E05").await, (1, 1));
+
+        store
+            .finalize_search_session("session-1", &["hash-E01".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(present("E01").await, (1, 1), "admitted results stay");
+        assert_eq!(
+            present("E02").await,
+            (0, 0),
+            "what this session rejected goes"
+        );
+        assert_eq!(
+            present("E05").await,
+            (1, 1),
+            "another session's orphan waits for the daily cleanup"
+        );
+
+        let long_ago = now - chrono::Duration::days(30);
+        store
+            .cleanup_search_diagnostics(long_ago, long_ago, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            present("E05").await,
+            (0, 0),
+            "the daily cleanup sweeps orphans"
+        );
+        assert_eq!(present("E01").await, (1, 1), "linked results survive it");
     }
 }

@@ -62,7 +62,10 @@ import {
   HIGHLIGHT_COLOR_PRESETS,
   isDarkTheme,
 } from "@/lib/theme";
-import { canSubmitJellyfinLink as canSubmitJellyfinLinkDraft } from "@/lib/utils/external-account-link-gate";
+import {
+  canSubmitJellyfinLink as canSubmitJellyfinLinkDraft,
+  type ServerAccountOption,
+} from "@/lib/utils/external-account-link-gate";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 const TOTP_CODE_LENGTH = 6;
@@ -106,6 +109,8 @@ type Props = {
   linkingProvider: ExternalAccountProvider | null;
   linkAccountConnectionId: string;
   linkAccountUsername: string;
+  /** The server's accounts to pick from, or null to keep free text. */
+  linkAccountServerOptions: ServerAccountOption[] | null;
   linkAccountPassword: string;
   linkAccountEmbyMode: "LOCAL" | "CONNECT";
   linkAccountBusy: boolean;
@@ -177,6 +182,50 @@ function LinkedAccountAvatar({ account }: { account: LinkedAccount }) {
   );
 }
 
+/**
+ * The username as a choice of the server's accounts. An account someone has
+ * already linked is listed but cannot be picked. Picking fills the username
+ * only; the password field still proves the account is the user's.
+ */
+function ServerAccountUsernameSelect({
+  id,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  options: ServerAccountOption[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const t = useTranslate();
+  return (
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
+      <SelectTrigger id={id} className="w-full">
+        <SelectValue placeholder={t("profile.linkAccountChooseAccount")} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem
+            id={selectorId(`${id}-option`, option.value)}
+            key={option.value}
+            value={option.value}
+            disabled={option.linked}
+          >
+            {option.linked
+              ? t("profile.linkAccountAlreadyLinked", {
+                  username: option.label,
+                })
+              : option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 const PROFILE_CARD_CLASS =
   "space-y-4 rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] p-5 shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
 const PROFILE_CARD_TITLE_CLASS =
@@ -242,6 +291,7 @@ export function SettingsProfileSection({
   linkingProvider,
   linkAccountConnectionId,
   linkAccountUsername,
+  linkAccountServerOptions,
   linkAccountPassword,
   linkAccountEmbyMode,
   linkAccountBusy,
@@ -1084,16 +1134,26 @@ export function SettingsProfileSection({
                 <Label htmlFor="profile-link-jellyfin-username">
                   {t("profile.linkAccountUsername")}
                 </Label>
-                <Input
-                  id="profile-link-jellyfin-username"
-                  type="text"
-                  autoComplete="username"
-                  value={linkAccountUsername}
-                  onChange={(event) =>
-                    onLinkAccountUsernameChange(event.target.value)
-                  }
-                  disabled={linkAccountBusy}
-                />
+                {linkAccountServerOptions ? (
+                  <ServerAccountUsernameSelect
+                    id="profile-link-jellyfin-username"
+                    value={linkAccountUsername}
+                    options={linkAccountServerOptions}
+                    onChange={onLinkAccountUsernameChange}
+                    disabled={linkAccountBusy}
+                  />
+                ) : (
+                  <Input
+                    id="profile-link-jellyfin-username"
+                    type="text"
+                    autoComplete="username"
+                    value={linkAccountUsername}
+                    onChange={(event) =>
+                      onLinkAccountUsernameChange(event.target.value)
+                    }
+                    disabled={linkAccountBusy}
+                  />
+                )}
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-1.5">
@@ -1218,14 +1278,24 @@ export function SettingsProfileSection({
                     ? "Emby Connect username or email"
                     : t("profile.linkAccountUsername")}
                 </Label>
-                <Input
-                  id="profile-link-emby-username"
-                  value={linkAccountUsername}
-                  onChange={(event) =>
-                    onLinkAccountUsernameChange(event.target.value)
-                  }
-                  disabled={linkAccountBusy}
-                />
+                {linkAccountEmbyMode === "LOCAL" && linkAccountServerOptions ? (
+                  <ServerAccountUsernameSelect
+                    id="profile-link-emby-username"
+                    value={linkAccountUsername}
+                    options={linkAccountServerOptions}
+                    onChange={onLinkAccountUsernameChange}
+                    disabled={linkAccountBusy}
+                  />
+                ) : (
+                  <Input
+                    id="profile-link-emby-username"
+                    value={linkAccountUsername}
+                    onChange={(event) =>
+                      onLinkAccountUsernameChange(event.target.value)
+                    }
+                    disabled={linkAccountBusy}
+                  />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="profile-link-emby-password">

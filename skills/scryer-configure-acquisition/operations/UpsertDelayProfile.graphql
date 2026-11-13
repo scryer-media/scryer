@@ -1,0 +1,21 @@
+# Write. Creates or replaces the profile with this id.
+# Variables: {"input": DelayProfileInput}
+mutation UpsertDelayProfile($input: DelayProfileInput!) {
+  upsertDelayProfile(input: $input) {
+    id
+    name
+    enabled
+    priority
+    usenetDelayMinutes
+    torrentDelayMinutes
+    enableUsenet
+    enableTorrent
+    preferredProtocol
+    minAgeMinutes
+    bypassScoreThreshold
+    bypassIfHighestQuality
+    appliesToFacets
+    tags
+    libraryIds
+  }
+}

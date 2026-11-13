@@ -79,15 +79,21 @@ impl AppUseCase {
                 )
                 .await?;
 
+            // The same rows, removed in one batch per library rather than one
+            // statement each.
+            let mut paths_by_library: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
             for item in items {
+                paths_by_library
+                    .entry(item.library_id)
+                    .or_default()
+                    .push(item.item_path);
+            }
+            for (library_id, item_paths) in paths_by_library {
                 self.services
                     .library
                     .library_scan_unmatched_items
-                    .delete_library_scan_unmatched_item(
-                        &item.library_id,
-                        item.facet.clone(),
-                        &item.item_path,
-                    )
+                    .delete_library_scan_unmatched_items(&library_id, facet.clone(), &item_paths)
                     .await?;
             }
         }
@@ -173,17 +179,26 @@ impl AppUseCase {
         key_name: &str,
         scope_id: Option<&str>,
     ) -> AppResult<Option<T>> {
-        let Some(raw_value) = self.read_setting_string_value(key_name, scope_id).await? else {
-            return Ok(None);
-        };
-        serde_json::from_str::<T>(&raw_value)
-            .map(Some)
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to parse setting '{key_name}' JSON value: {error}"
-                ))
-            })
+        let value = self.read_setting_string_value(key_name, scope_id).await?;
+        parse_setting_json_value(key_name, value)
     }
+}
+
+/// Decodes a normalized setting string the way [`AppUseCase::read_setting_json_value`] does.
+fn parse_setting_json_value<T: DeserializeOwned>(
+    key_name: &str,
+    value: Option<String>,
+) -> AppResult<Option<T>> {
+    let Some(raw_value) = value else {
+        return Ok(None);
+    };
+    serde_json::from_str::<T>(&raw_value)
+        .map(Some)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to parse setting '{key_name}' JSON value: {error}"
+            ))
+        })
 }
 impl AppUseCase {
     pub async fn smg_version_compatibility_notice(

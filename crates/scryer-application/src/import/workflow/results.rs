@@ -279,13 +279,7 @@ async fn execute_history_retry(
                 error @ (AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }) => Some(error.clone()),
                 _ => None,
             };
-            let skip_reason = if crate::archive_extractor::is_password_required_error(&error) {
-                Some(ImportSkipReason::PasswordRequired)
-            } else if crate::archive_extractor::is_timeout_error(&error) {
-                Some(ImportSkipReason::ArchiveExtractionTimedOut)
-            } else {
-                None
-            };
+            let skip_reason = completed_import_error_skip_reason(&error);
             let result = ImportResult {
                 decision: ImportDecision::Failed,
                 skip_reason,
@@ -405,7 +399,13 @@ async fn compute_history_retry_state(
         || (result.decision == ImportDecision::Skipped
             && result.skip_reason == Some(ImportSkipReason::AlreadyImported))
         || ((result.skip_reason == Some(ImportSkipReason::NoVideoFiles)
-            || (result.decision == ImportDecision::Failed && result.skip_reason.is_none()))
+            // An execution failure, including a folder refusal, can still
+            // follow an earlier pass that already placed every file.
+            || (result.decision == ImportDecision::Failed
+                && matches!(
+                    result.skip_reason,
+                    None | Some(ImportSkipReason::TitleFolderConflict)
+                )))
             && artifacts.iter().any(|artifact| {
                 matches!(artifact.result.as_str(), "imported" | "already_present")
             }));
@@ -2994,6 +2994,7 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
                 ImportSkipReason::PasswordRequired
                     | ImportSkipReason::ArchiveExtractionPluginRequired
                     | ImportSkipReason::ArchiveExtractionTimedOut
+                    | ImportSkipReason::TitleFolderConflict
             )
         ),
         // A post-download rule outcome is a decision, never a transient

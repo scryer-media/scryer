@@ -902,6 +902,18 @@ async fn graphql_settings_mutations_require_config_step_up() {
             json!({ "input": { "regoSource": "package scryer\nallow := true" } }),
         ),
         (
+            "translateArrCustomFormats",
+            "translateArrCustomFormats",
+            r#"mutation($input: TranslateArrCustomFormatsInput!) { translateArrCustomFormats(input: $input) { regoSource } }"#,
+            json!({
+                "input": {
+                    "sourceApplication": "SONARR",
+                    "customFormatJson": "[]",
+                    "scores": []
+                }
+            }),
+        ),
+        (
             "createIndexerConfig",
             "createIndexerConfig",
             r#"mutation($input: CreateIndexerConfigInput!) { createIndexerConfig(input: $input) { id } }"#,
@@ -1756,6 +1768,94 @@ async fn graphql_users_query_exposes_auth_factor_status_with_manage_users() {
         .expect("user without factors in users query");
     assert_eq!(row_without_factors["hasMfa"], false);
     assert_eq!(row_without_factors["hasPasskey"], false);
+}
+
+#[tokio::test]
+async fn graphql_users_auth_factor_status_matches_the_single_user_read() {
+    let ctx = TestContext::new().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let mut created = Vec::new();
+    for username in [
+        "emberfall_totp",
+        "cinderwake_passkeys",
+        "ashgrove_both",
+        "emberfall_none",
+    ] {
+        created.push(
+            ctx.app
+                .create_user(
+                    &admin,
+                    username.to_string(),
+                    "s3cr3t!!".to_string(),
+                    AppPermissionMask::NONE,
+                    vec![],
+                )
+                .await
+                .expect("create factor user"),
+        );
+    }
+    enroll_totp_for_test(&ctx, &created[0]).await;
+    seed_test_passkey(&ctx, &created[1].id, "cinderwake-passkey-1").await;
+    seed_test_passkey(&ctx, &created[1].id, "cinderwake-passkey-2").await;
+    enroll_totp_for_test(&ctx, &created[2]).await;
+    seed_test_passkey(&ctx, &created[2].id, "ashgrove-passkey").await;
+
+    let body = schema_exec(
+        &ctx,
+        "{ users { id hasMfa hasPasskey } }",
+        Some(manage_users_actor("factor-batch-manager")),
+    )
+    .await;
+    assert_no_errors(&body);
+    let rows = body["data"]["users"].as_array().expect("users");
+    let all_users = ctx.app.list_users(&admin).await.expect("list users");
+    assert_eq!(rows.len(), all_users.len());
+    for row in rows {
+        let id = row["id"].as_str().expect("user id");
+        let single = ctx
+            .app
+            .user_auth_factor_status(id)
+            .await
+            .expect("single-user factor status");
+        assert_eq!(row["hasMfa"], single.has_mfa, "hasMfa for {id}");
+        assert_eq!(row["hasPasskey"], single.has_passkey, "hasPasskey for {id}");
+    }
+    let expected = [(true, false), (false, true), (true, true), (false, false)];
+    for (user, (has_mfa, has_passkey)) in created.iter().zip(expected) {
+        let row = rows
+            .iter()
+            .find(|row| row["id"].as_str() == Some(user.id.as_str()))
+            .expect("created user listed");
+        assert_eq!(row["hasMfa"], has_mfa, "hasMfa for {}", user.username);
+        assert_eq!(
+            row["hasPasskey"], has_passkey,
+            "hasPasskey for {}",
+            user.username
+        );
+    }
+
+    // More ids than one statement takes, with the factor owners spread
+    // across the statements.
+    let mut ids: Vec<String> = (0..1_200)
+        .map(|index| format!("absent-{index:04}"))
+        .collect();
+    for (offset, user) in created.iter().enumerate() {
+        ids.insert(offset * 400, user.id.clone());
+    }
+    let batched = ctx
+        .app
+        .users_auth_factor_status(&ids)
+        .await
+        .expect("batched factor status");
+    assert_eq!(batched.len(), ids.len());
+    for id in &ids {
+        let single = ctx
+            .app
+            .user_auth_factor_status(id)
+            .await
+            .expect("single-user factor status");
+        assert_eq!(batched[id], single, "factor status for {id}");
+    }
 }
 
 #[tokio::test]
@@ -4932,4 +5032,323 @@ async fn graphql_local_password_login_with_voluntary_passkey_requires_verificati
     assert_eq!(errors[0]["extensions"]["hasTotp"], false);
     assert_eq!(errors[0]["extensions"]["preferredFactor"], "PASSKEY");
     assert!(errors[0]["extensions"]["loginChallengeId"].is_string());
+}
+
+#[tokio::test]
+async fn media_server_connection_accounts_need_connection_management_permission() {
+    let ctx = TestContext::new().await;
+    let now = Utc::now();
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    let media_servers =
+        MediaServerConnectionStore::new(ctx.db.datastore(), ctx.db.encryption_key_state());
+    for (id, provider) in [
+        ("jellyfin-emberfall", MediaServerProvider::Jellyfin),
+        ("emby-cinderwake", MediaServerProvider::Emby),
+    ] {
+        MediaServerConnectionRepository::create(
+            &media_servers,
+            MediaServerConnection {
+                id: id.to_string(),
+                provider,
+                display_name: id.to_string(),
+                base_url: ctx.smg_server.uri(),
+                external_url: None,
+                enabled: true,
+                login_enabled: false,
+                linking_enabled: true,
+                auto_add_enabled: false,
+                default_app_permissions: AppPermissionMask::NONE,
+                default_library_grants: Vec::new(),
+                machine_id: None,
+                api_key: Some(format!("{id}-api-key")),
+                emby_server_id: None,
+                emby_connect_enabled: false,
+                path_mappings: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("seed media server connection");
+    }
+
+    Mock::given(method("GET"))
+        .and(path("/Users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"Id": "jf-cinderwake", "Name": "Cinderwake"},
+            {"Id": "jf-ashgrove", "Name": "Ashgrove"},
+        ])))
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/Users/Query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "Items": [{"Id": "emby-emberfall", "Name": "Emberfall", "Policy": {"IsDisabled": false}}],
+            "TotalRecordCount": 1
+        })))
+        .mount(&ctx.smg_server)
+        .await;
+
+    // Ashgrove already carries a verified link on the Jellyfin connection.
+    sqlx::query(
+        "INSERT INTO user_external_accounts
+            (id, user_id, provider, connection_id, external_user_id, username,
+             status, verified_at, created_at, updated_at)
+         VALUES ('link-ashgrove', ?, 'jellyfin', 'jellyfin-emberfall', 'jf-ashgrove',
+                 'Ashgrove', 'active', ?, ?, ?)",
+    )
+    .bind(&admin.id)
+    .bind(now.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .execute(ctx.db.pool())
+    .await
+    .expect("seed verified link");
+
+    // Managing users is not managing connections.
+    let user_manager = User {
+        id: Id::new().0,
+        username: "ashgrove-user-manager".to_string(),
+        password_hash: None,
+        password_change_required: false,
+        account_kind: Default::default(),
+        authorization: UserAuthorization {
+            app: AppPermissionMask::MANAGE_USERS,
+            libraries: HashMap::new(),
+            default_library: LibraryPermissionMask::NONE,
+            actor_capabilities: scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
+            login_status: Default::default(),
+            loaded: true,
+        },
+    };
+    UserRepository::create(&ctx.users, user_manager.clone())
+        .await
+        .expect("create user manager");
+
+    let query = |connection_id: &str| {
+        format!(
+            r#"{{ mediaServerConnectionAccounts(connectionId: "{connection_id}") {{ id username linked }} }}"#
+        )
+    };
+
+    let refused = schema_exec(&ctx, &query("jellyfin-emberfall"), Some(user_manager)).await;
+    let (_, code) = first_graphql_error_message_and_code(&refused);
+    assert_eq!(code, "UNAUTHORIZED", "{refused}");
+    assert!(refused["data"].is_null(), "{refused}");
+
+    let jellyfin = schema_exec(&ctx, &query("jellyfin-emberfall"), Some(admin.clone())).await;
+    assert_no_errors(&jellyfin);
+    assert_eq!(
+        jellyfin["data"]["mediaServerConnectionAccounts"],
+        json!([
+            {"id": "jf-ashgrove", "username": "Ashgrove", "linked": true},
+            {"id": "jf-cinderwake", "username": "Cinderwake", "linked": false},
+        ])
+    );
+
+    let emby = schema_exec(&ctx, &query("emby-cinderwake"), Some(admin)).await;
+    assert_no_errors(&emby);
+    assert_eq!(
+        emby["data"]["mediaServerConnectionAccounts"],
+        json!([{"id": "emby-emberfall", "username": "Emberfall", "linked": false}])
+    );
+}
+
+const EMBERFALL_JELLYFIN_ID: &str = "0f6c2b9e7d4a4e1b9c3f5a8d2e7b1c40";
+
+/// A Jellyfin connection that lets users link, on the mock server, with the
+/// sign-in and the user list a link and a sweep read.
+async fn seed_linkable_jellyfin(ctx: &TestContext, connection_id: &str) {
+    let now = Utc::now();
+    let media_servers =
+        MediaServerConnectionStore::new(ctx.db.datastore(), ctx.db.encryption_key_state());
+    MediaServerConnectionRepository::create(
+        &media_servers,
+        MediaServerConnection {
+            id: connection_id.to_string(),
+            provider: MediaServerProvider::Jellyfin,
+            display_name: "Emberfall Jellyfin".to_string(),
+            base_url: ctx.smg_server.uri(),
+            external_url: None,
+            enabled: true,
+            login_enabled: false,
+            linking_enabled: true,
+            auto_add_enabled: false,
+            default_app_permissions: AppPermissionMask::NONE,
+            default_library_grants: Vec::new(),
+            machine_id: None,
+            api_key: Some("emberfall-api-key".to_string()),
+            emby_server_id: None,
+            emby_connect_enabled: false,
+            path_mappings: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("seed Jellyfin connection");
+
+    Mock::given(method("POST"))
+        .and(path("/Users/AuthenticateByName"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "User": { "Id": EMBERFALL_JELLYFIN_ID, "Name": "Emberfall" }
+        })))
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/Users"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!([{ "Id": EMBERFALL_JELLYFIN_ID }])),
+        )
+        .mount(&ctx.smg_server)
+        .await;
+}
+
+async fn link_emberfall(ctx: &TestContext, actor: &User, connection_id: &str) -> Value {
+    schema_exec(
+        ctx,
+        &format!(
+            r#"mutation {{
+              linkJellyfinAccount(input: {{
+                connectionId: "{connection_id}", username: "Emberfall", password: "ember-pass1"
+              }}) {{ externalUserId status }}
+            }}"#
+        ),
+        Some(actor.clone()),
+    )
+    .await
+}
+
+/// Waits for a finished watch-signal sweep. Each check follows a stored
+/// domain event, and a run's end is one, so the wait wakes on the run itself.
+async fn wait_for_finished_signal_sweep(
+    ctx: &TestContext,
+    actor: &User,
+    events: &mut tokio::sync::broadcast::Receiver<i64>,
+) -> Vec<scryer_application::JobRun> {
+    timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
+        loop {
+            let runs = ctx
+                .app
+                .list_job_runs(actor, JobKey::MediaServerSignalSync, 10)
+                .await
+                .expect("list signal sweep runs");
+            if runs.iter().any(|run| run.status.is_terminal()) {
+                return runs;
+            }
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    panic!("domain events closed before the sweep finished")
+                }
+            }
+        }
+    })
+    .await
+    .expect("the sweep started by the link should finish")
+}
+
+async fn linked_signal_count(ctx: &TestContext, user_id: &str, connection_id: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM media_server_user_media_signals
+         WHERE scryer_user_id = ? AND connection_id = ? AND external_user_id = ?",
+    )
+    .bind(user_id)
+    .bind(connection_id)
+    .bind(EMBERFALL_JELLYFIN_ID)
+    .fetch_one(ctx.db.pool())
+    .await
+    .expect("count linked signals")
+}
+
+#[tokio::test]
+async fn linking_a_jellyfin_account_reads_its_watch_history_right_away() {
+    let ctx = TestContext::new_with_http_media_server_signals().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    seed_linkable_jellyfin(&ctx, "jellyfin-emberfall").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/Users/{EMBERFALL_JELLYFIN_ID}/Items")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "Items": [{
+                "Id": "jf-ashgrove-feature",
+                "Type": "Movie",
+                "Name": "Ashgrove",
+                "ProviderIds": { "Tmdb": "424242" },
+                "UserData": { "Played": true, "PlayCount": 1 }
+            }],
+            "TotalRecordCount": 1
+        })))
+        .mount(&ctx.smg_server)
+        .await;
+    let mut events = ctx
+        .app
+        .subscribe_domain_event_sequences(&admin)
+        .await
+        .expect("subscribe to domain events");
+
+    let linked = link_emberfall(&ctx, &admin, "jellyfin-emberfall").await;
+    assert_no_errors(&linked);
+    assert_eq!(linked["data"]["linkJellyfinAccount"]["status"], "ACTIVE");
+
+    let runs = wait_for_finished_signal_sweep(&ctx, &admin, &mut events).await;
+    assert_eq!(runs.len(), 1, "one link starts one sweep: {runs:?}");
+    let last_error: Option<String> = sqlx::query_scalar(
+        "SELECT last_error FROM media_server_signal_sync_state WHERE connection_id = ?",
+    )
+    .bind("jellyfin-emberfall")
+    .fetch_one(ctx.db.pool())
+    .await
+    .expect("the sweep recorded the connection");
+    assert_eq!(runs[0].status, JobRunStatus::Completed, "{last_error:?}");
+    assert_eq!(
+        runs[0].trigger_source,
+        scryer_application::JobTriggerSource::SystemInternal
+    );
+    assert_eq!(
+        linked_signal_count(&ctx, &admin.id, "jellyfin-emberfall").await,
+        1,
+        "the sweep stored the linked user's played movie"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_sweep_after_linking_leaves_the_link_in_place() {
+    let ctx = TestContext::new_with_http_media_server_signals().await;
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    seed_linkable_jellyfin(&ctx, "jellyfin-cinderwake").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/Users/{EMBERFALL_JELLYFIN_ID}/Items")))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&ctx.smg_server)
+        .await;
+    let mut events = ctx
+        .app
+        .subscribe_domain_event_sequences(&admin)
+        .await
+        .expect("subscribe to domain events");
+
+    let linked = link_emberfall(&ctx, &admin, "jellyfin-cinderwake").await;
+    assert_no_errors(&linked);
+    assert_eq!(
+        linked["data"]["linkJellyfinAccount"],
+        json!({ "externalUserId": EMBERFALL_JELLYFIN_ID, "status": "ACTIVE" })
+    );
+
+    let runs = wait_for_finished_signal_sweep(&ctx, &admin, &mut events).await;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_ne!(runs[0].status, JobRunStatus::Completed, "the read failed");
+    assert_eq!(
+        linked_signal_count(&ctx, &admin.id, "jellyfin-cinderwake").await,
+        0
+    );
+
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM user_external_accounts
+         WHERE connection_id = 'jellyfin-cinderwake' AND external_user_id = ?",
+    )
+    .bind(EMBERFALL_JELLYFIN_ID)
+    .fetch_one(ctx.db.pool())
+    .await
+    .expect("the link is stored");
+    assert_eq!(status, "active");
 }

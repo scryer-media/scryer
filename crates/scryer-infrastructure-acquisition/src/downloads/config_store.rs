@@ -45,6 +45,16 @@ impl DownloadClientConfigStore {
 
 #[async_trait]
 impl DownloadClientConfigRepository for DownloadClientConfigStore {
+    async fn any_configured(&self) -> AppResult<bool> {
+        Ok(SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT 1 AS present FROM download_clients LIMIT 1",
+            &[],
+        )
+        .await?
+        .is_some())
+    }
+
     async fn list(&self, client_type: Option<String>) -> AppResult<Vec<DownloadClientConfig>> {
         let encryption_key = self.encryption_key()?;
         let (sql, args) = match client_type {

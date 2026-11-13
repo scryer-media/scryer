@@ -26,6 +26,7 @@ pub(crate) struct ReleaseCoverageCatalog<'a> {
 pub(crate) struct ResolvedScoringContext {
     profile: QualityProfile,
     required_audio_languages: Vec<String>,
+    language_preferences: crate::AudioLanguagePreferences,
     category: String,
     title_id: String,
     library_name: Option<String>,
@@ -75,6 +76,7 @@ impl ResolvedScoringContext {
         ScoringContext {
             profile: &self.profile,
             required_audio_languages: &self.required_audio_languages,
+            language_preferences: &self.language_preferences,
             category: &self.category,
             size_basis: size_basis.or_runtime(self.default_runtime_minutes),
             rules: (!self.rules.is_empty()).then_some(&self.rules),
@@ -111,6 +113,7 @@ impl ResolvedScoringContext {
         let Self {
             profile,
             required_audio_languages,
+            language_preferences,
             category,
             title_id,
             library_name,
@@ -128,6 +131,7 @@ impl ResolvedScoringContext {
             &serde_json::to_value(profile).unwrap_or(serde_json::Value::Null),
         );
         hash_debug(hasher, required_audio_languages);
+        hash_debug(hasher, language_preferences);
         hash_debug(hasher, category);
         hash_debug(hasher, title_id);
         hash_debug(hasher, library_name);
@@ -164,6 +168,8 @@ pub(crate) struct ParkedReleaseFacts {
     /// release waited can veto it (D20).
     pub allowed: bool,
     pub block_codes: Vec<String>,
+    /// Standing against the title's audio language preferences, announced.
+    pub language: crate::AudioLanguageRank,
 }
 
 /// Score a release Scryer knows only as a title and a size.
@@ -232,6 +238,7 @@ pub(crate) fn score_parked_release_title(
         size_fit_penalty: scored.announced_decision.size_fit_penalty,
         allowed: scored.announced_decision.allowed,
         block_codes: scored.announced_decision.block_codes.clone(),
+        language: scored.language,
     }
 }
 
@@ -350,6 +357,17 @@ impl AppUseCase {
             .resolve_required_audio_languages_for_title(title)
             .await
             .unwrap_or_default();
+        let language_preferences = self
+            .resolve_audio_language_preferences_for_title(title)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    error = %error,
+                    title_id = %title.id,
+                    "canonical scoring: audio language preferences unresolved; ranking without them"
+                );
+                crate::AudioLanguagePreferences::default()
+            });
         let persona = self
             .resolve_scoring_persona(Some(title.library_id.as_str()), Some(category.as_str()))
             .await
@@ -396,6 +414,7 @@ impl AppUseCase {
         ResolvedScoringContext {
             profile,
             required_audio_languages,
+            language_preferences,
             category,
             title_id: title.id.clone(),
             library_name,
@@ -507,6 +526,7 @@ impl AppUseCase {
                     release_group: crate::canonical_scoring::announced_parse_from_media_file(file)
                         .release_group,
                     score: bar.score,
+                    language: bar.language,
                     covers,
                     created_at: file.created_at.clone(),
                 },
@@ -830,6 +850,7 @@ impl AppUseCase {
                     },
                     tier_index: facts.tier_index,
                     revision: facts.revision,
+                    language: facts.language,
                     score: facts.score,
                 })
             })
@@ -904,18 +925,12 @@ impl AppUseCase {
                 );
                 let criteria = &context.profile.criteria;
                 let history_cutoff_reached = state.status == crate::AcquisitionScopeStatus::Wanted
-                    && criteria.cutoff_tier.as_deref().is_some_and(|cutoff| {
+                    && criteria.quality_cutoff_met(
                         facts
                             .tier_index
                             .and_then(|index| criteria.quality_tiers.get(index))
-                            .is_some_and(|quality| {
-                                crate::quality_profile::quality_meets_or_exceeds_cutoff(
-                                    quality,
-                                    cutoff,
-                                    &criteria.quality_tiers,
-                                )
-                            })
-                    })
+                            .map(String::as_str),
+                    )
                     && criteria
                         .cutoff_score
                         .is_none_or(|cutoff| facts.score >= cutoff);
@@ -932,6 +947,7 @@ impl AppUseCase {
                     },
                     tier_index: facts.tier_index,
                     revision: facts.revision,
+                    language: facts.language,
                     // The grab-time score is what the ledger has, but the
                     // re-derivation is what the candidate beside it gets; use
                     // the same derivation unless the title no longer parses.
@@ -1075,11 +1091,9 @@ impl AppUseCase {
             .with_queued(queued);
         let candidate =
             crate::admission::CandidateFacts::new(facts.tier_index, facts.revision, facts.score)
+                .with_language(facts.language)
                 .with_release_title(release_title)
-                .with_revision_policy(
-                    facts.release_group.as_deref(),
-                    upgrade.profile.criteria.ignore_proper_repack,
-                );
+                .with_profile_policy(facts.release_group.as_deref(), &upgrade.profile.criteria);
         let policy = crate::admission::AdmissionPolicy {
             allow_upgrades: upgrade.profile.criteria.allow_upgrades,
             min_delta: upgrade.thresholds.same_tier_min_delta,
@@ -1094,6 +1108,7 @@ impl AppUseCase {
                 upgrade.cutoff_reached,
                 &admission,
                 upgrade.profile.criteria.cutoff_score,
+                &upgrade.profile.criteria.decision_pipeline,
             ),
             // Lane-specific old-file rules were already checked by the
             // caller. This final history guard must not impose RSS policy on searches.
@@ -1186,6 +1201,7 @@ impl AppUseCase {
             score: scored.total,
             tier_index,
             revision: scored.revision,
+            language: scored.language,
         }
     }
 }
@@ -1203,6 +1219,31 @@ pub(crate) struct IncumbentFacts {
     pub tier_index: Option<usize>,
     /// PROPER/REPACK rank of the release the row remembers.
     pub revision: i32,
+    /// Standing against the title's audio language preferences.
+    pub language: crate::AudioLanguageRank,
+}
+
+impl IncumbentFacts {
+    /// The stored file as the decision steps read it. The one builder for a
+    /// re-derived bar; see [`crate::decision_pipeline::SideFacts`].
+    pub(crate) fn side(&self) -> crate::decision_pipeline::SideFacts {
+        crate::decision_pipeline::SideFacts {
+            tier_sort_key: crate::admission::tier_sort_key(self.tier_index),
+            language: self.language,
+        }
+    }
+
+    /// Where the file sits on `pipeline`'s ladder before its score, lower
+    /// first: [`crate::admission::incumbent_ladder_key`] over [`Self::side`],
+    /// the same key admission ranks held files by. Choosing between files
+    /// already on disk goes through this, then the score, so no such choice
+    /// names a step.
+    pub(crate) fn ladder_key(
+        &self,
+        pipeline: &crate::DecisionPipeline,
+    ) -> crate::decision_pipeline::GateKey {
+        crate::admission::incumbent_ladder_key(pipeline, self.side())
+    }
 }
 
 /// What a scope row remembers about its last grab.

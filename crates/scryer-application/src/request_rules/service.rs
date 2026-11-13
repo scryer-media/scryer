@@ -77,6 +77,10 @@ pub struct RequestRuleSample {
     /// say, which is also treated as forever. The double option exists so a
     /// client can distinguish the two even though they behave alike today.
     pub lease_days: Option<Option<i64>>,
+    /// `None` leaves it to the library; an empty list asks for no requirement.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// `None` leaves it to the library.
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +128,21 @@ pub struct RequestRulePreviewResult {
     pub metadata_partial: bool,
 }
 
+/// A rule set with its current revision; a missing revision is a repository
+/// fault.
+fn request_rule_detail(
+    rule_set: RequestRuleSet,
+    revision: Option<RequestRuleRevision>,
+) -> AppResult<RequestRuleSetDetail> {
+    let revision = revision.ok_or_else(|| {
+        AppError::Repository(format!(
+            "request rule set {} has no revision {}",
+            rule_set.id, rule_set.current_revision_number
+        ))
+    })?;
+    Ok(RequestRuleSetDetail { rule_set, revision })
+}
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 impl AppUseCase {
@@ -144,11 +163,21 @@ impl AppUseCase {
         actor: &User,
     ) -> AppResult<Vec<RequestRuleSetDetail>> {
         let rule_sets = self.list_request_rule_sets(actor).await?;
-        let mut details = Vec::with_capacity(rule_sets.len());
-        for rule_set in rule_sets {
-            details.push(self.load_request_rule_detail(rule_set).await?);
-        }
-        Ok(details)
+        let keys: Vec<(String, i64)> = rule_sets
+            .iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set.current_revision_number))
+            .collect();
+        let revisions = self
+            .services
+            .customization
+            .request_rule_sets
+            .get_revisions(&keys)
+            .await?;
+        rule_sets
+            .into_iter()
+            .zip(revisions)
+            .map(|(rule_set, revision)| request_rule_detail(rule_set, revision))
+            .collect()
     }
 
     pub async fn get_request_rule_set(
@@ -427,6 +456,11 @@ impl AppUseCase {
             enriched_ids
         };
 
+        let (requested_required_audio_languages, requested_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                sample.required_audio_languages.clone(),
+                sample.preferred_audio_languages.clone(),
+            )?;
         let quality_profile_id = sample.quality_profile_id.clone();
         let quality_profile_name = match quality_profile_id.as_deref() {
             None => None,
@@ -450,6 +484,8 @@ impl AppUseCase {
             monitor_type: sample.monitor_type.clone(),
             monitor_selection: None,
             requested_lease_days: sample.lease_days.flatten(),
+            requested_required_audio_languages,
+            requested_preferred_audio_languages,
             origin: scryer_domain::MediaRequestOrigin::Manual,
             list_rank: None,
         };
@@ -609,14 +645,8 @@ impl AppUseCase {
             .customization
             .request_rule_sets
             .get_revision(&rule_set.id, rule_set.current_revision_number)
-            .await?
-            .ok_or_else(|| {
-                AppError::Repository(format!(
-                    "request rule set {} has no revision {}",
-                    rule_set.id, rule_set.current_revision_number
-                ))
-            })?;
-        Ok(RequestRuleSetDetail { rule_set, revision })
+            .await?;
+        request_rule_detail(rule_set, revision)
     }
 
     async fn resolve_request_preview_policy(

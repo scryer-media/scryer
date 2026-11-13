@@ -157,6 +157,9 @@ test("global search initializes library managers without reading catalog setting
     roots: [{ id: "root-a", path: "/synthetic/a", isDefault: true }],
     requestQualityProfileIds: [],
     requestQualityProfileDefaultId: "default",
+    defaultMonitorType: "MISSING_AND_FUTURE_EPISODES",
+    inheritedRequiredAudioLanguages: [],
+    inheritedPreferredAudioLanguages: ["original"],
   };
   let settingsReads = 0;
   const response = await graphql({

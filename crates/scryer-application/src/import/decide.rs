@@ -65,6 +65,12 @@ use scryer_domain::{ImportSkipReason, Title};
 pub(crate) enum ImportOrigin {
     Automatic,
     OperatorQueued,
+    /// A download Scryer never submitted: someone added it to the client by
+    /// hand. Guard failures cost it what they cost an automatic grab, but a
+    /// lost comparison with the library copy is held for manual import rather
+    /// than settled, because nobody asked Scryer to judge it and a settled
+    /// download leaves every surface.
+    DownloaderObservation,
 }
 
 impl ImportOrigin {
@@ -78,9 +84,33 @@ impl ImportOrigin {
 
     fn rejection_disposition(self) -> RejectionDisposition {
         match self {
-            Self::Automatic => RejectionDisposition::Blocklist,
+            Self::Automatic | Self::DownloaderObservation => RejectionDisposition::Blocklist,
             Self::OperatorQueued => RejectionDisposition::Hold,
         }
+    }
+
+    /// Hold a download nobody grabbed through Scryer when the only thing
+    /// against it is that the library copy is at least as good. Every other
+    /// origin, and every other refusal, passes through unchanged.
+    fn hold_lost_library_comparison(
+        self,
+        mut refusal: ImportAdmissionRefusal,
+    ) -> ImportAdmissionRefusal {
+        if self != Self::DownloaderObservation
+            || refusal.disposition != RejectionDisposition::Skip
+            || refusal.better_library_copy.is_none()
+        {
+            return refusal;
+        }
+        refusal.rejection.message = format!(
+            "held for manual import because {}",
+            refusal.rejection.message
+        );
+        refusal.rejection.recycle_reason = "policy_mismatch";
+        refusal.rejection.skip_reason = Some(ImportSkipReason::PolicyMismatch);
+        refusal.disposition = RejectionDisposition::Hold;
+        refusal.better_library_copy = None;
+        refusal
     }
 
     pub(crate) fn held_rejection(
@@ -322,13 +352,10 @@ pub(crate) async fn decide_import(
 
     let candidate =
         crate::admission::CandidateFacts::new(scored.tier_index, scored.revision, scored.score)
-            .with_revision_policy(
+            .with_language(scored.language)
+            .with_profile_policy(
                 scored.parsed.release_group.as_deref(),
-                input
-                    .scoring_context
-                    .profile()
-                    .criteria
-                    .ignore_proper_repack,
+                &input.scoring_context.profile().criteria,
             );
 
     match evaluate_import_admission(
@@ -338,11 +365,14 @@ pub(crate) async fn decide_import(
         &input.incumbent_rows,
         input.scope_label,
     ) {
-        Err(refusal) => ImportDecisionOutcome::Reject {
-            rejection: refusal.rejection,
-            disposition: refusal.disposition,
-            better_library_copy: refusal.better_library_copy,
-        },
+        Err(refusal) => {
+            let refusal = input.origin.hold_lost_library_comparison(*refusal);
+            ImportDecisionOutcome::Reject {
+                rejection: refusal.rejection,
+                disposition: refusal.disposition,
+                better_library_copy: refusal.better_library_copy,
+            }
+        }
         Ok(admitted) => ImportDecisionOutcome::Admit(Box::new(ImportAdmitPlan {
             score: scored.score,
             scoring_log: scored.scoring_log,
@@ -472,7 +502,10 @@ pub(crate) fn disposition_for(
         // The candidate lost a fair comparison. Nothing to escalate.
         Reason::NotAnUpgrade { .. }
         | Reason::LowerQualityTier
+        | Reason::LowerLanguagePreference { .. }
+        | Reason::FewerOptionalLanguages { .. }
         | Reason::LowerRevision { .. }
+        | Reason::LostAtStep { .. }
         | Reason::QueuedEqualOrBetter { .. }
         | Reason::QueuedSameRelease { .. } => RejectionDisposition::Skip,
         // Reopening a scope whose profile forbids upgrades is pure churn: the
@@ -504,7 +537,12 @@ pub(crate) fn better_library_copy(
     use crate::admission::AdmissionRejectionReason as Reason;
 
     match rejection.reason {
-        Reason::NotAnUpgrade { .. } | Reason::LowerQualityTier | Reason::LowerRevision { .. } => {}
+        Reason::NotAnUpgrade { .. }
+        | Reason::LowerQualityTier
+        | Reason::LowerRevision { .. }
+        | Reason::LowerLanguagePreference { .. }
+        | Reason::FewerOptionalLanguages { .. }
+        | Reason::LostAtStep { .. } => {}
         Reason::QueuedEqualOrBetter { .. }
         | Reason::QueuedSameRelease { .. }
         | Reason::FormatCutoffReached { .. }
@@ -583,6 +621,32 @@ pub(crate) fn admission_rejection_to_import(
             format!(
                 "existing file {path} for {scope_label} is a later revision \
                  (PROPER/REPACK {incumbent_revision} > {candidate_revision})"
+            ),
+        ),
+        Reason::LowerLanguagePreference { .. } => (
+            "already_imported",
+            ImportSkipReason::AlreadyImported,
+            format!(
+                "existing file {path} for {scope_label} carries a more preferred audio language \
+                 than this import"
+            ),
+        ),
+        Reason::FewerOptionalLanguages {
+            incumbent_optional_hits,
+            candidate_optional_hits,
+        } => (
+            "already_imported",
+            ImportSkipReason::AlreadyImported,
+            format!(
+                "existing file {path} for {scope_label} carries more of the optional audio \
+                 languages ({incumbent_optional_hits} > {candidate_optional_hits})"
+            ),
+        ),
+        Reason::LostAtStep { step } => (
+            "already_imported",
+            ImportSkipReason::AlreadyImported,
+            format!(
+                "existing file {path} for {scope_label} is preferred at the profile's {step} step"
             ),
         ),
         Reason::BroaderIncumbentSpan => (
@@ -796,5 +860,65 @@ mod tests {
                 "{reason:?}"
             );
         }
+    }
+
+    fn library_comparison_refusal(
+        reason: crate::admission::AdmissionRejectionReason,
+    ) -> ImportAdmissionRefusal {
+        let rejection = admission_rejection(reason, "/library/Harbor Pals (2020)/Harbor Pals.mkv");
+        ImportAdmissionRefusal {
+            rejection: admission_rejection_to_import("this title", &rejection),
+            disposition: disposition_for(&rejection.reason),
+            better_library_copy: better_library_copy(&rejection),
+        }
+    }
+
+    /// A download added to the client by hand that loses to the library copy
+    /// must stay visible for manual import: settling it as already imported
+    /// removes it from every surface without a word.
+    #[test]
+    fn a_downloader_observation_that_loses_to_the_library_copy_is_held() {
+        use crate::admission::AdmissionRejectionReason as Reason;
+        let not_an_upgrade = || Reason::NotAnUpgrade {
+            incumbent_score: 120,
+            candidate_score: 90,
+            required_delta: 0,
+        };
+
+        let held = ImportOrigin::DownloaderObservation
+            .hold_lost_library_comparison(library_comparison_refusal(not_an_upgrade()));
+        assert_eq!(held.disposition, RejectionDisposition::Hold);
+        assert_eq!(
+            held.rejection.skip_reason,
+            Some(ImportSkipReason::PolicyMismatch)
+        );
+        assert_eq!(held.rejection.recycle_reason, "policy_mismatch");
+        assert_eq!(held.better_library_copy, None);
+        assert!(held.rejection.message.contains("Harbor Pals.mkv"));
+
+        for origin in [ImportOrigin::Automatic, ImportOrigin::OperatorQueued] {
+            let kept =
+                origin.hold_lost_library_comparison(library_comparison_refusal(not_an_upgrade()));
+            assert_eq!(kept.disposition, RejectionDisposition::Skip, "{origin:?}");
+            assert_eq!(
+                kept.rejection.skip_reason,
+                Some(ImportSkipReason::AlreadyImported),
+                "{origin:?}"
+            );
+            assert!(kept.better_library_copy.is_some(), "{origin:?}");
+        }
+
+        // A release still in the queue is no library copy, so that refusal is
+        // not this rule's to change.
+        let queued = ImportOrigin::DownloaderObservation.hold_lost_library_comparison(
+            library_comparison_refusal(Reason::QueuedSameRelease {
+                queued_title: "Harbor.Pals.2020.1080p.WEB-DL".to_string(),
+            }),
+        );
+        assert_eq!(queued.disposition, RejectionDisposition::Skip);
+        assert_eq!(
+            queued.rejection.skip_reason,
+            Some(ImportSkipReason::AlreadyImported)
+        );
     }
 }

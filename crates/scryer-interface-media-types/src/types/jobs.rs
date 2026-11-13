@@ -54,6 +54,8 @@ pub enum JobKeyValue {
     ListSync,
     /// Title deletion.
     TitleDeletion,
+    /// Library deletion: the library and its titles' catalog records.
+    LibraryDeletion,
     /// Title rename.
     TitleRename,
     /// Media-file deletion.
@@ -242,6 +244,10 @@ pub struct JobScheduleInfoPayload {
     pub initial_delay_seconds: Option<i32>,
     /// Next scheduled run as a UTC timestamp, or null when no run is scheduled.
     pub next_run_at: Option<DateTime<Utc>>,
+    /// UTC time the scheduler last visited the job and found nothing to do, so
+    /// recorded no run. Null when no such visit happened since the server
+    /// started.
+    pub last_idle_check_at: Option<DateTime<Utc>>,
 }
 
 /// Metadata describing a configured job.

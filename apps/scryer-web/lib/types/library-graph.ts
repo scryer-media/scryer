@@ -38,6 +38,8 @@ export type LibraryGraphCluster = {
 
 export type LibraryGraphResult = {
   generatedAt: string;
+  /** The server's key for exactly this view; absent on traversal results and older cached graphs. */
+  viewKey?: string;
   nodes: LibraryGraphNode[];
   edges: LibraryGraphEdge[];
   clusters: LibraryGraphCluster[];

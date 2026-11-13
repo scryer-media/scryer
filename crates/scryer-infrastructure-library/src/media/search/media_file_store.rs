@@ -15,13 +15,15 @@ use scryer_application::{
 use scryer_domain::Id;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
-use crate::storage::sql::json::{canonical_json_text, json_text_or};
+use crate::storage::sql::json::canonical_json_text;
 
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
 /// Same-path upgrades stage the verified replacement beside the final file
@@ -602,6 +604,376 @@ fn import_destination_ownership_matches(
         )
 }
 
+/// One `IN (...)` statement per reader, exactly as a single call issues it;
+/// the repository methods split only a list too long for one statement.
+impl MediaFileStore {
+    fn title_id_statements<'a>(&self, title_ids: &'a [String]) -> (Cow<'a, [String]>, usize) {
+        id_list_statements(
+            title_ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            EPISODE_AVAILABILITY_ID_CHUNK,
+        )
+    }
+
+    async fn list_media_files_for_titles_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaFile>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let sql = format!(
+            "SELECT {}
+             FROM media_files mf
+             LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
+             WHERE mf.title_id IN ({placeholders})
+               AND {}
+             ORDER BY mf.title_id, mf.created_at DESC",
+            media_file_select_columns(dialect, "fem.episode_id", "COALESCE(fem.role, mf.role)"),
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        fetch_media_files(self.datastore.read_exec(), &sql, &args).await
+    }
+
+    async fn list_title_media_size_summaries_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMediaSizeSummary>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let total_size_expression = total_size_bytes_sum_expression(dialect, "matched.size_bytes");
+        let sql = format!(
+            "SELECT matched.title_id,
+                    {total_size_expression} AS total_size_bytes
+               FROM (
+                    SELECT DISTINCT mf.id,
+                           mf.title_id,
+                           CASE
+                               WHEN mf.size_bytes > 0 THEN mf.size_bytes
+                               ELSE 0
+                           END AS size_bytes
+                      FROM media_files mf
+                 LEFT JOIN file_episode_map fem
+                        ON fem.file_id = mf.id
+                 LEFT JOIN collections c
+                        ON c.title_id = mf.title_id
+                       AND c.ordered_path = mf.file_path
+                 LEFT JOIN file_series_movie_link_map fsmlm
+                        ON fsmlm.file_id = mf.id
+                     WHERE mf.title_id IN ({placeholders})
+                       AND {}
+                       AND (
+                           fem.file_id IS NOT NULL
+                           OR c.id IS NOT NULL
+                           OR fsmlm.file_id IS NOT NULL
+                       )
+               ) matched
+              GROUP BY matched.title_id",
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(TitleMediaSizeSummary {
+                    title_id: row.text("title_id")?,
+                    total_size_bytes: row.i64("total_size_bytes")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_collection_media_size_summaries_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<CollectionMediaSizeSummary>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let total_size_expression = total_size_bytes_sum_expression(dialect, "matched.size_bytes");
+        let sql = format!(
+            "SELECT matched.title_id,
+                    matched.collection_id,
+                    {total_size_expression} AS total_size_bytes
+               FROM (
+                    SELECT DISTINCT c.title_id,
+                           c.id AS collection_id,
+                           mf.id AS media_file_id,
+                           CASE
+                               WHEN mf.size_bytes > 0 THEN mf.size_bytes
+                               ELSE 0
+                           END AS size_bytes
+                      FROM collections c
+                      JOIN media_files mf
+                        ON mf.title_id = c.title_id
+                       AND (
+                            mf.file_path = c.ordered_path
+                            OR EXISTS (
+                                SELECT 1
+                                  FROM episodes e
+                                  JOIN file_episode_map fem ON fem.episode_id = e.id
+                                 WHERE e.collection_id = c.id
+                                   AND e.title_id = c.title_id
+                                   AND fem.file_id = mf.id
+                            )
+                       )
+                     WHERE c.title_id IN ({placeholders})
+                       AND {}
+               ) matched
+              GROUP BY matched.title_id, matched.collection_id",
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(CollectionMediaSizeSummary {
+                    title_id: row.text("title_id")?,
+                    collection_id: row.text("collection_id")?,
+                    total_size_bytes: row.i64("total_size_bytes")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_episode_media_size_summaries_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<EpisodeMediaSizeSummary>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let total_size_expression = total_size_bytes_sum_expression(dialect, "matched.size_bytes");
+        let sql = format!(
+            "SELECT matched.title_id,
+                    matched.episode_id,
+                    {total_size_expression} AS total_size_bytes
+               FROM (
+                    SELECT DISTINCT e.title_id,
+                           e.id AS episode_id,
+                           mf.id AS media_file_id,
+                           CASE
+                               WHEN mf.size_bytes > 0 THEN mf.size_bytes
+                               ELSE 0
+                           END AS size_bytes
+                      FROM episodes e
+                      JOIN file_episode_map fem
+                        ON fem.episode_id = e.id
+                      JOIN media_files mf
+                        ON mf.id = fem.file_id
+                       AND mf.title_id = e.title_id
+                     WHERE e.title_id IN ({placeholders})
+                       AND {}
+               ) matched
+              GROUP BY matched.title_id, matched.episode_id",
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(EpisodeMediaSizeSummary {
+                    title_id: row.text("title_id")?,
+                    episode_id: row.text("episode_id")?,
+                    total_size_bytes: row.i64("total_size_bytes")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_title_quality_summaries_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleQualitySummary>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let normalized_quality = normalized_quality_expression("media_files");
+        let quality_rank = quality_rank_expression("media_files");
+        let sql = format!(
+            "SELECT title_id, quality_tier
+             FROM (
+                SELECT media_files.title_id AS title_id,
+                       {normalized_quality} AS quality_tier,
+                       ROW_NUMBER() OVER (
+                          PARTITION BY media_files.title_id
+                          ORDER BY CASE WHEN media_files.role = 'primary' THEN 0 ELSE 1 END ASC,
+                                   CASE WHEN media_files.role = 'primary' THEN -({quality_rank}) ELSE {quality_rank} END ASC,
+                                   media_files.created_at DESC,
+                                   media_files.id DESC
+                       ) AS quality_row
+                  FROM media_files
+                 WHERE media_files.title_id IN ({placeholders})
+                   AND {}
+                   AND media_files.role IN ('primary', 'additional')
+                   AND media_files.scan_status <> 'review_required'
+                   AND {normalized_quality} IS NOT NULL
+             ) ranked
+             WHERE quality_row = 1
+               AND quality_tier IS NOT NULL",
+            live_media_file_predicate(dialect, "media_files")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(TitleQualitySummary {
+                    title_id: row.text("title_id")?,
+                    quality_tier: row.text("quality_tier")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_title_movie_media_summaries_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleMovieMediaSummary>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = placeholders(title_ids.len());
+        let dialect = dialect_for_datastore(&self.datastore);
+        let resolution_expression = normalized_quality_expression("media_files");
+        let audio_codec_expression = "COALESCE(NULLIF(TRIM(media_files.audio_codec_parsed), ''), NULLIF(TRIM(media_files.audio_codec), ''))";
+        let hdr_expression = "NULLIF(TRIM(media_files.video_hdr_format), '')";
+        let sql = format!(
+            "SELECT title_id, resolution, hdr_format, audio_codec
+             FROM (
+                SELECT media_files.title_id AS title_id,
+                       {resolution_expression} AS resolution,
+                       {hdr_expression} AS hdr_format,
+                       {audio_codec_expression} AS audio_codec,
+                       ROW_NUMBER() OVER (
+                          PARTITION BY media_files.title_id
+                          ORDER BY CASE WHEN media_files.size_bytes > 0 THEN media_files.size_bytes ELSE 0 END DESC,
+                                   media_files.created_at DESC,
+                                   media_files.id DESC
+                       ) AS media_row
+                  FROM media_files
+                  JOIN titles ON titles.id = media_files.title_id
+                 WHERE media_files.title_id IN ({placeholders})
+                   AND titles.facet = 'movie'
+                   AND {}
+                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
+             ) ranked
+             WHERE media_row = 1",
+            live_media_file_predicate(dialect, "media_files")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(TitleMovieMediaSummary {
+                    title_id: row.text("title_id")?,
+                    resolution: row.opt_text("resolution")?,
+                    hdr_format: row
+                        .opt_text("hdr_format")?
+                        .filter(|value| !value.trim().is_empty()),
+                    audio_codec: row.opt_text("audio_codec")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_title_episode_progress_summaries_statement(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let placeholders = placeholders(title_ids.len());
+        let sql = format!(
+            "SELECT e.title_id,
+                    COUNT(DISTINCT e.id) AS total_episodes,
+                    COUNT(DISTINCT CASE WHEN {} THEN e.id END) AS monitored_episodes,
+                    COUNT(DISTINCT CASE WHEN mf.id IS NOT NULL THEN e.id END) AS owned_episodes
+             FROM episodes e
+             INNER JOIN collections c ON c.id = e.collection_id
+             LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
+             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
+             WHERE e.title_id IN ({placeholders})
+               AND c.collection_type <> 'specials'
+               AND c.collection_index <> '0'
+               AND trim(COALESCE(e.title, '')) <> ''
+               AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
+               AND trim(COALESCE(e.air_date, '')) <> ''
+             GROUP BY e.title_id",
+            bool_column_is_true(dialect, "e.monitored"),
+            live_media_file_predicate(dialect, "mf")
+        );
+        let args = title_ids
+            .iter()
+            .cloned()
+            .map(SqlArg::Text)
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(TitleEpisodeProgressSummary {
+                    title_id: row.text("title_id")?,
+                    owned_episodes: row.i64("owned_episodes")?,
+                    monitored_episodes: row.i64("monitored_episodes")?,
+                    total_episodes: row.i64("total_episodes")?,
+                })
+            })
+            .collect()
+    }
+}
+
 #[async_trait]
 impl MediaFileRepository for MediaFileStore {
     async fn score_refresh_page(
@@ -952,28 +1324,12 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<TitleMediaFile>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut files = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            files.extend(self.list_media_files_for_titles_statement(chunk).await?);
         }
-
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let sql = format!(
-            "SELECT {}
-             FROM media_files mf
-             LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
-             WHERE mf.title_id IN ({placeholders})
-               AND {}
-             ORDER BY mf.title_id, mf.created_at DESC",
-            media_file_select_columns(dialect, "fem.episode_id", "COALESCE(fem.role, mf.role)"),
-            live_media_file_predicate(dialect, "mf")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        fetch_media_files(self.datastore.read_exec(), &sql, &args).await
+        Ok(files)
     }
 
     async fn list_live_media_files_for_episode_ids(
@@ -1030,6 +1386,157 @@ impl MediaFileRepository for MediaFileStore {
             .collect()
     }
 
+    async fn list_live_media_files_for_titles_episode_ids(
+        &self,
+        requests: &[(String, Vec<String>)],
+    ) -> AppResult<Vec<(String, Vec<EpisodeScopedMediaFile>)>> {
+        // Requested episodes per title; one title's list may span statements.
+        let mut wanted: Vec<(String, std::collections::BTreeSet<String>)> = Vec::new();
+        let mut index: HashMap<&str, usize> = HashMap::new();
+        for (title_id, episode_ids) in requests {
+            let slot = *index.entry(title_id.as_str()).or_insert_with(|| {
+                wanted.push((title_id.clone(), std::collections::BTreeSet::new()));
+                wanted.len() - 1
+            });
+            wanted[slot].1.extend(episode_ids.iter().cloned());
+        }
+
+        // One statement when every title and episode fits its binds. A longer
+        // list, which one statement would refuse, is read in statements of at
+        // most EPISODE_AVAILABILITY_ID_CHUNK binds, titles and episodes together.
+        let total_binds = wanted
+            .iter()
+            .map(|(_, episode_ids)| episode_ids.len() + 1)
+            .sum::<usize>();
+        let limit = max_binds(&self.datastore.read_exec());
+        let chunk = EPISODE_AVAILABILITY_ID_CHUNK.min(limit).max(2);
+        let mut statements: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+        let mut current: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        if total_binds <= limit {
+            let mut all_episode_ids = std::collections::BTreeSet::new();
+            for (title_id, episode_ids) in &wanted {
+                current.0.push(title_id.clone());
+                all_episode_ids.extend(episode_ids.iter().cloned());
+            }
+            current.1 = all_episode_ids.into_iter().collect();
+        } else {
+            for (title_id, episode_ids) in &wanted {
+                let episode_ids = episode_ids.iter().cloned().collect::<Vec<_>>();
+                for part in episode_ids.chunks(chunk - 1) {
+                    if current.0.len() + current.1.len() + part.len() + 1 > chunk {
+                        statements.push(std::mem::take(&mut current));
+                    }
+                    if !current.0.contains(title_id) {
+                        current.0.push(title_id.clone());
+                    }
+                    current.1.extend(part.iter().cloned());
+                }
+            }
+        }
+        if !current.1.is_empty() {
+            statements.push(current);
+        }
+
+        let dialect = dialect_for_datastore(&self.datastore);
+        let mut files_by_id: HashMap<String, EpisodeScopedMediaFile> = HashMap::new();
+        let mut order: Vec<(String, String)> = Vec::new();
+        let statement_count = statements.len();
+        for (title_ids, episode_ids) in statements {
+            let sql = format!(
+                "SELECT {},
+                        mf.role AS title_role,
+                        {} AS episode_ids_json,
+                        {} AS primary_episode_ids_json
+                 FROM media_files mf
+                 INNER JOIN (
+                     SELECT DISTINCT file_id
+                     FROM file_episode_map
+                     WHERE episode_id IN ({})
+                 ) fem_target ON fem_target.file_id = mf.id
+                 LEFT JOIN file_episode_map fem_all ON fem_all.file_id = mf.id
+                 WHERE mf.title_id IN ({})
+                   AND {}
+                 GROUP BY mf.id
+                 ORDER BY mf.created_at DESC",
+                media_file_select_columns(dialect, "NULL", "'additional'"),
+                episode_ids_aggregate(dialect),
+                primary_episode_ids_aggregate(dialect),
+                placeholders(episode_ids.len()),
+                placeholders(title_ids.len()),
+                live_media_file_predicate(dialect, "mf")
+            );
+            let args = episode_ids
+                .into_iter()
+                .chain(title_ids)
+                .map(SqlArg::Text)
+                .collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                let file = row_to_episode_scoped_media_file(&row)?;
+                if !files_by_id.contains_key(&file.media_file.id) {
+                    order.push((
+                        file.media_file.created_at.clone(),
+                        file.media_file.id.clone(),
+                    ));
+                    files_by_id.insert(file.media_file.id.clone(), file);
+                }
+            }
+        }
+        // Newest first, as the per-title read orders them. One statement keeps
+        // the database's order. Rows from several are merged on created_at the
+        // way the database compares it: the stored text on sqlite, the instant
+        // on postgres. The merge is stable, so rows the sort key ties keep the
+        // order they were read in; the per-title read has no tie-break either.
+        if statement_count > 1 {
+            match dialect {
+                SqlDialect::Postgres => order.sort_by(|left, right| {
+                    let instant = |stamp: &str| chrono::DateTime::parse_from_rfc3339(stamp).ok();
+                    instant(&right.0)
+                        .cmp(&instant(&left.0))
+                        .then_with(|| right.0.cmp(&left.0))
+                }),
+                SqlDialect::Sqlite => order.sort_by(|left, right| right.0.cmp(&left.0)),
+            }
+        }
+
+        let mut files_by_title: HashMap<&str, Vec<&EpisodeScopedMediaFile>> = HashMap::new();
+        for (_, id) in &order {
+            if let Some(file) = files_by_id.get(id) {
+                files_by_title
+                    .entry(file.media_file.title_id.as_str())
+                    .or_default()
+                    .push(file);
+            }
+        }
+
+        Ok(wanted
+            .iter()
+            .map(|(title_id, episode_ids)| {
+                let files = files_by_title
+                    .get(title_id.as_str())
+                    .into_iter()
+                    .flatten()
+                    .filter(|file| file.episode_ids.iter().any(|id| episode_ids.contains(id)))
+                    .map(|file| {
+                        let mut file = (*file).clone();
+                        // The per-title read marks a file primary when it is
+                        // primary for any of that title's requested episodes.
+                        file.media_file.role = if file
+                            .primary_episode_ids
+                            .iter()
+                            .any(|id| episode_ids.contains(id))
+                        {
+                            scryer_application::MediaFileRole::Primary
+                        } else {
+                            scryer_application::MediaFileRole::Additional
+                        };
+                        file
+                    })
+                    .collect();
+                (title_id.clone(), files)
+            })
+            .collect())
+    }
+
     async fn list_series_movie_link_ids_with_files_for_title(
         &self,
         title_id: &str,
@@ -1057,171 +1564,45 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<TitleMediaSizeSummary>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            summaries.extend(
+                self.list_title_media_size_summaries_statement(chunk)
+                    .await?,
+            );
         }
-
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let total_size_expression = total_size_bytes_sum_expression(dialect, "matched.size_bytes");
-        let sql = format!(
-            "SELECT matched.title_id,
-                    {total_size_expression} AS total_size_bytes
-               FROM (
-                    SELECT DISTINCT mf.id,
-                           mf.title_id,
-                           CASE
-                               WHEN mf.size_bytes > 0 THEN mf.size_bytes
-                               ELSE 0
-                           END AS size_bytes
-                      FROM media_files mf
-                 LEFT JOIN file_episode_map fem
-                        ON fem.file_id = mf.id
-                 LEFT JOIN collections c
-                        ON c.title_id = mf.title_id
-                       AND c.ordered_path = mf.file_path
-                 LEFT JOIN file_series_movie_link_map fsmlm
-                        ON fsmlm.file_id = mf.id
-                     WHERE mf.title_id IN ({placeholders})
-                       AND {}
-                       AND (
-                           fem.file_id IS NOT NULL
-                           OR c.id IS NOT NULL
-                           OR fsmlm.file_id IS NOT NULL
-                       )
-               ) matched
-              GROUP BY matched.title_id",
-            live_media_file_predicate(dialect, "mf")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(TitleMediaSizeSummary {
-                    title_id: row.text("title_id")?,
-                    total_size_bytes: row.i64("total_size_bytes")?,
-                })
-            })
-            .collect()
+        Ok(summaries)
     }
 
     async fn list_collection_media_size_summaries(
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<CollectionMediaSizeSummary>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            summaries.extend(
+                self.list_collection_media_size_summaries_statement(chunk)
+                    .await?,
+            );
         }
-
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let total_size_expression = total_size_bytes_sum_expression(dialect, "matched.size_bytes");
-        let sql = format!(
-            "SELECT matched.title_id,
-                    matched.collection_id,
-                    {total_size_expression} AS total_size_bytes
-               FROM (
-                    SELECT DISTINCT c.title_id,
-                           c.id AS collection_id,
-                           mf.id AS media_file_id,
-                           CASE
-                               WHEN mf.size_bytes > 0 THEN mf.size_bytes
-                               ELSE 0
-                           END AS size_bytes
-                      FROM collections c
-                      JOIN media_files mf
-                        ON mf.title_id = c.title_id
-                       AND (
-                            mf.file_path = c.ordered_path
-                            OR EXISTS (
-                                SELECT 1
-                                  FROM episodes e
-                                  JOIN file_episode_map fem ON fem.episode_id = e.id
-                                 WHERE e.collection_id = c.id
-                                   AND e.title_id = c.title_id
-                                   AND fem.file_id = mf.id
-                            )
-                       )
-                     WHERE c.title_id IN ({placeholders})
-                       AND {}
-               ) matched
-              GROUP BY matched.title_id, matched.collection_id",
-            live_media_file_predicate(dialect, "mf")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(CollectionMediaSizeSummary {
-                    title_id: row.text("title_id")?,
-                    collection_id: row.text("collection_id")?,
-                    total_size_bytes: row.i64("total_size_bytes")?,
-                })
-            })
-            .collect()
+        Ok(summaries)
     }
 
     async fn list_episode_media_size_summaries(
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<EpisodeMediaSizeSummary>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            summaries.extend(
+                self.list_episode_media_size_summaries_statement(chunk)
+                    .await?,
+            );
         }
-
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let total_size_expression = total_size_bytes_sum_expression(dialect, "matched.size_bytes");
-        let sql = format!(
-            "SELECT matched.title_id,
-                    matched.episode_id,
-                    {total_size_expression} AS total_size_bytes
-               FROM (
-                    SELECT DISTINCT e.title_id,
-                           e.id AS episode_id,
-                           mf.id AS media_file_id,
-                           CASE
-                               WHEN mf.size_bytes > 0 THEN mf.size_bytes
-                               ELSE 0
-                           END AS size_bytes
-                      FROM episodes e
-                      JOIN file_episode_map fem
-                        ON fem.episode_id = e.id
-                      JOIN media_files mf
-                        ON mf.id = fem.file_id
-                       AND mf.title_id = e.title_id
-                     WHERE e.title_id IN ({placeholders})
-                       AND {}
-               ) matched
-              GROUP BY matched.title_id, matched.episode_id",
-            live_media_file_predicate(dialect, "mf")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(EpisodeMediaSizeSummary {
-                    title_id: row.text("title_id")?,
-                    episode_id: row.text("episode_id")?,
-                    total_size_bytes: row.i64("total_size_bytes")?,
-                })
-            })
-            .collect()
+        Ok(summaries)
     }
 
     async fn collection_media_size_bytes(
@@ -1262,109 +1643,27 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<TitleQualitySummary>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            summaries.extend(self.list_title_quality_summaries_statement(chunk).await?);
         }
-
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let normalized_quality = normalized_quality_expression("media_files");
-        let quality_rank = quality_rank_expression("media_files");
-        let sql = format!(
-            "SELECT title_id, quality_tier
-             FROM (
-                SELECT media_files.title_id AS title_id,
-                       {normalized_quality} AS quality_tier,
-                       ROW_NUMBER() OVER (
-                          PARTITION BY media_files.title_id
-                          ORDER BY CASE WHEN media_files.role = 'primary' THEN 0 ELSE 1 END ASC,
-                                   CASE WHEN media_files.role = 'primary' THEN -({quality_rank}) ELSE {quality_rank} END ASC,
-                                   media_files.created_at DESC,
-                                   media_files.id DESC
-                       ) AS quality_row
-                  FROM media_files
-                 WHERE media_files.title_id IN ({placeholders})
-                   AND {}
-                   AND media_files.role IN ('primary', 'additional')
-                   AND media_files.scan_status <> 'review_required'
-                   AND {normalized_quality} IS NOT NULL
-             ) ranked
-             WHERE quality_row = 1
-               AND quality_tier IS NOT NULL",
-            live_media_file_predicate(dialect, "media_files")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(TitleQualitySummary {
-                    title_id: row.text("title_id")?,
-                    quality_tier: row.text("quality_tier")?,
-                })
-            })
-            .collect()
+        Ok(summaries)
     }
 
     async fn list_title_movie_media_summaries(
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<TitleMovieMediaSummary>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            summaries.extend(
+                self.list_title_movie_media_summaries_statement(chunk)
+                    .await?,
+            );
         }
-
-        let placeholders = placeholders(title_ids.len());
-        let dialect = dialect_for_datastore(&self.datastore);
-        let resolution_expression = normalized_quality_expression("media_files");
-        let audio_codec_expression = "COALESCE(NULLIF(TRIM(media_files.audio_codec_parsed), ''), NULLIF(TRIM(media_files.audio_codec), ''))";
-        let hdr_expression = "NULLIF(TRIM(media_files.video_hdr_format), '')";
-        let sql = format!(
-            "SELECT title_id, resolution, hdr_format, audio_codec
-             FROM (
-                SELECT media_files.title_id AS title_id,
-                       {resolution_expression} AS resolution,
-                       {hdr_expression} AS hdr_format,
-                       {audio_codec_expression} AS audio_codec,
-                       ROW_NUMBER() OVER (
-                          PARTITION BY media_files.title_id
-                          ORDER BY CASE WHEN media_files.size_bytes > 0 THEN media_files.size_bytes ELSE 0 END DESC,
-                                   media_files.created_at DESC,
-                                   media_files.id DESC
-                       ) AS media_row
-                  FROM media_files
-                  JOIN titles ON titles.id = media_files.title_id
-                 WHERE media_files.title_id IN ({placeholders})
-                   AND titles.facet = 'movie'
-                   AND {}
-                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
-             ) ranked
-             WHERE media_row = 1",
-            live_media_file_predicate(dialect, "media_files")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(TitleMovieMediaSummary {
-                    title_id: row.text("title_id")?,
-                    resolution: row.opt_text("resolution")?,
-                    hdr_format: row
-                        .opt_text("hdr_format")?
-                        .filter(|value| !value.trim().is_empty()),
-                    audio_codec: row.opt_text("audio_codec")?,
-                })
-            })
-            .collect()
+        Ok(summaries)
     }
 
     async fn list_cutoff_unmet_quality_summaries(
@@ -1376,59 +1675,58 @@ impl MediaFileRepository for MediaFileStore {
         }
 
         let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
         let normalized_quality = normalized_quality_expression("media_files");
         let quality_rank = quality_rank_expression("media_files");
-        let sql = format!(
-            "SELECT title_id, episode_id, season_number, episode_number, quality_tier
-             FROM (
-                SELECT media_files.title_id AS title_id,
-                       fem.episode_id AS episode_id,
-                       e.season_number AS season_number,
-                       e.episode_number AS episode_number,
-                       {normalized_quality} AS quality_tier,
-                       ROW_NUMBER() OVER (
-                          PARTITION BY CASE
-                              WHEN fem.episode_id IS NOT NULL THEN fem.episode_id
-                              ELSE {}
-                          END
-                          ORDER BY {quality_rank} DESC,
-                                   media_files.created_at DESC,
-                                   media_files.id DESC
-                       ) AS quality_row
-                  FROM media_files
-                  LEFT JOIN file_episode_map fem ON fem.file_id = media_files.id
-                  LEFT JOIN episodes e ON e.id = fem.episode_id
-                 WHERE media_files.title_id IN ({placeholders})
-                   AND {}
-                   AND media_files.role = 'primary'
-                   AND {normalized_quality} IS NOT NULL
-                   AND (fem.episode_id IS NULL OR {})
-             ) ranked
-             WHERE quality_row = 1
-               AND quality_tier IS NOT NULL",
-            title_partition_fallback(dialect, "media_files.title_id"),
-            live_media_file_predicate(dialect, "media_files"),
-            bool_column_is_true(dialect, "e.monitored")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(CutoffUnmetQualitySummary {
+        // Each ranked group (an episode, or a movie title) belongs to one
+        // title, so a chunk by title never splits one.
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            let placeholders = placeholders(chunk.len());
+            let sql = format!(
+                "SELECT title_id, episode_id, season_number, episode_number, quality_tier
+                 FROM (
+                    SELECT media_files.title_id AS title_id,
+                           fem.episode_id AS episode_id,
+                           e.season_number AS season_number,
+                           e.episode_number AS episode_number,
+                           {normalized_quality} AS quality_tier,
+                           ROW_NUMBER() OVER (
+                              PARTITION BY CASE
+                                  WHEN fem.episode_id IS NOT NULL THEN fem.episode_id
+                                  ELSE {}
+                              END
+                              ORDER BY {quality_rank} DESC,
+                                       media_files.created_at DESC,
+                                       media_files.id DESC
+                           ) AS quality_row
+                      FROM media_files
+                      LEFT JOIN file_episode_map fem ON fem.file_id = media_files.id
+                      LEFT JOIN episodes e ON e.id = fem.episode_id
+                     WHERE media_files.title_id IN ({placeholders})
+                       AND {}
+                       AND media_files.role = 'primary'
+                       AND {normalized_quality} IS NOT NULL
+                       AND (fem.episode_id IS NULL OR {})
+                 ) ranked
+                 WHERE quality_row = 1
+                   AND quality_tier IS NOT NULL",
+                title_partition_fallback(dialect, "media_files.title_id"),
+                live_media_file_predicate(dialect, "media_files"),
+                bool_column_is_true(dialect, "e.monitored")
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                summaries.push(CutoffUnmetQualitySummary {
                     title_id: row.text("title_id")?,
                     episode_id: row.opt_text("episode_id")?,
                     season_number: row.opt_text("season_number")?,
                     episode_number: row.opt_text("episode_number")?,
                     quality_tier: row.text("quality_tier")?,
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        Ok(summaries)
     }
 
     async fn list_missing_scope_candidates(&self) -> AppResult<MissingScopeCandidates> {
@@ -1583,136 +1881,52 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<TitleEpisodeProgressSummary>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            summaries.extend(
+                self.list_title_episode_progress_summaries_statement(chunk)
+                    .await?,
+            );
         }
-
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let sql = format!(
-            "SELECT e.title_id,
-                    COUNT(DISTINCT e.id) AS total_episodes,
-                    COUNT(DISTINCT CASE WHEN {} THEN e.id END) AS monitored_episodes,
-                    COUNT(DISTINCT CASE WHEN mf.id IS NOT NULL THEN e.id END) AS owned_episodes
-             FROM episodes e
-             INNER JOIN collections c ON c.id = e.collection_id
-             LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
-             WHERE e.title_id IN ({placeholders})
-               AND c.collection_type <> 'specials'
-               AND c.collection_index <> '0'
-               AND trim(COALESCE(e.title, '')) <> ''
-               AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
-               AND trim(COALESCE(e.air_date, '')) <> ''
-             GROUP BY e.title_id",
-            bool_column_is_true(dialect, "e.monitored"),
-            live_media_file_predicate(dialect, "mf")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(TitleEpisodeProgressSummary {
-                    title_id: row.text("title_id")?,
-                    owned_episodes: row.i64("owned_episodes")?,
-                    monitored_episodes: row.i64("monitored_episodes")?,
-                    total_episodes: row.i64("total_episodes")?,
-                })
-            })
-            .collect()
+        Ok(summaries)
     }
 
     async fn list_episode_media_availability(
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<EpisodeMediaAvailability>> {
-        if title_ids.is_empty() {
-            return Ok(Vec::new());
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut availability = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            availability.extend(
+                list_episode_media_availability_query(
+                    &self.datastore,
+                    EpisodeAvailabilityScope::Titles,
+                    chunk,
+                )
+                .await?,
+            );
         }
+        Ok(availability)
+    }
 
-        let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        let sql = format!(
-            "WITH requested_episodes AS (
-                SELECT id, title_id, monitored
-                FROM episodes
-                WHERE title_id IN ({placeholders})
-             ), ranked_availability_files AS (
-                SELECT fem.episode_id,
-                       mf.scan_status,
-                       mf.video_width,
-                       mf.video_height,
-                       mf.quality_id,
-                       mf.resolution,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY fem.episode_id
-                           ORDER BY CASE WHEN mf.scan_status = 'review_required' THEN 1 ELSE 0 END,
-                                    CASE WHEN fem.role = 'primary' THEN 0 ELSE 1 END,
-                                    CASE WHEN fem.role = 'primary' THEN 0 ELSE mf.size_bytes END DESC,
-                                    mf.created_at DESC,
-                                    mf.id DESC
-                       ) AS row_number
-                FROM file_episode_map fem
-                INNER JOIN requested_episodes e ON e.id = fem.episode_id
-                INNER JOIN media_files mf ON mf.id = fem.file_id
-                WHERE {} AND fem.role IN ('primary', 'additional')
-             )
-             SELECT e.title_id,
-                    e.id AS episode_id,
-                    e.monitored,
-                    availability_file.scan_status,
-                    availability_file.video_width,
-                    availability_file.video_height,
-                    availability_file.quality_id,
-                    availability_file.resolution
-             FROM requested_episodes e
-             LEFT JOIN ranked_availability_files availability_file
-               ON availability_file.episode_id = e.id AND availability_file.row_number = 1",
-            live_media_file_predicate(dialect, "mf"),
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                let scan_status = row.opt_text("scan_status")?;
-                let state = match scan_status.as_deref() {
-                    Some("imported") => EpisodeMediaAvailabilityState::PendingScan,
-                    Some("scan_failed") => EpisodeMediaAvailabilityState::ScanFailed,
-                    Some("review_required") => EpisodeMediaAvailabilityState::ReviewRequired,
-                    Some(_) => EpisodeMediaAvailabilityState::Available,
-                    None if row.bool("monitored")? => EpisodeMediaAvailabilityState::Missing,
-                    None => EpisodeMediaAvailabilityState::Unmonitored,
-                };
-                let primary_quality_label = if state == EpisodeMediaAvailabilityState::Available {
-                    let quality_label = row.opt_text("quality_id")?;
-                    let resolution = row.opt_text("resolution")?;
-                    derive_primary_quality_label(
-                        row.opt_i32("video_width")?,
-                        row.opt_i32("video_height")?,
-                        quality_label.as_deref(),
-                        resolution.as_deref(),
-                    )
-                } else {
-                    None
-                };
-                Ok(EpisodeMediaAvailability {
-                    title_id: row.text("title_id")?,
-                    episode_id: row.text("episode_id")?,
-                    state,
-                    primary_quality_label,
-                })
-            })
-            .collect()
+    async fn list_episode_media_availability_for_episodes(
+        &self,
+        episode_ids: &[String],
+    ) -> AppResult<Vec<EpisodeMediaAvailability>> {
+        let mut availability = Vec::new();
+        for chunk in episode_ids.chunks(EPISODE_AVAILABILITY_ID_CHUNK) {
+            availability.extend(
+                list_episode_media_availability_query(
+                    &self.datastore,
+                    EpisodeAvailabilityScope::Episodes,
+                    chunk,
+                )
+                .await?,
+            );
+        }
+        Ok(availability)
     }
 
     async fn list_collection_episode_progress_summaries(
@@ -1724,46 +1938,45 @@ impl MediaFileRepository for MediaFileStore {
         }
 
         let dialect = dialect_for_datastore(&self.datastore);
-        let placeholders = placeholders(title_ids.len());
-        // Countable episodes exclude unnamed/TBA/undated placeholder records; the
-        // record total intentionally counts every episode row so callers can tell
-        // "no episodes at all" apart from "only placeholder episodes".
-        let countable = "(trim(COALESCE(e.title, '')) <> ''
-               AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
-               AND trim(COALESCE(e.air_date, '')) <> '')";
-        let sql = format!(
-            "SELECT e.collection_id,
-                    COUNT(DISTINCT e.id) AS episode_records_total,
-                    COUNT(DISTINCT CASE WHEN {countable} THEN e.id END) AS total_episodes,
-                    COUNT(DISTINCT CASE WHEN {countable} AND {} THEN e.id END) AS monitored_episodes,
-                    COUNT(DISTINCT CASE WHEN {countable} AND mf.id IS NOT NULL THEN e.id END) AS owned_episodes
-             FROM episodes e
-             LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-             LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
-             WHERE e.title_id IN ({placeholders})
-               AND e.collection_id IS NOT NULL
-             GROUP BY e.collection_id",
-            bool_column_is_true(dialect, "e.monitored"),
-            live_media_file_predicate(dialect, "mf")
-        );
-        let args = title_ids
-            .iter()
-            .cloned()
-            .map(SqlArg::Text)
-            .collect::<Vec<_>>();
-        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
-            .await?
-            .iter()
-            .map(|row| {
-                Ok(CollectionEpisodeProgressSummary {
+        // A collection belongs to one title, so a chunk by title never splits
+        // a group.
+        let (title_ids, per_statement) = self.title_id_statements(title_ids);
+        let mut summaries = Vec::new();
+        for chunk in title_ids.chunks(per_statement) {
+            let placeholders = placeholders(chunk.len());
+            // Countable episodes exclude unnamed/TBA/undated placeholder records; the
+            // record total intentionally counts every episode row so callers can tell
+            // "no episodes at all" apart from "only placeholder episodes".
+            let countable = "(trim(COALESCE(e.title, '')) <> ''
+                   AND upper(trim(e.title)) NOT IN ('TBA', 'TBD')
+                   AND trim(COALESCE(e.air_date, '')) <> '')";
+            let sql = format!(
+                "SELECT e.collection_id,
+                        COUNT(DISTINCT e.id) AS episode_records_total,
+                        COUNT(DISTINCT CASE WHEN {countable} THEN e.id END) AS total_episodes,
+                        COUNT(DISTINCT CASE WHEN {countable} AND {} THEN e.id END) AS monitored_episodes,
+                        COUNT(DISTINCT CASE WHEN {countable} AND mf.id IS NOT NULL THEN e.id END) AS owned_episodes
+                 FROM episodes e
+                 LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
+                 LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND fem.role = 'primary' AND mf.scan_status <> 'review_required'
+                 WHERE e.title_id IN ({placeholders})
+                   AND e.collection_id IS NOT NULL
+                 GROUP BY e.collection_id",
+                bool_column_is_true(dialect, "e.monitored"),
+                live_media_file_predicate(dialect, "mf")
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                summaries.push(CollectionEpisodeProgressSummary {
                     collection_id: row.text("collection_id")?,
                     owned_episodes: row.i64("owned_episodes")?,
                     monitored_episodes: row.i64("monitored_episodes")?,
                     total_episodes: row.i64("total_episodes")?,
                     episode_records_total: row.i64("episode_records_total")?,
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        Ok(summaries)
     }
 
     async fn update_media_file_analysis(
@@ -1771,8 +1984,12 @@ impl MediaFileRepository for MediaFileStore {
         file_id: &str,
         analysis: MediaFileAnalysis,
     ) -> AppResult<()> {
-        let (sql, args) = media_analysis_update(file_id, analysis)?;
-        execute_write(&self.datastore, "update_media_file_analysis", sql, args).await?;
+        let update = media_analysis_update(file_id, analysis)?;
+        SqlRuntime::run_in_transaction(&self.datastore, "update_media_file_analysis", move |tx| {
+            let update = update.clone();
+            Box::pin(async move { apply_media_analysis_update_tx(tx, &update).await })
+        })
+        .await?;
         Ok(())
     }
 
@@ -1812,7 +2029,7 @@ impl MediaFileRepository for MediaFileStore {
                 Ok(ids.into_iter().collect::<Vec<_>>())
             })
             .transpose()?;
-        let (sql, args) = media_analysis_update(&expected.id, analysis)?;
+        let update = media_analysis_update(&expected.id, analysis)?;
         let dialect = dialect_for_datastore(&self.datastore);
         let query = format!(
             "SELECT {} FROM media_files mf WHERE mf.id = {{}}{}",
@@ -1825,7 +2042,7 @@ impl MediaFileRepository for MediaFileStore {
         );
         let expected = expected.clone();
         SqlRuntime::run_in_transaction(&self.datastore, "publish_unchanged_media_analysis", move |tx| {
-            let (query, expected, sql, args) = (query.clone(), expected.clone(), sql.clone(), args.clone());
+            let (query, expected, update) = (query.clone(), expected.clone(), update.clone());
             let disc_links = disc_links.clone();
             Box::pin(async move {
                 let Some(current) = fetch_optional_media_file(SqlExec::Tx(tx), &query, &[SqlArg::Text(expected.id.clone())]).await? else { return Ok(false); };
@@ -1855,7 +2072,7 @@ impl MediaFileRepository for MediaFileStore {
                             &[SqlArg::Text(expected.id.clone()), SqlArg::Text(episode_id)]).await?;
                     }
                 }
-                Ok(SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await? > 0)
+                apply_media_analysis_update_tx(tx, &update).await
             })
         }).await
     }
@@ -2041,6 +2258,30 @@ impl MediaFileRepository for MediaFileStore {
         Ok(())
     }
 
+    async fn update_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        match paths {
+            [] => return Ok(()),
+            [(file_id, file_path)] => return self.update_media_file_path(file_id, file_path).await,
+            _ => {}
+        }
+        let paths = paths.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "update_media_file_paths", move |tx| {
+            let paths = paths.clone();
+            Box::pin(async move {
+                for (file_id, file_path) in paths {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE media_files SET file_path = {} WHERE id = {}",
+                        &[SqlArg::Text(file_path), SqlArg::Text(file_id)],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn set_media_file_roles_for_title(
         &self,
         title_id: &str,
@@ -2167,6 +2408,118 @@ impl MediaFileRepository for MediaFileStore {
                     if promoted != 1 {
                         return Err(AppError::Repository(format!(
                             "expected to promote one episode media file, promoted {promoted}: {primary_file_id}"
+                        )));
+                    }
+
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn set_primary_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        episode_ids: &[String],
+        primary_file_id: &str,
+    ) -> AppResult<()> {
+        // Keeps every statement well under both engines' bind limits.
+        const MAX_ROLE_BATCH_EPISODES: usize = 1_000;
+        // Each episode's writes touch only that episode's map rows, and
+        // (file_id, episode_id) is the key, so the per-episode steps applied
+        // to every episode at once end the same.
+        let mut episodes = Vec::with_capacity(episode_ids.len());
+        for episode_id in episode_ids {
+            if !episodes.contains(episode_id) {
+                episodes.push(episode_id.clone());
+            }
+        }
+        if episodes.is_empty() {
+            return Ok(());
+        }
+        if episodes.len() > MAX_ROLE_BATCH_EPISODES {
+            for episode_id in &episodes {
+                self.set_media_file_roles_for_episode(title_id, episode_id, primary_file_id, &[])
+                    .await?;
+            }
+            return Ok(());
+        }
+        let title_id = title_id.to_string();
+        let primary_file_id = primary_file_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "set_primary_media_file_for_episodes",
+            move |tx| {
+                let title_id = title_id.clone();
+                let primary_file_id = primary_file_id.clone();
+                let episodes = episodes.clone();
+                Box::pin(async move {
+                    let episode_placeholders = placeholders(episodes.len());
+                    let episode_args = episodes.iter().cloned().map(SqlArg::Text);
+                    let owned_args = || {
+                        let mut args = episode_args.clone().collect::<Vec<_>>();
+                        args.push(SqlArg::Text(primary_file_id.clone()));
+                        args.push(SqlArg::Text(title_id.clone()));
+                        args
+                    };
+                    let updated = SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "UPDATE file_episode_map
+                                SET role = 'additional'
+                              WHERE episode_id IN ({episode_placeholders})
+                                AND file_id = {{}}
+                                AND EXISTS (
+                                    SELECT 1
+                                    FROM media_files mf
+                                    WHERE mf.id = file_episode_map.file_id
+                                      AND mf.title_id = {{}}
+                                )"
+                        ),
+                        &owned_args(),
+                    )
+                    .await?;
+                    if updated != episodes.len() as u64 {
+                        return Err(AppError::Repository(format!(
+                            "expected to update {} episode media file roles, updated {updated}",
+                            episodes.len()
+                        )));
+                    }
+
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "UPDATE file_episode_map
+                                SET role = 'additional'
+                              WHERE episode_id IN ({episode_placeholders})
+                                AND role = 'primary'"
+                        ),
+                        &episode_args.clone().collect::<Vec<_>>(),
+                    )
+                    .await?;
+
+                    let promoted = SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "UPDATE file_episode_map
+                                SET role = 'primary'
+                              WHERE episode_id IN ({episode_placeholders})
+                                AND file_id = {{}}
+                                AND EXISTS (
+                                    SELECT 1
+                                    FROM media_files mf
+                                    WHERE mf.id = file_episode_map.file_id
+                                      AND mf.title_id = {{}}
+                                )"
+                        ),
+                        &owned_args(),
+                    )
+                    .await?;
+                    if promoted != episodes.len() as u64 {
+                        return Err(AppError::Repository(format!(
+                            "expected to promote {} episode media file links, promoted {promoted}: {primary_file_id}",
+                            episodes.len()
                         )));
                     }
 
@@ -2390,6 +2743,29 @@ impl MediaFileRepository for MediaFileStore {
             &[SqlArg::Text(file_id.to_string())],
         )
         .await
+    }
+
+    async fn list_media_file_title_ids(
+        &self,
+        file_ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Same id space and no liveness filter, as `get_media_file_by_id`.
+        let (file_ids, per_statement) = self.title_id_statements(file_ids);
+        let mut owners = Vec::with_capacity(file_ids.len());
+        for chunk in file_ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT mf.id, mf.title_id FROM media_files mf WHERE mf.id IN ({})",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                owners.push((row.text("id")?, row.text("title_id")?));
+            }
+        }
+        Ok(owners)
     }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>> {
@@ -2635,6 +3011,111 @@ impl MediaFileRepository for MediaFileStore {
 /// stays well under sqlite's historical 999-variable ceiling.
 const MEDIA_FILE_PATH_LOOKUP_CHUNK: usize = 400;
 
+/// Episode ids per availability lookup, one bind each, under sqlite's
+/// historical 999-variable ceiling.
+const EPISODE_AVAILABILITY_ID_CHUNK: usize = 900;
+
+/// Which column the ids handed to [`list_episode_media_availability_query`]
+/// name.
+#[derive(Clone, Copy)]
+enum EpisodeAvailabilityScope {
+    /// Every episode of these titles.
+    Titles,
+    /// Exactly these episodes.
+    Episodes,
+}
+
+/// Each requested episode's availability, read from its best file. The scope
+/// only decides which episodes are requested; an episode's answer is the same
+/// whichever way it was asked for.
+async fn list_episode_media_availability_query(
+    datastore: &StoreDatastore,
+    scope: EpisodeAvailabilityScope,
+    ids: &[String],
+) -> AppResult<Vec<EpisodeMediaAvailability>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dialect = dialect_for_datastore(datastore);
+    let placeholders = placeholders(ids.len());
+    let requested_column = match scope {
+        EpisodeAvailabilityScope::Titles => "title_id",
+        EpisodeAvailabilityScope::Episodes => "id",
+    };
+    let sql = format!(
+        "WITH requested_episodes AS (
+            SELECT id, title_id, monitored
+            FROM episodes
+            WHERE {requested_column} IN ({placeholders})
+         ), ranked_availability_files AS (
+            SELECT fem.episode_id,
+                   mf.scan_status,
+                   mf.video_width,
+                   mf.video_height,
+                   mf.quality_id,
+                   mf.resolution,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY fem.episode_id
+                       ORDER BY CASE WHEN mf.scan_status = 'review_required' THEN 1 ELSE 0 END,
+                                CASE WHEN fem.role = 'primary' THEN 0 ELSE 1 END,
+                                CASE WHEN fem.role = 'primary' THEN 0 ELSE mf.size_bytes END DESC,
+                                mf.created_at DESC,
+                                mf.id DESC
+                   ) AS row_number
+            FROM file_episode_map fem
+            INNER JOIN requested_episodes e ON e.id = fem.episode_id
+            INNER JOIN media_files mf ON mf.id = fem.file_id
+            WHERE {} AND fem.role IN ('primary', 'additional')
+         )
+         SELECT e.title_id,
+                e.id AS episode_id,
+                e.monitored,
+                availability_file.scan_status,
+                availability_file.video_width,
+                availability_file.video_height,
+                availability_file.quality_id,
+                availability_file.resolution
+         FROM requested_episodes e
+         LEFT JOIN ranked_availability_files availability_file
+           ON availability_file.episode_id = e.id AND availability_file.row_number = 1",
+        live_media_file_predicate(dialect, "mf"),
+    );
+    let args = ids.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+    SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args)
+        .await?
+        .iter()
+        .map(|row| {
+            let scan_status = row.opt_text("scan_status")?;
+            let state = match scan_status.as_deref() {
+                Some("imported") => EpisodeMediaAvailabilityState::PendingScan,
+                Some("scan_failed") => EpisodeMediaAvailabilityState::ScanFailed,
+                Some("review_required") => EpisodeMediaAvailabilityState::ReviewRequired,
+                Some(_) => EpisodeMediaAvailabilityState::Available,
+                None if row.bool("monitored")? => EpisodeMediaAvailabilityState::Missing,
+                None => EpisodeMediaAvailabilityState::Unmonitored,
+            };
+            let primary_quality_label = if state == EpisodeMediaAvailabilityState::Available {
+                let quality_label = row.opt_text("quality_id")?;
+                let resolution = row.opt_text("resolution")?;
+                derive_primary_quality_label(
+                    row.opt_i32("video_width")?,
+                    row.opt_i32("video_height")?,
+                    quality_label.as_deref(),
+                    resolution.as_deref(),
+                )
+            } else {
+                None
+            };
+            Ok(EpisodeMediaAvailability {
+                title_id: row.text("title_id")?,
+                episode_id: row.text("episode_id")?,
+                state,
+                primary_quality_label,
+            })
+        })
+        .collect()
+}
+
 /// The key two paths share when [`media_file_path_predicate`] treats them as
 /// the same file, used to attribute batched rows back to a requested path.
 fn media_file_path_match_key(file_path: &str) -> String {
@@ -2768,14 +3249,51 @@ fn quality_rank_expression(alias: &str) -> String {
     )
 }
 
+/// An analysis write: the summary columns on the media file row and the
+/// analysis document in its own table.
+#[derive(Clone)]
+struct MediaAnalysisUpdate {
+    sql: String,
+    args: Vec<SqlArg>,
+    analysis_args: Vec<SqlArg>,
+}
+
+const MEDIA_ANALYSIS_UPSERT: &str =
+    "INSERT INTO media_file_analyses (media_file_id, analysis) VALUES ({}, {})
+     ON CONFLICT(media_file_id) DO UPDATE SET analysis = excluded.analysis";
+
+/// Applies an analysis write inside `tx`. The document is stored only when
+/// the file row still exists, so a vanished file leaves nothing behind.
+async fn apply_media_analysis_update_tx(
+    tx: &mut SqlTx<'_>,
+    update: &MediaAnalysisUpdate,
+) -> AppResult<bool> {
+    if SqlRuntime::execute(SqlExec::Tx(tx), &update.sql, &update.args).await? == 0 {
+        return Ok(false);
+    }
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        MEDIA_ANALYSIS_UPSERT,
+        &update.analysis_args,
+    )
+    .await?;
+    Ok(true)
+}
+
 fn media_analysis_update(
     file_id: &str,
     analysis: MediaFileAnalysis,
-) -> AppResult<(String, Vec<SqlArg>)> {
-    let analysis_json = serialized_media_analysis(&analysis)?;
+) -> AppResult<MediaAnalysisUpdate> {
+    let analysis_args = vec![
+        SqlArg::Text(file_id.to_string()),
+        SqlArg::OptBytes(Some(encode_media_analysis(&serialized_media_analysis(
+            &analysis,
+        )?)?)),
+    ];
     let labels = analysis.derived_labels();
-    Ok((
-        "UPDATE media_files SET
+    Ok(MediaAnalysisUpdate {
+        analysis_args,
+        sql: "UPDATE media_files SET
                 resolution = COALESCE({}, resolution),
                 video_codec_parsed = COALESCE({}, video_codec_parsed),
                 audio_codec_parsed = {},
@@ -2795,7 +3313,6 @@ fn media_analysis_update(
                 duration_seconds = {},
                 num_chapters = {},
                 container_format = {},
-                analysis_json = {},
                 analysis_revision = {},
                 analysis_attempt_revision = {},
                 analysis_attempted_at = {},
@@ -2806,7 +3323,7 @@ fn media_analysis_update(
                 scan_status = 'scanned'
              WHERE id = {}"
             .to_string(),
-        vec![
+        args: vec![
             SqlArg::OptText(labels.resolution),
             SqlArg::OptText(labels.video_codec.as_ref().map(ToString::to_string)),
             SqlArg::OptText(labels.audio_codec),
@@ -2826,14 +3343,13 @@ fn media_analysis_update(
             SqlArg::OptI32(analysis.duration_seconds),
             SqlArg::OptI32(analysis.num_chapters),
             SqlArg::OptText(analysis.container_format),
-            SqlArg::Text(analysis_json),
             SqlArg::I64(i64::from(analysis.details.revision)),
             SqlArg::I64(i64::from(analysis.details.revision)),
             SqlArg::Text(chrono::Utc::now().to_rfc3339()),
             SqlArg::Bool(analysis.has_multiaudio),
             SqlArg::Text(file_id.to_string()),
         ],
-    ))
+    })
 }
 
 fn serialized_media_analysis(analysis: &MediaFileAnalysis) -> AppResult<String> {
@@ -2854,7 +3370,9 @@ fn media_file_select_columns(dialect: SqlDialect, episode_expr: &str, role_expr:
             mf.video_bitrate_kbps, mf.video_bit_depth,
             mf.video_hdr_format, mf.video_frame_rate, mf.video_profile,
             mf.audio_codec, mf.audio_profile, mf.audio_channels, mf.audio_bitrate_kbps,
-            mf.duration_seconds, mf.num_chapters, mf.container_format, mf.analysis_json,
+            mf.duration_seconds, mf.num_chapters, mf.container_format,
+            (SELECT mfa.analysis FROM media_file_analyses mfa WHERE mfa.media_file_id = mf.id)
+                AS analysis,
             mf.analysis_attempt_revision, mf.analysis_attempted_at, mf.analysis_attempt_status, mf.analysis_attempt_json,
             mf.has_multiaudio,
             mf.scene_name, mf.release_group, mf.source_type, mf.resolution,
@@ -3202,11 +3720,26 @@ fn row_to_episode_scoped_media_file(row: &SqlRow) -> AppResult<EpisodeScopedMedi
     })
 }
 
+use scryer_infrastructure_sql::compressed_blob::MEDIA_ANALYSIS_MAX_BYTES as ANALYSIS_MAX_BYTES;
+
+/// Stores an analysis document as one zstd frame.
+fn encode_media_analysis(analysis_json: &str) -> AppResult<Vec<u8>> {
+    scryer_infrastructure_sql::compressed_blob::compress_text(analysis_json, ANALYSIS_MAX_BYTES)
+}
+
+/// A file without a stored analysis reads as the empty document, as a blank
+/// one always did; an unreadable one reads as null.
 fn analysis_json_from_row(row: &SqlRow) -> JsonValue {
-    json_text_or(row, "analysis_json", "{}")
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or(JsonValue::Null)
+    let stored = match row.opt_bytes("analysis") {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return JsonValue::Object(Default::default()),
+        Err(_) => return JsonValue::Null,
+    };
+    match scryer_infrastructure_sql::compressed_blob::decompress_text(&stored, ANALYSIS_MAX_BYTES) {
+        Ok(json) if json.trim().is_empty() => JsonValue::Object(Default::default()),
+        Ok(json) => serde_json::from_str(&json).unwrap_or(JsonValue::Null),
+        Err(_) => JsonValue::Null,
+    }
 }
 
 fn analysis_u8_field(analysis: &JsonValue, field: &str) -> Option<u8> {
@@ -5081,6 +5614,187 @@ mod tests {
             vec![(bystander, MediaFileRole::Primary)],
             "another episode's file is untouched"
         );
+    }
+
+    /// Making one file Primary for several episodes at once leaves the map as
+    /// the per-episode writes do, and a batch that cannot complete keeps
+    /// nothing.
+    #[tokio::test]
+    async fn primary_for_several_episodes_matches_per_episode_writes() {
+        use sqlx::Row;
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_primary_for_episodes_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-emberfall-multi");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let collection = Collection {
+            id: "collection-emberfall-multi".to_string(),
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("6".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        ShowRepository::create_collection(&shows, collection.clone())
+            .await
+            .expect("collection should insert");
+        let mut episode_ids = Vec::new();
+        for number in 1..=6 {
+            let episode = Episode {
+                id: format!("episode-emberfall-multi-{number}"),
+                title_id: title.id.clone(),
+                collection_id: Some(collection.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(number.to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some(format!("S01E0{number}")),
+                title: Some(format!("Episode {number}")),
+                air_date: Some("2026-04-01".to_string()),
+                duration_seconds: None,
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                contiguous_absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            };
+            ShowRepository::create_episode(&shows, episode.clone())
+                .await
+                .expect("episode should insert");
+            episode_ids.push(episode.id);
+        }
+        let add_file = |name: &'static str, episodes: Vec<String>| {
+            let media_files = &media_files;
+            let title_id = title.id.clone();
+            async move {
+                let file_id = media_files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id,
+                        file_path: format!("/data/series/Emberfall/Season 1/{name}.mkv"),
+                        size_bytes: 1_000,
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("media file should insert");
+                for episode_id in episodes {
+                    media_files
+                        .link_file_to_episode(&file_id, &episode_id)
+                        .await
+                        .expect("file should link");
+                }
+                file_id
+            }
+        };
+        // Each half holds an older Primary on its first episode, then a
+        // three-episode file arrives for the half.
+        let old_batch = add_file("old-batch", vec![episode_ids[0].clone()]).await;
+        let old_single = add_file("old-single", vec![episode_ids[3].clone()]).await;
+        let new_batch = add_file("new-batch", episode_ids[0..3].to_vec()).await;
+        let new_single = add_file("new-single", episode_ids[3..6].to_vec()).await;
+        // Labels each map row by which file of its half it is, so the halves
+        // compare.
+        let map_of = |episodes: Vec<String>, old: String, new: String| {
+            let pool = services.pool().clone();
+            async move {
+                let mut rows = Vec::new();
+                for (position, episode_id) in episodes.iter().enumerate() {
+                    for row in sqlx::query(
+                        "SELECT file_id, role FROM file_episode_map
+                          WHERE episode_id = ? ORDER BY file_id",
+                    )
+                    .bind(episode_id)
+                    .fetch_all(&pool)
+                    .await
+                    .expect("map should load")
+                    {
+                        let file_id = row.get::<String, _>("file_id");
+                        let label = if file_id == old {
+                            "old"
+                        } else if file_id == new {
+                            "new"
+                        } else {
+                            "other"
+                        };
+                        rows.push((position, label, row.get::<String, _>("role")));
+                    }
+                }
+                rows.sort();
+                rows
+            }
+        };
+
+        media_files
+            .set_primary_media_file_for_episodes(&title.id, &episode_ids[0..3], &new_batch)
+            .await
+            .expect("batched roles should write");
+        for episode_id in &episode_ids[3..6] {
+            media_files
+                .set_media_file_roles_for_episode(&title.id, episode_id, &new_single, &[])
+                .await
+                .expect("roles should write");
+        }
+        let batched = map_of(
+            episode_ids[0..3].to_vec(),
+            old_batch.clone(),
+            new_batch.clone(),
+        )
+        .await;
+        assert_eq!(
+            batched,
+            map_of(episode_ids[3..6].to_vec(), old_single, new_single).await
+        );
+        assert_eq!(
+            batched,
+            vec![
+                (0, "new", "primary".to_string()),
+                (0, "old", "additional".to_string()),
+                (1, "new", "primary".to_string()),
+                (2, "new", "primary".to_string()),
+            ]
+        );
+
+        // A file linked to only two of three episodes cannot be made Primary
+        // for all three: the batch fails and leaves every role as it was.
+        let partial = add_file("partial", episode_ids[0..2].to_vec()).await;
+        let before = map_of(
+            episode_ids[0..3].to_vec(),
+            old_batch.clone(),
+            new_batch.clone(),
+        )
+        .await;
+        assert!(
+            media_files
+                .set_primary_media_file_for_episodes(&title.id, &episode_ids[0..3], &partial)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            map_of(episode_ids[0..3].to_vec(), old_batch, new_batch).await,
+            before
+        );
+        let _ = std::fs::remove_file(db);
     }
 
     /// An in-flight same-path upgrade stages the replacement beside the final
@@ -7132,6 +7846,36 @@ mod tests {
             "the episode-scoped primary supplies the collapsed-row quality"
         );
 
+        // Asking for chosen episodes reads only those, with the answers the
+        // title-scoped read gives them. An unknown id contributes nothing.
+        let requested = [
+            available.id.clone(),
+            missing.id.clone(),
+            additional_only.id.clone(),
+            legacy_multiple_primary.id.clone(),
+            "episode-availability-unknown".to_string(),
+        ];
+        let mut scoped = media_files
+            .list_episode_media_availability_for_episodes(&requested)
+            .await
+            .expect("episode-scoped availability should load");
+        scoped.sort_by(|left, right| left.episode_id.cmp(&right.episode_id));
+        let mut expected = summaries
+            .iter()
+            .filter(|summary| requested.contains(&summary.episode_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        expected.sort_by(|left, right| left.episode_id.cmp(&right.episode_id));
+        assert_eq!(scoped.len(), 4);
+        assert_eq!(scoped, expected);
+        assert!(
+            media_files
+                .list_episode_media_availability_for_episodes(&[])
+                .await
+                .expect("an empty request should load")
+                .is_empty()
+        );
+
         let _ = std::fs::remove_file(db);
     }
 
@@ -7635,5 +8379,281 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(db);
+    }
+
+    /// Several paths written together land as the same writes one at a time
+    /// would, and a write naming a missing file keeps none of them. The owner
+    /// read answers what reading each file would, past the bind limit too.
+    #[tokio::test]
+    async fn grouped_path_writes_and_owner_reads_match_the_per_file_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("grouped.db").to_string_lossy())
+            .await
+            .unwrap();
+        let owner = make_test_series_title("grouped-owner");
+        let other = make_test_series_title("grouped-other");
+        title_store(&services).create(owner.clone()).await.unwrap();
+        title_store(&services).create(other.clone()).await.unwrap();
+        let files = media_file_store(&services);
+        let mut ids = Vec::new();
+        for (title, path) in [
+            (&owner, "/synthetic/one.mkv"),
+            (&owner, "/synthetic/two.mkv"),
+            (&other, "/synthetic/three.mkv"),
+        ] {
+            ids.push(
+                files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: title.id.clone(),
+                        file_path: path.into(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let refused = vec![
+            (ids[0].clone(), "/synthetic/moved/one.mkv".to_string()),
+            (
+                "missing-file".to_string(),
+                "/synthetic/moved/none.mkv".to_string(),
+            ),
+        ];
+        // The single-row write refuses a missing id; the grouped write keeps
+        // nothing when any statement fails.
+        let refused_result = files.update_media_file_paths(&refused).await;
+        if refused_result.is_err() {
+            assert_eq!(
+                files
+                    .get_media_file_by_id(&ids[0])
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .file_path,
+                "/synthetic/one.mkv"
+            );
+        }
+
+        let paths = vec![
+            (ids[0].clone(), "/synthetic/moved/one.mkv".to_string()),
+            (ids[2].clone(), "/synthetic/moved/three.mkv".to_string()),
+        ];
+        files.update_media_file_paths(&paths).await.unwrap();
+        for (id, expected) in [
+            (&ids[0], "/synthetic/moved/one.mkv"),
+            (&ids[1], "/synthetic/two.mkv"),
+            (&ids[2], "/synthetic/moved/three.mkv"),
+        ] {
+            assert_eq!(
+                files
+                    .get_media_file_by_id(id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .file_path,
+                expected
+            );
+        }
+
+        let mut asked = ids.clone();
+        asked.push(ids[0].clone());
+        asked.push("missing-file".to_string());
+        let mut expected = Vec::new();
+        for id in &asked {
+            if let Some(file) = files.get_media_file_by_id(id).await.unwrap() {
+                expected.push((id.clone(), file.title_id));
+            }
+        }
+        let normalize = |mut rows: Vec<(String, String)>| {
+            rows.sort();
+            rows.dedup();
+            rows
+        };
+        let single = files.list_media_file_title_ids(&asked).await.unwrap();
+        let chunked = {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+            files.list_media_file_title_ids(&asked).await.unwrap()
+        };
+        assert_eq!(normalize(single.clone()), normalize(expected.clone()));
+        assert_eq!(normalize(chunked), normalize(expected));
+    }
+
+    fn stream_analysis(language: &str) -> MediaFileAnalysis {
+        MediaFileAnalysis {
+            details: Default::default(),
+            video_codec: None,
+            video_width: Some(1920),
+            video_height: Some(1080),
+            video_bitrate_kbps: None,
+            video_bit_depth: None,
+            video_hdr_format: None,
+            dovi_profile: None,
+            dovi_bl_compat_id: None,
+            video_frame_rate: None,
+            video_profile: None,
+            audio_codec: Some("aac".to_string()),
+            audio_profile: None,
+            audio_channels: Some(2),
+            audio_bitrate_kbps: None,
+            audio_languages: vec![language.to_string()],
+            audio_streams: vec![AudioStreamDetail {
+                codec: Some("aac".to_string()),
+                profile: None,
+                channels: Some(2),
+                language: Some(language.to_string()),
+                name: None,
+                bitrate_kbps: None,
+            }],
+            subtitle_languages: vec![],
+            subtitle_codecs: vec![],
+            subtitle_streams: vec![],
+            has_multiaudio: false,
+            duration_seconds: Some(60),
+            num_chapters: None,
+            container_format: Some("matroska".to_string()),
+        }
+    }
+
+    async fn stored_analysis(services: &SqliteServices, file_id: &str) -> Option<Vec<u8>> {
+        sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT analysis FROM media_file_analyses WHERE media_file_id = ?",
+        )
+        .bind(file_id)
+        .fetch_optional(services.pool())
+        .await
+        .unwrap()
+    }
+
+    async fn analysis_fixture(name: &str) -> (tempfile::TempDir, SqliteServices, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join(format!("{name}.db")).to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title(&format!("{name}-title"));
+        title_store(&services).create(title.clone()).await.unwrap();
+        let file_id = media_file_store(&services)
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id,
+                file_path: format!("/synthetic/{name}/Episode 01.mkv"),
+                size_bytes: 1_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        (dir, services, file_id)
+    }
+
+    #[tokio::test]
+    async fn analysis_is_stored_as_a_zstd_frame_and_reads_back() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-frame").await;
+        let files = media_file_store(&services);
+        files
+            .update_media_file_analysis(&file_id, stream_analysis("eng"))
+            .await
+            .unwrap();
+
+        let stored = stored_analysis(&services, &file_id)
+            .await
+            .expect("blob row");
+        assert_eq!(&stored[..4], &[0x28, 0xB5, 0x2F, 0xFD]);
+        let file = files.get_media_file_by_id(&file_id).await.unwrap().unwrap();
+        assert_eq!(file.audio_languages, vec!["eng".to_string()]);
+        assert_eq!(file.audio_streams.len(), 1);
+        assert_eq!(file.audio_streams[0].language.as_deref(), Some("eng"));
+
+        // A second analysis replaces the one row in place.
+        files
+            .update_media_file_analysis(&file_id, stream_analysis("fra"))
+            .await
+            .unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_file_analyses")
+            .fetch_one(services.pool())
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+        let file = files.get_media_file_by_id(&file_id).await.unwrap().unwrap();
+        assert_eq!(file.audio_languages, vec!["fra".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn analysis_copied_as_plain_bytes_by_the_migration_reads_back() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-legacy").await;
+        let legacy = serde_json::json!({
+            "audio_languages": ["deu"],
+            "audio_streams": [{"codec": "ac3", "channels": 6, "language": "deu"}],
+        })
+        .to_string();
+        sqlx::query("INSERT INTO media_file_analyses (media_file_id, analysis) VALUES (?, ?)")
+            .bind(&file_id)
+            .bind(legacy.as_bytes())
+            .execute(services.pool())
+            .await
+            .unwrap();
+
+        let file = media_file_store(&services)
+            .get_media_file_by_id(&file_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.audio_languages, vec!["deu".to_string()]);
+        assert_eq!(file.audio_streams[0].codec.as_deref(), Some("ac3"));
+        assert_eq!(file.audio_streams[0].channels, Some(6));
+    }
+
+    #[tokio::test]
+    async fn a_file_without_analysis_has_no_blob_row_and_reads_the_old_default() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-absent").await;
+        assert!(stored_analysis(&services, &file_id).await.is_none());
+        let file = media_file_store(&services)
+            .get_media_file_by_id(&file_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(file.audio_languages.is_empty());
+        assert!(file.audio_streams.is_empty());
+        assert!(file.subtitle_streams.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_analysis_for_a_missing_file_writes_no_blob_row() {
+        let (_dir, services, _file_id) = analysis_fixture("analysis-missing").await;
+        let _ = media_file_store(&services)
+            .update_media_file_analysis("missing-file", stream_analysis("eng"))
+            .await;
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_file_analyses")
+            .fetch_one(services.pool())
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
+    async fn path_writes_leave_the_analysis_row_alone_and_delete_takes_it() {
+        let (_dir, services, file_id) = analysis_fixture("analysis-owner").await;
+        let files = media_file_store(&services);
+        let sentinel = b"sentinel-analysis-bytes".to_vec();
+        sqlx::query("INSERT INTO media_file_analyses (media_file_id, analysis) VALUES (?, ?)")
+            .bind(&file_id)
+            .bind(&sentinel)
+            .execute(services.pool())
+            .await
+            .unwrap();
+
+        files
+            .update_media_file_path(&file_id, "/synthetic/analysis-owner/Renamed.mkv")
+            .await
+            .unwrap();
+        files
+            .update_media_file_paths(&[(
+                file_id.clone(),
+                "/synthetic/analysis-owner/Moved.mkv".to_string(),
+            )])
+            .await
+            .unwrap();
+        assert_eq!(stored_analysis(&services, &file_id).await, Some(sentinel));
+
+        files.delete_media_file(&file_id).await.unwrap();
+        assert!(stored_analysis(&services, &file_id).await.is_none());
     }
 }

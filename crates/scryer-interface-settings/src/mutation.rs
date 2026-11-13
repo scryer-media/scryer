@@ -639,6 +639,7 @@ fn normalize_quality_profile(profile: QualityProfile) -> QualityProfile {
             min_upgrade_score_delta: criteria
                 .min_upgrade_score_delta
                 .filter(|delta| *delta != scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+            decision_pipeline: criteria.decision_pipeline,
             facet_persona_overrides,
         },
     }
@@ -670,7 +671,23 @@ fn quality_profile_from_input(
         "criteria.audio_codec_blocklist",
     )?;
 
-    let profile = normalize_quality_profile(QualityProfile {
+    let requested_pipeline = criteria
+        .decision_pipeline
+        .map(|gates| {
+            scryer_application::DecisionPipeline::try_from_gates(
+                gates.into_iter().map(IntoApplication::into_application),
+            )
+        })
+        .transpose()
+        .map_err(|scryer_application::DuplicateDecisionGate(gate)| {
+            to_gql_error(AppError::validation_refused(
+                scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE,
+                format!("the decision order lists {gate} more than once"),
+            ))
+        })?;
+    let requested_ignore_proper_repack = criteria.ignore_proper_repack;
+
+    let mut profile = normalize_quality_profile(QualityProfile {
         id: input.id.to_string(),
         name: input.name,
         criteria: QualityProfileCriteria {
@@ -691,32 +708,35 @@ fn quality_profile_from_input(
             prefer_remux: criteria.prefer_remux,
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
-            ignore_proper_repack: criteria.ignore_proper_repack.unwrap_or_else(|| {
-                existing.is_some_and(|profile| profile.criteria.ignore_proper_repack)
-            }),
+            ignore_proper_repack: existing
+                .is_some_and(|profile| profile.criteria.ignore_proper_repack),
             prefer_dual_audio: false,
             required_audio_languages: Vec::new(),
             scoring_persona: scryer_application::ScoringPersona::Balanced,
             scoring_overrides: criteria.scoring_overrides.into_application(),
             cutoff_tier: criteria.cutoff_tier,
             min_score_to_grab: criteria.min_score_to_grab,
-            // Preserved from the stored profile, like `atmos_preferred` above:
-            // the quality-profile editor does not send `cutoffScore` yet (D19
-            // says web exposure is a follow-on), so reading it from the input
-            // would let any UI save silently clear a value set through the API.
-            // TODO(web): surface `cutoffScore` in
-            // `settings-quality-profiles-section.tsx` and read it from the input.
-            cutoff_score: criteria
-                .cutoff_score
-                .or_else(|| existing.and_then(|profile| profile.criteria.cutoff_score)),
-            // Omitting it keeps the stored value, like `cutoff_score`; sending
+            // Read as sent, like `cutoff_tier`: null clears it.
+            cutoff_score: criteria.cutoff_score,
+            // Omitting it keeps the stored value; sending
             // the default clears it back to unset in `normalize_quality_profile`.
             min_upgrade_score_delta: criteria
                 .min_upgrade_score_delta
                 .or_else(|| existing.and_then(|profile| profile.criteria.min_upgrade_score_delta)),
+            // Settled below from the input, else kept from the stored profile.
+            decision_pipeline: existing
+                .map(|profile| profile.criteria.decision_pipeline)
+                .unwrap_or_default(),
             facet_persona_overrides: std::collections::HashMap::new(),
         },
     });
+    // A sent order decides whether PROPER/REPACK counts; without one, the
+    // revision switch alone adds or removes the order's revision step.
+    match (requested_pipeline, requested_ignore_proper_repack) {
+        (Some(pipeline), _) => profile.criteria.set_decision_pipeline(pipeline),
+        (None, Some(ignore)) => profile.criteria.set_ignore_proper_repack(ignore),
+        (None, None) => profile.criteria.reconcile_revision_gate(),
+    }
 
     if profile.id.is_empty() {
         return Err(to_gql_error(AppError::validation_refused(
@@ -1686,6 +1706,10 @@ impl SettingsMutations {
             scope.into_media_facet(),
             scryer_application::UpdateMediaSettings {
                 required_audio_languages: input.required_audio_languages,
+                preferred_audio_languages: input.preferred_audio_languages,
+                optional_audio_languages: input.optional_audio_languages,
+                optional_audio_languages_keep_searching: input
+                    .optional_audio_languages_keep_searching,
                 use_season_folders: input.use_season_folders,
                 folder_template: input.folder_template,
                 season_folder_template: input.season_folder_template,
@@ -2777,6 +2801,97 @@ mod tests {
                 quality_profile_from_input(parse(input.clone()), Some(&existing)).unwrap();
             assert_eq!(updated.criteria.ignore_proper_repack, explicit);
         }
+    }
+
+    #[test]
+    fn a_sent_decision_order_settles_the_revision_switch_and_an_omitted_one_is_kept() {
+        use async_graphql::InputType;
+        use scryer_application::{DecisionGate, DecisionPipeline};
+
+        let mut input = serde_json::json!({
+            "id": "decision-order", "name": "Decision order",
+            "criteria": {
+                "qualityTiers": ["1080P"], "archivalQuality": "1080P",
+                "allowUnknownQuality": false,
+                "sourceAllowlist": [], "sourceBlocklist": [],
+                "videoCodecAllowlist": [], "videoCodecBlocklist": [],
+                "audioCodecAllowlist": [], "audioCodecBlocklist": [],
+                "dolbyVisionAllowed": true, "detectedHdrAllowed": true,
+                "preferRemux": false, "allowBdDisk": true,
+                "allowUpgrades": true, "scoringOverrides": {}
+            }
+        });
+        let parse = |value| {
+            QualityProfileInput::parse(Some(async_graphql::Value::from_json(value).unwrap()))
+                .unwrap_or_else(|_| panic!("invalid profile input"))
+        };
+
+        let fresh = quality_profile_from_input(parse(input.clone()), None).unwrap();
+        assert!(fresh.criteria.decision_pipeline.is_default());
+
+        input["criteria"]["decisionPipeline"] =
+            serde_json::json!(["PREFERRED_LANGUAGE", "QUALITY_TIER", "OPTIONAL_LANGUAGES"]);
+        input["criteria"]["ignoreProperRepack"] = false.into();
+        let language_ahead = quality_profile_from_input(parse(input.clone()), None).unwrap();
+        assert_eq!(
+            language_ahead.criteria.decision_pipeline.gates(),
+            [
+                DecisionGate::PreferredLanguage,
+                DecisionGate::QualityTier,
+                DecisionGate::OptionalLanguages
+            ],
+            "the sent order wins over the switch"
+        );
+        assert!(language_ahead.criteria.ignore_proper_repack);
+
+        input["criteria"]["decisionPipeline"] = serde_json::json!([]);
+        let score_only = quality_profile_from_input(parse(input.clone()), None).unwrap();
+        assert_eq!(
+            score_only.criteria.decision_pipeline,
+            DecisionPipeline::score_only()
+        );
+        assert!(score_only.criteria.ignore_proper_repack);
+
+        // Omitted: the stored order is kept, and the switch alone moves the
+        // revision step in or out of it.
+        input["criteria"]
+            .as_object_mut()
+            .unwrap()
+            .remove("decisionPipeline");
+        input["criteria"]["ignoreProperRepack"] = false.into();
+        let restored =
+            quality_profile_from_input(parse(input.clone()), Some(&language_ahead)).unwrap();
+        assert!(
+            restored
+                .criteria
+                .decision_pipeline
+                .contains(DecisionGate::Revision)
+        );
+        assert!(!restored.criteria.ignore_proper_repack);
+        input["criteria"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ignoreProperRepack");
+        let kept = quality_profile_from_input(parse(input.clone()), Some(&restored)).unwrap();
+        assert_eq!(
+            kept.criteria.decision_pipeline,
+            restored.criteria.decision_pipeline
+        );
+
+        input["criteria"]["decisionPipeline"] =
+            serde_json::json!(["QUALITY_TIER", "REVISION", "QUALITY_TIER"]);
+        let error = quality_profile_from_input(parse(input), None).unwrap_err();
+        let reason = error
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("reason"))
+            .cloned();
+        assert_eq!(
+            reason,
+            Some(async_graphql::Value::from(
+                scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE
+            ))
+        );
     }
 
     #[test]

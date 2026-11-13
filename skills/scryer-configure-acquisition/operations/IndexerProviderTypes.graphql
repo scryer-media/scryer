@@ -1,0 +1,27 @@
+# Installed indexer providers and the config fields each one declares.
+query IndexerProviderTypes {
+  indexerProviderTypes {
+    providerType
+    name
+    defaultBaseUrl
+    supportsTest
+    recommendedFacets
+    availableHostBindings
+    dynamicConfigTriggerKeys
+    configFields {
+      key
+      label
+      fieldType
+      required
+      defaultValue
+      valueSource
+      role
+      hostBinding
+      helpText
+      advanced
+      options { value label configOverrides { key value } }
+      visibleWhen { key op values }
+      requiredWhen { key op values }
+    }
+  }
+}

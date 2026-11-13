@@ -173,6 +173,15 @@ pub fn from_quality_profile_decision(
     decision: QualityProfileDecision,
 ) -> QualityProfileDecisionPayload {
     QualityProfileDecisionPayload {
+        audio_language: AudioLanguageRankPayload {
+            preferred_rank: i32::from(decision.language.matched.preferred_rank),
+            preferred_count: i32::from(decision.language.preferred_count),
+            optional_hits: i32::from(decision.language.matched.optional_hits),
+            wanted: decision.language.wanted,
+        },
+        decided_by: decision
+            .decided_by
+            .map(ReleaseDecidingStepValue::from_application),
         allowed: decision.allowed,
         block_codes: decision.block_codes,
         release_score: decision.release_score,
@@ -210,6 +219,8 @@ pub fn from_parsed_release(result: ParsedReleaseMetadata) -> ParsedReleasePayloa
         video_encoding: result.video_encoding,
         stereoscopy: result.stereoscopy.map(from_stereoscopy),
         audio: result.audio.map(|codec| codec.to_string()),
+        audio_channels: result.audio_channels,
+        audio_languages: result.languages_audio,
         is_dual_audio: result.is_dual_audio,
         is_atmos: result.is_atmos,
         is_dolby_vision: result.is_dolby_vision,
@@ -321,6 +332,8 @@ pub fn from_download_queue_item(item: DownloadQueueItem) -> DownloadQueueItemPay
             assign_title: actions.assign_title,
             ignore: actions.ignore,
             mark_failed: actions.mark_failed,
+            dismiss_import_warning: actions.dismiss_import_warning,
+            resume_import_tracking: actions.resume_import_tracking,
         },
         seeding_state,
         seed_ratio: seeding.seed_ratio,
@@ -578,10 +591,23 @@ pub fn from_release_decision(
         candidate_score: decision.candidate_score,
         current_score: decision.current_score,
         score_delta: decision.score_delta,
+        decided_by: recorded_deciding_step(decision.explanation_json.as_deref()),
         explanation_json: decision.explanation_json.map(json_string_to_value),
         created_at: parse_datetime(&decision.created_at, "release decision created_at")
             .map_err(scryer_application::AppError::Repository)?,
     })
+}
+
+/// The deciding step a release decision's explanation records under
+/// `auto_decision.decided_by`; null for decisions recorded before it was.
+fn recorded_deciding_step(explanation_json: Option<&str>) -> Option<ReleaseDecidingStepValue> {
+    let explanation: serde_json::Value = serde_json::from_str(explanation_json?).ok()?;
+    crate::conversions::deciding_step_from_recorded(
+        explanation
+            .get("auto_decision")?
+            .get("decided_by")?
+            .as_str(),
+    )
 }
 
 pub fn from_decision_code_count(
@@ -688,5 +714,25 @@ mod stereo_tests {
         assert!(schema.contains("stereoscopy: ParsedStereoscopyPayload\n"));
         assert!(schema.contains("layout: StereoLayoutValue\n"));
         assert!(schema.contains("presentation: StereoPresentationValue!"));
+        assert!(schema.contains("audioChannels: String\n"));
+        assert!(schema.contains("audioLanguages: [String!]!\n"));
+    }
+
+    #[test]
+    fn audio_channels_and_languages_carry_the_parse() {
+        let mut parsed = ParsedReleaseMetadata {
+            audio_channels: Some("5.1".to_string()),
+            languages_audio: vec!["fra".to_string(), "eng".to_string()],
+            ..ParsedReleaseMetadata::default()
+        };
+        let payload = from_parsed_release(parsed.clone());
+        assert_eq!(payload.audio_channels.as_deref(), Some("5.1"));
+        assert_eq!(payload.audio_languages, vec!["fra", "eng"]);
+
+        parsed.audio_channels = None;
+        parsed.languages_audio.clear();
+        let payload = from_parsed_release(parsed);
+        assert_eq!(payload.audio_channels, None);
+        assert!(payload.audio_languages.is_empty());
     }
 }

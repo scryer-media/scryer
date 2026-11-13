@@ -1,0 +1,9 @@
+# Create or replace one delay profile by id. Side effect: confirm first.
+# Variables: {"input": {...DelayProfileInput}}
+mutation UpsertDelayProfile($input: DelayProfileInput!) {
+  upsertDelayProfile(input: $input) {
+    id
+    name
+    enabled
+  }
+}

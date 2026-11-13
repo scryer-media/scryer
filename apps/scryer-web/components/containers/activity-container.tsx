@@ -14,6 +14,7 @@ import {
   assignTrackedDownloadTitleMutation,
   buildDeleteDownloadBatchMutation,
   buildIgnoreTrackedDownloadBatchMutation,
+  setTrackedDownloadImportDismissedMutation,
   ignoreTrackedDownloadMutation,
   markTrackedDownloadFailedMutation,
   cancelActiveImportMutation,
@@ -137,6 +138,9 @@ export const ActivityContainer = memo(function ActivityContainer({
   const [, executeIgnoreTrackedDownload] = useMutation(
     ignoreTrackedDownloadMutation,
   );
+  const [, executeSetImportDismissed] = useMutation(
+    setTrackedDownloadImportDismissedMutation,
+  );
   const [, executeMarkTrackedDownloadFailed] = useMutation(
     markTrackedDownloadFailedMutation,
   );
@@ -208,7 +212,9 @@ export const ActivityContainer = memo(function ActivityContainer({
     loadMoreImport,
   } = useDownloadImport({
     enabled: importTabActive,
-    filter: "ATTENTION",
+    filter: selectedImportStatuses.includes("DISMISSED")
+      ? "DISMISSED"
+      : "ATTENTION",
   });
   const filteredImportItems = useMemo(() => {
     return importItems.filter((item) =>
@@ -463,6 +469,42 @@ export const ActivityContainer = memo(function ActivityContainer({
       await refreshVisibleTab();
     },
     [executeIgnoreTrackedDownload, refreshVisibleTab, setGlobalStatus, t],
+  );
+
+  const requestSetImportDismissed = useCallback(
+    async (item: DownloadQueueItem, dismissed: boolean) => {
+      if (!item.downloadId) return;
+      const result = await executeSetImportDismissed({
+        input: {
+          downloadId: item.downloadId,
+          clientId: item.clientId,
+          clientType: item.clientType,
+          downloadClientItemId: item.downloadClientItemId,
+          dismissed,
+        },
+      });
+      if (result.error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(
+            result.error,
+            t("queue.importTrackingFailed"),
+            t,
+          ),
+          { level: "ERROR" },
+        );
+        return;
+      }
+      setGlobalStatus(
+        t(
+          dismissed
+            ? "queue.importDismissedSuccess"
+            : "queue.importTrackingResumed",
+        ),
+      );
+      await refreshVisibleTab();
+      dispatchNavigationBadgesRefresh();
+    },
+    [executeSetImportDismissed, refreshVisibleTab, setGlobalStatus, t],
   );
 
   const requestMarkFailed = useCallback(
@@ -776,6 +818,7 @@ export const ActivityContainer = memo(function ActivityContainer({
             setAssignTitleItem(item);
           },
           requestIgnore,
+          requestSetImportDismissed,
           requestMarkFailed,
           requestIgnoreItems,
           requestPause,
@@ -813,7 +856,14 @@ export const ActivityContainer = memo(function ActivityContainer({
           selectedImportStatuses,
           toggleImportStatus: (status) => {
             setSelectedImportStatuses((current) =>
-              toggleSelectedValue(current, status),
+              status === "DISMISSED"
+                ? current.includes("DISMISSED")
+                  ? [...IMPORT_ATTENTION_STATUSES]
+                  : ["DISMISSED"]
+                : toggleSelectedValue(
+                    current.filter((value) => value !== "DISMISSED"),
+                    status,
+                  ),
             );
           },
           selectedActivityStatuses,

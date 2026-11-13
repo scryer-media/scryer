@@ -1,0 +1,41 @@
+# All indexers with their stored config. Secret values come back only as
+# SecretConfigValuePayload { stored }. Variables: {"providerType": null}
+query ListIndexers($providerType: String) {
+  indexers(providerType: $providerType) {
+    id
+    name
+    providerType
+    baseUrl
+    isEnabled
+    isManaged
+    enableInteractiveSearch
+    enableAutoSearch
+    proxyConfigId
+    downloadClientId
+    seedingProfileId
+    rateLimitSeconds
+    rateLimitBurst
+    maxQueriesPerMinute
+    storedSecretKeys
+    lastHealthStatus
+    lastErrorAt
+    disabledUntil
+    rateLimitedUntil
+    capsCategories { code label }
+    config {
+      key
+      label
+      fieldType
+      required
+      role
+      value {
+        __typename
+        ... on StringConfigValuePayload { stringValue: value }
+        ... on BoolConfigValuePayload { boolValue: value }
+        ... on IntConfigValuePayload { intValue: value }
+        ... on FloatConfigValuePayload { floatValue: value }
+        ... on SecretConfigValuePayload { stored }
+      }
+    }
+  }
+}

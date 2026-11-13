@@ -264,6 +264,55 @@ impl AppUseCase {
             .and_then(|installation| blockers.get(&installation.plugin_id).cloned())
     }
 
+    /// [`Self::plugin_component_blocker_for_provider`] for each provider in
+    /// order, reading the blockers once and the installation list at most once.
+    pub async fn plugin_component_blockers_for_providers(
+        &self,
+        provider_types: &[&str],
+    ) -> Vec<Option<String>> {
+        let blockers = self
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .clone();
+        if blockers.is_empty() {
+            return vec![None; provider_types.len()];
+        }
+        let mut installations: Option<Option<Vec<PluginInstallation>>> = None;
+        let mut reasons = Vec::with_capacity(provider_types.len());
+        for provider_type in provider_types {
+            let key = normalize_provider_key(provider_type);
+            if let Some(reason) = blockers.get(&key) {
+                reasons.push(Some(reason.clone()));
+                continue;
+            }
+            if installations.is_none() {
+                installations = Some(
+                    self.services
+                        .customization
+                        .plugin_installations
+                        .list_plugin_installations()
+                        .await
+                        .ok(),
+                );
+            }
+            reasons.push(
+                installations
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .and_then(|installations| {
+                        installations.iter().find(|installation| {
+                            normalize_provider_key(&installation.provider_type) == key
+                        })
+                    })
+                    .and_then(|installation| blockers.get(&installation.plugin_id).cloned()),
+            );
+        }
+        reasons
+    }
+
     /// Refuse a provider connection or notification test when the plugin behind
     /// it is blocked.
     ///

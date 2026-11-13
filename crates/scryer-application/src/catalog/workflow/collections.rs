@@ -1125,6 +1125,45 @@ impl AppUseCase {
             .await
     }
 
+    /// Availability for exactly these episodes, keeping only those of titles
+    /// the actor may view: the same answers
+    /// [`Self::list_episode_media_availability`] gives for them, without
+    /// reading the rest of their titles' episodes.
+    pub async fn list_episode_media_availability_for_episodes(
+        &self,
+        actor: &User,
+        episode_ids: &[String],
+    ) -> AppResult<Vec<crate::types::EpisodeMediaAvailability>> {
+        if episode_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let availability = self
+            .services
+            .library
+            .media_files
+            .list_episode_media_availability_for_episodes(episode_ids)
+            .await?;
+        let mut title_ids = availability
+            .iter()
+            .map(|entry| entry.title_id.clone())
+            .collect::<Vec<_>>();
+        title_ids.sort_unstable();
+        title_ids.dedup();
+        let viewable = self
+            .filter_title_ids_for_permission(
+                actor,
+                &title_ids,
+                scryer_domain::LibraryPermission::View,
+            )
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        Ok(availability
+            .into_iter()
+            .filter(|entry| viewable.contains(&entry.title_id))
+            .collect())
+    }
+
     pub async fn list_collection_episode_progress_summaries(
         &self,
         actor: &User,
@@ -1574,11 +1613,13 @@ impl AppUseCase {
         if visible_library_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let mut episode_library_ids = visible_library_ids.iter().cloned().collect::<Vec<_>>();
+        episode_library_ids.sort_unstable();
         let episodes = self
             .services
             .catalog
             .shows
-            .list_episodes_in_date_range(start_date, end_date)
+            .list_episodes_in_date_range(start_date, end_date, &episode_library_ids)
             .await?;
         let mut events = episodes
             .into_iter()
@@ -1604,12 +1645,25 @@ impl AppUseCase {
             .collect::<HashMap<_, _>>();
         if !libraries.is_empty() {
             let policies = self.movie_availability_policies().await?;
-            let movie_library_ids = libraries.keys().cloned().collect::<Vec<_>>();
+            let mut movie_library_ids = libraries.keys().cloned().collect::<Vec<_>>();
+            movie_library_ids.sort_unstable();
             let now = Utc::now();
             let mut offset = 0;
             // Availability depends on market, threshold, and delay. Filter by
             // the policy's effective date, never by the legacy theatrical column.
+            // The store only narrows the candidates to movies holding a date
+            // that can land inside the range; the decision below is the rule.
             // Page the input so a calendar read does not hydrate the entire catalog.
+            let filter = crate::TitleCatalogFilter {
+                release_date_window: calendar_movie_release_date_window(
+                    start_date,
+                    end_date,
+                    movie_library_ids
+                        .iter()
+                        .map(|library_id| policies.for_library(library_id).delay_days),
+                ),
+                ..Default::default()
+            };
             loop {
                 let page = self
                     .services
@@ -1619,7 +1673,7 @@ impl AppUseCase {
                         Some(MediaFacet::Movie),
                         &movie_library_ids,
                         None,
-                        crate::TitleCatalogFilter::default(),
+                        filter.clone(),
                         crate::TitleCatalogSort::default(),
                         256,
                         offset,
@@ -1685,9 +1739,62 @@ fn calendar_episode_is_visible(season_number: Option<&str>, monitored: bool) -> 
     monitored || season_number.and_then(|value| value.trim().parse::<i32>().ok()) != Some(0)
 }
 
+/// The stored release dates that can put a movie on the calendar between
+/// `start_date` and `end_date`, given the delays of the libraries in view.
+///
+/// A movie's effective date is one of its stored dates, plus nothing or the
+/// theatrical-to-home estimate, plus its library's delay. Reading a stored
+/// RFC 3339 timestamp can move its day by one more either way. So a movie
+/// inside the range holds a date no earlier than the start less the largest
+/// delay, the estimate and that day, and no later than the end less the
+/// smallest delay and that day.
+///
+/// `None` when no bound can be drawn: the range is not two plain dates (the
+/// decision compares them as text, which only orders plain dates by day), or
+/// no library is in view. A side whose bound would leave four-digit years
+/// stays open.
+fn calendar_movie_release_date_window(
+    start_date: &str,
+    end_date: &str,
+    delay_days: impl IntoIterator<Item = i32>,
+) -> Option<crate::TitleReleaseDateWindow> {
+    use chrono::{Datelike, Duration, NaiveDate};
+
+    fn plain_date(value: &str) -> Option<NaiveDate> {
+        let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+        (date.format("%Y-%m-%d").to_string() == value).then_some(date)
+    }
+    fn bound(date: NaiveDate, days: i64) -> Option<String> {
+        let date = date.checked_add_signed(Duration::try_days(days)?)?;
+        (0..=9999)
+            .contains(&date.year())
+            .then(|| date.format("%Y-%m-%d").to_string())
+    }
+
+    let start = plain_date(start_date)?;
+    let end = plain_date(end_date)?;
+    let (smallest_delay, largest_delay) = delay_days
+        .into_iter()
+        .map(i64::from)
+        .fold(None, |range: Option<(i64, i64)>, delay| match range {
+            None => Some((delay, delay)),
+            Some((smallest, largest)) => Some((smallest.min(delay), largest.max(delay))),
+        })?;
+    let reading_slack = 1;
+    Some(crate::TitleReleaseDateWindow {
+        earliest: bound(
+            start,
+            -(largest_delay
+                + crate::acquisition::targets::THEATRICAL_TO_HOME_ESTIMATE_DAYS
+                + reading_slack),
+        ),
+        latest: bound(end, -smallest_delay + reading_slack),
+    })
+}
+
 #[cfg(test)]
 mod calendar_episode_visibility_tests {
-    use super::calendar_episode_is_visible;
+    use super::{calendar_episode_is_visible, calendar_movie_release_date_window};
     use crate::{
         AppUseCase, MovieAvailabilityOverrides, TitleMetadataUpdate, lib_tests::bootstrap,
     };
@@ -1988,6 +2095,104 @@ mod calendar_episode_visibility_tests {
                 .iter()
                 .any(|event| event.title_id == "calendar-movie-256")
         );
+    }
+
+    #[tokio::test]
+    async fn calendar_movie_enters_the_range_only_through_its_library_delay() {
+        let (app, user) = bootstrap();
+        let digital_on = |date: &str| MovieReleaseDates {
+            market: "US".into(),
+            fetched: true,
+            digital_dates: vec![date.into()],
+            ..Default::default()
+        };
+        let inside = movie(
+            &app,
+            &user,
+            "Delayed inside",
+            None,
+            Some(digital_on("2026-09-28")),
+            None,
+        )
+        .await;
+        movie(
+            &app,
+            &user,
+            "Delayed outside",
+            None,
+            Some(digital_on("2026-09-27")),
+            None,
+        )
+        .await;
+        app.write_movie_availability_values(
+            &inside.library_id,
+            &MovieAvailabilityOverrides {
+                delay_days: Some(3),
+                ..Default::default()
+            },
+            false,
+            &user.id,
+        )
+        .await
+        .unwrap();
+
+        let events = app
+            .list_calendar_episodes(&user, "2026-10-01", "2026-10-31", None)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title_id, inside.id);
+        assert_eq!(events[0].air_date.as_deref(), Some("2026-10-01"));
+
+        let window = calendar_movie_release_date_window("2026-10-01", "2026-10-31", [3]).unwrap();
+        assert!(window.earliest.as_deref().unwrap() <= "2026-09-28");
+        assert!(window.latest.as_deref().unwrap() >= "2026-09-28");
+    }
+
+    #[test]
+    fn release_date_window_widens_by_every_delay_the_estimate_and_a_day() {
+        let window =
+            calendar_movie_release_date_window("2026-10-01", "2026-10-31", [3, -2, 0]).unwrap();
+        // 2026-10-01 less (3 + 90 + 1) days; 2026-10-31 plus (2 + 1) days.
+        assert_eq!(window.earliest.as_deref(), Some("2026-06-29"));
+        assert_eq!(window.latest.as_deref(), Some("2026-11-03"));
+
+        let undelayed = calendar_movie_release_date_window("2026-10-01", "2026-10-01", [0]).unwrap();
+        assert_eq!(undelayed.earliest.as_deref(), Some("2026-07-02"));
+        assert_eq!(undelayed.latest.as_deref(), Some("2026-10-02"));
+    }
+
+    #[test]
+    fn release_date_window_is_absent_without_plain_dates_or_libraries() {
+        assert_eq!(
+            calendar_movie_release_date_window("2026-10-01", "2026-10-31", []),
+            None
+        );
+        for (start, end) in [
+            ("2026-10-1", "2026-10-31"),
+            ("2026-10-01T00:00:00Z", "2026-10-31"),
+            ("2026-10-01", "October"),
+            ("2026-02-30", "2026-10-31"),
+        ] {
+            assert_eq!(
+                calendar_movie_release_date_window(start, end, [0]),
+                None,
+                "{start}..{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_date_window_leaves_a_side_open_past_four_digit_years() {
+        let window = calendar_movie_release_date_window("0000-01-01", "9999-12-31", [0]).unwrap();
+        assert_eq!(window.earliest, None);
+        assert_eq!(window.latest, None);
+
+        let large_delay =
+            calendar_movie_release_date_window("2026-10-01", "2026-10-31", [i32::MAX, i32::MIN])
+                .unwrap();
+        assert_eq!(large_delay.earliest, None);
+        assert_eq!(large_delay.latest, None);
     }
 
     #[test]

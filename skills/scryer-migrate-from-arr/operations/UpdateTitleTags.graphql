@@ -1,0 +1,8 @@
+# Add tags to titles. Side effect: confirm the batch first.
+# Variables: {"input": {"titleIds": ["..."], "add": ["..."]}}
+mutation UpdateTitleTags($input: UpdateTitleTagsInput!) {
+  updateTitleTags(input: $input) {
+    id
+    tags
+  }
+}

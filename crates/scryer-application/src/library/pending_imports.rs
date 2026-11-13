@@ -9,12 +9,15 @@ use tracing::warn;
 
 use super::*;
 use crate::library::library::{
-    PlannedTitleScanFile, PlannedTitleScanRecord, file_source_snapshot_from_path,
-    finalize_title_scan_file,
+    PlannedTitleScanFile, PlannedTitleScanRecord, ScannedEpisodeCompletions,
+    file_source_snapshot_from_path, finalize_title_scan_file,
 };
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 
 const MAX_PENDING_IMPORTS_PAGE_SIZE: i64 = 200;
+/// The most distinct pending imports one bulk ignore accepts. A larger
+/// request is refused whole, before anything is read or claimed.
+pub const PENDING_IMPORT_IGNORE_BATCH_MAX: usize = 1000;
 
 /// The identities a pending import's chosen title is looked up by, tried in
 /// this order: SMG title id, TVDB id, TMDB id, and for a movie also its IMDb
@@ -361,7 +364,15 @@ fn pending_import_item_is_folder_ownership_item(item: &LibraryScanUnmatchedItem)
             == crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER
 }
 
-fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> bool {
+/// The reason codes [`pending_import_item_is_folder_ownership_item`] matches.
+pub const PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES: [&str; 2] = [
+    crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
+    crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER,
+];
+
+/// Whether a pending item still needs a person: a folder-ownership item, or
+/// anything other than a movie already bound to a title.
+pub fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> bool {
     pending_import_item_is_folder_ownership_item(item)
         || !(item.facet == MediaFacet::Movie && item.title_id.is_some())
 }
@@ -475,6 +486,23 @@ impl AppUseCase {
     ) -> AppResult<HashMap<String, PendingImportCounts>> {
         let repository = self.services.library.library_scan_unmatched_items.clone();
         let mut by_library: HashMap<String, PendingImportCounts> = HashMap::new();
+        // A store that counts in place applies the same predicate there.
+        if let Some(grouped) = repository
+            .count_pending_library_scan_items_requiring_action(
+                &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
+            )
+            .await?
+        {
+            for (library_id, facet, count) in grouped {
+                let counts = by_library.entry(library_id).or_default();
+                match facet {
+                    MediaFacet::Movie => counts.movie += count,
+                    MediaFacet::Series => counts.series += count,
+                    MediaFacet::Anime => counts.anime += count,
+                }
+            }
+            return Ok(by_library);
+        }
         for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
             let items = repository
                 .list_library_scan_unmatched_items(
@@ -526,6 +554,35 @@ impl AppUseCase {
             .map(|library_id| library_id.trim().to_string())
             .filter(|library_id| !library_id.is_empty())
             .collect::<HashSet<_>>();
+        let mut library_ids = manageable
+            .iter()
+            .filter(|library_id| {
+                requested_library_ids.is_empty() || requested_library_ids.contains(*library_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        library_ids.sort();
+        if let Some((total, page)) = self
+            .services
+            .library
+            .library_scan_unmatched_items
+            .page_library_scan_items_requiring_action(
+                facet.clone(),
+                status,
+                &library_ids,
+                &PENDING_IMPORT_FOLDER_OWNERSHIP_REASON_CODES,
+                limit,
+                offset,
+            )
+            .await?
+        {
+            let mut items = page
+                .into_iter()
+                .map(pending_import_item_from_unmatched)
+                .collect::<Vec<_>>();
+            self.hydrate_pending_import_known_titles(&mut items).await?;
+            return Ok(PendingImportConnection { total, items });
+        }
         let filtered = self
             .services
             .library
@@ -579,19 +636,18 @@ impl AppUseCase {
             .collect::<Vec<_>>();
         let mut invalid_ownership = HashSet::new();
         let mut known_titles = HashMap::with_capacity(title_ids.len());
-        for title_id in title_ids {
-            if let Some(title) = self.services.catalog.titles.get_by_id(title_id).await? {
-                if crate::location::title_folder_recovery::eligible(
-                    title.folder_path.as_deref(),
-                    &roots,
-                ) {
-                    invalid_ownership.insert(title.id.clone());
-                }
-                known_titles.insert(
-                    title_id.to_string(),
-                    (title.name, title.slug, title.folder_path),
-                );
+        let title_ids = title_ids
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        for title in self.services.catalog.titles.get_by_ids(&title_ids).await? {
+            if crate::location::title_folder_recovery::eligible(
+                title.folder_path.as_deref(),
+                &roots,
+            ) {
+                invalid_ownership.insert(title.id.clone());
             }
+            known_titles.insert(title.id, (title.name, title.slug, title.folder_path));
         }
 
         for item in items.iter_mut() {
@@ -668,6 +724,156 @@ impl AppUseCase {
             id: item.id,
             status: item.status,
         })
+    }
+
+    /// [`Self::ignore_pending_import`] for each of `pending_import_ids`, in
+    /// order, with each id's own outcome: one read of the rows, one read of
+    /// the actor's permissions and one write transaction for the batch. A
+    /// failed write is replayed row by row so each id still gets its own
+    /// outcome. A repeated id is answered once. More than
+    /// [`PENDING_IMPORT_IGNORE_BATCH_MAX`] distinct ids refuses the whole
+    /// request before anything is read or claimed.
+    pub async fn ignore_pending_imports(
+        &self,
+        actor: &User,
+        pending_import_ids: &[String],
+    ) -> AppResult<IgnorePendingImportsResult> {
+        let mut seen = HashSet::new();
+        let requested = pending_import_ids
+            .iter()
+            .filter(|id| seen.insert(id.trim().to_string()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if requested.len() > PENDING_IMPORT_IGNORE_BATCH_MAX {
+            use crate::error_reasons::library as reasons;
+            return Err(AppError::validation_refused_with_facts(
+                reasons::PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE,
+                format!(
+                    "one request may ignore at most {PENDING_IMPORT_IGNORE_BATCH_MAX} pending imports"
+                ),
+                vec![
+                    crate::RefusalFact::new(
+                        reasons::PENDING_IMPORT_IGNORE_MAX_IDS_FACT,
+                        PENDING_IMPORT_IGNORE_BATCH_MAX.to_string(),
+                    ),
+                    crate::RefusalFact::new(
+                        reasons::PENDING_IMPORT_IGNORE_REQUESTED_IDS_FACT,
+                        requested.len().to_string(),
+                    ),
+                ],
+            ));
+        }
+        let mut outcomes: Vec<Option<Result<IgnorePendingImportResult, AppError>>> =
+            Vec::with_capacity(requested.len());
+        let mut guards = Vec::with_capacity(requested.len());
+        let mut guarded = Vec::with_capacity(requested.len());
+        for (index, raw_id) in requested.iter().enumerate() {
+            let id = raw_id.trim();
+            if id.is_empty() {
+                outcomes.push(Some(Err(AppError::validation_refused(
+                    crate::error_reasons::library::PENDING_IMPORT_ID_REQUIRED,
+                    "pending import id is required",
+                ))));
+                continue;
+            }
+            match self.acquire_pending_import_resolution_guard(id) {
+                Ok(guard) => {
+                    guards.push(guard);
+                    guarded.push((index, id.to_string()));
+                    outcomes.push(None);
+                }
+                Err(error) => outcomes.push(Some(Err(error))),
+            }
+        }
+
+        if !guarded.is_empty() {
+            let ids = guarded.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>();
+            let mut items = self
+                .services
+                .library
+                .library_scan_unmatched_items
+                .get_library_scan_unmatched_items(&ids)
+                .await?
+                .into_iter()
+                .map(|item| (item.id.clone(), item))
+                .collect::<HashMap<_, _>>();
+            let authorization = self.authorization_for_actor(actor).await?;
+            let base = Utc::now();
+            let mut to_write = Vec::new();
+            for (index, id) in guarded {
+                let Some(mut item) = items.remove(&id) else {
+                    outcomes[index] = Some(Err(AppError::not_found_reason(
+                        crate::error_reasons::library::PENDING_IMPORT_NOT_FOUND,
+                        format!("pending import {id}"),
+                    )));
+                    continue;
+                };
+                if !crate::authorization::effective_library_permission(
+                    &authorization,
+                    &item.library_id,
+                    scryer_domain::LibraryPermission::ResolveImports,
+                ) {
+                    outcomes[index] = Some(Err(AppError::unauthorized_reason(
+                        crate::error_reasons::authorization::LIBRARY_ACCESS_DENIED,
+                        "You do not have access to this library".to_string(),
+                    )));
+                    continue;
+                }
+                if item.status != PendingImportStatus::Ignored {
+                    // One request ignores its rows one after another, so
+                    // each row keeps its own later time and the ignored list
+                    // shows them in the same order.
+                    item.status = PendingImportStatus::Ignored;
+                    item.updated_at =
+                        (base + chrono::Duration::microseconds(to_write.len() as i64)).to_rfc3339();
+                    to_write.push((index, item.clone()));
+                }
+                outcomes[index] = Some(Ok(IgnorePendingImportResult {
+                    id: item.id,
+                    status: item.status,
+                }));
+            }
+            let rows = to_write
+                .iter()
+                .map(|(_, item)| (item.id.clone(), item.updated_at.clone()))
+                .collect::<Vec<_>>();
+            let written = self
+                .services
+                .library
+                .library_scan_unmatched_items
+                .ignore_library_scan_unmatched_items(&rows)
+                .await;
+            if !matches!(written, Ok(Some(()))) {
+                if let Err(error) = &written {
+                    warn!(%error, rows = rows.len(), "batched pending-import ignore failed; replaying row by row");
+                }
+                for (index, item) in &to_write {
+                    if let Err(error) = self
+                        .services
+                        .library
+                        .library_scan_unmatched_items
+                        .upsert_library_scan_unmatched_item(item)
+                        .await
+                    {
+                        outcomes[*index] = Some(Err(error));
+                    }
+                }
+            }
+        }
+        drop(guards);
+
+        let mut result = IgnorePendingImportsResult {
+            ignored: Vec::new(),
+            failed: Vec::new(),
+        };
+        for (raw_id, outcome) in requested.into_iter().zip(outcomes) {
+            match outcome {
+                Some(Ok(ignored)) => result.ignored.push(ignored),
+                Some(Err(error)) => result.failed.push((raw_id, error)),
+                None => {}
+            }
+        }
+        Ok(result)
     }
 
     pub async fn resolve_pending_import(
@@ -1329,6 +1535,7 @@ impl AppUseCase {
         let mut db_elapsed = StdDuration::ZERO;
         let mut external_subtitle_cache =
             crate::subtitles::ExternalSubtitleDirectoryCache::default();
+        let mut episode_completions = ScannedEpisodeCompletions::default();
         finalize_title_scan_file(
             self,
             &title,
@@ -1351,8 +1558,10 @@ impl AppUseCase {
             &mut summary,
             &mut db_elapsed,
             &mut external_subtitle_cache,
+            &mut episode_completions,
         )
         .await;
+        episode_completions.complete(self, &title.id).await;
 
         if !library_scan_summary_has_pending_import_success(&summary) {
             return Err(AppError::validation_refused(

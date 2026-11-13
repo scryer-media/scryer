@@ -1992,6 +1992,18 @@ const cs: LocaleDictionary = {
   "title.monitoredSection": "Sledované: {{facet}}",
   "title.searchReleasesAction": "Hledat vydání",
   "title.queueLatest": "Zařadit nejnovější do fronty",
+  "search.addConfigRequiredAudio": "Požadovaný jazyk zvuku",
+  "search.addConfigPreferredAudio": "Preferovaný jazyk zvuku",
+  "search.addConfigAudioChoose": "Vybrat jazyky",
+  "search.addConfigAudioRequireNone": "Nevyžadovat žádný",
+  "title.preferredAudioLanguages": "Preferované jazyky zvuku",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Tento jazyk zvuku Scryer nezná.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Jazyk zvuku u trasy Scryer nezná.",
+  "requests.requestedAudioLanguages": "Požadované jazyky zvuku",
+  "requests.requestedRequiredAudio": "Vyžadováno: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferováno: {{languages}}",
   "title.requiredAudioLanguages": "Povinné jazyky zvuku",
   "title.originalAudioLanguagePerTitle": "Původní jazyk (podle titulu)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -2375,6 +2387,18 @@ const cs: LocaleDictionary = {
   "importHistory.hidePassword": "Skrýt heslo",
   "importHistory.retrySuccess": "Opakování importu bylo spuštěno",
   "system.title": "Stav systému",
+  "system.diagnosticsBundle.download": "Stáhnout diagnostický balíček",
+  "system.diagnosticsBundle.preparing": "Připravuje se diagnostika…",
+  "system.diagnosticsBundle.helper":
+    "Protokoly, metriky a přehled nastavení v jednom souboru pro správce projektu. Jména, adresy, cesty a tajné údaje se odstraňují podle možností; před sdílením balíček zkontrolujte.",
+  "system.diagnosticsBundle.failed":
+    "Diagnostický balíček se nepodařilo stáhnout.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Pro stažení diagnostiky se znovu přihlaste.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Stažení diagnostiky vyžaduje oprávnění k systémovým nastavením.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Diagnostický balíček se nepodařilo vytvořit. Podrobnosti najdete v protokolu serveru.",
   "system.jobsTitle": "Úlohy",
   "system.auditTitle": "Audit",
   "system.auditLoaded": "Protokol auditu načten.",
@@ -2560,6 +2584,11 @@ const cs: LocaleDictionary = {
     "V tomto JSON nebyly nalezeny žádné platné vlastní formáty.",
   "settings.arrImportInvalidJson":
     "Vložte platný JSON exportovaný ze Sonarru nebo Radarru.",
+  "settings.arrImportRefusalTooLarge":
+    "Vložte nejvýše {{maxBytes}} bajtů JSON.",
+  "settings.arrImportRefusalEmpty": "Vložte alespoň jeden vlastní formát.",
+  "settings.arrImportRefusalTooMany":
+    "Vložte najednou nejvýše {{maxFormats}} vlastních formátů.",
   "settings.arrImportReviewFailed":
     "Tyto vlastní formáty se nepodařilo zkontrolovat.",
   "settings.arrImportScore": "Skóre",
@@ -3165,7 +3194,7 @@ const cs: LocaleDictionary = {
     "Úrovně kvality a archivační kvalita",
   "qualityProfile.qualityPreference": "Preference kvality",
   "qualityProfile.qualityPreferenceHelp":
-    "Nejvyšší preference je první. Preference úrovně má přednost před skóre. Nové úrovně se přidávají s nejnižší preferencí.",
+    "Nejvyšší preference je první. Podle tohoto pořadí se vydání porovnávají v kroku úroveň kvality v pořadí rozhodování. Nové úrovně se přidávají s nejnižší preferencí.",
   "qualityProfile.moveQualityTierUp": "Posunout {{value}} nahoru",
   "qualityProfile.moveQualityTierDown": "Posunout {{value}} dolů",
   "qualityProfile.dragQualityTier": "Přetažením změnit pořadí {{value}}",
@@ -3198,9 +3227,6 @@ const cs: LocaleDictionary = {
   "qualityProfile.allowBdDiskInfo":
     "Povolit vydání typu BD/obraz disku (ISO/Blu-ray disková vydání), aby prošla profilem.",
   "qualityProfile.allowDv": "Dolby Vision",
-  "qualityProfile.ignoreProperRepack": "Ignorovat PROPER/REPACK",
-  "qualityProfile.ignoreProperRepackInfo":
-    "Nechat o výběru rozhodnout kvalitu a skóre bez automatické preference nebo ochrany revize. Pravidla hodnocení mohou vydání PROPER/REPACK stále odměňovat.",
   "qualityProfile.allowUpgrades": "Upgrady povoleny",
   "qualityProfile.allowUpgradesInfo":
     "Povolit pozdější nahrazení spravovaných kopií lepší shodou, nikdy ale nad vybranou archivační kvalitu.",
@@ -3801,6 +3827,8 @@ const cs: LocaleDictionary = {
   "profile.linkPlexAccount": "Propojit s Plex",
   "profile.linkAccountConnection": "Připojení",
   "profile.linkAccountUsername": "Uživatelské jméno",
+  "profile.linkAccountChooseAccount": "Vyberte účet",
+  "profile.linkAccountAlreadyLinked": "{{username}} (již propojeno)",
   "profile.linkAccountPassword": "Heslo",
   "profile.linkAccountPasswordlessHint":
     "Ponechte prázdné, pokud tento účet Jellyfin nemá heslo. Účty bez hesla lze propojit, ale nelze je použít k přihlášení do Scryeru.",
@@ -3936,6 +3964,7 @@ const cs: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Neshoda kategorie",
   "wanted.decision.ambiguousIdentity": "Nejednoznačná identita",
   "wanted.decision.qualityBlocked": "Kvalita zablokována",
+  "wanted.decision.episodeAvailabilityBlocked": "Čeká na datum vysílání",
   "wanted.decision.minimumSeeders": "Málo seederů",
   "wanted.decision.packBelowMissingThreshold": "Balíček pod prahem chybějících",
   "wanted.decision.packForSingleEpisode": "Balíček pro jedinou epizodu",
@@ -5598,6 +5627,7 @@ const cs: LocaleDictionary = {
   "requests.approvedLease": "Uchovat po dobu",
   "requests.approvedLeaseKeepForever": "Navždy, jak bylo požadováno",
   "requests.approvedLeaseKeepRequested": "Požadovaných dní: {{count}}",
+  "requests.approvedAudioLanguages": "Jazyky zvuku",
   "requests.approvedTags": "Štítky",
   "requests.approvedTagsHelp":
     "Použije se na titul při schválení. Předvyplněno tím, co vytvořila pravidla; přidejte nebo odeberte libovolný štítek, který definoval administrátor v Nastavení > Štítky.",
@@ -5677,6 +5707,10 @@ const cs: LocaleDictionary = {
     "True, pokud žadatel požádal o trvalé uchování média",
   "settings.refReqRequestLeaseDays":
     "Kolik dní žadatel požádal o uchování; chybí, pokud žádal o navždy",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Jazyky zvuku, které titul podle žadatele musí mít. null ponechává volbu na knihovně; prázdný seznam žádá žádný požadavek",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Jazyky zvuku, které žadatel upřednostňuje, v pořadí. null ponechává volbu na knihovně",
   "settings.refReqRequestList":
     "Seznam, který žádost podal; viz input.request.list níže. Chybí u ruční žádosti",
   "settings.refReqSectionExternalIds":
@@ -6322,6 +6356,9 @@ const cs: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protokol",
   "indexerSearch.facet.resolution": "Rozlišení",
   "indexerSearch.facet.source": "Zdroj",
+  "indexerSearch.facet.videoCodec": "Video kodek",
+  "indexerSearch.facet.audioCodec": "Zvukový kodek",
+  "indexerSearch.facet.audioChannels": "Zvukové kanály",
   "indexerSearch.facet.audio": "Zvuk a HDR",
   "indexerSearch.facet.flags": "Příznaky",
   "indexerSearch.facet.indexer": "Indexer",
@@ -7228,6 +7265,52 @@ const cs: LocaleDictionary = {
   "setup.sourceImportState.failed": "Selhalo",
   "setup.sourceImportState.interrupted": "Přerušeno",
   "setup.sourceImportState.skipped": "Přeskočeno",
+  "qualityProfile.decisionOrder": "Pořadí rozhodování",
+  "qualityProfile.decisionOrderInfo":
+    "Když dvě vydání splní tento profil, Scryer prochází tyto kroky shora. Rozhodne první krok, který je od sebe odliší. Skóre rozhoduje vždy jako poslední.",
+  "qualityProfile.decisionGateQualityTier": "Úroveň kvality",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "Vyhrává vydání v úrovni, která je v preferenci kvality tohoto profilu výše.",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Ve stejné úrovni a od stejné skupiny vyhrává novější PROPER nebo REPACK.",
+  "qualityProfile.decisionGatePreferredLanguage": "Preferovaný jazyk",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "Vyhrává vydání, jehož zvuk je v preferovaných jazycích zvuku knihovny výše.",
+  "qualityProfile.decisionGateOptionalLanguages": "Volitelné jazyky",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "Vyhrává vydání, které obsahuje více volitelných jazyků zvuku knihovny.",
+  "qualityProfile.decisionGateUnknown": "Neznámý krok ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Tato verze webové aplikace tento krok nezná. Zůstává na svém místě.",
+  "qualityProfile.decisionGateScore": "Skóre",
+  "qualityProfile.decisionGateScoreDescription":
+    "Vyhrává vyšší skóre. Skóre je vždy posledním krokem.",
+  "qualityProfile.decisionScoreLocked": "Vždy poslední",
+  "qualityProfile.decisionStepRemove": "Odebrat {{value}} z pořadí rozhodování",
+  "qualityProfile.decisionStepAdd": "Přidat {{value}} do pořadí rozhodování",
+  "qualityProfile.decisionAvailableSteps": "Nepoužité kroky",
+  "qualityProfile.decisionAllStepsInUse": "Všechny kroky se používají.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Bez kroku úroveň kvality může vydání nižší úrovně nahradit soubor vyšší úrovně a hraniční úroveň neplatí. Hledání upgradů zastaví jen hraniční skóre; bez něj je profil spokojen, jakmile má soubor.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Jazykový krok je před úrovní kvality, takže vydání nižší úrovně v preferovaném jazyce může nahradit soubor vyšší úrovně.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Bez kroku PROPER/REPACK nemají vydání PROPER a REPACK automatickou přednost. Pravidla hodnocení je stále mohou zvýhodnit.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Jazykové kroky mají účinek jen tehdy, když má knihovna nastavené preferované nebo volitelné jazyky zvuku.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Nepoužije se, dokud v pořadí rozhodování chybí krok úroveň kvality.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Každý krok se může v pořadí rozhodování profilu kvality objevit jen jednou.",
+  "qualityProfile.decidedBy": "Rozhodl krok: {{step}}",
+  "qualityProfile.cutoffScore": "Hraniční skóre",
+  "qualityProfile.cutoffScoreInfo":
+    "Jakmile soubor na disku dosáhne tohoto skóre, profil přestane hledat upgrady. Ponechte prázdné, pokud nechcete hraniční skóre.",
+  "qualityProfile.cutoffScorePlaceholder": "Bez hraničního skóre",
+  "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
+  "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
 };
 
 export default cs;

@@ -1,0 +1,13 @@
+# Latest health-check run. summaryJson holds
+# {total, errors, warnings, checks: [{source, status, message}]}.
+# source: DownloadClient | Indexer | RootFolder | RecycleBin | DiskSpace | ReleaseAgeUnknown
+# status: ok | warning | error
+query HealthChecks {
+  jobRuns(jobKey: HEALTH_CHECKS, limit: 1) {
+    status
+    startedAt
+    completedAt
+    summaryJson
+    errorText
+  }
+}

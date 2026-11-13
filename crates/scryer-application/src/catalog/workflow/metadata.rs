@@ -144,7 +144,12 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_for_libraries(Some(MediaFacet::Movie), library_ids, None)
+            .list_with_projection(
+                Some(MediaFacet::Movie),
+                Some(library_ids),
+                None,
+                crate::TitleListProjection::without_canonical_tags(),
+            )
             .await?;
         let title_ids = titles
             .into_iter()
@@ -503,7 +508,12 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_for_libraries(None, &[library_id.to_string()], None)
+            .list_with_projection(
+                None,
+                Some(&[library_id.to_string()]),
+                None,
+                crate::TitleListProjection::without_canonical_tags(),
+            )
             .await?;
         let title_ids = titles
             .iter()

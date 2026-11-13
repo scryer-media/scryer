@@ -392,6 +392,48 @@ export function scriptRunIdOf(run: Pick<JobRun, "summaryJson">): string | null {
   return null;
 }
 
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  let parsed: unknown = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return isRecord(parsed) ? parsed : null;
+}
+
+/** The reason code a failed library deletion run recorded in its summary. */
+export function libraryDeletionFailureReason(
+  run: Pick<JobRun, "jobKey" | "summaryJson">,
+): string | null {
+  if (run.jobKey !== "LIBRARY_DELETION") return null;
+  const reason = jsonRecord(run.summaryJson)?.reason;
+  return typeof reason === "string" && reason !== "" ? reason : null;
+}
+
+/** How far a running library deletion has got, from its progress. */
+export function libraryDeletionProgress(
+  run: Pick<JobRun, "jobKey" | "status" | "progressJson">,
+): { phase: "clearing" | "deleting"; processed: number; total: number } | null {
+  if (run.jobKey !== "LIBRARY_DELETION" || isTerminalJobRunStatus(run.status)) {
+    return null;
+  }
+  const progress = jsonRecord(run.progressJson);
+  if (
+    !progress ||
+    (progress.phase !== "clearing" && progress.phase !== "deleting")
+  ) {
+    return null;
+  }
+  return {
+    phase: progress.phase,
+    processed: normalizeNumber(progress.processed),
+    total: normalizeNumber(progress.total),
+  };
+}
+
 /** Finds the script run joined to a job run through its summary. */
 export function scriptRunForJobRun<T extends { id: string }>(
   run: Pick<JobRun, "summaryJson">,

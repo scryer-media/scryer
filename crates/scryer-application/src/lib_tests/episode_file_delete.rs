@@ -398,6 +398,262 @@ async fn nested_title_single_file_delete_refuses_sibling_path_and_keeps_row() {
     assert_eq!(blake3::hash(&std::fs::read(path).unwrap()), before);
 }
 
+/// How another title's recorded folder relates to the fixture title's.
+#[derive(Clone, Copy, Debug)]
+enum OtherTitleFolder {
+    Same,
+    Inside,
+}
+
+/// The fixture title's episode file and sidecar, a bystander file of its own,
+/// and a file of a second title whose recorded folder overlaps the fixture's.
+struct OverlappingFolderFixture {
+    fixture: EpisodeDeleteFixture,
+    other_title_id: String,
+    file_id: String,
+    leaves: [PathBuf; 2],
+    survivors: Vec<(PathBuf, blake3::Hash)>,
+}
+
+async fn seed_overlapping_folder_fixture(other: OtherTitleFolder) -> OverlappingFolderFixture {
+    let fixture = seed_episode_delete_fixture().await;
+    let file_id = fixture
+        .add_episode_file("Emberfall/Season 01/Emberfall - S01E01.mkv", "episode-1")
+        .await;
+    let sidecar = fixture
+        .root
+        .join("Emberfall/Season 01/Emberfall - S01E01.nfo");
+    std::fs::write(&sidecar, b"episode sidecar").unwrap();
+    let bystander = fixture.root.join("Emberfall/Season 01/notes.txt");
+    std::fs::write(&bystander, b"bystander bytes").unwrap();
+    let other_folder = match other {
+        OtherTitleFolder::Same => fixture.root.join("Emberfall"),
+        OtherTitleFolder::Inside => fixture.root.join("Emberfall/Season 01"),
+    };
+    let other_file = other_folder.join("Cinderwake - S01E01.mkv");
+    std::fs::write(&other_file, b"other title bytes").unwrap();
+    let other_title = fixture
+        .app
+        .add_title(
+            &fixture.admin,
+            NewTitle {
+                name: "Cinderwake".into(),
+                facet: MediaFacet::Series,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .set_folder_path(&other_title.id, &other_folder.to_string_lossy())
+        .await
+        .unwrap();
+    let survivors = [bystander, other_file]
+        .into_iter()
+        .map(|path| {
+            let hash = blake3::hash(&std::fs::read(&path).unwrap());
+            (path, hash)
+        })
+        .collect();
+    OverlappingFolderFixture {
+        leaves: [
+            fixture
+                .root
+                .join("Emberfall/Season 01/Emberfall - S01E01.mkv"),
+            sidecar,
+        ],
+        fixture,
+        other_title_id: other_title.id,
+        file_id,
+        survivors,
+    }
+}
+
+impl OverlappingFolderFixture {
+    fn assert_survivors_intact(&self) {
+        for (path, hash) in &self.survivors {
+            assert_eq!(
+                blake3::hash(&std::fs::read(path).unwrap()),
+                *hash,
+                "{}",
+                path.display()
+            );
+        }
+        assert!(self.fixture.root.join("Emberfall/Season 01").is_dir());
+    }
+
+    fn assert_leaves_present(&self) {
+        for leaf in &self.leaves {
+            assert!(leaf.exists(), "{}", leaf.display());
+        }
+    }
+}
+
+#[tokio::test]
+async fn single_file_delete_by_a_person_ignores_an_overlapping_title_folder() {
+    for other in [OtherTitleFolder::Same, OtherTitleFolder::Inside] {
+        let setup = seed_overlapping_folder_fixture(other).await;
+        let preview = setup
+            .fixture
+            .app
+            .preview_delete_media_file(&setup.fixture.admin, &setup.file_id)
+            .await
+            .unwrap_or_else(|error| panic!("{other:?}: {error}"));
+        assert_eq!(preview.total_file_count, 2, "{other:?}");
+        setup
+            .fixture
+            .app
+            .delete_media_file(
+                &setup.fixture.admin,
+                &setup.file_id,
+                true,
+                Some(DeleteExecutionConfirmation {
+                    preview_fingerprint: preview.fingerprint,
+                    typed_confirmation: None,
+                }),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{other:?}: {error}"));
+        for leaf in &setup.leaves {
+            assert!(!leaf.exists(), "{other:?}: {}", leaf.display());
+        }
+        setup.assert_survivors_intact();
+        assert!(setup.fixture.remaining_file_ids().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn episode_file_delete_by_a_person_ignores_an_overlapping_title_folder() {
+    for other in [OtherTitleFolder::Same, OtherTitleFolder::Inside] {
+        let setup = seed_overlapping_folder_fixture(other).await;
+        let episode_ids = vec!["episode-1".to_string()];
+        let preview = setup
+            .fixture
+            .app
+            .preview_delete_episode_files(
+                &setup.fixture.admin,
+                &setup.fixture.title_id,
+                &episode_ids,
+            )
+            .await
+            .unwrap();
+        assert!(
+            preview.items.iter().all(|item| item.error.is_none()),
+            "{other:?}: {:?}",
+            preview.items
+        );
+        assert_eq!(preview.preview.total_file_count, 2, "{other:?}");
+        let accepted = setup
+            .fixture
+            .app
+            .start_delete_episode_files_job(
+                &setup.fixture.admin,
+                &setup.fixture.title_id,
+                &episode_ids,
+                true,
+                Some(DeleteExecutionConfirmation {
+                    preview_fingerprint: preview.preview.fingerprint.clone(),
+                    typed_confirmation: None,
+                }),
+            )
+            .await
+            .unwrap();
+        let run = setup.fixture.wait_for_run(&accepted.job_run.id).await;
+        assert_eq!(run.status, JobRunStatus::Completed, "{other:?}: {run:?}");
+        for leaf in &setup.leaves {
+            assert!(!leaf.exists(), "{other:?}: {}", leaf.display());
+        }
+        setup.assert_survivors_intact();
+        assert!(setup.fixture.remaining_file_ids().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn policy_file_delete_still_refuses_an_overlapping_title_folder() {
+    for other in [OtherTitleFolder::Same, OtherTitleFolder::Inside] {
+        let setup = seed_overlapping_folder_fixture(other).await;
+        let app = &setup.fixture.app;
+        let error = app
+            .prepare_policy_media_file_delete(&setup.file_id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::TITLE_FOLDER_OVERLAPS_ANOTHER_TITLE),
+            "{other:?}: {error}"
+        );
+
+        // A plan captured before the overlap appeared is refused at execution.
+        app.services
+            .catalog
+            .titles
+            .clear_folder_path(&setup.other_title_id)
+            .await
+            .unwrap();
+        let plan = app
+            .prepare_policy_media_file_delete(&setup.file_id)
+            .await
+            .unwrap();
+        let other_folder = match other {
+            OtherTitleFolder::Same => setup.fixture.root.join("Emberfall"),
+            OtherTitleFolder::Inside => setup.fixture.root.join("Emberfall/Season 01"),
+        };
+        app.services
+            .catalog
+            .titles
+            .set_folder_path(&setup.other_title_id, &other_folder.to_string_lossy())
+            .await
+            .unwrap();
+        let error = app
+            .execute_delete_media_file_by_policy(
+                &setup.file_id,
+                &plan,
+                &crate::library::user_delete::PolicyDeleteAuthorization {
+                    rule_set_id: "rule-set".into(),
+                    candidate_id: "candidate".into(),
+                    revision_number: 1,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::library::TITLE_FOLDER_OVERLAPS_ANOTHER_TITLE),
+            "{other:?}: {error}"
+        );
+        setup.assert_leaves_present();
+        setup.assert_survivors_intact();
+        assert_eq!(
+            setup.fixture.remaining_file_ids().await,
+            vec![setup.file_id.clone()]
+        );
+    }
+}
+
+#[tokio::test]
+async fn whole_title_delete_still_refuses_an_overlapping_title_folder() {
+    for other in [OtherTitleFolder::Same, OtherTitleFolder::Inside] {
+        let setup = seed_overlapping_folder_fixture(other).await;
+        let error = setup
+            .fixture
+            .app
+            .preview_delete_title_files(&setup.fixture.admin, &setup.fixture.title_id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::title_delete::FOLDER_OVERLAPS_TITLE),
+            "{other:?}: {error}"
+        );
+        setup.assert_leaves_present();
+        setup.assert_survivors_intact();
+    }
+}
+
 impl EpisodeDeleteFixture {
     /// Create the file on disk and insert a media-file row linked to `episode_id`.
     async fn add_episode_file(&self, relative_path: &str, episode_id: &str) -> String {
@@ -2147,6 +2403,146 @@ async fn delete_titles_job_from_disk_reports_the_tracked_files_it_removed() {
         assert!(!Path::new(path).exists(), "{path} should be gone");
     }
     assert!(bystander.exists(), "unrelated file must be preserved");
+}
+
+#[tokio::test]
+async fn delete_titles_job_spanning_two_libraries_removes_only_the_selected_titles() {
+    let fixture = seed_episode_delete_fixture().await;
+    let (series_tracked, bystander) = fixture.seed_title_files_and_bystander().await;
+
+    // A movie in the movie library, under its own root.
+    let movie_root = fixture.root.with_file_name("movies");
+    std::fs::create_dir_all(&movie_root).expect("create movie root");
+    update_default_library_roots(
+        &fixture.app,
+        &fixture.admin,
+        MediaFacet::Movie,
+        vec![build_root_folder_entry(&movie_root, true)],
+    )
+    .await
+    .expect("save movie roots");
+    let add_movie = |name: &str| NewTitle {
+        name: name.into(),
+        facet: MediaFacet::Movie,
+        monitored: true,
+        ..Default::default()
+    };
+    let movie = fixture
+        .app
+        .add_title(&fixture.admin, add_movie("Kestrel Point"))
+        .await
+        .expect("create selected movie");
+    let kept_movie = fixture
+        .app
+        .add_title(&fixture.admin, add_movie("Lanternfall"))
+        .await
+        .expect("create unselected movie");
+    let series_library_id = fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&fixture.title_id)
+        .await
+        .expect("read series")
+        .expect("series exists")
+        .library_id;
+    assert_ne!(movie.library_id, series_library_id);
+
+    let mut movie_file = String::new();
+    let mut kept_movie_file = PathBuf::new();
+    for (title, folder) in [
+        (&movie, "Kestrel Point (2026)"),
+        (&kept_movie, "Lanternfall (2026)"),
+    ] {
+        let dir = movie_root.join(folder);
+        std::fs::create_dir_all(&dir).expect("create movie folder");
+        let path = dir.join(format!("{folder}.mkv"));
+        std::fs::write(&path, b"video").expect("write movie file");
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, &dir.to_string_lossy())
+            .await
+            .expect("record movie folder");
+        fixture
+            .app
+            .services
+            .library
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes: 5,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .expect("insert movie file");
+        if title.id == movie.id {
+            movie_file = path.to_string_lossy().to_string();
+        } else {
+            kept_movie_file = path;
+        }
+    }
+
+    let mut items = Vec::new();
+    for title_id in [&fixture.title_id, &movie.id] {
+        let preview = fixture
+            .app
+            .preview_delete_title_files(&fixture.admin, title_id)
+            .await
+            .expect("preview title delete");
+        items.push(DeleteTitlesJobItem {
+            title_id: title_id.clone(),
+            preview_fingerprint: Some(preview.fingerprint),
+        });
+    }
+    let accepted = fixture
+        .app
+        .start_delete_titles_job(
+            &fixture.admin,
+            DeleteTitlesJobRequest {
+                items,
+                delete_files_on_disk: true,
+                typed_confirmation: None,
+            },
+        )
+        .await
+        .expect("start cross-library deletion job");
+    let run_id = accepted.job_run.id.clone();
+    let run = wait_for(
+        "the title deletion job to reach a terminal status",
+        || async {
+            fixture
+                .app
+                .list_job_runs(&fixture.admin, JobKey::TitleDeletion, 10)
+                .await
+                .expect("list title deletion runs")
+                .into_iter()
+                .find(|run| run.id == run_id && run.status.is_terminal())
+        },
+    )
+    .await;
+    assert_eq!(run.status, JobRunStatus::Completed);
+
+    for path in series_tracked.iter().chain([&movie_file]) {
+        assert!(!Path::new(path).exists(), "{path} should be gone");
+    }
+    assert!(bystander.exists(), "unrelated file must be preserved");
+    assert!(
+        kept_movie_file.exists(),
+        "an unselected title's file must be preserved"
+    );
+    let titles = &fixture.app.services.catalog.titles;
+    assert!(titles.get_by_id(&fixture.title_id).await.unwrap().is_none());
+    assert!(titles.get_by_id(&movie.id).await.unwrap().is_none());
+    assert!(
+        titles.get_by_id(&kept_movie.id).await.unwrap().is_some(),
+        "an unselected title stays in the catalog"
+    );
 }
 
 #[tokio::test]

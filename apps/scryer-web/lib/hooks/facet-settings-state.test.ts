@@ -173,6 +173,81 @@ test(
 );
 
 test(
+  "audio language preference saves send only the change and adopt the saved facet",
+  { timeout: 10_000 },
+  async () => {
+    const inputs: object[] = [];
+    const media = {
+      scope: "ANIME",
+      libraryPath: "",
+      rootFolders: [],
+      requiredAudioLanguages: [],
+      preferredAudioLanguages: ["deu", "jpn"],
+      optionalAudioLanguages: [],
+      optionalAudioLanguagesKeepSearching: false,
+    };
+    const h = harness({
+      mutation: (_query: string, variables: { input: object }) => {
+        inputs.push(variables.input);
+        return {
+          toPromise: async () => ({ data: { updateMediaSettings: media } }),
+        };
+      },
+    });
+    const render = () =>
+      h.render<UseMediaSettingsResult>(
+        "use-media-settings.ts",
+        "useMediaSettings",
+      );
+    const scope = "ANIME";
+    await render().saveCategoryAudioLanguagePreferences({
+      preferredAudioLanguages: ["deu", "jpn"],
+    });
+    assert.deepEqual(inputs, [
+      { scope, preferredAudioLanguages: ["deu", "jpn"] },
+    ]);
+    assert.deepEqual(render().categoryAudioLanguagePreferences.ANIME, {
+      preferredAudioLanguages: ["deu", "jpn"],
+      optionalAudioLanguages: [],
+      optionalAudioLanguagesKeepSearching: false,
+    });
+    assert.equal(render().mediaSettingsSaving, false);
+  },
+);
+
+test(
+  "a failed audio language preference save restores the previous preferences",
+  { timeout: 10_000 },
+  async () => {
+    const response = deferred<{ error: Error }>();
+    const h = harness({
+      mutation: () => ({ toPromise: () => response.promise }),
+    });
+    const render = () =>
+      h.render<UseMediaSettingsResult>(
+        "use-media-settings.ts",
+        "useMediaSettings",
+      );
+    const scope = "ANIME";
+    const before = render().categoryAudioLanguagePreferences[scope];
+    const saving = render().saveCategoryAudioLanguagePreferences({
+      optionalAudioLanguagesKeepSearching: true,
+    }) as Promise<void>;
+    assert.equal(
+      render().categoryAudioLanguagePreferences[scope]
+        .optionalAudioLanguagesKeepSearching,
+      true,
+    );
+    assert.equal(render().mediaSettingsSaving, true);
+    response.resolve({ error: new Error("save rejected") });
+    await assert.rejects(saving, /save rejected/);
+    assert.deepEqual(render().categoryAudioLanguagePreferences[scope], before);
+    assert.equal(render().mediaSettingsSaving, false);
+    assert.deepEqual(h.messages, ["save rejected"]);
+  },
+);
+
+test(
   "failed general save restores the previous value and releases the save lock",
   { timeout: 10_000 },
   async () => {
@@ -292,3 +367,69 @@ test("download-client state retains server order and appends newly configured cl
     ["b", "a", "new"],
   );
 });
+
+test(
+  "a category quality profile save sends every field the mutation input requires",
+  { timeout: 10_000 },
+  async () => {
+    const criteria = {
+      qualityTiers: ["1080P"],
+      sourceAllowlist: [],
+      sourceBlocklist: [],
+      videoCodecAllowlist: [],
+      videoCodecBlocklist: [],
+      audioCodecAllowlist: [],
+      audioCodecBlocklist: [],
+    };
+    const quality = {
+      profiles: [
+        { id: "custom", name: "Custom", criteria },
+        { id: "compact", name: "Compact", criteria },
+      ],
+      globalProfileId: "custom",
+      globalScoringPersona: "QUALITY",
+      categorySelections: [],
+      categoryPersonaSelections: [],
+    };
+    const media = {
+      scope: "ANIME",
+      libraryPath: "",
+      rootFolders: [],
+      requiredAudioLanguages: [],
+    };
+    const inputs: object[] = [];
+    const h = harness({
+      query: () => ({
+        toPromise: async () => ({
+          data: { qualityProfileSettings: quality, mediaSettings: media },
+        }),
+      }),
+      mutation: (_query: string, variables: { input: object }) => {
+        inputs.push(variables.input);
+        return {
+          toPromise: async () => ({
+            data: { saveQualityProfileSettings: quality },
+          }),
+        };
+      },
+    });
+    const render = () =>
+      h.render<UseMediaSettingsResult>(
+        "use-media-settings.ts",
+        "useMediaSettings",
+      );
+    await render().refreshMediaSettings();
+    await render().saveCategoryQualityProfileOverride("compact");
+    assert.deepEqual(inputs, [
+      {
+        profiles: [],
+        globalProfileId: null,
+        categorySelections: [
+          { scope: "ANIME", profileId: "compact", inheritGlobal: false },
+        ],
+        categoryPersonaSelections: [],
+        replaceExisting: false,
+      },
+    ]);
+  },
+);

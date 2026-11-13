@@ -773,6 +773,7 @@ pub fn library_graph_query_from_input(
             .into_iter()
             .map(|id| id.to_string())
             .collect(),
+        known_view_key: input.known_view_key,
     }
 }
 
@@ -783,6 +784,7 @@ fn graph_int(value: i64) -> i32 {
 pub fn from_library_graph(view: scryer_application::LibraryGraphView) -> LibraryGraph {
     LibraryGraph {
         generated_at: view.generated_at,
+        view_key: view.view_key,
         nodes: view
             .nodes
             .into_iter()
@@ -815,6 +817,7 @@ pub fn from_library_graph(view: scryer_application::LibraryGraphView) -> Library
             .collect(),
         subject_count: graph_int(view.subject_count),
         truncated: view.truncated,
+        unchanged: view.unchanged,
     }
 }
 

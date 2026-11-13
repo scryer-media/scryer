@@ -37,6 +37,10 @@ struct DiscoveryNeighborCachePayload {
     items: Vec<DiscoveryNeighborCacheItem>,
     #[serde(default)]
     groups: Vec<DiscoveryRelatedGroup>,
+    /// Absent on rows written before it was recorded, which read as not yet
+    /// attempted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    regroup_attempted: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -69,6 +73,7 @@ impl From<StoredDiscoveryNeighborCachePayload> for DiscoveryNeighborCachePayload
                     })
                     .collect(),
                 groups: Vec::new(),
+                regroup_attempted: false,
             },
         }
     }
@@ -521,6 +526,14 @@ impl DiscoveryRepository for DiscoveryStore {
                     for item in &commit.items {
                         insert_item_tx(tx, &datastore, item, &commit.run.language).await?;
                     }
+                    delete_stale_discovery_title_children_tx(
+                        tx,
+                        &commit.run.id,
+                        &commit.items,
+                        &commit.run.language,
+                        true,
+                    )
+                    .await?;
                     let facet_rows: Vec<Vec<SqlArg>> =
                         commit.facets.iter().map(facet_row).collect();
                     SqlRuntime::execute_batch_insert(
@@ -579,6 +592,14 @@ impl DiscoveryRepository for DiscoveryStore {
                     for item in &commit.items {
                         insert_item_tx(tx, &datastore, item, &commit.run.language).await?;
                     }
+                    delete_stale_discovery_title_children_tx(
+                        tx,
+                        &commit.run.id,
+                        &commit.items,
+                        &commit.run.language,
+                        true,
+                    )
+                    .await?;
                     if let Some(sequence) = commit.clear_pending_through_sequence {
                         clear_pending_discovery_context_changes_tx(
                             tx,
@@ -690,6 +711,14 @@ impl DiscoveryRepository for DiscoveryStore {
                             );
                         })?;
                 }
+                delete_stale_discovery_title_children_tx(
+                    tx,
+                    &commit.run.id,
+                    &commit.items,
+                    &commit.run.language,
+                    false,
+                )
+                .await?;
                 enforce_discovery_indexed_title_limit_tx(tx, &commit.state.scope_key).await?;
                 Ok(())
             })
@@ -1052,7 +1081,30 @@ impl DiscoveryRepository for DiscoveryStore {
         filters: &DiscoveryHomeFilters,
         limit_per_section: i64,
     ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>> {
-        let mut sections = self.list_discovery_sections(run_id, Some("public")).await?;
+        let sections = self.list_discovery_sections(run_id, Some("public")).await?;
+        self.list_public_discovery_section_items_in(
+            run_id,
+            &sections,
+            section_ids,
+            allowed_media_kinds,
+            include_unresolved,
+            filters,
+            limit_per_section,
+        )
+        .await
+    }
+
+    async fn list_public_discovery_section_items_in(
+        &self,
+        run_id: &str,
+        public_sections: &[DiscoverySectionRecord],
+        section_ids: &[String],
+        allowed_media_kinds: &[String],
+        include_unresolved: bool,
+        filters: &DiscoveryHomeFilters,
+        limit_per_section: i64,
+    ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>> {
+        let mut sections = public_sections.to_vec();
         if !section_ids.is_empty() {
             sections.retain(|section| section_ids.contains(&section.section_id));
         }
@@ -1315,6 +1367,40 @@ impl DiscoveryRepository for DiscoveryStore {
         query_discovery_items_page(&self.datastore, query).await
     }
 
+    async fn query_discovery_items_uncounted(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<DiscoveryItemRecord>> {
+        let Some(sql) = build_discovery_items_sql(&self.datastore, query) else {
+            return Ok(Vec::new());
+        };
+        let (page_sql, page_args) = discovery_items_page_sql(&self.datastore, query, sql);
+        fetch_items_with_sql(&self.datastore, &page_sql, &page_args).await
+    }
+
+    async fn query_discovery_item_identity_keys(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<String>> {
+        let Some(sql) = build_discovery_items_sql(&self.datastore, query) else {
+            return Ok(Vec::new());
+        };
+        let (page_sql, page_args) = discovery_items_page_sql(&self.datastore, query, sql);
+        // The page's rows, unhydrated: the identity key reads only the row.
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &page_sql, &page_args)
+            .await?
+            .iter()
+            .map(|row| {
+                let item = item_from_row(row)?;
+                Ok(if item.target_key.trim().is_empty() {
+                    item.id
+                } else {
+                    item.target_key
+                })
+            })
+            .collect()
+    }
+
     async fn count_discovery_browse_labels(
         &self,
         query: &DiscoveryItemsStorageQuery,
@@ -1339,17 +1425,36 @@ impl DiscoveryRepository for DiscoveryStore {
         if label_rows.is_empty() {
             return Ok(vec![0; labels.len()]);
         }
+        // The pool is built once; each item's tags are then matched to the
+        // labels by key and by name as two equality joins instead of one OR,
+        // and an item counts once per label however many of its tags match.
+        // SQLite's CROSS JOIN keeps that join order.
+        let join = match &self.datastore {
+            StoreDatastore::Sqlite { .. } => "CROSS JOIN",
+            StoreDatastore::Postgres { .. } => "JOIN",
+        };
+        let matches = |tag_column: &str| {
+            format!(
+                "SELECT pool.id, labels.label_index
+                 FROM pool
+                 {join} discovery_title_metadata_tags tag
+                     ON tag.discovery_title_id = pool.discovery_title_id
+                 {join} requested_labels labels ON labels.category = LOWER(tag.category)
+                     AND labels.value = LOWER(tag.{tag_column})"
+            )
+        };
         let statement = format!(
-            "{}, requested_labels(label_index, category, value) AS (VALUES {})
-             SELECT labels.label_index, COUNT(DISTINCT i.id) AS item_count
-             FROM deduped i
-             JOIN discovery_title_metadata_tags tag ON tag.discovery_title_id = i.discovery_title_id
-             JOIN requested_labels labels ON labels.category = LOWER(tag.category)
-                 AND (labels.value = LOWER(tag.tag_key) OR labels.value = LOWER(tag.name))
-             WHERE i.identity_rank = 1
-             GROUP BY labels.label_index",
+            "{}, pool AS MATERIALIZED (
+                 SELECT id, discovery_title_id FROM deduped WHERE identity_rank = 1
+             ),
+             requested_labels(label_index, category, value) AS (VALUES {})
+             SELECT matched.label_index, COUNT(DISTINCT matched.id) AS item_count
+             FROM ({} UNION ALL {}) matched
+             GROUP BY matched.label_index",
             sql.cte_sql,
-            label_rows.join(", ")
+            label_rows.join(", "),
+            matches("tag_key"),
+            matches("name"),
         );
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &statement, &sql.args).await?;
         let mut counts = vec![0; labels.len()];
@@ -1546,6 +1651,13 @@ impl DiscoveryRepository for DiscoveryStore {
         super::library_graph::get_latest_library_graph(&self.datastore, facet).await
     }
 
+    async fn get_latest_library_graph_generated_at(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<Option<String>>> {
+        super::library_graph::get_latest_library_graph_generated_at(&self.datastore, facet).await
+    }
+
     async fn get_latest_library_graph_run(
         &self,
         facet: &str,
@@ -1615,6 +1727,7 @@ impl DiscoveryRepository for DiscoveryStore {
                 .collect(),
             groups: payload.groups,
             fetched_at: row.timestamp("fetched_at")?,
+            regroup_attempted: payload.regroup_attempted,
         }))
     }
 
@@ -1644,6 +1757,7 @@ impl DiscoveryRepository for DiscoveryStore {
                 })
                 .collect(),
             groups: record.groups.clone(),
+            regroup_attempted: record.regroup_attempted,
         };
         let payload_blob = encode_compressed_json(&payload)?;
         let target_key = record.target_key.clone();
@@ -2311,6 +2425,17 @@ async fn legacy_title_more_like_this_items(
 }
 
 async fn backfill_title_recommendation_cards(datastore: &StoreDatastore) -> AppResult<()> {
+    // Only cards without a payload are backfilled; when there are none the
+    // joined read below returns nothing.
+    let pending = SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT 1 AS pending FROM title_recommendation_cards WHERE payload_blob IS NULL LIMIT 1",
+        &[],
+    )
+    .await?;
+    if pending.is_none() {
+        return Ok(());
+    }
     let rows = SqlRuntime::fetch_all(
         datastore.read_exec(),
         &format!(
@@ -2335,19 +2460,21 @@ async fn backfill_title_recommendation_cards(datastore: &StoreDatastore) -> AppR
         return Ok(());
     }
 
-    let mut items = rows
+    // Only the first row of each discovery title becomes its card, and title
+    // children are hydrated per title, so later rows need no hydration.
+    let all_items = rows
         .iter()
         .map(item_from_row)
         .collect::<AppResult<Vec<_>>>()?;
-    let title_ids = discovery_title_ids_from_rows(&rows)?;
+    let mut seen = HashSet::new();
+    let (title_ids, mut items): (Vec<_>, Vec<_>) = discovery_title_ids_from_rows(&rows)?
+        .into_iter()
+        .zip(all_items)
+        .filter(|(discovery_title_id, _)| seen.insert(discovery_title_id.clone()))
+        .unzip();
     hydrate_discovery_title_children(datastore, &mut items, &title_ids).await?;
 
-    let mut seen = HashSet::new();
-    let cards = title_ids
-        .into_iter()
-        .zip(items)
-        .filter(|(discovery_title_id, _)| seen.insert(discovery_title_id.clone()))
-        .collect::<Vec<_>>();
+    let cards = title_ids.into_iter().zip(items).collect::<Vec<_>>();
     let cards = std::sync::Arc::new(cards);
     SqlRuntime::run_in_transaction(
         datastore,
@@ -2600,6 +2727,13 @@ fn discovery_title_target_key_norm(item: &DiscoveryItemRecord) -> String {
     } else {
         target_key
     }
+}
+
+/// The `target_key_norm` every title row whose `target_key` equals `target_key`
+/// carries, or `None` for a blank key (its rows are keyed by occurrence).
+fn discovery_target_key_norm_for_key(target_key: &str) -> Option<String> {
+    let norm = target_key.trim().to_ascii_lowercase();
+    (!norm.is_empty()).then_some(norm)
 }
 
 fn discovery_title_id_for(target_key_norm: &str, language: &str) -> String {
@@ -3134,19 +3268,13 @@ async fn fetch_discovery_home_filter_options(
             {}
          ),
          options AS (
-            SELECT 'genre' AS option_kind, tag.tag_key AS option_key, tag.name AS option_name
+            -- Genres and themes in one pass over the tags; the kind is the
+            -- lowercased category, which the filter limits to the two.
+            SELECT LOWER(tag.category) AS option_kind, tag.tag_key AS option_key, tag.name AS option_name
             FROM discovery_title_metadata_tags tag
             JOIN entitled_titles entitled
               ON entitled.discovery_title_id = tag.discovery_title_id
-            WHERE LOWER(tag.category) = 'genre'
-              AND TRIM(tag.tag_key) <> ''
-              AND TRIM(tag.name) <> ''
-            UNION ALL
-            SELECT 'theme' AS option_kind, tag.tag_key AS option_key, tag.name AS option_name
-            FROM discovery_title_metadata_tags tag
-            JOIN entitled_titles entitled
-              ON entitled.discovery_title_id = tag.discovery_title_id
-            WHERE LOWER(tag.category) = 'theme'
+            WHERE LOWER(tag.category) IN ('genre', 'theme')
               AND TRIM(tag.tag_key) <> ''
               AND TRIM(tag.name) <> ''
             UNION ALL
@@ -3783,7 +3911,13 @@ fn build_discovery_items_sql(
         if let Some((kind, label)) = &query.browse_label {
             append_canonical_facet_filter(&mut clauses, args, kind, std::slice::from_ref(label));
         }
-        format!(" AND {}", clauses.join(" AND "))
+        let mut clause = format!(" AND {}", clauses.join(" AND "));
+        clause.push_str(&target_key_norm_pushdown_clause(
+            datastore,
+            args,
+            &query.filters,
+        ));
+        clause
     };
     if let Some(context_run_id) = query.context_run_id.as_deref()
         && !query.readable_library_ids.is_empty()
@@ -3891,6 +4025,30 @@ fn build_discovery_items_sql(
         ),
         args,
     })
+}
+
+/// On SQLite, narrows each item source to the requested target keys through
+/// the title's stored key norm, so a key lookup reads only that key's items.
+/// `LOWER(i.target_key)` equal to a trimmed, lowercased key means the item key
+/// has no surrounding whitespace and its ASCII lowercase is that key, which is
+/// exactly the norm its title row was stored under. The `LOWER(i.target_key)`
+/// filter stays applied afterwards. Postgres `LOWER` folds non-ASCII letters,
+/// so it keeps the plain filter.
+fn target_key_norm_pushdown_clause(
+    datastore: &StoreDatastore,
+    args: &mut Vec<SqlArg>,
+    filters: &scryer_application::DiscoveryItemsQuery,
+) -> String {
+    if !matches!(datastore, StoreDatastore::Sqlite { .. }) {
+        return String::new();
+    }
+    let target_keys = normalized_filter_values(&filters.target_keys);
+    if target_keys.is_empty() {
+        return String::new();
+    }
+    let placeholders = placeholders(target_keys.len());
+    args.extend(target_keys.into_iter().map(SqlArg::Text));
+    format!(" AND t.target_key_norm IN ({placeholders})")
 }
 
 fn append_discovery_home_filters(
@@ -4837,24 +4995,37 @@ async fn tombstone_discovery_items_tx(
         return Ok(());
     };
     for target_key in target_keys {
+        let mut args = vec![
+            SqlArg::Text(tombstone_run_id.to_string()),
+            SqlArg::Timestamp(tombstoned_at),
+            SqlArg::Timestamp(tombstoned_at),
+            SqlArg::Text(base_generation_id.to_string()),
+            SqlArg::Text(target_key.clone()),
+        ];
+        // A title row stores the normalised form of its non-blank target key,
+        // so the key's norm finds the same rows through the unique key index
+        // instead of scanning every title. Blank keys keep the plain match.
+        let norm_clause = match discovery_target_key_norm_for_key(target_key) {
+            Some(norm) => {
+                args.push(SqlArg::Text(norm));
+                " AND target_key_norm = {}"
+            }
+            None => "",
+        };
         SqlRuntime::execute(
             SqlExec::Tx(tx),
-            "UPDATE discovery_items
-             SET tombstoned_by_run_id = {}, tombstoned_at = {}, updated_at = {}
-             WHERE base_generation_id = {}
-               AND discovery_title_id IN (
-                    SELECT id
-                    FROM discovery_titles
-                    WHERE target_key = {}
-               )
-               AND tombstoned_at IS NULL",
-            &[
-                SqlArg::Text(tombstone_run_id.to_string()),
-                SqlArg::Timestamp(tombstoned_at),
-                SqlArg::Timestamp(tombstoned_at),
-                SqlArg::Text(base_generation_id.to_string()),
-                SqlArg::Text(target_key.clone()),
-            ],
+            &format!(
+                "UPDATE discovery_items
+                 SET tombstoned_by_run_id = {{}}, tombstoned_at = {{}}, updated_at = {{}}
+                 WHERE base_generation_id = {{}}
+                   AND discovery_title_id IN (
+                        SELECT id
+                        FROM discovery_titles
+                        WHERE target_key = {{}}{norm_clause}
+                   )
+                   AND tombstoned_at IS NULL"
+            ),
+            &args,
         )
         .await?;
     }
@@ -5599,14 +5770,31 @@ async fn fetch_child_rows(
     sql_template: &str,
     item_ids: &[String],
 ) -> AppResult<Vec<SqlRow>> {
-    let sql = sql_template.replace("{}", &placeholders(item_ids.len()));
-    let args = item_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
-    SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await
+    // One statement whenever the ids fit the engine's bind ceiling. Above it
+    // the ids are split, so every id's rows still come from one statement in
+    // the template's order; callers group rows by id.
+    let ceiling = match datastore {
+        StoreDatastore::Sqlite { .. } => SQLITE_MAX_BIND_PARAMETERS,
+        StoreDatastore::Postgres { .. } => POSTGRES_MAX_BIND_PARAMETERS,
+    };
+    let chunks = if item_ids.is_empty() {
+        vec![item_ids]
+    } else {
+        item_ids.chunks(ceiling).collect()
+    };
+    let mut rows = Vec::new();
+    for chunk in chunks {
+        let sql = sql_template.replace("{}", &placeholders(chunk.len()));
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        rows.extend(SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await?);
+    }
+    Ok(rows)
 }
+
+/// Bind ceiling of the bundled SQLite build (`SQLITE_MAX_VARIABLE_NUMBER`).
+const SQLITE_MAX_BIND_PARAMETERS: usize = 32_766;
+/// Bind ceiling of the Postgres wire protocol.
+const POSTGRES_MAX_BIND_PARAMETERS: usize = 65_535;
 
 fn submitted_subject_from_row(row: &SqlRow) -> AppResult<DiscoverySubmittedSubjectRecord> {
     Ok(DiscoverySubmittedSubjectRecord {
@@ -6422,6 +6610,488 @@ async fn insert_title_external_id_tx(
     Ok(())
 }
 
+/// Term kinds whose rows a commit replaces. A kind missing from this list is
+/// never removed, so a kind added to `insert_title_children_tx` without a
+/// matching entry in `DiscoveryTitleChildKeys::add_item` is kept, not lost.
+const DISCOVERY_REPLACED_TERM_KINDS: &[&str] = &[
+    "status_tag",
+    "source",
+    "relation_type",
+    "relation_subtype",
+    "chart_signal",
+    "provider_signal",
+    "facet_term",
+    "context_term",
+    "media_kind",
+    "studio",
+    "person",
+    "source_tag",
+    "source_tag_value",
+];
+
+/// The child rows a commit's items give one discovery title, keyed as each
+/// child table's unique constraint keys them, and the kinds the commit speaks
+/// for. A kind the commit does not speak for keeps every row it has: a field
+/// the payload leaves out means "unknown", not "none".
+#[derive(Default)]
+struct DiscoveryTitleChildKeys {
+    /// Term kinds whose rows this commit replaces on this title. External ids
+    /// are listed as `external_id`.
+    authoritative: HashSet<&'static str>,
+    /// (term_kind, term_category, term_value)
+    terms: HashSet<(String, String, String)>,
+    /// (sort_index, category, name)
+    source_tags: HashSet<(i32, String, String)>,
+    /// (source_tag_sort_index, source_tag_value)
+    source_tag_values: HashSet<(i32, String)>,
+    /// (source, external_kind, external_identity)
+    external_ids: HashSet<(String, String, String)>,
+}
+
+impl DiscoveryTitleChildKeys {
+    /// Adds the keys `insert_title_children_tx` writes for `item`, with the
+    /// same trimming and skipping rules, and the kinds `item` speaks for.
+    ///
+    /// Every discovery feed selects status tags, sources, relation types and
+    /// subtypes, chart and provider signals and source tags, so an empty list
+    /// there means the title has none. Facet and context terms are selected
+    /// only by the context snapshot and changes feeds (`context_fields`).
+    /// Studio, people and media kind count only when the item carries a
+    /// value, and external ids only when it carries at least one: no feed
+    /// selects studio or people, and a title is never left without identity.
+    fn add_item(&mut self, item: &DiscoveryItemRecord, context_fields: bool) {
+        self.authoritative.extend([
+            "status_tag",
+            "source",
+            "relation_type",
+            "relation_subtype",
+            "chart_signal",
+            "provider_signal",
+            "source_tag",
+            "source_tag_value",
+        ]);
+        if context_fields {
+            self.authoritative.extend(["facet_term", "context_term"]);
+        }
+        if discovery_item_authoritative_media_kind(item).is_some() {
+            self.authoritative.insert("media_kind");
+        }
+        if item
+            .studio_slug
+            .as_deref()
+            .is_some_and(|slug| !slug.trim().is_empty())
+        {
+            self.authoritative.insert("studio");
+        }
+        if !item.person_ids.is_empty() {
+            self.authoritative.insert("person");
+        }
+        if item.external_ids.iter().any(|external_id| {
+            !external_id.source.trim().is_empty()
+                && !(external_id.id.trim().is_empty() && external_id.key.trim().is_empty())
+        }) {
+            self.authoritative.insert("external_id");
+        }
+        let mut add_terms = |kind: &str, category: Option<&str>, values: &[String]| {
+            for value in values {
+                let value = value.trim();
+                if !value.is_empty() {
+                    self.terms.insert((
+                        kind.to_string(),
+                        storage_text(category),
+                        value.to_string(),
+                    ));
+                }
+            }
+        };
+        add_terms("status_tag", None, &item.status_tags);
+        add_terms("source", None, &item.sources);
+        add_terms("relation_type", None, &item.relation_types);
+        add_terms("relation_subtype", None, &item.relation_subtypes);
+        add_terms("chart_signal", None, &item.chart_signals);
+        add_terms("provider_signal", None, &item.provider_signals);
+        add_terms("facet_term", None, &item.facet_terms);
+        add_terms("context_term", None, &item.context_terms);
+        if let Some(media_kind) = discovery_item_authoritative_media_kind(item) {
+            add_terms("media_kind", None, &[media_kind]);
+        }
+        if let Some(studio_slug) = &item.studio_slug {
+            add_terms("studio", None, std::slice::from_ref(studio_slug));
+        }
+        let person_values = item
+            .person_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        add_terms("person", None, &person_values);
+        for source_tag in &item.source_tags {
+            let category = source_tag.category.as_deref();
+            if let Some(name) = source_tag.name.as_deref() {
+                add_terms("source_tag", category, &[name.to_string()]);
+            }
+            add_terms("source_tag_value", category, &source_tag.values);
+        }
+        for (index, source_tag) in item.source_tags.iter().enumerate() {
+            let index = index as i32;
+            self.source_tags.insert((
+                index,
+                storage_text(source_tag.category.as_deref()),
+                storage_text(source_tag.name.as_deref()),
+            ));
+            for value in &source_tag.values {
+                let value = value.trim();
+                if !value.is_empty() {
+                    self.source_tag_values.insert((index, value.to_string()));
+                }
+            }
+        }
+        for external_id in &item.external_ids {
+            let source = external_id.source.trim();
+            let id = external_id.id.trim();
+            let key = external_id.key.trim();
+            let identity = if id.is_empty() { key } else { id };
+            if source.is_empty() || identity.is_empty() {
+                continue;
+            }
+            self.external_ids.insert((
+                source.to_ascii_lowercase(),
+                external_id.kind.trim().to_ascii_lowercase(),
+                identity.to_string(),
+            ));
+        }
+    }
+}
+
+/// Removes the child rows (terms, source tags, source tag values and external
+/// ids) that titles written by this commit no longer have.
+///
+/// Only titles no other live owner references are touched. The live owners
+/// of a discovery title are:
+/// - an item, other than this commit's, of a run a sync state row points at
+///   (active context, active public feed or in-flight snapshot), or of an
+///   incremental run based on the active context run;
+/// - an item whose run is not a recorded sync run (its owner is unknown);
+/// - a "more like this" row of a library title.
+///
+/// Items of older generations that history retention still keeps are not
+/// owners: no list reads them, and they hydrate from these same title rows.
+/// Several owners can give one title different occurrence terms (sources,
+/// chart signals and the like), and the rows are not stored per owner, so a
+/// shared title keeps every row it has. Rows of titles this commit did not
+/// write are never read or removed.
+async fn delete_stale_discovery_title_children_tx(
+    tx: &mut SqlTx<'_>,
+    run_id: &str,
+    items: &[DiscoveryItemRecord],
+    language: &str,
+    context_fields: bool,
+) -> AppResult<()> {
+    let language = normalize_discovery_language(language);
+    let mut expected: std::collections::BTreeMap<String, DiscoveryTitleChildKeys> =
+        std::collections::BTreeMap::new();
+    for item in items {
+        let title_id = discovery_title_id_for(&discovery_title_target_key_norm(item), &language);
+        expected
+            .entry(title_id)
+            .or_default()
+            .add_item(item, context_fields);
+    }
+    if expected.is_empty() {
+        return Ok(());
+    }
+
+    let mut live_run_ids = Vec::new();
+    let mut context_run_ids = Vec::new();
+    for row in SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        "SELECT last_success_generation_id, last_public_feed_generation_id,
+                inflight_context_snapshot_run_id
+         FROM discovery_sync_state",
+        &[],
+    )
+    .await?
+    {
+        if let Some(context_run_id) = row.opt_text("last_success_generation_id")? {
+            live_run_ids.push(context_run_id.clone());
+            context_run_ids.push(context_run_id);
+        }
+        if let Some(public_run_id) = row.opt_text("last_public_feed_generation_id")? {
+            live_run_ids.push(public_run_id);
+        }
+        if let Some(inflight_run_id) = row.opt_text("inflight_context_snapshot_run_id")? {
+            live_run_ids.push(inflight_run_id);
+        }
+    }
+
+    let mut owner_clauses =
+        vec!["NOT EXISTS (SELECT 1 FROM discovery_sync_runs r WHERE r.id = i.run_id)".to_string()];
+    if !live_run_ids.is_empty() {
+        owner_clauses.push(format!(
+            "i.run_id IN ({})",
+            placeholders(live_run_ids.len())
+        ));
+    }
+    if !context_run_ids.is_empty() {
+        owner_clauses.push(format!(
+            "i.base_generation_id IN ({})",
+            placeholders(context_run_ids.len())
+        ));
+    }
+    let owner_clause = owner_clauses.join(" OR ");
+    let title_ids = expected.keys().cloned().collect::<Vec<_>>();
+    let mut shared = HashSet::new();
+    for chunk in title_ids.chunks(500) {
+        let chunk_args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        let mut args = chunk_args.clone();
+        args.push(SqlArg::Text(run_id.to_string()));
+        args.extend(live_run_ids.iter().cloned().map(SqlArg::Text));
+        args.extend(context_run_ids.iter().cloned().map(SqlArg::Text));
+        args.extend(chunk_args);
+        for row in SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            &format!(
+                "SELECT i.discovery_title_id AS discovery_title_id
+                 FROM discovery_items i
+                 WHERE i.discovery_title_id IN ({in_clause})
+                   AND i.run_id <> {{}}
+                   AND ({owner_clause})
+                 UNION
+                 SELECT m.discovery_title_id AS discovery_title_id
+                 FROM title_more_like_this_items m
+                 WHERE m.discovery_title_id IN ({in_clause})",
+                in_clause = placeholders(chunk.len())
+            ),
+            &args,
+        )
+        .await?
+        {
+            shared.insert(row.text("discovery_title_id")?);
+        }
+    }
+    let owned = title_ids
+        .into_iter()
+        .filter(|title_id| !shared.contains(title_id))
+        .collect::<Vec<_>>();
+
+    for chunk in owned.chunks(500) {
+        let chunk_args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        let in_clause = placeholders(chunk.len());
+
+        let mut stale_terms = Vec::new();
+        for row in SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            &format!(
+                "SELECT discovery_title_id, term_kind, term_category, term_value
+                 FROM discovery_title_terms
+                 WHERE discovery_title_id IN ({in_clause})"
+            ),
+            &chunk_args,
+        )
+        .await?
+        {
+            let title_id = row.text("discovery_title_id")?;
+            let key = (
+                row.text("term_kind")?,
+                row.text("term_category")?,
+                row.text("term_value")?,
+            );
+            if DISCOVERY_REPLACED_TERM_KINDS.contains(&key.0.as_str())
+                && expected.get(&title_id).is_some_and(|keys| {
+                    keys.authoritative.contains(key.0.as_str()) && !keys.terms.contains(&key)
+                })
+            {
+                stale_terms.push((title_id, key));
+            }
+        }
+        delete_discovery_title_child_rows_tx(
+            tx,
+            "discovery_title_terms",
+            &[
+                "discovery_title_id",
+                "term_kind",
+                "term_category",
+                "term_value",
+            ],
+            stale_terms
+                .into_iter()
+                .map(|(title_id, (kind, category, value))| {
+                    vec![
+                        SqlArg::Text(title_id),
+                        SqlArg::Text(kind),
+                        SqlArg::Text(category),
+                        SqlArg::Text(value),
+                    ]
+                })
+                .collect(),
+        )
+        .await?;
+
+        let mut stale_source_tags = Vec::new();
+        for row in SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            &format!(
+                "SELECT discovery_title_id, sort_index, category, name
+                 FROM discovery_title_source_tags
+                 WHERE discovery_title_id IN ({in_clause})"
+            ),
+            &chunk_args,
+        )
+        .await?
+        {
+            let title_id = row.text("discovery_title_id")?;
+            let key = (
+                row.i32("sort_index")?,
+                row.text("category")?,
+                row.text("name")?,
+            );
+            if expected.get(&title_id).is_some_and(|keys| {
+                keys.authoritative.contains("source_tag") && !keys.source_tags.contains(&key)
+            }) {
+                stale_source_tags.push((title_id, key));
+            }
+        }
+        delete_discovery_title_child_rows_tx(
+            tx,
+            "discovery_title_source_tags",
+            &["discovery_title_id", "sort_index", "category", "name"],
+            stale_source_tags
+                .into_iter()
+                .map(|(title_id, (sort_index, category, name))| {
+                    vec![
+                        SqlArg::Text(title_id),
+                        SqlArg::I32(sort_index),
+                        SqlArg::Text(category),
+                        SqlArg::Text(name),
+                    ]
+                })
+                .collect(),
+        )
+        .await?;
+
+        let mut stale_source_tag_values = Vec::new();
+        for row in SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            &format!(
+                "SELECT discovery_title_id, source_tag_sort_index, source_tag_value
+                 FROM discovery_title_source_tag_values
+                 WHERE discovery_title_id IN ({in_clause})"
+            ),
+            &chunk_args,
+        )
+        .await?
+        {
+            let title_id = row.text("discovery_title_id")?;
+            let key = (
+                row.i32("source_tag_sort_index")?,
+                row.text("source_tag_value")?,
+            );
+            if expected.get(&title_id).is_some_and(|keys| {
+                keys.authoritative.contains("source_tag_value")
+                    && !keys.source_tag_values.contains(&key)
+            }) {
+                stale_source_tag_values.push((title_id, key));
+            }
+        }
+        delete_discovery_title_child_rows_tx(
+            tx,
+            "discovery_title_source_tag_values",
+            &[
+                "discovery_title_id",
+                "source_tag_sort_index",
+                "source_tag_value",
+            ],
+            stale_source_tag_values
+                .into_iter()
+                .map(|(title_id, (sort_index, value))| {
+                    vec![
+                        SqlArg::Text(title_id),
+                        SqlArg::I32(sort_index),
+                        SqlArg::Text(value),
+                    ]
+                })
+                .collect(),
+        )
+        .await?;
+
+        let mut stale_external_ids = Vec::new();
+        for row in SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            &format!(
+                "SELECT discovery_title_id, source, external_kind, external_identity
+                 FROM discovery_title_external_ids
+                 WHERE discovery_title_id IN ({in_clause})"
+            ),
+            &chunk_args,
+        )
+        .await?
+        {
+            let title_id = row.text("discovery_title_id")?;
+            let key = (
+                row.text("source")?,
+                row.text("external_kind")?,
+                row.text("external_identity")?,
+            );
+            if expected.get(&title_id).is_some_and(|keys| {
+                keys.authoritative.contains("external_id") && !keys.external_ids.contains(&key)
+            }) {
+                stale_external_ids.push((title_id, key));
+            }
+        }
+        delete_discovery_title_child_rows_tx(
+            tx,
+            "discovery_title_external_ids",
+            &[
+                "discovery_title_id",
+                "source",
+                "external_kind",
+                "external_identity",
+            ],
+            stale_external_ids
+                .into_iter()
+                .map(|(title_id, (source, kind, identity))| {
+                    vec![
+                        SqlArg::Text(title_id),
+                        SqlArg::Text(source),
+                        SqlArg::Text(kind),
+                        SqlArg::Text(identity),
+                    ]
+                })
+                .collect(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Deletes the rows of one discovery title child table whose `columns` equal
+/// one of `rows`, a chunk of rows per statement. Each row gives every key
+/// column of the table's unique constraint, so it names exactly one row.
+async fn delete_discovery_title_child_rows_tx(
+    tx: &mut SqlTx<'_>,
+    table: &'static str,
+    columns: &[&str],
+    rows: Vec<Vec<SqlArg>>,
+) -> AppResult<()> {
+    const ROWS_PER_STATEMENT: usize = 200;
+    let row_clause = format!(
+        "({})",
+        columns
+            .iter()
+            .map(|column| format!("{column} = {{}}"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    );
+    for chunk in rows.chunks(ROWS_PER_STATEMENT) {
+        let sql = format!(
+            "DELETE FROM {table} WHERE {}",
+            vec![row_clause.as_str(); chunk.len()].join(" OR ")
+        );
+        let args = chunk.iter().flatten().cloned().collect::<Vec<_>>();
+        SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
+    }
+    Ok(())
+}
+
 fn rank_component_row(
     item: &DiscoveryItemRecord,
     component: &DiscoveryRankComponentRecord,
@@ -6594,6 +7264,178 @@ mod tests {
         assert!(values.contains(&"canonical:genre:drama".to_string()));
     }
 
+    async fn tombstone_fixture() -> (StoreDatastore, sqlx::SqlitePool) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE discovery_titles (id TEXT PRIMARY KEY, target_key TEXT NOT NULL,
+                 target_key_norm TEXT NOT NULL, language TEXT NOT NULL,
+                 UNIQUE (target_key_norm, language));
+             CREATE TABLE discovery_items (id TEXT PRIMARY KEY, base_generation_id TEXT,
+                 discovery_title_id TEXT, tombstoned_by_run_id TEXT, tombstoned_at TEXT,
+                 updated_at TEXT);
+             INSERT INTO discovery_titles VALUES
+                 ('t-emberfall-eng', 'tmdb:movie:10', 'tmdb:movie:10', 'eng'),
+                 ('t-emberfall-jpn', 'TMDB:Movie:10', 'tmdb:movie:10', 'jpn'),
+                 ('t-cinderwake', 'TMDB:Movie:11', 'tmdb:movie:11', 'eng'),
+                 ('t-ashgrove-blank', '', '__scryer_occurrence:item-blank', 'eng'),
+                 ('t-ashgrove-space', '  ', '__scryer_occurrence:item-space', 'eng');
+             INSERT INTO discovery_items VALUES
+                 ('i1', 'base', 't-emberfall-eng', NULL, NULL, 'old'),
+                 ('i2', 'base', 't-emberfall-jpn', NULL, NULL, 'old'),
+                 ('i3', 'other', 't-emberfall-eng', NULL, NULL, 'old'),
+                 ('i4', 'base', 't-cinderwake', NULL, NULL, 'old'),
+                 ('i5', 'base', 't-cinderwake', 'earlier', 'earlier', 'old'),
+                 ('i6', 'base', 't-ashgrove-blank', NULL, NULL, 'old'),
+                 ('i7', 'base', 't-ashgrove-space', NULL, NULL, 'old');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let datastore = StoreDatastore::sqlite(
+            pool.clone(),
+            std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        );
+        (datastore, pool)
+    }
+
+    async fn tombstone_rows(pool: &sqlx::SqlitePool) -> Vec<(String, Option<String>, bool)> {
+        sqlx::query_as(
+            "SELECT id, tombstoned_by_run_id, updated_at <> 'old' FROM discovery_items ORDER BY id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn child_rows_above_the_bind_ceiling_match_one_statement_per_id() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE child (item_id TEXT, value TEXT);
+             INSERT INTO child VALUES ('ashgrove', 'b'), ('ashgrove', 'a'),
+                 ('cinderwake', 'c'), ('emberfall', 'e'), ('unrequested', 'x');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let datastore = StoreDatastore::sqlite(
+            pool.clone(),
+            std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        );
+        let template = "SELECT item_id, value FROM child WHERE item_id IN ({})
+                        ORDER BY item_id ASC, value ASC";
+        let decode = |rows: Vec<SqlRow>| {
+            rows.iter()
+                .map(|row| (row.text("item_id").unwrap(), row.text("value").unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let small = ["emberfall", "ashgrove", "cinderwake"].map(String::from);
+        let expected = vec![
+            ("ashgrove".to_string(), "a".to_string()),
+            ("ashgrove".to_string(), "b".to_string()),
+            ("cinderwake".to_string(), "c".to_string()),
+            ("emberfall".to_string(), "e".to_string()),
+        ];
+        assert_eq!(
+            decode(
+                fetch_child_rows(&datastore, template, &small)
+                    .await
+                    .unwrap()
+            ),
+            expected
+        );
+        // Requested ids straddle the ceiling; every id's rows stay together
+        // and in the template's order.
+        let mut large = (0..SQLITE_MAX_BIND_PARAMETERS - 1)
+            .map(|index| format!("absent-{index}"))
+            .collect::<Vec<_>>();
+        large.extend(small.iter().cloned());
+        large.extend((0..100).map(|index| format!("absent-tail-{index}")));
+        let mut rows = decode(
+            fetch_child_rows(&datastore, template, &large)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(rows[0], ("emberfall".to_string(), "e".to_string()));
+        rows.sort();
+        assert_eq!(rows, expected);
+        assert!(decode(fetch_child_rows(&datastore, template, &[]).await.unwrap()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn tombstone_by_key_norm_marks_the_rows_the_plain_key_match_marked() {
+        let keys = [
+            "tmdb:movie:10",
+            "TMDB:Movie:11",
+            "tmdb:movie:11",
+            " tmdb:movie:10 ",
+            "",
+            "  ",
+            "tmdb:movie:missing",
+        ];
+        let at = chrono::DateTime::parse_from_rfc3339("2026-11-10T10:00:00-07:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        for key in keys {
+            let (reference_store, reference) = tombstone_fixture().await;
+            drop(reference_store);
+            // The statement before the norm predicate was added.
+            sqlx::query(
+                "UPDATE discovery_items
+                 SET tombstoned_by_run_id = ?, tombstoned_at = ?, updated_at = ?
+                 WHERE base_generation_id = ?
+                   AND discovery_title_id IN (
+                        SELECT id FROM discovery_titles WHERE target_key = ?)
+                   AND tombstoned_at IS NULL",
+            )
+            .bind("run")
+            .bind(at)
+            .bind(at)
+            .bind("base")
+            .bind(key)
+            .execute(&reference)
+            .await
+            .unwrap();
+
+            let (datastore, pool) = tombstone_fixture().await;
+            let keys = vec![key.to_string()];
+            SqlRuntime::run_in_transaction(&datastore, "tombstone_test", move |tx| {
+                let keys = keys.clone();
+                Box::pin(async move {
+                    tombstone_discovery_items_tx(tx, Some("base"), &keys, "run", at).await
+                })
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                tombstone_rows(&pool).await,
+                tombstone_rows(&reference).await,
+                "{key:?}"
+            );
+        }
+
+        let (_datastore, pool) = tombstone_fixture().await;
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN SELECT id FROM discovery_titles
+             WHERE target_key = 'tmdb:movie:10' AND target_key_norm = 'tmdb:movie:10'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            plan.iter().all(|row| !row.3.starts_with("SCAN")),
+            "{plan:?}"
+        );
+    }
+
     fn sqlite_projection_datastore() -> StoreDatastore {
         StoreDatastore::Sqlite {
             pool: sqlx::SqlitePool::connect_lazy("sqlite::memory:")
@@ -6732,8 +7574,19 @@ mod tests {
         case_distinct.library_provenance[0].subject_key = case_distinct.target_key.clone();
         case_distinct.library_provenance[0].title_id = Some("library-title-203".to_string());
 
+        // A category written in another case still counts as a theme.
+        let mut upper_category = first.clone();
+        upper_category.id = format!("{run_id}:upper-category");
+        upper_category.target_key = "tmdb:movie:204".to_string();
+        upper_category.canonical_tags.truncate(1);
+        upper_category.canonical_tags[0].key = "canonical:theme:heist".to_string();
+        upper_category.canonical_tags[0].category = "THEME".to_string();
+        upper_category.canonical_tags[0].name = "Heist".to_string();
+        upper_category.library_provenance[0].subject_key = upper_category.target_key.clone();
+        upper_category.library_provenance[0].title_id = Some("library-title-204".to_string());
+
         store
-            .replace_discovery_items(run_id, &[first, second, case_distinct])
+            .replace_discovery_items(run_id, &[first, second, case_distinct, upper_category])
             .await
             .expect("items should upsert");
 
@@ -6749,7 +7602,13 @@ mod tests {
         .expect("filter options should load");
 
         assert_eq!(options.genres.len(), 2);
-        assert_eq!(options.themes.len(), 1);
+        assert_eq!(options.themes.len(), 2);
+        assert!(
+            options
+                .themes
+                .iter()
+                .any(|theme| theme.key == "canonical:theme:heist" && theme.name == "Heist")
+        );
         assert_eq!(options.studio_slugs.len(), 1);
         assert_eq!(options.genres[0].key, "canonical:genre:drama");
         assert_eq!(options.genres[0].name, "Drama");
@@ -9208,6 +10067,7 @@ mod tests {
                 .collect(),
             groups: groups.clone(),
             fetched_at,
+            regroup_attempted: true,
         };
         store
             .replace_discovery_neighbor_cache(&record, fetched_at - chrono::Duration::hours(24))
@@ -9245,6 +10105,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(cached.groups, groups);
+        assert!(cached.regroup_attempted);
         assert!(
             store
                 .get_discovery_neighbor_cache("tmdb:movie:100", "deu")
@@ -9264,6 +10125,7 @@ mod tests {
                     items: Vec::new(),
                     groups: Vec::new(),
                     fetched_at: later,
+                    regroup_attempted: false,
                 },
                 later - chrono::Duration::hours(24),
             )
@@ -9277,11 +10139,12 @@ mod tests {
                 .is_none()
         );
         assert!(
-            store
+            !store
                 .get_discovery_neighbor_cache("tmdb:movie:200", "eng")
                 .await
                 .expect("fresh entry should read")
-                .is_some()
+                .expect("fresh entry should exist")
+                .regroup_attempted
         );
         let _ = std::fs::remove_file(db);
     }
@@ -9345,6 +10208,7 @@ mod tests {
             ]
         );
         assert!(cached.groups.is_empty());
+        assert!(!cached.regroup_attempted);
         let _ = std::fs::remove_file(db);
     }
 
@@ -9867,6 +10731,288 @@ mod tests {
         .is_some();
         assert!(!low_rank_exists);
         assert!(high_rank_exists);
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_commit_drops_child_rows_a_title_no_longer_has() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_stale_title_children_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        let item = |run_id: &str, id: &str, target: u32, title: &str| {
+            let mut item = discovery_prune_item(run_id, now);
+            item.id = format!("{run_id}:{id}");
+            item.source_run_kind = "public_feed".to_string();
+            item.target_key = format!("tmdb:movie:{target}");
+            item.display_title = title.to_string();
+            item.sort_title = Some(title.to_string());
+            item.facet_terms = vec!["movie".to_string()];
+            item
+        };
+        let external_id = |source: &str, id: &str| DiscoveryExternalIdRecord {
+            source: source.to_string(),
+            kind: "movie".to_string(),
+            id: id.to_string(),
+            key: format!("{source}:movie:{id}"),
+        };
+        let source_tag = |name: &str, values: &[&str]| DiscoverySourceTagRecord {
+            category: Some("genre".to_string()),
+            name: Some(name.to_string()),
+            values: values.iter().map(|value| value.to_string()).collect(),
+        };
+        let public_commit = |run_id: &str, context_run_id: &str, items| DiscoveryPublicFeedCommit {
+            state: DiscoverySyncStateRecord {
+                last_success_generation_id: Some(context_run_id.to_string()),
+                last_public_feed_generation_id: Some(run_id.to_string()),
+                updated_at: now,
+                ..DiscoverySyncStateRecord::default()
+            },
+            run: discovery_prune_run(run_id, "public_feed", "complete", now),
+            sections: Vec::new(),
+            items,
+        };
+
+        // Ashgrove is also in the active context run, with its own chart signal.
+        let mut context_ashgrove = item("context-one", "ashgrove", 51_003, "Ashgrove");
+        context_ashgrove.source_run_kind = "context_snapshot".to_string();
+        context_ashgrove.chart_signals = vec!["top_rated".to_string()];
+        store
+            .commit_discovery_context_snapshot(&DiscoveryContextSnapshotCommit {
+                state: DiscoverySyncStateRecord {
+                    last_success_generation_id: Some("context-one".to_string()),
+                    updated_at: now,
+                    ..DiscoverySyncStateRecord::default()
+                },
+                run: discovery_prune_run("context-one", "context_snapshot", "complete", now),
+                submitted_subjects: Vec::new(),
+                items: vec![context_ashgrove],
+                facets: Vec::new(),
+                clear_pending_through_sequence: None,
+            })
+            .await
+            .expect("context snapshot should commit");
+
+        let mut emberfall = item("public-one", "emberfall", 51_001, "Emberfall");
+        emberfall.chart_signals = vec!["trending".to_string()];
+        emberfall.status_tags = vec!["airing".to_string()];
+        emberfall.sources = vec!["tmdb".to_string()];
+        emberfall.studio_slug = Some("emberfall-studio".to_string());
+        emberfall.person_ids = vec![51_001];
+        emberfall.context_terms = vec!["slow-burn".to_string()];
+        emberfall.external_ids = vec![external_id("tmdb", "51001"), external_id("imdb", "tt51001")];
+        emberfall.source_tags = vec![source_tag("Drama", &["drama", "slow-burn"])];
+        let mut cinderwake = item("public-one", "cinderwake", 51_002, "Cinderwake");
+        cinderwake.chart_signals = vec!["trending".to_string()];
+        cinderwake.studio_slug = Some("cinderwake-studio".to_string());
+        cinderwake.external_ids = vec![external_id("imdb", "tt51002")];
+        let mut ashgrove = item("public-one", "ashgrove", 51_003, "Ashgrove");
+        ashgrove.chart_signals = vec!["trending".to_string()];
+        let mut duskmere = item("public-one", "duskmere", 51_004, "Duskmere");
+        duskmere.chart_signals = vec!["new_release".to_string()];
+        let mut brindlemoor = item("public-one", "brindlemoor", 51_005, "Brindlemoor");
+        brindlemoor.chart_signals = vec!["trending".to_string()];
+        brindlemoor.status_tags = vec!["airing".to_string()];
+        store
+            .commit_discovery_public_feed(&public_commit(
+                "public-one",
+                "context-one",
+                vec![
+                    emberfall.clone(),
+                    cinderwake.clone(),
+                    ashgrove.clone(),
+                    duskmere.clone(),
+                    brindlemoor.clone(),
+                ],
+            ))
+            .await
+            .expect("first public feed should commit");
+        // Brindlemoor is also a library title's "more like this" pick.
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id, created_at
+             )
+             VALUES ({}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("library-ashgrove".to_string()),
+                SqlArg::Text("movie_default_library".to_string()),
+                SqlArg::Text("Ashgrove".to_string()),
+                SqlArg::Text("ashgrove".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("canonical_root_for_movie_default_library".to_string()),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await
+        .expect("library title should insert");
+        let mut brindlemoor_pick = brindlemoor.clone();
+        brindlemoor_pick.id = "title:library-ashgrove:more_like_this:item:0".to_string();
+        brindlemoor_pick.run_id = "title:library-ashgrove:more_like_this".to_string();
+        brindlemoor_pick.base_generation_id = None;
+        brindlemoor_pick.source_run_kind = "title_more_like_this".to_string();
+        store
+            .replace_title_more_like_this_items("library-ashgrove", "eng", &[brindlemoor_pick])
+            .await
+            .expect("more like this should store");
+
+        // The next feed: Emberfall leaves the chart, loses its status tag, its
+        // source, its IMDb id and a source tag value, and carries no studio,
+        // people or context terms at all. Cinderwake moves studio. Duskmere
+        // shows up twice with two other chart signals, and Ashgrove and
+        // Brindlemoor leave the chart.
+        let mut emberfall = item("public-two", "emberfall", 51_001, "Emberfall");
+        emberfall.external_ids = vec![external_id("tmdb", "51001")];
+        emberfall.source_tags = vec![source_tag("Drama", &["drama"])];
+        let mut cinderwake_again = cinderwake.clone();
+        cinderwake_again.id = "public-two:cinderwake".to_string();
+        cinderwake_again.run_id = "public-two".to_string();
+        cinderwake_again.base_generation_id = Some("public-two".to_string());
+        cinderwake_again.studio_slug = Some("cinderwake-pictures".to_string());
+        let ashgrove = item("public-two", "ashgrove", 51_003, "Ashgrove");
+        let mut duskmere_trending = item("public-two", "duskmere-a", 51_004, "Duskmere");
+        duskmere_trending.chart_signals = vec!["trending".to_string()];
+        let mut duskmere_top_rated = item("public-two", "duskmere-b", 51_004, "Duskmere");
+        duskmere_top_rated.chart_signals = vec!["top_rated".to_string()];
+        duskmere_top_rated.sort_index = 1;
+        let brindlemoor = item("public-two", "brindlemoor", 51_005, "Brindlemoor");
+        store
+            .commit_discovery_public_feed(&public_commit(
+                "public-two",
+                "context-one",
+                vec![
+                    emberfall,
+                    cinderwake_again,
+                    ashgrove,
+                    duskmere_trending,
+                    duskmere_top_rated,
+                    brindlemoor,
+                ],
+            ))
+            .await
+            .expect("second public feed should commit");
+
+        let terms = |target: &'static str, kind: &'static str| {
+            let store = &store;
+            async move {
+                SqlRuntime::fetch_all(
+                    store.datastore.read_exec(),
+                    "SELECT t.term_value
+                     FROM discovery_title_terms t
+                     JOIN discovery_titles d ON d.id = t.discovery_title_id
+                     WHERE d.target_key_norm = {} AND t.term_kind = {}
+                     ORDER BY t.term_value",
+                    &[
+                        SqlArg::Text(target.to_string()),
+                        SqlArg::Text(kind.to_string()),
+                    ],
+                )
+                .await
+                .expect("terms should load")
+                .iter()
+                .map(|row| row.text("term_value").expect("term value"))
+                .collect::<Vec<_>>()
+            }
+        };
+        let strings = |values: &[&str]| values.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+
+        // Emberfall no longer matches the chart, status or source filters.
+        assert!(terms("tmdb:movie:51001", "chart_signal").await.is_empty());
+        assert!(terms("tmdb:movie:51001", "status_tag").await.is_empty());
+        assert!(terms("tmdb:movie:51001", "source").await.is_empty());
+        // A feed that leaves studio, people and context terms out says
+        // nothing about them, so they stay.
+        assert_eq!(
+            terms("tmdb:movie:51001", "studio").await,
+            strings(&["emberfall-studio"])
+        );
+        assert_eq!(
+            terms("tmdb:movie:51001", "person").await,
+            strings(&["51001"])
+        );
+        assert_eq!(
+            terms("tmdb:movie:51001", "context_term").await,
+            strings(&["slow-burn"])
+        );
+        assert_eq!(
+            terms("tmdb:movie:51001", "facet_term").await,
+            strings(&["movie"])
+        );
+        assert_eq!(
+            terms("tmdb:movie:51001", "source_tag_value").await,
+            strings(&["drama"])
+        );
+        let emberfall_ids = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            "SELECT e.source
+             FROM discovery_title_external_ids e
+             JOIN discovery_titles d ON d.id = e.discovery_title_id
+             WHERE d.target_key_norm = 'tmdb:movie:51001'",
+            &[],
+        )
+        .await
+        .expect("external ids should load");
+        assert_eq!(emberfall_ids.len(), 1);
+        assert_eq!(emberfall_ids[0].text("source").expect("source"), "tmdb");
+        let emberfall_tag_values = SqlRuntime::fetch_all(
+            store.datastore.read_exec(),
+            "SELECT v.source_tag_value
+             FROM discovery_title_source_tag_values v
+             JOIN discovery_titles d ON d.id = v.discovery_title_id
+             WHERE d.target_key_norm = 'tmdb:movie:51001'",
+            &[],
+        )
+        .await
+        .expect("source tag values should load");
+        assert_eq!(emberfall_tag_values.len(), 1);
+        let hydrated = store
+            .list_discovery_items_for_generation("public-two")
+            .await
+            .expect("public items should hydrate");
+        let hydrated_emberfall = hydrated
+            .iter()
+            .find(|item| item.target_key == "tmdb:movie:51001")
+            .expect("Emberfall should hydrate");
+        assert!(hydrated_emberfall.chart_signals.is_empty());
+        assert_eq!(
+            hydrated_emberfall.studio_slug.as_deref(),
+            Some("emberfall-studio")
+        );
+
+        // A title given a different studio swaps it; its unchanged rows stay.
+        assert_eq!(
+            terms("tmdb:movie:51002", "chart_signal").await,
+            strings(&["trending"])
+        );
+        assert_eq!(
+            terms("tmdb:movie:51002", "studio").await,
+            strings(&["cinderwake-pictures"])
+        );
+        // A title a "more like this" row also holds keeps every row.
+        assert_eq!(
+            terms("tmdb:movie:51005", "chart_signal").await,
+            strings(&["trending"])
+        );
+        assert_eq!(
+            terms("tmdb:movie:51005", "status_tag").await,
+            strings(&["airing"])
+        );
+        // Every occurrence in one commit counts, and an old signal goes.
+        assert_eq!(
+            terms("tmdb:movie:51004", "chart_signal").await,
+            strings(&["top_rated", "trending"])
+        );
+        // A title the active context run also holds keeps its rows.
+        assert_eq!(
+            terms("tmdb:movie:51003", "chart_signal").await,
+            strings(&["top_rated", "trending"])
+        );
 
         let _ = std::fs::remove_file(db);
     }
@@ -10573,6 +11719,24 @@ mod tests {
                 first.items.iter().map(|i| &i.id).collect::<Vec<_>>(),
                 repeated.items.iter().map(|i| &i.id).collect::<Vec<_>>()
             );
+            let uncounted = store.query_discovery_items_uncounted(&query).await.unwrap();
+            assert_eq!(
+                uncounted, first.items,
+                "uncounted page matches the counted page"
+            );
+            let identity_keys = store
+                .query_discovery_item_identity_keys(&query)
+                .await
+                .unwrap();
+            assert_eq!(
+                identity_keys,
+                first
+                    .items
+                    .iter()
+                    .map(|item| item.target_key.clone())
+                    .collect::<Vec<_>>(),
+                "identity keys follow the counted page's order"
+            );
         }
         query.excluded_identity_keys = vec!["tmdb:movie:0".into()];
         query.requested_keys = vec!["movie:tmdb:1".into()];
@@ -10673,6 +11837,285 @@ mod tests {
         drop(store);
         drop(services);
         std::fs::remove_file(db).unwrap();
+    }
+
+    /// The label count as one OR join, kept to prove the split join counts
+    /// the same items per label.
+    async fn joined_reference_browse_label_counts(
+        store: &DiscoveryStore,
+        query: &DiscoveryItemsStorageQuery,
+        labels: &[(String, String)],
+    ) -> Vec<i64> {
+        let mut sql = build_discovery_items_sql(&store.datastore, query).expect("pool sql");
+        let mut label_rows = Vec::new();
+        for (index, (kind, label)) in labels.iter().enumerate() {
+            for value in canonical_facet_filter_values(kind, std::slice::from_ref(label)) {
+                label_rows.push("(CAST({} AS BIGINT), CAST({} AS TEXT), CAST({} AS TEXT))");
+                sql.args.push(SqlArg::I64(index as i64));
+                sql.args
+                    .push(SqlArg::Text(kind.trim().to_ascii_lowercase()));
+                sql.args.push(SqlArg::Text(value));
+            }
+        }
+        let statement = format!(
+            "{}, requested_labels(label_index, category, value) AS (VALUES {})
+             SELECT labels.label_index, COUNT(DISTINCT i.id) AS item_count
+             FROM deduped i
+             JOIN discovery_title_metadata_tags tag ON tag.discovery_title_id = i.discovery_title_id
+             JOIN requested_labels labels ON labels.category = LOWER(tag.category)
+                 AND (labels.value = LOWER(tag.tag_key) OR labels.value = LOWER(tag.name))
+             WHERE i.identity_rank = 1
+             GROUP BY labels.label_index",
+            sql.cte_sql,
+            label_rows.join(", ")
+        );
+        let rows = SqlRuntime::fetch_all(store.datastore.read_exec(), &statement, &sql.args)
+            .await
+            .expect("reference label counts");
+        let mut counts = vec![0; labels.len()];
+        for row in rows {
+            counts[row.i64("label_index").unwrap() as usize] = row.i64("item_count").unwrap();
+        }
+        counts
+    }
+
+    #[tokio::test]
+    async fn sqlite_browse_label_counts_match_the_joined_count() {
+        let db =
+            std::env::temp_dir().join(format!("scryer_label_count_{}.db", uuid::Uuid::new_v4()));
+        let services = SqliteServices::new(db.to_string_lossy()).await.unwrap();
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        let tag = |key: &str, category: &str, name: &str| {
+            let mut tag = canonical_genre_tags(&[name]).remove(0);
+            tag.key = key.to_string();
+            tag.category = category.to_string();
+            tag
+        };
+        for (run, kind, keys) in [
+            (
+                "labels-context",
+                "context_snapshot",
+                vec![
+                    "tmdb:movie:1",
+                    "tmdb:movie:2",
+                    "tmdb:movie:3",
+                    "tmdb:movie:4",
+                    "tmdb:movie:5",
+                ],
+            ),
+            (
+                "labels-public",
+                "public_feed",
+                vec![
+                    "tmdb:movie:2",
+                    "TMDB:Movie:3",
+                    "tmdb:movie:6",
+                    "tmdb:movie:7",
+                ],
+            ),
+        ] {
+            store
+                .upsert_discovery_sync_run(&discovery_prune_run(run, kind, "complete", now))
+                .await
+                .unwrap();
+            let items = keys
+                .into_iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    let mut item = discovery_prune_item(run, now);
+                    item.id = format!("{run}-{index}");
+                    item.target_key = key.to_string();
+                    item.display_title = format!("Cinderwake {index:02}");
+                    item.sort_title = Some(item.display_title.clone());
+                    item.source_run_kind = kind.to_string();
+                    item.resolved = true;
+                    item.rank_score = Some(index as f64);
+                    item.canonical_tags = match index % 5 {
+                        // Key and name both match: counted once.
+                        0 => vec![tag("canonical:genre:drama", "Genre", "DRAMA")],
+                        // Only the name matches.
+                        1 => vec![
+                            tag("custom:genre:x", "genre", "Drama"),
+                            tag("canonical:theme:heist", "THEME", "Heist"),
+                        ],
+                        // Two tags match the same label, and one matches by key only.
+                        2 => vec![
+                            tag("canonical:genre:drama", "genre", "Stage"),
+                            tag("custom:genre:y", "genre", "drama"),
+                            tag("canonical:genre:comedy", "genre", "Comedy"),
+                        ],
+                        // Right value, wrong category.
+                        3 => vec![tag("canonical:theme:drama", "theme", "Drama")],
+                        _ => Vec::new(),
+                    };
+                    item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+                        subject_key: "tmdb:movie:seed".into(),
+                        title_id: None,
+                        library_id: Some("labels-library".into()),
+                    }];
+                    item
+                })
+                .collect::<Vec<_>>();
+            store.replace_discovery_items(run, &items).await.unwrap();
+        }
+        let labels: Vec<(String, String)> = vec![
+            ("genre".into(), "drama".into()),
+            ("genre".into(), "DRAMA".into()),
+            ("genre".into(), "comedy".into()),
+            ("theme".into(), "heist".into()),
+            ("theme".into(), "drama".into()),
+            ("genre".into(), "missing".into()),
+        ];
+        let base = DiscoveryItemsStorageQuery {
+            context_run_id: Some("labels-context".into()),
+            public_run_id: Some("labels-public".into()),
+            readable_library_ids: vec!["labels-library".into()],
+            allowed_media_kinds: vec!["movie".into()],
+            limit: 1000,
+            ..Default::default()
+        };
+        let mut queries = vec![base.clone()];
+        let mut with_label = base.clone();
+        with_label.browse_label = Some(("genre".into(), "drama".into()));
+        queries.push(with_label);
+        let mut context_only = base.clone();
+        context_only.public_run_id = None;
+        queries.push(context_only);
+        let mut saw_counts = false;
+        for query in &queries {
+            let expected = joined_reference_browse_label_counts(&store, query, &labels).await;
+            saw_counts |= expected.iter().any(|count| *count > 0);
+            assert_eq!(
+                store
+                    .count_discovery_browse_labels(query, &labels)
+                    .await
+                    .unwrap(),
+                expected,
+                "{query:?}"
+            );
+        }
+        assert!(saw_counts, "the fixture must produce non-zero counts");
+        drop(store);
+        drop(services);
+        std::fs::remove_file(db).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sqlite_target_key_lookup_matches_filtering_the_whole_pool() {
+        let db =
+            std::env::temp_dir().join(format!("scryer_key_lookup_{}.db", uuid::Uuid::new_v4()));
+        let services = SqliteServices::new(db.to_string_lossy()).await.unwrap();
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        for (run, kind, keys) in [
+            (
+                "lookup-context",
+                "context_snapshot",
+                vec![
+                    "tmdb:movie:1",
+                    "tmdb:movie:2",
+                    "TMDB:Movie:3",
+                    " tmdb:movie:4 ",
+                    "",
+                    "tmdb:movie:5",
+                ],
+            ),
+            (
+                "lookup-public",
+                "public_feed",
+                vec![
+                    "tmdb:movie:2",
+                    "tmdb:movie:3",
+                    "Tmdb:Movie:5",
+                    "",
+                    "tmdb:movie:6",
+                ],
+            ),
+        ] {
+            store
+                .upsert_discovery_sync_run(&discovery_prune_run(run, kind, "complete", now))
+                .await
+                .unwrap();
+            let items = keys
+                .into_iter()
+                .enumerate()
+                .map(|(index, key)| {
+                    let mut item = discovery_prune_item(run, now);
+                    item.id = format!("{run}-{index}");
+                    item.target_key = key.to_string();
+                    item.display_title = format!("Emberfall {index:02}");
+                    item.sort_title = Some(item.display_title.clone());
+                    item.source_run_kind = kind.to_string();
+                    item.resolved = index % 3 != 0;
+                    item.rank_score = Some(index as f64);
+                    item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+                        subject_key: "tmdb:movie:seed".into(),
+                        title_id: None,
+                        library_id: Some("lookup-library".into()),
+                    }];
+                    item
+                })
+                .collect::<Vec<_>>();
+            store.replace_discovery_items(run, &items).await.unwrap();
+        }
+        let base = DiscoveryItemsStorageQuery {
+            context_run_id: Some("lookup-context".into()),
+            public_run_id: Some("lookup-public".into()),
+            readable_library_ids: vec!["lookup-library".into()],
+            allowed_media_kinds: vec!["movie".into()],
+            filters: DiscoveryItemsQuery {
+                include_owned: true,
+                include_public: true,
+                ..DiscoveryItemsQuery::default()
+            },
+            limit: 1000,
+            ..Default::default()
+        };
+        for include_unresolved in [true, false] {
+            let mut whole_pool_query = base.clone();
+            whole_pool_query.filters.include_unresolved = include_unresolved;
+            let whole_pool = store
+                .query_discovery_items(&whole_pool_query)
+                .await
+                .unwrap();
+            assert!(whole_pool.total_count > 0);
+            for requested in [
+                vec!["tmdb:movie:1"],
+                vec!["TMDB:MOVIE:3"],
+                vec![" tmdb:movie:4 "],
+                vec!["tmdb:movie:5", "tmdb:movie:2"],
+                vec!["tmdb:movie:6", "tmdb:movie:missing"],
+                vec!["tmdb:movie:missing"],
+            ] {
+                let wanted = requested
+                    .iter()
+                    .map(|key| key.trim().to_ascii_lowercase())
+                    .collect::<Vec<_>>();
+                // Every row of a dedupe partition shares its target key, so
+                // filtering the deduped pool equals filtering before dedupe.
+                let expected = whole_pool
+                    .items
+                    .iter()
+                    .filter(|item| wanted.contains(&item.target_key.to_ascii_lowercase()))
+                    .map(|item| item.id.clone())
+                    .collect::<Vec<_>>();
+                let mut query = whole_pool_query.clone();
+                query.filters.target_keys = requested.iter().map(|key| key.to_string()).collect();
+                let page = store.query_discovery_items(&query).await.unwrap();
+                assert_eq!(
+                    page.items
+                        .iter()
+                        .map(|item| item.id.clone())
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{requested:?} {include_unresolved}"
+                );
+                assert_eq!(page.total_count as usize, expected.len());
+            }
+        }
+        drop(services);
+        let _ = std::fs::remove_file(db);
     }
 
     #[tokio::test]

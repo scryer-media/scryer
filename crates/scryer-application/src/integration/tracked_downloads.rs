@@ -2319,6 +2319,12 @@ pub enum TrackedDownloadCommand {
         record_completed_at: DateTime<Utc>,
         reply: oneshot::Sender<AppResult<ManualImportRecoveryOutcome>>,
     },
+    SetImportTrackingDismissed {
+        id: String,
+        expected_download_id: String,
+        dismissed: bool,
+        reply: oneshot::Sender<AppResult<()>>,
+    },
     Ignore {
         id: String,
         reply: oneshot::Sender<AppResult<()>>,
@@ -2497,6 +2503,29 @@ impl TrackedDownloadHandle {
         reply_rx.await.map_err(|_| {
             crate::AppError::Repository("tracked download service dropped reply".into())
         })
+    }
+
+    pub async fn set_import_tracking_dismissed(
+        &self,
+        id: String,
+        expected_download_id: String,
+        dismissed: bool,
+    ) -> AppResult<()> {
+        let (reply, response) = oneshot::channel();
+        self.tx
+            .send(TrackedDownloadCommand::SetImportTrackingDismissed {
+                id,
+                expected_download_id,
+                dismissed,
+                reply,
+            })
+            .await
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
+        response.await.map_err(|_| {
+            crate::AppError::Repository("tracked download service dropped reply".into())
+        })?
     }
 
     pub async fn ignore(&self, id: String) -> AppResult<()> {
@@ -3970,10 +3999,16 @@ mod tests {
         async fn count_title_history_page_events(
             &self,
             event_types: Option<&[TitleHistoryEventType]>,
-            title_ids: Option<&[String]>,
+            title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
             _include_titleless: bool,
             download_id: Option<&str>,
         ) -> AppResult<i64> {
+            let title_ids = title_scope.map(|scope| match scope {
+                crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+                crate::TitleHistoryTitleScope::Libraries(_) => {
+                    unimplemented!("these tests never read history by library")
+                }
+            });
             let events = self.events.lock().await;
             Ok(events
                 .iter()
@@ -3996,13 +4031,19 @@ mod tests {
         async fn list_title_history_page_events(
             &self,
             event_types: Option<&[TitleHistoryEventType]>,
-            title_ids: Option<&[String]>,
+            title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
             _include_titleless: bool,
             download_id: Option<&str>,
             limit: usize,
             offset: usize,
         ) -> AppResult<Vec<DomainEvent>> {
             let page_size = if limit == 0 { usize::MAX } else { limit };
+            let title_ids = title_scope.map(|scope| match scope {
+                crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+                crate::TitleHistoryTitleScope::Libraries(_) => {
+                    unimplemented!("these tests never read history by library")
+                }
+            });
             let events = self.events.lock().await;
             Ok(events
                 .iter()
@@ -4214,11 +4255,10 @@ mod tests {
             Ok(())
         }
 
-        async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
+        async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
-
-        async fn clear_folder_path(&self, _: &str) -> AppResult<()> {
+        async fn check_title_folder_writes(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
 
@@ -4390,11 +4430,10 @@ mod tests {
             Ok(())
         }
 
-        async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
+        async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
-
-        async fn clear_folder_path(&self, _: &str) -> AppResult<()> {
+        async fn check_title_folder_writes(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
 
@@ -4574,6 +4613,50 @@ mod tests {
             attempts,
             next_retry_at,
         }
+    }
+
+    /// The prebuilt source lookup answers every identity, including ones two
+    /// cached entries share and ones nothing carries, exactly as a scan of the
+    /// same entries in the same order does.
+    #[test]
+    fn source_lookup_matches_a_scan_of_the_cache() {
+        use crate::integration::workflow::{
+            first_tracked_download_id_by_source, tracked_download_source_identity,
+        };
+
+        let mut entries = Vec::new();
+        for (client_id, item_id) in [
+            ("client-a", "job-1"),
+            ("client-a", "job-2"),
+            ("client-b", "job-1"),
+            ("client-a", "job-1"),
+            ("client-b", "  "),
+        ] {
+            let mut tracked = build_tracked_download(item_id);
+            tracked.client_id = client_id.to_string();
+            tracked.client_item.client_id = client_id.to_string();
+            entries.push(tracked);
+        }
+        let ordered: Vec<&TrackedDownload> = entries.iter().collect();
+        let lookup = first_tracked_download_id_by_source(ordered.iter().copied());
+
+        let mut queries: Vec<ClientJobLocator> = ordered
+            .iter()
+            .filter_map(|tracked| tracked_download_source_identity(tracked))
+            .collect();
+        queries.push(ClientJobLocator::new(
+            Some("client-c"),
+            &entries[0].client_type,
+            "job-9",
+        ));
+        for query in &queries {
+            let scanned = ordered
+                .iter()
+                .find(|tracked| tracked_download_source_identity(tracked).as_ref() == Some(query))
+                .map(|tracked| tracked.download_id);
+            assert_eq!(lookup.get(query).copied(), scanned, "{query:?}");
+        }
+        assert_eq!(lookup.len(), 3);
     }
 
     #[test]
@@ -8651,6 +8734,46 @@ mod tests {
             .expect("restart should re-track the download");
         assert_eq!(recovered.download_id, canonical_download_id);
         assert_eq!(recovered.state, TrackedDownloadState::Ignored);
+    }
+
+    #[tokio::test]
+    async fn dismiss_import_warning_restores_canonical_marker_on_restart() {
+        let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+        let submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        submissions
+            .canonical_identity_tracked_states
+            .lock()
+            .await
+            .insert(
+                canonical_download_id,
+                TrackedDownloadState::ImportDismissed.as_str().to_string(),
+            );
+        let registry = Arc::new(TestDownloadRegistry {
+            ids: Mutex::new(HashMap::from([(
+                "dismissed-job".to_string(),
+                canonical_download_id,
+            )])),
+            failing_item_ids: HashSet::new(),
+            conflicting_item_ids: HashMap::new(),
+            fallback_download_ids: HashMap::new(),
+        });
+        let app = build_app(submissions, Arc::new(TestImportRepo::default()))
+            .with_test_overrides(|services| services.with_download_registry(registry));
+        let mut item = build_client_item();
+        item.download_client_item_id = "dismissed-job".to_string();
+        item.download_id = None;
+        let tracked_id = tracked_download_id_for_item(&item);
+        let mut restarted = TrackedDownloadService::new();
+        restarted.track(&app, item.clone()).await;
+        // Further successful polls must neither revive import nor forget the marker.
+        restarted.track(&app, item).await;
+        let recovered = restarted
+            .find(&tracked_id)
+            .expect("dismissed source remains tracked");
+        assert_eq!(recovered.download_id, canonical_download_id);
+        assert_eq!(recovered.state, TrackedDownloadState::ImportDismissed);
+        assert!(recovered.state.is_import_settled());
+        assert!(!recovered.state.counts_as_imported());
     }
 
     /// A poller-shaped torrent item: the observed download id is the info hash,

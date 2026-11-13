@@ -18,6 +18,11 @@ export type LibraryGraphRequest = {
   facet: Facet;
   /** The libraries in view; empty means every library the viewer can read. */
   libraryIds: readonly string[];
+  /**
+   * The graph already drawn for this request. The server is told its build
+   * time, and when that is still the newest graph the load returns it as is.
+   */
+  held?: LibraryGraphResult | null;
 };
 
 export interface LibraryGraphSource {
@@ -43,6 +48,7 @@ export function createFixtureLibraryGraphSource(
 
 type LibraryGraphPayload = {
   generatedAt: string;
+  viewKey: string;
   nodes: LibraryGraphNode[];
   edges: LibraryGraphEdge[];
   clusters: Array<
@@ -50,12 +56,14 @@ type LibraryGraphPayload = {
   >;
   subjectCount: number;
   truncated: boolean;
+  /** True when this graph is the one the request said it holds. */
+  unchanged?: boolean;
 };
 
 type LibraryGraphQueryData = { libraryGraph?: LibraryGraphPayload | null };
 
 type LibraryGraphQueryVariables = {
-  input: { facet: Facet; libraryIds?: string[] };
+  input: { facet: Facet; libraryIds?: string[]; knownViewKey?: string };
 };
 
 /** The server's payload as a library graph result. */
@@ -64,6 +72,7 @@ export function libraryGraphResultFromPayload(
 ): LibraryGraphResult {
   return {
     generatedAt: payload.generatedAt,
+    viewKey: payload.viewKey,
     nodes: payload.nodes.map((node) => ({
       subjectKey: node.subjectKey,
       targetKey: node.targetKey,
@@ -100,6 +109,8 @@ const delay = (ms: number) =>
  * The graph the server built for the facet and libraries. A request error
  * rejects; a graph that has not been built yet resolves to null. A graph
  * replaced while it was being read is read once more after a short wait.
+ * When the server says the held graph is still the view it would give, the
+ * held graph is returned.
  */
 export function createServerLibraryGraphSource(
   client: Pick<Client, "query">,
@@ -108,6 +119,7 @@ export function createServerLibraryGraphSource(
   return {
     async load(request) {
       const libraryIds = [...request.libraryIds];
+      const held = request.held?.viewKey ? request.held : null;
       const read = () =>
         client
           .query<LibraryGraphQueryData, LibraryGraphQueryVariables>(
@@ -116,6 +128,7 @@ export function createServerLibraryGraphSource(
               input: {
                 facet: request.facet,
                 ...(libraryIds.length > 0 ? { libraryIds } : {}),
+                ...(held ? { knownViewKey: held.viewKey } : {}),
               },
             },
             { requestPolicy: "network-only" },
@@ -137,6 +150,9 @@ export function createServerLibraryGraphSource(
         throw error;
       }
       const payload = data?.libraryGraph;
+      if (payload?.unchanged && held) {
+        return held;
+      }
       return payload ? libraryGraphResultFromPayload(payload) : null;
     },
   };

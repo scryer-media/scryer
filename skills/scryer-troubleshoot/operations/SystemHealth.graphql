@@ -1,0 +1,27 @@
+# Readiness, title counts and 24-hour indexer statistics.
+# dbPath is deliberately not selected: it is a local path.
+query SystemHealth {
+  systemHealth {
+    serviceReady
+    datastoreEngine
+    datastoreMigrationKey
+    totalTitles
+    monitoredTitles
+    titlesMovie
+    titlesSeries
+    titlesAnime
+    indexerStats {
+      indexerId
+      indexerName
+      queriesLast24H
+      successfulLast24H
+      failedLast24H
+      grabsLast24H
+      lastQueryAt
+      apiCurrent
+      apiMax
+      grabCurrent
+      grabMax
+    }
+  }
+}

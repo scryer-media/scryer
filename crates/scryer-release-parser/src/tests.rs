@@ -3,10 +3,177 @@ use chrono::NaiveDate;
 use crate::enrichment::{enrich_candidate, project_final_metadata};
 use crate::{
     AudioCodec, ContextAlias, ContextEpisode, ContextFacetHint, ContextTitle,
-    ContextTitleMatchKind, ExternalIdSource, ParseFamily, ParsedEpisodeReleaseType,
-    ReleaseParseContext, ReleaseSource, StreamingService, TokenRole, VideoCodec,
-    analyze_release_against_targets, analyze_release_for_target,
+    ContextTitleMatchKind, ExternalIdSource, ParseDisposition, ParseFamily,
+    ParsedEpisodeReleaseType, ReleaseParseContext, ReleaseSource, StreamingService, TokenRole,
+    VideoCodec, analyze_release_against_targets, analyze_release_for_target,
 };
+
+#[test]
+fn numeric_episode_titles_do_not_extend_standard_ranges() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let target = context(facet, "Show A");
+        for (marker, season, expected) in [
+            ("S13E01 - 13", 13, 1),
+            ("S13E02 - 113 AM", 13, 2),
+            ("S01E05 - 12 Angry Men", 1, 5),
+            ("S01E05 - 24 Hours", 1, 5),
+            ("S01E10 - 11", 1, 10),
+            ("S01E05 - 6", 1, 5),
+            ("S01E05 - 3", 1, 5),
+            ("S01E05 - 5 Years Later", 1, 5),
+            ("S01E01 - 03", 1, 1),
+            ("S01E08 - 09", 1, 8),
+            ("S01E01 \u{2013} 13", 1, 1),
+            ("S01E01- 13", 1, 1),
+            ("S01E01\u{2013} 13", 1, 1),
+            ("S01E01-- 13", 1, 1),
+            ("S02E01 - 083", 2, 1),
+            ("S03E05 - 049 - Title", 3, 5),
+        ] {
+            for suffix in ["", " [WEBDL-1080p][EAC3 5.1][h264]-Grp.mkv"] {
+                let raw = format!("Show A (2011) - {marker}{suffix}");
+                let parsed = crate::best_parse_for_target(&raw, &target);
+                let episode = parsed.episode.expect(&raw);
+                assert_eq!(episode.season, Some(season), "{raw}");
+                assert_eq!(episode.episode_numbers, vec![expected], "{raw}");
+                assert!(!episode.full_season, "{raw}");
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_standard_ranges_preserve_members_before_episode_titles() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let target = context(facet, "Show A");
+        for marker in [
+            "S01E01-03",
+            "S01E01\u{2013}03",
+            "S01E01\u{2014}03",
+            "S01E01\u{2212}03",
+            "S01E01~03",
+            "S01E01\u{ff5e}03",
+            "S01E01-E03",
+            "S01E01-S01E03",
+            "S01E01 - E03",
+            "S01E01-02-03",
+            "S01E01E02E03",
+        ] {
+            for suffix in ["", " - Title", " - 13", " - 083 - Title"] {
+                let raw = format!("Show A (2011) - {marker}{suffix} [WEBDL-1080p]-Grp.mkv");
+                let parsed = crate::best_parse_for_target(&raw, &target);
+                let episode = parsed.episode.expect(&raw);
+                assert_eq!(episode.season, Some(1), "{raw}");
+                assert_eq!(episode.episode_numbers, vec![1, 2, 3], "{raw}");
+            }
+        }
+    }
+}
+
+#[test]
+fn multi_season_scope_keeps_a_spaced_episode_range() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let raw = "Show A S01-S03 E01 - 10 1080p";
+        let parsed = crate::best_parse_for_target(raw, &context(facet, "Show A"));
+        let episode = parsed.episode.expect(raw);
+        assert!(episode.is_multi_season, "{raw}");
+        assert_eq!(episode.season_numbers, vec![1, 2, 3], "{raw}");
+        assert_eq!(episode.season, None, "{raw}");
+        assert_eq!(
+            episode.absolute_episode_numbers,
+            (1..=10).collect::<Vec<_>>(),
+            "{raw}"
+        );
+        assert!(!episode.full_season, "{raw}");
+        assert_eq!(parsed.release_group, None, "{raw}");
+    }
+}
+
+#[test]
+fn fused_and_explicit_ranges_survive_following_segments() {
+    for (raw, expected) in [
+        (
+            "Show A - S01E01-14 - 1080p WEB H.264 -GRP (SVC)",
+            (1..=14).collect::<Vec<_>>(),
+        ),
+        (
+            "[Grp] Show A (2024) - S01E01-12 - 001-012 - Season 1 - [Batch]",
+            (1..=12).collect(),
+        ),
+        ("Show-A-[E01-E02-E03]-[1280x720p]", vec![1, 2, 3]),
+        ("[Grp] Show A E01-02 - Some Title [1080p]", vec![1, 2]),
+    ] {
+        let parsed =
+            crate::best_parse_for_target(raw, &context(ContextFacetHint::Series, "Show A"));
+        let episode = parsed.episode.expect(raw);
+        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(episode.episode_numbers, expected, "{raw}");
+        assert!(!episode.full_season, "{raw}");
+        assert!(!episode.is_multi_season, "{raw}");
+    }
+}
+
+#[test]
+fn spaced_bare_range_end_keeps_the_first_episode_but_is_ambiguous() {
+    for (raw, season) in [
+        ("Show A S01E01 - 12 [Batch] [1080p]", 1),
+        ("[Grp] Show A (S01E01 - 12) [1080p]", 1),
+        ("Show A S01E01 - 03 [1080p]", 1),
+        ("Show A S01E01 - 03.mkv", 1),
+        ("Show A S01E01 - 03 1080p WEB-DL x264-GRP", 1),
+        (
+            "Show A (2011) - S13E01 - 13 [WEBDL-1080p][EAC3 5.1][h264]-Grp.mkv",
+            13,
+        ),
+        ("Show A (2011) - S13E01 - 13 [WEBDL-1080p].mkv", 13),
+        ("Show A 1x01 - 03 1080p", 1),
+    ] {
+        let target = context(ContextFacetHint::Series, "Show A");
+        let analysis = analyze_release_for_target(raw, &target);
+        assert_eq!(analysis.disposition, ParseDisposition::Ambiguous, "{raw}");
+        let parsed = crate::best_parse_for_target(raw, &target);
+        let episode = parsed.episode.expect(raw);
+        assert_eq!(episode.season, Some(season), "{raw}");
+        assert_eq!(episode.episode_numbers, vec![1], "{raw}");
+    }
+}
+
+#[test]
+fn episode_titles_and_absolute_slots_after_an_episode_stay_confident() {
+    for suffix in ["", " [WEBDL-1080p]-Grp.mkv"] {
+        for (marker, season, expected) in [
+            ("S01E05 - 12 Angry Men", 1, 5),
+            ("S01E05 - 5 Years Later", 1, 5),
+            ("S02E01 - 083 - Title", 2, 1),
+            ("S01E05 - 3", 1, 5),
+            ("S01E01 - Title", 1, 1),
+        ] {
+            let raw = format!("Show A (2011) - {marker}{suffix}");
+            let target = context(ContextFacetHint::Series, "Show A");
+            let analysis = analyze_release_for_target(&raw, &target);
+            assert_eq!(analysis.disposition, ParseDisposition::Parsed, "{raw}");
+            let parsed = crate::best_parse_for_target(&raw, &target);
+            let episode = parsed.episode.expect(&raw);
+            assert_eq!(episode.season, Some(season), "{raw}");
+            assert_eq!(episode.episode_numbers, vec![expected], "{raw}");
+        }
+    }
+    let raw = "Show A S01-S03 E01 - 10 1080p";
+    let analysis = analyze_release_for_target(raw, &context(ContextFacetHint::Series, "Show A"));
+    assert_eq!(analysis.disposition, ParseDisposition::Parsed, "{raw}");
+}
 
 #[test]
 fn parenthetical_qualifiers_do_not_create_independent_title_identities() {
@@ -31,6 +198,56 @@ fn parenthetical_qualifiers_do_not_create_independent_title_identities() {
             let episode = parsed.episode.expect(&raw);
             assert_eq!(episode.season, Some(1), "{raw}");
             assert_eq!(episode.full_season, marker == "(Season 01)", "{raw}");
+        }
+    }
+}
+
+#[test]
+fn compact_episode_ranges_before_hyphenated_metadata_are_not_absolute_slots() {
+    for facet in [
+        ContextFacetHint::Unknown,
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+    ] {
+        let target = context(facet, "Example Show");
+        for raw in [
+            "Example Show - S1E1-13 - 2026 WEBDL 2160p",
+            "Example Show.S01E01-13-2026.1080p.WEB-DL",
+            "Example Show S01E01-13 - Complete [1080p]",
+            "Example Show S01E01-02-03-04-05-06-07-08-09-10-11-12-13 [1080p]",
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(1), "{raw}");
+            assert_eq!(
+                episode.episode_numbers,
+                (1..=13).collect::<Vec<_>>(),
+                "{raw}"
+            );
+        }
+        for (raw, season, last) in [
+            ("Example Show (2018) - S02E01-34 - 1080p WEB H.264", 2, 34),
+            (
+                "[Grp] Example Show (2024) - S01E01-12 - 001-012 - Season 1 - [Batch][1080p]",
+                1,
+                12,
+            ),
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            let episode = parsed.episode.expect(raw);
+            assert_eq!(episode.season, Some(season), "{raw}");
+            assert_eq!(
+                episode.episode_numbers,
+                (1..=last).collect::<Vec<_>>(),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "Example Show (1997) - S02E01 - 083 - Episode Title [1080p]",
+            "Example Show S01E01 - 2026 - Episode Title [1080p]",
+        ] {
+            let parsed = crate::best_parse_for_target(raw, &target);
+            assert_eq!(parsed.episode.expect(raw).episode_numbers, vec![1], "{raw}");
         }
     }
 }
@@ -1060,6 +1277,110 @@ fn standard_episode_range_token_projects_multi_episode() {
     assert_eq!(episode.season, Some(1));
     assert_eq!(episode.episode_numbers, (1..=11).collect::<Vec<_>>());
     assert_eq!(episode.release_type, ParsedEpisodeReleaseType::MultiEpisode);
+}
+
+#[test]
+fn complete_standard_episode_range_with_total_projects_season_pack() {
+    let target = context(ContextFacetHint::Series, "Пример шоу");
+    for (raw, season) in [
+        ("Пример шоу / S1E1-16 of 16 (2026) WEBRip 1080p RUS", 1),
+        (
+            "Пример шоу / Example Show / S2E1-8 of 8 [2026, WEB-DL 1080p] RUS",
+            2,
+        ),
+        (
+            "Пример шоу / S1E1-16 of 16 [2026, Боевик, WEBRip 1080p] RUS",
+            1,
+        ),
+    ] {
+        let parsed = crate::best_parse_for_target(raw, &target);
+        let episode = parsed.episode.expect(raw);
+
+        assert_eq!(episode.season, Some(season), "{raw}");
+        assert_eq!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SeasonPack,
+            "{raw}"
+        );
+        assert!(episode.full_season, "{raw}");
+        assert!(!episode.is_partial_season, "{raw}");
+        assert!(!episode.is_series_pack, "{raw}");
+        assert_eq!(parsed.year, Some(2026), "{raw}");
+        assert_eq!(parsed.quality.as_deref(), Some("1080p"), "{raw}");
+        assert!(!parsed.is_ambiguous, "{raw}: {:?}", parsed.parse_hints);
+    }
+}
+
+#[test]
+fn incomplete_standard_episode_ranges_are_not_promoted_to_season_packs() {
+    let target = context(ContextFacetHint::Series, "Пример шоу");
+    for coordinates in [
+        "S1E1-8 of 16",
+        "S1E2-16 of 16",
+        "S1E1-16 of 20",
+        "S1E1-16",
+        "S1E1E3 of 3",
+        "S1E1 of 1",
+        "S1E1-16 of 0",
+        "S1E1-16 of unknown",
+    ] {
+        let raw = format!("Пример шоу / {coordinates} (2026) WEBRip 1080p RUS");
+        let parsed = crate::best_parse_for_target(&raw, &target);
+        let episode = parsed.episode.expect(&raw);
+
+        assert_ne!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SeasonPack,
+            "{raw}"
+        );
+        assert!(!episode.full_season, "{raw}");
+    }
+}
+
+/// A total outside the ` / ` multi-title form is a cour or part count, so the
+/// range keeps its explicit episodes instead of claiming the catalog season.
+#[test]
+fn episode_range_totals_outside_the_multi_title_form_stay_multi_episode() {
+    let target = context(ContextFacetHint::Series, "Example Show");
+    for raw in [
+        "Example Show S01E01-16 of 16 (2026) WEBRip 1080p",
+        "Example Show (S01E01-16 of 16) WEBRip 1080p",
+        "Example Show / S01E01-E16 of 16 (2026) WEBRip 1080p",
+        "Example Show / S01E01-S01E16 of 16 (2026) WEBRip 1080p",
+        "Example Show / S1E1-16 из 16 (2026) WEBRip 1080p",
+        "Example Show / S1E1-16 of 16 WEBRip 1080p",
+        "Example Show / [S1E1-16 of 16] (2026) WEBRip 1080p",
+    ] {
+        let parsed = crate::best_parse_for_target(raw, &target);
+        let episode = parsed.episode.expect(raw);
+        assert_ne!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SeasonPack,
+            "{raw}"
+        );
+        assert!(!episode.full_season, "{raw}");
+        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(
+            episode.episode_numbers,
+            (1..=16).collect::<Vec<_>>(),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn standard_episode_range_total_does_not_cross_metadata_groups() {
+    let target = context(ContextFacetHint::Series, "Пример шоу");
+    for coordinates in ["[S1E1-16] [of 16]", "[S1E1-16 of] [16]"] {
+        let raw = format!("Пример шоу / {coordinates} WEBRip 1080p");
+        let parsed = crate::best_parse_for_target(&raw, &target);
+        let episode = parsed.episode.expect(&raw);
+        assert_ne!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SeasonPack,
+            "{raw}"
+        );
+    }
 }
 
 #[test]
@@ -5131,5 +5452,39 @@ fn a_dotted_channel_layout_after_a_multi_part_codec_is_not_an_episode() {
             assert_eq!(episode.season, Some(2), "{facet:?} {raw}: {episode:?}");
             assert_eq!(episode.episode_numbers, vec![6], "{facet:?} {raw}");
         }
+    }
+}
+
+#[test]
+fn enrichment_flags_multi_audio_markers_without_naming_a_language() {
+    let projected_for_anime = |raw: &str| {
+        crate::best_parse_for_target(raw, &context(ContextFacetHint::Anime, "Amber Lantern"))
+    };
+    // Name structures taken from real anime listings, with the titles swapped.
+    for raw in [
+        "Amber Lantern S02E02 A Quiet Morning 1080p CR WEB-DL MULTi AAC2.0 H.264-GRP (Amber Lantern 2nd Season, Multi-Audio, Multi-Subs)",
+        "[Enc] Amber Lantern - S01 (BD 1080p x265 10-bit Opus 2.0) [Multi-Audio]",
+        "[Enc] Amber Lantern 01-12 (DVDRip VFR HEVC AC3) [MultiAudio][MultiSubs]",
+        "Amber Lantern S01 1080p ADN WEB-DL AAC2.0 x264-GRP (Multi Audio, Amber Lantern Uncut)",
+        "Amber.Lantern.S01E01.MULTi.AD.1080p.BluRay.x265-GRP",
+    ] {
+        let parsed = projected_for_anime(raw);
+        assert!(parsed.is_multi_audio, "{raw}");
+        assert!(!parsed.is_dual_audio, "{raw}");
+        assert!(
+            !parsed
+                .languages_audio
+                .iter()
+                .any(|language| language == "eng"),
+            "{raw}"
+        );
+    }
+
+    for raw in [
+        "Amber Lantern S04E18 A Quiet Morning 1080p CR WEB-DL AAC2.0 H.264-GRP (Amber Lantern, Multi-Subs)",
+        "[Enc] Amber Lantern S01E01 [WEBRip 1080p AV1 Opus] (Dual Audio, Multi Subs)",
+        "[Enc] Amber Lantern 01-12 (BDRip VFR HEVC FLAC) [DualAudio][MultiSubs]",
+    ] {
+        assert!(!projected_for_anime(raw).is_multi_audio, "{raw}");
     }
 }

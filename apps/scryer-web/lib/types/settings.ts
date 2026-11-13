@@ -369,6 +369,13 @@ export type ExternalAuthRuntimeConnection = {
   embyConnectEnabled: boolean;
 };
 
+/** One account a media-server connection's server knows, as the link form lists it. */
+export type MediaServerConnectionAccount = {
+  id: string;
+  username: string;
+  linked: boolean;
+};
+
 export type ExternalAuthRuntimeSettings = {
   loginProviders: ExternalAccountProvider[];
   linkingProviders: ExternalAccountProvider[];
@@ -474,11 +481,20 @@ export type TotpEnrollmentComplete = {
 
 export type ImportMode = "HARDLINK_OR_COPY" | "MOVE";
 
+export type AudioLanguagePreferences = {
+  preferredAudioLanguages: string[];
+  optionalAudioLanguages: string[];
+  optionalAudioLanguagesKeepSearching: boolean;
+};
+
 export type MediaSettings = {
   scope: "MOVIE" | "SERIES" | "ANIME";
   libraryPath: string;
   rootFolders: { path: string; isDefault: boolean }[];
   requiredAudioLanguages: string[];
+  preferredAudioLanguages: string[];
+  optionalAudioLanguages: string[];
+  optionalAudioLanguagesKeepSearching: boolean;
   useSeasonFolders: boolean;
   folderTemplate: string;
   seasonFolderTemplate: string | null;

@@ -229,6 +229,28 @@ pub(crate) fn release_audio_language_hints_for_title(
         push_language(&mut normalized, original_language);
     }
 
+    let indexer_reported_audio = indexer_languages.is_some_and(|languages| {
+        languages
+            .iter()
+            .any(|language| normalize_detected_audio_language_code(language).is_some())
+    });
+    if parsed.is_multi_audio && !parsed.is_dual_audio && !indexer_reported_audio {
+        // A multi-audio release keeps the original-language track next to
+        // its dubs. French and German groups use the marker for their own
+        // dub plus the original and name that dub, so a named language is
+        // taken at its word and English is not added. A release that names
+        // no language at all is the streaming-service kind, which carries
+        // the English dub among its tracks.
+        // An indexer that lists the audio tracks is the better witness, so
+        // the marker only fills in when it reported none.
+        if normalized.is_empty() {
+            push_language(&mut normalized, "eng");
+        }
+        if let Some(context) = title_language_context {
+            push_language(&mut normalized, &context.inferred_original_audio_language);
+        }
+    }
+
     if normalized.is_empty()
         && !parsed.is_dual_audio
         && infer_unlabeled_audio
@@ -300,7 +322,7 @@ pub(crate) fn resolve_audio_languages_from_track_title(title: &str) -> Vec<Strin
 /// tag (e.g. a codec string mis-stored in the language field) is treated as
 /// unresolved rather than a bogus "known" language that could flip an
 /// indeterminate result into a false rejection.
-fn resolved_track_languages(stream: &crate::AudioStreamDetail) -> Vec<String> {
+pub(crate) fn resolved_track_languages(stream: &crate::AudioStreamDetail) -> Vec<String> {
     if let Some(code) = stream
         .language
         .as_deref()
@@ -474,6 +496,61 @@ mod tests {
             release_audio_language_hints_for_title(&parsed, None, Some(&context), false),
             vec!["eng".to_string()]
         );
+    }
+
+    #[test]
+    fn multi_audio_adds_the_original_language_and_english_only_when_no_language_is_named() {
+        let anime = title_audio_language_context(None, None, Some("anime"), &[]);
+
+        // A French group's multi release: French dub plus the original.
+        let parsed = parse_release_metadata(
+            "Example Title S01E08 MULTi 1080p WEB x265 E-AC-3 -GRP (VF, FRENCH, VOSTFR, Multi-Subs, Multi-Audio)",
+        );
+        assert_eq!(
+            release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+            vec!["fra".to_string(), "jpn".to_string()]
+        );
+
+        // A German group's multi release naming only its dub.
+        let parsed = parse_release_metadata(
+            "[Enc] Example Title - S01 (BD 720p x264 DTS 5.1) (Multi-Audio) (German/Deutsch)",
+        );
+        assert_eq!(
+            release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+            vec!["deu".to_string(), "jpn".to_string()]
+        );
+
+        // No language named: English next to the original. Name structures
+        // taken from real anime listings, with the titles swapped.
+        for raw in [
+            "Example Title S02E02 1080p CR WEB-DL MULTi AAC2.0 H.264-GRP (Multi-Audio, Multi-Subs)",
+            "[Enc] Example Title S01E06 1080p AMZN WEB-DL MULTi DDP5.1 H.264 (Example Title, Multi-Audio, Multi-Subs)",
+            "[Enc] Example Title (Season 2) [1080p][HEVC x265 10bit][Multi-Audio][Multi-Subs] (Batch)",
+            "[Enc] Example Title - S01E06 [WEB.1080p.AV1] | Example Title (Multi-Audio, Multi-Subs) (Weekly)",
+        ] {
+            let parsed = parse_release_metadata(raw);
+            assert_eq!(
+                release_audio_language_hints_for_title(&parsed, None, Some(&anime), false),
+                vec!["eng".to_string(), "jpn".to_string()],
+                "{raw}"
+            );
+            assert_eq!(
+                release_audio_language_hints_for_title(&parsed, None, None, false),
+                vec!["eng".to_string()],
+                "{raw}"
+            );
+            // An indexer that lists the tracks is believed over the marker.
+            assert_eq!(
+                release_audio_language_hints_for_title(
+                    &parsed,
+                    Some(&["Japanese".to_string(), "German".to_string()]),
+                    Some(&anime),
+                    false,
+                ),
+                vec!["jpn".to_string(), "deu".to_string()],
+                "{raw}"
+            );
+        }
     }
 
     #[test]

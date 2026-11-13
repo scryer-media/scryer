@@ -15,7 +15,18 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { defaultMonitorTypeForFacet } from "@/lib/facets/helpers";
+import {
+  MONITOR_TYPE_LABEL_KEYS,
+  defaultMonitorTypesForFacet,
+} from "@/lib/utils/default-monitor-type";
+import { requestDialogLibraryId } from "@/lib/utils/request-dialog-library";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
+import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
+import {
+  catalogAudioLanguagesForSubmit,
+  INHERIT_CATALOG_AUDIO_LANGUAGES,
+  type CatalogAudioLanguageDraft,
+} from "@/lib/utils/catalog-audio-languages";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import {
   submitMediaRequestInput,
@@ -186,26 +197,50 @@ export function RequestMediaDialog({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [leaseChoice, setLeaseChoice] = React.useState<LeaseChoice>("forever");
   const [customLeaseDays, setCustomLeaseDays] = React.useState(30);
+  const [audioLanguages, setAudioLanguages] =
+    React.useState<CatalogAudioLanguageDraft>(INHERIT_CATALOG_AUDIO_LANGUAGES);
   const [preflight, setPreflight] =
     React.useState<RequestPreflightResult | null>(null);
   const client = useClient();
 
+  // The item and facet this dialog was last reset for. The choices reset
+  // when the dialog opens or the requested item changes; a refreshed library
+  // list keeps them and re-picks the library only when the chosen one is gone.
+  const resetForRef = React.useRef<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
   React.useEffect(() => {
-    if (!open) return;
-    setLibraryId(
-      requestableLibraries.find((library) => library.isDefault)?.id ||
-        requestableLibraries[0]?.id ||
-        "",
+    if (!open) {
+      resetForRef.current = null;
+      return;
+    }
+    const resetFor = resetForRef.current;
+    const isNewRequest =
+      !resetFor || resetFor.facet !== facet || resetFor.result !== result;
+    const nextLibraryId = requestDialogLibraryId(
+      requestableLibraries,
+      isNewRequest ? "" : libraryId,
     );
-    setQualityProfileId("");
-    setMonitorType(defaultMonitorTypeForFacet(facet));
+    if (!isNewRequest && nextLibraryId === libraryId) return;
+    const nextMonitorType = defaultMonitorTypeForFacet(
+      facet,
+      requestableLibraries.find((library) => library.id === nextLibraryId)
+        ?.defaultMonitorType,
+    );
+    setLibraryId(nextLibraryId);
+    setMonitorType(nextMonitorType);
     setMonitorSelection(EMPTY_MONITOR_SELECTION);
+    if (!isNewRequest) return;
+    resetForRef.current = { facet, result };
+    setQualityProfileId("");
     setMonitorSelectionLoading(false);
     setIsSubmitting(false);
     setLeaseChoice("forever");
     setCustomLeaseDays(30);
+    setAudioLanguages(INHERIT_CATALOG_AUDIO_LANGUAGES);
     setPreflight(null);
-  }, [facet, open, requestableLibraries]);
+  }, [facet, libraryId, open, requestableLibraries, result]);
 
   /// Null means forever, which is what the API models an absent lease as.
   const requestedLeaseDays =
@@ -214,23 +249,30 @@ export function RequestMediaDialog({
       : leaseChoice === "custom"
         ? clampRequestLeaseDays(customLeaseDays)
         : Number(leaseChoice);
+  // Keyed on what would be sent, not on the draft: a draft change that sends
+  // the same lists (switching to "choose" before ticking any) keeps the same
+  // value, so the preview does not ask again with identical variables.
+  const requestedAudioKey = JSON.stringify(
+    catalogAudioLanguagesForSubmit(audioLanguages),
+  );
+  const requestedAudio = React.useMemo(
+    () =>
+      JSON.parse(requestedAudioKey) as ReturnType<
+        typeof catalogAudioLanguagesForSubmit
+      >,
+    [requestedAudioKey],
+  );
 
   const selectedLibrary =
     requestableLibraries.find((library) => library.id === libraryId) ?? null;
-  const canRequestMonitorType = facet !== "MOVIE";
+  const canRequestMonitorType = true;
   const monitorOptions: Array<{
     value: MetadataCatalogMonitorType;
     label: string;
   }> = [
-    { value: "FUTURE_EPISODES", label: t("search.monitorType.futureEpisodes") },
-    {
-      value: "MISSING_AND_FUTURE_EPISODES",
-      label: t("search.monitorType.missingAndFutureEpisodes"),
-    },
-    { value: "ALL_EPISODES", label: t("search.monitorType.allEpisodes") },
-    { value: "NONE", label: t("search.monitorType.none") },
-    { value: "ADVANCED", label: t("search.monitorType.advanced") },
-  ];
+    ...defaultMonitorTypesForFacet(facet),
+    ...(facet === "MOVIE" ? [] : (["ADVANCED"] as const)),
+  ].map((value) => ({ value, label: t(MONITOR_TYPE_LABEL_KEYS[value]) }));
   // Same rule as the add dialog: the picker (and its one metadata query) only
   // exists while ADVANCED is the live choice.
   const advancedSelected = canRequestMonitorType && monitorType === "ADVANCED";
@@ -292,6 +334,10 @@ export function RequestMediaDialog({
           ? monitorSelectionInput(monitorSelection)
           : undefined,
         requestedLeaseDays: requestedLeaseDays ?? undefined,
+        // Request rules can read the requested audio languages, so the
+        // preview carries them and asks again when they change.
+        requestedRequiredAudioLanguages: requestedAudio.required,
+        requestedPreferredAudioLanguages: requestedAudio.preferred,
       });
       void client
         .query(
@@ -328,6 +374,7 @@ export function RequestMediaDialog({
     monitorType,
     open,
     qualityProfileId,
+    requestedAudio,
     requestedLeaseDays,
     result,
     selectedLibrary,
@@ -348,6 +395,8 @@ export function RequestMediaDialog({
           ? monitorSelectionInput(monitorSelection)
           : undefined,
         requestedLeaseDays: requestedLeaseDays ?? undefined,
+        requestedRequiredAudioLanguages: requestedAudio.required,
+        requestedPreferredAudioLanguages: requestedAudio.preferred,
       });
       if (accepted) {
         onOpenChange(false);
@@ -364,6 +413,7 @@ export function RequestMediaDialog({
     onOpenChange,
     onRequest,
     qualityProfileId,
+    requestedAudio,
     requestedLeaseDays,
     result,
     selectedLibrary,
@@ -389,7 +439,17 @@ export function RequestMediaDialog({
               </span>
               <Select
                 value={selectedLibrary?.id || ""}
-                onValueChange={setLibraryId}
+                onValueChange={(id) => {
+                  setLibraryId(id);
+                  setMonitorType(
+                    defaultMonitorTypeForFacet(
+                      facet,
+                      requestableLibraries.find((l) => l.id === id)
+                        ?.defaultMonitorType,
+                    ),
+                  );
+                  setMonitorSelection(EMPTY_MONITOR_SELECTION);
+                }}
                 disabled={isSubmitting || requestableLibraries.length <= 1}
               >
                 <SelectTrigger
@@ -552,6 +612,19 @@ export function RequestMediaDialog({
                 />
               </label>
             ) : null}
+
+            <CatalogAudioLanguageFields
+              idPrefix="request-media"
+              value={audioLanguages}
+              onChange={setAudioLanguages}
+              inheritedRequired={
+                selectedLibrary?.inheritedRequiredAudioLanguages ?? null
+              }
+              inheritedPreferred={
+                selectedLibrary?.inheritedPreferredAudioLanguages ?? null
+              }
+              disabled={isSubmitting}
+            />
           </div>
 
           <RequestPreflightBanner preflight={preflight} />

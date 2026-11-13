@@ -1,0 +1,13 @@
+# Find a title to test against. Variables: {"facet": "MOVIE", "query": "name", "limit": 5}
+query FindTitles($facet: MediaFacetValue, $query: String, $limit: Int) {
+  titles(facet: $facet, query: $query, limit: $limit) {
+    totalCount
+    items {
+      id
+      name
+      facet
+      year
+      qualityProfileId
+    }
+  }
+}

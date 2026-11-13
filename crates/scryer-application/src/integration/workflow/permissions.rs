@@ -80,10 +80,9 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .get_by_ids(&title_ids)
+            .list_library_ids_for_titles(&title_ids)
             .await?
             .into_iter()
-            .map(|title| (title.id, title.library_id))
             .collect::<HashMap<_, _>>();
         let mut visible = Vec::new();
         for item in items {
@@ -165,7 +164,15 @@ impl AppUseCase {
             .await
         {
             Ok(Some(binding)) => binding,
-            Ok(None) => return Ok(None),
+            Ok(None) => {
+                // A settled download has no open binding, yet its client entry
+                // can still be acted on (an ignore settles that latest
+                // submission), so that submission's title decides.
+                return Ok(latest_submission_for_client_item(self, &locator)
+                    .await?
+                    .map(|submission| submission.title_id)
+                    .filter(|title_id| !title_id.trim().is_empty()));
+            }
             Err(error) => {
                 // Same degradation as the queue delete itself: a registry
                 // fault leaves the legacy (any-library) authorization path.
@@ -259,7 +266,7 @@ fn download_history_item_from_terminal_row(
         TrackedDownloadState::Failed => (DownloadQueueState::Failed, None),
         // A dismissed grab is closed history; the display layer reads
         // `Ignored` off the tracked state, not off the client state.
-        TrackedDownloadState::Ignored => (DownloadQueueState::Completed, None),
+        TrackedDownloadState::Ignored | TrackedDownloadState::ImportDismissed => (DownloadQueueState::Completed, None),
         _ => return None,
     };
 
@@ -420,14 +427,14 @@ impl AppUseCase {
                 .into_iter()
                 .collect::<Vec<_>>();
             if !unknown_title_ids.is_empty() {
-                for title in self
+                for (title_id, library_id) in self
                     .services
                     .catalog
                     .titles
-                    .get_by_ids(&unknown_title_ids)
+                    .list_library_ids_for_titles(&unknown_title_ids)
                     .await?
                 {
-                    durable_title_library_ids.insert(title.id, title.library_id);
+                    durable_title_library_ids.insert(title_id, library_id);
                 }
             }
             items.extend(durable);

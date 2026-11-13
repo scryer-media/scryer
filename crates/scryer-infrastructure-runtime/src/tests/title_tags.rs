@@ -205,6 +205,7 @@ async fn assert_title_tag_registry_behaviour(
         TitleCatalogAggregates {
             total_count: true,
             filter_counts: true,
+            file_state_counts: true,
             managed_bytes: true,
         },
     )
@@ -228,6 +229,7 @@ async fn assert_title_tag_registry_behaviour(
         TitleCatalogAggregates {
             total_count: true,
             filter_counts: true,
+            file_state_counts: true,
             managed_bytes: true,
         },
     )

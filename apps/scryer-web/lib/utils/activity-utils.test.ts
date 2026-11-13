@@ -13,6 +13,8 @@ type QueueRowResult = {
   displayStateKey: string;
   statusBadgeKey: string;
   statusLabel: string;
+  canDismissImport: boolean;
+  canResumeImportTracking: boolean;
 };
 
 type DeriveQueueRowPresentation = (
@@ -106,6 +108,7 @@ function blockedItem(
       assignTitle: true,
       ignore: true,
       markFailed: true,
+      dismissImportWarning: true,
     },
     queueScope: null,
     ...overrides,
@@ -274,4 +277,17 @@ test("backend import-block detail takes precedence over frontend fallback copy",
   );
 
   assert.equal(row.failureReason, backendReason);
+});
+
+test("blocked warnings offer dismissal only when the canonical grab is known", () => {
+  const row = deriveQueueRowPresentation(
+    blockedItem({ downloadId: "grab-1", trackedState: "IMPORT_BLOCKED" }),
+    translate,
+  );
+  assert.equal(row.canDismissImport, true);
+  const unknownGrab = deriveQueueRowPresentation(
+    blockedItem({ downloadId: null }),
+    translate,
+  );
+  assert.equal(unknownGrab.canDismissImport, false);
 });

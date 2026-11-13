@@ -169,6 +169,25 @@ const FACET_RGB: Record<string, string> = {
   series: "var(--scry-facet-series-rgb)",
 };
 
+// FullCalendar rebuilds its view, refires datesSet and resets scroll whenever
+// an option changes identity, so every non-primitive option it receives is
+// either hoisted here or memoized in CalendarView.
+const CALENDAR_PLUGINS = [dayGridPlugin, classicThemePlugin];
+const CALENDAR_LOCALES = [ruCalendarLocale];
+
+function calendarButtonClass(arg: { isSelected: boolean }): string {
+  return `fc-scryer-button${arg.isSelected ? " is-selected" : ""}`;
+}
+
+function calendarEventClass(arg: EventDisplayInfo): string {
+  const ep = arg.event.extendedProps as CalendarEpisodeItem;
+  return [
+    "fc-scryer-event",
+    `fc-scryer-facet-${ep.titleFacet}`,
+    ep.monitored ? "is-monitored" : "is-unmonitored",
+  ].join(" ");
+}
+
 // Handoff orders the filter pills Anime · Movie · Series.
 const FACET_ORDER = ["anime", "movie", "series"] as const;
 
@@ -605,14 +624,23 @@ export function CalendarView({
     [filteredEpisodes, t],
   );
 
-  const handleDatesSet = (arg: DatesSetInfo) => {
-    if (arg.view.type === "dayGridMonth" || arg.view.type === "dayGridWeek") {
-      writeStoredCalendarViewMode(arg.view.type);
-    }
-    const start = arg.startStr.slice(0, 10);
-    const end = arg.endStr.slice(0, 10);
-    onDateRangeChange(start, end);
-  };
+  const lastDateRangeRef = useRef<string | null>(null);
+  const handleDatesSet = useCallback(
+    (arg: DatesSetInfo) => {
+      if (arg.view.type === "dayGridMonth" || arg.view.type === "dayGridWeek") {
+        writeStoredCalendarViewMode(arg.view.type);
+      }
+      const start = arg.startStr.slice(0, 10);
+      const end = arg.endStr.slice(0, 10);
+      // datesSet can refire for the range already shown; refetching it would
+      // flip the loading state and rerender the grid for nothing.
+      const rangeKey = `${start}/${end}`;
+      if (lastDateRangeRef.current === rangeKey) return;
+      lastDateRangeRef.current = rangeKey;
+      onDateRangeChange(start, end);
+    },
+    [onDateRangeChange],
+  );
 
   const handleEventClick = useCallback(
     (arg: EventClickInfo) => {
@@ -761,6 +789,91 @@ export function CalendarView({
     if (values.length > 0) setFacetFilter(values);
   }, []);
 
+  const dayCellClass = useCallback(
+    (arg: DayCellInfo) => {
+      const classes = ["fc-scryer-day-cell"];
+      if (arg.isToday) classes.push("is-today");
+      if (arg.isOther) classes.push("is-other");
+      if ((dayEventCounts.get(formatDateKey(arg.date)) ?? 0) > 0) {
+        classes.push("has-events");
+      }
+      if (arg.view.type === "dayGridMonth") classes.push("is-month");
+      return classes.join(" ");
+    },
+    [dayEventCounts],
+  );
+
+  const calendarButtons = useMemo(
+    () => ({
+      today: { text: t("calendar.today") },
+      dayGridMonth: { text: t("calendar.month") },
+      dayGridWeek: { text: t("calendar.week") },
+    }),
+    [t],
+  );
+
+  const toolbarElements = useMemo(
+    () => ({
+      calendarLibraryFacetFilters: () => (
+        <CalendarLibraryFacetFilters
+          libraries={libraries}
+          librariesLoading={librariesLoading}
+          selectedLibraryIds={selectedLibraryIds}
+          onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
+          facetFilter={facetFilter}
+          onFacetFilterChange={handleFacetChange}
+        />
+      ),
+      calendarMonitoringFilter: () => (
+        <CalendarMonitoringFilterControl
+          visibleStatuses={visibleMonitoringStatuses}
+          counts={monitoringCounts}
+          onValueChange={setVisibleMonitoringStatuses}
+        />
+      ),
+    }),
+    [
+      libraries,
+      librariesLoading,
+      selectedLibraryIds,
+      onSelectedLibraryIdsChange,
+      facetFilter,
+      handleFacetChange,
+      visibleMonitoringStatuses,
+      monitoringCounts,
+    ],
+  );
+
+  const headerToolbar = useMemo(
+    () =>
+      isMobile
+        ? { left: "prev,next", center: "title", right: "today" }
+        : {
+            left: "calendarLibraryFacetFilters calendarMonitoringFilter",
+            center: "title",
+            right: "today dayGridMonth,dayGridWeek prev,next",
+          },
+    [isMobile],
+  );
+
+  const calendarViews = useMemo(
+    () => ({
+      dayGrid: {
+        className: "fc-scryer-daygrid",
+        tableBodyClass: "fc-scryer-daygrid-body",
+      },
+      dayGridMonth: {
+        fixedWeekCount: !isMobile,
+        showNonCurrentDates: true,
+        dayMaxEvents: isMobile ? 1 : 3,
+      },
+      dayGridWeek: {
+        dayMaxEvents: false,
+      },
+    }),
+    [isMobile],
+  );
+
   return (
     <>
       <Card className="flex min-h-0 flex-1 flex-col rounded-none border-0 bg-transparent shadow-none">
@@ -786,16 +899,14 @@ export function CalendarView({
           <div className="fc-scryer min-h-0 flex-1">
             <FullCalendar
               key={isMobile ? "calendar-mobile" : "calendar-desktop"}
-              plugins={[dayGridPlugin, classicThemePlugin]}
-              locales={[ruCalendarLocale]}
+              plugins={CALENDAR_PLUGINS}
+              locales={CALENDAR_LOCALES}
               locale={t("calendar.locale")}
               initialView={initialCalendarView}
               headerToolbarClass="fc-scryer-header-toolbar"
               toolbarSectionClass="fc-scryer-toolbar-section"
               toolbarTitleClass="fc-scryer-toolbar-title"
-              buttonClass={(arg) =>
-                `fc-scryer-button${arg.isSelected ? " is-selected" : ""}`
-              }
+              buttonClass={calendarButtonClass}
               events={events}
               eventClick={handleEventClick}
               eventMouseEnter={handleEventMouseEnter}
@@ -803,15 +914,7 @@ export function CalendarView({
               eventDidMount={handleEventDidMount}
               datesSet={handleDatesSet}
               eventContent={renderEventContent}
-              eventClass={(arg) => {
-                const ep = arg.event.extendedProps as CalendarEpisodeItem;
-                const classes = [
-                  "fc-scryer-event",
-                  `fc-scryer-facet-${ep.titleFacet}`,
-                ];
-                classes.push(ep.monitored ? "is-monitored" : "is-unmonitored");
-                return classes.join(" ");
-              }}
+              eventClass={calendarEventClass}
               dayHeaderClass="fc-scryer-day-header"
               dayHeaderInnerClass="fc-scryer-day-header-inner"
               dayHeaderContent={renderDayHeaderContent}
@@ -820,71 +923,15 @@ export function CalendarView({
               dayCellTopInnerClass="fc-scryer-day-cell-top-inner"
               dayCellInnerClass="fc-scryer-day-cell-inner"
               dayCellBottomClass="fc-scryer-day-cell-bottom"
-              dayCellClass={(arg) => {
-                const classes = ["fc-scryer-day-cell"];
-                if (arg.isToday) classes.push("is-today");
-                if (arg.isOther) classes.push("is-other");
-                if ((dayEventCounts.get(formatDateKey(arg.date)) ?? 0) > 0) {
-                  classes.push("has-events");
-                }
-                if (arg.view.type === "dayGridMonth") classes.push("is-month");
-                return classes.join(" ");
-              }}
+              dayCellClass={dayCellClass}
               popoverClass="fc-scryer-popover"
               moreLinkClass="fc-scryer-more-link"
               moreLinkContent={renderMoreLinkContent}
               buttonGroupClass="fc-scryer-button-group"
-              buttons={{
-                today: { text: t("calendar.today") },
-                dayGridMonth: { text: t("calendar.month") },
-                dayGridWeek: { text: t("calendar.week") },
-              }}
-              toolbarElements={{
-                calendarLibraryFacetFilters: () => (
-                  <CalendarLibraryFacetFilters
-                    libraries={libraries}
-                    librariesLoading={librariesLoading}
-                    selectedLibraryIds={selectedLibraryIds}
-                    onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
-                    facetFilter={facetFilter}
-                    onFacetFilterChange={handleFacetChange}
-                  />
-                ),
-                calendarMonitoringFilter: () => (
-                  <CalendarMonitoringFilterControl
-                    visibleStatuses={visibleMonitoringStatuses}
-                    counts={monitoringCounts}
-                    onValueChange={setVisibleMonitoringStatuses}
-                  />
-                ),
-              }}
-              headerToolbar={
-                isMobile
-                  ? {
-                      left: "prev,next",
-                      center: "title",
-                      right: "today",
-                    }
-                  : {
-                      left: "calendarLibraryFacetFilters calendarMonitoringFilter",
-                      center: "title",
-                      right: "today dayGridMonth,dayGridWeek prev,next",
-                    }
-              }
-              views={{
-                dayGrid: {
-                  className: "fc-scryer-daygrid",
-                  tableBodyClass: "fc-scryer-daygrid-body",
-                },
-                dayGridMonth: {
-                  fixedWeekCount: !isMobile,
-                  showNonCurrentDates: true,
-                  dayMaxEvents: isMobile ? 1 : 3,
-                },
-                dayGridWeek: {
-                  dayMaxEvents: false,
-                },
-              }}
+              buttons={calendarButtons}
+              toolbarElements={toolbarElements}
+              headerToolbar={headerToolbar}
+              views={calendarViews}
               height={isMobile ? "auto" : "100%"}
               contentHeight={isMobile ? "auto" : "100%"}
               expandRows={!isMobile}

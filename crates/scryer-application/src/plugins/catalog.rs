@@ -398,6 +398,45 @@ pub fn parse_and_validate_catalog_v3(raw: &[u8]) -> AppResult<CatalogV3> {
     Ok(catalog)
 }
 
+/// Successfully parsed catalogs kept by content hash, so cached catalog JSON
+/// read on every plugin listing is parsed and validated once per content.
+/// Parsing is a pure function of the bytes; failures are never kept.
+const PARSED_CATALOG_MEMO_CAPACITY: usize = 32;
+
+type ParsedCatalogMemo = std::sync::Mutex<std::collections::VecDeque<([u8; 32], CatalogV3)>>;
+
+static PARSED_CATALOGS: std::sync::LazyLock<ParsedCatalogMemo> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+
+/// [`parse_and_validate_catalog_v3`] through a bounded memo of successes.
+pub fn parse_and_validate_catalog_v3_memoized(raw: &[u8]) -> AppResult<CatalogV3> {
+    let key = *blake3::hash(raw).as_bytes();
+    if let Ok(memo) = PARSED_CATALOGS.lock()
+        && let Some((_, catalog)) = memo.iter().find(|(hash, _)| *hash == key)
+    {
+        return Ok(catalog.clone());
+    }
+    let catalog = parse_and_validate_catalog_v3(raw)?;
+    if let Ok(mut memo) = PARSED_CATALOGS.lock()
+        && !memo.iter().any(|(hash, _)| *hash == key)
+    {
+        if memo.len() >= PARSED_CATALOG_MEMO_CAPACITY {
+            memo.pop_front();
+        }
+        memo.push_back((key, catalog.clone()));
+    }
+    Ok(catalog)
+}
+
+#[cfg(test)]
+fn parsed_catalog_memo_holds(raw: &[u8]) -> bool {
+    let key = *blake3::hash(raw).as_bytes();
+    PARSED_CATALOGS
+        .lock()
+        .map(|memo| memo.iter().any(|(hash, _)| *hash == key))
+        .unwrap_or(false)
+}
+
 pub fn parse_and_validate_catalog_v3_redirect(raw: &[u8]) -> AppResult<CatalogV3Redirect> {
     let redirect: CatalogV3Redirect = serde_json::from_slice(raw).map_err(|e| {
         AppError::validation_refused(
@@ -1314,6 +1353,47 @@ mod tests {
             artifact,
             &capabilities(&["wasm32-wasip2", "simd128"])
         ));
+    }
+
+    #[test]
+    fn memoized_catalog_parse_matches_the_parse_and_keeps_only_successes() {
+        let valid = r#"{
+            "schema_version": "scryer.plugin.catalog.v3",
+            "catalog_version": 7,
+            "plugins": [],
+            "rule_packs": []
+        }"#;
+        let direct = parse_and_validate_catalog_v3(valid.as_bytes()).expect("valid catalog");
+        let first = parse_and_validate_catalog_v3_memoized(valid.as_bytes()).expect("first read");
+        assert!(super::parsed_catalog_memo_holds(valid.as_bytes()));
+        let again = parse_and_validate_catalog_v3_memoized(valid.as_bytes()).expect("memo hit");
+        for catalog in [&first, &again] {
+            assert_eq!(
+                serde_json::to_value(catalog).unwrap(),
+                serde_json::to_value(&direct).unwrap()
+            );
+        }
+
+        let invalid = valid.replace(r#""catalog_version": 7"#, r#""catalog_version": 0"#);
+        let direct_error = parse_and_validate_catalog_v3(invalid.as_bytes()).unwrap_err();
+        for _ in 0..2 {
+            let error = parse_and_validate_catalog_v3_memoized(invalid.as_bytes()).unwrap_err();
+            assert_eq!(error.validation_reason(), direct_error.validation_reason());
+            assert!(!super::parsed_catalog_memo_holds(invalid.as_bytes()));
+        }
+
+        // The memo stays bounded however many distinct catalogs pass through.
+        for version in 1..=(super::PARSED_CATALOG_MEMO_CAPACITY as u64 + 5) {
+            let distinct = valid.replace(
+                r#""catalog_version": 7"#,
+                &format!(r#""catalog_version": {}"#, version + 100),
+            );
+            parse_and_validate_catalog_v3_memoized(distinct.as_bytes()).expect("distinct catalog");
+        }
+        assert_eq!(
+            super::PARSED_CATALOGS.lock().unwrap().len(),
+            super::PARSED_CATALOG_MEMO_CAPACITY
+        );
     }
 
     #[test]

@@ -1,0 +1,10 @@
+# Contacts the indexer. Needs the operator's yes. Testing a saved indexer by
+# id also stores its capabilities and clears its last error.
+# Variables: {"input": {"providerType": "...", "config": [...], "indexerId": null, "proxyConfigId": null}}
+mutation TestIndexerConnection($input: TestIndexerConnectionInput!) {
+  testIndexerConnection(input: $input) {
+    status
+    message
+    retryAfterSeconds
+  }
+}

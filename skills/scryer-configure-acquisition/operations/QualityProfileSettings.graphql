@@ -1,0 +1,36 @@
+# Quality profiles, the global default and per-scope selections.
+query QualityProfileSettings {
+  qualityProfileSettings {
+    globalProfileId
+    globalScoringPersona
+    categorySelections { scope overrideProfileId effectiveProfileId inheritsGlobal }
+    categoryPersonaSelections { scope overridePersona effectivePersona inheritsGlobal }
+    profiles {
+      id
+      name
+      criteria {
+        qualityTiers
+        archivalQuality
+        allowUnknownQuality
+        sourceAllowlist
+        sourceBlocklist
+        videoCodecAllowlist
+        videoCodecBlocklist
+        audioCodecAllowlist
+        audioCodecBlocklist
+        dolbyVisionAllowed
+        detectedHdrAllowed
+        preferRemux
+        allowBdDisk
+        allowUpgrades
+        ignoreProperRepack
+        scoringOverrides { allowX265Non4K blockDvWithoutFallback preferCompactEncodes preferLosslessAudio blockUpscaled }
+        cutoffTier
+        minScoreToGrab
+        cutoffScore
+        minUpgradeScoreDelta
+        decisionPipeline
+      }
+    }
+  }
+}

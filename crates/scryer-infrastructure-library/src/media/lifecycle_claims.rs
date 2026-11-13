@@ -343,6 +343,44 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         .await
     }
 
+    async fn release_for_titles(
+        &self,
+        title_ids: &[String],
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let state_placeholders = std::iter::repeat_n("{}", LIFECYCLE_CLAIM_LIVE_STATES.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut released = 0;
+        // Well under either engine's bind limit per statement.
+        for chunk in title_ids.chunks(900) {
+            let title_placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut args = vec![
+                SqlArg::Text(LifecycleClaimState::Released.as_storage_str().to_string()),
+                SqlArg::Text(reason.to_string()),
+                SqlArg::Timestamp(now),
+            ];
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
+            args.extend(live_state_args());
+            released += execute_write_sql(
+                &self.datastore,
+                "release_lifecycle_claims_for_titles",
+                format!(
+                    "UPDATE lifecycle_claims
+                        SET state = {{}}, released_reason = {{}}, updated_at = {{}}
+                      WHERE title_id IN ({title_placeholders})
+                        AND state IN ({state_placeholders})"
+                ),
+                args,
+            )
+            .await?;
+        }
+        Ok(released)
+    }
+
     /// Only a live claim can be extended: pushing an expired lease's date out
     /// would resurrect a hold the operator already watched lapse, which is a
     /// new claim, not an extension.

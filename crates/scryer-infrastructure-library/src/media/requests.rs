@@ -250,77 +250,88 @@ impl MediaRequestRepository for MediaRequestStore {
         Option<scryer_domain::DomainEvent>,
     )> {
         let request = request.clone();
-        SqlRuntime::run_in_transaction(&self.datastore, "approve_request_with_title", move |tx| {
-            let (request, title, options, resolution, added_event) = (
-                request.clone(),
-                title.clone(),
-                options.clone(),
-                resolution.clone(),
-                added_event.clone(),
-            );
-            Box::pin(async move {
-                let movie_only = request.is_list_series_movie();
-                let created = if movie_only {
-                    let selection =
-                        request
-                            .requested_monitor_selection
-                            .as_ref()
-                            .ok_or_else(|| {
-                                AppError::validation_refused(
-                                    crate::error_reasons::MEDIA_LIST_MOVIE_SELECTION_MISSING,
-                                    "list movie selection is missing",
-                                )
-                            })?;
-                    crate::media::titles::store::create_or_get_title_preserving_options_tx(
-                        tx, &title, selection,
-                    )
-                    .await?
-                } else {
-                    crate::media::titles::store::create_or_get_title_tx(tx, &title, &options)
+        let scope = crate::media::titles::store::TitleFolderWriteScope::open();
+        let proof = scope.proof();
+        let result = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "approve_request_with_title",
+            move |tx| {
+                let (request, title, options, resolution, added_event, proof) = (
+                    request.clone(),
+                    title.clone(),
+                    options.clone(),
+                    resolution.clone(),
+                    added_event.clone(),
+                    proof.clone(),
+                );
+                Box::pin(async move {
+                    let movie_only = request.is_list_series_movie();
+                    let created = if movie_only {
+                        let selection =
+                            request
+                                .requested_monitor_selection
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    AppError::validation_refused(
+                                        crate::error_reasons::MEDIA_LIST_MOVIE_SELECTION_MISSING,
+                                        "list movie selection is missing",
+                                    )
+                                })?;
+                        crate::media::titles::store::create_or_get_title_preserving_options_tx(
+                            tx, &proof, &title, selection,
+                        )
                         .await?
-                };
-                // The application guards this identity. A concurrent creation
-                // with another id must retry under the correct title guard.
-                if created.title.id != title.id {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::MEDIA_REQUEST_APPROVAL_TITLE_CHANGED,
-                        "request title changed during approval; retry",
-                    ));
-                }
-                let advanced = created
-                    .title
-                    .tags
-                    .iter()
-                    .any(|tag| tag == "scryer:monitor-type:advanced");
-                if !movie_only && (!advanced || options.monitor_selection.is_some()) {
-                    replace_monitor_selection_tx(
-                        tx,
-                        crate::media::monitor_selections::OWNER_KIND_TITLE,
-                        &title.id,
-                        if advanced {
-                            options.monitor_selection.as_ref().and_then(Option::as_ref)
-                        } else {
-                            None
-                        },
-                    )
-                    .await?;
-                }
-                let event = if created.reused_existing {
-                    None
-                } else {
-                    Some(append_domain_event_tx(tx, added_event).await?)
-                };
-                let result = resolve_pending_overlapping_tx(tx, &request, resolution).await?;
-                if result.updated == 0 {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::MEDIA_REQUEST_NOT_PENDING,
-                        "request is no longer pending",
-                    ));
-                }
-                Ok((created, result, event))
-            })
-        })
-        .await
+                    } else {
+                        crate::media::titles::store::create_or_get_title_tx(
+                            tx, &proof, &title, &options,
+                        )
+                        .await?
+                    };
+                    // The application guards this identity. A concurrent creation
+                    // with another id must retry under the correct title guard.
+                    if created.title.id != title.id {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_REQUEST_APPROVAL_TITLE_CHANGED,
+                            "request title changed during approval; retry",
+                        ));
+                    }
+                    let advanced = created
+                        .title
+                        .tags
+                        .iter()
+                        .any(|tag| tag == "scryer:monitor-type:advanced");
+                    if !movie_only && (!advanced || options.monitor_selection.is_some()) {
+                        replace_monitor_selection_tx(
+                            tx,
+                            crate::media::monitor_selections::OWNER_KIND_TITLE,
+                            &title.id,
+                            if advanced {
+                                options.monitor_selection.as_ref().and_then(Option::as_ref)
+                            } else {
+                                None
+                            },
+                        )
+                        .await?;
+                    }
+                    let event = if created.reused_existing {
+                        None
+                    } else {
+                        Some(append_domain_event_tx(tx, added_event).await?)
+                    };
+                    let result = resolve_pending_overlapping_tx(tx, &request, resolution).await?;
+                    if result.updated == 0 {
+                        return Err(AppError::validation_refused(
+                            crate::error_reasons::MEDIA_REQUEST_NOT_PENDING,
+                            "request is no longer pending",
+                        ));
+                    }
+                    Ok((created, result, event))
+                })
+            },
+        )
+        .await;
+        drop(scope);
+        result
     }
 
     async fn resolve_pending_overlapping(
@@ -370,6 +381,8 @@ impl MediaRequestRepository for MediaRequestStore {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
@@ -383,6 +396,9 @@ impl MediaRequestRepository for MediaRequestStore {
                 let requested_quality_profile_name = requested_quality_profile_name.clone();
                 let requested_monitor_type = requested_monitor_type.clone();
                 let requested_monitor_selection = requested_monitor_selection.clone();
+                let requested_required_audio_languages = requested_required_audio_languages.clone();
+                let requested_preferred_audio_languages =
+                    requested_preferred_audio_languages.clone();
                 let updated_event = updated_event.clone();
                 Box::pin(async move {
                     update_pending_request_preferences_tx(
@@ -392,6 +408,8 @@ impl MediaRequestRepository for MediaRequestStore {
                         requested_quality_profile_name,
                         requested_monitor_type,
                         requested_monitor_selection,
+                        requested_required_audio_languages,
+                        requested_preferred_audio_languages,
                         requested_lease_days,
                         updated_event,
                     )
@@ -499,6 +517,51 @@ impl MediaRequestRepository for MediaRequestStore {
         Ok(counts)
     }
 
+    async fn count_pending_by_library_and_facet(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, MediaRequestCounts>> {
+        let mut by_library = library_ids
+            .iter()
+            .map(|library_id| (library_id.clone(), MediaRequestCounts::default()))
+            .collect::<std::collections::HashMap<_, _>>();
+        for chunk in library_ids.chunks(MEDIA_REQUEST_ID_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            // Grouping by library too: the distinct key already carries it, so
+            // each group counts what the single-library read counts.
+            let sql = format!(
+                "SELECT library_id, facet,
+                        COUNT(DISTINCT library_id || ':' || identity_fingerprint) AS count
+                   FROM media_requests
+                  WHERE status = {{}} AND library_id IN ({placeholders})
+                  GROUP BY library_id, facet"
+            );
+            let mut args = vec![SqlArg::Text(
+                MediaRequestStatus::Pending.as_str().to_string(),
+            )];
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                let library_id = row.text("library_id")?;
+                let facet_raw = row.text("facet")?;
+                let count = row.i64("count")?;
+                let counts = by_library.entry(library_id).or_default();
+                match MediaFacet::parse(&facet_raw) {
+                    Some(MediaFacet::Movie) => counts.movie = count,
+                    Some(MediaFacet::Series) => counts.series = count,
+                    Some(MediaFacet::Anime) => counts.anime = count,
+                    None => {
+                        return Err(AppError::Repository(format!(
+                            "unknown media request facet {facet_raw}"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(by_library)
+    }
+
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
         if matches!(&query.library_ids, Some(library_ids) if library_ids.is_empty()) {
             return Ok(Vec::new());
@@ -506,27 +569,33 @@ impl MediaRequestRepository for MediaRequestStore {
 
         let (sql, args) = build_media_request_list_sql(&query);
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-        let mut requests = Vec::with_capacity(rows.len());
-        for row in rows {
-            let mut request = row_to_media_request(&row)?;
-            request.external_ids =
-                load_media_request_external_ids(self.datastore.read_exec(), &request.id).await?;
-            request.requesters =
-                load_media_request_requesters(self.datastore.read_exec(), &request.id).await?;
-            requests.push(request);
-        }
-        // One query for the whole page rather than one per request.
+        let mut requests = rows
+            .iter()
+            .map(row_to_media_request)
+            .collect::<AppResult<Vec<_>>>()?;
+        // One query per chunk of the page rather than one per request.
         let owner_ids = requests
             .iter()
             .map(|request| request.id.clone())
             .collect::<Vec<_>>();
-        let mut selections = load_monitor_selections_for_owners(
-            self.datastore.read_exec(),
-            OWNER_KIND_MEDIA_REQUEST,
-            &owner_ids,
-        )
-        .await?;
+        let mut external_ids =
+            load_media_request_external_ids_for_requests(&self.datastore, &owner_ids).await?;
+        let mut requesters =
+            load_media_request_requesters_for_requests(&self.datastore, &owner_ids).await?;
+        let mut selections = std::collections::HashMap::new();
+        for chunk in owner_ids.chunks(MEDIA_REQUEST_ID_CHUNK) {
+            selections.extend(
+                load_monitor_selections_for_owners(
+                    self.datastore.read_exec(),
+                    OWNER_KIND_MEDIA_REQUEST,
+                    chunk,
+                )
+                .await?,
+            );
+        }
         for request in &mut requests {
+            request.external_ids = external_ids.remove(&request.id).unwrap_or_default();
+            request.requesters = requesters.remove(&request.id).unwrap_or_default();
             request.requested_monitor_selection = selections.remove(&request.id);
         }
         Ok(requests)
@@ -585,12 +654,18 @@ impl MediaRequestRepository for MediaRequestStore {
             &[SqlArg::Text(identity_fingerprint.to_string())],
         )
         .await?;
-        let mut requests = Vec::with_capacity(rows.len());
-        for row in rows {
-            let mut request = row_to_media_request(&row)?;
-            request.external_ids =
-                load_media_request_external_ids(self.datastore.read_exec(), &request.id).await?;
-            requests.push(request);
+        let mut requests = rows
+            .iter()
+            .map(row_to_media_request)
+            .collect::<AppResult<Vec<_>>>()?;
+        let request_ids = requests
+            .iter()
+            .map(|request| request.id.clone())
+            .collect::<Vec<_>>();
+        let mut external_ids =
+            load_media_request_external_ids_for_requests(&self.datastore, &request_ids).await?;
+        for request in &mut requests {
+            request.external_ids = external_ids.remove(&request.id).unwrap_or_default();
         }
         Ok(requests)
     }
@@ -698,6 +773,7 @@ const REQUEST_COLUMNS: &str = "id, library_id, facet, status, identity_fingerpri
         sort_title, slug, poster_url, background_url, year, overview, runtime_minutes, language,
         content_status, rating_summary_json,
         requested_quality_profile_id, requested_quality_profile_name, requested_monitor_type,
+        requested_required_audio_languages_json, requested_preferred_audio_languages_json,
         resolved_by_user_id, resolved_at, created_title_id,
         approved_quality_profile_id, approved_quality_profile_name,
         requested_lease_days, approved_lease_days, decision_id, decided_by_rule_set_ids,
@@ -727,6 +803,7 @@ async fn insert_media_request_tx(
             rating_summary_json,
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
+            requested_required_audio_languages_json, requested_preferred_audio_languages_json,
             requested_lease_days, metadata_snapshot_json,
             origin_kind, origin_subscription_id,
             created_by_user_id, created_at, updated_at
@@ -735,6 +812,7 @@ async fn insert_media_request_tx(
             {}, {}, {}, {}, {}, {}, {},
             {},
             {}, {}, {},
+            {}, {},
             {}, {},
             {}, {},
             {}, {}, {}
@@ -759,6 +837,12 @@ async fn insert_media_request_tx(
             SqlArg::OptText(request.requested_quality_profile_id.clone()),
             SqlArg::OptText(request.requested_quality_profile_name.clone()),
             SqlArg::OptText(request.requested_monitor_type.clone()),
+            SqlArg::OptText(audio_languages_json(
+                request.requested_required_audio_languages.as_deref(),
+            )?),
+            SqlArg::OptText(audio_languages_json(
+                request.requested_preferred_audio_languages.as_deref(),
+            )?),
             SqlArg::OptI64(request.requested_lease_days),
             SqlArg::Text(metadata_snapshot_json),
             SqlArg::Text(request.origin.as_str().to_string()),
@@ -1052,6 +1136,8 @@ async fn update_pending_request_preferences_tx(
     requested_quality_profile_name: String,
     requested_monitor_type: Option<String>,
     requested_monitor_selection: Option<MonitorSelection>,
+    requested_required_audio_languages: Option<Vec<String>>,
+    requested_preferred_audio_languages: Option<Vec<String>>,
     requested_lease_days: Option<i64>,
     updated_event: NewDomainEvent,
 ) -> AppResult<MediaRequestUpdateResult> {
@@ -1062,6 +1148,8 @@ async fn update_pending_request_preferences_tx(
                 SET requested_quality_profile_id = {},
                     requested_quality_profile_name = {},
                     requested_monitor_type = {},
+                    requested_required_audio_languages_json = {},
+                    requested_preferred_audio_languages_json = {},
                     requested_lease_days = {},
                     updated_at = {}
               WHERE id = {} AND status = {}",
@@ -1069,6 +1157,12 @@ async fn update_pending_request_preferences_tx(
                 SqlArg::Text(requested_quality_profile_id),
                 SqlArg::Text(requested_quality_profile_name),
                 SqlArg::OptText(requested_monitor_type),
+                SqlArg::OptText(audio_languages_json(
+                    requested_required_audio_languages.as_deref(),
+                )?),
+                SqlArg::OptText(audio_languages_json(
+                    requested_preferred_audio_languages.as_deref(),
+                )?),
                 SqlArg::OptI64(requested_lease_days),
                 SqlArg::Timestamp(now),
                 SqlArg::Text(request_id.to_string()),
@@ -1153,6 +1247,94 @@ async fn load_media_request_external_ids(
         .collect()
 }
 
+/// Request ids per `IN (...)` list, well under every engine's bind ceiling.
+const MEDIA_REQUEST_ID_CHUNK: usize = 900;
+
+/// [`load_media_request_external_ids`] for many requests; each request's ids
+/// keep the per-request `source, external_id` order.
+async fn load_media_request_external_ids_for_requests(
+    datastore: &StoreDatastore,
+    request_ids: &[String],
+) -> AppResult<std::collections::HashMap<String, Vec<ExternalId>>> {
+    let mut by_request: std::collections::HashMap<String, Vec<ExternalId>> =
+        std::collections::HashMap::new();
+    for chunk in request_ids.chunks(MEDIA_REQUEST_ID_CHUNK) {
+        let placeholders = std::iter::repeat_n("{}", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT request_id, source, external_id
+               FROM media_request_external_ids
+              WHERE request_id IN ({placeholders})
+              ORDER BY request_id, source, external_id"
+        );
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        for row in SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await? {
+            by_request
+                .entry(row.text("request_id")?)
+                .or_default()
+                .push(ExternalId::new(
+                    row.text("source")?,
+                    row.text("external_id")?,
+                ));
+        }
+    }
+    Ok(by_request)
+}
+
+/// [`load_media_request_requesters`] for many requests; each request's
+/// requesters keep the per-request `requested_at, username` order.
+async fn load_media_request_requesters_for_requests(
+    datastore: &StoreDatastore,
+    request_ids: &[String],
+) -> AppResult<std::collections::HashMap<String, Vec<MediaRequestRequester>>> {
+    let mut by_request: std::collections::HashMap<String, Vec<MediaRequestRequester>> =
+        std::collections::HashMap::new();
+    for chunk in request_ids.chunks(MEDIA_REQUEST_ID_CHUNK) {
+        let placeholders = std::iter::repeat_n("{}", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT mrr.request_id,
+                    mrr.user_id,
+                    users.username,
+                    (
+                        SELECT account.avatar_url
+                          FROM user_external_accounts account
+                         WHERE account.user_id = mrr.user_id
+                           AND account.status = 'active'
+                           AND account.avatar_url IS NOT NULL
+                           AND account.avatar_url <> ''
+                         ORDER BY COALESCE(
+                             account.last_login_at,
+                             account.verified_at,
+                             account.updated_at,
+                             account.created_at
+                         ) DESC, account.id ASC
+                         LIMIT 1
+                    ) AS avatar_url,
+                    mrr.requested_at
+               FROM media_request_requesters mrr
+               JOIN users ON users.id = mrr.user_id
+              WHERE mrr.request_id IN ({placeholders})
+              ORDER BY mrr.request_id, mrr.requested_at ASC, users.username ASC"
+        );
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        for row in SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await? {
+            by_request
+                .entry(row.text("request_id")?)
+                .or_default()
+                .push(MediaRequestRequester {
+                    user_id: row.text("user_id")?,
+                    username: row.text("username")?,
+                    avatar_url: row.opt_text("avatar_url")?,
+                    requested_at: row.timestamp("requested_at")?,
+                });
+        }
+    }
+    Ok(by_request)
+}
+
 async fn load_media_request_requesters(
     exec: SqlExec<'_, '_>,
     request_id: &str,
@@ -1173,7 +1355,7 @@ async fn load_media_request_requesters(
                          account.verified_at,
                          account.updated_at,
                          account.created_at
-                     ) DESC
+                     ) DESC, account.id ASC
                      LIMIT 1
                 ) AS avatar_url,
                 mrr.requested_at
@@ -1269,6 +1451,14 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         requested_quality_profile_name: row.opt_text("requested_quality_profile_name")?,
         requested_monitor_type: row.opt_text("requested_monitor_type")?,
         requested_monitor_selection: None,
+        requested_required_audio_languages: parse_audio_languages(
+            row,
+            "requested_required_audio_languages_json",
+        )?,
+        requested_preferred_audio_languages: parse_audio_languages(
+            row,
+            "requested_preferred_audio_languages_json",
+        )?,
         resolved_by_user_id: row.opt_text("resolved_by_user_id")?,
         resolved_at: row.opt_timestamp("resolved_at")?,
         created_title_id: row.opt_text("created_title_id")?,
@@ -1298,6 +1488,21 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
 /// Serialize a string list for one of the JSON text columns 0223 added.
 fn json_array_text(values: &[String]) -> AppResult<String> {
     canonical_json_text(&values)
+}
+
+/// A requested audio language list, or NULL when the request inherits.
+fn audio_languages_json(languages: Option<&[String]>) -> AppResult<Option<String>> {
+    languages
+        .map(|languages| canonical_json_text(&languages))
+        .transpose()
+}
+
+/// A requested audio language column. NULL inherits; a value that is not a
+/// string array also reads as inheriting rather than hiding the request.
+fn parse_audio_languages(row: &SqlRow, column: &str) -> AppResult<Option<Vec<String>>> {
+    Ok(row
+        .opt_text(column)?
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok()))
 }
 
 fn parse_json_array(row: &SqlRow, column: &str) -> AppResult<Vec<String>> {
@@ -1477,6 +1682,292 @@ mod tests {
             policy_tags_of(&store, "pending-both").await,
             vec!["keep".to_string()]
         );
+    }
+
+    async fn seed_batch_row(
+        store: &MediaRequestStore,
+        id: &str,
+        library_id: &str,
+        facet: &str,
+        status: &str,
+        fingerprint: &str,
+    ) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_media_request_for_batch_reads",
+            "INSERT INTO media_requests (
+                id, library_id, facet, status, identity_fingerprint, title,
+                policy_tags_json, created_by_user_id, created_at, updated_at
+            ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(library_id.to_string()),
+                SqlArg::Text(facet.to_string()),
+                SqlArg::Text(status.to_string()),
+                SqlArg::Text(fingerprint.to_string()),
+                SqlArg::Text("Emberfall".to_string()),
+                SqlArg::Text("[]".to_string()),
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .expect("seed the request row");
+    }
+
+    async fn seed_library(store: &MediaRequestStore, id: &str, facet: &str) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_library_for_batch_reads",
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(facet.to_string()),
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(id.to_string()),
+                SqlArg::Bool(false),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .expect("seed the library row");
+    }
+
+    async fn seed_user(store: &MediaRequestStore, id: &str) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_user_for_batch_reads",
+            "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status)
+             VALUES ({}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(id.to_string()),
+                SqlArg::OptText(None),
+                SqlArg::Bool(false),
+                SqlArg::Text("local".to_string()),
+                SqlArg::Text("active".to_string()),
+            ],
+        )
+        .await
+        .expect("seed the user row");
+    }
+
+    #[tokio::test]
+    async fn batched_list_and_history_attach_what_the_per_request_reads_attach() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        // Usernames sort against insertion order so a tie on requested_at
+        // has to fall through to the username.
+        for user in ["user-cinderwake", "user-ashgrove", "user-emberfall"] {
+            seed_user(&store, user).await;
+        }
+        assert!(
+            store
+                .list(MediaRequestQuery::default())
+                .await
+                .expect("empty list")
+                .is_empty()
+        );
+
+        let tied_at = Utc::now();
+        // More than one chunk of request ids.
+        let total = MEDIA_REQUEST_ID_CHUNK + 57;
+        for n in 0..total {
+            let id = format!("request-{n:04}");
+            let fingerprint = format!("fingerprint-{}", n % 3);
+            seed_batch_row(
+                &store,
+                &id,
+                "library-under-test",
+                "movie",
+                "pending",
+                &fingerprint,
+            )
+            .await;
+            if n % 4 == 0 {
+                continue;
+            }
+            for (source, value) in [("tvdb", "20"), ("imdb", "tt2"), ("tvdb", "10")] {
+                SqlRuntime::execute_write(
+                    &store.datastore,
+                    "seed_external_id",
+                    "INSERT INTO media_request_external_ids
+                     (request_id, library_id, source, external_id, created_at)
+                     VALUES ({}, {}, {}, {}, {})",
+                    vec![
+                        SqlArg::Text(id.clone()),
+                        SqlArg::Text("library-under-test".to_string()),
+                        SqlArg::Text(source.to_string()),
+                        SqlArg::Text(format!("{value}-{n}")),
+                        SqlArg::Timestamp(Utc::now()),
+                    ],
+                )
+                .await
+                .expect("seed external id");
+            }
+            for (user, offset) in [
+                ("user-cinderwake", 0),
+                ("user-ashgrove", 0),
+                ("user-emberfall", -1),
+            ] {
+                SqlRuntime::execute_write(
+                    &store.datastore,
+                    "seed_requester",
+                    "INSERT INTO media_request_requesters (request_id, user_id, requested_at)
+                     VALUES ({}, {}, {})",
+                    vec![
+                        SqlArg::Text(id.clone()),
+                        SqlArg::Text(user.to_string()),
+                        SqlArg::Timestamp(tied_at + chrono::Duration::seconds(offset)),
+                    ],
+                )
+                .await
+                .expect("seed requester");
+            }
+        }
+
+        let listed = store
+            .list(MediaRequestQuery::default())
+            .await
+            .expect("list requests");
+        assert_eq!(listed.len(), total);
+        for request in &listed {
+            let external_ids =
+                load_media_request_external_ids(store.datastore.read_exec(), &request.id)
+                    .await
+                    .expect("per-request external ids");
+            let requesters =
+                load_media_request_requesters(store.datastore.read_exec(), &request.id)
+                    .await
+                    .expect("per-request requesters");
+            let selection = load_monitor_selection(
+                store.datastore.read_exec(),
+                OWNER_KIND_MEDIA_REQUEST,
+                &request.id,
+            )
+            .await
+            .expect("per-request monitor selection");
+            assert_eq!(
+                format!("{:?}", request.external_ids),
+                format!("{external_ids:?}")
+            );
+            assert_eq!(
+                format!("{:?}", request.requesters),
+                format!("{requesters:?}")
+            );
+            assert_eq!(
+                format!("{:?}", request.requested_monitor_selection),
+                format!("{selection:?}")
+            );
+        }
+        assert!(
+            listed
+                .iter()
+                .any(|request| request.requesters.len() == 3 && request.external_ids.len() == 3)
+        );
+
+        let history = store
+            .history_for_fingerprint("fingerprint-1")
+            .await
+            .expect("history");
+        assert!(history.len() > MEDIA_REQUEST_ID_CHUNK / 3);
+        for request in &history {
+            let external_ids =
+                load_media_request_external_ids(store.datastore.read_exec(), &request.id)
+                    .await
+                    .expect("per-request external ids");
+            assert_eq!(
+                format!("{:?}", request.external_ids),
+                format!("{external_ids:?}")
+            );
+        }
+        assert!(
+            store
+                .history_for_fingerprint("fingerprint-none")
+                .await
+                .expect("empty history")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn grouped_pending_counts_match_the_per_library_count() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_library(&store, "library-cinderwake", "series").await;
+        seed_library(&store, "library-ashgrove", "anime").await;
+        let rows = [
+            ("library-under-test", "movie", "pending", "fp-emberfall"),
+            ("library-under-test", "movie", "pending", "fp-emberfall"),
+            ("library-under-test", "movie", "approved", "fp-ashgrove"),
+            ("library-under-test", "series", "pending", "fp-cinderwake"),
+            ("library-cinderwake", "series", "pending", "fp-emberfall"),
+            ("library-cinderwake", "series", "pending", "fp-cinderwake"),
+            ("library-cinderwake", "anime", "pending", "fp-emberfall"),
+            ("library-cinderwake", "movie", "rejected", "fp-emberfall"),
+        ];
+        for (n, (library, facet, status, fingerprint)) in rows.iter().enumerate() {
+            seed_batch_row(
+                &store,
+                &format!("count-{n}"),
+                library,
+                facet,
+                status,
+                fingerprint,
+            )
+            .await;
+        }
+
+        for library_ids in [
+            Vec::new(),
+            vec!["library-ashgrove".to_string()],
+            vec![
+                "library-under-test".to_string(),
+                "library-cinderwake".to_string(),
+                "library-ashgrove".to_string(),
+                "library-missing".to_string(),
+                "library-cinderwake".to_string(),
+            ],
+        ] {
+            let grouped = store
+                .count_pending_by_library_and_facet(&library_ids)
+                .await
+                .expect("grouped counts");
+            let mut expected = std::collections::HashMap::new();
+            for library_id in &library_ids {
+                expected.insert(
+                    library_id.clone(),
+                    store
+                        .count_pending_by_facet(std::slice::from_ref(library_id))
+                        .await
+                        .expect("per-library counts"),
+                );
+            }
+            assert_eq!(
+                format!("{:?}", sorted(&grouped)),
+                format!("{:?}", sorted(&expected))
+            );
+        }
+        let grouped = store
+            .count_pending_by_library_and_facet(&["library-under-test".to_string()])
+            .await
+            .expect("grouped counts");
+        let counts = &grouped["library-under-test"];
+        assert_eq!((counts.movie, counts.series, counts.anime), (1, 1, 0));
+    }
+
+    fn sorted(
+        counts: &std::collections::HashMap<String, MediaRequestCounts>,
+    ) -> Vec<(String, i64, i64, i64)> {
+        let mut rows = counts
+            .iter()
+            .map(|(id, c)| (id.clone(), c.movie, c.series, c.anime))
+            .collect::<Vec<_>>();
+        rows.sort();
+        rows
     }
 }
 

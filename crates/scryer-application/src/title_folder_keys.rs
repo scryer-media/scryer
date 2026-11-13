@@ -1,0 +1,850 @@
+//! The key a title folder is unique under, and the rule every write of a
+//! title's folder is checked against.
+//!
+//! The key is decided from the stored path's own shape, never from the host
+//! the code runs on, so a catalog keyed on one machine compares the same on
+//! every other. A path with a drive letter (`C:`) or a UNC prefix (`\\server`)
+//! is a Windows path: its separators are folded to `\` and its case is folded
+//! the way Windows folds it, character by character to upper case, because
+//! Windows treats `Show` and `show` as one folder. Every other path is
+//! compared exactly as POSIX does, so `/library/Show` and `/library/show` are
+//! two folders. Both kinds drop empty and `.` components, lose trailing
+//! separators and trailing spaces, and are compared in Unicode NFC, so the
+//! spellings a filesystem hands back for one folder share one key.
+//!
+//! The stored escape form for names that are not valid text is compared
+//! exactly: it is already canonical, and decoding it could merge names the
+//! filesystem keeps apart.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use unicode_normalization::UnicodeNormalization;
+
+use crate::error_reasons::folder_ownership;
+use crate::stored_paths::{is_escaped_stored_path, stored_path_to_display_string};
+use crate::{AppError, AppResult};
+
+const WINDOWS_SEPARATOR: char = '\\';
+const POSIX_SEPARATOR: char = '/';
+
+/// The key a stored title folder is unique under, or `None` for an empty or
+/// whitespace-only value, which records no folder at all.
+pub fn title_folder_key(stored: &str) -> Option<String> {
+    if stored.trim().is_empty() {
+        return None;
+    }
+    if is_escaped_stored_path(stored) {
+        return Some(stored.to_string());
+    }
+    let path = strip_extended_length_prefix(stored);
+    let key = if windows_kind(&path) {
+        windows_key(&path)
+    } else {
+        posix_key(&path)
+    };
+    (!key.is_empty()).then_some(key)
+}
+
+/// `\\?\C:\x` names `C:\x` and `\\?\UNC\server\share` names
+/// `\\server\share`; the prefix only lifts Win32 path-length limits.
+fn strip_extended_length_prefix(path: &str) -> String {
+    for prefix in [r"\\?\", "//?/"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            // `get` keeps a multi-byte character straddling byte 4 from
+            // panicking; such a path simply has no `UNC` marker.
+            let unc = rest.get(..4).is_some_and(|marker| {
+                marker.eq_ignore_ascii_case(r"UNC\") || marker.eq_ignore_ascii_case("UNC/")
+            });
+            if unc && let Some(share) = rest.get(4..) {
+                return format!(r"\\{share}");
+            }
+            return rest.to_string();
+        }
+    }
+    path.to_string()
+}
+
+fn has_drive_letter(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes.len() == 2 || bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+fn windows_kind(path: &str) -> bool {
+    has_drive_letter(path) || path.starts_with(r"\\")
+}
+
+fn trim_trailing(path: &str, separator: impl Fn(char) -> bool) -> &str {
+    path.trim_end_matches(|c: char| c == ' ' || separator(c))
+}
+
+fn windows_key(path: &str) -> String {
+    let is_separator = |c: char| c == '\\' || c == '/';
+    // Both anchors are two ASCII bytes, so splitting at byte 2 is safe; `get`
+    // keeps it that way if the recognizer above ever widens.
+    let (anchor, rest) = if has_drive_letter(path) {
+        (
+            format!("{}\\", path.get(..2).unwrap_or_default()),
+            path.get(2..).unwrap_or_default(),
+        )
+    } else {
+        (r"\\".to_string(), path.get(2..).unwrap_or_default())
+    };
+    let rest = trim_trailing(rest, is_separator);
+    let components = rest
+        .split(is_separator)
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>();
+    let joined = format!(
+        "{anchor}{}",
+        components.join(&WINDOWS_SEPARATOR.to_string())
+    );
+    let composed = joined.nfc().collect::<String>();
+    composed.chars().map(ordinal_case_fold).nfc().collect()
+}
+
+/// Fold one character the way Windows compares names ignoring case, one
+/// character at a time to upper case (NTFS's upcase table, .NET's
+/// ordinal-ignore-case), so the fold never depends on its neighbours and
+/// never changes a name's length.
+///
+/// The standard library only offers the full upper-case mapping. Where that
+/// is a single character it is the simple mapping too and is used. The Greek
+/// letters with iota subscript are the characters whose full mapping is
+/// several characters but whose simple mapping is one; they are mapped from a
+/// table here. Every other character whose upper case is several characters
+/// has no single-character upper case and is left as it is.
+fn ordinal_case_fold(c: char) -> char {
+    if let Some(upper) = iota_subscript_simple_upper_case(c) {
+        return upper;
+    }
+    let mut upper = c.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(single), None) => single,
+        _ => c,
+    }
+}
+
+/// The simple upper-case mapping of the lower-case Greek letters with iota
+/// subscript (ypogegrammeni) to their capitals with prosgegrammeni.
+fn iota_subscript_simple_upper_case(c: char) -> Option<char> {
+    let code = c as u32;
+    let upper = match code {
+        0x1F80..=0x1F87 | 0x1F90..=0x1F97 | 0x1FA0..=0x1FA7 => code + 8,
+        0x1FB3 => 0x1FBC,
+        0x1FC3 => 0x1FCC,
+        0x1FF3 => 0x1FFC,
+        _ => return None,
+    };
+    char::from_u32(upper)
+}
+
+fn posix_key(path: &str) -> String {
+    let is_separator = |c: char| c == POSIX_SEPARATOR;
+    let absolute = path.starts_with(POSIX_SEPARATOR);
+    let rest = trim_trailing(path, is_separator);
+    let components = rest
+        .split(is_separator)
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>();
+    let joined = components.join(&POSIX_SEPARATOR.to_string());
+    let joined = if absolute {
+        format!("{POSIX_SEPARATOR}{joined}")
+    } else {
+        joined
+    };
+    joined.nfc().collect()
+}
+
+fn key_separator(key: &str) -> Option<char> {
+    if is_escaped_stored_path(key) {
+        None
+    } else if windows_kind(key) {
+        Some(WINDOWS_SEPARATOR)
+    } else {
+        Some(POSIX_SEPARATOR)
+    }
+}
+
+/// The prefix every key strictly inside `key` starts with.
+fn descendant_prefix(key: &str) -> Option<String> {
+    let separator = key_separator(key)?;
+    Some(if key.ends_with(separator) {
+        key.to_string()
+    } else {
+        format!("{key}{separator}")
+    })
+}
+
+/// Bounds `[low, high)` that select, by plain bytewise comparison, every key
+/// strictly inside `key`. `None` for the escape form, which only ever
+/// compares by equality.
+pub fn title_folder_key_descendant_bounds(key: &str) -> Option<(String, String)> {
+    let prefix = descendant_prefix(key)?;
+    let mut high = prefix.clone();
+    let last = high.pop()?;
+    // `/` and `\` are ASCII, so the next code point is one byte up too.
+    high.push(char::from_u32(last as u32 + 1)?);
+    Some((prefix, high))
+}
+
+/// Every key `key` lies strictly inside, nearest last.
+pub fn title_folder_key_ancestors(key: &str) -> Vec<String> {
+    let Some(separator) = key_separator(key) else {
+        return Vec::new();
+    };
+    let anchor_len = if has_drive_letter(key) {
+        3
+    } else if key.starts_with(r"\\") {
+        2
+    } else if key.starts_with(POSIX_SEPARATOR) {
+        1
+    } else {
+        0
+    };
+    let mut ancestors = Vec::new();
+    if anchor_len > 0
+        && key.len() > anchor_len
+        && !key.starts_with(r"\\")
+        && let Some(anchor) = key.get(..anchor_len)
+    {
+        ancestors.push(anchor.to_string());
+    }
+    // Separators are ASCII, so every match index is a character boundary.
+    for (index, _) in key.match_indices(separator) {
+        if index >= anchor_len
+            && let Some(ancestor) = key.get(..index)
+        {
+            ancestors.push(ancestor.to_string());
+        }
+    }
+    ancestors
+}
+
+/// How one title folder key sits relative to another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleFolderKeyRelation {
+    /// The two keys name one folder.
+    Same,
+    /// The first folder lies inside the second.
+    Inside,
+    /// The second folder lies inside the first.
+    Contains,
+}
+
+/// Where `key` sits relative to `other`, or `None` when the two folders are
+/// disjoint.
+pub fn title_folder_key_relation(key: &str, other: &str) -> Option<TitleFolderKeyRelation> {
+    if key == other {
+        return Some(TitleFolderKeyRelation::Same);
+    }
+    if descendant_prefix(other).is_some_and(|prefix| key.starts_with(&prefix)) {
+        return Some(TitleFolderKeyRelation::Inside);
+    }
+    if descendant_prefix(key).is_some_and(|prefix| other.starts_with(&prefix)) {
+        return Some(TitleFolderKeyRelation::Contains);
+    }
+    None
+}
+
+/// What a title's folder must currently be for a folder write to apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedTitleFolder {
+    /// Apply whatever the title's folder is now.
+    Unchecked,
+    /// Apply only while the title's folder is this one; `None` means the
+    /// title records no folder. Compared by key.
+    Exactly(Option<String>),
+}
+
+/// One change to one title's folder. A batch of writes is applied as one
+/// unit: either every write lands or none does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleFolderWrite {
+    pub title_id: String,
+    /// The folder to record; `None` clears the title's folder.
+    pub folder: Option<String>,
+    pub expected_current: ExpectedTitleFolder,
+}
+
+impl TitleFolderWrite {
+    /// Record `folder` for the title, whatever it records now.
+    pub fn assign(title_id: impl Into<String>, folder: impl Into<String>) -> Self {
+        Self {
+            title_id: title_id.into(),
+            folder: Some(folder.into()),
+            expected_current: ExpectedTitleFolder::Unchecked,
+        }
+    }
+
+    /// Clear the title's folder, whatever it records now.
+    pub fn clear(title_id: impl Into<String>) -> Self {
+        Self {
+            title_id: title_id.into(),
+            folder: None,
+            expected_current: ExpectedTitleFolder::Unchecked,
+        }
+    }
+
+    /// Apply only while the title's folder is still `current`.
+    pub fn expecting(mut self, current: Option<String>) -> Self {
+        self.expected_current = ExpectedTitleFolder::Exactly(current);
+        self
+    }
+}
+
+/// A title whose recorded folder a write could collide with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleFolderOccupant {
+    pub title_id: String,
+    pub title_name: String,
+    pub folder_path: String,
+    pub key: String,
+}
+
+/// A checked write, with the key the store records beside the folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedTitleFolderWrite {
+    pub title_id: String,
+    pub folder_path: Option<String>,
+    pub key: Option<String>,
+}
+
+/// Check a batch of title folder writes against the folders other titles
+/// record and the configured library roots, and return what to store.
+///
+/// `current_folders` holds the recorded folder of every title being written;
+/// a write for a title missing from it is refused as not found. `occupants`
+/// may include the titles being written: their current folders are about to
+/// change, so they are judged by what the batch writes instead.
+pub fn plan_title_folder_writes(
+    writes: &[TitleFolderWrite],
+    current_folders: &BTreeMap<String, Option<String>>,
+    occupants: &[TitleFolderOccupant],
+    library_root_paths: &[String],
+) -> AppResult<Vec<PlannedTitleFolderWrite>> {
+    let mut written = BTreeSet::new();
+    let mut planned = Vec::with_capacity(writes.len());
+    for write in writes {
+        if !written.insert(write.title_id.as_str()) {
+            return Err(AppError::Validation(format!(
+                "title {} appears twice in one folder write",
+                write.title_id
+            )));
+        }
+        let current = current_folders
+            .get(&write.title_id)
+            .ok_or_else(|| AppError::NotFound(format!("title {}", write.title_id)))?;
+        let key = match write.folder.as_deref() {
+            None => None,
+            Some(folder) => Some(title_folder_key(folder).ok_or_else(|| {
+                AppError::validation_refused(
+                    folder_ownership::TITLE_FOLDER_PATH_REQUIRED,
+                    "title folder path is required",
+                )
+            })?),
+        };
+        let current_key = current.as_deref().and_then(title_folder_key);
+        let expectation_holds = match &write.expected_current {
+            ExpectedTitleFolder::Unchecked => true,
+            ExpectedTitleFolder::Exactly(expected) => {
+                expected.as_deref().and_then(title_folder_key) == current_key
+            }
+        };
+        let mut folder_path = write.folder.clone();
+        if !expectation_holds {
+            // A title that already records the folder being assigned has the
+            // write it asked for; only a different folder means it changed.
+            // Its stored spelling stays, since the caller expected another.
+            if key.is_none() || key != current_key {
+                return Err(AppError::validation_refused(
+                    folder_ownership::TITLE_FOLDER_CHANGED,
+                    format!(
+                        "the folder recorded for title {} changed before this write",
+                        write.title_id
+                    ),
+                ));
+            }
+            folder_path = current.clone();
+        }
+        planned.push(PlannedTitleFolderWrite {
+            title_id: write.title_id.clone(),
+            folder_path,
+            key,
+        });
+    }
+
+    let root_keys = library_root_paths
+        .iter()
+        .filter_map(|root| title_folder_key(root))
+        .collect::<Vec<_>>();
+    // A title that records a library root, or a folder holding one, is not a
+    // valid owner of anything inside it; the repair heals that record, and
+    // until then it must not lock every folder under the root.
+    let spans_a_root = |key: &str| {
+        root_keys.iter().any(|root_key| {
+            matches!(
+                title_folder_key_relation(key, root_key),
+                Some(TitleFolderKeyRelation::Same | TitleFolderKeyRelation::Contains)
+            )
+        })
+    };
+
+    for (index, write) in planned.iter().enumerate() {
+        let (Some(key), Some(folder)) = (write.key.as_deref(), write.folder_path.as_deref()) else {
+            continue;
+        };
+        for root_key in &root_keys {
+            match title_folder_key_relation(key, root_key) {
+                Some(TitleFolderKeyRelation::Same) => {
+                    return Err(AppError::validation_refused(
+                        folder_ownership::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER,
+                        format!(
+                            "{} is a library root, not a title folder",
+                            stored_path_to_display_string(folder)
+                        ),
+                    ));
+                }
+                Some(TitleFolderKeyRelation::Contains) => {
+                    return Err(AppError::validation_refused(
+                        folder_ownership::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER,
+                        format!(
+                            "{} holds a library root, so it cannot be a title folder",
+                            stored_path_to_display_string(folder)
+                        ),
+                    ));
+                }
+                Some(TitleFolderKeyRelation::Inside) | None => {}
+            }
+        }
+        for other in planned.iter().skip(index + 1) {
+            if let Some(other_key) = other.key.as_deref()
+                && let Some(relation) = title_folder_key_relation(key, other_key)
+            {
+                return Err(conflict_refusal(folder, relation, &other.title_id));
+            }
+        }
+        for occupant in occupants {
+            if written.contains(occupant.title_id.as_str()) || spans_a_root(&occupant.key) {
+                continue;
+            }
+            if let Some(relation) = title_folder_key_relation(key, &occupant.key) {
+                return Err(conflict_refusal(folder, relation, &occupant.title_name));
+            }
+        }
+    }
+    Ok(planned)
+}
+
+fn conflict_refusal(folder: &str, relation: TitleFolderKeyRelation, owner: &str) -> AppError {
+    let folder = stored_path_to_display_string(folder);
+    match relation {
+        TitleFolderKeyRelation::Same => AppError::validation_refused(
+            folder_ownership::FOLDER_ALREADY_OWNED_TITLE,
+            format!("folder {folder} is already owned by title {owner}"),
+        ),
+        TitleFolderKeyRelation::Inside | TitleFolderKeyRelation::Contains => {
+            AppError::validation_refused(
+                folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE,
+                format!("folder {folder} overlaps the folder owned by title {owner}"),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(path: &str) -> String {
+        title_folder_key(path).unwrap_or_else(|| panic!("{path:?} has no key"))
+    }
+
+    #[test]
+    fn empty_and_whitespace_folders_have_no_key() {
+        assert_eq!(title_folder_key(""), None);
+        assert_eq!(title_folder_key("   "), None);
+        assert_eq!(title_folder_key("\t\n"), None);
+    }
+
+    #[test]
+    fn posix_keys_keep_case() {
+        assert_ne!(key("/library/Emberfall"), key("/library/emberfall"));
+        assert_eq!(key("/library/Emberfall"), "/library/Emberfall");
+    }
+
+    #[test]
+    fn windows_keys_fold_case_and_separators_on_every_host() {
+        assert_eq!(key(r"C:\Media\Emberfall"), key("c:/media/EMBERFALL"));
+        assert_eq!(key(r"C:\Media\Emberfall"), r"C:\MEDIA\EMBERFALL");
+        assert_eq!(
+            key(r"\\NAS\Share\Emberfall"),
+            key(r"\\nas\share\emberfall\")
+        );
+    }
+
+    #[test]
+    fn trailing_separators_spaces_and_dot_components_collapse() {
+        for spelling in [
+            "/library/Emberfall/",
+            "/library/Emberfall//",
+            "/library/Emberfall ",
+            "/library//./Emberfall",
+            "/library/Emberfall/ /",
+        ] {
+            assert_eq!(key(spelling), "/library/Emberfall", "{spelling:?}");
+        }
+        assert_eq!(key(r"D:\TV\.\Cinderwake\\"), r"D:\TV\CINDERWAKE");
+    }
+
+    #[test]
+    fn unicode_forms_share_one_key() {
+        assert_eq!(
+            key("/library/Cinde\u{301}rwake"),
+            key("/library/Cind\u{e9}rwake")
+        );
+        assert_eq!(
+            key("C:\\Media\\CIND\u{c9}RWAKE"),
+            key("c:\\media\\cinde\u{301}rwake")
+        );
+    }
+
+    #[test]
+    fn extended_length_prefixes_name_the_plain_path() {
+        assert_eq!(key(r"\\?\C:\Media\Emberfall"), key(r"C:\Media\Emberfall"));
+        assert_eq!(
+            key(r"\\?\UNC\nas\share\Emberfall"),
+            key(r"\\nas\share\Emberfall")
+        );
+    }
+
+    #[test]
+    fn roots_keep_their_separator() {
+        assert_eq!(key("/"), "/");
+        assert_eq!(key("c:"), r"C:\");
+        assert_eq!(key(r"C:\"), r"C:\");
+    }
+
+    #[test]
+    fn posix_backslashes_are_part_of_a_name() {
+        assert_ne!(key(r"/library/Ember\fall"), key("/library/Ember/fall"));
+    }
+
+    #[test]
+    fn escape_form_is_kept_exactly() {
+        let escaped = "scryer-path-v1:u:/library/%FFEmberfall";
+        assert_eq!(key(escaped), escaped);
+    }
+
+    #[test]
+    fn relation_finds_equality_and_both_nesting_directions() {
+        let outer = key("/library/Emberfall");
+        let inner = key("/library/Emberfall/Season 01");
+        let sibling = key("/library/Emberfall 2");
+        assert_eq!(
+            title_folder_key_relation(&outer, &outer),
+            Some(TitleFolderKeyRelation::Same)
+        );
+        assert_eq!(
+            title_folder_key_relation(&inner, &outer),
+            Some(TitleFolderKeyRelation::Inside)
+        );
+        assert_eq!(
+            title_folder_key_relation(&outer, &inner),
+            Some(TitleFolderKeyRelation::Contains)
+        );
+        assert_eq!(title_folder_key_relation(&outer, &sibling), None);
+        assert_eq!(
+            title_folder_key_relation(&key("/library/x"), &key("/")),
+            Some(TitleFolderKeyRelation::Inside)
+        );
+    }
+
+    #[test]
+    fn ancestors_and_descendant_bounds_match_the_relation() {
+        assert_eq!(
+            title_folder_key_ancestors("/library/Emberfall/Season 01"),
+            vec!["/", "/library", "/library/Emberfall"]
+        );
+        assert_eq!(
+            title_folder_key_ancestors(r"C:\MEDIA\EMBERFALL"),
+            vec![r"C:\", r"C:\MEDIA"]
+        );
+        assert_eq!(
+            title_folder_key_ancestors(r"\\NAS\SHARE\EMBERFALL"),
+            vec![r"\\NAS", r"\\NAS\SHARE"]
+        );
+        assert!(title_folder_key_ancestors("/").is_empty());
+        assert!(title_folder_key_ancestors(r"C:\").is_empty());
+
+        let (low, high) = title_folder_key_descendant_bounds("/library/Emberfall").unwrap();
+        assert_eq!(low, "/library/Emberfall/");
+        assert_eq!(high, "/library/Emberfall0");
+        let inside = "/library/Emberfall/Season 01";
+        assert!(inside >= low.as_str() && inside < high.as_str());
+        let sibling = "/library/Emberfall 2";
+        assert!(!(sibling >= low.as_str() && sibling < high.as_str()));
+
+        let (low, high) = title_folder_key_descendant_bounds(r"C:\").unwrap();
+        assert_eq!((low.as_str(), high.as_str()), (r"C:\", "C:]"));
+    }
+
+    #[test]
+    fn multi_byte_characters_never_split_a_slice() {
+        for stored in [
+            "\\\\?\\a\u{e9}\u{e9}",
+            "\\\\?\\\u{e9}\u{e9}",
+            "//?/a\u{e9}\u{e9}",
+            "\\\\?\\UN\u{e9}x",
+            "\u{e9}:\\Emberfall",
+            "\\\\\u{e9}",
+            "/\u{e9}/\u{1f525}",
+        ] {
+            let key = title_folder_key(stored).expect("non-blank folders have a key");
+            title_folder_key_ancestors(&key);
+            title_folder_key_descendant_bounds(&key);
+        }
+        assert_eq!(key("\\\\?\\a\u{e9}\u{e9}"), key("a\u{e9}\u{e9}"));
+    }
+
+    #[test]
+    fn windows_case_fold_is_per_character_upper_case() {
+        let folded = key("C:\\Media\\\u{39f}\u{394}\u{39f}\u{3a3}");
+        assert_eq!(key("C:\\Media\\\u{3bf}\u{3b4}\u{3bf}\u{3c3}"), folded);
+        assert_eq!(key("C:\\Media\\\u{3bf}\u{3b4}\u{3bf}\u{3c2}"), folded);
+        // A character whose upper case is several characters is kept as is,
+        // so a name never changes length.
+        assert_eq!(key("C:\\Stra\u{df}e"), "C:\\STRA\u{df}E");
+        assert_ne!(key("C:\\Stra\u{df}e"), key("C:\\STRASSE"));
+    }
+
+    #[test]
+    fn iota_subscript_letters_fold_to_their_simple_upper_case() {
+        assert_eq!(key("C:\\TV\\\u{1fb3}"), key("C:\\TV\\\u{1fbc}"));
+        for (lower, upper) in [
+            (0x1F80, 0x1F88),
+            (0x1F87, 0x1F8F),
+            (0x1F90, 0x1F98),
+            (0x1FA7, 0x1FAF),
+            (0x1FB3, 0x1FBC),
+            (0x1FC3, 0x1FCC),
+            (0x1FF3, 0x1FFC),
+        ] {
+            let lower = char::from_u32(lower).unwrap();
+            let upper = char::from_u32(upper).unwrap();
+            assert_eq!(ordinal_case_fold(lower), upper, "{lower}");
+            assert_eq!(ordinal_case_fold(upper), upper, "{upper}");
+        }
+        // The fold is idempotent over the whole Greek Extended block and its
+        // neighbours.
+        for code in 0x0370..=0x1FFF {
+            if let Some(c) = char::from_u32(code) {
+                let once = ordinal_case_fold(c);
+                assert_eq!(ordinal_case_fold(once), once, "U+{code:04X}");
+            }
+        }
+        let folded = key("C:\\TV\\\u{1fb3}");
+        assert_eq!(title_folder_key(&folded).as_deref(), Some(folded.as_str()));
+    }
+
+    fn occupant(id: &str, folder: &str) -> TitleFolderOccupant {
+        TitleFolderOccupant {
+            title_id: id.into(),
+            title_name: id.into(),
+            folder_path: folder.into(),
+            key: key(folder),
+        }
+    }
+
+    fn current(entries: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
+        entries
+            .iter()
+            .map(|(id, folder)| (id.to_string(), folder.map(str::to_string)))
+            .collect()
+    }
+
+    #[test]
+    fn plan_refuses_conflicts_and_accepts_a_swap() {
+        let roots = vec!["/library".to_string()];
+        let occupants = vec![
+            occupant("emberfall", "/library/Emberfall"),
+            occupant("cinderwake", "/library/Cinderwake"),
+        ];
+        let folders = current(&[
+            ("emberfall", Some("/library/Emberfall")),
+            ("cinderwake", Some("/library/Cinderwake")),
+            ("ashgrove", None),
+        ]);
+        let reason = |result: AppResult<Vec<PlannedTitleFolderWrite>>| {
+            result.unwrap_err().validation_reason().map(str::to_string)
+        };
+
+        assert_eq!(
+            reason(plan_title_folder_writes(
+                &[TitleFolderWrite::assign("ashgrove", "/library/Emberfall/")],
+                &folders,
+                &occupants,
+                &roots,
+            )),
+            Some(folder_ownership::FOLDER_ALREADY_OWNED_TITLE.to_string())
+        );
+        assert_eq!(
+            reason(plan_title_folder_writes(
+                &[TitleFolderWrite::assign(
+                    "ashgrove",
+                    "/library/Emberfall/Extras"
+                )],
+                &folders,
+                &occupants,
+                &roots,
+            )),
+            Some(folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE.to_string())
+        );
+        assert_eq!(
+            reason(plan_title_folder_writes(
+                &[TitleFolderWrite::assign("ashgrove", "/library/")],
+                &folders,
+                &[],
+                &roots,
+            )),
+            Some(folder_ownership::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER.to_string())
+        );
+        assert_eq!(
+            reason(plan_title_folder_writes(
+                &[TitleFolderWrite::assign("ashgrove", "/library/Ashgrove")
+                    .expecting(Some("/library/Elsewhere".into()))],
+                &folders,
+                &occupants,
+                &roots,
+            )),
+            Some(folder_ownership::TITLE_FOLDER_CHANGED.to_string())
+        );
+
+        let swap = plan_title_folder_writes(
+            &[
+                TitleFolderWrite::assign("emberfall", "/library/Cinderwake")
+                    .expecting(Some("/library/Emberfall".into())),
+                TitleFolderWrite::assign("cinderwake", "/library/Emberfall")
+                    .expecting(Some("/library/Cinderwake".into())),
+            ],
+            &folders,
+            &occupants,
+            &roots,
+        )
+        .expect("a swap frees each folder for the other");
+        assert_eq!(swap.len(), 2);
+
+        assert_eq!(
+            reason(plan_title_folder_writes(
+                &[
+                    TitleFolderWrite::assign("emberfall", "/library/Shared"),
+                    TitleFolderWrite::assign("cinderwake", "/library/Shared/Inner"),
+                ],
+                &folders,
+                &occupants,
+                &roots,
+            )),
+            Some(folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE.to_string())
+        );
+    }
+
+    #[test]
+    fn a_title_already_holding_the_assigned_folder_has_its_write() {
+        let folders = current(&[("emberfall", Some("D:\\Media\\Emberfall"))]);
+        let occupants = vec![occupant("emberfall", "D:\\Media\\Emberfall")];
+
+        // A stale expectation: the folder is already the one asked for, so
+        // the write is satisfied and the stored spelling stays.
+        let planned = plan_title_folder_writes(
+            &[TitleFolderWrite::assign("emberfall", "d:\\media\\EMBERFALL").expecting(None)],
+            &folders,
+            &occupants,
+            &[],
+        )
+        .expect("the title already records this folder");
+        assert_eq!(
+            planned[0].folder_path.as_deref(),
+            Some("D:\\Media\\Emberfall")
+        );
+
+        // A matching expectation respells the folder.
+        let planned = plan_title_folder_writes(
+            &[
+                TitleFolderWrite::assign("emberfall", "d:\\media\\EMBERFALL")
+                    .expecting(Some("D:\\Media\\Emberfall".into())),
+            ],
+            &folders,
+            &occupants,
+            &[],
+        )
+        .expect("a deliberate respell");
+        assert_eq!(
+            planned[0].folder_path.as_deref(),
+            Some("d:\\media\\EMBERFALL")
+        );
+
+        // A different folder, or a clear, under a stale expectation is still
+        // refused.
+        for write in [
+            TitleFolderWrite::assign("emberfall", "D:\\Media\\Cinderwake").expecting(None),
+            TitleFolderWrite::clear("emberfall").expecting(None),
+        ] {
+            assert_eq!(
+                plan_title_folder_writes(&[write], &folders, &occupants, &[])
+                    .unwrap_err()
+                    .validation_reason(),
+                Some(folder_ownership::TITLE_FOLDER_CHANGED)
+            );
+        }
+    }
+
+    #[test]
+    fn a_title_recording_a_library_root_owns_nothing_inside_it() {
+        let roots = vec!["/srv/films".to_string()];
+        let folders = current(&[("emberfall", None), ("stale", Some("/srv"))]);
+        for occupants in [
+            vec![occupant("stale", "/srv/films")],
+            vec![occupant("stale", "/srv")],
+        ] {
+            plan_title_folder_writes(
+                &[TitleFolderWrite::assign(
+                    "emberfall",
+                    "/srv/films/Emberfall",
+                )],
+                &folders,
+                &occupants,
+                &roots,
+            )
+            .expect("a root-sized record does not own the folders under the root");
+        }
+        // The written title's own folder is still refused at the root.
+        assert_eq!(
+            plan_title_folder_writes(
+                &[TitleFolderWrite::assign("emberfall", "/srv/films")],
+                &folders,
+                &[occupant("stale", "/srv/films")],
+                &roots,
+            )
+            .unwrap_err()
+            .validation_reason(),
+            Some(folder_ownership::CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER)
+        );
+        // A title inside the root still owns its folder.
+        assert_eq!(
+            plan_title_folder_writes(
+                &[TitleFolderWrite::assign(
+                    "emberfall",
+                    "/srv/films/Cinderwake/Extras"
+                )],
+                &folders,
+                &[occupant("cinderwake", "/srv/films/Cinderwake")],
+                &roots,
+            )
+            .unwrap_err()
+            .validation_reason(),
+            Some(folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE)
+        );
+    }
+}

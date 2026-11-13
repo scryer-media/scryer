@@ -1,0 +1,13 @@
+# Find Scryer titles by provider id. Variables: {"source": "tvdb"|"tmdb"|"imdb", "values": ["..."]}
+query TitlesByExternalIds($source: String!, $values: [String!]!) {
+  titlesByExternalIds(source: $source, values: $values) {
+    id
+    facet
+    monitored
+    qualityProfileId
+    externalIds {
+      source
+      value
+    }
+  }
+}

@@ -282,7 +282,8 @@ pub(crate) fn movie_availability_decision(
                     earliest_movie_release_date(&release_dates.theatrical_dates)
                 {
                     {
-                        let Some(estimated) = theatrical.checked_add_signed(Duration::days(90))
+                        let Some(estimated) = theatrical
+                            .checked_add_signed(Duration::days(THEATRICAL_TO_HOME_ESTIMATE_DAYS))
                         else {
                             return movie_availability_result(
                                 MovieAvailabilityStatus::Unknown,
@@ -371,7 +372,9 @@ pub(crate) fn movie_availability_decision(
                         "home_release_date_unknown",
                     );
                 };
-                let Some(estimated) = theatrical.checked_add_signed(Duration::days(90)) else {
+                let Some(estimated) =
+                    theatrical.checked_add_signed(Duration::days(THEATRICAL_TO_HOME_ESTIMATE_DAYS))
+                else {
                     return movie_availability_result(
                         MovieAvailabilityStatus::Unknown,
                         None,
@@ -409,8 +412,10 @@ pub(crate) fn movie_availability_decision(
 }
 
 /// The typical gap between a US theatrical release and its home release
-/// (measured median: 88 days).
-const THEATRICAL_TO_HOME_ESTIMATE_DAYS: i64 = 90;
+/// (measured median: 88 days). It is the only amount a decision adds to a
+/// stored date before the policy delay, which is what lets the calendar bound
+/// the stored dates that can land a movie inside its range.
+pub(crate) const THEATRICAL_TO_HOME_ESTIMATE_DAYS: i64 = 90;
 
 struct WorldwideRung {
     date: NaiveDate,
@@ -813,8 +818,8 @@ impl AppUseCase {
             {
                 continue;
             }
-            // An unaired (or undated) episode is not yet available — RSS still
-            // grabs an early posting; active search waits for the air window.
+            // Active search requires a schedule. RSS can accept an undated
+            // posting, but shares the pre-air window when the date is known.
             if !episode_search_window_is_open(episode.air_date.as_deref(), now) {
                 transitions.note(
                     &episode.title_id,
@@ -1184,37 +1189,108 @@ impl AppUseCase {
         let memo = &self.runtime.acquisition.landed_bar_memo;
         let full_pass = title_id.is_none().then(|| memo.begin_pass());
 
-        // No profile asks the score question: nothing to load or score. This
-        // is every install that has not set a `cutoff_score`.
+        // No profile asks the score question and no title, library or facet
+        // sets audio language preferences: nothing to load or score. This is
+        // every install that has set none of them.
         let profile_settings = self.load_quality_profile_settings().await?;
         let default_profile = crate::builtin_default_quality_profile();
-        if !profile_settings
+        let any_cutoff_score = profile_settings
             .profiles
             .iter()
             .chain(std::iter::once(&default_profile))
             .any(|profile| {
                 profile.criteria.allow_upgrades && profile.criteria.cutoff_score.is_some()
-            })
-        {
-            if let Some(pass) = full_pass {
-                memo.finish_pass(pass);
-            }
-            return Ok(Vec::new());
-        }
-
+            });
         let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
-        let titles = self
-            .titles_with_profiles_for_search(None, &library_ids, title_id, respect_title_monitoring)
+        // Every title's own preferred languages, from one listing; `None` when
+        // the store cannot list them.
+        let listed_title_preferences = if self.any_title_preferred_audio_override().await? {
+            self.list_title_preferred_audio_overrides().await?
+        } else {
+            Some(HashMap::new())
+        };
+        // Without a cutoff score and without library or facet preferences,
+        // only titles holding their own preferred languages can be targets:
+        // load just those. An override left by a deleted title names no title
+        // and costs nothing.
+        let mut only_overridden_titles = false;
+        if !any_cutoff_score && let Some(overrides) = &listed_title_preferences {
+            let mut scopes: Vec<&str> = libraries
+                .iter()
+                .flat_map(|library| [library.id.as_str(), library.facet.as_str()])
+                .collect();
+            scopes.sort_unstable();
+            scopes.dedup();
+            if self
+                .scopes_with_audio_language_preferences(&scopes)
+                .await?
+                .is_empty()
+            {
+                if overrides.is_empty() {
+                    if let Some(pass) = full_pass {
+                        memo.finish_pass(pass);
+                    }
+                    return Ok(Vec::new());
+                }
+                only_overridden_titles = true;
+            }
+        }
+
+        let titles = match &listed_title_preferences {
+            Some(overrides) if only_overridden_titles && title_id.is_none() => {
+                let ids: Vec<String> = overrides.keys().cloned().collect();
+                self.titles_with_profiles_for_ids(&ids, &library_ids)
+                    .await?
+            }
+            _ => {
+                self.titles_with_profiles_for_search(
+                    None,
+                    &library_ids,
+                    title_id,
+                    respect_title_monitoring,
+                )
+                .await?
+            }
+        };
+        // Titles whose library or facet sets audio language preferences can be
+        // language targets without any `cutoff_score`: a file missing the
+        // preferred language still lets a better-language release past its
+        // cutoff (see `cutoff_refusal`), so it stays a search target.
+        let mut preference_scopes: Vec<&str> = titles
+            .iter()
+            .flat_map(|(title, _)| [title.library_id.as_str(), title.facet.as_str()])
+            .collect();
+        preference_scopes.sort_unstable();
+        preference_scopes.dedup();
+        let language_scopes = self
+            .scopes_with_audio_language_preferences(&preference_scopes)
             .await?;
-        let scored: Vec<(scryer_domain::Title, i32)> = titles
+        // A title's own preferred languages make it a language target even
+        // when its library and facet set none. One read for every title.
+        let titles_with_preferences = match listed_title_preferences {
+            Some(overrides) => overrides,
+            None => {
+                let ids: Vec<String> = titles.iter().map(|(title, _)| title.id.clone()).collect();
+                self.load_title_preferred_audio_overrides(&ids).await?
+            }
+        };
+        // A profile without a quality-tier gate ignores the tier cutoff, so
+        // `cutoff_score` alone decides whether its files are done; without one
+        // the first file satisfies the scope.
+        let scored: Vec<(scryer_domain::Title, Option<i32>, crate::DecisionPipeline)> = titles
             .into_iter()
             .filter(|(_, profile)| profile.criteria.allow_upgrades)
             .filter_map(|(title, profile)| {
-                profile
-                    .criteria
-                    .cutoff_score
-                    .map(|cutoff_score| (title, cutoff_score))
+                let language = titles_with_preferences.contains_key(&title.id)
+                    || language_scopes.contains(title.library_id.as_str())
+                    || language_scopes.contains(title.facet.as_str());
+                let cutoff_score = profile.criteria.cutoff_score;
+                (language || cutoff_score.is_some()).then_some((
+                    title,
+                    cutoff_score,
+                    profile.criteria.decision_pipeline,
+                ))
             })
             .collect();
         if scored.is_empty() {
@@ -1224,15 +1300,18 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let cutoff_by_title: HashMap<&str, i32> = scored
+        let cutoff_by_title: HashMap<&str, (Option<i32>, crate::DecisionPipeline)> = scored
             .iter()
-            .map(|(title, cutoff)| (title.id.as_str(), *cutoff))
+            .map(|(title, cutoff, pipeline)| (title.id.as_str(), (*cutoff, *pipeline)))
             .collect();
         let title_by_id: HashMap<&str, &scryer_domain::Title> = scored
             .iter()
-            .map(|(title, _)| (title.id.as_str(), title))
+            .map(|(title, _, _)| (title.id.as_str(), title))
             .collect();
-        let title_ids: Vec<String> = scored.iter().map(|(title, _)| title.id.clone()).collect();
+        let title_ids: Vec<String> = scored
+            .iter()
+            .map(|(title, _, _)| title.id.clone())
+            .collect();
 
         // The same enumeration the quality sweep uses: one row per occupied
         // scope, already narrowed to titles whose profile asks the question.
@@ -1288,11 +1367,13 @@ impl AppUseCase {
                 // No bar means nothing scored for this scope; a scope with no
                 // number is not evidence that the number is low.
                 let Some(bar) = bar else { continue };
-                let Some(cutoff_score) = cutoff_by_title.get(summary.title_id.as_str()).copied()
+                let Some((cutoff_score, pipeline)) =
+                    cutoff_by_title.get(summary.title_id.as_str()).copied()
                 else {
                     continue;
                 };
-                if bar >= cutoff_score {
+                let below_cutoff = cutoff_score.is_some_and(|cutoff| bar.score < cutoff);
+                if !below_cutoff && !pipeline.still_wants(&bar.side()) {
                     continue;
                 }
                 let Some(title) = title_by_id.get(summary.title_id.as_str()) else {

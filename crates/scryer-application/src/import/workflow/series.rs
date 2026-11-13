@@ -1219,26 +1219,107 @@ fn parsed_title_matches_catalog_title(
     parsed: &crate::ParsedReleaseMetadata,
     title: &scryer_domain::Title,
 ) -> bool {
-    let candidates = if parsed.normalized_title_variants.is_empty() {
-        vec![parsed.normalized_title.as_str()]
+    // A parsed title variant equal to a name the catalog itself carries keeps
+    // matching as it always has, even beside a second name the catalog lacks.
+    let variants = if parsed.normalized_title_variants.is_empty() {
+        std::slice::from_ref(&parsed.normalized_title)
     } else {
-        parsed
-            .normalized_title_variants
-            .iter()
-            .map(String::as_str)
-            .collect()
+        parsed.normalized_title_variants.as_slice()
     };
-    candidates
-        .into_iter()
-        .any(|candidate| exact_catalog_title_name_matches(candidate, title))
+    let names_catalog_title = variants
+        .iter()
+        .any(|name| exact_title_name_matches(name, title, &[]));
+    let custom_aliases = title.custom_search_aliases();
+    if custom_aliases.is_empty() {
+        return names_catalog_title;
+    }
+    // A match that rests on a custom search alias must account for the whole
+    // title zone, so an alias contained in a longer name is not enough.
+    let context = crate::build_release_parse_context(title, None, None, None);
+    let analysis = crate::analyze_release_for_target(&parsed.raw_title, &context);
+    let Some(candidate) = analysis.best_candidate() else {
+        return false;
+    };
+    if candidate.context_title_matches.is_empty() {
+        return std::iter::once(&parsed.normalized_title)
+            .chain(parsed.normalized_title_variants.iter())
+            .any(|name| exact_catalog_title_name_matches(name, title));
+    }
+    let matched_spans = candidate
+        .context_title_matches
+        .iter()
+        .filter(|matched| {
+            matched.kind != crate::release_parser::ContextTitleMatchKind::EpisodeTitle
+                && exact_catalog_title_name_matches(&matched.normalized, title)
+        })
+        .map(|matched| matched.token_range)
+        .collect::<Vec<_>>();
+    let Some(first_match_start) = matched_spans.iter().map(|span| span.start_token).min() else {
+        return false;
+    };
+    // The parser also found a name the catalog carries itself, so the match
+    // does not rest on the custom alias alone.
+    let matches_catalog_name = candidate.context_title_matches.iter().any(|matched| {
+        matched.kind != crate::release_parser::ContextTitleMatchKind::EpisodeTitle
+            && exact_title_name_matches(&matched.normalized, title, &[])
+    });
+    let uses_custom_alias = candidate.context_title_matches.iter().any(|matched| {
+        custom_aliases.iter().any(|alias| {
+            crate::app_usecase_rss::normalize_for_matching(alias)
+                == crate::app_usecase_rss::normalize_for_matching(&matched.normalized)
+        })
+    });
+    // An alias-backed absolute parse must not hide an explicit season/episode
+    // coordinate outside the alias. Let Manual Import resolve that ambiguity.
+    if uses_custom_alias
+        && candidate
+            .projected
+            .episode
+            .as_ref()
+            .is_some_and(|episode| episode.season.is_none() && episode.absolute_episode.is_some())
+        && analysis.tokens.iter().enumerate().any(|(index, token)| {
+            token.normalized.starts_with('S')
+                && token.normalized.contains('E')
+                && !matched_spans
+                    .iter()
+                    .any(|span| (span.start_token..span.end_token).contains(&index))
+                && crate::parse_release_metadata_for_target(&token.raw, &context)
+                    .episode
+                    .is_some_and(|episode| episode.season.is_some())
+        })
+    {
+        return false;
+    }
+    // Numeric ordinal/range prefixes are not title words. A known alias must
+    // account for the rest of the title zone, never just a contained name.
+    (matches_catalog_name && names_catalog_title)
+        || candidate.zones.title_zones.iter().all(|zone| {
+            (zone.start_token..zone.end_token).all(|index| {
+                (index < first_match_start
+                    && !analysis.tokens[index].raw.chars().any(char::is_alphabetic))
+                    || matched_spans
+                        .iter()
+                        .any(|span| (span.start_token..span.end_token).contains(&index))
+            })
+        })
 }
 
 fn exact_catalog_title_name_matches(candidate: &str, title: &scryer_domain::Title) -> bool {
+    exact_title_name_matches(candidate, title, &title.custom_search_aliases())
+}
+
+/// Exact match against the catalog's own names plus `extra_names`.
+fn exact_title_name_matches(
+    candidate: &str,
+    title: &scryer_domain::Title,
+    extra_names: &[String],
+) -> bool {
     let normalized = crate::app_usecase_rss::normalize_for_matching(candidate);
     !normalized.is_empty()
         && std::iter::once(title.name.as_str())
             .chain(title.aliases.iter().map(String::as_str))
             .chain(title.tagged_aliases.iter().map(|alias| alias.name.as_str()))
+            .chain(extra_names.iter().map(String::as_str))
             .any(|name| crate::app_usecase_rss::normalize_for_matching(name) == normalized)
 }
 

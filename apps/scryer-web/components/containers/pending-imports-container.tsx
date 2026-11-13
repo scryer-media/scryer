@@ -40,7 +40,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { facetForView } from "@/lib/facets/registry";
 import {
   bindPendingImportMutation,
-  ignorePendingImportMutation,
+  ignorePendingImportsMutation,
   resolvePendingImportMutation,
 } from "@/lib/graphql/mutations";
 import {
@@ -1267,13 +1267,40 @@ export const PendingImportsContainer = React.memo(
       try {
         const { ignored, failed } = await ignorePendingImportBatch(
           targets,
-          async (itemId) => {
-            const { error: mutationError } = await client
-              .mutation(ignorePendingImportMutation, {
-                pendingImportId: itemId,
-              })
+          async (pendingImportIds) => {
+            const { data, error: mutationError } = await client
+              .mutation(ignorePendingImportsMutation, { pendingImportIds })
               .toPromise();
             if (mutationError) throw mutationError;
+            const payload = data?.ignorePendingImports;
+            return {
+              ignoredIds: (payload?.ignored ?? []).map(
+                (entry: { id: string }) => entry.id,
+              ),
+              // Shaped like a GraphQL error so the same message helper
+              // translates its reason exactly as for a single ignore.
+              failed: (payload?.failed ?? []).map(
+                (entry: {
+                  id: string;
+                  message: string;
+                  code?: string | null;
+                  reason?: string | null;
+                }) => ({
+                  id: entry.id,
+                  error: {
+                    graphQLErrors: [
+                      {
+                        message: entry.message,
+                        extensions: {
+                          ...(entry.code ? { code: entry.code } : {}),
+                          ...(entry.reason ? { reason: entry.reason } : {}),
+                        },
+                      },
+                    ],
+                  },
+                }),
+              ),
+            };
           },
         );
         const ignoredIds = new Set(ignored.map((item) => item.id));

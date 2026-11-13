@@ -74,6 +74,33 @@ impl IntoApplication<AppScoringPersona> for ScoringPersonaValue {
     }
 }
 
+impl FromApplication<scryer_application::DecisionGate> for QualityDecisionGateValue {
+    fn from_application(value: scryer_application::DecisionGate) -> Self {
+        Self::from_gate(value)
+    }
+}
+
+impl IntoApplication<scryer_application::DecisionGate> for QualityDecisionGateValue {
+    fn into_application(self) -> scryer_application::DecisionGate {
+        self.into_gate()
+    }
+}
+
+impl FromApplication<scryer_application::ReleaseDecidingStep> for ReleaseDecidingStepValue {
+    fn from_application(value: scryer_application::ReleaseDecidingStep) -> Self {
+        Self::from_step(value)
+    }
+}
+
+/// The deciding step recorded as text (on a grab or in a decision's
+/// explanation), or `None` for records that predate it or name a step this
+/// build does not know.
+pub fn deciding_step_from_recorded(value: Option<&str>) -> Option<ReleaseDecidingStepValue> {
+    value
+        .and_then(scryer_application::ReleaseDecidingStep::parse)
+        .map(ReleaseDecidingStepValue::from_application)
+}
+
 impl IntoApplication<AppDownloadSourceKind> for DownloadSourceKindValue {
     fn into_application(self) -> AppDownloadSourceKind {
         match self {
@@ -176,6 +203,7 @@ impl IntoApplication<scryer_application::DownloadActivityFilter> for DownloadAct
 impl IntoApplication<scryer_application::DownloadImportFilter> for DownloadImportFilterValue {
     fn into_application(self) -> scryer_application::DownloadImportFilter {
         match self {
+            Self::Dismissed => scryer_application::DownloadImportFilter::Dismissed,
             Self::All => scryer_application::DownloadImportFilter::All,
             Self::Attention => scryer_application::DownloadImportFilter::Attention,
             Self::Importing => scryer_application::DownloadImportFilter::Importing,
@@ -364,6 +392,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::ListSync => AppJobKey::ListSync,
             Self::LifecycleActionHandling => AppJobKey::LifecycleActionHandling,
             Self::TitleDeletion => AppJobKey::TitleDeletion,
+            Self::LibraryDeletion => AppJobKey::LibraryDeletion,
             Self::TitleRename => AppJobKey::TitleRename,
             Self::MediaFileRescore => AppJobKey::MediaFileRescore,
             Self::MediaFileDeletion => AppJobKey::MediaFileDeletion,
@@ -405,6 +434,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::ListSync => Self::ListSync,
             AppJobKey::LifecycleActionHandling => Self::LifecycleActionHandling,
             AppJobKey::TitleDeletion => Self::TitleDeletion,
+            AppJobKey::LibraryDeletion => Self::LibraryDeletion,
             AppJobKey::TitleRename => Self::TitleRename,
             AppJobKey::MediaFileRescore => Self::MediaFileRescore,
             AppJobKey::MediaFileDeletion => Self::MediaFileDeletion,

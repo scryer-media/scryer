@@ -6037,8 +6037,9 @@ async fn regrab_import_records_a_visible_result_for_each_attempt() {
     );
 }
 
-/// A verified better library copy satisfies a foreign episode download without
-/// burning its release. A later accepted upgrade still replaces that copy.
+/// A foreign episode download that loses to a verified better library copy is
+/// held for manual import without burning its release or touching the copy.
+/// A later accepted upgrade still replaces that copy.
 #[tokio::test]
 async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accepted() {
     let (fixture, _) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
@@ -6098,7 +6099,7 @@ async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accept
     let incumbent = events[0].media_updates[0].path.clone();
     let incumbent_size = std::fs::metadata(&incumbent).unwrap().len();
     for (quality, width, height, expected) in [
-        ("480p", 640, 480, scryer_domain::ImportDecision::Skipped),
+        ("480p", 640, 480, scryer_domain::ImportDecision::Rejected),
         ("1080p", 1920, 1080, scryer_domain::ImportDecision::Imported),
     ] {
         let source = tempfile::tempdir().unwrap();
@@ -6117,10 +6118,12 @@ async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accept
             .unwrap();
         assert_eq!(result.title_id.as_deref(), Some(title.id.as_str()));
         assert_eq!(result.decision, expected, "{result:?}");
-        if expected == scryer_domain::ImportDecision::Skipped {
+        if expected == scryer_domain::ImportDecision::Rejected {
+            // Nobody grabbed it through Scryer, so losing to the library copy
+            // holds it for manual import instead of settling it.
             assert_eq!(
                 result.skip_reason,
-                Some(scryer_domain::ImportSkipReason::AlreadyImported)
+                Some(scryer_domain::ImportSkipReason::PolicyMismatch)
             );
             assert!(!result.release_burned, "{result:?}");
             assert_eq!(std::fs::metadata(&incumbent).unwrap().len(), incumbent_size);
@@ -6139,10 +6142,11 @@ async fn automatic_episode_downgrade_is_already_present_without_burning() {
             app,
             user,
             title,
+            episode,
             library_dir: _library_dir,
             ..
         },
-        _submissions,
+        submissions,
     ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
         series_root_at_library_dir: true,
         ..Default::default()
@@ -6180,6 +6184,17 @@ async fn automatic_episode_downgrade_is_already_present_without_burning() {
         rejected_source.path(),
         "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
     );
+    // Scryer's own automatic grab of the lower-quality release.
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "burned-upgrade-rejected",
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+        SubmissionScope::Episode {
+            episode_id: episode.id.clone(),
+        },
+    )
+    .await;
     let rejected = series_pack_completed_download(
         "burned-upgrade-rejected",
         &title.id,
@@ -6352,13 +6367,14 @@ async fn automatic_mixed_pack_with_better_incumbent(missing_incumbent: bool) {
             import_artifacts,
             ..
         },
-        _submissions,
+        submissions,
     ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
         series_root_at_library_dir: true,
         ..Default::default()
     })
     .await;
-    create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+    let second_episode =
+        create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
 
     let initial_source = tempfile::tempdir().expect("initial source tempdir");
     write_pack_video(
@@ -6398,6 +6414,17 @@ async fn automatic_mixed_pack_with_better_incumbent(missing_incumbent: bool) {
         mixed_source.path(),
         "Fail.Closed.Pack.S01E02.1080p.WEB-DL.mkv",
     );
+    // Scryer's own automatic grab of the pack covering both episodes.
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "mixed-burn-release",
+        "Fail.Closed.Pack.S01.1080p.WEB-DL",
+        SubmissionScope::EpisodeSet {
+            episode_ids: vec![episode.id.clone(), second_episode.id.clone()],
+        },
+    )
+    .await;
     let mixed = series_pack_completed_download(
         "mixed-burn-release",
         &title.id,
@@ -13370,6 +13397,100 @@ async fn queued_delete_poller_executes_client_delete() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn download_queue_commands_idle_poller_wakes_on_enqueue_and_recovers_on_its_own_cadence() {
+    use std::sync::atomic::Ordering;
+
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let (app, user) =
+        bootstrap_with_delete_queue(download_client.clone(), download_queue_commands.clone());
+    let token = tokio_util::sync::CancellationToken::new();
+    let started_at = tokio::time::Instant::now();
+    let handle = tokio::spawn(start_background_download_delete_poller(
+        app.clone(),
+        token.child_token(),
+    ));
+
+    // Startup pass: one recovery and one listing of persisted commands.
+    crate::test_wait::wait_until("startup delete poller pass", || async {
+        download_queue_commands
+            .list_pending_calls
+            .load(Ordering::SeqCst)
+            >= 1
+    })
+    .await;
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1
+    );
+
+    // Idle: no reads while nothing is queued and recovery is not due. A sleep
+    // on the paused clock lets every timer due in the next 60 seconds fire
+    // and run to its next wait first, so a poller still ticking on the old
+    // 2-second cadence would list again here.
+    let idle_lists = download_queue_commands
+        .list_pending_calls
+        .load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        download_queue_commands
+            .list_pending_calls
+            .load(Ordering::SeqCst),
+        idle_lists
+    );
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1
+    );
+
+    // A queued delete runs on its wake, without waiting out a timer.
+    let enqueued_at = tokio::time::Instant::now();
+    let command = app
+        .delete_download_queue_item(
+            &user,
+            Some("client-emberfall"),
+            "nzbget",
+            "emberfall-job",
+            false,
+        )
+        .await
+        .expect("queue delete command");
+    crate::test_wait::within_deadline(
+        "woken delete completes",
+        download_queue_commands.wait_completed(&command.id),
+    )
+    .await;
+    assert!(enqueued_at.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1,
+        "a wake does not run stale recovery"
+    );
+    assert_eq!(
+        download_client.deleted_items.lock().await.clone(),
+        vec![("emberfall-job".to_string(), false)]
+    );
+
+    // Stale recovery runs again once its 120-second interval elapses, and
+    // not before.
+    let interval = Duration::from_secs(120);
+    tokio::time::sleep(interval - started_at.elapsed() - Duration::from_secs(1)).await;
+    assert_eq!(
+        download_queue_commands.recover_calls.load(Ordering::SeqCst),
+        1
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    crate::test_wait::wait_until("periodic stale recovery", || async {
+        download_queue_commands.recover_calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    assert!(started_at.elapsed() >= Duration::from_secs(120));
+
+    token.cancel();
+    handle.await.expect("delete poller should stop cleanly");
+}
+
 #[tokio::test]
 async fn queue_delete_ends_bound_download_when_client_is_unavailable() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -14081,6 +14202,207 @@ async fn ignore_tracked_download_uses_durable_fallback_idempotently() {
             .await
             .expect("load durable state")
             .is_some_and(|state| state == TrackedDownloadState::Ignored.as_str())
+    );
+}
+
+async fn record_settled_submission(
+    app: &AppUseCase,
+    user: &User,
+    download_submissions: &TrackingDownloadSubmissionRepo,
+    item_id: &str,
+) -> (
+    ClientJobLocator,
+    scryer_domain::download_identity::DownloadId,
+) {
+    let title = app
+        .add_title(
+            user,
+            NewTitle {
+                name: "Harbor Lantern".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    download_submissions
+        .record_submission_with_identity(
+            DownloadSubmission {
+                download_id,
+                title_id: title.id,
+                purpose: crate::DownloadSubmissionPurpose::Standard,
+                facet: "movie".to_string(),
+                download_client_id: None,
+                download_client_type: "sabnzbd".to_string(),
+                download_client_item_id: item_id.to_string(),
+                source_hint: None,
+                source_provider_id: None,
+                source_provider_name: Some("Fixture Indexer".to_string()),
+                source_kind: None,
+                source_title: Some("Harbor.Lantern.2026.1080p.WEB-DL".to_string()),
+                info_hash: None,
+                release_size_bytes: None,
+                request_signature: None,
+                scope: SubmissionScope::Title,
+                release_listing_json: None,
+            },
+            DownloadSubmissionIdentity::default(),
+            None,
+        )
+        .await
+        .expect("record submission");
+    let source_identity = ClientJobLocator::new(None, "sabnzbd", item_id);
+    // Settled: the binding ended, but the client still lists the job.
+    download_submissions
+        .closed_bindings
+        .lock()
+        .await
+        .insert(source_identity.clone());
+    (source_identity, download_id)
+}
+
+/// A download Scryer already settled has no open binding, yet its client
+/// entry still draws an Import row. Ignoring that row must settle the same
+/// submission instead of answering "tracked download was not found".
+#[tokio::test]
+async fn ignore_settles_a_download_whose_binding_already_ended() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let (source_identity, download_id) =
+        record_settled_submission(&app, &user, &download_submissions, "sab-settled-1").await;
+
+    for attempt in ["first", "repeat"] {
+        assert!(
+            matches!(
+                crate::integration::workflow::finalize_scryer_download_ignored(
+                    &app,
+                    crate::domain_events::DomainEventActor::from(&user),
+                    source_identity.clone(),
+                )
+                .await
+                .expect("ignore a settled download"),
+                crate::integration::workflow::FinalizeIgnoredOutcome::Finalized
+            ),
+            "{attempt} ignore should settle the download"
+        );
+    }
+
+    // The ignore lands on the submission the row came from, by its canonical
+    // id, and does not bind a placeholder download to the client item.
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load durable state")
+            .as_deref(),
+        Some(TrackedDownloadState::Ignored.as_str())
+    );
+    assert_eq!(download_submissions.store.lock().await.len(), 1);
+}
+
+/// Ignoring a settled download checks the library of the title its latest
+/// submission names, not merely that the actor may resolve imports somewhere.
+#[tokio::test]
+async fn ignore_of_a_settled_download_requires_its_titles_library() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let (source_identity, download_id) =
+        record_settled_submission(&app, &user, &download_submissions, "sab-settled-3").await;
+    let series_resolver = library_permission_user(
+        "series-only-resolver",
+        &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        &[scryer_domain::LibraryPermission::ResolveImports],
+    );
+
+    let error = app
+        .ignore_tracked_download(&series_resolver, None, "sabnzbd", &source_identity.item_id)
+        .await
+        .expect_err("the movie belongs to a library this actor cannot resolve");
+    assert!(
+        matches!(
+            error,
+            AppError::Unauthorized(_) | AppError::UnauthorizedReason { .. }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load durable state"),
+        None
+    );
+
+    app.ignore_tracked_download(&user, None, "sabnzbd", &source_identity.item_id)
+        .await
+        .expect("an admin may ignore it");
+}
+
+/// A settled download keeps a terminal outcome it already reached; the ignore
+/// reports it rather than overwriting it.
+#[tokio::test]
+async fn ignore_keeps_the_outcome_of_a_download_whose_binding_ended() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let (source_identity, download_id) =
+        record_settled_submission(&app, &user, &download_submissions, "sab-settled-2").await;
+    download_submissions.tracked_states.lock().await.insert(
+        download_source_identity_key(&source_identity),
+        TrackedDownloadState::Failed.as_str().to_string(),
+    );
+
+    assert!(matches!(
+        crate::integration::workflow::finalize_scryer_download_ignored(
+            &app,
+            crate::domain_events::DomainEventActor::from(&user),
+            source_identity.clone(),
+        )
+        .await
+        .expect("ignore a failed download"),
+        crate::integration::workflow::FinalizeIgnoredOutcome::PreservedTerminal(state)
+            if state == TrackedDownloadState::Failed.as_str()
+    ));
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load durable state"),
+        None
     );
 }
 
@@ -22291,4 +22613,237 @@ mod held_sources {
             assert!(!held.holds_sources().await);
         }
     }
+}
+
+/// An import the title folder check refuses until the operator acts (here,
+/// another title owns the folder) waits in Import instead of retrying forever.
+#[tokio::test]
+async fn import_refused_by_the_title_folder_waits_for_the_operator() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) =
+        bootstrap_with_cleanup_tracking(download_client, download_submissions, pending_releases);
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_imports(import_repo)
+            .with_file_importer(Arc::new(CopyingFileImporter))
+            .with_media_files(Arc::new(MockMediaFileRepo::default()))
+    });
+    let library_dir = tempfile::tempdir().expect("library tempdir");
+    register_import_fixture_root(&app, MediaFacet::Series, library_dir.path()).await;
+    let shared_folder = library_dir.path().join("Copper Kettle");
+    std::fs::create_dir_all(&shared_folder).expect("create shared folder");
+    let mut titles = Vec::new();
+    for name in ["Copper Kettle", "Copper Kettle Night"] {
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: name.to_string(),
+                    facet: MediaFacet::Series,
+                    monitored: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create series title");
+        app.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, &shared_folder.to_string_lossy())
+            .await
+            .expect("record title folder");
+        titles.push(title);
+    }
+    let title = &titles[1];
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "3".into(),
+            Some("Season 3".into()),
+            None,
+            Some("4".into()),
+            Some("4".into()),
+        )
+        .await
+        .expect("create season");
+    app.create_episode(
+        &user,
+        title.id.clone(),
+        Some(collection.id),
+        "standard".into(),
+        Some("4".into()),
+        Some("3".into()),
+        Some("S03E04".into()),
+        Some("Fourth".into()),
+        None,
+        Some(1_500),
+        false,
+        false,
+    )
+    .await
+    .expect("create episode");
+
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let release_name = "Copper.Kettle.Night.S03E04.1080p.WEB-DL";
+    let source_dir = source_root.path().join(release_name);
+    std::fs::create_dir_all(&source_dir).expect("create source folder");
+    std::fs::File::create(source_dir.join(format!("{release_name}.mkv")))
+        .and_then(|file| file.set_len(128 * 1024 * 1024))
+        .expect("write source video");
+    let mut completed = completed_download_fixture_item(
+        "folder-refusal-1",
+        &title.id,
+        release_name,
+        &source_dir.to_string_lossy(),
+    );
+    completed.client_type = "weaver".to_string();
+    completed.client_id = "weaver-client".to_string();
+    completed.category = Some("series".to_string());
+    completed.parameters = vec![
+        ("*scryer_title_id".to_string(), title.id.clone()),
+        ("*scryer_facet".to_string(), "series".to_string()),
+    ];
+
+    let result = crate::import::import::import_completed_download(&app, &user, &completed)
+        .await
+        .expect("completed import should run");
+
+    assert_eq!(
+        result.skip_reason,
+        Some(ImportSkipReason::TitleFolderConflict),
+        "unexpected import result: {result:?}"
+    );
+    assert!(
+        !crate::import_workflow::completed_import_result_is_retryable(&result),
+        "a folder refusal must not retry on its own: {result:?}"
+    );
+    assert!(
+        source_dir.join(format!("{release_name}.mkv")).exists(),
+        "the refused source stays in place"
+    );
+}
+
+/// A queued release whose folder name has a typo still imports: the
+/// submission binds it to the title, and the inner file names the episode.
+#[tokio::test]
+async fn a_bound_download_imports_despite_a_typo_in_its_folder_name() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let import_repo = Arc::new(TrackingImportRepo::default());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_imports(import_repo)
+            .with_file_importer(Arc::new(CopyingFileImporter))
+            .with_media_files(media_files)
+    });
+    let library_dir = tempfile::tempdir().expect("library tempdir");
+    register_import_fixture_root(&app, MediaFacet::Series, library_dir.path()).await;
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Copper & Kettle's Long Night".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "3".into(),
+            Some("Season 3".into()),
+            None,
+            Some("3".into()),
+            Some("3".into()),
+        )
+        .await
+        .expect("create season");
+    let episode = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            Some(collection.id),
+            "standard".into(),
+            Some("4".into()),
+            Some("3".into()),
+            Some("S03E04".into()),
+            Some("Fourth".into()),
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create episode");
+    let source_root = tempfile::tempdir().expect("source tempdir");
+    let folder = "Copper.And.And.Kettles.Long.Night.S03E04.2160p.AMZN.WEB-DL.DDP5.1.HEVC-FLUX";
+    let source_dir = source_root.path().join(folder);
+    tokio::fs::create_dir_all(&source_dir).await.unwrap();
+    std::fs::File::create(
+        source_dir
+            .join("Copper.and.Kettles.Long.Night.S03E04.2160p.AMZN.WEB-DL.DDP5.1.HEVC-FLUX.mkv"),
+    )
+    .and_then(|file| file.set_len(128 * 1024 * 1024))
+    .unwrap();
+    download_submissions
+        .record_submission_with_identity(
+            DownloadSubmission {
+                download_id: scryer_domain::download_identity::DownloadId::new(),
+                title_id: title.id.clone(),
+                purpose: crate::DownloadSubmissionPurpose::OperatorQueued,
+                facet: "series".to_string(),
+                download_client_id: Some("weaver-client".to_string()),
+                download_client_type: "weaver".to_string(),
+                download_client_item_id: "typo-1".to_string(),
+                source_hint: None,
+                source_provider_id: None,
+                source_provider_name: Some("Fixture Indexer".to_string()),
+                source_kind: None,
+                source_title: Some(folder.to_string()),
+                info_hash: None,
+                release_size_bytes: None,
+                request_signature: None,
+                scope: SubmissionScope::Title,
+                release_listing_json: None,
+            },
+            DownloadSubmissionIdentity::default(),
+            None,
+        )
+        .await
+        .expect("record submission");
+    let mut completed =
+        completed_download_fixture_item("typo-1", &title.id, folder, &source_dir.to_string_lossy());
+    completed.client_type = "weaver".to_string();
+    completed.client_id = "weaver-client".to_string();
+    completed.category = Some("series".to_string());
+    completed.parameters = vec![];
+    let result = {
+        let _probe = probe_agrees_with_the_name(3840, 2160);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("import should run")
+    };
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "unexpected import result: {result:?}"
+    );
+    assert_eq!(result.episode_ids, vec![episode.id]);
 }

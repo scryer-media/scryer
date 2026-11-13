@@ -384,6 +384,29 @@ impl AppUseCase {
         &self,
         title: &Title,
     ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
+        self.load_title_episode_inventory(title, FilePresence::Probe(None))
+            .await
+    }
+
+    /// [`Self::maintenance_load_title_episode_inventory`] for an evaluation
+    /// pass: a file whose presence this pass already probed for another rule
+    /// is answered from `presence` instead of probing the share again.
+    pub(crate) async fn maintenance_load_title_episode_inventory_for_pass(
+        &self,
+        title: &Title,
+        presence: &mut MaintenancePassFilePresence,
+    ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
+        self.load_title_episode_inventory(title, FilePresence::Probe(Some(presence)))
+            .await
+    }
+
+    /// [`FilePresence::Skip`] only for a candidate listing, through
+    /// [`MaintenanceListingInventories`], which never hands the inventory on.
+    async fn load_title_episode_inventory(
+        &self,
+        title: &Title,
+        mut presence: FilePresence<'_>,
+    ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
         let collections = self
             .services
             .catalog
@@ -437,8 +460,26 @@ impl AppUseCase {
         let mut episode_coverage: HashMap<String, EpisodeFileCoverage> = HashMap::new();
         let mut file_availabilities = HashMap::new();
         for scoped in &scoped_files {
-            let availability = file_availability(&scoped.media_file.file_path).await;
-            file_availabilities.insert(scoped.media_file.id.clone(), availability);
+            let availability = match &mut presence {
+                FilePresence::Skip => None,
+                FilePresence::Probe(None) => {
+                    Some(file_availability(&scoped.media_file.file_path).await)
+                }
+                FilePresence::Probe(Some(memo)) => {
+                    let path = &scoped.media_file.file_path;
+                    Some(match memo.by_path.get(path) {
+                        Some(availability) => *availability,
+                        None => {
+                            let availability = file_availability(path).await;
+                            memo.by_path.insert(path.clone(), availability);
+                            availability
+                        }
+                    })
+                }
+            };
+            if let Some(availability) = availability {
+                file_availabilities.insert(scoped.media_file.id.clone(), availability);
+            }
             let associated_ids: BTreeSet<&str> = scoped
                 .episode_ids
                 .iter()
@@ -456,9 +497,12 @@ impl AppUseCase {
                 let coverage = episode_coverage.entry(episode_id.to_string()).or_default();
                 coverage.ambiguous |= ambiguous;
                 match availability {
-                    EpisodeFileAvailability::Present => coverage.has_present_file = true,
-                    EpisodeFileAvailability::Missing => coverage.has_missing_file = true,
-                    EpisodeFileAvailability::Unreadable => coverage.has_unreadable_file = true,
+                    Some(EpisodeFileAvailability::Present) => coverage.has_present_file = true,
+                    Some(EpisodeFileAvailability::Missing) => coverage.has_missing_file = true,
+                    Some(EpisodeFileAvailability::Unreadable) => {
+                        coverage.has_unreadable_file = true
+                    }
+                    None => {}
                 }
             }
         }
@@ -611,28 +655,142 @@ impl AppUseCase {
         title: &Title,
         files: &[TitleMediaFile],
     ) -> AppResult<MaintenanceSubject> {
-        let kind = Scope::parse_storage(kind).ok_or_else(|| {
-            AppError::validation_refused(
-                crate::error_reasons::maintenance::SUBJECT_KIND_INVALID,
-                "invalid maintenance subject kind",
-            )
-        })?;
-        if subject_id.is_empty() {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::maintenance::SUBJECT_ID_REQUIRED,
-                "maintenance subject ID is required",
-            ));
-        }
+        let kind = subject_coordinates_kind(kind, subject_id)?;
         self.maintenance_subjects_for_title(kind, title, files)
             .await?
             .into_iter()
             .find(|subject| subject.id == subject_id)
-            .ok_or_else(|| {
-                AppError::not_found_reason(
-                    crate::error_reasons::maintenance::SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND,
-                    "maintenance subject no longer belongs to this title",
-                )
-            })
+            .ok_or_else(subject_no_longer_belongs)
+    }
+
+    /// [`Self::maintenance_subjects_for_title`] for a candidate listing: each
+    /// title's inventory is read once per listing, without statting files.
+    pub(crate) async fn maintenance_listing_subjects(
+        &self,
+        kind: Scope,
+        title: &Title,
+        title_files: &[TitleMediaFile],
+        inventories: &mut MaintenanceListingInventories,
+    ) -> AppResult<Vec<MaintenanceListingSubject>> {
+        let subjects = if title.facet == scryer_domain::MediaFacet::Movie {
+            self.maintenance_subjects_for_title(kind, title, title_files)
+                .await?
+        } else {
+            let inventory = match inventories.by_title.get(&title.id) {
+                Some(inventory) => Arc::clone(inventory),
+                None => {
+                    let inventory = self
+                        .load_title_episode_inventory(title, FilePresence::Skip)
+                        .await?;
+                    inventories
+                        .by_title
+                        .insert(title.id.clone(), Arc::clone(&inventory));
+                    inventory
+                }
+            };
+            self.maintenance_subjects_from_episode_inventory(kind, title, title_files, &inventory)?
+        };
+        Ok(subjects
+            .into_iter()
+            .map(MaintenanceListingSubject::from)
+            .collect())
+    }
+
+    /// [`Self::maintenance_resolve_subject`] for a candidate listing.
+    pub(crate) async fn maintenance_resolve_listing_subject(
+        &self,
+        kind: &str,
+        subject_id: &str,
+        title: &Title,
+        files: &[TitleMediaFile],
+        inventories: &mut MaintenanceListingInventories,
+    ) -> AppResult<MaintenanceListingSubject> {
+        let kind = subject_coordinates_kind(kind, subject_id)?;
+        self.maintenance_listing_subjects(kind, title, files, inventories)
+            .await?
+            .into_iter()
+            .find(|subject| subject.id == subject_id)
+            .ok_or_else(subject_no_longer_belongs)
+    }
+}
+
+fn subject_coordinates_kind(kind: &str, subject_id: &str) -> AppResult<Scope> {
+    let kind = Scope::parse_storage(kind).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::maintenance::SUBJECT_KIND_INVALID,
+            "invalid maintenance subject kind",
+        )
+    })?;
+    if subject_id.is_empty() {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::SUBJECT_ID_REQUIRED,
+            "maintenance subject ID is required",
+        ));
+    }
+    Ok(kind)
+}
+
+fn subject_no_longer_belongs() -> AppError {
+    AppError::not_found_reason(
+        crate::error_reasons::maintenance::SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND,
+        "maintenance subject no longer belongs to this title",
+    )
+}
+
+/// The display fields of one subject in a candidate listing. It carries no
+/// inventory and no downloaded-episode counts, so nothing built from it can
+/// become a rule fact or an action input.
+#[derive(Debug)]
+pub(crate) struct MaintenanceListingSubject {
+    pub(crate) id: String,
+    pub(crate) kind: Scope,
+    pub(crate) label: String,
+    pub(crate) files: Vec<TitleMediaFile>,
+    pub(crate) ambiguous_files: bool,
+}
+
+impl From<MaintenanceSubject> for MaintenanceListingSubject {
+    fn from(subject: MaintenanceSubject) -> Self {
+        Self {
+            id: subject.id,
+            kind: subject.kind,
+            label: subject.label,
+            files: subject.files,
+            ambiguous_files: subject.ambiguous_files,
+        }
+    }
+}
+
+/// Episode inventories for one candidate listing, read once per title. They
+/// are read without statting files, since no listing field depends on file
+/// presence, and they stay private to this type so evaluation and execution
+/// can never receive one.
+#[derive(Default)]
+pub(crate) struct MaintenanceListingInventories {
+    by_title: HashMap<String, Arc<MaintenanceTitleEpisodeInventory>>,
+}
+
+/// Whether an inventory load probes its files' presence on disk.
+enum FilePresence<'a> {
+    /// A candidate listing: no listing field depends on presence.
+    Skip,
+    /// Probe each file, answering from the pass memo when one is given.
+    Probe(Option<&'a mut MaintenancePassFilePresence>),
+}
+
+/// File presence probed during one evaluation pass, by catalog path. Every
+/// rule of the pass sees the presence sampled the first time any rule loaded
+/// that file, the way rules already shared a cached title inventory. It lives
+/// only for the pass; previews and execution always probe afresh.
+#[derive(Default)]
+pub(crate) struct MaintenancePassFilePresence {
+    by_path: HashMap<String, EpisodeFileAvailability>,
+}
+
+#[cfg(test)]
+impl MaintenancePassFilePresence {
+    pub(crate) fn probed_paths(&self) -> usize {
+        self.by_path.len()
     }
 }
 
@@ -656,6 +814,24 @@ impl AppUseCase {
         &self,
         keys: impl Iterator<Item = (String, String)>,
     ) -> AppResult<std::collections::HashMap<(String, String), (String, i64, i64)>> {
+        self.subject_summaries(keys, None).await
+    }
+
+    /// [`Self::maintenance_subject_summaries`] for a candidate listing, which
+    /// shares the listing's inventories.
+    pub(crate) async fn maintenance_listing_subject_summaries(
+        &self,
+        keys: impl Iterator<Item = (String, String)>,
+        inventories: &mut MaintenanceListingInventories,
+    ) -> AppResult<std::collections::HashMap<(String, String), (String, i64, i64)>> {
+        self.subject_summaries(keys, Some(inventories)).await
+    }
+
+    async fn subject_summaries(
+        &self,
+        keys: impl Iterator<Item = (String, String)>,
+        mut inventories: Option<&mut MaintenanceListingInventories>,
+    ) -> AppResult<std::collections::HashMap<(String, String), (String, i64, i64)>> {
         let mut summaries = std::collections::HashMap::new();
         let mut keys: Vec<_> = keys.collect();
         keys.sort();
@@ -673,10 +849,19 @@ impl AppUseCase {
                 .media_files
                 .list_media_files_for_title(&title_id)
                 .await?;
-            for subject in self
-                .maintenance_subjects_for_title(kind, &title, &files)
-                .await?
-            {
+            let subjects = match inventories.as_deref_mut() {
+                Some(inventories) => {
+                    self.maintenance_listing_subjects(kind, &title, &files, inventories)
+                        .await?
+                }
+                None => self
+                    .maintenance_subjects_for_title(kind, &title, &files)
+                    .await?
+                    .into_iter()
+                    .map(MaintenanceListingSubject::from)
+                    .collect(),
+            };
+            for subject in subjects {
                 summaries.insert(
                     (kind.as_storage_str().to_string(), subject.id),
                     (

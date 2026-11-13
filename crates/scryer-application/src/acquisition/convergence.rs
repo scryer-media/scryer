@@ -434,6 +434,7 @@ pub(crate) fn compute_search_fingerprint(
     profile_id: &str,
     profile_version: &str,
     required_audio_languages: &[String],
+    language_preferences: &crate::AudioLanguagePreferences,
     match_identity: &str,
 ) -> String {
     let mut langs: Vec<String> = required_audio_languages
@@ -443,13 +444,26 @@ pub(crate) fn compute_search_fingerprint(
         .collect();
     langs.sort();
     langs.dedup();
-    let canonical = format!(
+    let mut canonical = format!(
         "v5;profile={};version={};audio={};match={}",
         profile_id.trim(),
         profile_version.trim(),
         langs.join(","),
         match_identity.trim(),
     );
+    // Appended only when set, so scopes without preferences keep the
+    // fingerprint they converged under and are not all re-opened by an upgrade.
+    // Order is meaningful for the preferred list, so it is not sorted.
+    if !language_preferences.is_empty() {
+        let mut optional = language_preferences.optional.clone();
+        optional.sort();
+        canonical.push_str(&format!(
+            ";preferred={};optional={};keep_searching={}",
+            language_preferences.preferred.join(","),
+            optional.join(","),
+            language_preferences.optional_keep_searching,
+        ));
+    }
     crate::helpers::blake3_identity_hex(crate::helpers::HashDomain::ConvergenceScope, canonical)
 }
 
@@ -782,7 +796,10 @@ pub(crate) struct ScopeConvergence {
 #[derive(Default)]
 pub(crate) struct ConvergenceInputMemo {
     required_audio_languages:
-        std::sync::Mutex<std::collections::HashMap<RequiredAudioLanguagesKey, Vec<String>>>,
+        std::sync::Mutex<std::collections::HashMap<TitleAudioContextKey, Vec<String>>>,
+    language_preferences: std::sync::Mutex<
+        std::collections::HashMap<TitleAudioContextKey, crate::AudioLanguagePreferences>,
+    >,
     routed_indexer_ids: std::sync::Mutex<std::collections::HashMap<RoutedIndexersKey, Vec<String>>>,
     /// Coverage rows by scope key, read once when the walk starts. A key the
     /// walk did not load is absent, never an empty list.
@@ -795,9 +812,11 @@ pub(crate) struct ConvergenceInputMemo {
 /// The routing inputs a walk's routed-indexer answer depends on.
 type RoutedIndexersKey = (String, Option<String>);
 
-/// Every title field `resolve_required_audio_languages_for_title` reads.
+/// Every title field the audio language resolutions read: required languages
+/// (`resolve_required_audio_languages_for_title`) and preferences
+/// (`resolve_audio_language_preferences_for_title`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct RequiredAudioLanguagesKey {
+struct TitleAudioContextKey {
     title_id: String,
     library_id: String,
     facet: String,
@@ -806,7 +825,7 @@ struct RequiredAudioLanguagesKey {
     tags: Vec<String>,
 }
 
-impl RequiredAudioLanguagesKey {
+impl TitleAudioContextKey {
     fn for_title(title: &Title) -> Self {
         Self {
             title_id: title.id.clone(),
@@ -1063,10 +1082,25 @@ impl AppUseCase {
                 return None;
             }
         };
+        let language_preferences = match self
+            .language_preferences_for_convergence(title, memo)
+            .await
+        {
+            Ok(preferences) => preferences,
+            Err(error) => {
+                tracing::warn!(
+                    title_id = subject.title_id.as_str(),
+                    error = %error,
+                    "convergence: failed to resolve audio language preferences; leaving scope unresolved"
+                );
+                return None;
+            }
+        };
         let fingerprint = compute_search_fingerprint(
             &profile.id,
             &profile_criteria_version(&profile.criteria),
             &required_audio_languages,
+            &language_preferences,
             &scope_match_identity(subject),
         );
 
@@ -1097,7 +1131,7 @@ impl AppUseCase {
         let Some(memo) = memo else {
             return self.resolve_required_audio_languages_for_title(title).await;
         };
-        let key = RequiredAudioLanguagesKey::for_title(title);
+        let key = TitleAudioContextKey::for_title(title);
         if let Some(hit) = memo_lock(&memo.required_audio_languages).get(&key) {
             return Ok(hit.clone());
         }
@@ -1109,6 +1143,31 @@ impl AppUseCase {
             .entry(key)
             .or_insert_with(|| languages.clone());
         Ok(languages)
+    }
+
+    /// `resolve_audio_language_preferences_for_title`, memoized like
+    /// [`Self::required_audio_languages_for_convergence`] and on the same key.
+    async fn language_preferences_for_convergence(
+        &self,
+        title: &Title,
+        memo: Option<&ConvergenceInputMemo>,
+    ) -> AppResult<crate::AudioLanguagePreferences> {
+        let Some(memo) = memo else {
+            return self
+                .resolve_audio_language_preferences_for_title(title)
+                .await;
+        };
+        let key = TitleAudioContextKey::for_title(title);
+        if let Some(hit) = memo_lock(&memo.language_preferences).get(&key) {
+            return Ok(hit.clone());
+        }
+        let preferences = self
+            .resolve_audio_language_preferences_for_title(title)
+            .await?;
+        memo_lock(&memo.language_preferences)
+            .entry(key)
+            .or_insert_with(|| preferences.clone());
+        Ok(preferences)
     }
 
     /// The indexer ids an active search of `subject` targets — the enabled routing
@@ -1519,6 +1578,7 @@ mod tests {
         series_pack_collection_scope_key, series_pack_set_scope_key,
     };
     use crate::contracts::SubmissionScope;
+    use crate::media::language_preference::NO_LANGUAGE_PREFERENCES;
     use crate::quality_profile::{AcceptanceCriteria, QualityProfileCriteria};
 
     #[test]
@@ -1587,15 +1647,29 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_and_order_independent_for_audio() {
-        let a = compute_search_fingerprint("p1", "v1", &["en".into(), "ja".into()], "m1");
-        let b = compute_search_fingerprint("p1", "v1", &["JA".into(), " en ".into()], "m1");
+        let a = compute_search_fingerprint(
+            "p1",
+            "v1",
+            &["en".into(), "ja".into()],
+            &NO_LANGUAGE_PREFERENCES,
+            "m1",
+        );
+        let b = compute_search_fingerprint(
+            "p1",
+            "v1",
+            &["JA".into(), " en ".into()],
+            &NO_LANGUAGE_PREFERENCES,
+            "m1",
+        );
         assert_eq!(a, b, "audio-language order/case/whitespace must not matter");
     }
 
     #[test]
     fn fingerprint_changes_on_profile_version() {
-        let a = compute_search_fingerprint("p1", "v1", &["en".into()], "m1");
-        let b = compute_search_fingerprint("p1", "v2", &["en".into()], "m1");
+        let a =
+            compute_search_fingerprint("p1", "v1", &["en".into()], &NO_LANGUAGE_PREFERENCES, "m1");
+        let b =
+            compute_search_fingerprint("p1", "v2", &["en".into()], &NO_LANGUAGE_PREFERENCES, "m1");
         assert_ne!(
             a, b,
             "a profile edit (version bump) must change the fingerprint"
@@ -1604,22 +1678,44 @@ mod tests {
 
     #[test]
     fn fingerprint_changes_on_profile_id_and_audio() {
-        let base = compute_search_fingerprint("p1", "v1", &["en".into()], "m1");
+        let base =
+            compute_search_fingerprint("p1", "v1", &["en".into()], &NO_LANGUAGE_PREFERENCES, "m1");
         assert_ne!(
             base,
-            compute_search_fingerprint("p2", "v1", &["en".into()], "m1")
+            compute_search_fingerprint("p2", "v1", &["en".into()], &NO_LANGUAGE_PREFERENCES, "m1")
         );
         assert_ne!(
             base,
-            compute_search_fingerprint("p1", "v1", &["en".into(), "ja".into()], "m1")
+            compute_search_fingerprint(
+                "p1",
+                "v1",
+                &["en".into(), "ja".into()],
+                &NO_LANGUAGE_PREFERENCES,
+                "m1"
+            )
         );
-        assert_ne!(base, compute_search_fingerprint("p1", "v1", &[], "m1"));
+        assert_ne!(
+            base,
+            compute_search_fingerprint("p1", "v1", &[], &NO_LANGUAGE_PREFERENCES, "m1")
+        );
+        let german = crate::AudioLanguagePreferences {
+            preferred: vec!["deu".into()],
+            ..Default::default()
+        };
+        let with_preferences =
+            compute_search_fingerprint("p1", "v1", &["en".into()], &german, "m1");
+        assert_ne!(
+            base, with_preferences,
+            "setting preferences re-opens the scope"
+        );
     }
 
     #[test]
     fn fingerprint_changes_when_resolved_original_language_changes() {
-        let japanese = compute_search_fingerprint("p1", "v1", &["jpn".into()], "m1");
-        let korean = compute_search_fingerprint("p1", "v1", &["kor".into()], "m1");
+        let japanese =
+            compute_search_fingerprint("p1", "v1", &["jpn".into()], &NO_LANGUAGE_PREFERENCES, "m1");
+        let korean =
+            compute_search_fingerprint("p1", "v1", &["kor".into()], &NO_LANGUAGE_PREFERENCES, "m1");
 
         assert_ne!(japanese, korean);
     }
@@ -1628,8 +1724,20 @@ mod tests {
     fn fingerprint_changes_on_rematch() {
         // A rematch changes the scope's external-id identity → new fingerprint →
         // convergence re-opens.
-        let a = compute_search_fingerprint("p1", "v1", &["en".into()], "imdb=tt1");
-        let b = compute_search_fingerprint("p1", "v1", &["en".into()], "imdb=tt2");
+        let a = compute_search_fingerprint(
+            "p1",
+            "v1",
+            &["en".into()],
+            &NO_LANGUAGE_PREFERENCES,
+            "imdb=tt1",
+        );
+        let b = compute_search_fingerprint(
+            "p1",
+            "v1",
+            &["en".into()],
+            &NO_LANGUAGE_PREFERENCES,
+            "imdb=tt2",
+        );
         assert_ne!(
             a, b,
             "a rematch (changed SMG match id) must change the fingerprint"
@@ -1873,6 +1981,18 @@ mod tests {
         assert_eq!(upgrade_delta.min_upgrade_score_delta, None);
         upgrade_delta.min_upgrade_score_delta = Some(5);
 
+        let mut decision_order = base.clone();
+        assert!(decision_order.decision_pipeline.is_default());
+        decision_order.set_decision_pipeline(
+            crate::DecisionPipeline::try_from_gates([
+                crate::DecisionGate::PreferredLanguage,
+                crate::DecisionGate::QualityTier,
+                crate::DecisionGate::Revision,
+                crate::DecisionGate::OptionalLanguages,
+            ])
+            .unwrap(),
+        );
+
         for (label, edited) in [
             ("quality_tiers", tiers),
             ("allow_upgrades", upgrades),
@@ -1880,6 +2000,7 @@ mod tests {
             ("cutoff_score", cutoff),
             ("allow_unknown_quality", unknown),
             ("min_upgrade_score_delta", upgrade_delta),
+            ("decision_pipeline", decision_order),
         ] {
             assert_ne!(
                 baseline,
@@ -1930,6 +2051,19 @@ mod tests {
         assert!(
             serialized.get("min_upgrade_score_delta").is_none(),
             "an unset `min_upgrade_score_delta` must not appear in the fingerprint input at all"
+        );
+        assert!(
+            serialized.get("decision_pipeline").is_none(),
+            "a profile on the default order must not carry `decision_pipeline` into the fingerprint input"
+        );
+        let mut without_revision = base.clone();
+        without_revision.set_ignore_proper_repack(true);
+        assert!(
+            serde_json::to_value(AcceptanceCriteria::from(&without_revision))
+                .expect("criteria serialize for the fingerprint")
+                .get("decision_pipeline")
+                .is_none(),
+            "the revision switch alone already records the order it implies"
         );
         for ranking_key in [
             "scoring_persona",

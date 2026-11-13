@@ -390,3 +390,105 @@ async fn library_scan_unmatched_items_delete_for_title_keeps_other_rows() {
     );
     let _ = std::fs::remove_file(db);
 }
+
+#[tokio::test]
+async fn deleting_several_unmatched_items_removes_only_the_named_rows() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_scan_unmatched_batch_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+    let store = library_scan_unmatched_store(&services);
+    let series_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let anime_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
+    let rows = [
+        (
+            MediaFacet::Series,
+            series_library.clone(),
+            "/library/Emberfall/S01E01.mkv",
+        ),
+        (
+            MediaFacet::Series,
+            series_library.clone(),
+            "/library/Emberfall/S01E02.mkv",
+        ),
+        (
+            MediaFacet::Series,
+            series_library.clone(),
+            "/library/Ashgrove/S01E01.mkv",
+        ),
+        (
+            MediaFacet::Anime,
+            anime_library.clone(),
+            "/library/Emberfall/S01E01.mkv",
+        ),
+    ];
+    for (index, (facet, library_id, item_path)) in rows.iter().enumerate() {
+        store
+            .upsert_library_scan_unmatched_item(&LibraryScanUnmatchedItem {
+                id: format!("library_scan_unmatched:batch-{index}"),
+                library_id: library_id.clone(),
+                facet: facet.clone(),
+                status: PendingImportStatus::Pending,
+                title_id: None,
+                scan_session_id: "session-1".to_string(),
+                scan_root: "/library".to_string(),
+                item_path: item_path.to_string(),
+                display_name: item_path.to_string(),
+                query: "Emberfall".to_string(),
+                year_hint: None,
+                reason_code: "no_metadata_search_results".to_string(),
+                error_message: None,
+                search_attempts: Vec::new(),
+                size_bytes: None,
+                created_at: "2026-04-07T00:00:00Z".to_string(),
+                updated_at: "2026-04-07T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("insert unmatched item");
+    }
+
+    store
+        .delete_library_scan_unmatched_items(&series_library, MediaFacet::Series, &[])
+        .await
+        .expect("delete nothing");
+    store
+        .delete_library_scan_unmatched_items(
+            &series_library,
+            MediaFacet::Series,
+            &[
+                "/library/Emberfall/S01E01.mkv".to_string(),
+                "/library/Emberfall/S01E02.mkv".to_string(),
+                "/library/Cinderwake/S01E01.mkv".to_string(),
+            ],
+        )
+        .await
+        .expect("delete several unmatched items");
+
+    let mut remaining = Vec::new();
+    for facet in [MediaFacet::Series, MediaFacet::Anime] {
+        for item in store
+            .list_library_scan_unmatched_items(Some(facet), Some("/library"), None, 10, 0)
+            .await
+            .expect("list unmatched items")
+        {
+            remaining.push((item.facet.as_str().to_string(), item.item_path));
+        }
+    }
+    remaining.sort();
+    assert_eq!(
+        remaining,
+        vec![
+            (
+                "anime".to_string(),
+                "/library/Emberfall/S01E01.mkv".to_string()
+            ),
+            (
+                "series".to_string(),
+                "/library/Ashgrove/S01E01.mkv".to_string()
+            ),
+        ]
+    );
+}

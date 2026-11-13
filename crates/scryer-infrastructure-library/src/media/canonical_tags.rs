@@ -1,9 +1,10 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::Utc;
 use scryer_application::{AppResult, TitleExternalRating, TitleRatingSummary};
 use scryer_domain::{CanonicalMediaTag, Title};
 
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, SqlTx};
 
 #[derive(Clone, Copy)]
@@ -198,7 +199,53 @@ pub async fn load_title_metadata_tags(
     exec: SqlExec<'_, '_>,
     title_ids: &[String],
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
-    load_metadata_tags(exec, TITLE_METADATA_TABLES, title_ids, None).await
+    load_metadata_tags(exec, TITLE_METADATA_TABLES, Owners::Ids(title_ids), None).await
+}
+
+/// Load a title's tags whose `LOWER(category)` is one of `lowered_categories`
+/// (already lowercase), with their sources and source keys.
+#[cfg(test)]
+pub async fn load_title_metadata_tags_in_lowered_categories(
+    exec: SqlExec<'_, '_>,
+    title_ids: &[String],
+    lowered_categories: &[&str],
+) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
+    load_metadata_tags(
+        exec,
+        TITLE_METADATA_TABLES,
+        Owners::Ids(title_ids),
+        Some(CategoryFilter::LoweredIn(lowered_categories)),
+    )
+    .await
+}
+
+/// Owners chosen by a `WITH` clause instead of a bound id list, so a read
+/// over a whole selection costs the same statements at any selection size.
+#[derive(Clone, Copy)]
+pub struct OwnerSelection<'a> {
+    /// A `WITH ...` clause; its placeholders take `args`, in order.
+    pub with_clause: &'a str,
+    /// A table expression in `with_clause` with one `id` row per owner.
+    pub cte: &'a str,
+    pub args: &'a [SqlArg],
+}
+
+/// Load the tags whose `LOWER(category)` is one of `lowered_categories`
+/// (already lowercase), with their sources and source keys, for the titles a
+/// selection names: the same tags, in the same order, as reading those
+/// titles' ids, but as three statements whatever the selection's size.
+pub async fn load_selected_title_metadata_tags_in_lowered_categories(
+    exec: SqlExec<'_, '_>,
+    selection: OwnerSelection<'_>,
+    lowered_categories: &[&str],
+) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
+    load_metadata_tags(
+        exec,
+        TITLE_METADATA_TABLES,
+        Owners::Selected(selection),
+        Some(CategoryFilter::LoweredIn(lowered_categories)),
+    )
+    .await
 }
 
 pub async fn load_discovery_title_metadata_tags(
@@ -208,7 +255,7 @@ pub async fn load_discovery_title_metadata_tags(
     load_metadata_tags(
         exec,
         DISCOVERY_TITLE_METADATA_TABLES,
-        discovery_title_ids,
+        Owners::Ids(discovery_title_ids),
         None,
     )
     .await
@@ -230,62 +277,250 @@ pub async fn load_discovery_title_metadata_tags_in_category(
     load_metadata_tags(
         exec,
         DISCOVERY_TITLE_METADATA_TABLES,
-        discovery_title_ids,
-        Some(category),
+        Owners::Ids(discovery_title_ids),
+        Some(CategoryFilter::Trimmed(category)),
     )
     .await
 }
 
+/// Which tag categories a read keeps.
+#[derive(Clone, Copy)]
+enum CategoryFilter<'a> {
+    /// `LOWER(TRIM(category))` equals this value trimmed and lowercased.
+    Trimmed(&'a str),
+    /// `LOWER(category)` is one of these lowercase values.
+    LoweredIn(&'a [&'a str]),
+}
+
+/// Owner ids bound into one tag read statement. Each statement binds one value
+/// per owner plus at most one category, which keeps every statement well under
+/// the sqlite and postgres bind ceilings.
+const METADATA_TAG_OWNER_CHUNK: usize = 900;
+
+/// Whose tags a read loads.
+#[derive(Clone, Copy)]
+enum Owners<'a> {
+    Ids(&'a [String]),
+    Selected(OwnerSelection<'a>),
+}
+
+/// One tag read's owners as SQL: `owner_column IN {owner_set}`, after an
+/// optional `with_clause`. `args` bind the placeholders of both, which come
+/// before any category placeholder.
+#[derive(Clone, Copy)]
+struct OwnerFilter<'a> {
+    with_clause: &'a str,
+    owner_set: &'a str,
+    args: &'a [SqlArg],
+}
+
+/// Reads tags, their sources and their source keys as three statements per
+/// chunk of owners and merges them in Rust. Joining the three tables in one
+/// statement returns tags x sources x keys rows per tag.
+///
+/// The merged lists match what one joined read ordered by tag
+/// `(sort_index, category, name)`, then source `(sort_index, source)`, then
+/// source key `(sort_index, source_tag_key)` produces: tags in that order,
+/// sources and source keys each in their own order, trimmed, blank values
+/// dropped and repeats kept only at their first position.
+///
+/// An id list is read [`METADATA_TAG_OWNER_CHUNK`] owners at a time; a
+/// selection is read in one set of three statements, each restating the
+/// selection's `WITH` clause.
 async fn load_metadata_tags(
-    exec: SqlExec<'_, '_>,
+    mut exec: SqlExec<'_, '_>,
     tables: MetadataTables,
-    owner_ids: &[String],
-    category: Option<&str>,
+    owners: Owners<'_>,
+    category: Option<CategoryFilter<'_>>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
-    if owner_ids.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let placeholders = bind_placeholders(owner_ids.len());
-    let category_clause = if category.is_some() {
-        " AND LOWER(TRIM(t.category)) = {}"
-    } else {
-        ""
+    let (category_clause, category_args) = match category {
+        None => (String::new(), Vec::new()),
+        Some(CategoryFilter::Trimmed(category)) => (
+            " AND LOWER(TRIM(t.category)) = {}".to_string(),
+            vec![SqlArg::Text(category.trim().to_ascii_lowercase())],
+        ),
+        Some(CategoryFilter::LoweredIn(categories)) => (
+            format!(
+                " AND LOWER(t.category) IN ({})",
+                bind_placeholders(categories.len())
+            ),
+            categories
+                .iter()
+                .map(|category| SqlArg::Text((*category).to_string()))
+                .collect(),
+        ),
     };
-    let sql = format!(
-        "SELECT
-            t.{owner_column} AS owner_id,
-            t.tag_key AS tag_key,
-            t.category AS category,
-            t.name AS name,
-            t.confidence AS confidence,
-            t.affinity_signals_json AS affinity_signals_json,
-            t.is_adult AS is_adult,
-            t.is_spoiler AS is_spoiler,
-            ts.source AS source,
-            tsk.source_tag_key AS source_tag_key
-         FROM {tags} t
-         LEFT JOIN {tag_sources} ts
-            ON ts.{owner_column} = t.{owner_column} AND ts.tag_key = t.tag_key
-         LEFT JOIN {tag_source_keys} tsk
-            ON tsk.{owner_column} = t.{owner_column} AND tsk.tag_key = t.tag_key
-         WHERE t.{owner_column} IN ({placeholders}){category_clause}
-         ORDER BY t.{owner_column}, t.sort_index, t.category, t.name,
-                  ts.sort_index, ts.source, tsk.sort_index, tsk.source_tag_key",
-        owner_column = tables.owner_column,
-        tags = tables.tags,
-        tag_sources = tables.tag_sources,
-        tag_source_keys = tables.tag_source_keys,
-    );
-    let mut args = owner_ids
-        .iter()
-        .cloned()
-        .map(SqlArg::Text)
-        .collect::<Vec<_>>();
-    if let Some(category) = category {
-        args.push(SqlArg::Text(category.trim().to_ascii_lowercase()));
+    let category = category.map(|_| (category_clause.as_str(), category_args.as_slice()));
+    let mut merged = BTreeMap::<String, OwnerTags>::new();
+    match owners {
+        Owners::Ids(owner_ids) => {
+            for chunk in owner_ids.chunks(METADATA_TAG_OWNER_CHUNK) {
+                let owner_set = format!("({})", bind_placeholders(chunk.len()));
+                let owner_args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+                load_metadata_tags_chunk(
+                    reborrow_exec(&mut exec),
+                    tables,
+                    OwnerFilter {
+                        with_clause: "",
+                        owner_set: &owner_set,
+                        args: &owner_args,
+                    },
+                    category,
+                    &mut merged,
+                )
+                .await?;
+            }
+        }
+        Owners::Selected(selection) => {
+            let with_clause = format!("{} ", selection.with_clause.trim_end());
+            let owner_set = format!("(SELECT id FROM {})", selection.cte);
+            load_metadata_tags_chunk(
+                reborrow_exec(&mut exec),
+                tables,
+                OwnerFilter {
+                    with_clause: &with_clause,
+                    owner_set: &owner_set,
+                    args: selection.args,
+                },
+                category,
+                &mut merged,
+            )
+            .await?;
+        }
     }
-    let rows = SqlRuntime::fetch_all(exec, &sql, &args).await?;
-    rows_to_tags_by_owner(&rows)
+    Ok(merged
+        .into_iter()
+        .map(|(owner_id, owner_tags)| (owner_id, owner_tags.tags))
+        .collect())
+}
+
+#[derive(Default)]
+struct OwnerTags {
+    tags: Vec<CanonicalMediaTag>,
+    index_by_key: HashMap<String, usize>,
+}
+
+fn reborrow_exec<'a, 'db>(exec: &'a mut SqlExec<'_, 'db>) -> SqlExec<'a, 'db> {
+    match exec {
+        SqlExec::Target(target) => SqlExec::Target(*target),
+        SqlExec::Tx(tx) => SqlExec::Tx(tx),
+    }
+}
+
+async fn load_metadata_tags_chunk(
+    mut exec: SqlExec<'_, '_>,
+    tables: MetadataTables,
+    owners: OwnerFilter<'_>,
+    category: Option<(&str, &[SqlArg])>,
+    merged: &mut BTreeMap<String, OwnerTags>,
+) -> AppResult<()> {
+    let OwnerFilter {
+        with_clause,
+        owner_set,
+        args: owner_args,
+    } = owners;
+    let mut args = owner_args.to_vec();
+    let category_clause = match category {
+        Some((clause, category_args)) => {
+            args.extend(category_args.iter().cloned());
+            clause
+        }
+        None => "",
+    };
+    let owner_column = tables.owner_column;
+
+    let tag_rows = SqlRuntime::fetch_all(
+        reborrow_exec(&mut exec),
+        &format!(
+            "{with_clause}SELECT
+                t.{owner_column} AS owner_id,
+                t.tag_key AS tag_key,
+                t.category AS category,
+                t.name AS name,
+                t.confidence AS confidence,
+                t.affinity_signals_json AS affinity_signals_json,
+                t.is_adult AS is_adult,
+                t.is_spoiler AS is_spoiler
+             FROM {tags} t
+             WHERE t.{owner_column} IN {owner_set}{category_clause}
+             ORDER BY t.{owner_column}, t.sort_index, t.category, t.name, t.tag_key",
+            tags = tables.tags,
+        ),
+        &args,
+    )
+    .await?;
+    if tag_rows.is_empty() {
+        return Ok(());
+    }
+    for row in &tag_rows {
+        let owner_id = row.text("owner_id")?;
+        let tag_key = row.text("tag_key")?;
+        let owner_tags = merged.entry(owner_id).or_default();
+        if owner_tags.index_by_key.contains_key(&tag_key) {
+            continue;
+        }
+        owner_tags
+            .index_by_key
+            .insert(tag_key.clone(), owner_tags.tags.len());
+        owner_tags.tags.push(CanonicalMediaTag {
+            affinity_signals: serde_json::from_str(&row.text("affinity_signals_json")?)
+                .map_err(|error| scryer_application::AppError::Repository(error.to_string()))?,
+            key: tag_key,
+            category: row.text("category")?,
+            name: row.text("name")?,
+            confidence: row.opt_f64("confidence")?,
+            sources: Vec::new(),
+            source_tag_keys: Vec::new(),
+            is_adult: row.bool("is_adult")?,
+            is_spoiler: row.bool("is_spoiler")?,
+        });
+    }
+
+    // With a category, only values of tags in that category are wanted; the
+    // join is on the tag's primary key, so it adds no rows.
+    let category_join = if category.is_some() {
+        format!(
+            " JOIN {tags} t ON t.{owner_column} = v.{owner_column} AND t.tag_key = v.tag_key",
+            tags = tables.tags,
+        )
+    } else {
+        String::new()
+    };
+    type ValuesOf = fn(&mut CanonicalMediaTag) -> &mut Vec<String>;
+    let tag_values: [(&str, &str, ValuesOf); 2] = [
+        (tables.tag_sources, "source", |tag| &mut tag.sources),
+        (tables.tag_source_keys, "source_tag_key", |tag| {
+            &mut tag.source_tag_keys
+        }),
+    ];
+    for (table, column, values_of) in tag_values {
+        let rows = SqlRuntime::fetch_all(
+            reborrow_exec(&mut exec),
+            &format!(
+                "{with_clause}SELECT v.{owner_column} AS owner_id, v.tag_key AS tag_key, v.{column} AS tag_value
+                 FROM {table} v{category_join}
+                 WHERE v.{owner_column} IN {owner_set}{category_clause}
+                 ORDER BY v.{owner_column}, v.tag_key, v.sort_index, v.{column}"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &rows {
+            let owner_id = row.text("owner_id")?;
+            let tag_key = row.text("tag_key")?;
+            let Some(owner_tags) = merged.get_mut(&owner_id) else {
+                continue;
+            };
+            let Some(&index) = owner_tags.index_by_key.get(&tag_key) else {
+                continue;
+            };
+            push_unique_opt(
+                values_of(&mut owner_tags.tags[index]),
+                row.opt_text("tag_value")?,
+            );
+        }
+    }
+    Ok(())
 }
 
 pub async fn replace_title_metadata_ratings_tx(
@@ -443,7 +678,30 @@ pub async fn load_discovery_title_metadata_ratings(
     .await
 }
 
+/// Reads every owner's ratings in one statement, which binds each owner three
+/// times. Only a list too long for one statement is read a third of
+/// [`METADATA_TAG_OWNER_CHUNK`] distinct owners at a time; an owner's rows
+/// always come from one statement.
 async fn load_metadata_ratings(
+    mut exec: SqlExec<'_, '_>,
+    owner: MetadataRatingOwner,
+    owner_ids: &[String],
+) -> AppResult<BTreeMap<String, TitleRatingSummary>> {
+    let (owner_ids, per_statement) = id_list_statements(
+        owner_ids,
+        3,
+        0,
+        max_binds(&exec),
+        METADATA_TAG_OWNER_CHUNK / 3,
+    );
+    let mut ratings = BTreeMap::new();
+    for chunk in owner_ids.chunks(per_statement) {
+        ratings.extend(load_metadata_ratings_chunk(reborrow_exec(&mut exec), owner, chunk).await?);
+    }
+    Ok(ratings)
+}
+
+async fn load_metadata_ratings_chunk(
     exec: SqlExec<'_, '_>,
     owner: MetadataRatingOwner,
     owner_ids: &[String],
@@ -573,6 +831,7 @@ async fn insert_tag_values_tx(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn rows_to_tags_by_owner<'a>(
     rows: impl IntoIterator<Item = &'a crate::queries::sql_runtime::SqlRow>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {

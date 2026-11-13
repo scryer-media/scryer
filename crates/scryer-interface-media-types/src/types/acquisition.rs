@@ -2,7 +2,7 @@ use super::{
     ConvergenceStateValue, DownloadQueueStateValue, DownloadSourceKindValue, Long, MediaFacetValue,
     PendingReleaseStatusValue, PluginConfigFieldOptionPayload, PluginConfigFieldRoleValue,
     PluginConfigFieldTypeValue, PluginConfigValueSourceValue, QueueDownloadPurposeValue,
-    QueueDownloadScopeInput, WantedKindValue, WantedStatusValue,
+    QueueDownloadScopeInput, ReleaseDecidingStepValue, WantedKindValue, WantedStatusValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -251,6 +251,10 @@ pub struct ParsedReleasePayload {
     pub stereoscopy: Option<ParsedStereoscopyPayload>,
     /// Audio description, or null when not detected.
     pub audio: Option<String>,
+    /// Audio channel layout such as `5.1`, or null when not detected.
+    pub audio_channels: Option<String>,
+    /// Audio languages named in the release title as ISO 639-2 codes, in title order.
+    pub audio_languages: Vec<String>,
     /// Whether dual audio was detected.
     pub is_dual_audio: bool,
     /// Whether Atmos audio was detected.
@@ -305,6 +309,28 @@ pub struct QualityProfileDecisionPayload {
     pub preference_score: i32,
     /// Ordered scoring contributions used to compute the decision.
     pub scoring_log: Vec<ScoringEntryPayload>,
+    /// Standing against the title's audio language preferences.
+    pub audio_language: AudioLanguageRankPayload,
+    /// The step of the profile's decision order that settled the comparison
+    /// with what the scope already holds, or null when nothing was compared:
+    /// an empty scope, a refusal outside the order, or a release that was
+    /// never evaluated for automatic acquisition.
+    pub decided_by: Option<ReleaseDecidingStepValue>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// How a release or file ranks against the title's audio language preferences.
+/// Every field is neutral when no preferences are configured.
+pub struct AudioLanguageRankPayload {
+    /// Position of the first preferred language present; 0 is best, and the
+    /// length of the preferred list means none is present.
+    pub preferred_rank: i32,
+    /// Length of the preferred list; 0 when no preferred language is configured.
+    pub preferred_count: i32,
+    /// How many of the optional languages are present.
+    pub optional_hits: i32,
+    /// Whether the preferences still want something this release lacks.
+    pub wanted: bool,
 }
 
 #[derive(SimpleObject, Clone)]

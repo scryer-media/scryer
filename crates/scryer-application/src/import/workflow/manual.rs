@@ -95,10 +95,9 @@ pub async fn start_background_manual_import_poller(
             if in_flight.contains_key(&record.id) {
                 continue;
             }
-            if manual_import_record_requires_reconciliation(&record) {
-                continue;
-            }
-            if !manual_import_retry_is_due(&record, Utc::now()) {
+            if let Some(gate) = ManualImportResultGate::parse(&record)
+                && (gate.requires_reconciliation() || !gate.retry_is_due(Utc::now()))
+            {
                 continue;
             }
             let id = record.id.clone();
@@ -154,31 +153,51 @@ async fn mark_manual_import_reconciliation(app: &AppUseCase, import_id: &str, me
     }
 }
 
-pub(crate) fn manual_import_record_requires_reconciliation(
-    record: &scryer_domain::ImportRecord,
-) -> bool {
-    let Some(result) = record
-        .result_json
-        .as_deref()
-        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok())
-    else {
-        return false;
-    };
-    result.requires_reconciliation
-        || result.error_message.is_some_and(|message| {
+/// The parts of a stored manual-import result the poller decides on, read
+/// with one parse of the stored JSON.
+struct ManualImportResultGate {
+    result: ManualImportExecutionResult,
+    /// Whether the stored JSON names `requires_reconciliation`; a result
+    /// written before the field existed does not.
+    flag_stored: bool,
+}
+
+impl ManualImportResultGate {
+    fn parse(record: &scryer_domain::ImportRecord) -> Option<Self> {
+        use serde::Deserialize as _;
+        let value =
+            serde_json::from_str::<serde_json::Value>(record.result_json.as_deref()?).ok()?;
+        let result = ManualImportExecutionResult::deserialize(&value).ok()?;
+        Some(Self {
+            result,
+            flag_stored: value.get("requires_reconciliation").is_some(),
+        })
+    }
+
+    fn requires_reconciliation(&self) -> bool {
+        if self.flag_stored {
+            return self.result.requires_reconciliation;
+        }
+        // A result written before the flag existed said so only in its
+        // message; this reads that old form and nothing newer.
+        self.result.error_message.as_deref().is_some_and(|message| {
             message
                 .to_ascii_lowercase()
                 .starts_with("manual reconciliation required:")
         })
+    }
+
+    fn retry_is_due(&self, now: DateTime<Utc>) -> bool {
+        self.result
+            .next_retry_at
+            .is_none_or(|next_retry_at| next_retry_at <= now)
+    }
 }
 
-fn manual_import_retry_is_due(record: &scryer_domain::ImportRecord, now: DateTime<Utc>) -> bool {
-    record
-        .result_json
-        .as_deref()
-        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok())
-        .and_then(|result| result.next_retry_at)
-        .is_none_or(|next_retry_at| next_retry_at <= now)
+pub(crate) fn manual_import_record_requires_reconciliation(
+    record: &scryer_domain::ImportRecord,
+) -> bool {
+    ManualImportResultGate::parse(record).is_some_and(|gate| gate.requires_reconciliation())
 }
 
 async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::ImportRecord) {
@@ -877,6 +896,17 @@ fn canonical_manual_import_source_under_trusted_root(
     source_path: &Path,
     trusted_root: &Path,
 ) -> AppResult<PathBuf> {
+    canonical_manual_import_source_with_metadata(source_path, trusted_root)
+        .map(|(canonical, _)| canonical)
+}
+
+/// [`canonical_manual_import_source_under_trusted_root`] with the metadata
+/// of the canonical source it already read, so a caller that needs the
+/// file's size does not stat it again.
+fn canonical_manual_import_source_with_metadata(
+    source_path: &Path,
+    trusted_root: &Path,
+) -> AppResult<(PathBuf, std::fs::Metadata)> {
     let trusted_root_metadata = std::fs::metadata(trusted_root).map_err(|err| {
         manual_import_io_error(&err, format!(
             "manual import source root is not accessible: {} ({err})",
@@ -898,7 +928,8 @@ fn canonical_manual_import_source_under_trusted_root(
 
     if trusted_root_metadata.is_file() {
         if canonical == canonical_trusted_root {
-            return Ok(canonical);
+            // The root is this very file; its metadata is the file's.
+            return Ok((canonical, trusted_root_metadata));
         }
         return Err(AppError::validation_refused(crate::error_reasons::import::MANUAL_IMPORT_FILE_OUTSIDE_TRUSTED_SOURCE_ROOT, format!(
             "manual import file is outside the trusted source root: {}",
@@ -941,7 +972,7 @@ fn canonical_manual_import_source_under_trusted_root(
             source_path.display()
         )));
     }
-    Ok(canonical)
+    Ok((canonical, metadata))
 }
 
 pub(crate) fn validate_manual_import_source_under_trusted_root(
@@ -963,14 +994,35 @@ pub(crate) async fn qualify_manual_import_video_candidate(
     source_path: &Path,
     trusted_root: &Path,
 ) -> AppResult<Option<QualifiedManualImportVideo>> {
-    let canonical_path =
-        canonical_manual_import_source_under_trusted_root(source_path, trusted_root)?;
-    let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
-        manual_import_io_error(&error, format!(
-            "manual import file is not accessible: {} ({error})",
-            source_path.display()
-        ))
-    })?;
+    let canonical = canonical_manual_import_source_with_metadata(source_path, trusted_root)?;
+    qualify_manual_import_video_canonical(source_path, canonical).await
+}
+
+/// [`qualify_manual_import_video_candidate`] under `download_root` when the
+/// source lies there, otherwise under `trusted_root`. The containment check
+/// under the download root already resolved the source, so that answer is
+/// used as is instead of resolving it a second time.
+pub(crate) async fn qualify_manual_import_video_under_roots(
+    source_path: &Path,
+    download_root: Option<&Path>,
+    trusted_root: &Path,
+) -> AppResult<Option<QualifiedManualImportVideo>> {
+    let canonical = match download_root
+        .and_then(|root| canonical_manual_import_source_with_metadata(source_path, root).ok())
+    {
+        Some(canonical) => canonical,
+        None => canonical_manual_import_source_with_metadata(source_path, trusted_root)?,
+    };
+    qualify_manual_import_video_canonical(source_path, canonical).await
+}
+
+/// [`qualify_manual_import_video_candidate`] for a source whose canonical
+/// path and metadata [`canonical_manual_import_source_with_metadata`] just
+/// returned.
+async fn qualify_manual_import_video_canonical(
+    source_path: &Path,
+    (canonical_path, metadata): (PathBuf, std::fs::Metadata),
+) -> AppResult<Option<QualifiedManualImportVideo>> {
     std::fs::File::open(&canonical_path).map_err(|error| {
         manual_import_io_error(&error, format!(
             "manual import file is not accessible: {} ({error})",
@@ -2280,9 +2332,27 @@ pub(crate) async fn validate_manual_import_candidate_mapping_scope(
     title_id: &str,
     files: &[ManualImportCandidateMapping],
 ) -> AppResult<()> {
+    fn disc_episode_ids(mapping: &ManualImportCandidateMapping) -> Vec<&str> {
+        mapping
+            .disc_selection
+            .iter()
+            .flat_map(|selection| &selection.episode_mappings)
+            .flat_map(|mapping| &mapping.episode_ids)
+            .map(String::as_str)
+            .collect()
+    }
+    let episode_ids = files
+        .iter()
+        .flat_map(|mapping| {
+            manual_import_candidate_episode_ids(mapping)
+                .into_iter()
+                .chain(disc_episode_ids(mapping))
+        })
+        .collect::<Vec<_>>();
+    let episode_titles = load_manual_import_episode_titles(app, &episode_ids).await?;
     for mapping in files {
         for episode_id in manual_import_candidate_episode_ids(mapping) {
-            validate_manual_import_target_scope(app, title_id, Some(episode_id), None).await?;
+            check_manual_import_episode_target(&episode_titles, title_id, Some(episode_id))?;
         }
         validate_manual_import_target_scope(
             app,
@@ -2291,17 +2361,66 @@ pub(crate) async fn validate_manual_import_candidate_mapping_scope(
             mapping.series_movie_link_id.as_deref(),
         )
         .await?;
-        if let Some(selection) = &mapping.disc_selection {
-            for episode_id in selection
-                .episode_mappings
-                .iter()
-                .flat_map(|mapping| &mapping.episode_ids)
-            {
-                validate_manual_import_target_scope(app, title_id, Some(episode_id), None).await?;
-            }
+        for episode_id in disc_episode_ids(mapping) {
+            check_manual_import_episode_target(&episode_titles, title_id, Some(episode_id))?;
         }
     }
 
+    Ok(())
+}
+
+/// The title of each episode among `episode_ids` that exists, read in one
+/// batch so validating a mapping list costs one episode read, not one per
+/// episode.
+async fn load_manual_import_episode_titles(
+    app: &AppUseCase,
+    episode_ids: &[&str],
+) -> AppResult<HashMap<String, String>> {
+    let mut seen = HashSet::new();
+    let ids = episode_ids
+        .iter()
+        .filter_map(|episode_id| normalize_manual_import_target(Some(*episode_id)))
+        .filter(|episode_id| seen.insert(*episode_id))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(app
+        .services
+        .catalog
+        .shows
+        .get_episodes_by_ids(&ids)
+        .await?
+        .into_iter()
+        .map(|episode| (episode.id, episode.title_id))
+        .collect())
+}
+
+/// The episode half of [`validate_manual_import_target_scope`], answered
+/// from [`load_manual_import_episode_titles`].
+fn check_manual_import_episode_target(
+    episode_titles: &HashMap<String, String>,
+    title_id: &str,
+    episode_id: Option<&str>,
+) -> AppResult<()> {
+    let Some(episode_id) = normalize_manual_import_target(episode_id) else {
+        return Ok(());
+    };
+    let episode_title_id = episode_titles.get(episode_id).ok_or_else(|| {
+        AppError::validation_refused(
+            crate::error_reasons::import::MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE,
+            format!("manual import episode target is unavailable: {episode_id}"),
+        )
+    })?;
+    if episode_title_id != title_id {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::import::MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE,
+            format!(
+                "manual import episode target {episode_id} does not belong to title {title_id}"
+            ),
+        ));
+    }
     Ok(())
 }
 
@@ -3144,7 +3263,8 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     let archive_source = trusted_source_root
         .as_deref()
         .is_some_and(crate::archive_extractor::is_owned_archive_workspace);
-    let (result, cleanups) =
+    // Every file of this import is gated on one observation of the client.
+    let (result, cleanups) = crate::seeding_gate::with_import_seeding_observations(
         collect_deferred_import_source_cleanup(execute_manual_import_with_release_evidence_inner(
             app,
             actor,
@@ -3154,8 +3274,9 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             release_evidence,
             files,
             trusted_source_root,
-        ))
-        .await;
+        )),
+    )
+    .await;
     let mut results = result?;
     let can_release = results
         .iter()
@@ -3266,9 +3387,14 @@ async fn execute_manual_import_with_release_evidence_inner(
             &title.id,
         )
         .await?;
+    let episode_ids = files
+        .iter()
+        .flat_map(manual_import_mapping_episode_ids)
+        .collect::<Vec<_>>();
+    let episode_titles = load_manual_import_episode_titles(app, &episode_ids).await?;
     for mapping in &files {
         for episode_id in manual_import_mapping_episode_ids(mapping) {
-            validate_manual_import_target_scope(app, &title.id, Some(episode_id), None).await?;
+            check_manual_import_episode_target(&episode_titles, &title.id, Some(episode_id))?;
         }
         validate_manual_import_target_scope(
             app,
@@ -3397,11 +3523,13 @@ async fn execute_manual_import_with_release_evidence_inner(
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
-        let candidate_root = download_root
-            .as_deref()
-            .filter(|root| validate_manual_import_source_under_trusted_root(&source, root).is_ok())
-            .unwrap_or(&trusted_source_root);
-        let qualified = match qualify_manual_import_video_candidate(&source, candidate_root).await {
+        let qualified = match qualify_manual_import_video_under_roots(
+            &source,
+            download_root.as_deref(),
+            &trusted_source_root,
+        )
+        .await
+        {
             Ok(Some(qualified)) => qualified,
             Ok(None) => {
                 results.push(manual_import_file_result(
@@ -4032,6 +4160,91 @@ fn manual_import_recovery_retry_delay(attempts: u32) -> chrono::Duration {
     crate::tracked_downloads::import_execution_retry_delay(attempts)
 }
 
+/// The completed manual imports in the recovery window the sweep still has
+/// to look at, newest first, after forgetting memo entries that aged out of
+/// the window. The window is read as ids alone; only records the memo does
+/// not settle or defer are read in full, so an idle tick decodes no import
+/// rows. `None` when the window could not be read.
+async fn list_completed_manual_imports_needing_recovery(
+    app: &AppUseCase,
+    worker: &PollingWorker,
+    memo: &mut HashMap<String, ManualImportRecoveryMemo>,
+    now: DateTime<Utc>,
+    updated_after: DateTime<Utc>,
+) -> Option<Vec<scryer_domain::ImportRecord>> {
+    let imports = &app.services.workflow.imports;
+    let ids = match imports
+        .list_completed_manual_import_ids(updated_after, MANUAL_IMPORT_RECOVERY_BATCH_SIZE)
+        .await
+    {
+        Ok(Some(ids)) => ids,
+        Ok(None) => {
+            return match imports
+                .list_completed_manual_imports(updated_after, MANUAL_IMPORT_RECOVERY_BATCH_SIZE)
+                .await
+            {
+                Ok(records) => {
+                    let live_ids = records
+                        .iter()
+                        .map(|record| record.id.as_str())
+                        .collect::<HashSet<_>>();
+                    memo.retain(|id, _| live_ids.contains(id.as_str()));
+                    Some(records)
+                }
+                Err(error) => {
+                    worker.warn_error("list_completed_manual_imports", &error);
+                    None
+                }
+            };
+        }
+        Err(error) => {
+            worker.warn_error("list_completed_manual_imports", &error);
+            return None;
+        }
+    };
+    // Records that aged out of the window never come back; forget them.
+    let live_ids = ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    memo.retain(|id, _| live_ids.contains(id.as_str()));
+    if app.runtime.acquisition.tracked_download_handle.is_none() {
+        return Some(Vec::new());
+    }
+    let due = ids
+        .iter()
+        .filter(|id| match memo.get(id.as_str()) {
+            Some(ManualImportRecoveryMemo::Settled) => false,
+            Some(ManualImportRecoveryMemo::RetryAfter { next_check_at, .. }) => {
+                *next_check_at <= now
+            }
+            None => true,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if due.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut by_id = match imports.get_imports_by_ids(&due).await {
+        Ok(records) => records
+            .into_iter()
+            .map(|record| (record.id.clone(), record))
+            .collect::<HashMap<_, _>>(),
+        Err(error) => {
+            worker.warn_error("list_completed_manual_imports", &error);
+            return None;
+        }
+    };
+    // A record that left the completed state between the two reads is no
+    // longer in the window; the next tick forgets it like any other.
+    Some(
+        due.iter()
+            .filter_map(|id| by_id.remove(id))
+            .filter(|record| {
+                record.import_type == ImportType::ManualImport
+                    && record.status == ImportStatus::Completed
+            })
+            .collect(),
+    )
+}
+
 async fn recover_completed_manual_imports(
     app: &AppUseCase,
     worker: &PollingWorker,
@@ -4041,25 +4254,11 @@ async fn recover_completed_manual_imports(
 
     let now = Utc::now();
     let updated_after = now - chrono::Duration::hours(MANUAL_IMPORT_RECOVERY_WINDOW_HOURS);
-    let records = match app
-        .services
-        .workflow
-        .imports
-        .list_completed_manual_imports(updated_after, MANUAL_IMPORT_RECOVERY_BATCH_SIZE)
-        .await
-    {
-        Ok(records) => records,
-        Err(error) => {
-            worker.warn_error("list_completed_manual_imports", &error);
-            return;
-        }
+    let Some(records) =
+        list_completed_manual_imports_needing_recovery(app, worker, memo, now, updated_after).await
+    else {
+        return;
     };
-    // Records that aged out of the window never come back; forget them.
-    let live_ids = records
-        .iter()
-        .map(|record| record.id.as_str())
-        .collect::<HashSet<_>>();
-    memo.retain(|id, _| live_ids.contains(id.as_str()));
     let Some(handle) = app.runtime.acquisition.tracked_download_handle.as_ref() else {
         return;
     };
@@ -4774,11 +4973,79 @@ mod manual_import_recovery_tests {
         )
         .expect("parse result JSON");
         result.status = ImportStatus::Pending;
+        result.requires_reconciliation = true;
         result.error_message =
             Some("Manual reconciliation required: filesystem worker was terminated".to_string());
         record.result_json = Some(serde_json::to_string(&result).expect("result JSON"));
 
         assert!(manual_import_record_requires_reconciliation(&record));
+    }
+
+    /// The flag decides, never the sentence; the sentence is read only from
+    /// a result written before the flag existed.
+    #[test]
+    fn reconciliation_is_read_from_its_flag_and_from_text_only_in_old_results() {
+        let mut record = completed_manual_import_record("weaver", true);
+        record.status = ImportStatus::Pending;
+        let mut result = serde_json::from_str::<ManualImportExecutionResult>(
+            record.result_json.as_deref().expect("result JSON"),
+        )
+        .expect("parse result JSON");
+        result.status = ImportStatus::Pending;
+        result.error_message =
+            Some("Manual reconciliation required: filesystem worker was terminated".to_string());
+
+        result.requires_reconciliation = false;
+        record.result_json = Some(serde_json::to_string(&result).expect("result JSON"));
+        assert!(!manual_import_record_requires_reconciliation(&record));
+
+        result.requires_reconciliation = true;
+        result.error_message = Some("a reworded sentence".to_string());
+        record.result_json = Some(serde_json::to_string(&result).expect("result JSON"));
+        assert!(manual_import_record_requires_reconciliation(&record));
+
+        let mut old = serde_json::to_value(&result).expect("result value");
+        old.as_object_mut()
+            .expect("result object")
+            .remove("requires_reconciliation");
+        old["error_message"] =
+            serde_json::json!("Manual reconciliation required: filesystem worker was terminated");
+        record.result_json = Some(old.to_string());
+        assert!(manual_import_record_requires_reconciliation(&record));
+        old["error_message"] = serde_json::json!("Import evidence is temporarily unavailable");
+        record.result_json = Some(old.to_string());
+        assert!(!manual_import_record_requires_reconciliation(&record));
+    }
+
+    /// Every result the poller writes for a reconciliation sets the flag, so
+    /// reading the flag alone keeps every current row's outcome.
+    #[test]
+    fn every_reconciliation_result_written_sets_the_flag() {
+        let payload = ManualImportRequestPayload {
+            requested_by_user_id: None,
+            title_id: Some("title-1".to_string()),
+            download_client_item_id: "download-1".to_string(),
+            client_id: None,
+            client_type: "weaver".to_string(),
+            files: Vec::new(),
+            selection_id: None,
+            release_evidence: None,
+            trusted_source_root: None,
+            archive_workspace_root: None,
+            requested_at: "2026-08-17T00:00:00Z".to_string(),
+        };
+        let json = manual_import_pending_result_json(
+            "manual-import-1",
+            &payload,
+            "Manual reconciliation required: worker ended".to_string(),
+            true,
+            0,
+            None,
+            Vec::new(),
+        )
+        .expect("result JSON");
+        let value = serde_json::from_str::<serde_json::Value>(&json).expect("JSON");
+        assert_eq!(value["requires_reconciliation"], serde_json::json!(true));
     }
 
     #[test]

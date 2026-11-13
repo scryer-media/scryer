@@ -370,7 +370,12 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_for_libraries(Some(facet.clone()), &[library_id.to_string()], None)
+            .list_with_projection(
+                Some(facet.clone()),
+                Some(&[library_id.to_string()]),
+                None,
+                crate::TitleListProjection::without_canonical_tags(),
+            )
             .await?;
         let mut primary = HashMap::<String, Vec<Title>>::new();
         let mut imdb = HashMap::<String, Vec<Title>>::new();

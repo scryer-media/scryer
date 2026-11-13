@@ -980,6 +980,7 @@ impl ShowRepository for MockShowRepo {
         &self,
         _start_date: &str,
         _end_date: &str,
+        _library_ids: &[String],
     ) -> AppResult<Vec<CalendarEpisode>> {
         Ok(vec![])
     }

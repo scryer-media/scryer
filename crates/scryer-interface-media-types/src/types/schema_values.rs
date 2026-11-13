@@ -347,6 +347,123 @@ pub enum ScoringPersonaValue {
     Compatible,
 }
 
+/// Both GraphQL views of the decision steps, and their conversions, from one
+/// list. A new step adds one entry here: its variant (named as in
+/// `scryer_application::DecisionGate`), the description it carries as a
+/// profile step, and the one it carries as the step that decided.
+macro_rules! decision_step_values {
+    (
+        gate_enum: { $(#[$gate_enum_doc:meta])* }
+        decided_enum: { $(#[$decided_enum_doc:meta])* }
+        steps: {
+            $(
+                $variant:ident {
+                    gate: { $(#[$gate_doc:meta])* }
+                    decided: { $(#[$decided_doc:meta])* }
+                }
+            )*
+        }
+        score: { $(#[$score_doc:meta])* }
+    ) => {
+        $(#[$gate_enum_doc])*
+        #[derive(Enum, Copy, Clone, Eq, PartialEq)]
+        #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+        pub enum QualityDecisionGateValue {
+            $(
+                $(#[$gate_doc])*
+                $variant,
+            )*
+        }
+
+        $(#[$decided_enum_doc])*
+        #[derive(Enum, Copy, Clone, Eq, PartialEq)]
+        #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+        pub enum ReleaseDecidingStepValue {
+            $(
+                $(#[$decided_doc])*
+                $variant,
+            )*
+            $(#[$score_doc])*
+            Score,
+        }
+
+        impl QualityDecisionGateValue {
+            pub fn from_gate(gate: scryer_application::DecisionGate) -> Self {
+                match gate {
+                    $(scryer_application::DecisionGate::$variant => Self::$variant,)*
+                }
+            }
+
+            pub fn into_gate(self) -> scryer_application::DecisionGate {
+                match self {
+                    $(Self::$variant => scryer_application::DecisionGate::$variant,)*
+                }
+            }
+        }
+
+        impl ReleaseDecidingStepValue {
+            pub fn from_step(step: scryer_application::ReleaseDecidingStep) -> Self {
+                use scryer_application::{DecisionGate, ReleaseDecidingStep};
+                match step {
+                    $(ReleaseDecidingStep::Gate(DecisionGate::$variant) => Self::$variant,)*
+                    ReleaseDecidingStep::Score => Self::Score,
+                }
+            }
+        }
+    };
+}
+
+decision_step_values! {
+    gate_enum: {
+        /// One step of a quality profile's decision order. Releases are compared on
+        /// each step in turn; the first step that tells two releases apart decides,
+        /// and the score decides when none does.
+    }
+    decided_enum: {
+        /// The step of a quality profile's decision order that settled a comparison
+        /// with what was already on disk.
+    }
+    steps: {
+        QualityTier {
+            gate: {
+                /// The profile's quality tier order. Without it the cutoff tier does not
+                /// apply.
+            }
+            decided: {
+                /// The quality tier decided.
+            }
+        }
+        Revision {
+            gate: {
+                /// PROPER and REPACK releases from the same group. Without it they rank
+                /// like the original release.
+            }
+            decided: {
+                /// PROPER or REPACK decided.
+            }
+        }
+        PreferredLanguage {
+            gate: {
+                /// The library's ordered preferred audio languages.
+            }
+            decided: {
+                /// The preferred audio language decided.
+            }
+        }
+        OptionalLanguages {
+            gate: {
+                /// How many of the library's optional audio languages a release carries.
+            }
+            decided: {
+                /// The optional audio languages decided.
+            }
+        }
+    }
+    score: {
+        /// No step told the releases apart, so the score decided.
+    }
+}
+
 /// Monitoring mode applied to episodic content.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -564,6 +681,8 @@ pub enum DownloadActivityFilterValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum DownloadImportFilterValue {
+    /// Show dismissed import warnings for explicitly resuming their tracking.
+    Dismissed,
     /// Include every import state.
     All,
     /// Include imports awaiting attention rather than actively executing.
@@ -913,6 +1032,8 @@ pub enum TrackedDownloadStateValue {
     FailedPending,
     /// Download or import failed.
     Failed,
+    /// Import tracking was dismissed without changing the client entry or payload.
+    ImportDismissed,
     /// Download was ignored.
     Ignored,
 }
@@ -929,6 +1050,7 @@ impl TrackedDownloadStateValue {
             TrackedDownloadState::ImportBlocked => Self::ImportBlocked,
             TrackedDownloadState::FailedPending => Self::FailedPending,
             TrackedDownloadState::Failed => Self::Failed,
+            TrackedDownloadState::ImportDismissed => Self::ImportDismissed,
             TrackedDownloadState::Ignored => Self::Ignored,
         }
     }
@@ -1216,6 +1338,8 @@ pub enum ImportSkipReasonValue {
     ArchiveExtractionPluginRequired,
     /// Archive extraction exceeded its configured time limit.
     ArchiveExtractionTimedOut,
+    /// The title's folder must be resolved before the import can run.
+    TitleFolderConflict,
 }
 
 impl ImportSkipReasonValue {
@@ -1240,6 +1364,7 @@ impl ImportSkipReasonValue {
                 Self::ArchiveExtractionPluginRequired
             }
             ImportSkipReason::ArchiveExtractionTimedOut => Self::ArchiveExtractionTimedOut,
+            ImportSkipReason::TitleFolderConflict => Self::TitleFolderConflict,
         }
     }
 }

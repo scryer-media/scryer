@@ -11,7 +11,7 @@ use crate::acquisition_release_search::title_with_bridge_cour_titles;
 use crate::acquisition_release_search::{
     AutoCandidateEvaluationContext, CandidateTitleMatch, ReleaseAutoDecisionCode,
     annotate_auto_decision, candidate_presents_identity_disambiguator, canonical_title_evidence,
-    context_free_identity_anchor_keys, evaluate_auto_candidate, external_id_agreement,
+    context_free_identity_anchor_keys, evaluate_auto_candidate_with_step, external_id_agreement,
     parsed_release_matches_title_evidence, serialize_decision_explanation,
     series_movie_search_title,
 };
@@ -3277,16 +3277,12 @@ impl AppUseCase {
         // Catalog rows belong to the title visit, shared across all scopes.
         let existing_files = reads.primary_file_cutoffs(self).await.unwrap_or_default();
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
-        let analyzed_cutoff_quality =
-            crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-                &existing_files,
-                &cutoff_scope,
-            );
         let upgrade_context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
+            .resolve_upgrade_context_for_scope(
                 title,
                 Some(subject.owner_facet.as_str()),
-                analyzed_cutoff_quality,
+                &existing_files,
+                &cutoff_scope,
             )
             .await
         {
@@ -3486,9 +3482,9 @@ impl AppUseCase {
                 parsed.map_or(0, crate::acquisition::scoring::revision_rank),
                 decision.map_or(0, |decision| decision.preference_score),
             )
-            .with_revision_policy(
+            .with_profile_policy(
                 parsed.and_then(|parsed| parsed.release_group.as_deref()),
-                upgrade_context.profile.criteria.ignore_proper_repack,
+                &upgrade_context.profile.criteria,
             );
             let mut rank = crate::acquisition::scoring::RankHead::from_result(candidate);
             rank.negated_revision =
@@ -3497,13 +3493,16 @@ impl AppUseCase {
         }
         // Preserve the existing listing tie-breakers after the scope-derived key.
         ranked.sort_by_key(|(index, _, key)| (*key, *index));
+        // Every verdict is settled from this pass's snapshot alone, so they
+        // are decided first, written together, and acted on in rank order.
+        // The walk still stops at the first eligible release.
+        let mut decided = Vec::with_capacity(ranked.len());
         for (candidate_index, admission, _) in ranked {
             let candidate = &scored[candidate_index];
             let candidate_scope = candidate
                 .coverage_scope
                 .as_ref()
                 .unwrap_or(&subject.submission_scope);
-            let candidate_coverage_identity = rss_coverage_identity(candidate_scope);
             let oldest_overlapping_pending_published_at = pending_scopes
                 .iter()
                 .filter(|(pending, scope)| {
@@ -3539,6 +3538,7 @@ impl AppUseCase {
                     upgrade_context.cutoff_reached,
                     &admission,
                     upgrade_context.profile.criteria.cutoff_score,
+                    &upgrade_context.profile.criteria.decision_pipeline,
                 ),
                 // A feed pass, so the PROPER old-file guard binds here — this
                 // is the lane Sonarr's `ProperSpecification` was written for.
@@ -3556,6 +3556,7 @@ impl AppUseCase {
             };
             let route_key = crate::acquisition_workflow::DownloadRouteKey::for_candidate(candidate)
                 .map(|route| format!("__rss_failed_route:{route:?}"));
+            let mut decided_by = None;
             let decision_code = if candidate.auto_decision_code.as_deref().is_some_and(|code| {
                 code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
                     || code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
@@ -3579,15 +3580,97 @@ impl AppUseCase {
             {
                 ReleaseAutoDecisionCode::DownloadClientUnavailable
             } else {
-                evaluate_auto_candidate(candidate, &evaluation_context)
+                let (code, step) =
+                    evaluate_auto_candidate_with_step(candidate, &evaluation_context);
+                decided_by = step;
+                code
+            };
+            let candidate = if decided_by.is_some() {
+                let mut annotated = candidate.clone();
+                if let Some(decision) = annotated.quality_profile_decision.as_mut() {
+                    decision.decided_by = decided_by;
+                }
+                std::borrow::Cow::Owned(annotated)
+            } else {
+                std::borrow::Cow::Borrowed(candidate)
+            };
+            let mut decision_candidate = candidate.as_ref().clone();
+            annotate_auto_decision(&mut decision_candidate, decision_code);
+            let eligible = decision_code.is_eligible();
+            decided.push((
+                candidate_index,
+                admission,
+                candidate,
+                decision_code,
+                decision_candidate,
+                oldest_overlapping_pending_published_at,
+            ));
+            if eligible {
+                break;
+            }
+        }
+
+        // One construction, shared with the convergence path, so the two
+        // cannot drift apart in what they record.
+        let decision_rows = decided
+            .iter()
+            .map(|(_, admission, candidate, decision_code, _, _)| {
+                (candidate.as_ref(), *decision_code, admission.best_score())
+            })
+            .collect::<Vec<_>>();
+        crate::acquisition_workflow::record_release_decisions(
+            self,
+            &wanted,
+            title,
+            &decision_rows,
+            now,
+        )
+        .await;
+
+        for (
+            candidate_index,
+            admission,
+            candidate,
+            decision_code,
+            decision_candidate,
+            oldest_overlapping_pending_published_at,
+        ) in decided
+        {
+            let candidate = candidate.as_ref();
+            let candidate_scope = scored[candidate_index]
+                .coverage_scope
+                .as_ref()
+                .unwrap_or(&subject.submission_scope);
+            let candidate_coverage_identity = rss_coverage_identity(candidate_scope);
+            let evaluation_context = AutoCandidateEvaluationContext {
+                title,
+                subject: &subject,
+                admission: &admission,
+                profile: &upgrade_context.profile,
+                thresholds: &upgrade_context.thresholds,
+                incumbent_at_cutoff: crate::acquisition_release_search::incumbent_at_cutoff(
+                    upgrade_context.cutoff_reached,
+                    &admission,
+                    upgrade_context.profile.criteria.cutoff_score,
+                    &upgrade_context.profile.criteria.decision_pipeline,
+                ),
+                is_rss_lane: true,
+                now,
+                dl_snapshot: Some(dl_snapshot),
+                db_blocklist: &db_blocklist,
+                existing_files: &existing_files,
+                delay_profiles,
+                user_invoked: false,
+                oldest_overlapping_pending_published_at,
+                failed_routes: None,
+                minimum_seeders: &minimum_seeders,
+                unmonitored_episode_ids: &unmonitored_episode_ids,
             };
             let candidate_score = candidate
                 .quality_profile_decision
                 .as_ref()
                 .map(|d| d.preference_score)
                 .unwrap_or(0);
-            let mut decision_candidate = candidate.clone();
-            annotate_auto_decision(&mut decision_candidate, decision_code);
             if let Some(outcome) = report.external_outcome.as_mut() {
                 outcome.reasons = vec![
                     decision_candidate
@@ -3596,19 +3679,6 @@ impl AppUseCase {
                         .unwrap_or_else(|| decision_code.as_str().to_owned()),
                 ];
             }
-
-            // One construction, shared with the convergence path, so the two
-            // cannot drift apart in what they record.
-            crate::acquisition_workflow::record_release_decision(
-                self,
-                &wanted,
-                title,
-                candidate,
-                decision_code,
-                admission.best_score(),
-                now,
-            )
-            .await;
 
             if rss_is_permanent_rejection(decision_code) {
                 for pending in pending_scopes.iter().filter_map(|(pending, scope)| {
@@ -6094,6 +6164,7 @@ mod tests {
             ReleaseAutoDecisionCode::MinimumAge,
             ReleaseAutoDecisionCode::ReleaseAgeUnknown,
             ReleaseAutoDecisionCode::DownloadClientUnavailable,
+            ReleaseAutoDecisionCode::EpisodeAvailabilityBlocked,
         ] {
             assert!(!rss_is_permanent_rejection(code));
         }

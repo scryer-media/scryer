@@ -60,6 +60,7 @@ export type QueueRowItemProps = {
   onManualImport: () => void;
   onAssignTitle: () => void;
   onIgnore: () => void;
+  onSetImportDismissed: () => void;
   onReleaseHeldSources: () => void;
   onMarkFailedSearchAgain: () => void;
   onMarkFailedOnly: () => void;
@@ -88,6 +89,7 @@ export const QueueRowItem = memo(function QueueRowItem({
   onManualImport,
   onAssignTitle,
   onIgnore,
+  onSetImportDismissed,
   onReleaseHeldSources,
   onMarkFailedSearchAgain,
   onMarkFailedOnly,
@@ -282,6 +284,33 @@ export const QueueRowItem = memo(function QueueRowItem({
               {row.trackedMatchTypeKey === "unmatched" || !queueItem.titleId
                 ? t("queue.assignTitle")
                 : t("queue.reassignTitle")}
+            </span>
+          </Button>
+        )}
+        {(row.canDismissImport || row.canResumeImportTracking) && (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            id={selectorId(
+              "activity",
+              activeTab,
+              "import-tracking",
+              rowSelectorKey,
+            )}
+            className={`flex-1 ${rowActionVisualClass}`}
+            disabled={isRowFullyBusy}
+            onClick={() => {
+              if (!isActionLoading && !isRowBlocked) onSetImportDismissed();
+            }}
+          >
+            <CircleOff className="h-4 w-4" />
+            <span>
+              {t(
+                row.canResumeImportTracking
+                  ? "queue.resumeImportTracking"
+                  : "queue.dismissImportWarning",
+              )}
             </span>
           </Button>
         )}

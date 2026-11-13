@@ -860,7 +860,18 @@ async fn execute_resolved_episode_import(
     maybe_trigger_subtitle_search(app, &title.id, &media_file_id);
 
     let mut episode_role_failed = false;
-    for episode in target_episodes {
+    // One write for every episode of the file. If it fails nothing was kept,
+    // and each episode is written on its own, so the end state is the one
+    // per-episode writes leave.
+    let roles_batched = target_episodes.len() > 1
+        && app
+            .services
+            .library
+            .media_files
+            .set_primary_media_file_for_episodes(&title.id, &target_episode_ids, &media_file_id)
+            .await
+            .is_ok();
+    for episode in target_episodes.iter().filter(|_| !roles_batched) {
         if let Err(err) = app
             .services
             .library
@@ -890,7 +901,21 @@ async fn execute_resolved_episode_import(
         file_result.strategy
     };
 
-    for episode in target_episodes {
+    // One write for every episode of the file, replayed per episode on failure.
+    let completion_batched = target_episodes.len() > 1
+        && app
+            .services
+            .workflow
+            .acquisition_scope_states
+            .complete_acquisition_scopes_for_episodes(
+                &title.id,
+                &target_episode_ids,
+                Some(&Utc::now().to_rfc3339()),
+                true,
+            )
+            .await
+            .is_ok();
+    for episode in target_episodes.iter().filter(|_| !completion_batched) {
         mark_wanted_completed(app, &title.id, Some(&episode.id), true).await;
     }
 

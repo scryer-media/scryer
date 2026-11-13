@@ -224,7 +224,7 @@ fn revision_policy_defaults_round_trips_and_changes_acceptance() {
     assert!(!profile.criteria.ignore_proper_repack);
     let original = serde_json::to_value(AcceptanceCriteria::from(&profile.criteria)).unwrap();
     assert!(original.get("ignore_proper_repack").is_none());
-    profile.criteria.ignore_proper_repack = true;
+    profile.criteria.set_ignore_proper_repack(true);
     let updated = serde_json::to_value(AcceptanceCriteria::from(&profile.criteria)).unwrap();
     assert_eq!(updated["ignore_proper_repack"], true);
     assert_ne!(updated, original);
@@ -2618,4 +2618,83 @@ fn a_spelled_season_without_a_number_keeps_the_title_text() {
             parsed.normalized_title
         );
     }
+}
+
+// ── quality_cutoff_met per ranking mode ───────────────────────────────────
+
+#[test]
+fn tier_first_quality_cutoff_follows_the_cutoff_tier() {
+    let criteria = QualityProfileCriteria {
+        quality_tiers: vec!["2160P".into(), "1080P".into(), "720P".into()],
+        cutoff_tier: Some("1080P".into()),
+        cutoff_score: Some(500),
+        ..QualityProfileCriteria::default()
+    };
+    assert!(criteria.quality_cutoff_met(Some("2160P")));
+    assert!(criteria.quality_cutoff_met(Some("1080P")));
+    assert!(!criteria.quality_cutoff_met(Some("720P")));
+    assert!(!criteria.quality_cutoff_met(None));
+    let no_cutoff = QualityProfileCriteria {
+        cutoff_tier: None,
+        ..criteria
+    };
+    assert!(!no_cutoff.quality_cutoff_met(Some("2160P")));
+}
+
+/// Without a quality tier step the cutoff tier does not apply: the quality
+/// half of the cutoff is met by any file, so a `cutoff_score` alone decides,
+/// and a profile without one is finished once it holds a file.
+#[test]
+fn an_order_without_the_tier_ignores_the_cutoff_tier() {
+    let criteria = QualityProfileCriteria {
+        quality_tiers: vec!["2160P".into(), "1080P".into(), "720P".into()],
+        cutoff_tier: Some("1080P".into()),
+        cutoff_score: Some(500),
+        decision_pipeline: crate::DecisionPipeline::default_order()
+            .without(crate::DecisionGate::QualityTier),
+        ..QualityProfileCriteria::default()
+    };
+    assert!(criteria.quality_cutoff_met(Some("720P")));
+    assert!(criteria.quality_cutoff_met(Some("2160P")));
+    assert!(!criteria.quality_cutoff_met(None));
+    assert!(!criteria.quality_cutoff_met(Some("  ")));
+    let no_cutoff_score = QualityProfileCriteria {
+        cutoff_score: None,
+        ..criteria
+    };
+    assert!(no_cutoff_score.quality_cutoff_met(Some("720P")));
+    assert!(!no_cutoff_score.quality_cutoff_met(None));
+}
+
+#[test]
+fn a_stored_decision_order_reads_leniently_and_ignores_a_retired_ranking_mode() {
+    use crate::{DecisionGate as G, DecisionPipeline};
+    let pipeline = |gates: &[G]| DecisionPipeline::try_from_gates(gates.iter().copied()).unwrap();
+    for (raw, expected) in [
+        (
+            r#"["preferred_language","quality_tier"]"#,
+            pipeline(&[G::PreferredLanguage, G::QualityTier]),
+        ),
+        ("[]", DecisionPipeline::score_only()),
+        // Unknown steps are dropped and a repeated one keeps its first place.
+        (
+            r#"["something_new","revision","quality_tier","revision"]"#,
+            pipeline(&[G::Revision, G::QualityTier]),
+        ),
+        // Anything that is not a list reads as the default order.
+        ("null", DecisionPipeline::default_order()),
+        ("7", DecisionPipeline::default_order()),
+        (r#""score_first""#, DecisionPipeline::default_order()),
+    ] {
+        assert_eq!(
+            serde_json::from_str::<DecisionPipeline>(raw).unwrap(),
+            expected,
+            "{raw}"
+        );
+    }
+    let config: ScoringConfig = serde_json::from_str(r#"{"ranking_mode":"score_first"}"#).unwrap();
+    assert_eq!(config.decision_pipeline, None);
+    let reserialized = serde_json::to_value(&config).unwrap();
+    assert!(reserialized.get("ranking_mode").is_none());
+    assert!(reserialized.get("decision_pipeline").is_none());
 }

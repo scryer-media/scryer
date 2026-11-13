@@ -7,8 +7,9 @@ use crate::library_filename_parser::{
     parse_library_filename_with_index,
 };
 use crate::library_scan_unmatched::{
-    IgnoredLibraryScanItemArgs, LIBRARY_SCAN_SKIPPED_FILE_METADATA_UNREADABLE,
-    build_title_bound_unmatched_scan_item, persist_ignored_library_scan_item,
+    ClearedLibraryScanUnmatchedItems, IgnoredLibraryScanItemArgs,
+    LIBRARY_SCAN_SKIPPED_FILE_METADATA_UNREADABLE, build_title_bound_unmatched_scan_item,
+    persist_ignored_library_scan_item,
 };
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 
@@ -361,7 +362,7 @@ fn title_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str> {
 }
 
 /// Rank a scanned movie file for the primary role, exactly the way admission
-/// would: **tier first, then bar**.
+/// ranks held files: **the profile's decision order, then bar**.
 ///
 /// Scan is not exempt from invariant I1, and it is not exempt from I3 either.
 /// The file the scan promotes to primary is the file every later upgrade
@@ -373,28 +374,34 @@ fn title_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str> {
 /// — after which the 2160p file on disk reads as an upgrade candidate.
 ///
 /// [`crate::AppUseCase::incumbent_bar`] is the same derivation the grab path
-/// uses, so the pair this returns is the pair the gate will see for that file.
+/// uses, so the pair this returns is the pair the gate will see for that file,
+/// and the ladder key is the one
+/// [`crate::admission::AdmissionSubject::best_incumbent_record`] orders by.
 /// Mandatory rejections carry no points. All numeric penalties remain in the
 /// same canonical score used by import and subsequent upgrade comparisons.
 fn rank_movie_media_file_for_primary(
     app: &AppUseCase,
     context: &crate::quality::canonical_context::ResolvedScoringContext,
     file: &TitleMediaFile,
-) -> (usize, i32) {
+) -> (crate::decision_pipeline::GateKey, i32) {
     let bar = app.incumbent_bar(
         file,
         context,
         // A movie is one member: the title's own runtime, filled in by `view`.
         crate::quality_profile::CoverageSizeBasis::default(),
     );
-    (crate::admission::tier_sort_key(bar.tier_index), bar.score)
+    (
+        bar.ladder_key(&context.profile().criteria.decision_pipeline),
+        bar.score,
+    )
 }
 
 /// One candidate for the primary role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RankedMovieFile {
-    /// Profile tier position, ascending; [`crate::admission::tier_sort_key`].
-    tier_key: usize,
+    /// Position on the profile's decision order, ascending;
+    /// [`crate::quality::canonical_context::IncumbentFacts::ladder_key`].
+    ladder_key: crate::decision_pipeline::GateKey,
     /// The file's canonical bar, descending.
     score: i32,
     size_bytes: i64,
@@ -403,20 +410,20 @@ struct RankedMovieFile {
 }
 
 impl RankedMovieFile {
-    /// Best-first ordering key: tier, then bar, then the long-standing
-    /// size / path / id tie-breaks that keep the election deterministic when
-    /// two files are genuinely equivalent.
+    /// Best-first ordering key: the profile's decision order, then bar, then
+    /// the long-standing size / path / id tie-breaks that keep the election
+    /// deterministic when two files are genuinely equivalent.
     fn sort_key(
         &self,
     ) -> (
-        usize,
+        crate::decision_pipeline::GateKey,
         std::cmp::Reverse<i32>,
         std::cmp::Reverse<i64>,
         &str,
         &str,
     ) {
         (
-            self.tier_key,
+            self.ladder_key,
             std::cmp::Reverse(self.score),
             std::cmp::Reverse(self.size_bytes),
             self.file_path.as_str(),
@@ -465,7 +472,8 @@ async fn normalize_movie_file_roles_after_scan(
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
     // Two primaries is a contradiction the scan has to resolve, and it must
-    // resolve it on the ladder the gate uses — tier, then bar, then size — not
+    // resolve it on the ladder the gate uses — the profile's decision order,
+    // then bar, then size — not
     // on age. Oldest-wins demoted a freshly imported Remux behind an 800p
     // WEB-DL that had been on disk a week longer, after which every gate read
     // the scope through the WEB-DL and admitted the same BluRay release
@@ -512,9 +520,9 @@ async fn normalize_movie_file_roles_after_scan(
         // Additional.
         let mut ranked = Vec::with_capacity(primary_files.len());
         for file in primary_files.iter().copied() {
-            let (tier_key, score) = rank_movie_media_file_for_primary(app, &context, file);
+            let (ladder_key, score) = rank_movie_media_file_for_primary(app, &context, file);
             ranked.push(RankedMovieFile {
-                tier_key,
+                ladder_key,
                 score,
                 size_bytes: file.size_bytes,
                 file_path: file.file_path.clone(),
@@ -1972,10 +1980,12 @@ struct TitleScanAnalysisFinalizeContext<'a> {
     summary: &'a mut LibraryScanSummary,
     db_elapsed: &'a mut Duration,
     external_subtitle_cache: &'a mut crate::subtitles::ExternalSubtitleDirectoryCache,
+    episode_completions: &'a mut super::ScannedEpisodeCompletions,
     pending_progress: &'a mut TitleScanProgressDelta,
     session_id: Option<&'a str>,
     title_updated_since_emit: &'a mut bool,
     cancel_token: Option<&'a CancellationToken>,
+    cleared_unmatched: &'a mut ClearedLibraryScanUnmatchedItems,
 }
 
 async fn finalize_title_scan_analysis_task_result(
@@ -2024,23 +2034,12 @@ async fn finalize_title_scan_analysis_task_result(
         ctx.summary,
         ctx.db_elapsed,
         ctx.external_subtitle_cache,
+        ctx.episode_completions,
     )
     .await;
-    if outcome.progress.failed == 0
-        && let Err(error) = clear_library_scan_unmatched_item(
-            ctx.app,
-            &ctx.title.facet,
-            &ctx.title.library_id,
-            &file_path,
-        )
-        .await
-    {
-        warn!(
-            error = %error,
-            title_id = %ctx.title.id,
-            file_path = %file_path,
-            "failed to clear unmatched title scan item"
-        );
+    if outcome.progress.failed == 0 {
+        ctx.cleared_unmatched
+            .push(&ctx.title.facet, &ctx.title.library_id, &file_path);
     }
     ctx.pending_progress.absorb(outcome.progress);
     *ctx.title_updated_since_emit |= outcome.title_updated;
@@ -2078,6 +2077,7 @@ async fn finalize_failed_title_scan_analysis(
         ctx.summary,
         ctx.db_elapsed,
         ctx.external_subtitle_cache,
+        ctx.episode_completions,
     )
     .await;
 
@@ -2532,8 +2532,24 @@ impl AppUseCase {
                     full_folder_scan,
                     file_analysis_concurrency,
                 };
-                self.walk_episodic_library_title(actor, title, options)
-                    .await
+                // Rows the walk cleared are removed together when it ends, and
+                // its file progress gets a final flush, on every way out of it.
+                let mut cleared_unmatched = ClearedLibraryScanUnmatchedItems::new(self, &title.id);
+                let mut pending_progress = TitleScanProgressDelta::default();
+                let result = self
+                    .walk_episodic_library_title(
+                        actor,
+                        title,
+                        options,
+                        &mut cleared_unmatched,
+                        &mut pending_progress,
+                    )
+                    .await;
+                if result.is_err() {
+                    flush_title_scan_progress_final(self, session_id, &mut pending_progress).await;
+                }
+                cleared_unmatched.clear().await;
+                result
             }
         }
     }
@@ -2686,6 +2702,8 @@ impl AppUseCase {
         actor: &User,
         title: Title,
         options: LibraryScanTitleWalkOptions<'_>,
+        cleared_unmatched: &mut ClearedLibraryScanUnmatchedItems,
+        pending_progress: &mut TitleScanProgressDelta,
     ) -> AppResult<LibraryTitleWalkResult> {
         let LibraryScanTitleWalkOptions {
             session_id,
@@ -2716,7 +2734,7 @@ impl AppUseCase {
             ));
         }
 
-        let title = self.title_for_naming(&title).await;
+        let mut title = self.title_for_naming(&title).await;
         let import_paths = crate::import_workflow::resolve_import_paths(self, &title).await?;
         let media_root_path = PathBuf::from(&import_paths.media_root);
         let title_dir = crate::effective_title_folder_path(
@@ -2726,6 +2744,65 @@ impl AppUseCase {
             None,
         );
         let title_dir_str = path_to_stored_string(&title_dir);
+        // A title with no recorded folder falls back to the configured folder
+        // path, and that folder may belong to another title. The walk reads
+        // and records it only once the ownership claim grants it, and only
+        // when the walk would otherwise have recorded it. A refused claim
+        // stops a scan the operator asked for with the claim's reason; a
+        // library scan walks nothing for the title and carries on.
+        if !scoped_discovered_files
+            && !title_has_recorded_folder(&title)
+            && (episodic_title_directory_present(&title_dir).await?
+                || matches!(
+                    library_root_state(&media_root_path).await?,
+                    LibraryRootState::Populated
+                ))
+        {
+            match crate::folder_ownership::claim_title_folder_for_scan_if_missing(
+                self, &mut title, &title_dir,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(
+                    error @ (AppError::Validation(_)
+                    | AppError::ValidationRefused { .. }
+                    | AppError::ValidationRefusedWithCount { .. }),
+                ) => {
+                    if !matches!(
+                        mode,
+                        LibraryScanTitleWalkMode::Full | LibraryScanTitleWalkMode::Additive
+                    ) {
+                        return Err(error);
+                    }
+                    warn!(
+                        title_id = %title.id,
+                        title_dir = %title_dir_str,
+                        error = %error,
+                        "title scan skipped: the title has no folder and the configured folder cannot be claimed for it"
+                    );
+                    if let Some(coordinator) = session_coordinator.as_ref() {
+                        match pre_scanned_files.as_ref() {
+                            Some(files) if !files.is_empty() => {
+                                coordinator.mark_file_completed(files.len()).await;
+                            }
+                            Some(_) => {}
+                            None if file_total_mode
+                                == LibraryScanFileTotalMode::MarkKnownAfterThisWalk =>
+                            {
+                                coordinator.mark_file_total_known().await;
+                            }
+                            None => {}
+                        }
+                        coordinator.publish_progress().await;
+                    }
+                    return Ok(LibraryTitleWalkResult {
+                        summary: LibraryScanSummary::default(),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
         debug!(
             title_id = %title.id,
             title_name = %title.name,
@@ -2996,11 +3073,11 @@ impl AppUseCase {
         let mut layout_summary = TitleScanLayoutSummary::default();
         let mut seen_paths = HashSet::new();
         let analysis_limit = self.runtime.library.library_scan_analysis_limit.clone();
-        let mut pending_progress = TitleScanProgressDelta::default();
         let mut unchanged_file_skips = 0usize;
         let mut analyzed_files = 0usize;
         let mut external_subtitle_cache =
             crate::subtitles::ExternalSubtitleDirectoryCache::default();
+        let mut episode_completions = super::ScannedEpisodeCompletions::default();
         let actor_event = DomainEventActor::from(actor);
         let mut analysis_set = tokio::task::JoinSet::new();
         let mut pending_analysis_plans = std::collections::VecDeque::new();
@@ -3049,6 +3126,9 @@ impl AppUseCase {
                             } else {
                                 display_name
                             };
+                            cleared_unmatched
+                                .clear_before_persist(&title.facet, &title.library_id, &file.path)
+                                .await;
                             if let Err(persist_error) = persist_ignored_library_scan_item(
                                 self,
                                 &title.facet,
@@ -3079,7 +3159,7 @@ impl AppUseCase {
                             flush_title_scan_progress_batch(
                                 self,
                                 session_id,
-                                &mut pending_progress,
+                                &mut *pending_progress,
                             )
                             .await;
                             continue;
@@ -3211,6 +3291,9 @@ impl AppUseCase {
                         reason,
                         file.size_bytes,
                     );
+                    cleared_unmatched
+                        .clear_before_persist(&title.facet, &title.library_id, &file.path)
+                        .await;
                     if let Err(error) =
                         persist_library_scan_unmatched_item(self, &unmatched_item).await
                     {
@@ -3223,7 +3306,7 @@ impl AppUseCase {
                     }
                     summary.unmatched += 1;
                     pending_progress.absorb(TitleScanProgressDelta::failed(1));
-                    flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
+                    flush_title_scan_progress_batch(self, session_id, &mut *pending_progress).await;
                     continue;
                 }
 
@@ -3299,15 +3382,18 @@ impl AppUseCase {
                 if !should_analyze || mode == LibraryScanTitleWalkMode::FolderReconciliation {
                     if should_analyze
                         && let PlannedTitleScanRecord::Existing { file_id, .. } = &plan.record
-                    {
-                        self.services
+                        && let Err(error) = self
+                            .services
                             .library
                             .media_files
                             .update_media_file_analysis(
                                 file_id,
                                 crate::MediaFileAnalysis::default(),
                             )
-                            .await?;
+                            .await
+                    {
+                        episode_completions.complete(self, &title.id).await;
+                        return Err(error);
                     }
                     unchanged_file_skips += 1;
                     let file_path = plan.file.path.clone();
@@ -3321,27 +3407,15 @@ impl AppUseCase {
                         &mut summary,
                         &mut db_elapsed,
                         &mut external_subtitle_cache,
+                        &mut episode_completions,
                     )
                     .await;
-                    if outcome.progress.failed == 0
-                        && let Err(error) = clear_library_scan_unmatched_item(
-                            self,
-                            &title.facet,
-                            &title.library_id,
-                            &file_path,
-                        )
-                        .await
-                    {
-                        warn!(
-                            error = %error,
-                            title_id = %title.id,
-                            file_path = %file_path,
-                            "failed to clear unmatched title scan item"
-                        );
+                    if outcome.progress.failed == 0 {
+                        cleared_unmatched.push(&title.facet, &title.library_id, &file_path);
                     }
                     pending_progress.absorb(outcome.progress);
                     title_updated_since_emit |= outcome.title_updated;
-                    flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
+                    flush_title_scan_progress_batch(self, session_id, &mut *pending_progress).await;
                 } else {
                     analyzed_files += 1;
                     pending_analysis_plans.push_back(plan);
@@ -3365,14 +3439,23 @@ impl AppUseCase {
                             summary: &mut summary,
                             db_elapsed: &mut db_elapsed,
                             external_subtitle_cache: &mut external_subtitle_cache,
-                            pending_progress: &mut pending_progress,
+                            episode_completions: &mut episode_completions,
+                            pending_progress: &mut *pending_progress,
                             session_id,
                             title_updated_since_emit: &mut title_updated_since_emit,
                             cancel_token: cancel_token.as_ref(),
+                            cleared_unmatched: &mut *cleared_unmatched,
                         },
                         result,
                     )
-                    .await?;
+                    .await;
+                    let analysis_duration = match analysis_duration {
+                        Ok(duration) => duration,
+                        Err(error) => {
+                            episode_completions.complete(self, &title.id).await;
+                            return Err(error);
+                        }
+                    };
                     analyze_elapsed = analyze_elapsed.saturating_add(analysis_duration);
                 }
             }
@@ -3421,14 +3504,23 @@ impl AppUseCase {
                     summary: &mut summary,
                     db_elapsed: &mut db_elapsed,
                     external_subtitle_cache: &mut external_subtitle_cache,
-                    pending_progress: &mut pending_progress,
+                    episode_completions: &mut episode_completions,
+                    pending_progress: &mut *pending_progress,
                     session_id,
                     title_updated_since_emit: &mut title_updated_since_emit,
                     cancel_token: cancel_token.as_ref(),
+                    cleared_unmatched: &mut *cleared_unmatched,
                 },
                 result,
             )
-            .await?;
+            .await;
+            let analysis_duration = match analysis_duration {
+                Ok(duration) => duration,
+                Err(error) => {
+                    episode_completions.complete(self, &title.id).await;
+                    return Err(error);
+                }
+            };
             analyze_elapsed = analyze_elapsed.saturating_add(analysis_duration);
 
             if title_updated_since_emit {
@@ -3438,7 +3530,11 @@ impl AppUseCase {
             }
         }
 
-        flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
+        // The pass's covered episodes are completed before stale files are
+        // reconciled, as they were when each file completed its own.
+        episode_completions.complete(self, &title.id).await;
+        flush_title_scan_progress_final(self, session_id, &mut *pending_progress).await;
+        cleared_unmatched.clear().await;
 
         if !library_scan_cancel_requested(cancel_token.as_ref()) {
             let mut title_updated_after_scan = false;
@@ -3506,15 +3602,35 @@ impl AppUseCase {
                 lost_scope_keys.dedup();
                 reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;
 
-                if title.folder_path.as_deref() != Some(title_dir_str.as_str()) {
+                // Only a folder the title already holds, or was granted by the
+                // claim above, is recorded here.
+                if title_has_recorded_folder(&title)
+                    && title.folder_path.as_deref() != Some(title_dir_str.as_str())
+                {
                     let db_started = Instant::now();
-                    self.services
+                    let write = crate::TitleFolderWrite::assign(&title.id, &title_dir_str)
+                        .expecting(title.folder_path.clone());
+                    match self
+                        .services
                         .catalog
                         .titles
-                        .set_folder_path(&title.id, &title_dir_str)
-                        .await?;
+                        .assign_title_folders(&[write])
+                        .await
+                    {
+                        Ok(()) => title_updated_after_scan = true,
+                        // The record changed while the walk ran; the next
+                        // scan respells whatever it holds then.
+                        Err(error) if crate::folder_ownership::title_folder_write_lost(&error) => {
+                            tracing::warn!(
+                                title_id = %title.id,
+                                folder_path = %title_dir_str,
+                                reason = error.validation_reason().unwrap_or_default(),
+                                "not respelling the title folder: its record changed during the scan"
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    }
                     db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
-                    title_updated_after_scan = true;
                 }
 
                 if mode != LibraryScanTitleWalkMode::FolderReconciliation
@@ -3676,7 +3792,9 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decision_pipeline::DecisionGate;
     use crate::library_filename_parser::parse_library_filename;
+    use crate::quality::canonical_context::IncumbentFacts;
     use chrono::Utc;
     use scryer_domain::{Episode, ExternalId, MediaFacet, Title};
     use std::path::Path;
@@ -3912,14 +4030,37 @@ mod tests {
         assert_eq!(episode.episode_numbers, vec![1]);
     }
 
-    fn ranked(file_id: &str, tier_key: usize, score: i32) -> RankedMovieFile {
-        RankedMovieFile {
-            tier_key,
+    fn bar(tier_index: Option<usize>, preferred_rank: u16, score: i32) -> IncumbentFacts {
+        IncumbentFacts {
             score,
+            tier_index,
+            revision: 0,
+            language: crate::AudioLanguageRank::for_test(preferred_rank, 0),
+        }
+    }
+
+    fn ranked_under(
+        pipeline: &crate::DecisionPipeline,
+        file_id: &str,
+        bar: IncumbentFacts,
+    ) -> RankedMovieFile {
+        RankedMovieFile {
+            ladder_key: bar.ladder_key(pipeline),
+            score: bar.score,
             size_bytes: 1_000,
             file_path: format!("/movies/{file_id}.mkv"),
             file_id: file_id.to_string(),
         }
+    }
+
+    /// A file at `tier_index` under the default order, every file carrying
+    /// the same language standing.
+    fn ranked(file_id: &str, tier_index: Option<usize>, score: i32) -> RankedMovieFile {
+        ranked_under(
+            &crate::DecisionPipeline::DEFAULT,
+            file_id,
+            bar(tier_index, 0, score),
+        )
     }
 
     fn elect(mut candidates: Vec<RankedMovieFile>) -> String {
@@ -3937,9 +4078,126 @@ mod tests {
     #[test]
     fn the_scan_elects_the_better_tier_even_when_it_scores_lower() {
         assert_eq!(
-            elect(vec![ranked("uhd", 0, 100), ranked("hd", 2, 300)]),
+            elect(vec![
+                ranked("uhd", Some(0), 100),
+                ranked("hd", Some(2), 300)
+            ]),
             "uhd"
         );
+    }
+
+    /// A French 2160p file and an English 720p file, English preferred.
+    fn french_uhd_and_english_hd(pipeline: &crate::DecisionPipeline) -> Vec<RankedMovieFile> {
+        vec![
+            ranked_under(pipeline, "french-uhd", bar(Some(0), 1, 300)),
+            ranked_under(pipeline, "english-hd", bar(Some(2), 0, 100)),
+        ]
+    }
+
+    /// The election follows the profile's decision order: with the preferred
+    /// language ahead of the tier the English 720p file is primary, under the
+    /// default order the 2160p file is.
+    #[test]
+    fn the_scan_elects_on_the_profiles_decision_order() {
+        let language_first = crate::DecisionPipeline::try_from_gates([
+            DecisionGate::PreferredLanguage,
+            DecisionGate::QualityTier,
+        ])
+        .unwrap();
+        assert_eq!(
+            elect(french_uhd_and_english_hd(&language_first)),
+            "english-hd"
+        );
+        assert_eq!(
+            elect(french_uhd_and_english_hd(&crate::DecisionPipeline::DEFAULT)),
+            "french-uhd"
+        );
+    }
+
+    /// Without a tier step the tier never decides: the language step does,
+    /// and between files of one language standing the bar does.
+    #[test]
+    fn the_scan_never_elects_on_tier_when_the_profile_removed_it() {
+        let without_tier =
+            crate::DecisionPipeline::try_from_gates([DecisionGate::PreferredLanguage]).unwrap();
+        assert_eq!(
+            elect(vec![
+                ranked_under(&without_tier, "uhd", bar(Some(0), 0, 100)),
+                ranked_under(&without_tier, "hd", bar(Some(2), 0, 300)),
+            ]),
+            "hd"
+        );
+        assert_eq!(
+            elect(french_uhd_and_english_hd(&without_tier)),
+            "english-hd"
+        );
+    }
+
+    /// The election key before it followed the decision order.
+    fn tier_then_score_key(
+        file: &RankedMovieFile,
+        bar: &IncumbentFacts,
+    ) -> (
+        usize,
+        std::cmp::Reverse<i32>,
+        std::cmp::Reverse<i64>,
+        String,
+        String,
+    ) {
+        (
+            crate::admission::tier_sort_key(bar.tier_index),
+            std::cmp::Reverse(bar.score),
+            std::cmp::Reverse(file.size_bytes),
+            file.file_path.clone(),
+            file.file_id.clone(),
+        )
+    }
+
+    /// Under the default order, with every file carrying the same language
+    /// standing (which every file does when no audio language preference is
+    /// configured), a seeded set sorts exactly as tier-then-bar sorted it.
+    #[test]
+    fn the_default_order_elects_exactly_as_tier_then_bar_did() {
+        for language in [
+            crate::AudioLanguageRank::default(),
+            crate::AudioLanguageRank::for_test(2, 1),
+        ] {
+            let mut seeded = Vec::new();
+            for (tier, tier_index) in [Some(0), Some(1), Some(3), None].into_iter().enumerate() {
+                for score in [-50, 0, 100, 300] {
+                    for size_bytes in [1_000_i64, 5_000] {
+                        for revision in 0..2 {
+                            let facts = IncumbentFacts {
+                                score,
+                                tier_index,
+                                revision,
+                                language,
+                            };
+                            let mut file = ranked_under(
+                                &crate::DecisionPipeline::DEFAULT,
+                                &format!("t{tier}-s{score}-z{size_bytes}-r{revision}"),
+                                facts,
+                            );
+                            file.size_bytes = size_bytes;
+                            seeded.push((file, facts));
+                        }
+                    }
+                }
+            }
+            let mut new_order = seeded.clone();
+            new_order.sort_by(|(left, _), (right, _)| left.sort_key().cmp(&right.sort_key()));
+            let mut old_order = seeded.clone();
+            old_order.sort_by(|(left, left_bar), (right, right_bar)| {
+                tier_then_score_key(left, left_bar).cmp(&tier_then_score_key(right, right_bar))
+            });
+            let ids = |order: &[(RankedMovieFile, IncumbentFacts)]| {
+                order
+                    .iter()
+                    .map(|(file, _)| file.file_id.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&new_order), ids(&old_order), "{language:?}");
+        }
     }
 
     /// A quality the profile does not list sorts last, matching
@@ -3949,8 +4207,8 @@ mod tests {
     fn an_untiered_file_never_wins_the_primary_role_over_a_tiered_one() {
         assert_eq!(
             elect(vec![
-                ranked("unlisted", crate::admission::tier_sort_key(None), 9_000),
-                ranked("listed", 3, -50),
+                ranked("unlisted", None, 9_000),
+                ranked("listed", Some(3), -50),
             ]),
             "listed"
         );
@@ -3961,13 +4219,19 @@ mod tests {
     #[test]
     fn within_a_tier_the_bar_then_the_tie_breaks_decide() {
         assert_eq!(
-            elect(vec![ranked("weak", 1, 100), ranked("strong", 1, 400)]),
+            elect(vec![
+                ranked("weak", Some(1), 100),
+                ranked("strong", Some(1), 400)
+            ]),
             "strong"
         );
 
-        let mut bigger = ranked("bigger", 1, 400);
+        let mut bigger = ranked("bigger", Some(1), 400);
         bigger.size_bytes = 5_000;
-        assert_eq!(elect(vec![ranked("smaller", 1, 400), bigger]), "bigger");
+        assert_eq!(
+            elect(vec![ranked("smaller", Some(1), 400), bigger]),
+            "bigger"
+        );
     }
 
     /// An import or a pending bind carries its original path and a series

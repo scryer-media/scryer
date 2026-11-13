@@ -1,0 +1,14 @@
+# Notification channel types this Scryer offers, with their config fields. Variables: none.
+query NotificationProviderTypes {
+  notificationProviderTypes {
+    providerType
+    name
+    supportedEvents
+    configFields {
+      key
+      label
+      fieldType
+      required
+    }
+  }
+}

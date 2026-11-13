@@ -1237,52 +1237,56 @@ async fn dispatch_completed_import_target(
     } else {
         crate::post_download_gate::RuntimeSampleValidationMode::EnforceAutomatic
     };
-    let result = if let Some(ref series_movie_link_id) = target.series_movie_link_id {
-        Box::pin(import_series_movie_download(
-            app,
-            actor,
-            &target.title,
-            import_id,
-            completed,
-            release_evidence,
-            &target.video_files,
-            started_at,
-            series_movie_link_id,
-            runtime_sample_mode,
-        ))
-        .await
-    } else if target.is_series {
-        let source_root = target
-            .extracted_dir
-            .as_deref()
-            .unwrap_or_else(|| Path::new(&completed.dest_dir));
-        Box::pin(import_series_download(
-            app,
-            actor,
-            &target.title,
-            import_id,
-            completed,
-            release_evidence,
-            source_root,
-            &target.video_files,
-            started_at,
-            subtitle_deliveries,
-        ))
-        .await
-    } else {
-        Box::pin(import_movie_download(
-            app,
-            actor,
-            &target.title,
-            import_id,
-            completed,
-            release_evidence,
-            &target.video_files,
-            started_at,
-            runtime_sample_mode,
-        ))
-        .await
-    };
+    // Every file of this import is gated on one observation of the client.
+    let result = crate::seeding_gate::with_import_seeding_observations(async {
+        if let Some(ref series_movie_link_id) = target.series_movie_link_id {
+            Box::pin(import_series_movie_download(
+                app,
+                actor,
+                &target.title,
+                import_id,
+                completed,
+                release_evidence,
+                &target.video_files,
+                started_at,
+                series_movie_link_id,
+                runtime_sample_mode,
+            ))
+            .await
+        } else if target.is_series {
+            let source_root = target
+                .extracted_dir
+                .as_deref()
+                .unwrap_or_else(|| Path::new(&completed.dest_dir));
+            Box::pin(import_series_download(
+                app,
+                actor,
+                &target.title,
+                import_id,
+                completed,
+                release_evidence,
+                source_root,
+                &target.video_files,
+                started_at,
+                subtitle_deliveries,
+            ))
+            .await
+        } else {
+            Box::pin(import_movie_download(
+                app,
+                actor,
+                &target.title,
+                import_id,
+                completed,
+                release_evidence,
+                &target.video_files,
+                started_at,
+                runtime_sample_mode,
+            ))
+            .await
+        }
+    })
+    .await;
     if (target.series_movie_link_id.is_some() || !target.is_series)
         && let Ok(result) = &result
         && result.decision == ImportDecision::Imported
@@ -1863,7 +1867,8 @@ async fn import_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = std::fs::metadata(&source_video)
+    let source_size = tokio::fs::metadata(&source_video)
+        .await
         .map(|m| m.len() as i64)
         .unwrap_or(0);
 
@@ -2707,7 +2712,8 @@ async fn import_series_movie_download(
     let parse_video = largest.parse_path().into_owned();
     let source_video = largest.physical;
     let source_title = release_evidence.release_title(Some(&parse_video));
-    let source_size = std::fs::metadata(&source_video)
+    let source_size = tokio::fs::metadata(&source_video)
+        .await
         .map(|m| m.len() as i64)
         .unwrap_or(0);
 

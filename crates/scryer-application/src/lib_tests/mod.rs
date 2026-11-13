@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, Instant, sleep, timeout};
 
 mod acquisition_recovery;
+mod activity_read_paths;
 mod bridge_cour_titles;
 mod consolidation;
 mod cross_library_transfer;
@@ -66,7 +67,9 @@ mod metadata_search;
 mod multilingual_title_matching;
 mod queueing;
 mod recycle_bin_roots;
+mod recycle_purge_selection;
 mod release_anchor_prefetch;
+mod rename_folder_record;
 mod request_rules;
 mod request_rules_facts;
 mod romaji_release_matching;
@@ -107,12 +110,16 @@ mod support_library_show;
 mod support_settings_scan;
 pub(crate) use library_scan::{NestedDiscoveryGateway, bootstrap_nested_discovery_app};
 use support_acquisition_downloads::*;
-pub(crate) use support_bootstrap_fixtures::bootstrap;
 #[cfg(unix)]
 pub(crate) use support_bootstrap_fixtures::bootstrap_application_upgrade;
 use support_bootstrap_fixtures::*;
+#[cfg_attr(not(unix), allow(unused_imports))]
+pub(crate) use support_bootstrap_fixtures::{
+    bootstrap, bootstrap_import_tracking_spy, bootstrap_with_title_repo,
+};
 pub(crate) use support_catalog::MockTitleRepo;
 use support_catalog::*;
+pub(crate) use support_events_requests::MockDomainEventRepo;
 use support_events_requests::*;
 pub(crate) use support_imports::MockMediaFileRepo;
 use support_imports::*;

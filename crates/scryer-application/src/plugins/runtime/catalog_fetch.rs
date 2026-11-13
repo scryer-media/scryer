@@ -798,7 +798,7 @@ impl AppUseCase {
         let Some(json) = source.catalog_json else {
             return Ok(None);
         };
-        match parse_and_validate_catalog_v3(json.as_bytes()) {
+        match parse_and_validate_catalog_v3_memoized(json.as_bytes()) {
             Ok(catalog) => Ok(Some(catalog)),
             Err(error) => {
                 warn!(error = %error, "cached central plugin catalog is invalid");
@@ -811,6 +811,41 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rule_pack_manifest_memo_keys_on_the_checked_digest_and_stays_bounded() {
+        // The key is the digest verify_digest_set checks: the first usable
+        // blake3 entry, skipping other algorithms and malformed entries.
+        assert_eq!(
+            verified_rule_pack_memo_key(&[
+                "sha256:aa".to_string(),
+                "not-a-digest".to_string(),
+                "blake3:zz".to_string(),
+                "blake3:00aa".to_string(),
+                "blake3:11bb".to_string(),
+            ])
+            .as_deref(),
+            Some("blake3:00aa")
+        );
+        assert_eq!(verified_rule_pack_memo_key(&["sha256:aa".to_string()]), None);
+        assert_eq!(verified_rule_pack_memo_key(&[]), None);
+
+        assert_eq!(memoized_rule_pack_manifest("blake3:ashgrove"), None);
+        remember_rule_pack_manifest("blake3:ashgrove".to_string(), b"{}".to_vec());
+        remember_rule_pack_manifest("blake3:ashgrove".to_string(), b"ignored".to_vec());
+        assert_eq!(
+            memoized_rule_pack_manifest("blake3:ashgrove").as_deref(),
+            Some(&b"{}"[..])
+        );
+        for number in 0..RULE_PACK_MANIFEST_MEMO_CAPACITY {
+            remember_rule_pack_manifest(format!("blake3:emberfall-{number}"), Vec::new());
+        }
+        assert_eq!(
+            RULE_PACK_MANIFESTS.lock().unwrap().len(),
+            RULE_PACK_MANIFEST_MEMO_CAPACITY
+        );
+        assert_eq!(memoized_rule_pack_manifest("blake3:ashgrove"), None);
+    }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1269,7 +1304,7 @@ impl AppUseCase {
             .iter()
             .find(|source| source.source_key == CENTRAL_CATALOG_SOURCE_KEY)
             .and_then(|source| source.catalog_json.as_deref())
-            .and_then(|json| parse_and_validate_catalog_v3(json.as_bytes()).ok());
+            .and_then(|json| parse_and_validate_catalog_v3_memoized(json.as_bytes()).ok());
 
         let mut result = Vec::new();
         if let Some(central) = central.as_ref() {
@@ -1329,7 +1364,7 @@ impl AppUseCase {
                     continue;
                 }
             };
-            let catalog = match parse_and_validate_catalog_v3(catalog_json.as_bytes()) {
+            let catalog = match parse_and_validate_catalog_v3_memoized(catalog_json.as_bytes()) {
                 Ok(catalog) => catalog,
                 Err(error) => {
                     warn!(
@@ -1391,7 +1426,7 @@ impl AppUseCase {
         {
             let (catalog_json, repo_slug) = source;
             let manual_repo = GitHubRepo::parse(repo_slug)?;
-            let catalog = parse_and_validate_catalog_v3(catalog_json.as_bytes())?;
+            let catalog = parse_and_validate_catalog_v3_memoized(catalog_json.as_bytes())?;
             let plugin = single_manual_catalog_plugin(&catalog, &manual_repo)?;
             let Some((release, artifact)) =
                 select_catalog_release_and_artifact(&plugin, &supported_plugin_features, cpu_class)
@@ -1566,22 +1601,30 @@ impl AppUseCase {
             github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
             github_ref: None,
         };
-        let (compressed_manifest, actual_url) = self
-            .fetch_verified_blob_from_locations(
-                &primary_and_mirrors(&artifact.url, &artifact.mirror_urls),
-                &primary_and_mirrors(&artifact.signature_url, &artifact.signature_mirror_urls),
-                &signer,
-                "rule pack artifact",
-            )
-            .await?;
-        verify_digest_set(
-            "compressed rule pack artifact",
-            &artifact.digests,
-            &compressed_manifest,
-        )?;
-        let manifest_bytes =
-            decode_rule_pack_manifest_bytes(compressed_manifest, &actual_url, pack_id, &release)
-                .await?;
+        let memo_key = verified_rule_pack_memo_key(&release.rule_pack_digests);
+        let manifest_bytes = match memo_key.as_deref().and_then(memoized_rule_pack_manifest) {
+            Some(manifest_bytes) => manifest_bytes,
+            None => {
+                let (compressed_manifest, actual_url) = self
+                    .fetch_verified_blob_from_locations(
+                        &primary_and_mirrors(&artifact.url, &artifact.mirror_urls),
+                        &primary_and_mirrors(
+                            &artifact.signature_url,
+                            &artifact.signature_mirror_urls,
+                        ),
+                        &signer,
+                        "rule pack artifact",
+                    )
+                    .await?;
+                verify_digest_set(
+                    "compressed rule pack artifact",
+                    &artifact.digests,
+                    &compressed_manifest,
+                )?;
+                decode_rule_pack_manifest_bytes(compressed_manifest, &actual_url, pack_id, &release)
+                    .await?
+            }
+        };
         verify_digest_set(
             "rule pack manifest",
             &release.rule_pack_digests,
@@ -1591,6 +1634,9 @@ impl AppUseCase {
             .map_err(|e| AppError::Repository(format!("invalid rule pack JSON: {e}")))?;
 
         validate_rule_pack_manifest(&manifest, &pack)?;
+        if let Some(memo_key) = memo_key {
+            remember_rule_pack_manifest(memo_key, manifest_bytes);
+        }
         // The verified signed manifest is authoritative. The catalog flag is
         // only a discovery mirror for clients that have not downloaded it.
         pack.customizable = manifest.customizable;
@@ -1627,6 +1673,45 @@ impl AppUseCase {
             .await?
             .templates)
     }
+}
+
+/// Rule-pack manifests that verified and validated, kept by the blake3 digest
+/// the signed catalog names for them, so a repeat read of the same release
+/// skips the download. Only successes are kept.
+const RULE_PACK_MANIFEST_MEMO_CAPACITY: usize = 16;
+
+type RulePackManifestMemo = std::sync::Mutex<std::collections::VecDeque<(String, Vec<u8>)>>;
+
+static RULE_PACK_MANIFESTS: std::sync::LazyLock<RulePackManifestMemo> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+
+/// The digest [`verify_digest_set`] checks a manifest against: the first
+/// usable blake3 entry.
+fn verified_rule_pack_memo_key(expected_digests: &[String]) -> Option<String> {
+    expected_digests.iter().find_map(|digest| {
+        let (algorithm, digest_hex) = parse_digest_string(digest).ok()?;
+        (algorithm == "blake3").then(|| format!("blake3:{digest_hex}"))
+    })
+}
+
+fn memoized_rule_pack_manifest(key: &str) -> Option<Vec<u8>> {
+    let memo = RULE_PACK_MANIFESTS.lock().ok()?;
+    memo.iter()
+        .find(|(held, _)| held == key)
+        .map(|(_, bytes)| bytes.clone())
+}
+
+fn remember_rule_pack_manifest(key: String, bytes: Vec<u8>) {
+    let Ok(mut memo) = RULE_PACK_MANIFESTS.lock() else {
+        return;
+    };
+    if memo.iter().any(|(held, _)| *held == key) {
+        return;
+    }
+    if memo.len() >= RULE_PACK_MANIFEST_MEMO_CAPACITY {
+        memo.pop_front();
+    }
+    memo.push_back((key, bytes));
 }
 
 fn validate_rule_pack_manifest(

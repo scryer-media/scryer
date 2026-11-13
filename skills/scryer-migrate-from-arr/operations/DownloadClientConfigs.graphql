@@ -1,0 +1,11 @@
+# Configured download clients (secrets are never returned). Variables: none.
+query DownloadClientConfigs {
+  downloadClientConfigs {
+    id
+    name
+    clientType
+    baseUrl
+    isEnabled
+    status
+  }
+}

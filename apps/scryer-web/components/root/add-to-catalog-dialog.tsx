@@ -39,6 +39,12 @@ import {
 } from "@/lib/utils/catalog-add-quality-profile";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { libraryDefaultMovieAvailabilityQuery } from "@/lib/graphql/queries";
+import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
+import {
+  catalogAudioLanguagesForSubmit,
+  INHERIT_CATALOG_AUDIO_LANGUAGES,
+  type CatalogAudioLanguageDraft,
+} from "@/lib/utils/catalog-audio-languages";
 import {
   MOVIE_AVAILABILITY_VALUES,
   isMovieAvailabilityValue,
@@ -82,12 +88,13 @@ function buildDefaultDraft(
   facet: Facet,
   defaultLibraryId?: string,
   defaultRootFolderId?: string,
+  savedMonitorType?: string | null,
 ): MetadataCatalogAddOptions {
   return {
     libraryId: defaultLibraryId,
     rootFolderId: defaultRootFolderId,
     seasonFolder: facet !== "MOVIE",
-    monitorType: defaultMonitorTypeForFacet(facet),
+    monitorType: defaultMonitorTypeForFacet(facet, savedMonitorType),
     ...(facet === "ANIME"
       ? {
           monitorSpecials: false,
@@ -137,8 +144,11 @@ export function AddToCatalogDialog({
       defaultRootFolderId(
         defaultLibrary(libraries)?.roots ?? fallbackRootFolders,
       ),
+      defaultLibrary(libraries)?.defaultMonitorType,
     ),
   );
+  const [audioLanguages, setAudioLanguages] =
+    React.useState<CatalogAudioLanguageDraft>(INHERIT_CATALOG_AUDIO_LANGUAGES);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [monitorSelectionLoading, setMonitorSelectionLoading] =
     React.useState(false);
@@ -166,8 +176,14 @@ export function AddToCatalogDialog({
     }
     draftResetKeyRef.current = draftResetKey;
     setDraft(
-      buildDefaultDraft(facet, nextDefaultLibraryId, nextDefaultRootFolderId),
+      buildDefaultDraft(
+        facet,
+        nextDefaultLibraryId,
+        nextDefaultRootFolderId,
+        nextDefaultLibrary?.defaultMonitorType,
+      ),
     );
+    setAudioLanguages(INHERIT_CATALOG_AUDIO_LANGUAGES);
     setIsSubmitting(false);
     setMonitorSelectionLoading(false);
   }, [
@@ -175,6 +191,7 @@ export function AddToCatalogDialog({
     facet,
     nextDefaultLibraryId,
     nextDefaultRootFolderId,
+    nextDefaultLibrary?.defaultMonitorType,
     open,
   ]);
 
@@ -265,6 +282,7 @@ export function AddToCatalogDialog({
     const libraryId = selectedLibrary?.id?.trim();
     if (!submitAllowed || (libraryRequired && !libraryId)) return;
 
+    const audio = catalogAudioLanguagesForSubmit(audioLanguages);
     setIsSubmitting(true);
     try {
       const titleId = await onAdd(
@@ -274,6 +292,8 @@ export function AddToCatalogDialog({
           ...draft,
           libraryId,
           rootFolderId: effectiveRootFolderId || undefined,
+          requiredAudioLanguages: audio.required,
+          preferredAudioLanguages: audio.preferred,
         }),
       );
       if (titleId) {
@@ -283,6 +303,7 @@ export function AddToCatalogDialog({
       setIsSubmitting(false);
     }
   }, [
+    audioLanguages,
     draft,
     facet,
     libraryRequired,
@@ -359,7 +380,14 @@ export function AddToCatalogDialog({
                     );
                     setDraft((previous) =>
                       draftForCatalogLibrary(
-                        previous,
+                        {
+                          ...previous,
+                          monitorType: defaultMonitorTypeForFacet(
+                            facet,
+                            library?.defaultMonitorType,
+                          ),
+                          monitorSelection: undefined,
+                        },
                         v,
                         library?.roots ?? fallbackRootFolders,
                       ),
@@ -608,6 +636,19 @@ export function AddToCatalogDialog({
                 </Select>
               </label>
             )}
+
+            <CatalogAudioLanguageFields
+              idPrefix="add-to-catalog"
+              value={audioLanguages}
+              onChange={setAudioLanguages}
+              inheritedRequired={
+                selectedLibrary?.inheritedRequiredAudioLanguages ?? null
+              }
+              inheritedPreferred={
+                selectedLibrary?.inheritedPreferredAudioLanguages ?? null
+              }
+              disabled={isSubmitting}
+            />
           </div>
 
           {advancedSelected ? (

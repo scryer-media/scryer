@@ -104,6 +104,8 @@ fn subscription(id: &str, scope: ListScope, owner: &str) -> ListSubscription {
             use_season_folders: None,
             release_numbering: None,
             tags: vec!["fixture".into()],
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         }],
         filters: vec![],
         max_per_sync: Some(25),
@@ -250,6 +252,8 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
         use_season_folders: Some(true),
         release_numbering: None,
         tags: vec![],
+        required_audio_languages: Some(Vec::new()),
+        preferred_audio_languages: Some(vec!["original".into(), "jpn".into()]),
     }];
     let updated = ListSubscriptionRepository::update(&store, edited)
         .await
@@ -258,6 +262,23 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
     assert_eq!(updated.routes.len(), 1);
     assert_eq!(updated.routes[0].monitor_type, "none");
     assert_eq!(updated.routes[0].use_season_folders, Some(true));
+    let reloaded = ListSubscriptionRepository::get_by_id(&store, "sub-1")
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(
+        reloaded.routes[0].required_audio_languages,
+        Some(Vec::new()),
+        "an empty required list is stored, distinct from inherit"
+    );
+    assert_eq!(
+        reloaded.routes[0].preferred_audio_languages,
+        Some(vec!["original".to_string(), "jpn".to_string()])
+    );
+    assert_eq!(
+        loaded.routes[0].required_audio_languages, None,
+        "an inheriting route reads back as inheriting"
+    );
 }
 
 #[tokio::test]
@@ -341,6 +362,82 @@ async fn due_selection_respects_enabled_next_and_pause() {
         .collect();
     due.sort();
     assert_eq!(due, vec!["due", "never-synced"]);
+}
+
+/// The scheduler's existence check answers exactly what the due listing
+/// would: nothing due while every subscription waits, paused or disabled,
+/// and due as soon as one is.
+#[tokio::test]
+async fn has_due_agrees_with_the_due_listing() {
+    let store = test_store(None).await;
+    let now = Utc::now();
+    assert!(!store.has_due(now).await.expect("has due on empty"));
+    for (id, enabled, next_at, paused_until) in [
+        ("not-yet", true, Some(now + Duration::hours(1)), None),
+        (
+            "paused",
+            true,
+            Some(now - Duration::minutes(1)),
+            Some(now + Duration::hours(1)),
+        ),
+        ("disabled", false, Some(now - Duration::minutes(1)), None),
+    ] {
+        let mut subscription = subscription(id, ListScope::Public, OWNER);
+        subscription.enabled = enabled;
+        ListSubscriptionRepository::create(&store, subscription)
+            .await
+            .expect("create");
+        store
+            .record_sync(
+                id,
+                &ListSyncStatus {
+                    state: ListSyncState::Ok,
+                    next_at,
+                    paused_until,
+                    ..ListSyncStatus::default()
+                },
+                &ListCounts::default(),
+            )
+            .await
+            .expect("record sync");
+    }
+    assert!(store.list_due(now, 50).await.expect("list due").is_empty());
+    assert!(!store.has_due(now).await.expect("has due while waiting"));
+    assert!(
+        store
+            .has_due(now + Duration::hours(2))
+            .await
+            .expect("has due later"),
+        "a waiting subscription becomes due once its time passes"
+    );
+    assert!(
+        !store
+            .list_due(now + Duration::hours(2), 50)
+            .await
+            .expect("list due later")
+            .is_empty()
+    );
+
+    ListSubscriptionRepository::create(
+        &store,
+        subscription("never-synced", ListScope::Public, OWNER),
+    )
+    .await
+    .expect("create never-synced");
+    store
+        .record_sync(
+            "never-synced",
+            &ListSyncStatus {
+                state: ListSyncState::Ok,
+                next_at: None,
+                ..ListSyncStatus::default()
+            },
+            &ListCounts::default(),
+        )
+        .await
+        .expect("record sync never-synced");
+    assert_eq!(store.list_due(now, 50).await.expect("list due").len(), 1);
+    assert!(store.has_due(now).await.expect("has due once one is due"));
 }
 
 #[tokio::test]
@@ -610,6 +707,15 @@ async fn upsert_keeps_first_seen_and_clears_departure_when_item_returns() {
         .expect("item-a");
     assert!(item_a.left_at.is_some());
     assert!(!item_a.left_handled);
+    // The active read is the full read without departed rows, in order.
+    let active = store
+        .list_active_by_subscription("sub-1")
+        .await
+        .expect("active rows");
+    let mut expected_active = rows.clone();
+    expected_active.retain(|row| row.left_at.is_none());
+    assert_eq!(active, expected_active);
+    assert_eq!(active.len(), 1);
 
     store
         .set_left_handled("sub-1", &["item-a".to_string()])
@@ -654,6 +760,79 @@ async fn upsert_keeps_first_seen_and_clears_departure_when_item_returns() {
             .map(|row| row.item_key.as_str())
             .collect::<Vec<_>>(),
         vec!["item-b"]
+    );
+}
+
+#[tokio::test]
+async fn batched_active_read_matches_per_subscription_reads_in_caller_order() {
+    let store = test_store(None).await;
+    for id in ["sub-1", "sub-2"] {
+        ListSubscriptionRepository::create(&store, subscription(id, ListScope::Public, OWNER))
+            .await
+            .expect("create");
+    }
+    let first_sync = Utc::now() - Duration::hours(2);
+    store
+        .upsert_many(&[
+            membership("sub-1", "emberfall", first_sync),
+            membership("sub-1", "cinderwake", first_sync),
+            membership("sub-2", "ashgrove", first_sync),
+            membership("sub-2", "duskmere", first_sync),
+        ])
+        .await
+        .expect("first upsert");
+    let second_sync = first_sync + Duration::hours(1);
+    store
+        .upsert_many(&[membership("sub-2", "duskmere", second_sync)])
+        .await
+        .expect("second upsert");
+    store
+        .mark_left("sub-2", second_sync, second_sync)
+        .await
+        .expect("mark left");
+
+    let order = [
+        "sub-2".to_string(),
+        "sub-missing".to_string(),
+        "sub-1".to_string(),
+    ];
+    let mut expected = Vec::new();
+    for id in &order {
+        expected.extend(
+            store
+                .list_active_by_subscription(id)
+                .await
+                .expect("active rows"),
+        );
+    }
+    let batched = store
+        .list_active_by_subscriptions(&order)
+        .await
+        .expect("batched active rows");
+    assert_eq!(batched, expected);
+    assert_eq!(batched.len(), 3, "the departed row is left out");
+
+    // Past one statement's worth of ids, with a repeated id: same rows, same
+    // order.
+    let mut long_order = (0..2000)
+        .map(|index| format!("sub-filler-{index}"))
+        .collect::<Vec<_>>();
+    long_order[950] = "sub-2".to_string();
+    long_order[1999] = "sub-1".to_string();
+    long_order.push("sub-2".to_string());
+    assert_eq!(
+        store
+            .list_active_by_subscriptions(&long_order)
+            .await
+            .expect("chunked active rows"),
+        expected
+    );
+    assert!(
+        store
+            .list_active_by_subscriptions(&[])
+            .await
+            .expect("no subscriptions")
+            .is_empty()
     );
 }
 

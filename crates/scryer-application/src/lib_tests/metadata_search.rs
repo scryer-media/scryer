@@ -255,3 +255,251 @@ async fn movie_search_passes_every_publicly_accepted_limit_to_the_gateway() {
 
     assert_eq!(gateway.title_search_limits().await, vec![1, 25, 26, 100]);
 }
+
+fn denied_library_access(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::UnauthorizedReason { reason, .. }
+            if *reason == crate::error_reasons::services::LIBRARY_ACCESS_DENIED
+    )
+}
+
+/// A request-only actor reaches metadata search and the series lookup the
+/// request dialog uses; an actor with no library grant is still refused, with
+/// the same reason code as before.
+#[tokio::test]
+async fn request_only_actor_can_search_metadata_and_look_up_series() {
+    let gateway = Arc::new(RecordingSearchMetadataGateway::default());
+    let (app, _admin, _titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let movie_library = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let series_ref = SeriesTitleRef {
+        tvdb_id: Some(4242),
+        ..SeriesTitleRef::default()
+    };
+
+    for permission in [
+        scryer_domain::LibraryPermission::Request,
+        // Auto-approve implies Request.
+        scryer_domain::LibraryPermission::AutoApproveRequests,
+        scryer_domain::LibraryPermission::View,
+        scryer_domain::LibraryPermission::ManageTitles,
+    ] {
+        let actor = library_permission_user("fixture-searcher", &movie_library, &[permission]);
+        app.search_metadata(&actor, "fixture", "movie", 10, "eng", None)
+            .await
+            .unwrap_or_else(|error| panic!("{permission:?} should search: {error:?}"));
+        app.search_metadata_multi(&actor, "fixture", 10, "eng")
+            .await
+            .unwrap_or_else(|error| panic!("{permission:?} should multi-search: {error:?}"));
+        // The fixture gateway knows no series; the point is that the gate
+        // lets the call through to it.
+        if let Err(error) = app
+            .get_metadata_series_by_ref(&actor, &series_ref, "eng", false)
+            .await
+        {
+            assert!(
+                !denied_library_access(&error),
+                "{permission:?} should pass the series lookup gate: {error:?}"
+            );
+        }
+    }
+
+    // Grants that are none of View, Request or ManageTitles do not open it.
+    for grants in [
+        vec![],
+        vec![scryer_domain::LibraryPermission::ManageSubtitles],
+    ] {
+        let actor = library_permission_user("fixture-outsider", &movie_library, &grants);
+        let error = app
+            .search_metadata(&actor, "fixture", "movie", 10, "eng", None)
+            .await
+            .expect_err("no search grant should be refused");
+        assert!(denied_library_access(&error), "{error:?}");
+        let error = app
+            .search_metadata_multi(&actor, "fixture", 10, "eng")
+            .await
+            .expect_err("no search grant should be refused");
+        assert!(denied_library_access(&error), "{error:?}");
+        let error = app
+            .get_metadata_series_by_ref(&actor, &series_ref, "eng", false)
+            .await
+            .expect_err("no search grant should be refused");
+        assert!(denied_library_access(&error), "{error:?}");
+    }
+    assert_eq!(
+        gateway.title_search_limits().await.len(),
+        4,
+        "refused calls never reach the gateway"
+    );
+}
+
+fn fixture_title(id: &str, facet: MediaFacet, library_id: &str, tvdb_id: i64) -> Title {
+    let mut title = make_due_hydration_title(id, facet, tvdb_id);
+    title.library_id = library_id.to_string();
+    title
+}
+
+/// Presence lists only libraries of the result's facet that the actor may
+/// view, request into or manage titles in, in one read for every result.
+#[tokio::test]
+async fn library_presence_is_scoped_to_the_actors_libraries_of_the_result_facet() {
+    let gateway = Arc::new(RecordingSearchMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let movie_default = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let series_default = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let anime_default = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
+    let movie_alt = "fixture-movie-alt";
+    let movie_hidden = "fixture-movie-hidden";
+    {
+        let libraries = titles.library_store.get().expect("fixture libraries");
+        let mut libraries = libraries.lock().await;
+        libraries.push(custom_movie_library(movie_alt, "Fixture Alt"));
+        libraries.push(custom_movie_library(movie_hidden, "Fixture Hidden"));
+    }
+    {
+        let mut store = titles.store.lock().await;
+        store.push(fixture_title(
+            "fixture-m1",
+            MediaFacet::Movie,
+            &movie_default,
+            7001,
+        ));
+        store.push(fixture_title(
+            "fixture-m2",
+            MediaFacet::Movie,
+            movie_alt,
+            7001,
+        ));
+        store.push(fixture_title(
+            "fixture-m3",
+            MediaFacet::Movie,
+            movie_hidden,
+            7001,
+        ));
+        store.push(fixture_title(
+            "fixture-m4",
+            MediaFacet::Movie,
+            movie_hidden,
+            7002,
+        ));
+        store.push(fixture_title(
+            "fixture-s1",
+            MediaFacet::Series,
+            &series_default,
+            7001,
+        ));
+        store.push(fixture_title(
+            "fixture-a1",
+            MediaFacet::Anime,
+            &anime_default,
+            7001,
+        ));
+    }
+    let actor = library_permission_user_with_grants(
+        "fixture-requester",
+        &[
+            (
+                movie_default.as_str(),
+                &[scryer_domain::LibraryPermission::Request],
+            ),
+            (movie_alt, &[scryer_domain::LibraryPermission::View]),
+            (
+                series_default.as_str(),
+                &[scryer_domain::LibraryPermission::ManageTitles],
+            ),
+            (
+                anime_default.as_str(),
+                &[scryer_domain::LibraryPermission::ManageSubtitles],
+            ),
+        ],
+    );
+    let tvdb = |value: &str| vec![ExternalId::new(" TVDB ".to_string(), format!(" {value} "))];
+    let held = tvdb("7001");
+    let hidden_only = tvdb("7002");
+    let unknown = tvdb("7999");
+    let items = [
+        (MediaFacet::Movie, held.as_slice()),
+        (MediaFacet::Series, held.as_slice()),
+        (MediaFacet::Anime, held.as_slice()),
+        (MediaFacet::Movie, hidden_only.as_slice()),
+        (MediaFacet::Movie, unknown.as_slice()),
+        (MediaFacet::Movie, &[][..]),
+    ];
+
+    let presence = app
+        .metadata_search_library_presence(&actor, &items)
+        .await
+        .expect("presence should resolve");
+
+    assert_eq!(
+        presence,
+        vec![
+            vec![movie_default.clone(), movie_alt.to_string()],
+            vec![series_default.clone()],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ]
+    );
+    let reads = titles
+        .external_id_presence_reads
+        .lock()
+        .expect("presence read log")
+        .clone();
+    assert_eq!(reads.len(), 1, "one read covers every result");
+    assert!(
+        !reads[0]
+            .iter()
+            .any(|library_id| library_id == movie_hidden || *library_id == anime_default),
+        "a library the actor holds no search grant on is never asked about: {reads:?}"
+    );
+}
+
+#[tokio::test]
+async fn library_presence_reads_nothing_without_an_eligible_library() {
+    let gateway = Arc::new(RecordingSearchMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let movie_default = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    titles.store.lock().await.push(fixture_title(
+        "fixture-m1",
+        MediaFacet::Movie,
+        &movie_default,
+        7001,
+    ));
+    let held = vec![ExternalId::new("tvdb".to_string(), "7001".to_string())];
+    let items = [(MediaFacet::Movie, held.as_slice())];
+
+    let outsider = library_permission_user(
+        "fixture-outsider",
+        &movie_default,
+        &[scryer_domain::LibraryPermission::ManageSubtitles],
+    );
+    assert_eq!(
+        app.metadata_search_library_presence(&outsider, &items)
+            .await
+            .expect("presence should resolve"),
+        vec![Vec::<String>::new()]
+    );
+
+    // Eligible only for series: a movie result asks nothing either.
+    let series_only = library_permission_user(
+        "fixture-series-requester",
+        &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        &[scryer_domain::LibraryPermission::Request],
+    );
+    assert_eq!(
+        app.metadata_search_library_presence(&series_only, &items)
+            .await
+            .expect("presence should resolve"),
+        vec![Vec::<String>::new()]
+    );
+
+    assert!(
+        titles
+            .external_id_presence_reads
+            .lock()
+            .expect("presence read log")
+            .is_empty()
+    );
+}

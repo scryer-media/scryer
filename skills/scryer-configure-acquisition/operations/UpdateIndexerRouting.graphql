@@ -1,0 +1,10 @@
+# Write. REPLACES the whole scope; send every entry to keep.
+# Variables: {"input": {"scope": "MOVIE", "entries": [{"indexerId": "...", "enabled": true, "categories": ["2000"], "priority": 10}]}}
+mutation UpdateIndexerRouting($input: UpdateIndexerRoutingInput!) {
+  updateIndexerRouting(input: $input) {
+    indexerId
+    enabled
+    categories
+    priority
+  }
+}

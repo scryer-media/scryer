@@ -2,7 +2,7 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 
 #[derive(Default)]
-pub(super) struct MockDomainEventRepo {
+pub(crate) struct MockDomainEventRepo {
     space_notification_receipts: Mutex<std::collections::BTreeSet<(String, String)>>,
     space_notification_attempts: Mutex<HashMap<String, i64>>,
     pub(super) fail_append_many: AtomicBool,
@@ -14,9 +14,65 @@ pub(super) struct MockDomainEventRepo {
     /// Every `list` filter this repo was asked for, so a test can assert on the
     /// *shape* of the read and not only its result.
     pub(super) list_filters: Arc<Mutex<Vec<DomainEventFilter>>>,
+    /// Every subscriber offset write, in order.
+    pub(crate) subscriber_offset_writes: std::sync::Mutex<Vec<(String, i64)>>,
+    /// One per append transaction: `append` and `append_once` count one, and
+    /// `append_many` counts one for the whole batch.
+    pub(crate) append_commits: AtomicUsize,
+    /// The catalog a library-scoped history page read resolves its titles
+    /// from, as the store resolves them in SQL.
+    pub(super) titles: Option<Arc<MockTitleRepo>>,
 }
 
 impl MockDomainEventRepo {
+    /// The title ids a history page read is scoped to.
+    async fn history_scope_title_ids(
+        &self,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(match title_scope {
+            None => None,
+            Some(crate::TitleHistoryTitleScope::Titles(title_ids)) => Some(title_ids.to_vec()),
+            Some(crate::TitleHistoryTitleScope::Libraries(library_ids)) => Some(
+                self.titles
+                    .as_ref()
+                    .expect("a library-scoped history read needs the title repo")
+                    .list_title_ids_for_libraries(library_ids, None)
+                    .await?,
+            ),
+        })
+    }
+
+    async fn store_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        if self.fail_append.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic event append failure".into(),
+            ));
+        }
+        let mut events = self.events.lock().await;
+        let sequence = events
+            .last()
+            .map(|existing| existing.sequence + 1)
+            .unwrap_or(1);
+        let stored = DomainEvent {
+            sequence,
+            event_id: event.event_id,
+            occurred_at: event.occurred_at,
+            actor_kind: event.actor_kind,
+            actor_user_id: event.actor_user_id,
+            actor_display_name: event.actor_display_name,
+            title_id: event.title_id,
+            facet: event.facet,
+            correlation_id: event.correlation_id,
+            causation_id: event.causation_id,
+            schema_version: event.schema_version,
+            stream: event.stream,
+            payload: event.payload,
+        };
+        events.push(stored.clone());
+        Ok(stored)
+    }
+
     pub(super) async fn set_delete_operation_log(&self, operation_log: Arc<Mutex<Vec<String>>>) {
         *self.delete_operation_log.lock().await = Some(operation_log);
     }
@@ -235,33 +291,8 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
-        if self.fail_append.load(Ordering::SeqCst) {
-            return Err(AppError::Repository(
-                "synthetic event append failure".into(),
-            ));
-        }
-        let mut events = self.events.lock().await;
-        let sequence = events
-            .last()
-            .map(|existing| existing.sequence + 1)
-            .unwrap_or(1);
-        let stored = DomainEvent {
-            sequence,
-            event_id: event.event_id,
-            occurred_at: event.occurred_at,
-            actor_kind: event.actor_kind,
-            actor_user_id: event.actor_user_id,
-            actor_display_name: event.actor_display_name,
-            title_id: event.title_id,
-            facet: event.facet,
-            correlation_id: event.correlation_id,
-            causation_id: event.causation_id,
-            schema_version: event.schema_version,
-            stream: event.stream,
-            payload: event.payload,
-        };
-        events.push(stored.clone());
-        Ok(stored)
+        self.append_commits.fetch_add(1, Ordering::SeqCst);
+        self.store_event(event).await
     }
 
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
@@ -270,9 +301,10 @@ impl DomainEventRepository for MockDomainEventRepo {
                 "synthetic event append failure".into(),
             ));
         }
+        self.append_commits.fetch_add(1, Ordering::SeqCst);
         let mut stored = Vec::with_capacity(events.len());
         for event in events {
-            stored.push(self.append(event).await?);
+            stored.push(self.store_event(event).await?);
         }
         Ok(stored)
     }
@@ -382,10 +414,12 @@ impl DomainEventRepository for MockDomainEventRepo {
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
     ) -> AppResult<i64> {
+        let title_ids = self.history_scope_title_ids(title_scope).await?;
+        let title_ids = title_ids.as_deref();
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -407,13 +441,15 @@ impl DomainEventRepository for MockDomainEventRepo {
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let page_size = if limit == 0 { usize::MAX } else { limit };
+        let title_ids = self.history_scope_title_ids(title_scope).await?;
+        let title_ids = title_ids.as_deref();
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -477,6 +513,10 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn set_subscriber_offset(&self, subscriber: &str, sequence: i64) -> AppResult<()> {
+        self.subscriber_offset_writes
+            .lock()
+            .expect("subscriber offset writes")
+            .push((subscriber.to_string(), sequence));
         let mut offsets = self.subscriber_offsets.lock().await;
         offsets.insert(subscriber.to_string(), sequence);
         Ok(())
@@ -598,6 +638,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             requested_quality_profile_name: request.requested_quality_profile_name,
             requested_monitor_type: request.requested_monitor_type,
             requested_monitor_selection: request.requested_monitor_selection,
+            requested_required_audio_languages: request.requested_required_audio_languages,
+            requested_preferred_audio_languages: request.requested_preferred_audio_languages,
             requested_lease_days: request.requested_lease_days,
             approved_lease_days: None,
             decision_id: None,
@@ -734,6 +776,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
@@ -750,6 +794,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         request.requested_quality_profile_name = Some(requested_quality_profile_name);
         request.requested_monitor_type = requested_monitor_type;
         request.requested_monitor_selection = requested_monitor_selection;
+        request.requested_required_audio_languages = requested_required_audio_languages;
+        request.requested_preferred_audio_languages = requested_preferred_audio_languages;
         request.requested_lease_days = requested_lease_days;
         request.updated_at = now;
         let updated = request.clone();

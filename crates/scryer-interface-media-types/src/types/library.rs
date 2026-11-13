@@ -40,6 +40,18 @@ pub struct LibrarySettingsPayload {
     pub required_audio_languages_override: Option<Vec<String>>,
     /// Effective configured requirements after inheritance; `original` remains unchanged.
     pub required_audio_languages: Vec<String>,
+    /// Library override for the ordered preferred audio languages; null means inherit the facet setting.
+    pub preferred_audio_languages_override: Option<Vec<String>>,
+    /// Effective preferred audio languages after inheritance.
+    pub preferred_audio_languages: Vec<String>,
+    /// Library override for the optional audio languages; null means inherit the facet setting.
+    pub optional_audio_languages_override: Option<Vec<String>>,
+    /// Effective optional audio languages after inheritance.
+    pub optional_audio_languages: Vec<String>,
+    /// Library override for keep-searching on optional languages; null means inherit the facet setting.
+    pub optional_audio_languages_keep_searching_override: Option<bool>,
+    /// Effective keep-searching setting after inheritance.
+    pub optional_audio_languages_keep_searching: bool,
     /// Library metadata-language override; null means inherit the global default.
     pub metadata_language_override: Option<String>,
     /// Effective metadata language after inheritance.
@@ -48,6 +60,10 @@ pub struct LibrarySettingsPayload {
     pub use_season_folders_override: Option<bool>,
     /// Effective season-folder setting after inheritance.
     pub use_season_folders: bool,
+    /// Initial monitoring choice in new Add/Request dialogs.
+    pub default_monitor_type: String,
+    /// Saved library choice; null uses the built-in facet default.
+    pub default_monitor_type_override: Option<String>,
     /// Library override quality-profile ID; null means inherit.
     pub quality_profile_id_override: Option<ID>,
     /// Effective quality-profile ID.
@@ -706,6 +722,29 @@ pub struct IgnorePendingImportPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// A pending import a batch ignore did not ignore, with the error ignoring it
+/// alone would have returned.
+pub struct IgnorePendingImportFailurePayload {
+    /// Pending-import item ID as requested.
+    pub id: ID,
+    /// The error's message.
+    pub message: String,
+    /// The error's `code` extension.
+    pub code: Option<String>,
+    /// The error's `reason` extension, when it names one.
+    pub reason: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Result of ignoring several pending imports, each in request order.
+pub struct IgnorePendingImportsPayload {
+    /// Pending imports now ignored.
+    pub ignored: Vec<IgnorePendingImportPayload>,
+    /// Pending imports that were not ignored.
+    pub failed: Vec<IgnorePendingImportFailurePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Result of requesting cancellation for an acquisition search.
 pub struct CancelAcquisitionSearchPayload {
     /// Acquisition-search job ID.
@@ -998,6 +1037,10 @@ pub struct TitleOptionsInput {
     pub release_numbering: MaybeUndefined<ReleaseNumberingValue>,
     /// Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
     pub monitor_selection: MaybeUndefined<MonitorSelectionInput>,
+    /// The title's own required audio languages; omission preserves them, null clears them so the title inherits its library's and then its facet's, an empty list requires no language, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`. Needs the Manage titles grant, as `setTitleRequiredAudio` does.
+    pub required_audio_languages: MaybeUndefined<Vec<String>>,
+    /// The title's own preferred audio languages, in order; omission preserves them, null or an empty list clears them so the title inherits its library's and then its facet's, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+    pub preferred_audio_languages: MaybeUndefined<Vec<String>>,
 }
 
 #[derive(InputObject, Clone)]
@@ -1163,14 +1206,6 @@ pub struct DeleteTitleInput {
 pub struct DeleteTitlePayload {
     /// Deleted title identity.
     pub id: async_graphql::ID,
-    /// Recycle entries purged during this deletion.
-    pub recycle_purged: i32,
-    /// Recycle entries preserved after revalidation.
-    pub recycle_preserved: i32,
-    /// Recycle entries held by another operation.
-    pub recycle_busy: i32,
-    /// Recycle cleanup failures; catalog deletion still succeeded.
-    pub recycle_failed: i32,
 }
 
 #[derive(InputObject)]
@@ -1383,10 +1418,18 @@ pub struct LibrarySettingsInput {
     pub search_languages: Option<Vec<String>>,
     /// Required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
+    /// Ordered preferred audio-language codes; null or empty inherits the facet's.
+    pub preferred_audio_languages: Option<Vec<String>>,
+    /// Optional audio-language codes; null or empty inherits the facet's.
+    pub optional_audio_languages: Option<Vec<String>>,
+    /// Whether a file missing optional languages stays an upgrade target; null inherits the facet's.
+    pub optional_audio_languages_keep_searching: Option<bool>,
     /// Metadata language override; null inherits the global default.
     pub metadata_language: Option<String>,
     /// Whether episodic titles use season folders; null inherits the facet setting.
     pub use_season_folders: Option<bool>,
+    /// Initial monitoring choice for new Add/Request dialogs; null restores the built-in default.
+    pub default_monitor_type: Option<String>,
     /// Default quality profile identity.
     pub quality_profile_id: Option<ID>,
     /// Quality profile identities allowed for requests.
@@ -1433,10 +1476,13 @@ pub struct LibrarySettingsInput {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Identity returned after deleting a library.
+/// A library delete accepted to run in the background.
 pub struct DeleteLibraryPayload {
-    /// Deleted library identity.
+    /// Identity of the library being deleted.
     pub id: async_graphql::ID,
+    /// Background job that deletes the library and its titles' catalog
+    /// records. The library stays listed until the job finishes.
+    pub job_run: JobRunPayload,
 }
 
 #[derive(InputObject)]

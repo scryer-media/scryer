@@ -17,8 +17,10 @@ import { Label } from "@/components/ui/label";
 import {
   CheckCircle2,
   Database,
+  Download,
   ExternalLink,
   Film,
+  Loader2,
   Pause,
   Play,
   Search,
@@ -38,6 +40,10 @@ import { CODE_FONT } from "@/lib/fonts";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { downloadDiagnosticsBundle } from "@/lib/utils/diagnostics-bundle-download";
+import { diagnosticsBundleErrorMessage } from "@/lib/utils/diagnostics-bundle-error";
+import { systemLogsDiagnosticsBundleId } from "@/lib/utils/dom-ids";
 import {
   parseServiceLogLine,
   prettyServiceLogLine,
@@ -366,6 +372,61 @@ function buildLogViewerSnapshot(
   };
 }
 
+/** Downloads the sanitized diagnostics bundle for the maintainer. */
+function DiagnosticsBundleAction() {
+  const t = useTranslate();
+  const setGlobalStatus = useGlobalStatus();
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = useCallback(() => {
+    setDownloading(true);
+    void (async () => {
+      try {
+        await downloadDiagnosticsBundle();
+      } catch (error) {
+        setGlobalStatus(
+          diagnosticsBundleErrorMessage(
+            error,
+            t,
+            t("system.diagnosticsBundle.failed"),
+          ),
+          { level: "ERROR" },
+        );
+      } finally {
+        setDownloading(false);
+      }
+    })();
+  }, [setGlobalStatus, t]);
+
+  return (
+    <div
+      className={`${SYSTEM_INSET_CLASS} flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between`}
+    >
+      <p className={`text-xs ${SYSTEM_MUTED_TEXT_CLASS}`}>
+        {t("system.diagnosticsBundle.helper")}
+      </p>
+      <Button
+        id={systemLogsDiagnosticsBundleId()}
+        size="sm"
+        variant="secondary"
+        className="h-9 shrink-0 rounded-[10px] px-3 text-[13px]"
+        disabled={downloading}
+        aria-busy={downloading}
+        onClick={handleDownload}
+      >
+        {downloading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Download className="h-3.5 w-3.5" />
+        )}
+        {downloading
+          ? t("system.diagnosticsBundle.preparing")
+          : t("system.diagnosticsBundle.download")}
+      </Button>
+    </div>
+  );
+}
+
 function LogViewer() {
   const t = useTranslate();
   const client = useClient();
@@ -605,6 +666,7 @@ function LogViewer() {
         </div>
       </div>
       <div className={`${SYSTEM_PANEL_BODY_CLASS} flex min-h-0 flex-col gap-4`}>
+        <DiagnosticsBundleAction />
         <div
           className={`${SYSTEM_INSET_CLASS} grid gap-3 p-3 lg:grid-cols-[150px_minmax(220px,1fr)_auto] lg:items-end`}
         >

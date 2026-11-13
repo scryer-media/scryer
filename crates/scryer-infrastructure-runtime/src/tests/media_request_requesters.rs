@@ -106,6 +106,8 @@ pub(super) fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMed
         requested_quality_profile_name: None,
         requested_monitor_type: None,
         requested_lease_days: None,
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
         metadata_snapshot_json: "{}".to_string(),
         external_ids: Vec::new(),
         created_by_user_id: submitter.to_string(),
@@ -256,6 +258,78 @@ async fn requester_ids_union_every_request_that_created_the_title() {
         .await
         .expect("empty lookup");
     assert!(empty.is_empty());
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn requester_avatar_ties_resolve_to_the_lowest_account_id() {
+    let (services, db) = temp_services("scryer_media_request_avatar_tie").await;
+    seed_library(&services, "library-1").await;
+    seed_user(&services, "user-a").await;
+    let store = request_store(&services);
+    store
+        .submit(
+            new_request("request-1", "library-1", "user-a"),
+            &user("user-a"),
+            request_event("request-1"),
+        )
+        .await
+        .expect("submit the request");
+
+    // Two linked accounts stamped with the same instant; the connection rows
+    // are irrelevant to the avatar choice, so the foreign key is waived here.
+    let mut conn = services.pool().acquire().await.expect("connection");
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("waive foreign keys");
+    for (id, provider, avatar) in [
+        (
+            "account-b",
+            "plex",
+            "https://avatars.example.test/ashgrove.png",
+        ),
+        (
+            "account-a",
+            "jellyfin",
+            "https://avatars.example.test/emberfall.png",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO user_external_accounts
+                (id, user_id, provider, connection_id, username, avatar_url, status,
+                 verified_at, last_login_at, created_at, updated_at)
+             VALUES (?, 'user-a', ?, ?, 'user-a', ?, 'active',
+                     '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(provider)
+        .bind(format!("connection-{provider}"))
+        .bind(avatar)
+        .execute(&mut *conn)
+        .await
+        .expect("seed linked account");
+    }
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await
+        .expect("restore foreign keys");
+    drop(conn);
+
+    let expected = Some("https://avatars.example.test/emberfall.png".to_string());
+    let single = store
+        .get("request-1")
+        .await
+        .expect("read the request")
+        .expect("the request exists");
+    assert_eq!(single.requesters[0].avatar_url, expected);
+    let listed = store
+        .list(scryer_application::MediaRequestQuery::default())
+        .await
+        .expect("list requests");
+    assert_eq!(listed[0].requesters[0].avatar_url, expected);
 
     let _ = std::fs::remove_file(db);
 }

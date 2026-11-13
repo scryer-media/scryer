@@ -207,8 +207,28 @@ export function useDownloadQueue({
     });
 
     if (includeHistoryOnly) {
-      pollingRef.current = setInterval(() => void refreshQueue(), 10_000);
+      // A hidden tab skips ticks and refreshes once when it becomes visible.
+      let missedWhileHidden = false;
+      const handleVisibilityChange = () => {
+        if (document.visibilityState !== "visible" || !missedWhileHidden) {
+          return;
+        }
+        missedWhileHidden = false;
+        void refreshQueue();
+      };
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+      pollingRef.current = setInterval(() => {
+        if (document.hidden) {
+          missedWhileHidden = true;
+          return;
+        }
+        void refreshQueue();
+      }, 10_000);
       return () => {
+        document.removeEventListener(
+          "visibilitychange",
+          handleVisibilityChange,
+        );
         if (pollingRef.current) {
           clearInterval(pollingRef.current);
           pollingRef.current = null;

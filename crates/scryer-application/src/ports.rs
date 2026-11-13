@@ -141,6 +141,20 @@ pub struct TitleOptionsPatch {
     /// Explicit season/series-movie picks for the `advanced` monitor type.
     /// `Some(None)` clears the stored selection.
     pub monitor_selection: Option<Option<MonitorSelection>>,
+    /// The title's own required audio languages. `Some(None)` inherits the
+    /// library's and facet's; `Some(Some(vec![]))` requires nothing. Kept in
+    /// settings, not on the title row.
+    pub required_audio_languages: Option<Option<Vec<String>>>,
+    /// The title's own preferred audio languages, in order. `Some(None)` and
+    /// an empty list both inherit. Kept in settings, not on the title row.
+    pub preferred_audio_languages: Option<Option<Vec<String>>>,
+}
+
+impl TitleOptionsPatch {
+    /// Whether the patch sets either audio language override.
+    pub fn carries_audio_language_overrides(&self) -> bool {
+        self.required_audio_languages.is_some() || self.preferred_audio_languages.is_some()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +178,23 @@ pub struct TitleExternalIdLookup {
     pub lookup_index: usize,
     pub source: String,
     pub external_id: String,
+}
+
+/// One identity a batched library-presence read asks about: a facet, an id
+/// source (lowercase) and a value (trimmed), compared the way
+/// `list_existing_external_ids_in_library_and_facet` compares them.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TitleExternalIdPresenceLookup {
+    pub facet: MediaFacet,
+    pub source: String,
+    pub value: String,
+}
+
+/// A library that holds a title carrying one requested identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TitleExternalIdPresence {
+    pub library_id: String,
+    pub lookup: TitleExternalIdPresenceLookup,
 }
 
 #[derive(Clone, Debug)]
@@ -426,6 +457,9 @@ pub struct DiscoveryNeighborCacheRecord {
     pub items: Vec<DiscoveryNeighborItemRecord>,
     pub groups: Vec<crate::DiscoveryRelatedGroup>,
     pub fetched_at: DateTime<Utc>,
+    /// The gateway was asked again for an entry that came back without
+    /// groups. `false` on an entry cached before this was recorded.
+    pub regroup_attempted: bool,
 }
 
 /// One related title of an anchor and the neighbourhood it belongs to.
@@ -1099,6 +1133,31 @@ pub trait DiscoveryRepository: Send + Sync {
         filters: &DiscoveryHomeFilters,
         limit_per_section: i64,
     ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>>;
+    /// [`Self::list_public_discovery_section_items`] for a caller that already
+    /// read the run's public sections (`list_discovery_sections(run_id,
+    /// Some("public"))`), so they are not read again.
+    #[allow(clippy::too_many_arguments)]
+    async fn list_public_discovery_section_items_in(
+        &self,
+        run_id: &str,
+        public_sections: &[DiscoverySectionRecord],
+        section_ids: &[String],
+        allowed_media_kinds: &[String],
+        include_unresolved: bool,
+        filters: &DiscoveryHomeFilters,
+        limit_per_section: i64,
+    ) -> AppResult<Vec<DiscoveryHomeSectionCandidatesRecord>> {
+        let _ = public_sections;
+        self.list_public_discovery_section_items(
+            run_id,
+            section_ids,
+            allowed_media_kinds,
+            include_unresolved,
+            filters,
+            limit_per_section,
+        )
+        .await
+    }
     /// The personalized pool. Rows the gateway marked as owned in the
     /// submitted context are left out unless `include_owned` is set.
     #[allow(clippy::too_many_arguments)]
@@ -1196,6 +1255,33 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         query: &DiscoveryItemsStorageQuery,
     ) -> AppResult<DiscoveryItemsPageRecord>;
+    /// The page `query_discovery_items` returns, without its total count.
+    async fn query_discovery_items_uncounted(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<DiscoveryItemRecord>> {
+        Ok(self.query_discovery_items(query).await?.items)
+    }
+    /// The `target_key` (or `id` for a blank key) of each item in the page
+    /// `query_discovery_items` returns, in page order.
+    async fn query_discovery_item_identity_keys(
+        &self,
+        query: &DiscoveryItemsStorageQuery,
+    ) -> AppResult<Vec<String>> {
+        Ok(self
+            .query_discovery_items(query)
+            .await?
+            .items
+            .into_iter()
+            .map(|item| {
+                if item.target_key.trim().is_empty() {
+                    item.id
+                } else {
+                    item.target_key
+                }
+            })
+            .collect())
+    }
     async fn count_discovery_browse_labels(
         &self,
         query: &DiscoveryItemsStorageQuery,
@@ -1244,6 +1330,17 @@ pub trait DiscoveryRepository: Send + Sync {
         &self,
         facet: &str,
     ) -> AppResult<Option<LibraryGraphSnapshotRecord>>;
+    /// When the newest complete graph for a facet was built, without reading
+    /// the graph. The outer `None` means no complete graph is stored.
+    async fn get_latest_library_graph_generated_at(
+        &self,
+        facet: &str,
+    ) -> AppResult<Option<Option<String>>> {
+        Ok(self
+            .get_latest_library_graph(facet)
+            .await?
+            .map(|snapshot| snapshot.run.generated_at))
+    }
     /// The newest run for a facet, complete or failed.
     async fn get_latest_library_graph_run(
         &self,
@@ -1269,6 +1366,16 @@ pub trait DiscoveryRepository: Send + Sync {
         record: &DiscoveryNeighborCacheRecord,
         expire_before: DateTime<Utc>,
     ) -> AppResult<()>;
+}
+
+/// The catalog titles a title-history page read covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleHistoryTitleScope<'a> {
+    /// Exactly these titles.
+    Titles(&'a [String]),
+    /// Every title in these libraries, resolved by the store in the same
+    /// statement instead of as an id list.
+    Libraries(&'a [String]),
 }
 
 /// Stored values and related metadata required by a title list consumer.
@@ -1670,6 +1777,16 @@ pub struct DiscoveryAffinityTitle {
     pub canonical_tags: Vec<CanonicalMediaTag>,
 }
 
+/// A deleted title whose recycle-bin entries housekeeping still has to remove
+/// for good, with the library whose bins hold them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleRecyclePurge {
+    pub title_id: String,
+    pub library_id: String,
+    /// When the title's delete recorded it.
+    pub recorded_at: DateTime<Utc>,
+}
+
 #[async_trait]
 pub trait TitleRepository: Send + Sync {
     /// SQL implementations join the submitted generation without hydrating titles.
@@ -1881,6 +1998,32 @@ pub trait TitleRepository: Send + Sync {
             }
         }
     }
+    /// Ids of the titles in `library_ids`, in list order (`LOWER(name)`, then
+    /// id), at most `limit` of them. The same titles in the same order as
+    /// [`Self::list_with_projection`] for those libraries; a store reads only
+    /// the id. An empty `library_ids` holds no titles.
+    async fn list_title_ids_for_libraries(
+        &self,
+        library_ids: &[String],
+        limit: Option<usize>,
+    ) -> AppResult<Vec<String>> {
+        if library_ids.is_empty() || limit == Some(0) {
+            return Ok(Vec::new());
+        }
+        let titles = self
+            .list_with_projection(
+                None,
+                Some(library_ids),
+                None,
+                TitleListProjection::without_canonical_tags().without_external_ids(),
+            )
+            .await?;
+        Ok(titles
+            .into_iter()
+            .take(limit.unwrap_or(usize::MAX))
+            .map(|title| title.id)
+            .collect())
+    }
     /// How many titles one library holds, for the request-rule
     /// `library_title_count` fact (spec 0003 §3.2).
     ///
@@ -1951,6 +2094,42 @@ pub trait TitleRepository: Send + Sync {
                 folder_path: title.folder_path,
             })
             .collect())
+    }
+    /// Every title that records a folder, as `(title id, folder)`, in the
+    /// order [`Self::list_delete_preview_info`] returns titles. Titles with no
+    /// folder or an empty one are left out.
+    async fn list_title_folder_owners(&self) -> AppResult<Vec<(String, String)>> {
+        Ok(self
+            .list_delete_preview_info()
+            .await?
+            .into_iter()
+            .filter_map(|owner| {
+                owner
+                    .folder_path
+                    .filter(|path| !path.is_empty())
+                    .map(|path| (owner.title_id, path))
+            })
+            .collect())
+    }
+    /// A counter that advances after every write that can change which
+    /// titles record a folder or the folder any title records, once that
+    /// write's transaction has ended, whether it committed or not.
+    ///
+    /// A reader that takes the value before reading the owners, and later
+    /// finds it unchanged, knows no such write has finished in between.
+    /// `None` means this repository keeps no counter, or such a write is in
+    /// progress, and the reader must read the owners again.
+    fn title_folder_write_generation(&self) -> Option<u64> {
+        None
+    }
+    /// [`Self::assign_title_folders`], also returning the value of
+    /// [`Self::title_folder_write_generation`] that this call's own advance
+    /// produced. `None` when that is unknown.
+    async fn assign_title_folders_with_generation(
+        &self,
+        writes: &[crate::TitleFolderWrite],
+    ) -> (AppResult<()>, Option<u64>) {
+        (self.assign_title_folders(writes).await, None)
     }
     async fn list_for_libraries(
         &self,
@@ -2214,6 +2393,53 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(existing)
     }
+
+    /// `list_existing_external_ids_in_library_and_facet` for many libraries
+    /// and many `(facet, source, value)` identities at once: every library of
+    /// `library_ids` that holds a title of the lookup's facet carrying that
+    /// identity. The default asks the per-library method once per library
+    /// and `(facet, source)`; SQL stores override it with one read per chunk.
+    async fn list_existing_external_ids_in_libraries(
+        &self,
+        library_ids: &[String],
+        lookups: &[TitleExternalIdPresenceLookup],
+    ) -> AppResult<HashSet<TitleExternalIdPresence>> {
+        let mut grouped = std::collections::HashMap::<(MediaFacet, String), Vec<String>>::new();
+        for lookup in lookups {
+            grouped
+                .entry((
+                    lookup.facet.clone(),
+                    lookup.source.trim().to_ascii_lowercase(),
+                ))
+                .or_default()
+                .push(lookup.value.trim().to_string());
+        }
+        let mut present = HashSet::new();
+        for library_id in library_ids {
+            for ((facet, source), values) in &grouped {
+                for value in self
+                    .list_existing_external_ids_in_library_and_facet(
+                        library_id,
+                        facet.clone(),
+                        source,
+                        values,
+                    )
+                    .await?
+                {
+                    present.insert(TitleExternalIdPresence {
+                        library_id: library_id.clone(),
+                        lookup: TitleExternalIdPresenceLookup {
+                            facet: facet.clone(),
+                            source: source.clone(),
+                            value,
+                        },
+                    });
+                }
+            }
+        }
+        Ok(present)
+    }
+
     /// Same lookup as `list_existing_external_ids_in_library_and_facet`, but
     /// keeping the owning title id for each matched external id so callers can
     /// point the user at the title they already have. The default fans out over
@@ -2466,6 +2692,30 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(titles)
     }
+    /// [`Self::get_by_ids`] with the projection spelled out, for callers that
+    /// read only part of each row. External ids are never loaded. The default
+    /// ignores the projection: a repository holding whole `Title` values loses
+    /// nothing by returning them.
+    async fn get_by_ids_with_projection(
+        &self,
+        ids: &[String],
+        _projection: TitleListProjection,
+    ) -> AppResult<Vec<Title>> {
+        self.get_by_ids(ids).await
+    }
+    /// `(title id, library id)` for each id that exists, for permission checks
+    /// that need nothing else from the row. Order is not guaranteed.
+    async fn list_library_ids_for_titles(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        Ok(self
+            .get_by_ids(ids)
+            .await?
+            .into_iter()
+            .map(|title| (title.id, title.library_id))
+            .collect())
+    }
     async fn get_title_ratings(&self, _title_id: &str) -> AppResult<TitleRatingSummary> {
         Ok(TitleRatingSummary::default())
     }
@@ -2680,12 +2930,91 @@ pub trait TitleRepository: Send + Sync {
         tags: Vec<String>,
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
-    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
-    /// Atomically claim a missing folder without overwriting another writer.
-    async fn claim_missing_folder_path(&self, _id: &str, _folder_path: &str) -> AppResult<bool> {
+    /// Delete these titles, with the rows a title delete removes once the
+    /// titles' downloads have been dealt with, in one transaction: manual
+    /// import selections, pending releases, wanted items, download submissions,
+    /// blocklist entries, probe signatures, unmatched scan items, and then what
+    /// [`Self::delete`] removes for each title. Every title must exist, or
+    /// nothing is deleted and the call fails.
+    ///
+    /// `Ok(false)` means the store has no such batch and deleted nothing; the
+    /// caller then deletes title by title.
+    ///
+    /// With `recycle_purge_recorded_at`, the same transaction records every
+    /// title with its library as a [`TitleRecyclePurge`] recorded then.
+    async fn delete_titles_with_records(
+        &self,
+        _ids: &[String],
+        _recycle_purge_recorded_at: Option<DateTime<Utc>>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+    /// [`Self::delete`], recording the title with its library as a
+    /// [`TitleRecyclePurge`] recorded at `recorded_at`, in the same
+    /// transaction.
+    async fn delete_recording_recycle_purge(
+        &self,
+        id: &str,
+        recorded_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let _ = (id, recorded_at);
         Err(AppError::Repository(
-            "atomic folder claims are unsupported by this repository".into(),
+            "this title repository cannot record recycle purges".into(),
         ))
+    }
+    /// Recorded [`TitleRecyclePurge`]s, oldest first (then by title id), at
+    /// most `limit`.
+    async fn list_recycle_purges(&self, limit: usize) -> AppResult<Vec<TitleRecyclePurge>> {
+        let _ = limit;
+        Ok(Vec::new())
+    }
+    /// Forget at most `limit` recorded titles recorded before `cutoff`,
+    /// oldest first, whether or not entries of theirs remain. Writes nothing
+    /// when none is that old. Returns how many were forgotten.
+    async fn drop_recycle_purges_recorded_before(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<u32> {
+        let _ = (cutoff, limit);
+        Ok(0)
+    }
+    /// Forget these recorded titles: housekeeping has finished their entries.
+    async fn clear_recycle_purges(&self, title_ids: &[String]) -> AppResult<()> {
+        let _ = title_ids;
+        Ok(())
+    }
+    /// The one write path for titles' recorded folders.
+    ///
+    /// Applies every write in one transaction or none of them. Each write is
+    /// checked, under the store's write lock, against every other title's
+    /// folder (no two titles share a folder and none lies inside another,
+    /// whatever their library), against the configured library roots, and
+    /// against the folder it expects the title to have now. A swap or a
+    /// takeover is one call with one write per title. Refusals carry the
+    /// `folder_ownership` reason codes.
+    async fn assign_title_folders(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
+        let _ = writes;
+        Err(AppError::Repository(
+            "this title repository cannot write title folders".into(),
+        ))
+    }
+    /// Run the checks [`Self::assign_title_folders`] would run on `writes`,
+    /// without its write lock, and write nothing. A caller about to move or
+    /// remove files asks this first so a refusal leaves disk untouched; the
+    /// write itself still checks, because the catalog can change in between.
+    /// A write naming a title that does not exist yet is checked as a title
+    /// with no folder, so a folder can be checked before its title is created.
+    async fn check_title_folder_writes(&self, writes: &[crate::TitleFolderWrite]) -> AppResult<()> {
+        let _ = writes;
+        Err(AppError::Repository(
+            "this title repository cannot write title folders".into(),
+        ))
+    }
+    /// Record a title's folder through [`Self::assign_title_folders`].
+    async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
+        self.assign_title_folders(&[crate::TitleFolderWrite::assign(id, folder_path)])
+            .await
     }
     /// Move a title into another library and onto a root in that library, in one
     /// transaction, carrying its library projections with it (FR-056).
@@ -2724,7 +3053,11 @@ pub trait TitleRepository: Send + Sync {
             "this title repository cannot transfer title {id} between libraries"
         )))
     }
-    async fn clear_folder_path(&self, id: &str) -> AppResult<()>;
+    /// Clear a title's folder through [`Self::assign_title_folders`].
+    async fn clear_folder_path(&self, id: &str) -> AppResult<()> {
+        self.assign_title_folders(&[crate::TitleFolderWrite::clear(id)])
+            .await
+    }
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64>;
     async fn list_page_after_id(
         &self,
@@ -2753,6 +3086,34 @@ pub trait TitleRepository: Send + Sync {
             .take(limit)
             .collect();
         Ok(filtered)
+    }
+    /// [`Self::list_page_after_id`] restricted to titles in `library_ids`:
+    /// the same titles in the same id order as filtering every page, with
+    /// full pages. An empty `library_ids` pages every library.
+    async fn list_page_after_id_in_libraries(
+        &self,
+        after_id: Option<String>,
+        library_ids: &[String],
+        limit: usize,
+    ) -> AppResult<Vec<Title>> {
+        if library_ids.is_empty() {
+            return self.list_page_after_id(after_id, limit).await;
+        }
+        let mut selected = Vec::new();
+        let mut after_id = after_id;
+        while selected.len() < limit {
+            let page = self.list_page_after_id(after_id.clone(), limit).await?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after_id = Some(last.id.clone());
+            selected.extend(
+                page.into_iter()
+                    .filter(|title| library_ids.contains(&title.library_id)),
+            );
+        }
+        selected.truncate(limit);
+        Ok(selected)
     }
     async fn update_title_artwork_urls(
         &self,
@@ -3114,6 +3475,33 @@ pub trait LibraryRepository: Send + Sync {
         permissions: AppPermissionMask,
     ) -> AppResult<()>;
     async fn permission_masks_for_user(&self, user_id: &str) -> AppResult<Vec<LibraryGrant>>;
+    /// [`Self::app_permission_mask_for_user`] for several users, keyed by user
+    /// id. SQL stores override this with one read.
+    async fn app_permission_masks_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, AppPermissionMask>> {
+        let mut masks = std::collections::HashMap::with_capacity(user_ids.len());
+        for user_id in user_ids {
+            let mask = self.app_permission_mask_for_user(user_id).await?;
+            masks.insert(user_id.clone(), mask);
+        }
+        Ok(masks)
+    }
+    /// [`Self::permission_masks_for_user`] for several users, keyed by user
+    /// id, each user's grants in the same order. SQL stores override this
+    /// with one read.
+    async fn permission_masks_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<LibraryGrant>>> {
+        let mut grants = std::collections::HashMap::with_capacity(user_ids.len());
+        for user_id in user_ids {
+            let user_grants = self.permission_masks_for_user(user_id).await?;
+            grants.insert(user_id.clone(), user_grants);
+        }
+        Ok(grants)
+    }
     async fn set_grants_for_user(&self, user_id: &str, grants: Vec<LibraryGrant>) -> AppResult<()>;
     async fn title_library_id(&self, title_id: &str) -> AppResult<Option<String>>;
     /// The number of titles under each library root, keyed by root id. A
@@ -3144,6 +3532,10 @@ pub struct NewMediaRequest {
     pub requested_monitor_type: Option<String>,
     /// Season/series-movie picks captured for the `advanced` monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Required audio languages for the new title; `None` inherits.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages for the new title; `None` inherits.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     /// Lease the requester asked for, in days; `None` means forever
     /// (spec 0003 FR-040).
     pub requested_lease_days: Option<i64>,
@@ -3254,6 +3646,8 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
@@ -3270,6 +3664,22 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn count_pending_by_facet(&self, library_ids: &[String])
     -> AppResult<MediaRequestCounts>;
+
+    /// [`Self::count_pending_by_facet`] for each library on its own, one entry
+    /// per library id. SQL stores count them in one grouped read.
+    async fn count_pending_by_library_and_facet(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<HashMap<String, MediaRequestCounts>> {
+        let mut by_library = HashMap::with_capacity(library_ids.len());
+        for library_id in library_ids {
+            let counts = self
+                .count_pending_by_facet(std::slice::from_ref(library_id))
+                .await?;
+            by_library.insert(library_id.clone(), counts);
+        }
+        Ok(by_library)
+    }
 
     /// Requester user ids for each of `title_ids`, keyed by title id.
     ///
@@ -3546,6 +3956,14 @@ pub trait ImageProxyRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn delete_image_proxy_cache_entry(&self, token: &str, variant: &str) -> AppResult<()>;
+
+    /// [`Self::delete_image_proxy_cache_entry`] for each `(token, variant)`.
+    async fn delete_image_proxy_cache_entries(&self, keys: &[(String, String)]) -> AppResult<()> {
+        for (token, variant) in keys {
+            self.delete_image_proxy_cache_entry(token, variant).await?;
+        }
+        Ok(())
+    }
 
     async fn list_image_proxy_cache_entries_lru(
         &self,
@@ -3888,10 +4306,14 @@ pub trait ShowRepository: Send + Sync {
         &self,
         title_ids: &[String],
     ) -> AppResult<Vec<PrimaryCollectionSummary>>;
+    /// Episodes of non-movie titles in `library_ids` whose air date falls
+    /// between the two dates, both inclusive, in air-date order. An empty
+    /// `library_ids` matches nothing.
     async fn list_episodes_in_date_range(
         &self,
         start_date: &str,
         end_date: &str,
+        library_ids: &[String],
     ) -> AppResult<Vec<CalendarEpisode>>;
     async fn replace_anibridge_scoped_external_ids_for_title(
         &self,
@@ -4173,6 +4595,18 @@ pub trait UserExternalAccountRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Vec<scryer_domain::UserExternalAccount>>;
+    /// [`Self::list_by_user_id`] for each user in `user_ids` order, the
+    /// results concatenated. SQL stores override this with one read.
+    async fn list_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::UserExternalAccount>> {
+        let mut accounts = Vec::new();
+        for user_id in user_ids {
+            accounts.extend(self.list_by_user_id(user_id).await?);
+        }
+        Ok(accounts)
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::UserExternalAccount>>;
     async fn get_by_provider_identity(
         &self,
@@ -4724,6 +5158,17 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Vec<WebauthnCredentialRecord>>;
+    /// [`Self::list_credentials_for_user`] for several users at once.
+    async fn list_credentials_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<WebauthnCredentialRecord>> {
+        let mut credentials = Vec::new();
+        for user_id in user_ids {
+            credentials.extend(self.list_credentials_for_user(user_id).await?);
+        }
+        Ok(credentials)
+    }
     /// Counts users with passkeys in one query, for settings that warn before
     /// a change would stop those passkeys from working.
     async fn passkey_enrollment_counts(&self) -> AppResult<crate::PasskeyEnrollmentCounts> {
@@ -4825,6 +5270,17 @@ pub trait TotpRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Option<TotpCredentialRecord>>;
+    /// [`Self::get_credential_for_user`] for several users at once.
+    async fn list_credentials_for_users(
+        &self,
+        user_ids: &[String],
+    ) -> AppResult<Vec<TotpCredentialRecord>> {
+        let mut credentials = Vec::new();
+        for user_id in user_ids {
+            credentials.extend(self.get_credential_for_user(user_id).await?);
+        }
+        Ok(credentials)
+    }
     async fn upsert_credential(
         &self,
         credential: TotpCredentialRecord,
@@ -5023,23 +5479,23 @@ pub trait DomainEventRepository: Send + Sync {
     }
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>>;
     async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>>;
-    /// `title_ids` scopes the page to those catalog titles. `include_titleless`
+    /// `title_scope` scopes the page to those catalog titles. `include_titleless`
     /// additionally admits rows that have no catalog title at all - an unlinked
     /// grab (FR-026) is recorded against the release and the indexer, so it can
     /// never be named by a title id, and a page scoped only by the caller's
     /// library authorization would otherwise drop it. It is ignored when
-    /// `title_ids` is `None`, where nothing is excluded anyway.
+    /// `title_scope` is `None`, where nothing is excluded anyway.
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
     ) -> AppResult<i64>;
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<TitleHistoryTitleScope<'_>>,
         include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
@@ -5165,6 +5621,10 @@ pub trait DownloadClientStatusRepository: Send + Sync {
 #[async_trait]
 pub trait IndexerConfigRepository: Send + Sync {
     async fn list(&self, provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>>;
+    /// Whether any indexer is configured; stores answer without decrypting.
+    async fn any_configured(&self) -> AppResult<bool> {
+        Ok(!self.list(None).await?.is_empty())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<IndexerConfig>>;
     async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig>;
     async fn touch_last_error(&self, id: &str) -> AppResult<()>;
@@ -5434,6 +5894,10 @@ pub trait ScopeIndexerCoverageRepository: Send + Sync {
 #[async_trait]
 pub trait DownloadClientConfigRepository: Send + Sync {
     async fn list(&self, client_type: Option<String>) -> AppResult<Vec<DownloadClientConfig>>;
+    /// Whether any client is configured; stores answer without decrypting.
+    async fn any_configured(&self) -> AppResult<bool> {
+        Ok(!self.list(None).await?.is_empty())
+    }
     async fn get_by_id(&self, id: &str) -> AppResult<Option<DownloadClientConfig>>;
     async fn create(&self, config: DownloadClientConfig) -> AppResult<DownloadClientConfig>;
     async fn update(&self, update: DownloadClientConfigUpdate) -> AppResult<DownloadClientConfig>;
@@ -5525,6 +5989,28 @@ pub trait SettingsRepository: Send + Sync {
         Ok(values)
     }
 
+    /// Whether any scope id holds an explicit row for this scope + key. A
+    /// store that cannot answer cheaply says `true`, so a caller using this
+    /// to skip work only ever does more of it.
+    async fn any_explicit_setting_json_for_scope_ids(
+        &self,
+        _scope: &str,
+        _key_name: &str,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    /// Every explicit `(scope_id, effective_value_json)` row for this scope +
+    /// key, or `None` when the store cannot list them; a caller then takes its
+    /// wider path.
+    async fn list_explicit_setting_json_values(
+        &self,
+        _scope: &str,
+        _key_name: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        Ok(None)
+    }
+
     async fn upsert_setting_json(
         &self,
         scope: &str,
@@ -5556,6 +6042,18 @@ pub trait SettingsRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn delete_values_for_scope_id(&self, scope_id: &str) -> AppResult<u32>;
+
+    /// Delete the rows of `key_names` in `scope` scoped to any of `scope_ids`,
+    /// bind-safe for any number of ids. Rows of other keys, and rows scoped to
+    /// other ids, stay. Returns how many rows went.
+    async fn delete_values_for_keys_and_scope_ids(
+        &self,
+        _scope: &str,
+        _key_names: &[&str],
+        _scope_ids: &[String],
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
 }
 
 #[async_trait]
@@ -5604,6 +6102,16 @@ pub trait HousekeepingRepository: Send + Sync {
     async fn delete_terminal_download_queue_commands_older_than(&self, days: i64)
     -> AppResult<u32>;
     async fn delete_rule_set_history_older_than(&self, days: i64) -> AppResult<u32>;
+    /// Evaluation runs are display-only history; nothing decides from them.
+    async fn delete_maintenance_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+        Ok(0)
+    }
+    /// Held maintenance action runs that finished more than `days` ago. The
+    /// newest run of each candidate generation, every run that is not held,
+    /// and every run carrying a scoped-deletion resume journal are kept.
+    async fn delete_held_lifecycle_action_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+        Ok(0)
+    }
     async fn delete_history_events_for_title_ids(&self, title_ids: &[String]) -> AppResult<u32>;
     async fn delete_download_import_artifacts_for_title_ids(
         &self,
@@ -7588,6 +8096,19 @@ pub trait JobRunRepository: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// The newest run of each key, in the order the keys are given; a key
+    /// with no runs contributes nothing.
+    async fn list_latest_job_run_per_job_key(
+        &self,
+        job_keys: &[JobKey],
+    ) -> AppResult<Vec<JobRunRecord>> {
+        let mut runs = Vec::with_capacity(job_keys.len());
+        for job_key in job_keys {
+            runs.extend(self.list_job_runs(Some(*job_key), 1).await?);
+        }
+        Ok(runs)
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
 
     /// Fail every persisted run still in a non-terminal state and return the
@@ -7623,6 +8144,23 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         facet: MediaFacet,
         item_path: &str,
     ) -> AppResult<()>;
+
+    /// `delete_library_scan_unmatched_item` for each of `item_paths`. The SQL
+    /// store deletes them in one transaction, so on an error nothing is
+    /// removed and a caller can replay the paths one by one. The default
+    /// deletes them one by one, stopping at the first error.
+    async fn delete_library_scan_unmatched_items(
+        &self,
+        library_id: &str,
+        facet: MediaFacet,
+        item_paths: &[String],
+    ) -> AppResult<()> {
+        for item_path in item_paths {
+            self.delete_library_scan_unmatched_item(library_id, facet.clone(), item_path)
+                .await?;
+        }
+        Ok(())
+    }
     async fn delete_for_library(&self, library_id: &str) -> AppResult<u32>;
     /// Remove every row bound to `title_id`; the title they point at is gone.
     async fn delete_for_title(&self, title_id: &str) -> AppResult<u32>;
@@ -7671,6 +8209,61 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         scan_root: Option<&str>,
         status: Option<PendingImportStatus>,
     ) -> AppResult<i64>;
+
+    /// Pending movie, series and anime rows per `(library id, facet)` that
+    /// still need a person: the reason code is one of
+    /// `folder_ownership_reason_codes`, or the row is not a movie bound to a
+    /// title. A row without a library counts under its facet's default
+    /// library. `None` when the store cannot count in place.
+    async fn count_pending_library_scan_items_requiring_action(
+        &self,
+        _folder_ownership_reason_codes: &[&str],
+    ) -> AppResult<Option<Vec<(String, MediaFacet, i64)>>> {
+        Ok(None)
+    }
+
+    /// One page of `facet` rows with `status` in `library_ids` that still
+    /// need a person (the predicate of
+    /// [`Self::count_pending_library_scan_items_requiring_action`]), in the
+    /// order of [`Self::list_library_scan_unmatched_items`], with the total
+    /// that matches before paging. A row without a library belongs to its
+    /// facet's default library. `None` when the store cannot page in place.
+    async fn page_library_scan_items_requiring_action(
+        &self,
+        _facet: MediaFacet,
+        _status: PendingImportStatus,
+        _library_ids: &[String],
+        _folder_ownership_reason_codes: &[&str],
+        _limit: i64,
+        _offset: i64,
+    ) -> AppResult<Option<(i64, Vec<LibraryScanUnmatchedItem>)>> {
+        Ok(None)
+    }
+
+    /// The rows among `ids` that exist, in no particular order.
+    async fn get_library_scan_unmatched_items(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<LibraryScanUnmatchedItem>> {
+        let mut items = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(item) = self.get_library_scan_unmatched_item(id).await? {
+                items.push(item);
+            }
+        }
+        Ok(items)
+    }
+
+    /// Mark each `(id, updated_at)` row ignored at its `updated_at`, skipping
+    /// rows already ignored. The SQL store writes them in one transaction, so
+    /// on an error nothing changed and a caller can replay the rows one by
+    /// one. `None` when the store cannot write them together.
+    async fn ignore_library_scan_unmatched_items(
+        &self,
+        _rows: &[(String, String)],
+    ) -> AppResult<Option<()>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -7690,6 +8283,13 @@ pub trait StagedNzbStore: Send + Sync {
     async fn delete_staged_nzb(&self, staged_nzb: &StagedNzbRef) -> AppResult<bool>;
 
     async fn prune_staged_nzbs_older_than(&self, older_than: DateTime<Utc>) -> AppResult<u32>;
+
+    /// Whether [`Self::prune_staged_nzbs_older_than`] with the same cutoff
+    /// would remove anything. Answering `true` is always safe: it only means
+    /// the prune runs and finds out.
+    async fn has_staged_nzbs_older_than(&self, _older_than: DateTime<Utc>) -> AppResult<bool> {
+        Ok(true)
+    }
 
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()>;
 
@@ -8017,6 +8617,19 @@ pub trait LocationOperationRepository: Send + Sync {
     /// behind the guard (T016).
     async fn location_ownership_holder(&self, entity: &OwnedEntity) -> AppResult<Option<String>>;
 
+    /// [`Self::location_ownership_holder`] for each of `entities`, in order.
+    /// The default fans out; SQL stores override with one read.
+    async fn location_ownership_holders(
+        &self,
+        entities: &[OwnedEntity],
+    ) -> AppResult<Vec<Option<String>>> {
+        let mut holders = Vec::with_capacity(entities.len());
+        for entity in entities {
+            holders.push(self.location_ownership_holder(entity).await?);
+        }
+        Ok(holders)
+    }
+
     /// Every open claim, for the in-process guard cache and diagnostics.
     async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>>;
 }
@@ -8290,6 +8903,28 @@ pub trait ImportRepository: Send + Sync {
         _limit: usize,
     ) -> AppResult<Vec<ImportRecord>> {
         Ok(Vec::new())
+    }
+
+    /// The ids [`Self::list_completed_manual_imports`] would return, in its
+    /// order, without reading or decoding the rows. `None` when the store
+    /// cannot read the ids alone.
+    async fn list_completed_manual_import_ids(
+        &self,
+        _updated_after: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(None)
+    }
+
+    /// The imports among `ids` that exist, in no particular order.
+    async fn get_imports_by_ids(&self, ids: &[String]) -> AppResult<Vec<ImportRecord>> {
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(record) = self.get_import_by_id(id).await? {
+                records.push(record);
+            }
+        }
+        Ok(records)
     }
 
     /// Replaces the caller's previous unconsumed selection for the same source and title.
@@ -9046,6 +9681,30 @@ pub trait MediaFileRepository: Send + Sync {
         episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeScopedMediaFile>>;
 
+    /// [`Self::list_live_media_files_for_episode_ids`] for several titles, one
+    /// entry per distinct title in `requests`. SQL stores read them together.
+    async fn list_live_media_files_for_titles_episode_ids(
+        &self,
+        requests: &[(String, Vec<String>)],
+    ) -> AppResult<Vec<(String, Vec<EpisodeScopedMediaFile>)>> {
+        let mut results: Vec<(String, Vec<EpisodeScopedMediaFile>)> = Vec::new();
+        for (title_id, _) in requests {
+            if results.iter().any(|(id, _)| id == title_id) {
+                continue;
+            }
+            let episode_ids = requests
+                .iter()
+                .filter(|(id, _)| id == title_id)
+                .flat_map(|(_, episode_ids)| episode_ids.iter().cloned())
+                .collect::<Vec<_>>();
+            let files = self
+                .list_live_media_files_for_episode_ids(title_id, &episode_ids)
+                .await?;
+            results.push((title_id.clone(), files));
+        }
+        Ok(results)
+    }
+
     async fn list_series_movie_link_ids_with_files_for_title(
         &self,
         title_id: &str,
@@ -9138,6 +9797,16 @@ pub trait MediaFileRepository: Send + Sync {
     async fn list_episode_media_availability(
         &self,
         _title_ids: &[String],
+    ) -> AppResult<Vec<EpisodeMediaAvailability>> {
+        Ok(Vec::new())
+    }
+
+    /// [`Self::list_episode_media_availability`] for exactly these episodes
+    /// rather than every episode of their titles. Each episode's answer is the
+    /// one the title-scoped read gives it.
+    async fn list_episode_media_availability_for_episodes(
+        &self,
+        _episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeMediaAvailability>> {
         Ok(Vec::new())
     }
@@ -9277,6 +9946,17 @@ pub trait MediaFileRepository: Send + Sync {
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()>;
 
+    /// `update_media_file_path` for each `(file id, path)` pair, in order. The
+    /// SQL store writes them in one transaction, so on an error nothing is
+    /// kept and a caller can replay the pairs one by one. The default runs
+    /// them one by one, stopping at the first error.
+    async fn update_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        for (file_id, file_path) in paths {
+            self.update_media_file_path(file_id, file_path).await?;
+        }
+        Ok(())
+    }
+
     async fn set_media_file_roles_for_title(
         &self,
         title_id: &str,
@@ -9291,6 +9971,24 @@ pub trait MediaFileRepository: Send + Sync {
         primary_file_id: &str,
         additional_file_ids: &[String],
     ) -> AppResult<()>;
+
+    /// `set_media_file_roles_for_episode` with no additional files, for each
+    /// of `episode_ids`. The SQL store writes them in one transaction, so on
+    /// an error nothing is kept and a caller can replay the episodes one by
+    /// one. The default runs them one by one, stopping at the first error;
+    /// each write is idempotent, so a replay after it ends the same.
+    async fn set_primary_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        episode_ids: &[String],
+        primary_file_id: &str,
+    ) -> AppResult<()> {
+        for episode_id in episode_ids {
+            self.set_media_file_roles_for_episode(title_id, episode_id, primary_file_id, &[])
+                .await?;
+        }
+        Ok(())
+    }
 
     /// Make `file_id` Primary for every episode in `episode_ids`, but only
     /// while, at write time, no file is Primary for any of them and `file_id`
@@ -9318,6 +10016,22 @@ pub trait MediaFileRepository: Send + Sync {
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()>;
 
     async fn get_media_file_by_id(&self, file_id: &str) -> AppResult<Option<TitleMediaFile>>;
+
+    /// `(file id, title id)` for each of `file_ids` that has a row, the
+    /// owner `get_media_file_by_id` reports. Order is not guaranteed. SQL
+    /// stores read only the two columns; the default reads each row.
+    async fn list_media_file_title_ids(
+        &self,
+        file_ids: &[String],
+    ) -> AppResult<Vec<(String, String)>> {
+        let mut owners = Vec::with_capacity(file_ids.len());
+        for file_id in file_ids {
+            if let Some(file) = self.get_media_file_by_id(file_id).await? {
+                owners.push((file_id.clone(), file.title_id));
+            }
+        }
+        Ok(owners)
+    }
 
     async fn get_media_file_by_path(&self, file_path: &str) -> AppResult<Option<TitleMediaFile>>;
 
@@ -9393,6 +10107,19 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         .await
     }
 
+    /// Get-or-create each candidate's row, then mark it grabbed with
+    /// `grabbed_release`, keeping the row's stored `last_search_at`. Applied in
+    /// order; the first failure stops the run and is returned. SQL stores run
+    /// the whole batch in one transaction and, if it fails, replay this
+    /// per-row path so the end state matches it.
+    async fn ensure_acquisition_scopes_grabbed(
+        &self,
+        candidates: &[AcquisitionScopeState],
+        grabbed_release: &str,
+    ) -> AppResult<()> {
+        ensure_acquisition_scopes_grabbed_per_row(self, candidates, grabbed_release).await
+    }
+
     async fn transition_acquisition_scope_to_completed(
         &self,
         transition: &AcquisitionScopeCompleteTransition,
@@ -9439,6 +10166,29 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         .await?;
 
         Ok(true)
+    }
+
+    /// `complete_acquisition_scope_for_title` for each episode of one title.
+    /// The SQL store writes them in one statement, so on an error nothing is
+    /// kept and a caller can replay the episodes one by one. The default runs
+    /// them one by one, stopping at the first error.
+    async fn complete_acquisition_scopes_for_episodes(
+        &self,
+        title_id: &str,
+        episode_ids: &[String],
+        last_search_at: Option<&str>,
+        landed_import: bool,
+    ) -> AppResult<()> {
+        for episode_id in episode_ids {
+            self.complete_acquisition_scope_for_title(
+                title_id,
+                Some(episode_id),
+                last_search_at,
+                landed_import,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn transition_acquisition_scope_to_paused(
@@ -9493,6 +10243,20 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
     async fn delete_acquisition_scope_states_for_episode(&self, episode_id: &str) -> AppResult<()>;
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String>;
+
+    /// `insert_release_decision` for each decision in order, one result per
+    /// decision. SQL stores write the batch in one transaction and replay it
+    /// row by row if that fails, so each result matches the per-row call.
+    async fn insert_release_decisions(
+        &self,
+        decisions: &[ReleaseDecision],
+    ) -> Vec<AppResult<String>> {
+        let mut results = Vec::with_capacity(decisions.len());
+        for decision in decisions {
+            results.push(self.insert_release_decision(decision).await);
+        }
+        results
+    }
 
     async fn get_acquisition_scope_state_by_id(
         &self,
@@ -9583,6 +10347,27 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         &self,
         wanted_item_id: &str,
     ) -> AppResult<i64>;
+}
+
+/// One row at a time: ensure, read back `last_search_at`, mark grabbed.
+pub async fn ensure_acquisition_scopes_grabbed_per_row<
+    R: AcquisitionScopeStateRepository + ?Sized,
+>(
+    repo: &R,
+    candidates: &[AcquisitionScopeState],
+    grabbed_release: &str,
+) -> AppResult<()> {
+    for candidate in candidates {
+        let id = repo.ensure_acquisition_scope_state(candidate).await?;
+        let existing = repo.get_acquisition_scope_state_by_id(&id).await?;
+        repo.transition_acquisition_scope_to_grabbed(&AcquisitionScopeGrabTransition {
+            id,
+            last_search_at: existing.and_then(|state| state.last_search_at),
+            grabbed_release: grabbed_release.to_string(),
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 /// Locate the acquisition-state row matching `item`'s scope (episode /
@@ -9938,6 +10723,19 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         rule_set_id: &str,
         revision_number: i64,
     ) -> AppResult<Option<MaintenanceRuleRevision>>;
+
+    /// [`Self::get_revision`] for each `(rule_set_id, revision_number)` key,
+    /// in key order. SQL stores override this with one read.
+    async fn get_revisions(
+        &self,
+        keys: &[(String, i64)],
+    ) -> AppResult<Vec<Option<MaintenanceRuleRevision>>> {
+        let mut revisions = Vec::with_capacity(keys.len());
+        for (rule_set_id, revision_number) in keys {
+            revisions.push(self.get_revision(rule_set_id, *revision_number).await?);
+        }
+        Ok(revisions)
+    }
 
     /// Newest revision first.
     async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
@@ -10513,6 +11311,19 @@ pub trait RequestRuleSetRepository: Send + Sync {
         revision_number: i64,
     ) -> AppResult<Option<scryer_domain::RequestRuleRevision>>;
 
+    /// [`Self::get_revision`] for each `(rule_set_id, revision_number)` key,
+    /// in key order. SQL stores override this with one read.
+    async fn get_revisions(
+        &self,
+        keys: &[(String, i64)],
+    ) -> AppResult<Vec<Option<scryer_domain::RequestRuleRevision>>> {
+        let mut revisions = Vec::with_capacity(keys.len());
+        for (rule_set_id, revision_number) in keys {
+            revisions.push(self.get_revision(rule_set_id, *revision_number).await?);
+        }
+        Ok(revisions)
+    }
+
     /// Newest revision first.
     async fn list_revisions(
         &self,
@@ -10667,6 +11478,21 @@ pub trait LifecycleClaimRepository: Send + Sync {
         reason: &str,
         now: DateTime<Utc>,
     ) -> AppResult<u64>;
+
+    /// [`Self::release_for_title`] for many titles. The default fans out; SQL
+    /// stores override with one statement.
+    async fn release_for_titles(
+        &self,
+        title_ids: &[String],
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        let mut released = 0;
+        for title_id in title_ids {
+            released += self.release_for_title(title_id, reason, now).await?;
+        }
+        Ok(released)
+    }
 
     /// Push an active claim's expiry out. Only touches a live claim: extending
     /// an expired lease would resurrect a hold the operator already saw lapse.
@@ -13048,6 +13874,19 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         provider_file_id: &str,
         language: &str,
         reason: Option<&str>,
+    ) -> AppResult<()>;
+    /// The "nothing found" backoff rows of these media files.
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        media_file_ids: &[String],
+    ) -> AppResult<Vec<crate::subtitles::SubtitleSearchBackoff>>;
+    /// Write `upserts` and remove `cleared` (languages of `media_file_id`) in
+    /// one transaction.
+    async fn apply_search_backoffs(
+        &self,
+        media_file_id: &str,
+        upserts: &[crate::subtitles::SubtitleSearchBackoff],
+        cleared: &[crate::subtitles::SubtitleSearchBackoffKey],
     ) -> AppResult<()>;
 }
 

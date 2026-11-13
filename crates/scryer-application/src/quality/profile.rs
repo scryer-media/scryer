@@ -6,6 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::decision_pipeline::{DecisionGate, DecisionPipeline, ReleaseDecidingStep};
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct QualityProfile {
     pub id: String,
@@ -66,6 +68,17 @@ pub struct QualityProfileCriteria {
     /// `Some(DEFAULT_MIN_UPGRADE_SCORE_DELTA)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// The order this profile compares releases in; the score always follows
+    /// the last gate. See [`crate::decision_pipeline`].
+    ///
+    /// Kept consistent with `ignore_proper_repack`: a profile that ignores
+    /// PROPER/REPACK has no revision gate, and one without a revision gate
+    /// ignores them. Write it through
+    /// [`QualityProfileCriteria::set_decision_pipeline`] or
+    /// [`QualityProfileCriteria::set_ignore_proper_repack`], which keep the two
+    /// together.
+    #[serde(default, skip_serializing_if = "DecisionPipeline::is_default")]
+    pub decision_pipeline: DecisionPipeline,
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
@@ -120,6 +133,12 @@ pub(crate) struct AcceptanceCriteria<'a> {
     pub cutoff_score: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// Acceptance, not ranking: the order decides which releases may replace
+    /// a file, and without a tier gate the tier cutoff stops deciding when a
+    /// scope is done. Absent whenever the profile never chose an order, so
+    /// those profiles keep the fingerprint they had before it existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_pipeline: Option<DecisionPipeline>,
 }
 
 impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
@@ -144,6 +163,7 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
             min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+            decision_pipeline: criteria.stored_decision_pipeline(),
         }
     }
 }
@@ -166,11 +186,90 @@ pub struct ScoringConfig {
     pub cutoff_score: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_upgrade_score_delta: Option<i32>,
+    /// Omitted unless the profile chose an order other than the one its
+    /// `ignore_proper_repack` switch implies; see
+    /// [`QualityProfileCriteria::stored_decision_pipeline`]. A key this build
+    /// does not write, such as an older `ranking_mode`, is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_pipeline: Option<DecisionPipeline>,
     #[serde(default)]
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
 impl QualityProfileCriteria {
+    /// Whether a scope holding a file of `quality` has met the quality half of
+    /// the cutoff.
+    ///
+    /// With a quality-tier gate: the quality has reached `cutoff_tier`. A
+    /// profile without one has no quality half, so any file meets it and only
+    /// `cutoff_score` decides whether the scope is done. Without a cutoff score
+    /// either, the first file satisfies the scope.
+    pub(crate) fn quality_cutoff_met(&self, quality: Option<&str>) -> bool {
+        let quality = quality.map(str::trim).filter(|quality| !quality.is_empty());
+        if !self.tier_cutoff_applies() {
+            return quality.is_some();
+        }
+        quality
+            .zip(self.cutoff_tier.as_deref())
+            .is_some_and(|(quality, cutoff)| {
+                quality_meets_or_exceeds_cutoff(quality, cutoff, &self.quality_tiers)
+            })
+    }
+
+    /// Whether the tier cutoff applies at all: only while the quality tier
+    /// is one of the profile's gates. The one place that ties the tier cutoff
+    /// to a step.
+    pub(crate) fn tier_cutoff_applies(&self) -> bool {
+        self.decision_pipeline.contains(DecisionGate::QualityTier)
+    }
+
+    /// Whether PROPER/REPACK ranks are ignored: the stored switch is on, or
+    /// the pipeline has no revision gate.
+    pub fn ignores_revision(&self) -> bool {
+        self.decision_pipeline
+            .ignores_revisions(self.ignore_proper_repack)
+    }
+
+    /// The pipeline this profile runs, with the legacy revision switch
+    /// applied.
+    pub fn effective_decision_pipeline(&self) -> DecisionPipeline {
+        self.decision_pipeline
+            .reconciled_with_ignore_proper_repack(self.ignore_proper_repack)
+    }
+
+    /// Bring the pipeline and the `ignore_proper_repack` switch into agreement
+    /// after reading them separately: a stored `ignore_proper_repack` removes
+    /// the revision gate, and a pipeline without one sets the switch.
+    pub fn reconcile_revision_gate(&mut self) {
+        self.decision_pipeline = self
+            .decision_pipeline
+            .reconciled_with_ignore_proper_repack(self.ignore_proper_repack);
+        self.ignore_proper_repack = !self.decision_pipeline.compares_revisions();
+    }
+
+    /// Replace the pipeline; the revision switch follows it.
+    pub fn set_decision_pipeline(&mut self, pipeline: DecisionPipeline) {
+        self.decision_pipeline = pipeline;
+        self.ignore_proper_repack = !pipeline.compares_revisions();
+    }
+
+    /// Set the legacy revision switch; the pipeline follows it, losing or
+    /// regaining its revision gate.
+    pub fn set_ignore_proper_repack(&mut self, ignore: bool) {
+        self.decision_pipeline = self.decision_pipeline.with_ignore_proper_repack(ignore);
+        self.ignore_proper_repack = ignore;
+    }
+
+    /// The pipeline to persist and fingerprint: `None` when it is what the
+    /// revision switch implies on its own, so a profile that never chose an
+    /// order stores and hashes exactly what it did before orders existed.
+    pub fn stored_decision_pipeline(&self) -> Option<DecisionPipeline> {
+        (!self
+            .decision_pipeline
+            .is_implied_by(self.ignore_proper_repack))
+        .then_some(self.decision_pipeline)
+    }
+
     /// The same-tier upgrade delta this profile applies.
     pub fn min_upgrade_score_delta_or_default(&self) -> i32 {
         self.min_upgrade_score_delta
@@ -263,6 +362,19 @@ pub struct QualityProfileDecision {
     pub size_fit_penalty: i32,
     /// Context-derived revision preference; zero without related incumbents.
     pub revision_preference: i32,
+    /// Standing against the title's preferred and optional audio languages.
+    ///
+    /// Carried here for the same reason as `tier_index`: every ordering reads
+    /// it off the decision. It never contributes to the score, so custom rules
+    /// cannot outweigh it and it cannot outweigh them within its own step.
+    pub language: crate::AudioLanguageRank,
+    /// The profile's decision pipeline, so every ordering that reads tier and
+    /// score off the decision puts the gates in the order admission does.
+    pub decision_pipeline: DecisionPipeline,
+    /// The step of the pipeline that settled the automatic decision about
+    /// this release, once one has been made; `None` before, and for a
+    /// decision no comparison settled.
+    pub decided_by: Option<ReleaseDecidingStep>,
 }
 
 impl QualityProfileDecision {
@@ -276,6 +388,9 @@ impl QualityProfileDecision {
             tier_index: None,
             size_fit_penalty: 0,
             revision_preference: 0,
+            language: crate::AudioLanguageRank::default(),
+            decision_pipeline: DecisionPipeline::default_order(),
+            decided_by: None,
         }
     }
 
@@ -381,6 +496,8 @@ struct RawQualityProfileCriteria {
     #[serde(default)]
     min_upgrade_score_delta: Option<i32>,
     #[serde(default)]
+    decision_pipeline: Option<DecisionPipeline>,
+    #[serde(default)]
     facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
@@ -449,6 +566,7 @@ pub fn builtin_4k_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            decision_pipeline: DecisionPipeline::default_order(),
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -488,6 +606,7 @@ pub fn builtin_8k_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            decision_pipeline: DecisionPipeline::default_order(),
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -522,6 +641,7 @@ pub fn builtin_1080p_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            decision_pipeline: DecisionPipeline::default_order(),
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -556,6 +676,7 @@ pub fn builtin_anime_profile() -> QualityProfile {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            decision_pipeline: DecisionPipeline::default_order(),
             facet_persona_overrides: HashMap::new(),
         },
     }
@@ -565,7 +686,7 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
     let criteria = raw.criteria;
     let quality_tiers = normalize_list(criteria.quality_tiers);
     let archival_quality = resolve_archival_quality(criteria.archival_quality, &quality_tiers);
-    Ok(QualityProfile {
+    let mut profile = QualityProfile {
         id: raw.id,
         name: raw.name,
         criteria: QualityProfileCriteria {
@@ -616,9 +737,12 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             min_score_to_grab: criteria.min_score_to_grab,
             cutoff_score: criteria.cutoff_score,
             min_upgrade_score_delta: criteria.min_upgrade_score_delta,
+            decision_pipeline: criteria.decision_pipeline.unwrap_or_default(),
             facet_persona_overrides: criteria.facet_persona_overrides,
         },
-    })
+    };
+    profile.criteria.reconcile_revision_gate();
+    Ok(profile)
 }
 
 /// Test scaffolding only: this is the 4k-shaped profile, NOT the canonical
@@ -654,6 +778,7 @@ impl Default for QualityProfile {
                 min_score_to_grab: None,
                 cutoff_score: None,
                 min_upgrade_score_delta: None,
+                decision_pipeline: DecisionPipeline::default_order(),
                 facet_persona_overrides: HashMap::new(),
             },
         }
@@ -687,6 +812,7 @@ impl Default for QualityProfileCriteria {
             min_score_to_grab: None,
             cutoff_score: None,
             min_upgrade_score_delta: None,
+            decision_pipeline: DecisionPipeline::default_order(),
             facet_persona_overrides: HashMap::new(),
         }
     }
@@ -907,6 +1033,7 @@ pub fn evaluate_profile_requirements(
     let mut decision = QualityProfileDecision::new();
     let criteria = &profile.criteria;
     decision.tier_index = quality_tier_index(criteria, release.quality.as_deref());
+    decision.decision_pipeline = criteria.decision_pipeline;
     // The lowest admitted resolution is the fallback floor. Each standard
     // resolution step above it earns 100 points, including skipped tiers. Profile
     // ordering remains authoritative even against arbitrary custom scores.

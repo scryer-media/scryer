@@ -88,6 +88,13 @@ impl AppUseCase {
         }
         let requested_lease_days =
             crate::request_rules::service::validate_lease_days(input.requested_lease_days)?;
+        // Normalized exactly as submit stores them, so a rule reading the
+        // requested audio languages sees the same value in both places.
+        let (requested_required_audio_languages, requested_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                input.requested_required_audio_languages.clone(),
+                input.requested_preferred_audio_languages.clone(),
+            )?;
 
         // The same read-through cache the submit uses, so the two share one SMG
         // call and therefore one set of facts (FR-021).
@@ -124,6 +131,8 @@ impl AppUseCase {
             monitor_type: input.requested_monitor_type.clone(),
             monitor_selection: input.requested_monitor_selection.clone(),
             requested_lease_days,
+            requested_required_audio_languages,
+            requested_preferred_audio_languages,
             origin: scryer_domain::MediaRequestOrigin::Manual,
             list_rank: None,
         };

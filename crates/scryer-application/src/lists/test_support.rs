@@ -48,6 +48,8 @@ pub(crate) fn route(kind: MediaFacet, library_id: &str) -> ListRoute {
         use_season_folders: None,
         release_numbering: None,
         tags: Vec::new(),
+        required_audio_languages: None,
+        preferred_audio_languages: None,
     }
 }
 
@@ -640,6 +642,10 @@ pub(crate) struct RecordingActions {
     pub missing_titles: Mutex<HashSet<String>>,
     /// How many times a title's existence was looked up.
     pub title_lookups: Mutex<u32>,
+    /// The ids of every batched existence read, in order.
+    pub title_batch_lookups: Mutex<Vec<Vec<String>>>,
+    /// Makes batched existence reads fail.
+    pub fail_title_batch_lookups: Mutex<bool>,
     /// Every finished sync that was announced, in order.
     pub finished_syncs: Mutex<Vec<(String, ListSyncRunOutcome)>>,
     pub owner_manages_titles: bool,
@@ -735,6 +741,22 @@ impl ListActions for RecordingActions {
     async fn title_exists(&self, title_id: &str) -> AppResult<bool> {
         *self.title_lookups.lock().unwrap() += 1;
         Ok(!self.missing_titles.lock().unwrap().contains(title_id))
+    }
+
+    async fn titles_present(&self, title_ids: &[String]) -> AppResult<HashSet<String>> {
+        self.title_batch_lookups
+            .lock()
+            .unwrap()
+            .push(title_ids.to_vec());
+        if *self.fail_title_batch_lookups.lock().unwrap() {
+            return Err(AppError::Repository("fixture failure".into()));
+        }
+        let missing = self.missing_titles.lock().unwrap();
+        Ok(title_ids
+            .iter()
+            .filter(|title_id| !missing.contains(*title_id))
+            .cloned()
+            .collect())
     }
 
     async fn record_departure(

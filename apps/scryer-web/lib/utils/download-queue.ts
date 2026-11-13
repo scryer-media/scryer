@@ -563,6 +563,22 @@ export function deriveDownloadQueueDisplayState(
     return "importing";
   }
 
+  // Mirrors the server: an import record on a download Scryer already settled
+  // is history, not something left to import.
+  if (
+    importStatusKey === "skipped" &&
+    trackedStateKey === "imported" &&
+    stateKey !== "warning"
+  ) {
+    return "completed";
+  }
+  if (
+    (importStatusKey === "failed" || importStatusKey === "skipped") &&
+    trackedStateKey === "failed"
+  ) {
+    return "failed";
+  }
+
   if (
     (importStatusKey === "failed" || importStatusKey === "skipped") &&
     (trackedStateKey === "import_blocked" ||
@@ -673,13 +689,16 @@ export function collectDownloadClientFilterOptions(
 }
 
 export function matchesImportStatuses(
-  item: Pick<DownloadQueueItem, "displayState">,
+  item: Pick<DownloadQueueItem, "displayState"> &
+    Partial<Pick<DownloadQueueItem, "trackedState">>,
   statuses: DownloadImportStatus[],
 ): boolean {
   if (statuses.length === 0) {
     return false;
   }
 
+  if (item.trackedState === "IMPORT_DISMISSED")
+    return statuses.includes("DISMISSED");
   switch (item.displayState) {
     case "IMPORTING":
       return statuses.includes("IMPORTING");

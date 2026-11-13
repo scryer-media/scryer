@@ -203,11 +203,26 @@ export function useDownloadImport({
       return;
     }
 
+    // A hidden tab skips ticks and refreshes once when it becomes visible.
+    let missedWhileHidden = false;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || !missedWhileHidden) return;
+      missedWhileHidden = false;
+      void refreshImport();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     const intervalId = setInterval(() => {
+      if (document.hidden) {
+        missedWhileHidden = true;
+        return;
+      }
       void refreshImport();
     }, 10_000);
 
-    return () => clearInterval(intervalId);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearInterval(intervalId);
+    };
   }, [enabled, refreshImport]);
 
   return {

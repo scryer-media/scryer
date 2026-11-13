@@ -701,6 +701,22 @@ const ja: LocaleDictionary = {
     "品質プロファイルカタログが有効なJSONではありません。",
   "settings.qualityProfileUnknown": "不明な品質プロファイル ID「{{id}}」。",
   "settings.qualitySettingsSaved": "品質設定を保存しました。",
+  "settings.audioLanguagePreferences": "オーディオ言語の優先設定",
+  "settings.audioLanguagePreferencesInfo":
+    "リリースを除外せずにオーディオ言語で順位付けします。必須言語と異なり、これらの言語を含まないリリースも、より良いものがなければ取得され、より良いものが見つかった時点で置き換えられます。",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "このライブラリ独自の値です。リストを空にするか継承を選ぶと、カタログの既定値が使われます。",
+  "settings.audioPreferredLanguages": "優先言語",
+  "settings.audioPreferredLanguagesHint":
+    "優先度の高い順に並べます。1番目の言語を含むリリースは、2番目の言語だけを含むリリースより上位になります。どれも含まないファイルはアップグレード対象のままです。",
+  "settings.audioPreferredMoveUp": "{{language}} を上へ移動",
+  "settings.audioPreferredMoveDown": "{{language}} を下へ移動",
+  "settings.audioOptionalLanguages": "任意の言語",
+  "settings.audioOptionalLanguagesHint":
+    "あれば望ましい言語です。同じ品質のリリースの中では、これらの言語を多く含むものが優先されます。",
+  "settings.audioOptionalKeepSearching": "任意の言語を探し続ける",
+  "settings.audioOptionalKeepSearchingHint":
+    "オンにすると、任意の言語が欠けているファイルはアップグレード対象のままになります。オフの場合、そのようなリリースが見つかれば置き換えますが、検索はしません。",
   "settings.downloadClientRoutingSaved":
     "ダウンロードクライアントルーティングを保存しました。",
   "settings.downloadClientRoutingSavedFor":
@@ -1253,6 +1269,18 @@ const ja: LocaleDictionary = {
   "title.monitoredSection": "モニタリング中の{{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "最新をキューに追加",
+  "search.addConfigRequiredAudio": "必須オーディオ言語",
+  "search.addConfigPreferredAudio": "優先オーディオ言語",
+  "search.addConfigAudioChoose": "言語を選択",
+  "search.addConfigAudioRequireNone": "何も必須にしない",
+  "title.preferredAudioLanguages": "優先オーディオ言語",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "そのオーディオ言語は Scryer で認識できません。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "ルートのオーディオ言語は Scryer で認識できません。",
+  "requests.requestedAudioLanguages": "リクエストされたオーディオ言語",
+  "requests.requestedRequiredAudio": "必須: {{languages}}",
+  "requests.requestedPreferredAudio": "優先: {{languages}}",
   "title.requiredAudioLanguages": "必須オーディオ言語",
   "title.originalAudioLanguagePerTitle": "オリジナル言語（タイトルごと）",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1373,6 +1401,11 @@ const ja: LocaleDictionary = {
   "tvdb.searchPrompt": "上にタイトルを入力してTVDBを検索してください。",
   "tvdb.searchByTvdb": "TVDB検索",
   "nzb.searchResultsFor": "{{name}}のNZB結果",
+  "nzb.audioLanguagePreferred": "優先言語",
+  "nzb.audioLanguagePreferredRank": "優先言語 #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "優先言語なし",
+  "nzb.audioLanguageOptionalHits": "任意 +{{count}}",
+  "nzb.audioLanguageHint": "オーディオ言語の優先設定に対するこのリリースの順位",
   "nzb.noResultsYet": "リリースマッチはまだありません。",
   "nzb.searchFailed": "リリース検索に失敗しました。",
   "nzb.queue": "キュー",
@@ -1514,6 +1547,18 @@ const ja: LocaleDictionary = {
   "importHistory.passwordPlaceholder": "アーカイブのパスワード",
   "importHistory.retrySuccess": "インポートの再試行を開始しました",
   "system.title": "システムヘルス",
+  "system.diagnosticsBundle.download": "診断バンドルをダウンロード",
+  "system.diagnosticsBundle.preparing": "診断を準備しています…",
+  "system.diagnosticsBundle.helper":
+    "ログ、メトリクス、設定の概要をメンテナー向けに1つのファイルにまとめます。名前、アドレス、パス、シークレットは可能な限り削除されますが、共有する前にバンドルを確認してください。",
+  "system.diagnosticsBundle.failed":
+    "診断バンドルをダウンロードできませんでした。",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "診断をダウンロードするには再度サインインしてください。",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "診断のダウンロードにはシステム設定の権限が必要です。",
+  "system.diagnosticsBundle.refusal.failed":
+    "診断バンドルを作成できませんでした。詳細はサーバーログを確認してください。",
   "system.jobsTitle": "求人",
   "system.notLoaded": "システムヘルスが読み込まれていません。",
   "system.refreshing": "更新中",
@@ -2078,6 +2123,7 @@ const ja: LocaleDictionary = {
   "wanted.decision.eligible": "対象",
   "wanted.decision.titleMismatch": "タイトル不一致",
   "wanted.decision.qualityBlocked": "品質でブロック",
+  "wanted.decision.episodeAvailabilityBlocked": "放送日待ち",
   "wanted.decision.upgradeRejected": "アップグレード拒否",
   "wanted.decision.pendingDelay": "保留中の遅延",
   "wanted.decision.alreadyActive": "すでにアクティブ",
@@ -3039,6 +3085,9 @@ const ja: LocaleDictionary = {
   "indexerSearch.facet.protocol": "プロトコル",
   "indexerSearch.facet.resolution": "解像度",
   "indexerSearch.facet.source": "ソース",
+  "indexerSearch.facet.videoCodec": "映像コーデック",
+  "indexerSearch.facet.audioCodec": "音声コーデック",
+  "indexerSearch.facet.audioChannels": "音声チャンネル",
   "indexerSearch.facet.audio": "音声・HDR",
   "indexerSearch.facet.flags": "フラグ",
   "indexerSearch.facet.indexer": "インデクサー",
@@ -3768,6 +3817,54 @@ const ja: LocaleDictionary = {
   "setup.sourceImportState.failed": "失敗",
   "setup.sourceImportState.interrupted": "中断",
   "setup.sourceImportState.skipped": "スキップ済み",
+  "qualityProfile.decisionOrder": "判定順序",
+  "qualityProfile.decisionOrderInfo":
+    "2つのリリースがどちらもこのプロファイルを満たす場合、Scryer は上からこれらのステップを確認します。最初に差がついたステップで決まります。スコアは常に最後に判定します。",
+  "qualityProfile.decisionGateQualityTier": "品質ティア",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "このプロファイルの品質の優先順位で上位にあるティアのリリースが勝ちます。",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "同じティアかつ同じリリースグループでは、新しい PROPER または REPACK が勝ちます。",
+  "qualityProfile.decisionGatePreferredLanguage": "優先言語",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "ライブラリの優先音声言語で上位にある音声を持つリリースが勝ちます。",
+  "qualityProfile.decisionGateOptionalLanguages": "任意の言語",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "ライブラリの任意の音声言語をより多く含むリリースが勝ちます。",
+  "qualityProfile.decisionGateUnknown": "不明なステップ ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "このバージョンのウェブアプリはこのステップを認識できません。位置はそのまま保持されます。",
+  "qualityProfile.decisionGateScore": "スコア",
+  "qualityProfile.decisionGateScoreDescription":
+    "スコアの高い方が勝ちます。スコアは常に最後のステップです。",
+  "qualityProfile.decisionScoreLocked": "常に最後",
+  "qualityProfile.decisionStepRemove": "{{value}} を判定順序から削除",
+  "qualityProfile.decisionStepAdd": "{{value}} を判定順序に追加",
+  "qualityProfile.decisionAvailableSteps": "未使用のステップ",
+  "qualityProfile.decisionAllStepsInUse": "すべてのステップを使用中です。",
+  "qualityProfile.decisionWarningTierAbsent":
+    "品質ティアのステップがないと、下位ティアのリリースが上位ティアのファイルを置き換えることがあり、カットオフティアは適用されません。アップグレードの検索を止めるのはカットオフスコアだけです。カットオフスコアもない場合、ファイルがあればプロファイルは満たされます。",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "言語のステップが品質ティアより前にあるため、優先言語の下位ティアのリリースが上位ティアのファイルを置き換えることがあります。",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "PROPER/REPACK のステップがないと、PROPER や REPACK のリリースは自動的に優先されません。スコアリングルールで加点することは引き続きできます。",
+  "qualityProfile.decisionNoteLanguageGates":
+    "言語のステップは、ライブラリに優先または任意の音声言語が設定されている場合にのみ効果があります。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "判定順序に品質ティアのステップがないため適用されません。",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "品質プロファイルの判定順序では、各ステップは1回しか使えません。",
+  "qualityProfile.qualityPreferenceHelp":
+    "優先度の高いものが先頭です。リリースは判定順序の品質ティアのステップでこの順序に従って比較されます。新しいティアは最も低い優先度で追加されます。",
+  "qualityProfile.decidedBy": "判定したステップ: {{step}}",
+  "qualityProfile.cutoffScore": "カットオフスコア",
+  "qualityProfile.cutoffScoreInfo":
+    "ディスク上のファイルがこのスコアに達すると、プロファイルはアップグレードの検索を停止します。カットオフスコアを使わない場合は空欄にします。",
+  "qualityProfile.cutoffScorePlaceholder": "カットオフスコアなし",
+  "qualityProfile.decisionStepDrag": "ドラッグして {{value}} を並べ替え",
+  "qualityProfile.decisionStepMoveUp": "{{value}} を上へ移動",
+  "qualityProfile.decisionStepMoveDown": "{{value}} を下へ移動",
 };
 
 export default ja;

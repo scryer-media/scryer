@@ -115,7 +115,7 @@
 //! So **Move with Scryer** is the only requestable fold mode, **CatalogOnly** is
 //! derived (FR-076), and **Files are already there** is refused by name.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -346,19 +346,31 @@ pub fn classify_root_content(
     tracked_media_paths: &[PathBuf],
 ) -> RootContentInventory {
     let tracked: BTreeSet<&Path> = tracked_media_paths.iter().map(PathBuf::as_path).collect();
+    // `path.starts_with(folder)` holds exactly when `folder` is one of the
+    // path's ancestors (itself included), compared component by component as
+    // `Path` equality and hashing are. A folder with no components is a prefix
+    // of every path, and no ancestor walk reaches it.
+    let folder_set: HashSet<&Path> = title_folders.iter().map(PathBuf::as_path).collect();
+    let every_path_is_inside = title_folders
+        .iter()
+        .any(|folder| folder.components().next().is_none());
+    let under_title_folder = |path: &Path| {
+        every_path_is_inside
+            || path
+                .ancestors()
+                .any(|ancestor| folder_set.contains(ancestor))
+    };
     let mut inventory = RootContentInventory::default();
     let mut unknown_paths: Vec<PathBuf> = Vec::new();
     let mut loose_directories: Vec<PathBuf> = Vec::new();
 
     for entry in entries {
-        let inside_title_folder = title_folders
-            .iter()
-            .any(|folder| entry.path.starts_with(folder));
+        let inside_title_folder = under_title_folder(&entry.path);
 
         if entry.is_directory() {
             // A directory inside a title folder travels with the title; only
             // directories the title move leaves behind are cleanup's business.
-            if !inside_title_folder && !title_folders.iter().any(|folder| folder == &entry.path) {
+            if !inside_title_folder && !folder_set.contains(entry.path.as_path()) {
                 loose_directories.push(entry.path.clone());
             }
             continue;
@@ -404,10 +416,18 @@ pub fn classify_root_content(
             .then_with(|| left.cmp(right))
     });
 
+    // Every directory that holds an unknown entry, at any depth: the ancestors
+    // `unknown.starts_with(directory)` would have matched.
+    let unknown_ancestors: HashSet<&Path> = unknown_paths
+        .iter()
+        .flat_map(|unknown| unknown.ancestors())
+        .collect();
     for directory in loose_directories {
-        let holds_unknown = unknown_paths
-            .iter()
-            .any(|unknown| unknown.starts_with(&directory));
+        let holds_unknown = if directory.components().next().is_none() {
+            !unknown_paths.is_empty()
+        } else {
+            unknown_ancestors.contains(directory.as_path())
+        };
         let stored = path_to_stored_string(&directory);
         if holds_unknown {
             inventory.retained_directories.push(stored);
@@ -3676,6 +3696,131 @@ mod variant_tests {
                 default_transfer: DefaultRootTransfer::default(),
             })
             .contains("consolidation")
+        );
+    }
+}
+
+#[cfg(test)]
+mod classify_lookup_tests {
+    use super::*;
+
+    /// The classification as a scan of every title folder per entry computes
+    /// it, kept here to compare the lookup against.
+    fn classify_by_scanning(
+        source_root: &Path,
+        entries: &[RootEntry],
+        title_folders: &[PathBuf],
+        tracked_media_paths: &[PathBuf],
+    ) -> RootContentInventory {
+        let tracked: BTreeSet<&Path> = tracked_media_paths.iter().map(PathBuf::as_path).collect();
+        let mut inventory = RootContentInventory::default();
+        let mut unknown_paths: Vec<PathBuf> = Vec::new();
+        let mut loose_directories: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            let inside = title_folders
+                .iter()
+                .any(|folder| entry.path.starts_with(folder));
+            if entry.is_directory() {
+                if !inside && !title_folders.iter().any(|folder| folder == &entry.path) {
+                    loose_directories.push(entry.path.clone());
+                }
+                continue;
+            }
+            let class = if tracked.contains(entry.path.as_path()) {
+                RootContentClass::Managed
+            } else if inside && entry.path.starts_with(source_root) {
+                RootContentClass::Companion
+            } else {
+                RootContentClass::Unknown
+            };
+            let classified = ClassifiedRootEntry {
+                path: path_to_stored_string(&entry.path),
+                size_bytes: entry.size_bytes(),
+                class,
+                canonical_sidecar: entry
+                    .path
+                    .file_name()
+                    .map(|name| is_canonical_sidecar_name(&name.to_string_lossy()))
+                    .unwrap_or(false),
+            };
+            match class {
+                RootContentClass::Managed => inventory.managed.push(classified),
+                RootContentClass::Companion => inventory.companions.push(classified),
+                RootContentClass::Unknown => {
+                    unknown_paths.push(entry.path.clone());
+                    inventory.unknown.push(classified);
+                }
+            }
+        }
+        loose_directories.sort_by(|left, right| {
+            right
+                .components()
+                .count()
+                .cmp(&left.components().count())
+                .then_with(|| left.cmp(right))
+        });
+        for directory in loose_directories {
+            let holds_unknown = unknown_paths
+                .iter()
+                .any(|unknown| unknown.starts_with(&directory));
+            let stored = path_to_stored_string(&directory);
+            if holds_unknown {
+                inventory.retained_directories.push(stored);
+            } else {
+                inventory.prunable_directories.push(stored);
+            }
+        }
+        inventory
+    }
+
+    #[test]
+    fn folder_lookup_classifies_like_a_scan_of_every_folder() {
+        let root = Path::new("/media/old");
+        let entries = vec![
+            RootEntry::file("/media/old/Emberfall/Emberfall.mkv", 10),
+            RootEntry::file("/media/old/Emberfall/Emberfall.nfo", 1),
+            RootEntry::file("/media/old/Emberfall/extras/scene.mkv", 3),
+            RootEntry::directory("/media/old/Emberfall"),
+            RootEntry::directory("/media/old/Emberfall/extras"),
+            // A sibling whose name extends a title folder's name is not inside it.
+            RootEntry::file("/media/old/Emberfall 2/stray.mkv", 4),
+            RootEntry::directory("/media/old/Emberfall 2"),
+            RootEntry::file("/media/old/./Quillmoor/./Quillmoor.mkv", 7),
+            RootEntry::directory("/media/old/Quillmoor/"),
+            RootEntry::directory("/media/old/loose"),
+            RootEntry::directory("/media/old/loose/deeper"),
+            RootEntry::file("/media/old/loose/deeper/notes.txt", 2),
+            RootEntry::directory("/media/old/empty"),
+            RootEntry::directory("/media/old/empty/inner"),
+            RootEntry::file("/elsewhere/Emberfall/outside.mkv", 5),
+            RootEntry::file("/media/old/tvshow.nfo", 1),
+        ];
+        let folders = vec![
+            PathBuf::from("/media/old/Emberfall"),
+            PathBuf::from("/media/old/Quillmoor/"),
+            PathBuf::from("/media/old/Emberfall/extras"),
+        ];
+        let tracked = vec![
+            PathBuf::from("/media/old/Emberfall/Emberfall.mkv"),
+            PathBuf::from("/media/old/Quillmoor/Quillmoor.mkv"),
+        ];
+
+        for folders in [folders.clone(), Vec::new(), vec![PathBuf::new()]] {
+            assert_eq!(
+                classify_root_content(root, &entries, &folders, &tracked),
+                classify_by_scanning(root, &entries, &folders, &tracked),
+                "title folders {folders:?}"
+            );
+        }
+        let inventory = classify_root_content(root, &entries, &folders, &tracked);
+        assert_eq!(inventory.managed.len(), 2);
+        assert_eq!(
+            inventory.retained_directories,
+            vec![
+                "/media/old/loose/deeper".to_string(),
+                "/media/old/Emberfall 2".to_string(),
+                "/media/old/loose".to_string(),
+            ]
         );
     }
 }

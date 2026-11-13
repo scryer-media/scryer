@@ -1,0 +1,27 @@
+# Write. config, when sent, REPLACES the non-secret keys: send every key to
+# keep. Omitted secret keys keep their stored value.
+# Variables: {"input": UpdateIndexerConfigInput}
+mutation UpdateIndexer($input: UpdateIndexerConfigInput!) {
+  updateIndexerConfig(input: $input) {
+    id
+    name
+    providerType
+    baseUrl
+    isEnabled
+    isManaged
+    enableInteractiveSearch
+    enableAutoSearch
+    proxyConfigId
+    downloadClientId
+    seedingProfileId
+    rateLimitSeconds
+    rateLimitBurst
+    maxQueriesPerMinute
+    storedSecretKeys
+    lastHealthStatus
+    lastErrorAt
+    disabledUntil
+    rateLimitedUntil
+    capsCategories { code label }
+  }
+}

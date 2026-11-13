@@ -7,6 +7,8 @@ import { LazyCodeEditor } from "@/components/common/lazy-code-editor";
 import { formatSanitizedHistoryValue } from "@/lib/utils/history-redaction";
 import { cn } from "@/lib/utils";
 import { titleMoveHistoryDetails } from "@/lib/utils/history-moves";
+import { selectorId } from "@/lib/utils/dom-ids";
+import { DecidedByBadge } from "@/components/common/decided-by-badge";
 
 const friendlyKeys: Record<string, string> = {
   import_id: "Import ID",
@@ -213,6 +215,10 @@ export function HistoryEventDetailContent({
                   ? t("scoring.manualOverride")
                   : scoring.decisionCode}
           </div>
+          <DecidedByBadge
+            id={selectorId("history-event-decided-by", event.id)}
+            step={scoring.decidedBy}
+          />
           {scoring.comparisons.length > 1 ? (
             <ul className="space-y-0.5">
               {scoring.comparisons.map((comparison) => (

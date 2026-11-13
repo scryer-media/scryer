@@ -22,6 +22,7 @@ export const IMPORT_SKIP_REASON_KEYS = {
     "importHistory.skipReason.ARCHIVE_EXTRACTION_PLUGIN_REQUIRED",
   ARCHIVE_EXTRACTION_TIMED_OUT:
     "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT",
+  TITLE_FOLDER_CONFLICT: "importHistory.skipReason.TITLE_FOLDER_CONFLICT",
 } satisfies Record<ImportSkipReason, string>;
 
 export function importSkipReasonLabelKey(reason: string): string | null {

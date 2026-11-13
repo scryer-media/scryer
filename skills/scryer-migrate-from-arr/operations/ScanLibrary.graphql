@@ -1,0 +1,12 @@
+# Scan one library. Pass importWarmupSessionId "external-import-monitor-apply" after
+# finalize so the scan applies the staged monitored states and scan hints.
+# Side effect (adds titles found on disk): confirm first.
+# Variables: {"input": {"libraryId": "...", "importWarmupSessionId": "external-import-monitor-apply"}}
+mutation ScanLibrary($input: ScanLibraryInput!) {
+  scanLibrary(input: $input) {
+    sessionId
+    libraryId
+    mode
+    status
+  }
+}

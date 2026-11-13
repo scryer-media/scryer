@@ -1,0 +1,16 @@
+# Write. config, when sent, REPLACES the non-secret keys: send every key to
+# keep. Omitted secret keys keep their stored value.
+# Variables: {"input": UpdateDownloadClientConfigInput}
+mutation UpdateDownloadClient($input: UpdateDownloadClientConfigInput!) {
+  updateDownloadClientConfig(input: $input) {
+    id
+    name
+    clientType
+    baseUrl
+    isEnabled
+    status
+    lastError
+    proxyConfigId
+    storedSecretKeys
+  }
+}

@@ -608,6 +608,73 @@ async fn latest_run_per_operation_type_reads_each_custom_job_once() {
 }
 
 #[tokio::test]
+async fn latest_run_per_job_key_matches_one_read_per_key() {
+    let (services, _db) = temp_services("workflow_operation_latest_per_key").await;
+    let now = Utc::now();
+    let days_ago = |days| now - chrono::Duration::days(days);
+    for (id, job_key, started_at) in [
+        ("emberfall-old", Some(JobKey::Housekeeping), days_ago(4)),
+        ("emberfall-new", Some(JobKey::Housekeeping), days_ago(1)),
+        ("cinderwake-only", Some(JobKey::RssSync), days_ago(9)),
+        ("ashgrove-old", Some(JobKey::ListSync), days_ago(6)),
+        ("ashgrove-new", Some(JobKey::ListSync), days_ago(2)),
+        ("not-a-job", None, days_ago(0)),
+    ] {
+        seed_workflow_operation(
+            &services,
+            id,
+            job_key.map(|key| key.as_str()),
+            "completed",
+            started_at,
+        )
+        .await;
+    }
+    let store = workflow_operation_store(&services);
+    // Out of order, with a key that has no runs in the middle.
+    let keys = [
+        JobKey::ListSync,
+        JobKey::AutoBackup,
+        JobKey::Housekeeping,
+        JobKey::RssSync,
+    ];
+
+    let mut one_read_per_key = Vec::new();
+    for key in keys {
+        one_read_per_key.extend(
+            store
+                .list_job_runs(Some(key), 1)
+                .await
+                .expect("latest run of one key"),
+        );
+    }
+    let batched = store
+        .list_latest_job_run_per_job_key(&keys)
+        .await
+        .expect("latest run of every key");
+
+    let ids = |runs: &[JobRunRecord]| runs.iter().map(|run| run.id.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        ids(&batched),
+        vec!["ashgrove-new", "emberfall-new", "cinderwake-only"]
+    );
+    assert_eq!(ids(&batched), ids(&one_read_per_key));
+    assert_eq!(
+        batched.iter().map(|run| run.job_key).collect::<Vec<_>>(),
+        one_read_per_key
+            .iter()
+            .map(|run| run.job_key)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        store
+            .list_latest_job_run_per_job_key(&[])
+            .await
+            .expect("no keys")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn operation_type_keyset_paging_reaches_older_runs_without_skipping_timestamp_ties() {
     let (services, _db) = temp_services("workflow_operation_type_keyset_paging").await;
     let store = workflow_operation_store(&services);
@@ -749,7 +816,8 @@ async fn migration_registers_job_run_listing_indexes() {
         .map(|row| row.get::<String, _>("name"))
         .collect::<HashSet<_>>();
     assert!(domain_event_indexes.contains("idx_domain_events_event_type_sequence"));
-    assert!(domain_event_indexes.contains("idx_domain_events_occurred_at"));
+    assert!(domain_event_indexes.contains("idx_domain_events_event_type_occurred_at"));
+    assert!(!domain_event_indexes.contains("idx_domain_events_occurred_at"));
     assert!(!domain_event_indexes.contains("idx_domain_events_facet_sequence"));
 
     let title_index_definition: String = sqlx::query_scalar(

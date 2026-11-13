@@ -2578,7 +2578,7 @@ impl DomainEventRepository for NullDomainEventRepository {
     async fn count_title_history_page_events(
         &self,
         _: Option<&[TitleHistoryEventType]>,
-        _: Option<&[String]>,
+        _: Option<crate::TitleHistoryTitleScope<'_>>,
         _: bool,
         _: Option<&str>,
     ) -> AppResult<i64> {
@@ -2598,7 +2598,7 @@ impl DomainEventRepository for NullDomainEventRepository {
     async fn list_title_history_page_events(
         &self,
         _: Option<&[TitleHistoryEventType]>,
-        _: Option<&[String]>,
+        _: Option<crate::TitleHistoryTitleScope<'_>>,
         _: bool,
         _: Option<&str>,
         _: usize,
@@ -3154,6 +3154,20 @@ impl crate::SubtitleDownloadRepository for NullSubtitleDownloadRepository {
     ) -> AppResult<()> {
         Ok(())
     }
+    async fn list_search_backoffs_for_media_files(
+        &self,
+        _media_file_ids: &[String],
+    ) -> AppResult<Vec<crate::subtitles::SubtitleSearchBackoff>> {
+        Ok(Vec::new())
+    }
+    async fn apply_search_backoffs(
+        &self,
+        _media_file_id: &str,
+        _upserts: &[crate::subtitles::SubtitleSearchBackoff],
+        _cleared: &[crate::subtitles::SubtitleSearchBackoffKey],
+    ) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -3431,6 +3445,8 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _requested_quality_profile_name: String,
         _requested_monitor_type: Option<String>,
         _requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        _requested_required_audio_languages: Option<Vec<String>>,
+        _requested_preferred_audio_languages: Option<Vec<String>>,
         _requested_lease_days: Option<i64>,
         _updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
@@ -4560,10 +4576,10 @@ pub mod test_nulls {
         async fn delete(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
-        async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
+        async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
-        async fn clear_folder_path(&self, _: &str) -> AppResult<()> {
+        async fn check_title_folder_writes(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
             Ok(())
         }
         async fn clear_metadata_language_for_all(&self) -> AppResult<u64> {
@@ -4704,6 +4720,7 @@ pub mod test_nulls {
             &self,
             _: &str,
             _: &str,
+            _: &[String],
         ) -> AppResult<Vec<CalendarEpisode>> {
             Ok(vec![])
         }

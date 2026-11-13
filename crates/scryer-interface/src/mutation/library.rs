@@ -55,8 +55,12 @@ fn library_settings_draft(
     Ok(scryer_application::LibrarySettingsOverrideDraft {
         search_languages: input.search_languages,
         required_audio_languages: input.required_audio_languages,
+        preferred_audio_languages: input.preferred_audio_languages,
+        optional_audio_languages: input.optional_audio_languages,
+        optional_audio_languages_keep_searching: input.optional_audio_languages_keep_searching,
         metadata_language: input.metadata_language,
         use_season_folders: input.use_season_folders,
+        default_monitor_type: input.default_monitor_type,
         quality_profile_id: input.quality_profile_id.map(String::from),
         request_quality_profile_ids: input
             .request_quality_profile_ids
@@ -200,7 +204,9 @@ impl LibraryMutations {
         Ok(payload)
     }
 
-    /// Delete the library configuration identified by the supplied ID.
+    /// Accept a background job that deletes the library identified by the
+    /// supplied ID and removes its titles from the catalog. Files on disk are
+    /// left alone.
     async fn delete_library(
         &self,
         ctx: &Context<'_>,
@@ -209,10 +215,14 @@ impl LibraryMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let id = id.to_string();
-        app.delete_library(&actor, &id)
+        let accepted = app
+            .start_delete_library_job(&actor, &id)
             .await
             .map_err(to_gql_error)?;
-        Ok(DeleteLibraryPayload { id: ID::from(id) })
+        Ok(DeleteLibraryPayload {
+            id: ID::from(id),
+            job_run: from_job_run(accepted.job_run),
+        })
     }
 
     /// Start a library scan and return the accepted scan session snapshot.
@@ -354,6 +364,60 @@ impl LibraryMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(from_ignore_pending_import_result(result))
+    }
+
+    /// Mark several pending imports ignored without importing their files.
+    /// Each id is answered on its own: ignored, or failed with the error
+    /// `ignorePendingImport` would have returned for it. A repeated id counts
+    /// once. At most 1000 distinct ids per request: a larger request is
+    /// refused whole with reason `LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE`
+    /// and the `maxPendingImportIds` and `requestedPendingImportIds`
+    /// extensions, and no pending import changes.
+    async fn ignore_pending_imports(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Pending-import identities to ignore.")] pending_import_ids: Vec<ID>,
+    ) -> GqlResult<IgnorePendingImportsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let pending_import_ids = pending_import_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let result = app
+            .ignore_pending_imports(&actor, &pending_import_ids)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(IgnorePendingImportsPayload {
+            ignored: result
+                .ignored
+                .into_iter()
+                .map(from_ignore_pending_import_result)
+                .collect(),
+            failed: result
+                .failed
+                .into_iter()
+                .map(|(id, error)| {
+                    let error = to_gql_error(error);
+                    let extension = |name: &str| {
+                        error
+                            .extensions
+                            .as_ref()
+                            .and_then(|extensions| extensions.get(name))
+                            .and_then(|value| match value {
+                                async_graphql::Value::String(value) => Some(value.clone()),
+                                _ => None,
+                            })
+                    };
+                    IgnorePendingImportFailurePayload {
+                        id: ID::from(id),
+                        code: extension("code"),
+                        reason: extension("reason"),
+                        message: error.message.clone(),
+                    }
+                })
+                .collect(),
+        })
     }
 
     /// Apply a title rename plan after validating its preview fingerprint and optional idempotency key.

@@ -3829,6 +3829,30 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .iter()
             .any(|file| file.id != excluding_id && file.file_path == path))
     }
+    async fn media_file_paths_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        Ok(Some(
+            self.app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(title_id)
+                .await?
+                .into_iter()
+                .map(|file| (file.id, file.file_path))
+                .collect(),
+        ))
+    }
+    async fn set_media_file_paths(&self, paths: &[(String, String)]) -> AppResult<()> {
+        self.app
+            .services
+            .library
+            .media_files
+            .update_media_file_paths(paths)
+            .await
+    }
     async fn title_placement(&self, title_id: &str) -> AppResult<Option<TitlePlacementSnapshot>> {
         let Some(title) = self.app.services.catalog.titles.get_by_id(title_id).await? else {
             return Ok(None);
@@ -3902,7 +3926,16 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .services
             .catalog
             .titles
-            .set_folder_path(title_id, stored_path)
+            .assign_title_folders(&[crate::TitleFolderWrite::assign(title_id, stored_path)])
+            .await
+    }
+
+    async fn check_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()> {
+        self.app
+            .services
+            .catalog
+            .titles
+            .check_title_folder_writes(&[crate::TitleFolderWrite::assign(title_id, stored_path)])
             .await
     }
 
@@ -3970,6 +4003,11 @@ impl MergedSourceRetirer for AppUseCaseMergedSourceRetirer {
         // through `delete_title_row`, so this is the only place the matcher
         // learns that identity is gone.
         self.app.invalidate_monitored_title_matcher().await;
+        // The destination keeps its own per-title settings; the source's
+        // name a title that is gone.
+        self.app
+            .prune_title_scoped_settings(std::slice::from_ref(&request.source_title_id))
+            .await;
         self.app
             .purge_merged_source_dependent_records(&request.identity_map)
             .await

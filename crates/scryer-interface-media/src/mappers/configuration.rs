@@ -214,6 +214,15 @@ pub fn from_scoring_overrides(
 pub fn from_quality_profile_criteria(
     criteria: QualityProfileCriteria,
 ) -> QualityProfileCriteriaPayload {
+    // A stored revision switch reads as an order without the revision gate.
+    let ignore_proper_repack = criteria.ignores_revision();
+    let decision_pipeline = criteria
+        .effective_decision_pipeline()
+        .gates()
+        .iter()
+        .copied()
+        .map(QualityDecisionGateValue::from_application)
+        .collect();
     QualityProfileCriteriaPayload {
         quality_tiers: criteria.quality_tiers,
         archival_quality: criteria.archival_quality,
@@ -253,7 +262,8 @@ pub fn from_quality_profile_criteria(
         prefer_remux: criteria.prefer_remux,
         allow_bd_disk: criteria.allow_bd_disk,
         allow_upgrades: criteria.allow_upgrades,
-        ignore_proper_repack: criteria.ignore_proper_repack,
+        ignore_proper_repack,
+        decision_pipeline,
         scoring_overrides: from_scoring_overrides(criteria.scoring_overrides),
         cutoff_tier: criteria.cutoff_tier,
         min_score_to_grab: criteria.min_score_to_grab,
@@ -454,10 +464,19 @@ pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayloa
         search_languages: settings.search_languages,
         required_audio_languages_override: settings.required_audio_languages_override,
         required_audio_languages: settings.required_audio_languages,
+        preferred_audio_languages_override: settings.preferred_audio_languages_override,
+        preferred_audio_languages: settings.preferred_audio_languages,
+        optional_audio_languages_override: settings.optional_audio_languages_override,
+        optional_audio_languages: settings.optional_audio_languages,
+        optional_audio_languages_keep_searching_override: settings
+            .optional_audio_languages_keep_searching_override,
+        optional_audio_languages_keep_searching: settings.optional_audio_languages_keep_searching,
         metadata_language_override: settings.metadata_language_override,
         metadata_language: settings.metadata_language,
         use_season_folders_override: settings.use_season_folders_override,
         use_season_folders: settings.use_season_folders,
+        default_monitor_type: settings.default_monitor_type,
+        default_monitor_type_override: settings.default_monitor_type_override,
         quality_profile_id_override: settings.quality_profile_id_override.map(Into::into),
         quality_profile_id: settings.quality_profile_id.into(),
         request_quality_profile_ids_override: settings
@@ -588,6 +607,11 @@ pub fn from_media_settings(
             })
             .collect(),
         required_audio_languages: settings.required_audio_languages,
+        preferred_audio_languages: settings.audio_language_preferences.preferred,
+        optional_audio_languages: settings.audio_language_preferences.optional,
+        optional_audio_languages_keep_searching: settings
+            .audio_language_preferences
+            .optional_keep_searching,
         use_season_folders: settings.use_season_folders,
         folder_template: settings.folder_template,
         season_folder_template: settings.season_folder_template,

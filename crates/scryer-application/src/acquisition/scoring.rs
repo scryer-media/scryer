@@ -46,8 +46,10 @@ pub(crate) fn revision_rank(parsed: &crate::ParsedReleaseMetadata) -> i32 {
     parsed.revision
 }
 
-/// Shared rank head: eligibility, tier, context-derived revision preference,
-/// then score. Missing scopes and Ignore mode have no revision preference.
+/// Shared rank head: eligibility, then the profile's decision pipeline, then
+/// score, then size fit. Each gate is read as an ascending sort key in pipeline
+/// order (see [`crate::decision_pipeline::rank_key`]); missing scopes and a
+/// pipeline without a revision gate have no revision preference.
 ///
 /// Split out because two places order search results: the rank comparator used
 /// while scoring, and `compare_release_search_results`, which the interactive
@@ -63,15 +65,31 @@ pub(crate) fn revision_rank(parsed: &crate::ParsedReleaseMetadata) -> i32 {
 pub(crate) struct RankHead {
     /// Rejected releases sort last, whatever else they have going for them.
     pub blocked: bool,
-    /// Position in the profile's quality ordering; lower is better. `usize::MAX`
-    /// for a quality the profile does not list.
-    pub tier_index: usize,
+    /// What the profile's steps read off this release: its tier (lower is
+    /// better, `usize::MAX` for a quality the profile does not list) and its
+    /// standing against the title's preferred and optional audio languages.
+    pub side: crate::decision_pipeline::SideFacts,
     /// Negated revision preference, granted only by related-incumbent context.
     pub negated_revision: i32,
     /// The canonical score, negated so that higher wins.
     pub negated_score: i32,
     /// Size fit breaks otherwise equal release preferences; it is not a score.
     pub size_fit_penalty: i32,
+    /// The profile's gates, in the order they are compared.
+    pub pipeline: crate::DecisionPipeline,
+}
+
+impl crate::decision_pipeline::SideFacts {
+    /// A scored search result as the decision steps read it. The one builder
+    /// for a search result; an unscored result sorts as untiered.
+    pub(crate) fn of_decision(decision: Option<&crate::QualityProfileDecision>) -> Self {
+        Self {
+            tier_sort_key: crate::admission::tier_sort_key(
+                decision.and_then(|decision| decision.tier_index),
+            ),
+            language: decision.map_or_else(Default::default, |decision| decision.language),
+        }
+    }
 }
 
 impl RankHead {
@@ -86,22 +104,29 @@ impl RankHead {
         let decision = result.quality_profile_decision.as_ref();
         Self {
             blocked: decision.is_some_and(|decision| !decision.allowed),
-            tier_index: crate::admission::tier_sort_key(
-                decision.and_then(|decision| decision.tier_index),
-            ),
+            side: crate::decision_pipeline::SideFacts::of_decision(decision),
             negated_revision: decision
                 .map_or(0, |decision| decision.revision_preference.saturating_neg()),
             negated_score: decision
                 .map_or(0, |decision| decision.preference_score.saturating_neg()),
             size_fit_penalty: decision.map_or(0, |decision| decision.size_fit_penalty),
+            pipeline: decision.map_or_else(Default::default, |decision| decision.decision_pipeline),
         }
     }
 
-    pub(crate) fn key(&self) -> (bool, usize, i32, i32, i32) {
+    /// Blocked, then each gate of the pipeline in its order, then score, then
+    /// size fit. Positions past the end of the pipeline are zero, so a removed
+    /// gate orders nothing.
+    pub(crate) fn key(&self) -> RankHeadKey {
         (
             self.blocked,
-            self.tier_index,
-            self.negated_revision,
+            crate::decision_pipeline::rank_key(
+                &self.pipeline,
+                &crate::decision_pipeline::RankFacts {
+                    side: self.side,
+                    negated_revision: self.negated_revision,
+                },
+            ),
             self.negated_score,
             self.size_fit_penalty,
         )
@@ -149,15 +174,9 @@ pub(crate) struct SearchRank {
     pub usenet_age_hours: i64,
 }
 
-type SearchRankKey = (
-    (bool, usize, i32, i32, i32),
-    bool,
-    usize,
-    u32,
-    i64,
-    i64,
-    i64,
-);
+pub(crate) type RankHeadKey = (bool, crate::decision_pipeline::GateKey, i32, i32);
+
+type SearchRankKey = (RankHeadKey, bool, usize, u32, i64, i64, i64);
 
 impl SearchRank {
     fn key(&self) -> SearchRankKey {
@@ -217,6 +236,26 @@ pub(crate) fn compare_ranked_results(
 #[cfg(test)]
 mod tests {
     use super::{RankHead, SearchRank};
+    use crate::AudioLanguageRank;
+    use crate::decision_pipeline::SideFacts;
+
+    fn tier(tier_sort_key: usize) -> SideFacts {
+        spoken(tier_sort_key, AudioLanguageRank::default())
+    }
+
+    fn spoken(tier_sort_key: usize, language: AudioLanguageRank) -> SideFacts {
+        SideFacts {
+            tier_sort_key,
+            language,
+        }
+    }
+
+    fn retiered(tier_sort_key: usize, head: &RankHead) -> SideFacts {
+        SideFacts {
+            tier_sort_key,
+            ..head.side
+        }
+    }
 
     fn rank() -> SearchRank {
         SearchRank {
@@ -321,12 +360,12 @@ mod tests {
     #[test]
     fn a_lower_quality_is_a_fallback_even_with_a_much_higher_score() {
         let low = RankHead {
-            tier_index: 1,
+            side: tier(1),
             negated_score: -2000,
             ..Default::default()
         };
         let high = RankHead {
-            tier_index: 0,
+            side: tier(0),
             negated_score: -400,
             size_fit_penalty: 200,
             ..Default::default()
@@ -345,5 +384,213 @@ mod tests {
             ..high.clone()
         };
         assert!(proper.key() < high.key());
+    }
+
+    fn language_ahead_of_tier() -> crate::DecisionPipeline {
+        use crate::DecisionGate::*;
+        crate::DecisionPipeline::try_from_gates([
+            PreferredLanguage,
+            QualityTier,
+            Revision,
+            OptionalLanguages,
+        ])
+        .unwrap()
+    }
+
+    /// Tier and revision first, then the languages. The language steps are
+    /// opt-in, so a test about them under a tier-first order chooses this.
+    fn tier_then_languages() -> crate::DecisionPipeline {
+        use crate::DecisionGate::*;
+        crate::DecisionPipeline::try_from_gates([
+            QualityTier,
+            Revision,
+            PreferredLanguage,
+            OptionalLanguages,
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn a_preferred_language_gate_ahead_of_the_tier_outranks_a_better_tier() {
+        let german_1080p = RankHead {
+            side: spoken(1, AudioLanguageRank::for_test(0, 0)),
+            pipeline: language_ahead_of_tier(),
+            ..Default::default()
+        };
+        let english_2160p = RankHead {
+            side: spoken(0, AudioLanguageRank::for_test(1, 1)),
+            negated_score: -5000,
+            pipeline: language_ahead_of_tier(),
+            ..Default::default()
+        };
+        assert!(german_1080p.key() < english_2160p.key());
+    }
+
+    #[test]
+    fn a_tier_first_order_keeps_the_tier_ahead_of_the_preferred_language() {
+        let german_1080p = RankHead {
+            side: spoken(1, AudioLanguageRank::for_test(0, 0)),
+            pipeline: tier_then_languages(),
+            ..Default::default()
+        };
+        let english_2160p = RankHead {
+            side: spoken(0, AudioLanguageRank::for_test(1, 0)),
+            pipeline: tier_then_languages(),
+            ..Default::default()
+        };
+        assert!(english_2160p.key() < german_1080p.key());
+        let german_2160p = RankHead {
+            side: spoken(0, AudioLanguageRank::for_test(0, 0)),
+            negated_score: 0,
+            pipeline: tier_then_languages(),
+            ..Default::default()
+        };
+        let english_2160p_high_score = RankHead {
+            negated_score: -9000,
+            ..english_2160p
+        };
+        assert!(german_2160p.key() < english_2160p_high_score.key());
+    }
+
+    #[test]
+    fn optional_languages_follow_the_revision_and_precede_the_score() {
+        for pipeline in [tier_then_languages(), language_ahead_of_tier()] {
+            let dual = RankHead {
+                side: spoken(0, AudioLanguageRank::for_test(0, 1)),
+                pipeline,
+                ..Default::default()
+            };
+            let single_high_score = RankHead {
+                side: spoken(0, AudioLanguageRank::for_test(0, 0)),
+                negated_score: -9000,
+                pipeline,
+                ..Default::default()
+            };
+            assert!(dual.key() < single_high_score.key());
+            let single_proper = RankHead {
+                negated_revision: -1,
+                ..single_high_score.clone()
+            };
+            assert!(single_proper.key() < dual.key());
+            let better_tier_single = RankHead {
+                side: retiered(0, &single_high_score),
+                ..single_high_score.clone()
+            };
+            let worse_tier_dual = RankHead {
+                side: retiered(1, &dual),
+                ..dual.clone()
+            };
+            assert!(better_tier_single.key() < worse_tier_dual.key());
+        }
+    }
+
+    #[test]
+    fn without_preferences_the_language_steps_are_inert() {
+        let a = RankHead {
+            side: tier(1),
+            negated_score: -100,
+            ..Default::default()
+        };
+        let b = RankHead {
+            side: tier(0),
+            negated_score: -50,
+            ..Default::default()
+        };
+        assert!(b.key() < a.key());
+        assert_eq!(a.side.language, crate::AudioLanguageRank::default());
+    }
+
+    fn score_only(head: RankHead) -> RankHead {
+        RankHead {
+            pipeline: crate::DecisionPipeline::score_only(),
+            ..head
+        }
+    }
+
+    #[test]
+    fn an_empty_pipeline_ranks_by_score_alone() {
+        let low_tier_high_score = score_only(RankHead {
+            side: tier(1),
+            negated_score: -2000,
+            ..Default::default()
+        });
+        let high_tier_low_score = score_only(RankHead {
+            side: spoken(0, AudioLanguageRank::for_test(0, 2)),
+            negated_score: -400,
+            negated_revision: -1,
+            ..Default::default()
+        });
+        assert!(low_tier_high_score.key() < high_tier_low_score.key());
+        // Equal scores: no gate runs, so size fit decides.
+        let high_tier_equal_score = RankHead {
+            negated_score: -2000,
+            size_fit_penalty: 1,
+            ..high_tier_low_score.clone()
+        };
+        assert!(low_tier_high_score.key() < high_tier_equal_score.key());
+        // Blocked still sorts last.
+        let blocked = RankHead {
+            blocked: true,
+            ..low_tier_high_score.clone()
+        };
+        assert!(high_tier_low_score.key() < blocked.key());
+    }
+
+    #[test]
+    fn a_removed_gate_leaves_the_key_untouched() {
+        let head = RankHead {
+            side: spoken(2, AudioLanguageRank::for_test(1, 1)),
+            negated_revision: -1,
+            negated_score: -300,
+            size_fit_penalty: 7,
+            pipeline: crate::DecisionPipeline::default_order()
+                .without(crate::DecisionGate::QualityTier),
+            ..Default::default()
+        };
+        let other_tier = RankHead {
+            side: retiered(0, &head),
+            ..head.clone()
+        };
+        assert_eq!(head.key(), other_tier.key());
+    }
+
+    #[test]
+    fn the_default_order_key_reads_tier_revision_score_size() {
+        let head = RankHead {
+            side: spoken(2, AudioLanguageRank::for_test(1, 3)),
+            negated_revision: -1,
+            negated_score: -300,
+            size_fit_penalty: 7,
+            ..Default::default()
+        };
+        // The two default steps fill the first slots; the language steps are
+        // outside the default order, so their slots and every later one stay
+        // at zero.
+        let (blocked, gates, negated_score, size_fit_penalty) = head.key();
+        assert_eq!(
+            (blocked, &gates[..2], negated_score, size_fit_penalty),
+            (false, &[2, -1][..], -300, 7)
+        );
+        assert!(gates[2..].iter().all(|ordinal| *ordinal == 0));
+    }
+
+    #[test]
+    fn a_tier_first_order_key_reads_tier_revision_languages_score_size() {
+        let head = RankHead {
+            side: spoken(2, AudioLanguageRank::for_test(1, 3)),
+            negated_revision: -1,
+            negated_score: -300,
+            size_fit_penalty: 7,
+            pipeline: tier_then_languages(),
+            ..Default::default()
+        };
+        // The four chosen steps fill the first slots in order; a step outside
+        // the order leaves its slot at zero.
+        let (blocked, gates, negated_score, size_fit_penalty) = head.key();
+        assert_eq!(
+            (blocked, &gates[..4], negated_score, size_fit_penalty),
+            (false, &[2, -1, 1, -3][..], -300, 7)
+        );
+        assert!(gates[4..].iter().all(|ordinal| *ordinal == 0));
     }
 }

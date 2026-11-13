@@ -161,11 +161,13 @@ impl AppUseCase {
     /// from the gateway, which then refreshes the cache. A failed cache write
     /// is logged and the caller gets the gateway's answer as mapped.
     ///
-    /// An entry with related titles but no groups stays fresh only until the
-    /// next read: the gateway groups whenever it can, so such an answer is
-    /// one whose grouping was skipped (or one cached before grouping). The
-    /// next read asks the gateway again, and serves the cached entry if that
-    /// ask fails.
+    /// An entry with related titles but no groups is asked for again once:
+    /// the gateway groups whenever it can, so such an answer may be one whose
+    /// grouping was skipped (or one cached before grouping). The next read
+    /// asks the gateway again and serves the cached entry if that ask fails.
+    /// The answer to that second ask records that regrouping was attempted
+    /// and is served like any other entry until its normal refresh, grouped
+    /// or not.
     async fn discovery_neighbor_items(
         &self,
         target_key: &str,
@@ -183,12 +185,13 @@ impl AppUseCase {
             .await?
             && now.signed_duration_since(cached.fetched_at) < ttl
         {
-            if !discovery_neighbor_cache_ungrouped(&cached) {
+            if cached.regroup_attempted || !discovery_neighbor_cache_ungrouped(&cached) {
                 return Ok(cached);
             }
             ungrouped = Some(cached);
         }
 
+        let regroup_attempted = ungrouped.is_some();
         let input = crate::TitleRecommendationsInput {
             subject,
             query: String::new(),
@@ -247,6 +250,7 @@ impl AppUseCase {
             items,
             groups: recommendations.groups,
             fetched_at: now,
+            regroup_attempted,
         };
         let discovery = &self.services.library.discovery;
         if let Err(error) = discovery

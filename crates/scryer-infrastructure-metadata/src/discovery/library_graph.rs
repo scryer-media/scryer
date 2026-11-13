@@ -161,8 +161,22 @@ pub(crate) async fn commit_library_graph(
     datastore: &StoreDatastore,
     snapshot: &LibraryGraphSnapshotRecord,
 ) -> AppResult<()> {
-    let payload =
-        encode_library_graph_payload(&snapshot.nodes, &snapshot.edges, &snapshot.clusters)?;
+    // Encoding and compressing a full graph is CPU work; it runs on the
+    // blocking pool so it does not hold an async worker.
+    let (nodes, edges, clusters) = (
+        snapshot.nodes.clone(),
+        snapshot.edges.clone(),
+        snapshot.clusters.clone(),
+    );
+    let payload = match tokio::task::spawn_blocking(move || {
+        encode_library_graph_payload(&nodes, &edges, &clusters)
+    })
+    .await
+    {
+        Ok(encoded) => encoded?,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => return Err(AppError::Repository(error.to_string())),
+    };
     let run = Arc::new(snapshot.run.clone());
     let payload = Arc::new(payload);
     SqlRuntime::run_in_transaction(datastore, "commit_library_graph", move |tx| {
@@ -238,13 +252,44 @@ pub(crate) async fn get_latest_library_graph(
     let payload = row
         .opt_bytes("payload")?
         .ok_or_else(|| AppError::Repository("library graph payload is missing".to_string()))?;
-    let payload = decode_library_graph_payload(&payload)?;
+    // Decompressing and decoding a full graph is CPU work; it runs on the
+    // blocking pool so it does not hold an async worker.
+    let payload =
+        match tokio::task::spawn_blocking(move || decode_library_graph_payload(&payload)).await {
+            Ok(decoded) => decoded?,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => return Err(AppError::Repository(error.to_string())),
+        };
     Ok(Some(LibraryGraphSnapshotRecord {
         run,
         nodes: payload.nodes,
         edges: payload.edges,
         clusters: payload.clusters,
     }))
+}
+
+/// When the newest complete graph of a facet was built: the run
+/// [`get_latest_library_graph`] would return, read without its payload. The
+/// outer `None` means no complete graph is stored.
+pub(crate) async fn get_latest_library_graph_generated_at(
+    datastore: &StoreDatastore,
+    facet: &str,
+) -> AppResult<Option<Option<String>>> {
+    let row = SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT r.generated_at FROM discovery_library_graph_runs r \
+         JOIN discovery_library_graph_payloads p ON p.run_id = r.id \
+         WHERE r.facet = {} AND r.status = {} \
+         ORDER BY r.started_at DESC, r.id DESC LIMIT 1",
+        &[
+            SqlArg::Text(facet.to_string()),
+            SqlArg::Text(LIBRARY_GRAPH_RUN_COMPLETE.to_string()),
+        ],
+    )
+    .await?;
+    row.as_ref()
+        .map(|row| row.opt_text("generated_at"))
+        .transpose()
 }
 
 /// Whether the facet has a complete graph stored: a complete run together
@@ -381,11 +426,29 @@ mod tests {
         }
     }
 
+    /// The build time read without the graph names the same run as the full
+    /// read.
+    async fn assert_generated_at_matches_full_read(store: &DiscoveryStore, facet: &str) {
+        let full = store
+            .get_latest_library_graph(facet)
+            .await
+            .expect("full read")
+            .map(|snapshot| snapshot.run.generated_at);
+        let narrow = store
+            .get_latest_library_graph_generated_at(facet)
+            .await
+            .expect("narrow read");
+        assert_eq!(narrow, full);
+    }
+
     #[tokio::test]
     async fn library_graph_round_trips_and_replaces_the_previous_run() {
         let (store, path) = sqlite_store("round_trip").await;
+        assert_generated_at_matches_full_read(&store, "movie").await;
         let first = snapshot("library-graph-first", 0);
         store.commit_library_graph(&first).await.expect("commit");
+        assert_generated_at_matches_full_read(&store, "movie").await;
+        assert_generated_at_matches_full_read(&store, "anime").await;
         assert_eq!(
             store.get_latest_library_graph("movie").await.expect("read"),
             Some(first.clone())
@@ -406,6 +469,7 @@ mod tests {
             .record_failed_library_graph_run(&failed)
             .await
             .expect("record failure");
+        assert_generated_at_matches_full_read(&store, "movie").await;
         assert_eq!(
             store.get_latest_library_graph("movie").await.expect("read"),
             Some(first.clone())
@@ -421,7 +485,9 @@ mod tests {
         // A new complete run replaces both.
         let mut second = snapshot("library-graph-second", 10);
         second.edges.truncate(1);
+        second.run.generated_at = Some("2026-01-02T00:00:00Z".to_string());
         store.commit_library_graph(&second).await.expect("commit");
+        assert_generated_at_matches_full_read(&store, "movie").await;
         assert_eq!(
             store.get_latest_library_graph("movie").await.expect("read"),
             Some(second.clone())
@@ -586,6 +652,7 @@ mod tests {
         })
         .await
         .expect("seed run");
+        assert_generated_at_matches_full_read(&store, "movie").await;
         assert_eq!(
             store.get_latest_library_graph("movie").await.expect("read"),
             None

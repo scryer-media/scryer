@@ -1,3 +1,5 @@
+import type { QualityDecisionGate } from "../constants/quality-decision-gates.ts";
+
 export type ParsedQualityProfile = {
   id: string;
   name: string;
@@ -47,7 +49,11 @@ export type QualityProfileCriteriaPayload = {
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
   min_score_to_grab: number | null;
+  /** Score at which upgrade searching stops; null means no score cutoff. */
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  /** Ordered comparison steps before score; empty compares by score only. */
+  decision_pipeline: QualityDecisionGate[];
 };
 
 export type ParsedQualityProfileEntry = ParsedQualityProfile & {
@@ -80,7 +86,9 @@ export type QualityProfileGraphCriteriaPayload = {
   scoringOverrides: ScoringOverridesPayload;
   cutoffTier: string | null;
   minScoreToGrab: number | null;
+  cutoffScore: number | null;
   minUpgradeScoreDelta: number;
+  decisionPipeline: QualityDecisionGate[];
 };
 
 export type QualityProfileGraphPayload = {
@@ -119,11 +127,14 @@ export type QualityProfileDraft = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
-  ignore_proper_repack: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
+  /** Score at which upgrade searching stops; null means no score cutoff. */
+  cutoff_score: number | null;
   min_upgrade_score_delta: number;
+  /** Ordered comparison steps before score; empty compares by score only. */
+  decision_pipeline: QualityDecisionGate[];
 };
 
 export type JsonPrimitive = string | number | boolean | null;

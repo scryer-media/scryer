@@ -841,6 +841,22 @@ const zh_TW: LocaleDictionary = {
   "settings.qualityProfileCatalogInvalid": "品質配置目錄不是有效的 JSON。",
   "settings.qualityProfileUnknown": "未知的品質配置檔案 ID“{{id}}”。",
   "settings.qualitySettingsSaved": "品質設定已儲存。",
+  "settings.audioLanguagePreferences": "音訊語言偏好",
+  "settings.audioLanguagePreferencesInfo":
+    "依音訊語言為釋出排序，但不會拒絕任何釋出。與必要語言不同，沒有這些語言的釋出在沒有更好選擇時仍會被取得，並在出現更好的釋出時被取代。",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "此媒體庫的個別設定。清單留空或選擇繼承時，會使用目錄預設值。",
+  "settings.audioPreferredLanguages": "偏好語言",
+  "settings.audioPreferredLanguagesHint":
+    "依偏好順序排列。包含第一種語言的釋出排在只包含第二種語言的釋出之前，依此類推。不包含其中任何語言的檔案仍是升級目標。",
+  "settings.audioPreferredMoveUp": "上移 {{language}}",
+  "settings.audioPreferredMoveDown": "下移 {{language}}",
+  "settings.audioOptionalLanguages": "選用語言",
+  "settings.audioOptionalLanguagesHint":
+    "有則更好。在品質相同的釋出中，包含較多這些語言的釋出勝出。",
+  "settings.audioOptionalKeepSearching": "繼續搜尋選用語言",
+  "settings.audioOptionalKeepSearchingHint":
+    "開啟後，缺少選用語言的檔案仍是升級目標。關閉後，找到這類釋出時仍會取代，但不會主動搜尋。",
   "settings.downloadClientRoutingSaved": "下載使用者端路由已儲存。",
   "settings.downloadClientRoutingSavedFor":
     "下載為“{{name}}”儲存的使用者端路由。",
@@ -1710,6 +1726,17 @@ const zh_TW: LocaleDictionary = {
   "title.monitoredSection": "監控中的 {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "加入最新佇列",
+  "search.addConfigRequiredAudio": "必要音訊語言",
+  "search.addConfigPreferredAudio": "偏好音訊語言",
+  "search.addConfigAudioChoose": "選擇語言",
+  "search.addConfigAudioRequireNone": "不要求任何語言",
+  "title.preferredAudioLanguages": "偏好音訊語言",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "Scryer 無法辨識該音訊語言。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer 無法辨識某條路由的音訊語言。",
+  "requests.requestedAudioLanguages": "已請求的音訊語言",
+  "requests.requestedRequiredAudio": "必要：{{languages}}",
+  "requests.requestedPreferredAudio": "偏好：{{languages}}",
   "title.requiredAudioLanguages": "必需音訊語言",
   "title.originalAudioLanguagePerTitle": "原始語言（按標題）",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1855,6 +1882,11 @@ const zh_TW: LocaleDictionary = {
   "tvdb.searchPrompt": "在上方輸入標題以搜尋 TVDB。",
   "tvdb.searchByTvdb": "搜尋 TVDB",
   "nzb.searchResultsFor": "{{name}} 的 NZB 結果",
+  "nzb.audioLanguagePreferred": "偏好語言",
+  "nzb.audioLanguagePreferredRank": "偏好語言 #{{rank}}",
+  "nzb.audioLanguageNotPreferred": "沒有偏好語言",
+  "nzb.audioLanguageOptionalHits": "選用 +{{count}}",
+  "nzb.audioLanguageHint": "此釋出在音訊語言偏好中的排名",
   "nzb.noResultsYet": "暫無版本匹配。",
   "nzb.searchFailed": "釋出資源搜尋失敗。",
   "nzb.queue": "佇列",
@@ -2049,6 +2081,17 @@ const zh_TW: LocaleDictionary = {
   "importHistory.passwordPlaceholder": "壓縮包密碼",
   "importHistory.retrySuccess": "已開始重新匯入",
   "system.title": "系統健康",
+  "system.diagnosticsBundle.download": "下載診斷套件",
+  "system.diagnosticsBundle.preparing": "正在準備診斷…",
+  "system.diagnosticsBundle.helper":
+    "將記錄、指標和設定摘要打包成一個檔案給維護者。名稱、位址、路徑和密鑰會盡力移除；分享前請檢查診斷套件。",
+  "system.diagnosticsBundle.failed": "無法下載診斷套件。",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "請重新登入後下載診斷。",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "下載診斷需要系統設定權限。",
+  "system.diagnosticsBundle.refusal.failed":
+    "無法建立診斷套件。詳情請查看伺服器記錄。",
   "system.jobsTitle": "工作機會",
   "system.auditTitle": "稽核",
   "system.auditLoaded": "已載入稽核記錄。",
@@ -2220,6 +2263,11 @@ const zh_TW: LocaleDictionary = {
   "settings.arrImportNoFormats": "在此 JSON 中找不到有效的自訂格式。",
   "settings.arrImportInvalidJson":
     "請貼上由 Sonarr 或 Radarr 匯出的有效 JSON。",
+  "settings.arrImportRefusalTooLarge":
+    "請貼上不超過 {{maxBytes}} 位元組的 JSON。",
+  "settings.arrImportRefusalEmpty": "請至少貼上一個自訂格式。",
+  "settings.arrImportRefusalTooMany":
+    "每次最多貼上 {{maxFormats}} 個自訂格式。",
   "settings.arrImportReviewFailed": "無法審查這些自訂格式。",
   "settings.arrImportScore": "分數",
   "settings.arrImportScoreRequired": "在翻譯前請為 {{name}} 輸入整數分數。",
@@ -2683,7 +2731,7 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.qualityTiersAndArchival": "品質級別與存檔品質",
   "qualityProfile.qualityPreference": "品質偏好",
   "qualityProfile.qualityPreferenceHelp":
-    "最高偏好排在最前。層級偏好優先於評分。新層級會新增於最低偏好處。",
+    "最高偏好排在最前。發佈會在判定順序的品質等級步驟中依此順序比較。新層級會新增於最低偏好處。",
   "qualityProfile.moveQualityTierUp": "將 {{value}} 上移",
   "qualityProfile.moveQualityTierDown": "將 {{value}} 下移",
   "qualityProfile.dragQualityTier": "拖曳以重新排序 {{value}}",
@@ -3235,6 +3283,8 @@ const zh_TW: LocaleDictionary = {
   "profile.linkPlexAccount": "連結 Plex",
   "profile.linkAccountConnection": "連線",
   "profile.linkAccountUsername": "使用者名稱",
+  "profile.linkAccountChooseAccount": "選擇帳戶",
+  "profile.linkAccountAlreadyLinked": "{{username}}（已連結）",
   "profile.linkAccountPassword": "密碼",
   "profile.linkAccountPasswordlessHint":
     "若此 Jellyfin 帳號沒有密碼請留空。無密碼帳號可以關聯，但無法用於登入 Scryer。",
@@ -3361,6 +3411,7 @@ const zh_TW: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "分類不相符",
   "wanted.decision.ambiguousIdentity": "身分不明確",
   "wanted.decision.qualityBlocked": "被品質規則阻止",
+  "wanted.decision.episodeAvailabilityBlocked": "等待播出日期",
   "wanted.decision.minimumSeeders": "做種數過少",
   "wanted.decision.packBelowMissingThreshold": "合集低於缺失門檻",
   "wanted.decision.upgradeRejected": "升級被拒絕",
@@ -4691,6 +4742,7 @@ const zh_TW: LocaleDictionary = {
   "requests.approvedLease": "保留時間",
   "requests.approvedLeaseKeepForever": "依請求永久保留",
   "requests.approvedLeaseKeepRequested": "依請求保留 {{count}} 天",
+  "requests.approvedAudioLanguages": "音訊語言",
   "requests.approvedTags": "標籤",
   "requests.approvedTagsHelp":
     "核准時套用於作品。已預先填入規則輸出的標籤；您可在「設定 > 標籤」中新增或移除管理員定義的任何標籤。",
@@ -4761,6 +4813,10 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequestLeaseForever": "請求者要求永久保留媒體時為 true",
   "settings.refReqRequestLeaseDays":
     "請求者要求保留的天數；若要求永久保留則缺失",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "請求者要求作品必須具備的音訊語言。null 表示交由媒體庫決定；空清單表示不設要求",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "請求者偏好的音訊語言（依順序）。null 表示交由媒體庫決定",
   "settings.refReqSectionExternalIds":
     "— input.request.external_ids 上的提供者識別碼",
   "settings.refReqExternalIdsTmdb": "TMDB 識別碼（若提供者有提供）",
@@ -5325,6 +5381,9 @@ const zh_TW: LocaleDictionary = {
   "indexerSearch.facet.protocol": "協議",
   "indexerSearch.facet.resolution": "解析度",
   "indexerSearch.facet.source": "來源",
+  "indexerSearch.facet.videoCodec": "影片編碼",
+  "indexerSearch.facet.audioCodec": "音訊編碼",
+  "indexerSearch.facet.audioChannels": "音訊聲道",
   "indexerSearch.facet.audio": "音訊與 HDR",
   "indexerSearch.facet.flags": "標記",
   "indexerSearch.facet.indexer": "索引器",
@@ -5649,6 +5708,52 @@ const zh_TW: LocaleDictionary = {
   "setup.sourceImportState.failed": "失敗",
   "setup.sourceImportState.interrupted": "已中斷",
   "setup.sourceImportState.skipped": "已略過",
+  "qualityProfile.decisionOrder": "判定順序",
+  "qualityProfile.decisionOrderInfo":
+    "當兩個發佈都符合此設定檔時，Scryer 會由上而下檢查這些步驟。第一個能區分它們的步驟做出決定。評分一律最後決定。",
+  "qualityProfile.decisionGateQualityTier": "品質等級",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "在此設定檔的品質偏好中排名較高之等級的發佈勝出。",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "在同一等級與同一發佈群組內，較新的 PROPER 或 REPACK 勝出。",
+  "qualityProfile.decisionGatePreferredLanguage": "偏好語言",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "音訊在媒體庫偏好音訊語言中排名較高的發佈勝出。",
+  "qualityProfile.decisionGateOptionalLanguages": "選用語言",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "包含較多媒體庫選用音訊語言的發佈勝出。",
+  "qualityProfile.decisionGateUnknown": "無法辨識的步驟（{{value}}）",
+  "qualityProfile.decisionGateUnknownDescription":
+    "此版本的網頁應用程式無法辨識這個步驟，它會保留在原位。",
+  "qualityProfile.decisionGateScore": "評分",
+  "qualityProfile.decisionGateScoreDescription":
+    "評分較高者勝出。評分一律是最後一個步驟。",
+  "qualityProfile.decisionScoreLocked": "一律最後",
+  "qualityProfile.decisionStepRemove": "從判定順序移除 {{value}}",
+  "qualityProfile.decisionStepAdd": "將 {{value}} 加入判定順序",
+  "qualityProfile.decisionAvailableSteps": "未使用的步驟",
+  "qualityProfile.decisionAllStepsInUse": "所有步驟皆已使用。",
+  "qualityProfile.decisionWarningTierAbsent":
+    "沒有品質等級步驟時，較低等級的發佈可能取代較高等級的檔案，且截止等級不適用。只有截止評分會停止尋找升級；若也沒有截止評分，設定檔在有檔案後即視為滿足。",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "語言步驟位於品質等級之前，因此偏好語言的較低等級發佈可能取代較高等級的檔案。",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "沒有 PROPER/REPACK 步驟時，PROPER 與 REPACK 發佈不會自動獲得優先。評分規則仍可為其加分。",
+  "qualityProfile.decisionNoteLanguageGates":
+    "只有在媒體庫設定了偏好或選用音訊語言時，語言步驟才會生效。",
+  "qualityProfile.cutoffTierNotApplicable":
+    "判定順序中沒有品質等級步驟時不適用。",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "在品質設定檔的判定順序中，每個步驟只能出現一次。",
+  "qualityProfile.decidedBy": "決定步驟：{{step}}",
+  "qualityProfile.cutoffScore": "截止評分",
+  "qualityProfile.cutoffScoreInfo":
+    "磁碟上的檔案達到此評分後，設定檔便停止尋找升級。留空表示不使用截止評分。",
+  "qualityProfile.cutoffScorePlaceholder": "無截止評分",
+  "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
+  "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
+  "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
 };
 
 export default zh_TW;

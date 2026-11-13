@@ -742,32 +742,44 @@ impl ImageProxyRuntime {
             .map_err(|error| {
                 AppError::Repository(format!("failed to inspect image cache: {error}"))
             })?;
-        while let Some(file) = files.next_entry().await.map_err(|error| {
-            AppError::Repository(format!("failed to inspect image cache: {error}"))
-        })? {
-            let path = file.path();
-            let Some(entry) = expected.remove(&path) else {
-                self.remove_cache_file(&path).await?;
-                continue;
-            };
-            let valid_size = file
-                .metadata()
-                .await
-                .ok()
-                .is_some_and(|metadata| metadata.len() == entry.byte_size.max(0) as u64);
-            if !valid_size {
-                self.remove_cache_file(&path).await?;
-                self.repository
-                    .delete_image_proxy_cache_entry(&entry.token, &entry.variant)
-                    .await?;
+        // Rows are deleted together at the end. The caller holds the cache
+        // lifecycle lock for the whole pass, so nothing publishes in between;
+        // on a failure, the rows already condemned are deleted before the
+        // error returns, as they were one at a time.
+        let mut stale_rows = Vec::new();
+        let scanned = async {
+            while let Some(file) = files.next_entry().await.map_err(|error| {
+                AppError::Repository(format!("failed to inspect image cache: {error}"))
+            })? {
+                let path = file.path();
+                let Some(entry) = expected.remove(&path) else {
+                    self.remove_cache_file(&path).await?;
+                    continue;
+                };
+                let valid_size = file
+                    .metadata()
+                    .await
+                    .ok()
+                    .is_some_and(|metadata| metadata.len() == entry.byte_size.max(0) as u64);
+                if !valid_size {
+                    self.remove_cache_file(&path).await?;
+                    stale_rows.push((entry.token, entry.variant));
+                }
             }
+            AppResult::Ok(())
         }
-        for entry in expected.into_values() {
-            self.repository
-                .delete_image_proxy_cache_entry(&entry.token, &entry.variant)
-                .await?;
+        .await;
+        if scanned.is_ok() {
+            stale_rows.extend(
+                expected
+                    .into_values()
+                    .map(|entry| (entry.token, entry.variant)),
+            );
         }
-        Ok(())
+        self.repository
+            .delete_image_proxy_cache_entries(&stale_rows)
+            .await?;
+        scanned
     }
 
     async fn enforce_budget(&self) -> AppResult<()> {
@@ -784,18 +796,38 @@ impl ImageProxyRuntime {
             if batch.is_empty() {
                 break;
             }
+            // Every caller excludes other publishers for the whole pass (the
+            // lifecycle write lock, or the publication write lock), so a
+            // batch's rows are deleted together once its files are gone. A
+            // file that fails to go leaves the rows before it deleted, as one
+            // at a time did.
+            let mut evicted = Vec::new();
+            let mut removed = Ok(());
+            let mut budget_met = false;
             for entry in batch {
                 if total_bytes <= max {
-                    return Ok(());
+                    budget_met = true;
+                    break;
                 }
-                self.remove_cache_file(&self.existing_cache_path(&entry).await)
-                    .await?;
-                self.remove_obsolete_cache_file(&entry).await?;
-                self.repository
-                    .delete_image_proxy_cache_entry(&entry.token, &entry.variant)
-                    .await?;
+                removed = async {
+                    self.remove_cache_file(&self.existing_cache_path(&entry).await)
+                        .await?;
+                    self.remove_obsolete_cache_file(&entry).await
+                }
+                .await;
+                if removed.is_err() {
+                    break;
+                }
                 total_bytes = total_bytes.saturating_sub(entry.byte_size.max(0) as u64);
                 entry_count = entry_count.saturating_sub(1);
+                evicted.push((entry.token, entry.variant));
+            }
+            self.repository
+                .delete_image_proxy_cache_entries(&evicted)
+                .await?;
+            removed?;
+            if budget_met {
+                return Ok(());
             }
         }
         Ok(())

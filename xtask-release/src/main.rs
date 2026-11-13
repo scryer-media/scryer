@@ -638,7 +638,24 @@ fn scan_release_hygiene_content(path: &Path, content: &str) -> Vec<String> {
             continue;
         }
 
-        if release_hygiene_line_has_local_path_token(line)
+        // These diagnostics fixtures exercise redaction of synthetic paths. Strip
+        // only the known fixture paths, leaving any other path on the line visible.
+        let hygiene_line = match path_text.as_ref() {
+            "crates/scryer-application/src/diagnostics/tests.rs" => line
+                .replace(
+                    r"C:\Users\someone\Downloads\Synthetic.Release.mkv",
+                    "<fixture>",
+                )
+                .replace(
+                    r"C:\Users\CanaryWinUser\Downloads\Synthetic.Feature.2020.1080p.mkv",
+                    "<fixture>",
+                ),
+            "crates/scryer/src/diagnostics_routes.rs" => {
+                line.replace("\"info /home/x\"", "\"<fixture>\"")
+            }
+            _ => line.to_owned(),
+        };
+        if release_hygiene_line_has_local_path_token(&hygiene_line)
             && !release_hygiene_path_is_allowlisted(
                 &path_text,
                 RELEASE_LOCAL_PATH_ALLOWLIST_PREFIXES,
@@ -4400,6 +4417,8 @@ fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> 
         "RUSTSEC-2026-0391",
         "RUSTSEC-2026-0398",
         "RUSTSEC-2026-0403",
+        // Published SQLx 0.9 caps libsqlite3-sys below the patched 0.39 line.
+        "RUSTSEC-2026-0459",
     ];
     warn(format!(
         "Ignoring advisories pending upstream fixes: {}",
@@ -6612,6 +6631,21 @@ merge :2
                 "crates/scryer-application/src/lib.rs:1: sibling e2e repo reference: let fixture = manifest_dir.join(\"../e2e/testdata\").join(name);"
                     .to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn release_hygiene_allows_known_diagnostics_paths_only() {
+        let path = Path::new("crates/scryer-application/src/diagnostics/tests.rs");
+        let fixture = r"C:\Users\someone\Downloads\Synthetic.Release.mkv";
+        assert!(scan_release_hygiene_content(path, fixture).is_empty());
+        assert_eq!(
+            scan_release_hygiene_content(path, &format!("{fixture} /home/private/file")).len(),
+            1
+        );
+        assert_eq!(
+            scan_release_hygiene_content(Path::new("other.rs"), fixture).len(),
+            1
         );
     }
 

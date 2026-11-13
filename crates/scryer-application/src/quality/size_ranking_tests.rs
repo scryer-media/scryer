@@ -32,10 +32,11 @@ fn score(
 fn rank(decision: &QualityProfileDecision) -> RankHead {
     RankHead {
         blocked: !decision.allowed,
-        tier_index: decision.tier_index.unwrap_or(usize::MAX),
+        side: crate::decision_pipeline::SideFacts::of_decision(Some(decision)),
         negated_revision: 0,
         negated_score: -decision.preference_score,
         size_fit_penalty: decision.size_fit_penalty,
+        pipeline: decision.decision_pipeline,
     }
 }
 
@@ -67,7 +68,7 @@ fn matching_mixed_profile_releases_have_a_100_point_resolution_step() {
                 .filter(|e| e.code.starts_with("size_"))
                 .all(|e| e.delta == 0)
         );
-        assert!(rank(&high).tier_index < rank(&low).tier_index);
+        assert!(rank(&high).side.tier_sort_key < rank(&low).side.tier_sort_key);
     }
 }
 
@@ -130,7 +131,7 @@ fn resolution_weight_model_covers_normal_preferences_without_replacing_tier_orde
         }
         // Group reputation can exceed any modest numeric bump. Quality remains
         // the primary ordering dimension even in that deliberately adverse case.
-        assert!(rank(&high).tier_index < rank(&low).tier_index);
+        assert!(rank(&high).side.tier_sort_key < rank(&low).side.tier_sort_key);
     }
 }
 

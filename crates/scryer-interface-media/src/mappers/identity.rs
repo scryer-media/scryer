@@ -169,6 +169,17 @@ pub fn from_media_server_user(user: scryer_application::MediaServerUser) -> Medi
     }
 }
 
+pub fn from_media_server_connection_account(
+    account: scryer_application::MediaServerConnectionAccount,
+) -> MediaServerConnectionAccountPayload {
+    MediaServerConnectionAccountPayload {
+        id: account.user.id,
+        username: account.user.username,
+        display_name: account.user.display_name,
+        linked: account.linked,
+    }
+}
+
 pub fn from_media_server_user_group(
     group: scryer_application::MediaServerUserGroup,
 ) -> MediaServerUserGroupPayload {

@@ -283,22 +283,50 @@ impl LibraryScanCoordinator {
         self.record_delta(delta).await;
     }
 
-    /// Records the per-file completion/failure deltas of one flush and the
-    /// coalesced progress state in a single transaction. Equivalent to
-    /// `mark_file_completed` then `mark_file_failed` then `publish_progress`.
-    pub(crate) async fn mark_file_progress_and_publish(&self, completed: usize, failed: usize) {
-        let mut deltas = Vec::with_capacity(2);
-        if completed > 0 {
+    /// Records the per-file completion/failure deltas of one flush, which the
+    /// live session sees at once, exactly as `mark_file_completed` then
+    /// `mark_file_failed` would. The coalesced progress events are appended,
+    /// in the same transaction, only when
+    /// [`crate::LibraryScanTracker::note_file_progress`] says the event log is
+    /// due, or when `force`d. Delta records the tracker stages for the log
+    /// now are always appended, with the progress state.
+    pub(crate) async fn mark_file_progress_and_publish_when_due(
+        &self,
+        completed: usize,
+        failed: usize,
+        force: bool,
+    ) {
+        let mut events = Vec::new();
+        for (field_completed, count) in [(true, completed), (false, failed)] {
+            if count == 0 {
+                continue;
+            }
             let mut delta = empty_scan_delta(self.session_id.clone());
-            delta.file_completed_delta = completed as i64;
-            deltas.push(delta);
+            if field_completed {
+                delta.file_completed_delta = count as i64;
+            } else {
+                delta.file_failed_delta = count as i64;
+            }
+            events.extend(self.prepare_delta_events(delta).await);
         }
-        if failed > 0 {
-            let mut delta = empty_scan_delta(self.session_id.clone());
-            delta.file_failed_delta = failed as i64;
-            deltas.push(delta);
+        let due = self
+            .app
+            .runtime
+            .library
+            .library_scan_tracker
+            .note_file_progress(
+                self.session_id(),
+                completed.saturating_add(failed),
+                force || !events.is_empty(),
+            )
+            .await;
+        if due {
+            events.extend(self.prepare_progress_events().await);
         }
-        self.record_deltas_and_publish_progress(deltas).await;
+        if events.is_empty() {
+            return;
+        }
+        let _ = self.app.append_domain_events(events).await;
     }
 
     /// `mark_file_failed` followed by `publish_progress`, in one transaction.

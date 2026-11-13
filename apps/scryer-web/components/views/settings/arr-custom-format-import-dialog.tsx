@@ -13,20 +13,22 @@ import {
 import { Input, integerInputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
-import type {
-  ArrSource,
-  Diagnostic,
-  ImportedCustomFormat,
-  InspectionResult,
-  TranslationResult,
-} from "@/lib/arr-custom-format/types";
+import { translateArrCustomFormatsMutation } from "@/lib/graphql/mutations";
+import { makeAbortableFetch } from "@/lib/graphql/urql-client";
 import {
+  type ArrCustomFormatTranslation,
+  type ArrDiagnostic,
+  type ArrSource,
+  type ReviewedCustomFormat,
+  arrImportErrorMessage,
   candidateScores,
   collectFormatScores,
   defaultScore,
   isCurrentTranslationRequest,
   recommendScore,
+  reviewedFormat,
   sourceFacets,
 } from "@/lib/utils/arr-custom-format-import-state";
 import { LoadingMark } from "@/components/common/loading-mark";
@@ -45,12 +47,13 @@ type ArrCustomFormatImportDialogProps = {
   onApply: (draft: ArrCustomFormatDraft) => void;
 };
 
-function diagnosticText(diagnostic: Diagnostic): string {
-  return diagnostic.message;
-}
+type Review = {
+  formats: ReviewedCustomFormat[];
+  diagnostics: ArrDiagnostic[];
+};
 
-function formatId(format: ImportedCustomFormat, index: number): string {
-  return format.id || `format-${index}`;
+function diagnosticText(diagnostic: ArrDiagnostic): string {
+  return diagnostic.message;
 }
 
 export default function ArrCustomFormatImportDialog({
@@ -59,85 +62,117 @@ export default function ArrCustomFormatImportDialog({
   onApply,
 }: ArrCustomFormatImportDialogProps) {
   const t = useTranslate();
+  const client = useClient();
   const [source, setSource] = React.useState<ArrSource>("sonarr");
   const [json, setJson] = React.useState("");
-  const [inspection, setInspection] = React.useState<InspectionResult | null>(
-    null,
-  );
+  const [inspection, setInspection] = React.useState<Review | null>(null);
   const [scores, setScores] = React.useState<Record<string, string>>({});
   const [reviewing, setReviewing] = React.useState(false);
   const [translating, setTranslating] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const requestId = React.useRef(0);
-  const worker = React.useRef<Worker | null>(null);
+  const pending = React.useRef<AbortController | null>(null);
 
-  const cancelTranslation = React.useCallback(() => {
+  const cancelRequest = React.useCallback(() => {
     requestId.current += 1;
-    worker.current?.terminate();
-    worker.current = null;
+    pending.current?.abort();
+    pending.current = null;
+    setReviewing(false);
     setTranslating(false);
   }, []);
 
-  React.useEffect(() => () => worker.current?.terminate(), []);
+  React.useEffect(() => () => pending.current?.abort(), []);
 
   const close = React.useCallback(() => {
-    cancelTranslation();
-    setReviewing(false);
+    cancelRequest();
     onOpenChange(false);
-  }, [cancelTranslation, onOpenChange]);
+  }, [cancelRequest, onOpenChange]);
 
   const resetReview = React.useCallback(
     (nextJson?: string, nextSource?: ArrSource) => {
-      requestId.current += 1;
+      cancelRequest();
       setInspection(null);
       setScores({});
       setError(null);
       if (nextJson !== undefined) setJson(nextJson);
       if (nextSource !== undefined) setSource(nextSource);
     },
-    [],
+    [cancelRequest],
+  );
+
+  /**
+   * Sends the paste to the server. Resolves null after a failure, which it
+   * reports, or once a newer request, a cancellation or new input replaced it.
+   */
+  const requestTranslation = React.useCallback(
+    async (
+      scoreValues: { formatId: string; score: number }[],
+      fallback: string,
+      setBusy: (busy: boolean) => void,
+    ): Promise<ArrCustomFormatTranslation | null> => {
+      cancelRequest();
+      const thisRequest = requestId.current;
+      const abort = new AbortController();
+      pending.current = abort;
+      setError(null);
+      setBusy(true);
+      try {
+        const { data, error: failure } = await client
+          .mutation(
+            translateArrCustomFormatsMutation,
+            {
+              input: {
+                sourceApplication: source === "radarr" ? "RADARR" : "SONARR",
+                customFormatJson: json,
+                scores: scoreValues,
+              },
+            },
+            { fetch: makeAbortableFetch(abort.signal) },
+          )
+          .toPromise();
+        if (!isCurrentTranslationRequest(requestId.current, thisRequest))
+          return null;
+        setBusy(false);
+        const result = data?.translateArrCustomFormats as
+          ArrCustomFormatTranslation | undefined;
+        if (failure || !result) {
+          setError(arrImportErrorMessage(failure, t, fallback));
+          return null;
+        }
+        return result;
+      } finally {
+        if (pending.current === abort) pending.current = null;
+      }
+    },
+    [cancelRequest, client, json, source, t],
   );
 
   const review = React.useCallback(async () => {
-    const thisRequest = ++requestId.current;
-    setReviewing(true);
-    setError(null);
-    try {
-      const { inspectCustomFormats } =
-        await import("@/lib/arr-custom-format/inspection");
-      const result = inspectCustomFormats(json, source);
-      if (requestId.current !== thisRequest) return;
-      if (result.fatal || !result.formats?.length) {
-        const diagnostics =
-          result.diagnostics?.map(diagnosticText).filter(Boolean) ?? [];
-        setInspection(null);
-        setError(diagnostics.join("\n") || t("settings.arrImportNoFormats"));
-        return;
-      }
-      setInspection(result);
-      setScores(
-        Object.fromEntries(
-          result.formats.map((format, index) => [
-            formatId(format, index),
-            defaultScore(format, result.diagnostics),
-          ]),
-        ),
-      );
-    } catch (caught) {
-      if (requestId.current !== thisRequest) return;
-      setInspection(null);
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : t("settings.arrImportReviewFailed"),
-      );
-    } finally {
-      if (requestId.current === thisRequest) setReviewing(false);
+    const translation = await requestTranslation(
+      [],
+      t("settings.arrImportReviewFailed"),
+      setReviewing,
+    );
+    if (!translation) return;
+    if (!translation.formats.length) {
+      const diagnostics = translation.inspectionDiagnostics
+        .map(diagnosticText)
+        .filter(Boolean);
+      setError(diagnostics.join("\n") || t("settings.arrImportNoFormats"));
+      return;
     }
-  }, [json, source, t]);
+    const formats = translation.formats.map(reviewedFormat);
+    const diagnostics = translation.inspectionDiagnostics;
+    setInspection({ formats, diagnostics });
+    setScores(
+      Object.fromEntries(
+        formats.map((format) => [format.id, defaultScore(format, diagnostics)]),
+      ),
+    );
+  }, [requestTranslation, t]);
 
-  const translate = React.useCallback(() => {
-    if (!inspection?.formats?.length) return;
+  const translate = React.useCallback(async () => {
+    if (!inspection?.formats.length) return;
     const scoreResult = collectFormatScores(inspection.formats, scores);
     if ("missingFormat" in scoreResult) {
       setError(
@@ -147,96 +182,47 @@ export default function ArrCustomFormatImportDialog({
       );
       return;
     }
-    const scoreValues = scoreResult.scores;
-
-    const thisRequest = ++requestId.current;
-    cancelTranslation();
-    requestId.current = thisRequest;
-    setError(null);
-    setTranslating(true);
-    let nextWorker: Worker | null = null;
-    try {
-      const createdWorker = new Worker(
-        new URL(
-          "../../../workers/arr-custom-format-translator.worker.ts",
-          import.meta.url,
-        ),
-        { type: "module" },
-      );
-      nextWorker = createdWorker;
-      worker.current = createdWorker;
-      createdWorker.onmessage = (
-        event: MessageEvent<
-          | { type: "complete"; requestId: number; result: TranslationResult }
-          | { type: "error"; requestId: number; message: string }
-        >,
-      ) => {
-        if (
-          !isCurrentTranslationRequest(requestId.current, event.data.requestId)
-        )
-          return;
-        worker.current?.terminate();
-        worker.current = null;
-        setTranslating(false);
-        if (event.data.type === "error") {
-          setError(event.data.message);
-          return;
-        }
-        const result = event.data.result;
-        const translated = result.formats.filter(
-          (format) => format.status === "translated",
-        ).length;
-        const diagnostics = [
-          t("settings.arrImportResultSummary", {
-            translated,
-            disabled: result.formats.length - translated,
-          }),
-          ...result.diagnostics.map(diagnosticText),
-          ...result.formats.flatMap((format) =>
-            format.diagnostics.map(diagnosticText),
-          ),
-        ].filter(Boolean);
-        onApply({
-          name: result.name || t("settings.arrImportDraftName"),
-          description:
-            result.description || t("settings.arrImportDraftDescription"),
-          regoSource: result.regoSource,
-          appliedFacets: result.appliedFacets ?? sourceFacets(source),
-          translationDiagnostics: [...new Set(diagnostics)],
-        });
-        onOpenChange(false);
-      };
-      createdWorker.onerror = () => {
-        if (!isCurrentTranslationRequest(requestId.current, thisRequest))
-          return;
-        createdWorker.terminate();
-        worker.current = null;
-        setTranslating(false);
-        setError(t("settings.arrImportTranslationFailed"));
-      };
-      createdWorker.postMessage({
-        type: "translate",
-        requestId: thisRequest,
-        formats: inspection.formats,
-        scores: scoreValues,
-      });
-    } catch (caught) {
-      nextWorker?.terminate();
-      if (worker.current === nextWorker) worker.current = null;
-      if (requestId.current === thisRequest) {
-        setTranslating(false);
-        setError(
-          caught instanceof Error
-            ? caught.message
-            : t("settings.arrImportTranslationFailed"),
-        );
-      }
-    }
-  }, [cancelTranslation, inspection, onApply, onOpenChange, scores, source, t]);
+    const translation = await requestTranslation(
+      scoreResult.scores,
+      t("settings.arrImportTranslationFailed"),
+      setTranslating,
+    );
+    if (!translation) return;
+    const translated = translation.formats.filter(
+      (format) => format.status === "TRANSLATED",
+    ).length;
+    const diagnostics = [
+      t("settings.arrImportResultSummary", {
+        translated,
+        disabled: translation.formats.length - translated,
+      }),
+      ...translation.diagnostics.map(diagnosticText),
+      ...translation.formats.flatMap((format) =>
+        format.diagnostics.map(diagnosticText),
+      ),
+    ].filter(Boolean);
+    onApply({
+      name: translation.name || t("settings.arrImportDraftName"),
+      description:
+        translation.description || t("settings.arrImportDraftDescription"),
+      regoSource: translation.regoSource,
+      appliedFacets: translation.appliedFacets ?? sourceFacets(source),
+      translationDiagnostics: [...new Set(diagnostics)],
+    });
+    onOpenChange(false);
+  }, [
+    inspection,
+    onApply,
+    onOpenChange,
+    requestTranslation,
+    scores,
+    source,
+    t,
+  ]);
 
   const formats = inspection?.formats ?? [];
   const diagnostics =
-    inspection?.diagnostics?.map(diagnosticText).filter(Boolean) ?? [];
+    inspection?.diagnostics.map(diagnosticText).filter(Boolean) ?? [];
 
   return (
     <Dialog
@@ -325,7 +311,7 @@ export default function ArrCustomFormatImportDialog({
               ) : null}
               <div className="space-y-3">
                 {formats.map((format, index) => {
-                  const id = formatId(format, index);
+                  const id = format.id;
                   const suggested = candidateScores(format);
                   const recommendation = recommendScore(
                     format,
@@ -431,7 +417,7 @@ export default function ArrCustomFormatImportDialog({
               id="settings-rules-arr-translate"
               type="button"
               disabled={translating}
-              onClick={translate}
+              onClick={() => void translate()}
             >
               {translating ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
               {t("settings.arrImportTranslate")}

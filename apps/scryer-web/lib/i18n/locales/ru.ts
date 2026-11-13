@@ -1,6 +1,9 @@
 import type { LocaleDictionary } from "../types";
 
 const ru: LocaleDictionary = {
+  "settings.defaultMonitorType": "Отслеживание новых тайтлов по умолчанию",
+  "settings.defaultMonitorTypeHelp":
+    "Начальный выбор при добавлении или запросе тайтла. Существующие тайтлы и подписки на списки не меняются.",
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Эта версия Prowlarr не поддерживается. Обновите Prowlarr до версии 2.0 или новее.",
   "error.reason.STANDBY_NOT_FOUND":
@@ -756,6 +759,12 @@ const ru: LocaleDictionary = {
   "settings.libraryDeleted": "Библиотека удалена.",
   "settings.librarySaveFailed": "Не удалось сохранить библиотеку.",
   "settings.libraryDeleteFailed": "Не удалось удалить библиотеку.",
+  "settings.libraryDeleteQueued":
+    "Библиотека удаляется. Она останется в списке, пока не будут удалены её материалы.",
+  "settings.libraryDeleteProgressClearing":
+    "Очистка записей материалов: {{processed}} из {{total}}",
+  "settings.libraryDeleteProgressDeleting":
+    "Удаление материалов: {{processed}} из {{total}}",
   "settings.librarySettingsLoadFailed":
     "Не удалось загрузить настройки библиотеки.",
   "settings.libraryRequiredAudioLabel": "Требуемый аудиоформат",
@@ -857,6 +866,7 @@ const ru: LocaleDictionary = {
     "Файлы, для которых не удалось вычислить хеш",
   "jobs.fullHashBackfillFailuresMore": "…и ещё {{count}} не показано",
   "jobs.nextRunPrefix": "Следующий запуск: {{value}}",
+  "jobs.nothingToDo": "Нечего делать, проверено {{value}}",
   "jobs.startedAt": "Запущено {{value}}",
   "jobs.completedAt": "Завершено {{value}}",
   "jobs.failedToTrigger": "Не удалось запустить задание",
@@ -944,6 +954,23 @@ const ru: LocaleDictionary = {
   "settings.qualityProfileUnknown":
     'Неизвестный идентификатор профиля качества: "{{id}}".',
   "settings.qualitySettingsSaved": "Настройки качества сохранены.",
+  "settings.audioLanguagePreferences": "Предпочтения языка аудио",
+  "settings.audioLanguagePreferencesInfo":
+    "Ранжирует релизы по языку аудио, ничего не отклоняя. В отличие от обязательных языков, релиз без этих языков всё равно берётся, если лучшего нет, и заменяется, как только появляется лучший.",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "Собственные значения этой библиотеки. Пустой список или выбор наследования использует значение каталога по умолчанию.",
+  "settings.audioPreferredLanguages": "Предпочтительные языки",
+  "settings.audioPreferredLanguagesHint":
+    "В порядке предпочтения. Релиз с первым языком ставится выше релиза только со вторым, и так далее. Файл без любого из них остаётся целью для улучшения.",
+  "settings.audioPreferredMoveUp": "Переместить {{language}} выше",
+  "settings.audioPreferredMoveDown": "Переместить {{language}} ниже",
+  "settings.audioOptionalLanguages": "Дополнительные языки",
+  "settings.audioOptionalLanguagesHint":
+    "Желательны, но не обязательны. Среди релизов одного качества побеждает тот, в котором больше этих языков.",
+  "settings.audioOptionalKeepSearching":
+    "Продолжать искать дополнительные языки",
+  "settings.audioOptionalKeepSearchingHint":
+    "Если включено, файл без дополнительных языков остаётся целью для улучшения. Если выключено, такие релизы всё равно заменяют его при обнаружении, но специально не ищутся.",
   "settings.downloadClientRoutingSaved":
     "Маршрутизация клиентов загрузки сохранена.",
   "settings.downloadClientRoutingSavedFor":
@@ -1880,6 +1907,18 @@ const ru: LocaleDictionary = {
   "title.noWantedItem": "Нет активных желаемых материалов.",
   "title.searchReleasesAction": "Искать релизы",
   "title.queueLatest": "Добавить последний релиз в очередь",
+  "search.addConfigRequiredAudio": "Обязательный язык аудио",
+  "search.addConfigPreferredAudio": "Предпочитаемый язык аудио",
+  "search.addConfigAudioChoose": "Выбрать языки",
+  "search.addConfigAudioRequireNone": "Не требовать",
+  "title.preferredAudioLanguages": "Предпочитаемые языки аудио",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer не знает этот язык аудио.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer не знает язык аудио маршрута.",
+  "requests.requestedAudioLanguages": "Запрошенные языки аудио",
+  "requests.requestedRequiredAudio": "Обязательные: {{languages}}",
+  "requests.requestedPreferredAudio": "Предпочитаемые: {{languages}}",
   "title.requiredAudioLanguages": "Требуемые языки аудио",
   "title.originalAudioLanguagePerTitle":
     "Язык оригинала (для каждого произведения)",
@@ -2048,6 +2087,12 @@ const ru: LocaleDictionary = {
   "tvdb.popularity": "Популярность",
   "nzb.searchResults": "Результаты поиска в NZBGeek",
   "nzb.searchResultsFor": "Результаты NZB для {{name}}",
+  "nzb.audioLanguagePreferred": "Предпочтительный язык",
+  "nzb.audioLanguagePreferredRank": "Предпочтительный язык №{{rank}}",
+  "nzb.audioLanguageNotPreferred": "Нет предпочтительного языка",
+  "nzb.audioLanguageOptionalHits": "+{{count}} доп.",
+  "nzb.audioLanguageHint":
+    "Положение этого релиза относительно предпочтений языка аудио",
   "nzb.selectTvdbFirst":
     "Сначала выберите результат из TVDB, чтобы выполнить поиск в NZBGeek.",
   "nzb.noResultsYet": "Совпадений среди релизов пока нет.",
@@ -2172,6 +2217,21 @@ const ru: LocaleDictionary = {
   "queue.assignTitleBeforeImport":
     "Назначьте материал перед запуском ручного импорта.",
   "queue.ignore": "Игнорировать",
+  "queue.dismissImportWarning": "Скрыть предупреждение — сохранить раздачу",
+  "queue.resumeImportTracking": "Возобновить отслеживание импорта",
+  "queue.state.importDismissed": "Предупреждение импорта скрыто",
+  "activity.importFilter.dismissed": "Скрытые предупреждения",
+  "queue.importTrackingFailed": "Не удалось изменить отслеживание импорта.",
+  "queue.importDismissedSuccess":
+    "Предупреждение скрыто. Торрент, раздача и файлы не изменены. Возобновить отслеживание можно в разделе «Скрытые предупреждения».",
+  "queue.importTrackingResumed":
+    "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
+    "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
+    "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
+    "Эта загрузка уже импортирована, завершилась ошибкой или проигнорирована, поэтому её предупреждение больше нельзя изменить.",
   "queue.ignoreSuccess": "Загрузка проигнорирована.",
   "queue.ignoreFailed": "Не удалось проигнорировать загрузку.",
   "queue.releaseHeldSources": "Освободить удерживаемые источники",
@@ -2275,6 +2335,18 @@ const ru: LocaleDictionary = {
   "importHistory.passwordPlaceholder": "Пароль архива",
   "importHistory.retrySuccess": "Повторный импорт запущен",
   "system.title": "Состояние системы",
+  "system.diagnosticsBundle.download": "Скачать диагностический пакет",
+  "system.diagnosticsBundle.preparing": "Подготовка диагностики…",
+  "system.diagnosticsBundle.helper":
+    "Журналы, метрики и сводка настроек в одном файле для разработчика. Имена, адреса, пути и секреты удаляются по мере возможности; проверьте пакет перед отправкой.",
+  "system.diagnosticsBundle.failed":
+    "Не удалось скачать диагностический пакет.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Войдите снова, чтобы скачать диагностику.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Для скачивания диагностики нужно разрешение на системные настройки.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Не удалось собрать диагностический пакет. Подробности в журнале сервера.",
   "system.jobsTitle": "Задания",
   "system.auditTitle": "Аудит",
   "system.auditLoaded": "Журнал аудита загружен.",
@@ -3604,6 +3676,8 @@ const ru: LocaleDictionary = {
   "profile.linkPlexAccount": "Подключить Plex",
   "profile.linkAccountConnection": "Подключение",
   "profile.linkAccountUsername": "Имя пользователя",
+  "profile.linkAccountChooseAccount": "Выберите учётную запись",
+  "profile.linkAccountAlreadyLinked": "{{username}} (уже привязана)",
   "profile.linkAccountPassword": "Пароль",
   "profile.linkAccountPasswordlessHint":
     "Оставьте поле пустым, если для этой учётной записи Jellyfin пароль не используется. Учётные записи без пароля можно привязать, но их нельзя использовать для входа в Scryer.",
@@ -3737,6 +3811,7 @@ const ru: LocaleDictionary = {
   "wanted.decision.categoryMismatch": "Несоответствие категории",
   "wanted.decision.ambiguousIdentity": "Неоднозначное совпадение",
   "wanted.decision.qualityBlocked": "Заблокировано профилем качества",
+  "wanted.decision.episodeAvailabilityBlocked": "Ожидает даты выхода",
   "wanted.decision.upgradeRejected": "Обновление отклонено",
   "wanted.decision.pendingDelay": "Отложено",
   "wanted.decision.alreadyActive": "Уже активно",
@@ -5135,6 +5210,7 @@ const ru: LocaleDictionary = {
   "requests.approvedLease": "Хранить",
   "requests.approvedLeaseKeepForever": "Вечно, как и просили",
   "requests.approvedLeaseKeepRequested": "{{count}} дней, как и просили",
+  "requests.approvedAudioLanguages": "Языки аудио",
   "requests.approvedTags": "Метки",
   "requests.approvedTagsHelp":
     "Применяются к тайтлу при одобрении. Заполнены тем, что выдали правила; добавляйте и убирайте любой тег, определённый администратором в «Настройки › Теги».",
@@ -5215,6 +5291,10 @@ const ru: LocaleDictionary = {
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
     "Сколько дней запросивший просил хранить медиа; отсутствует, когда он попросил хранить вечно",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Языки аудио, которые, по словам запросившего, должны быть у тайтла. null оставляет выбор библиотеке; пустой список означает отсутствие требования",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Предпочитаемые запросившим языки аудио по порядку. null оставляет выбор библиотеке",
   "settings.refReqSectionExternalIds":
     "— Идентификаторы поставщиков в input.request.external_ids",
   "settings.refReqExternalIdsTmdb":
@@ -5752,6 +5832,9 @@ const ru: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Протокол",
   "indexerSearch.facet.resolution": "Разрешение",
   "indexerSearch.facet.source": "Источник",
+  "indexerSearch.facet.videoCodec": "Видеокодек",
+  "indexerSearch.facet.audioCodec": "Аудиокодек",
+  "indexerSearch.facet.audioChannels": "Аудиоканалы",
   "indexerSearch.facet.audio": "Звук и HDR",
   "indexerSearch.facet.flags": "Метки",
   "indexerSearch.facet.indexer": "Индексатор",
@@ -6497,6 +6580,8 @@ const ru: LocaleDictionary = {
     "Требуется средство распаковки архивов",
   "importHistory.skipReason.ARCHIVE_EXTRACTION_TIMED_OUT":
     "Истекло время ожидания распаковки архива",
+  "importHistory.skipReason.TITLE_FOLDER_CONFLICT":
+    "Папка тайтла требует внимания",
   "error.reason.LIST_SOURCE_RATE_LIMITED":
     "Поставщик списков запросил снижение частоты запросов.",
   "error.reason.LIST_SOURCE_UNAVAILABLE":
@@ -7269,6 +7354,8 @@ const ru: LocaleDictionary = {
     "Путь восстановления из корзины находится за пределами текущей папки тайтла; разрешите изменение папки перед восстановлением.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
     "Тайтлу с выбранным значением уже принадлежит другая папка.",
+  "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
+    "Папка тайтла изменилась во время сохранения. Обновите страницу и попробуйте снова.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
     "Путь к папке тайтла должен быть абсолютным и не содержать переходов к родительским каталогам.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":
@@ -8060,6 +8147,8 @@ const ru: LocaleDictionary = {
     "Фоновое заполнение полных хешей завершает работу.",
   "error.reason.JOB_LIBRARY_ACCESS_DENIED":
     "У вас нет доступа к этой библиотеке.",
+  "error.reason.JOB_LIBRARY_DELETION_JOBS_INVALID":
+    "Задания удаления библиотек запускаются удалением библиотеки.",
   "error.reason.JOB_LOCATION_OPERATIONS_INVALID":
     "Операции с расположением необходимо запускать через мутацию операции с расположением.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
@@ -8127,12 +8216,16 @@ const ru: LocaleDictionary = {
     "Библиотеки по умолчанию нельзя удалить.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
     "Библиотека по умолчанию не найдена.",
+  "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
+    "Выберите тип мониторинга по умолчанию, который поддерживает эта библиотека.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
     "Удаление каталога по пути с выбранным значением через операцию удаления отдельного файла запрещено.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
     "Удаление выбранного элемента с выбранным значением запрещено: он находится за пределами настроенных корневых папок.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
     "Удаление выбранного элемента с выбранным значением запрещено: у него нет родительского каталога.",
+  "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
+    "Эта библиотека уже удаляется.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Папка назначения содержит границу другого тайтла или тайтла с неустановленной принадлежностью.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
@@ -8196,6 +8289,8 @@ const ru: LocaleDictionary = {
     "Файл ожидающего импорта недоступен.",
   "error.reason.LIBRARY_PENDING_IMPORT_ID_REQUIRED":
     "Требуется идентификатор ожидающего импорта.",
+  "error.reason.LIBRARY_PENDING_IMPORT_IGNORE_BATCH_TOO_LARGE":
+    "Слишком много ожидающих импортов для игнорирования за один раз.",
   "error.reason.LIBRARY_PENDING_IMPORT_NOT_FOUND":
     "Ожидающий импорт не найден.",
   "error.reason.LIBRARY_PENDING_IMPORT_PATH_FOLDER_NOT_FILE_SO_CANNOT_BOUND_EPISODES":
@@ -8866,6 +8961,8 @@ const ru: LocaleDictionary = {
     "Выбранный корневой каталог изменился.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
     "Связь с фильмом сериала не найдена.",
+  "error.reason.MEDIA_SERVER_ACCOUNT_LISTING_REQUIRES_JELLYFIN_OR_EMBY_CONNECTION":
+    "Выбрать учётную запись из списка можно только на сервере Jellyfin или Emby; учётные записи Plex привязываются через вход в Plex.",
   "error.reason.MEDIA_SERVER_BASE_URL_INVALID":
     "Базовый URL медиасервера должен использовать HTTP или HTTPS.",
   "error.reason.MEDIA_SERVER_BASE_URL_QUERY_OR_FRAGMENT":
@@ -11248,6 +11345,12 @@ const ru: LocaleDictionary = {
     "В этом JSON не найдено допустимых пользовательских форматов.",
   "settings.arrImportInvalidJson":
     "Вставьте корректный JSON, экспортированный из Sonarr или Radarr.",
+  "settings.arrImportRefusalTooLarge":
+    "Вставьте не более {{maxBytes}} байт JSON.",
+  "settings.arrImportRefusalEmpty":
+    "Вставьте хотя бы один пользовательский формат.",
+  "settings.arrImportRefusalTooMany":
+    "Вставьте не более {{maxFormats}} пользовательских форматов за раз.",
   "settings.arrImportReviewFailed":
     "Не удалось проверить эти пользовательские форматы.",
   "settings.arrImportScore": "Баллы",
@@ -11387,14 +11490,11 @@ const ru: LocaleDictionary = {
     "Выберите хотя бы один тип содержимого. Scryer никогда не выполняет поиск через провайдера, у которого не выбран ни один тип.",
   "qualityProfile.qualityPreference": "Приоритет качества",
   "qualityProfile.qualityPreferenceHelp":
-    "Наиболее предпочтительное качество — вверху. Приоритет уровня качества важнее баллов. Новые уровни добавляются с самым низким приоритетом.",
+    "Наиболее предпочтительное — вверху. По этому порядку релизы сравниваются на шаге «Уровень качества» в порядке решения. Новые уровни добавляются с самым низким приоритетом.",
   "qualityProfile.moveQualityTierUp": "Переместить {{value}} вверх",
   "qualityProfile.moveQualityTierDown": "Переместить {{value}} вниз",
   "qualityProfile.dragQualityTier":
     "Перетащите, чтобы изменить порядок {{value}}",
-  "qualityProfile.ignoreProperRepack": "Игнорировать PROPER/REPACK",
-  "qualityProfile.ignoreProperRepackInfo":
-    "Принимать решение по качеству и баллам без автоматического предпочтения или защиты ревизий. Правила оценки по-прежнему могут начислять баллы релизам PROPER/REPACK.",
   "seasonSection.seasonSearchResults": "Результаты поиска: {{season}}",
   "seriesOverview.selectColumn": "Выбрать",
   "seriesOverview.selectEpisodeForDelete": "Выбрать {{name}}",
@@ -12927,6 +13027,9 @@ const ru: LocaleDictionary = {
   "jobs.builtin.TitleDeletion.name": "Удаление материалов",
   "jobs.builtin.TitleDeletion.description":
     "Удаление выбранных материалов из каталога.",
+  "jobs.builtin.LibraryDeletion.name": "Удаление библиотеки",
+  "jobs.builtin.LibraryDeletion.description":
+    "Удаление библиотеки и её материалов из каталога; файлы на диске остаются.",
   "jobs.builtin.TitleRename.name": "Переименование материалов",
   "jobs.builtin.TitleRename.description":
     "Переименование файлов выбранных материалов.",
@@ -13414,6 +13517,53 @@ const ru: LocaleDictionary = {
     "В этом экземпляре нет связанной истории. Тайтл или события могут отсутствовать, либо запись может быть старше сохранённых связей файлов и загрузок.",
   "settings.recycleBinHistoryTruncated":
     "В этой сводке показано до 50 связанных событий из последних 5000 событий загрузок и файлов тайтла. Более старая связанная история может быть не включена.",
+  "qualityProfile.decisionOrder": "Порядок решения",
+  "qualityProfile.decisionOrderInfo":
+    "Когда два релиза подходят под этот профиль, Scryer проверяет эти шаги сверху вниз. Решает первый шаг, который их различает. Оценка всегда решает последней.",
+  "qualityProfile.decisionGateQualityTier": "Уровень качества",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "Побеждает релиз из уровня, который стоит выше в предпочтениях качества этого профиля.",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "В пределах одного уровня и одной релиз-группы побеждает более новый PROPER или REPACK.",
+  "qualityProfile.decisionGatePreferredLanguage": "Предпочитаемый язык",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "Побеждает релиз, аудио которого стоит выше в списке предпочитаемых языков аудио библиотеки.",
+  "qualityProfile.decisionGateOptionalLanguages": "Дополнительные языки",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "Побеждает релиз, в котором больше дополнительных языков аудио библиотеки.",
+  "qualityProfile.decisionGateUnknown": "Неизвестный шаг ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Эта версия веб-приложения не знает этот шаг. Он остаётся на своём месте.",
+  "qualityProfile.decisionGateScore": "Оценка",
+  "qualityProfile.decisionGateScoreDescription":
+    "Побеждает более высокая оценка. Оценка всегда идёт последним шагом.",
+  "qualityProfile.decisionScoreLocked": "Всегда последний",
+  "qualityProfile.decisionStepRemove": "Убрать {{value}} из порядка решения",
+  "qualityProfile.decisionStepAdd": "Добавить {{value}} в порядок решения",
+  "qualityProfile.decisionAvailableSteps": "Неиспользуемые шаги",
+  "qualityProfile.decisionAllStepsInUse": "Все шаги используются.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень не действует. Поиск обновлений останавливает только пороговая оценка; без неё профиль считается выполненным, как только есть файл.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Языковой шаг стоит перед уровнем качества, поэтому релиз более низкого уровня на предпочитаемом языке может заменить файл более высокого уровня.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Без шага PROPER/REPACK релизы PROPER и REPACK не получают автоматического предпочтения. Правила оценки по-прежнему могут их поощрять.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Языковые шаги действуют, только если в библиотеке заданы предпочитаемые или дополнительные языки аудио.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Не применяется, пока в порядке решения нет шага «Уровень качества».",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Каждый шаг может встречаться в порядке решения профиля качества только один раз.",
+  "qualityProfile.decidedBy": "Решил шаг: {{step}}",
+  "qualityProfile.cutoffScore": "Пороговая оценка",
+  "qualityProfile.cutoffScoreInfo":
+    "Когда файл на диске достигает этой оценки, профиль перестаёт искать обновления. Оставьте пустым, чтобы не использовать пороговую оценку.",
+  "qualityProfile.cutoffScorePlaceholder": "Без пороговой оценки",
+  "qualityProfile.decisionStepDrag":
+    "Перетащите, чтобы изменить порядок {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
+  "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
 };
 
 export default ru;

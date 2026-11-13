@@ -1,0 +1,10 @@
+# Contacts the download client. Needs the operator's yes. With id set, stored
+# secrets fill in any secret keys left out of config.
+# Variables: {"input": {"id": null, "clientType": "...", "config": [...], "proxyConfigId": null}}
+mutation TestDownloadClientConnection($input: TestDownloadClientConnectionInput!) {
+  testDownloadClientConnection(input: $input) {
+    status
+    message
+    retryAfterSeconds
+  }
+}

@@ -711,6 +711,30 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::PREFERRED_AUDIO_LANGUAGES_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::OPTIONAL_AUDIO_LANGUAGES_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
             data_type: "string",
             default_value_json: "null",
@@ -720,6 +744,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+            data_type: "json",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
             data_type: "json",
             default_value_json: "null",
             is_sensitive: false,
@@ -1000,6 +1032,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: "anime.inter_season_movies",
             data_type: "string",
             default_value_json: "\"true\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "catalog.default_monitor_type",
+            data_type: "string",
+            default_value_json: "null",
             is_sensitive: false,
         },
         // Movie availability gate, set on the Movie facet and per library
@@ -3128,6 +3168,18 @@ mod tests {
                 .any(|seed| seed.key_name.starts_with("acquisition.")
                     && seed.key_name.contains("movie")),
             "the acquisition movie availability keys are retired"
+        );
+    }
+
+    #[test]
+    fn the_audio_language_priority_key_is_retired() {
+        // The quality profile's decision order replaced it; a row left behind
+        // by an earlier build is never read.
+        assert!(
+            !service_setting_seeds()
+                .iter()
+                .any(|seed| seed.key_name == "audio.language_priority"),
+            "audio.language_priority must not be registered"
         );
     }
 

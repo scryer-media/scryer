@@ -477,16 +477,28 @@ async fn quarantine_untrusted_committed_entry(
 
 async fn read_manifest(entry_dir: &Path) -> AppResult<Option<RecycleManifest>> {
     let path = manifest_path(entry_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let manifest_bytes = tokio::fs::read(&path).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to read recycle manifest {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
+    // Read first: a missing manifest answers NotFound from the read itself,
+    // so the common case costs one call. Any other failure falls back to the
+    // existence check, which still decides "no manifest" (for example a
+    // directory that cannot be searched) exactly as before.
+    let manifest_bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            let exists_path = path.clone();
+            let exists = tokio::task::spawn_blocking(move || exists_path.exists())
+                .await
+                .unwrap_or(true);
+            if !exists {
+                return Ok(None);
+            }
+            return Err(AppError::Repository(format!(
+                "failed to read recycle manifest {}: {}",
+                path.display(),
+                error
+            )));
+        }
+    };
     let manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
         AppError::Repository(format!(
             "failed to parse recycle manifest {}: {}",
@@ -1729,16 +1741,27 @@ async fn trusted_committed_entry_from_dir(
     config: &RecycleBinConfig,
     entry_dir: PathBuf,
 ) -> AppResult<Option<CommittedRecycleEntry>> {
+    Ok(inspect_entry_dir(config, entry_dir).await.1)
+}
+
+/// The trusted committed entry at `entry_dir`, plus the title its manifest
+/// names whenever the directory is a real entry directory under the root with a
+/// readable manifest. Manifests never change their title once written, so that
+/// title is stable for the life of the directory.
+async fn inspect_entry_dir(
+    config: &RecycleBinConfig,
+    entry_dir: PathBuf,
+) -> (Option<Option<String>>, Option<CommittedRecycleEntry>) {
     let metadata = match std::fs::symlink_metadata(&entry_dir) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (None, None),
         Err(error) => {
             warn!(
                 path = %entry_dir.display(),
                 error = %error,
                 "failed to inspect recycle entry path, skipping"
             );
-            return Ok(None);
+            return (None, None);
         }
     };
     if metadata.file_type().is_symlink() {
@@ -1746,13 +1769,13 @@ async fn trusted_committed_entry_from_dir(
             path = %entry_dir.display(),
             "skipping symlinked recycle entry"
         );
-        return Ok(None);
+        return (None, None);
     }
     if !metadata.is_dir() {
-        return Ok(None);
+        return (None, None);
     }
     let Some(parent) = entry_dir.parent() else {
-        return Ok(None);
+        return (None, None);
     };
     if normalize_path(parent) != normalize_path(&config.base_path) {
         warn!(
@@ -1760,18 +1783,19 @@ async fn trusted_committed_entry_from_dir(
             recycle_root = %config.base_path.display(),
             "skipping recycle entry outside configured recycle root"
         );
-        return Ok(None);
+        return (None, None);
     }
 
     let Some(manifest) = (match read_manifest(&entry_dir).await {
         Ok(manifest) => manifest,
         Err(error) => {
             warn!(path = %entry_dir.display(), error = %error, "failed to inspect recycle entry, skipping");
-            return Ok(None);
+            return (None, None);
         }
     }) else {
-        return Ok(None);
+        return (None, None);
     };
+    let title_id = Some(manifest.title_id.clone());
 
     if let Err(reason) = trusted_committed_entry(config, &entry_dir, &manifest) {
         if let Err(error) =
@@ -1783,21 +1807,43 @@ async fn trusted_committed_entry_from_dir(
                 "failed to quarantine untrusted recycle entry"
             );
         }
-        return Ok(None);
+        return (title_id, None);
     }
 
     if let Err(error) = recycled_payload_path(&entry_dir, &manifest).await {
         warn!(path = %entry_dir.display(), error = %error, "recycle metadata cannot be used as its payload; entry preserved");
-        return Ok(None);
+        return (title_id, None);
     }
-    Ok(Some(CommittedRecycleEntry {
-        entry_dir,
-        manifest,
-    }))
+    (
+        title_id,
+        Some(CommittedRecycleEntry {
+            entry_dir,
+            manifest,
+        }),
+    )
 }
 
-pub async fn list_committed_entries(
+/// Remembers, per recycle root, which title each entry directory belongs to,
+/// so one deletion job reads each manifest once instead of once per title.
+///
+/// Every title still lists the root's directory names, so entries created
+/// after an earlier title are seen, and still fully re-inspects every entry
+/// that is or may be its own. Only directories already known to belong to a
+/// different title are passed over.
+#[derive(Debug, Default)]
+pub struct TitleRecycleEntryIndex {
+    roots: std::collections::HashMap<
+        PathBuf,
+        std::collections::HashMap<std::ffi::OsString, Option<String>>,
+    >,
+}
+
+/// The same entries, in the same order and with the same inspection, that
+/// [`list_committed_entries`] returns for this title.
+pub(crate) async fn list_committed_entries_for_title(
     config: &RecycleBinConfig,
+    title_id: &str,
+    index: &mut TitleRecycleEntryIndex,
 ) -> AppResult<Vec<CommittedRecycleEntry>> {
     if !cleanup_ready(config) {
         if let Some(error) = &config.validation_error {
@@ -1806,6 +1852,12 @@ pub async fn list_committed_entries(
         return Ok(Vec::new());
     }
 
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::LIST_FOR_TITLE, &config.base_path);
+    let known = index
+        .roots
+        .entry(normalize_path(&config.base_path))
+        .or_default();
     let mut results = Vec::new();
     let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
         AppError::Repository(format!(
@@ -1820,32 +1872,144 @@ pub async fn list_committed_entries(
         .await
         .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
     {
-        if let Some(entry) = trusted_committed_entry_from_dir(config, entry.path()).await? {
-            results.push(entry);
+        let name = entry.file_name();
+        if let Some(owner) = known.get(&name)
+            && owner.as_deref() != Some(title_id)
+        {
+            continue;
+        }
+        let (owner, committed) = inspect_entry_dir(config, entry.path()).await;
+        match owner {
+            Some(owner) => {
+                known.insert(name, owner);
+            }
+            None => {
+                known.remove(&name);
+            }
+        }
+        if let Some(committed) = committed
+            && committed.manifest.title_id.as_deref() == Some(title_id)
+        {
+            results.push(committed);
         }
     }
 
     Ok(results)
 }
 
-pub async fn list_expired_committed_entries(
+/// Each listing, lookup and purge of a recycle root's entries, so tests can
+/// assert which operations touch a bin and how often.
+#[cfg(test)]
+pub(crate) mod test_bin_calls {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// A full listing of the root's entries.
+    pub(crate) const LIST: &str = "list";
+    /// A listing of the root for one title's entries.
+    pub(crate) const LIST_FOR_TITLE: &str = "list_for_title";
+    /// A lookup of one entry by id.
+    pub(crate) const FIND: &str = "find";
+    /// A purge of one entry.
+    pub(crate) const PURGE: &str = "purge";
+
+    static CALLS: Mutex<Vec<(&'static str, PathBuf)>> = Mutex::new(Vec::new());
+
+    pub(super) fn record(kind: &'static str, root: &Path) {
+        CALLS.lock().unwrap().push((kind, root.to_path_buf()));
+    }
+
+    /// Every call on `root`, of any kind.
+    pub(crate) fn count(root: &Path) -> usize {
+        CALLS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, called)| called.as_path() == root)
+            .count()
+    }
+
+    /// The calls of one kind on `root`.
+    pub(crate) fn count_kind(root: &Path, kind: &str) -> usize {
+        CALLS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(called_kind, called)| *called_kind == kind && called.as_path() == root)
+            .count()
+    }
+}
+
+pub async fn list_committed_entries(
     config: &RecycleBinConfig,
 ) -> AppResult<Vec<CommittedRecycleEntry>> {
-    let cutoff = Utc::now() - chrono::Duration::days(config.retention_days as i64);
+    Ok(list_committed_entries_reporting_withheld(config).await?.0)
+}
+
+/// [`list_committed_entries`], plus the title of every entry directory under
+/// the root it withheld (pending, quarantined or untrusted) whose manifest
+/// names one. The listing and the inspection of each entry are the same.
+pub(crate) async fn list_committed_entries_reporting_withheld(
+    config: &RecycleBinConfig,
+) -> AppResult<(Vec<CommittedRecycleEntry>, Vec<String>)> {
+    if !cleanup_ready(config) {
+        if let Some(error) = &config.validation_error {
+            warn!(error = %error, path = %config.base_path.display(), "recycle bin cleanup disabled");
+        }
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::LIST, &config.base_path);
     let mut results = Vec::new();
+    let mut withheld = Vec::new();
+    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
+        AppError::Repository(format!(
+            "failed to read recycle bin directory {}: {}",
+            config.base_path.display(),
+            e
+        ))
+    })?;
 
-    for entry in list_committed_entries(config).await? {
-        let recycled_at = match chrono::DateTime::parse_from_rfc3339(&entry.manifest.recycled_at) {
-            Ok(dt) => dt.with_timezone(&Utc),
-            Err(_) => continue,
-        };
-
-        if recycled_at < cutoff {
-            results.push(entry);
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
+    {
+        match inspect_entry_dir(config, entry.path()).await {
+            (_, Some(committed)) => results.push(committed),
+            (Some(Some(title_id)), None) => withheld.push(title_id),
+            _ => {}
         }
     }
 
-    Ok(results)
+    Ok((results, withheld))
+}
+
+/// The moment before which an entry of `config` has expired.
+pub(crate) fn expiry_cutoff(config: &RecycleBinConfig) -> chrono::DateTime<Utc> {
+    Utc::now() - chrono::Duration::days(config.retention_days as i64)
+}
+
+/// Whether `entry` was recycled before `cutoff`. An unreadable time never
+/// expires.
+pub(crate) fn recycled_before(
+    entry: &CommittedRecycleEntry,
+    cutoff: chrono::DateTime<Utc>,
+) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&entry.manifest.recycled_at)
+        .is_ok_and(|recycled_at| recycled_at.with_timezone(&Utc) < cutoff)
+}
+
+pub async fn list_expired_committed_entries(
+    config: &RecycleBinConfig,
+) -> AppResult<Vec<CommittedRecycleEntry>> {
+    let cutoff = expiry_cutoff(config);
+    Ok(list_committed_entries(config)
+        .await?
+        .into_iter()
+        .filter(|entry| recycled_before(entry, cutoff))
+        .collect())
 }
 
 /// Pending entries older than this are leftovers from an interrupted move
@@ -1941,6 +2105,8 @@ pub(crate) async fn purge_committed_entry(
     config: &RecycleBinConfig,
     entry: &CommittedRecycleEntry,
 ) -> AppResult<bool> {
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::PURGE, &config.base_path);
     if let Err(reason) = trusted_committed_entry(config, &entry.entry_dir, &entry.manifest) {
         warn!(path = %entry.entry_dir.display(), reason = %reason, "skipping untrusted recycle entry purge");
         if let Err(error) =
@@ -2051,6 +2217,8 @@ pub async fn find_committed_entry(
         return Ok(None);
     }
 
+    #[cfg(test)]
+    test_bin_calls::record(test_bin_calls::FIND, &config.base_path);
     let entry_dir = config.base_path.join(entry_id);
     trusted_committed_entry_from_dir(config, entry_dir).await
 }
@@ -4950,5 +5118,278 @@ mod tests {
             old_bin.join(entry_lost).is_dir(),
             "an unroutable entry stays put"
         );
+    }
+
+    fn bin_tree(dir: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+        let mut snapshot = std::collections::BTreeMap::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(current) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&current) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                let relative = path.strip_prefix(dir).unwrap().to_path_buf();
+                if path.is_dir() {
+                    snapshot.insert(relative, None);
+                    pending.push(path);
+                } else {
+                    snapshot.insert(relative, Some(std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        snapshot
+    }
+
+    /// One deletion job over several titles: each title's listing through the
+    /// job index matches a fresh full listing taken at the same moment, and
+    /// leaves the bin in the same state, while entries appear, commit, vanish,
+    /// gain a manifest, get repaired, and the bin briefly stops being ready.
+    #[tokio::test]
+    async fn title_listing_through_job_index_matches_a_fresh_full_listing() {
+        const RECYCLED_AT: &str = "2026-02-05T12:00:00+00:00";
+        let entry = |suffix: &str| format!("20260205_120000000_{suffix}");
+        let committed = |suffix: &str, title: &str| {
+            committed_manifest(
+                &entry(suffix),
+                RECYCLED_AT.to_string(),
+                "/data/series/Synthetic Show/media.mkv",
+                Some(title),
+                "file_deleted",
+            )
+        };
+        let tmp = TempDir::new().unwrap();
+        let bins = [tmp.path().join("full"), tmp.path().join("indexed")];
+
+        for bin in &bins {
+            tokio::fs::create_dir_all(bin).await.unwrap();
+            write_test_sentinel(bin).await;
+            write_test_entry(bin, &entry("aaa001"), &committed("aaa001", "title-one")).await;
+            write_test_entry(bin, &entry("aaa002"), &committed("aaa002", "title-two")).await;
+            let mut pending = committed("aaa003", "title-two");
+            pending.status = Some(RECYCLE_STATUS_PENDING.to_string());
+            write_test_entry(bin, &entry("aaa003"), &pending).await;
+            write_test_entry(bin, &entry("aaa004"), &committed("aaa004", "title-three")).await;
+            write_test_entry(bin, &entry("aaa005"), &committed("aaa005", "title-other")).await;
+            // A directory whose manifest has not been written yet.
+            tokio::fs::create_dir_all(bin.join(entry("aaa006")))
+                .await
+                .unwrap();
+            // A torn manifest.
+            let torn = write_test_entry(bin, &entry("aaa007"), &committed("aaa007", "x")).await;
+            tokio::fs::write(torn.join("manifest.json"), b"{\"schema\":")
+                .await
+                .unwrap();
+            // A committed entry that is not trusted is quarantined on sight.
+            let mut untrusted = committed("aaa008", "title-one");
+            untrusted.schema = None;
+            write_test_entry(bin, &entry("aaa008"), &untrusted).await;
+            let mut no_title = committed("aaa009", "x");
+            no_title.title_id = None;
+            write_test_entry(bin, &entry("aaa009"), &no_title).await;
+        }
+
+        let mut index = TitleRecycleEntryIndex::default();
+        // (title, purge what was listed)
+        let steps = [
+            ("title-one", true),
+            ("title-two", false),
+            ("title-three", true),
+            ("title-two", true),
+            ("title-one", true),
+            ("title-three", true),
+        ];
+        for (step, (title, purge)) in steps.into_iter().enumerate() {
+            for bin in &bins {
+                match step {
+                    1 => {
+                        // Created after the first title, and committed in place.
+                        write_test_entry(bin, &entry("bbb001"), &committed("bbb001", "title-two"))
+                            .await;
+                        let mut flipped = read_test_manifest(&bin.join(entry("aaa003"))).await;
+                        flipped.status = Some(RECYCLE_STATUS_COMMITTED.to_string());
+                        write_manifest(&bin.join(entry("aaa003")), &flipped)
+                            .await
+                            .unwrap();
+                    }
+                    2 => {
+                        write_manifest(
+                            &bin.join(entry("aaa006")),
+                            &committed("aaa006", "title-three"),
+                        )
+                        .await
+                        .unwrap();
+                        tokio::fs::write(bin.join(entry("aaa006")).join("media.mkv"), b"media")
+                            .await
+                            .unwrap();
+                        write_manifest(
+                            &bin.join(entry("aaa007")),
+                            &committed("aaa007", "title-three"),
+                        )
+                        .await
+                        .unwrap();
+                        write_test_entry(bin, &entry("bbb002"), &committed("bbb002", "title-one"))
+                            .await;
+                    }
+                    3 => {
+                        tokio::fs::remove_file(bin.join(RECYCLE_ROOT_SENTINEL))
+                            .await
+                            .unwrap();
+                    }
+                    4 => {
+                        write_test_sentinel(bin).await;
+                        crate::fs_safety::remove_dir_all_safely(&bin.join(entry("aaa005")))
+                            .await
+                            .unwrap();
+                    }
+                    _ => {}
+                }
+            }
+
+            let full = list_committed_entries(&test_config(&bins[0]))
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|listed| listed.manifest.title_id.as_deref() == Some(title))
+                .collect::<Vec<_>>();
+            let indexed =
+                list_committed_entries_for_title(&test_config(&bins[1]), title, &mut index)
+                    .await
+                    .unwrap();
+            let names = |entries: &[CommittedRecycleEntry]| {
+                entries
+                    .iter()
+                    .map(|listed| {
+                        (
+                            listed.entry_dir.file_name().unwrap().to_owned(),
+                            listed.manifest.clone(),
+                        )
+                    })
+                    .map(|(name, manifest)| (name, serde_json::to_string(&manifest).unwrap()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(names(&full), names(&indexed), "step {step} ({title})");
+            if step == 1 {
+                assert_eq!(
+                    indexed.len(),
+                    3,
+                    "the committed, the newly committed and the new entry are listed"
+                );
+            }
+            if purge {
+                for (bin, listed) in [(&bins[0], &full), (&bins[1], &indexed)] {
+                    for committed in listed.iter() {
+                        assert!(
+                            purge_committed_entry(&test_config(bin), committed)
+                                .await
+                                .unwrap()
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                bin_tree(&bins[0]),
+                bin_tree(&bins[1]),
+                "bin state after step {step} ({title})"
+            );
+        }
+        let remaining = bin_tree(&bins[1]);
+        assert!(remaining.contains_key(&PathBuf::from(entry("aaa008"))));
+        assert!(remaining.contains_key(&PathBuf::from(entry("aaa009"))));
+        assert!(!remaining.contains_key(&PathBuf::from(entry("aaa006"))));
+        // The second title was purged only while its bin was not ready.
+        assert!(remaining.contains_key(&PathBuf::from(entry("bbb001"))));
+        assert!(!remaining.contains_key(&PathBuf::from(entry("bbb002"))));
+    }
+
+    /// The manifest read without an existence check first gives the answer
+    /// the check-then-read did for every shape an entry directory can take.
+    #[tokio::test]
+    async fn manifest_read_without_a_prior_exists_check_answers_the_same() {
+        async fn check_then_read(entry_dir: &Path) -> AppResult<Option<RecycleManifest>> {
+            let path = manifest_path(entry_dir);
+            if !path.exists() {
+                return Ok(None);
+            }
+            let bytes = tokio::fs::read(&path)
+                .await
+                .map_err(|e| AppError::Repository(e.to_string()))?;
+            serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| AppError::Repository(e.to_string()))
+        }
+        fn shape(outcome: &AppResult<Option<RecycleManifest>>) -> String {
+            match outcome {
+                Ok(Some(manifest)) => serde_json::to_string(manifest).unwrap(),
+                Ok(None) => "none".to_string(),
+                Err(_) => "error".to_string(),
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let valid = base.join("valid");
+        std::fs::create_dir(&valid).unwrap();
+        std::fs::write(
+            manifest_path(&valid),
+            r#"{"recycled_at":"2026-01-01T00:00:00Z","original_path":"/synthetic/a.mkv","size_bytes":3,"reason":"synthetic"}"#,
+        )
+        .unwrap();
+        let missing = base.join("missing");
+        std::fs::create_dir(&missing).unwrap();
+        let garbled = base.join("garbled");
+        std::fs::create_dir(&garbled).unwrap();
+        std::fs::write(manifest_path(&garbled), b"{not json").unwrap();
+        let manifest_is_dir = base.join("manifest-is-dir");
+        std::fs::create_dir_all(manifest_path(&manifest_is_dir)).unwrap();
+        let entry_is_file = base.join("entry-is-file");
+        std::fs::write(&entry_is_file, b"synthetic").unwrap();
+        let absent_entry = base.join("absent-entry");
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut cases = vec![
+            (valid, "valid"),
+            (missing, "none"),
+            (garbled, "error"),
+            (manifest_is_dir, "error"),
+            (entry_is_file, "none"),
+            (absent_entry, "none"),
+        ];
+        #[cfg(unix)]
+        let unsearchable = {
+            use std::os::unix::fs::PermissionsExt;
+            let dangling = base.join("dangling");
+            std::fs::create_dir(&dangling).unwrap();
+            std::os::unix::fs::symlink(base.join("nowhere.json"), manifest_path(&dangling))
+                .unwrap();
+            cases.push((dangling, "none"));
+            let unsearchable = base.join("unsearchable");
+            std::fs::create_dir(&unsearchable).unwrap();
+            std::fs::write(manifest_path(&unsearchable), b"{}").unwrap();
+            std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o000))
+                .unwrap();
+            // Unreadable to an ordinary user; a privileged runner reads it,
+            // and both paths then agree on the parse error instead.
+            cases.push((unsearchable.clone(), "either"));
+            unsearchable
+        };
+
+        for (entry_dir, expected) in &cases {
+            let before = check_then_read(entry_dir).await;
+            let after = read_manifest(entry_dir).await;
+            assert_eq!(shape(&after), shape(&before), "{}", entry_dir.display());
+            match *expected {
+                "valid" => assert!(matches!(after, Ok(Some(_)))),
+                "none" => assert!(matches!(after, Ok(None))),
+                "error" => assert!(after.is_err()),
+                _ => {}
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
     }
 }

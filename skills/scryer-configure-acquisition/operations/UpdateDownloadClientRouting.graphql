@@ -1,0 +1,15 @@
+# Write. REPLACES the whole scope; order sets priority (first is highest).
+# removeCompleted / removeFailed make Scryer remove items from the client.
+# Variables: {"input": {"scope": "SERIES", "entries": [DownloadClientRoutingEntryInput]}}
+mutation UpdateDownloadClientRouting($input: UpdateDownloadClientRoutingInput!) {
+  updateDownloadClientRouting(input: $input) {
+    clientId
+    enabled
+    category
+    recentQueuePriority
+    olderQueuePriority
+    removeCompleted
+    removeFailed
+    seedingProfileId
+  }
+}

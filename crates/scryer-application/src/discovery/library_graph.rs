@@ -51,6 +51,10 @@ pub(crate) const LIBRARY_GRAPH_RETRY_BACKOFF_SECONDS: i64 = 4 * 60 * 60;
 pub struct LibraryGraphQuery {
     pub facet: MediaFacet,
     pub library_ids: Vec<String>,
+    /// The `view_key` of the view the caller already holds. When the view
+    /// this read would give has the same key, the read answers "unchanged"
+    /// without loading the graph.
+    pub known_view_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +86,10 @@ pub struct LibraryGraphCluster {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LibraryGraphView {
     pub generated_at: String,
+    /// Names this exact view: the build it was pruned from and the titles
+    /// the viewer could see behind it. A change of build, of the viewer's
+    /// libraries or of a visible title's name or ids gives a new key.
+    pub view_key: String,
     pub nodes: Vec<LibraryGraphNode>,
     pub edges: Vec<LibraryGraphEdge>,
     pub clusters: Vec<LibraryGraphCluster>,
@@ -90,6 +98,10 @@ pub struct LibraryGraphView {
     /// True when the build left out at least one subject this read covers
     /// because the facet was over [`LIBRARY_GRAPH_MAX_SUBJECTS`].
     pub truncated: bool,
+    /// True when this view is the one the caller said it holds. The
+    /// nodes, edges and clusters are then left empty, and the subject count
+    /// and truncation flag are not computed.
+    pub unchanged: bool,
 }
 
 /// What one facet's rebuild did, for the sync job's run summary.
@@ -477,7 +489,9 @@ pub(super) fn prune_library_graph_for_viewer(
 impl AppUseCase {
     /// A facet's stored library graph, pruned to what `actor` may see. `None`
     /// when personalized discovery is off, the actor cannot see the facet or
-    /// any of the requested libraries, or no graph has been built yet.
+    /// any of the requested libraries, or no graph has been built yet. When
+    /// the query names the build time the caller holds and it is still the
+    /// newest, the answer is an empty view marked `unchanged`.
     pub async fn library_graph(
         &self,
         actor: &User,
@@ -493,41 +507,176 @@ impl AppUseCase {
         if effective_library_ids.is_empty() || !self.personalized_discovery_enabled().await? {
             return Ok(None);
         }
-        let Some(snapshot) = self
-            .services
-            .library
-            .discovery
-            .get_latest_library_graph(query.facet.as_str())
-            .await?
-        else {
-            return Ok(None);
-        };
-
         let titles = self
             .services
             .catalog
             .titles
             .list_discovery_context_titles()
             .await?;
-        let visible_titles = titles
+        let facet = query.facet;
+        if let Some(known) = query.known_view_key.filter(|known| !known.is_empty()) {
+            let Some(latest) = self
+                .services
+                .library
+                .discovery
+                .get_latest_library_graph_generated_at(facet.as_str())
+                .await?
+            else {
+                return Ok(None);
+            };
+            // The held view is still right only when the build and every
+            // visible title behind it are the same as now.
+            let generated_at = latest.unwrap_or_default();
+            let build = generated_at.clone();
+            let (titles_back, facet_back, libraries_back, view_key) =
+                tokio::task::spawn_blocking(move || {
+                    let view_key = Self::library_graph_view_key(
+                        &build,
+                        &Self::library_graph_visible_titles(
+                            &titles,
+                            &facet,
+                            &effective_library_ids,
+                        ),
+                    );
+                    (titles, facet, effective_library_ids, view_key)
+                })
+                .await
+                .map_err(|error| {
+                    if error.is_panic() {
+                        std::panic::resume_unwind(error.into_panic())
+                    }
+                    AppError::Repository(error.to_string())
+                })?;
+            if view_key == known {
+                return Ok(Some(LibraryGraphView {
+                    generated_at,
+                    view_key,
+                    nodes: Vec::new(),
+                    edges: Vec::new(),
+                    clusters: Vec::new(),
+                    subject_count: 0,
+                    truncated: false,
+                    unchanged: true,
+                }));
+            }
+            return self
+                .library_graph_full_view(titles_back, facet_back, libraries_back)
+                .await;
+        }
+        self.library_graph_full_view(titles, facet, effective_library_ids)
+            .await
+    }
+
+    /// The newest stored graph scoped for the viewer, or `None` when no graph
+    /// has been built yet.
+    async fn library_graph_full_view(
+        &self,
+        titles: Vec<DiscoveryContextTitle>,
+        facet: MediaFacet,
+        effective_library_ids: HashSet<String>,
+    ) -> AppResult<Option<LibraryGraphView>> {
+        let Some(snapshot) = self
+            .services
+            .library
+            .discovery
+            .get_latest_library_graph(facet.as_str())
+            .await?
+        else {
+            return Ok(None);
+        };
+        // Scoping and pruning a full graph is CPU work; it runs on the
+        // blocking pool so it does not hold an async worker.
+        let view = tokio::task::spawn_blocking(move || {
+            Self::library_graph_view_for_viewer(&snapshot, &titles, &facet, &effective_library_ids)
+        })
+        .await;
+        match view {
+            Ok(view) => Ok(Some(view)),
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => Err(AppError::Repository(error.to_string())),
+        }
+    }
+
+    /// The titles of `facet` in `effective_library_ids`, each with its
+    /// discovery subject key when it has one.
+    fn library_graph_visible_titles<'a>(
+        titles: &'a [DiscoveryContextTitle],
+        facet: &MediaFacet,
+        effective_library_ids: &HashSet<String>,
+    ) -> Vec<(&'a DiscoveryContextTitle, Option<String>)> {
+        titles
             .iter()
             .filter(|title| {
-                title.facet == query.facet && effective_library_ids.contains(&title.library_id)
+                title.facet == *facet && effective_library_ids.contains(&title.library_id)
             })
-            .collect::<Vec<_>>();
-        let visible_title_names = visible_titles
-            .iter()
-            .map(|title| (title.id.as_str(), title.name.as_str()))
-            .collect::<HashMap<_, _>>();
-        let visible_subject_keys = visible_titles
-            .iter()
-            .filter_map(|title| {
-                build_discovery_subject_parts(
+            .map(|title| {
+                let subject_key = build_discovery_subject_parts(
                     &title.facet,
                     normalize_external_ids(&title.external_ids),
                 )
+                .map(|parts| parts.subject_key);
+                (title, subject_key)
             })
-            .map(|parts| parts.subject_key)
+            .collect()
+    }
+
+    /// The key of the view built from the graph generated at `generated_at`
+    /// over `visible_titles`: everything the pruned view depends on besides
+    /// the stored graph itself.
+    fn library_graph_view_key(
+        generated_at: &str,
+        visible_titles: &[(&DiscoveryContextTitle, Option<String>)],
+    ) -> String {
+        fn field(hasher: &mut blake3::Hasher, value: &str) {
+            hasher.update(&(value.len() as u64).to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+        let mut entries = visible_titles
+            .iter()
+            .map(|(title, subject_key)| {
+                (
+                    title.id.as_str(),
+                    title.name.as_str(),
+                    subject_key.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        let mut hasher = blake3::Hasher::new();
+        field(&mut hasher, generated_at);
+        for (id, name, subject_key) in entries {
+            field(&mut hasher, id);
+            field(&mut hasher, name);
+            match subject_key {
+                Some(subject_key) => {
+                    hasher.update(&[1]);
+                    field(&mut hasher, subject_key);
+                }
+                None => {
+                    hasher.update(&[0]);
+                }
+            }
+        }
+        format!("v1:{}", hasher.finalize().to_hex())
+    }
+
+    /// The stored graph scoped to the titles the viewer can see in
+    /// `effective_library_ids`.
+    fn library_graph_view_for_viewer(
+        snapshot: &LibraryGraphSnapshotRecord,
+        titles: &[DiscoveryContextTitle],
+        facet: &MediaFacet,
+        effective_library_ids: &HashSet<String>,
+    ) -> LibraryGraphView {
+        let visible_titles =
+            Self::library_graph_visible_titles(titles, facet, effective_library_ids);
+        let visible_title_names = visible_titles
+            .iter()
+            .map(|(title, _)| (title.id.as_str(), title.name.as_str()))
+            .collect::<HashMap<_, _>>();
+        let visible_subject_keys = visible_titles
+            .iter()
+            .filter_map(|(_, subject_key)| subject_key.clone())
             .collect::<HashSet<_>>();
         // Only the viewer's own subjects count: a hidden library pushing the
         // facet over the cap is not this viewer's business.
@@ -538,15 +687,18 @@ impl AppUseCase {
             .any(|subject_key| visible_subject_keys.contains(subject_key));
 
         let (nodes, edges, clusters) =
-            prune_library_graph_for_viewer(&snapshot, &visible_title_names);
-        Ok(Some(LibraryGraphView {
-            generated_at: snapshot.run.generated_at.clone().unwrap_or_default(),
+            prune_library_graph_for_viewer(snapshot, &visible_title_names);
+        let generated_at = snapshot.run.generated_at.clone().unwrap_or_default();
+        LibraryGraphView {
+            view_key: Self::library_graph_view_key(&generated_at, &visible_titles),
+            generated_at,
             nodes,
             edges,
             clusters,
             subject_count: visible_subject_keys.len() as i64,
             truncated,
-        }))
+            unchanged: false,
+        }
     }
 
     /// The facets among `owned_facets` whose graph a sync run should rebuild

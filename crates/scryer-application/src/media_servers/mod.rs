@@ -75,6 +75,16 @@ pub struct MediaServerConnectionPatch {
     pub path_mappings: Option<Vec<MediaServerPathMapping>>,
 }
 
+/// One account a connection's server knows, offered when a user links theirs.
+///
+/// `linked` says whether a Scryer user already holds a verified link to it.
+/// It is only read when the caller asks for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaServerConnectionAccount {
+    pub user: MediaServerUser,
+    pub linked: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 struct ResolvedPlexServerSelection {
     machine_id: Option<String>,

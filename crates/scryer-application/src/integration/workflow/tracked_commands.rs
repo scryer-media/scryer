@@ -397,7 +397,8 @@ fn apply_tracked_download_activity_projection(
         }
         TrackedDownloadState::Downloading
         | TrackedDownloadState::FailedPending
-        | TrackedDownloadState::Ignored => {}
+        | TrackedDownloadState::Ignored
+        | TrackedDownloadState::ImportDismissed => {}
     }
 }
 fn tracked_download_queue_snapshot(item: &TrackedDownload) -> TrackedDownloadQueueMetadata {
@@ -458,6 +459,19 @@ async fn publish_runtime_tracked_download_and_activity_item(
     }
 }
 impl AppUseCase {
+    /// Change Scryer's import tracking only. Never dispatch a client command or release acquisition claims.
+    pub async fn set_tracked_download_import_dismissed(
+        &self, actor: &User, client_id: Option<&str>, client_type: &str,
+        download_client_item_id: &str, expected_download_id: &str, dismissed: bool,
+    ) -> AppResult<()> {
+        self.require_download_item_permission(actor, client_id, Some(client_type),
+            download_client_item_id, scryer_domain::LibraryPermission::ResolveImports).await?;
+        let handle = self.runtime.acquisition.tracked_download_handle.as_ref()
+            .ok_or_else(|| AppError::Repository("tracked download service unavailable".into()))?;
+        handle.set_import_tracking_dismissed(crate::tracked_downloads::tracked_download_id(
+            client_id, client_type, download_client_item_id), expected_download_id.to_string(), dismissed).await
+    }
+
     pub async fn ignore_tracked_download(
         &self,
         actor: &User,
@@ -545,6 +559,50 @@ pub(crate) async fn finalize_scryer_download_ignored(
     finalize_scryer_download_ignored_for_download(app, actor, None, source_identity).await
 }
 
+fn same_client_item(left: &ClientJobLocator, right: &ClientJobLocator) -> bool {
+    normalized_download_client_id(left.client_id.as_deref())
+        == normalized_download_client_id(right.client_id.as_deref())
+        && left.client_type.eq_ignore_ascii_case(&right.client_type)
+        && left.item_id == right.item_id
+}
+
+/// The newest submission for a client item, whether or not its binding is
+/// still open: the same one the queue row was attributed from.
+async fn latest_submission_for_client_item(
+    app: &AppUseCase,
+    source_identity: &ClientJobLocator,
+) -> AppResult<Option<crate::DownloadSubmission>> {
+    Ok(app
+        .services
+        .workflow
+        .download_submissions
+        .list_for_client_items(std::slice::from_ref(source_identity))
+        .await?
+        .into_iter()
+        .find(|submission| {
+            same_client_item(
+                &ClientJobLocator::from_submission(submission),
+                source_identity,
+            )
+        }))
+}
+
+/// The durable tracked state the queue row reads for a client item.
+async fn latest_tracked_state_for_client_item(
+    app: &AppUseCase,
+    source_identity: &ClientJobLocator,
+) -> AppResult<Option<String>> {
+    Ok(app
+        .services
+        .workflow
+        .download_submissions
+        .list_identity_tracked_states_for_client_items(std::slice::from_ref(source_identity))
+        .await?
+        .into_iter()
+        .find(|(locator, _)| same_client_item(locator, source_identity))
+        .map(|(_, state)| state))
+}
+
 pub(crate) async fn finalize_scryer_download_ignored_for_download(
     app: &AppUseCase,
     actor: crate::domain_events::DomainEventActor,
@@ -574,24 +632,55 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
     ];
 
     let submission_repository = &app.services.workflow.download_submissions;
-    let Some(submission) = submission_repository
+    let (submission, binding_closed) = match submission_repository
         .find_by_client_item_id_for_download(canonical_download_id, &source_identity)
         .await?
-    else {
-        return Ok(FinalizeIgnoredOutcome::NoSubmission);
+    {
+        Some(submission) => (submission, false),
+        // A download Scryer already settled has no open client binding, but
+        // its client entry (and so its queue row) can outlive that. The row is
+        // drawn from the latest submission for the client item, so the ignore
+        // settles that same submission.
+        None if canonical_download_id.is_none() => {
+            match latest_submission_for_client_item(app, &source_identity).await? {
+                Some(submission) => (submission, true),
+                None => return Ok(FinalizeIgnoredOutcome::NoSubmission),
+            }
+        }
+        None => return Ok(FinalizeIgnoredOutcome::NoSubmission),
     };
     if submission.title_id.trim().is_empty() {
         return Ok(FinalizeIgnoredOutcome::NoSubmission);
     }
+    // With the binding closed nothing resolves the canonical id from the
+    // client item any more, so every write below names it.
+    let canonical_download_id =
+        canonical_download_id.or(binding_closed.then_some(&submission.download_id));
     let incident_download_id = canonical_download_id
         .cloned()
         .or(Some(submission.download_id));
 
-    match submission_repository
-        .get_tracked_state(&source_identity)
-        .await?
-        .as_deref()
-    {
+    let current_state = if binding_closed {
+        // Read this submission's own outcome first: a client that reuses an
+        // item id lists an older grab's state for the same item. The per-item
+        // read only covers a submission that predates identity states.
+        match submission_repository
+            .get_identity_tracked_state_for_download(
+                Some(&submission.download_id),
+                &crate::DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await?
+        {
+            Some(state) => Some(state),
+            None => latest_tracked_state_for_client_item(app, &source_identity).await?,
+        }
+    } else {
+        submission_repository
+            .get_tracked_state(&source_identity)
+            .await?
+    };
+    match current_state.as_deref() {
         Some(state) if state == ignored => {
             crate::import_checks::retire_space_blocks(
                 app,
@@ -655,9 +744,14 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
         _ => {}
     }
 
-    submission_repository
-        .update_tracked_state(&source_identity, ignored)
-        .await?;
+    // The legacy column lives on whichever submission the open binding names;
+    // with none open, writing it would bind a new placeholder download to this
+    // client item. The identity state above is what a closed one is read by.
+    if !binding_closed {
+        submission_repository
+            .update_tracked_state(&source_identity, ignored)
+            .await?;
+    }
 
     crate::import_checks::retire_space_blocks(app, &source_identity, incident_download_id.as_ref())
         .await;
@@ -1181,16 +1275,17 @@ async fn process_tracked_download_snapshot(
         TrackedDownloadSnapshotPrune::None => Vec::new(),
     };
 
+    // The loop below changes only fields of cached entries, never which
+    // entries exist, so one lookup built up front gives every iteration the
+    // same first match a scan of the cache would.
+    let cached_ids_by_source = if unavailable_sources.is_empty() {
+        HashMap::new()
+    } else {
+        first_tracked_download_id_by_source(runtime.tracker.get_all())
+    };
     for source_identity in unavailable_sources {
         let recorded = drop_source_removed_from_client(app, &source_identity).await;
-        let cached_id = runtime
-            .tracker
-            .get_all()
-            .into_iter()
-            .find(|tracked| {
-                tracked_download_source_identity(tracked).as_ref() == Some(&source_identity)
-            })
-            .map(|tracked| tracked.download_id);
+        let cached_id = cached_ids_by_source.get(&source_identity).copied();
         if let Some(tracked) = cached_id.and_then(|id| runtime.tracker.get_mut_by_download_id(id)) {
             if !recorded {
                 // Retry the transition on the next authoritative observation.
@@ -2151,6 +2246,29 @@ pub async fn start_download_queue_poller_with_options(
 /// The id string is not unique, so the row is chosen by
 /// `TrackedDownloadService::resolve_cached_download_id`, which prefers a row
 /// that is not import-settled over a deleted title's settled sibling.
+/// Does a dismiss or resume request still name this row's download?
+///
+/// The web sends the queue item's `downloadId`: the grab's wire token, the bare
+/// id from a history row, or the client's own token such as a torrent info
+/// hash. Any of those that resolves to this row's download is the same grab.
+fn import_tracking_request_names_download(
+    requested: &str,
+    download_id: scryer_domain::download_identity::DownloadId,
+    observed_client_token: Option<&str>,
+) -> bool {
+    use scryer_domain::download_identity::DownloadId;
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return false;
+    }
+    if DownloadId::from_wire(requested).or_else(|| DownloadId::parse(requested))
+        == Some(download_id)
+    {
+        return true;
+    }
+    observed_client_token.is_some_and(|token| token.trim() == requested)
+}
+
 fn resolve_tracked_command_download(
     tracker: &crate::tracked_downloads::TrackedDownloadService,
     requested_id: &str,
@@ -2677,6 +2795,99 @@ async fn handle_tracked_download_command(
             .await;
             publish_runtime_tracked_download_and_activity_item(app, tracker, activity_item).await;
             let _ = reply.send(Ok(ManualImportRecoveryOutcome::Marked));
+        }
+        TrackedDownloadCommand::SetImportTrackingDismissed { id, expected_download_id, dismissed, reply } => {
+            let result = async {
+                let (runtime_id, download_id) = resolve_tracked_command_download(tracker, &id)
+                    .ok_or_else(|| AppError::not_found_reason(
+                        crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND,
+                        format!("tracked download {id}")))?;
+                let tracked = tracker.get_by_download_id(download_id)
+                    .expect("resolved tracked download disappeared").clone();
+                if !import_tracking_request_names_download(
+                    &expected_download_id, download_id,
+                    tracked.client_item.download_id.as_deref())
+                {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::integration::IMPORT_TRACKING_DOWNLOAD_CHANGED,
+                        "The client item now belongs to a different download"));
+                }
+                if tracked_work_in_flight.contains(&runtime_id)
+                    || tracked.state == TrackedDownloadState::Importing
+                    || crate::import_workflow::find_active_manual_import_for_source(app,
+                        Some(&tracked.client_id), &tracked.client_type,
+                        &tracked.client_item.download_client_item_id).await?.is_some()
+                {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING,
+                        "Import work is active for this source"));
+                }
+                // Resume restores the block it dismissed. The blocked-row checks
+                // then run as before, including the guards that keep an assigned
+                // title or a post-import block out of automatic import.
+                let next = if dismissed {
+                    TrackedDownloadState::ImportDismissed
+                } else {
+                    TrackedDownloadState::ImportBlocked
+                };
+                if tracked.state == next {
+                    return Ok(None);
+                }
+                let expected = if dismissed { TrackedDownloadState::ImportBlocked }
+                    else { TrackedDownloadState::ImportDismissed };
+                if tracked.state != expected {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::integration::IMPORT_TRACKING_STATE_NOT_ELIGIBLE,
+                        "Only a blocked import can be dismissed, and only a dismissed import can be resumed"));
+                }
+                let source = tracked_download_source_identity(&tracked);
+                let repository = &app.services.workflow.download_submissions;
+                let identity = if let Some(source) = &source {
+                    repository.get_submission_identity(source).await?.unwrap_or_default()
+                } else { Default::default() };
+                // Use the canonical grab id: another grab with the same torrent hash
+                // must never inherit this operator decision. No cleanup/ignore finalizer,
+                // reacquisition, client commands, or import completion is performed here.
+                let preserved = ["imported", "imported_seeding", "failed", "ignored"];
+                // Keep the block's reason and detail on both sides of a dismissal,
+                // so a restart or a resume still knows why the import was blocked.
+                let reason = repository.get_identity_tracked_state_reason_for_download(
+                    Some(&download_id), &identity, source.as_ref()).await?;
+                let detail = repository.get_identity_tracked_state_detail_for_download(
+                    Some(&download_id), &identity, source.as_ref()).await?;
+                let previous = repository.upsert_identity_tracked_state_for_download_returning_previous(
+                    crate::IdentityTrackedStateTarget {
+                        canonical_download_id: Some(&download_id), identity: &identity,
+                        source_identity: source.as_ref(),
+                    }, next.as_str(), &preserved, reason.as_deref(), detail.as_deref()).await?;
+                if previous.as_deref().is_some_and(|state| preserved.contains(&state)) {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::integration::IMPORT_TRACKING_ALREADY_RESOLVED,
+                        "The download has already been resolved"));
+                }
+                // The canonical identity marker is the authoritative durable write.
+                // Do not separately update the legacy locator row: that would make
+                // dismissal a partial two-transaction mutation and could touch a re-grab.
+                app.runtime.acquisition.invalidate_download_registry_observations();
+                let td = tracker.get_mut_by_download_id(download_id)
+                    .expect("serialized tracked download disappeared");
+                // Only the state changes. The status, its messages and the retry
+                // bookkeeping stay, so a resumed row is exactly the row that was
+                // blocked, with its warning back in view.
+                td.state = next;
+                let activity_item = tracked_download_activity_queue_item(td);
+                app.emit_download_queue_item_command_issued_event(actor, id.clone(),
+                    if dismissed { scryer_domain::DownloadQueueCommandAction::DismissImportWarning }
+                    else { scryer_domain::DownloadQueueCommandAction::ResumeImportTracking }).await;
+                Ok(Some(activity_item))
+            }.await;
+            match result {
+                Ok(item) => {
+                    publish_runtime_tracked_download_and_activity_item(app, tracker, item).await;
+                    let _ = reply.send(Ok(()));
+                }
+                Err(error) => { let _ = reply.send(Err(error)); }
+            }
         }
         TrackedDownloadCommand::Ignore { id, reply } => {
             let requested_id = id;
@@ -3793,6 +4004,9 @@ pub(crate) async fn finalize_tracked_terminal_state_for_download_with(
         return;
     };
 
+    // Dismissal must never reach the cleanup gate, including on reconcile/restart.
+    if state == TrackedDownloadState::ImportDismissed { return; }
+
     // The settled download must stop conflicting new submissions for its
     // scope: the submission guard's 30s caches still hold it as accepted and
     // the cached client snapshot predates this transition, which would turn an
@@ -4212,7 +4426,7 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
     }
 }
 
-fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::ClientJobLocator> {
+pub(crate) fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::ClientJobLocator> {
     let client_type = tracked.client_type.trim();
     let item_id = tracked.client_item.download_client_item_id.trim();
     if client_type.is_empty() || item_id.is_empty() {
@@ -4223,6 +4437,20 @@ fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::
         client_type,
         item_id,
     ))
+}
+
+/// The id of the first cached download, in the order given, that carries
+/// each source identity: what a `find` over the same entries returns for it.
+pub(crate) fn first_tracked_download_id_by_source<'a>(
+    tracked: impl IntoIterator<Item = &'a TrackedDownload>,
+) -> HashMap<crate::ClientJobLocator, scryer_domain::download_identity::DownloadId> {
+    let mut by_source = HashMap::new();
+    for tracked in tracked {
+        if let Some(source) = tracked_download_source_identity(tracked) {
+            by_source.entry(source).or_insert(tracked.download_id);
+        }
+    }
+    by_source
 }
 
 #[cfg(test)]

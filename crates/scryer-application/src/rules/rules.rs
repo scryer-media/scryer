@@ -396,6 +396,29 @@ impl AppUseCase {
         Ok(rule_set)
     }
 
+    /// Translates pasted Arr custom-format JSON into Rego for the rule editor.
+    /// Nothing is saved.
+    pub async fn translate_arr_custom_formats(
+        &self,
+        actor: &User,
+        source: crate::arr_custom_format::ArrSourceApplication,
+        json: String,
+        scores: std::collections::HashMap<String, i32>,
+    ) -> AppResult<crate::arr_custom_format::ArrCustomFormatTranslation> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        // A large paste parses and compiles for a while; keep it off the
+        // async workers.
+        tokio::task::spawn_blocking(move || {
+            crate::arr_custom_format::translate_arr_custom_formats(source, &json, &scores)
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("custom-format translation failed: {error}"))
+        })?
+        .map_err(|refusal| refusal.into_app_error())
+    }
+
     pub async fn validate_rule_set(
         &self,
         actor: &User,

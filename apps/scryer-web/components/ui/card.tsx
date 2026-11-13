@@ -1,7 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+function Card({ className, ...props }: React.ComponentProps<"section">) {
   return (
     <section
       data-slot="card"
@@ -14,10 +14,7 @@ function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   );
 }
 
-function CardHeader({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div data-slot="card-header" className={cn("mb-3", className)} {...props} />
   );

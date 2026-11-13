@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -10,6 +11,7 @@ use scryer_domain::{
 
 use crate::config_store::{current_encryption_key, decrypt_value, maybe_encrypt_value};
 use crate::encryption::EncryptionKey;
+use crate::media::id_list_statements::{id_list_statements, max_binds};
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
 const CONNECTION_COLUMNS: &str =
@@ -184,22 +186,51 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
         if entities.is_empty() {
             return Ok(Vec::new());
         }
-        let mut predicates = Vec::with_capacity(entities.len());
-        let mut args = Vec::with_capacity(entities.len() * 2);
+        // One `entity_id IN (...)` list per kind, kinds in byte order.
+        let mut ids_by_kind: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
         for (entity_kind, entity_id) in entities {
-            predicates.push("(entity_kind = {} AND entity_id = {})");
-            args.push(SqlArg::Text(entity_kind.as_str().to_string()));
-            args.push(SqlArg::Text(entity_id.clone()));
+            ids_by_kind
+                .entry(entity_kind.as_str())
+                .or_default()
+                .push(entity_id.clone());
         }
-        let sql = format!(
-            "SELECT connection_id, entity_kind, entity_id, provider_item_id, last_seen_at
-               FROM media_server_playback_items
-              WHERE {}
-              ORDER BY entity_kind, entity_id, connection_id",
-            predicates.join(" OR ")
-        );
-        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-        rows.iter().map(row_to_playback_item).collect()
+        let exec = self.datastore.read_exec();
+        let limit = max_binds(&exec);
+
+        // Everything fits: one statement, ordered by the database.
+        if entities.len() + ids_by_kind.len() <= limit {
+            let mut predicates = Vec::with_capacity(ids_by_kind.len());
+            let mut args = Vec::with_capacity(entities.len() + ids_by_kind.len());
+            for (entity_kind, ids) in &ids_by_kind {
+                predicates.push(playback_kind_predicate(ids.len()));
+                args.push(SqlArg::Text((*entity_kind).to_string()));
+                args.extend(ids.iter().cloned().map(SqlArg::Text));
+            }
+            let sql = playback_items_sql(&predicates.join(" OR "));
+            let rows = SqlRuntime::fetch_all(exec, &sql, &args).await?;
+            return rows.iter().map(row_to_playback_item).collect();
+        }
+
+        // Past the bind limit each kind's ids are distinct, in byte order and
+        // split into consecutive chunks, so reading the kinds in order and each
+        // kind's chunks in order keeps `entity_kind, entity_id, connection_id`
+        // across the whole result.
+        let mut items = Vec::new();
+        for (entity_kind, ids) in &ids_by_kind {
+            let (ids, per_statement) =
+                id_list_statements(ids, 1, 1, limit, PLAYBACK_ENTITY_ID_CHUNK);
+            for chunk in ids.chunks(per_statement) {
+                let sql = playback_items_sql(&playback_kind_predicate(chunk.len()));
+                let mut args = Vec::with_capacity(chunk.len() + 1);
+                args.push(SqlArg::Text((*entity_kind).to_string()));
+                args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+                for row in &rows {
+                    items.push(row_to_playback_item(row)?);
+                }
+            }
+        }
+        Ok(items)
     }
 
     async fn upsert_playback_items_for_connection(
@@ -517,6 +548,27 @@ fn validate_playback_item_connection_ids(
     Ok(())
 }
 
+/// Entity ids bound into one statement once a list is split past the bind limit.
+const PLAYBACK_ENTITY_ID_CHUNK: usize = 900;
+
+/// `entity_kind = {} AND entity_id IN (...)` for `ids` entity ids of one kind,
+/// served by `idx_media_server_playback_items_entity`.
+fn playback_kind_predicate(ids: usize) -> String {
+    format!(
+        "(entity_kind = {{}} AND entity_id IN ({}))",
+        vec!["{}"; ids].join(", ")
+    )
+}
+
+fn playback_items_sql(predicate: &str) -> String {
+    format!(
+        "SELECT connection_id, entity_kind, entity_id, provider_item_id, last_seen_at
+           FROM media_server_playback_items
+          WHERE {predicate}
+          ORDER BY entity_kind, entity_id, connection_id"
+    )
+}
+
 fn row_to_playback_item(row: &SqlRow) -> AppResult<MediaServerPlaybackItem> {
     let entity_kind = row.text("entity_kind")?;
     let entity_kind = MediaServerPlaybackEntityKind::parse(&entity_kind).ok_or_else(|| {
@@ -718,3 +770,6 @@ async fn load_default_library_grants(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod playback_items_tests;

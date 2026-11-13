@@ -1,0 +1,40 @@
+# One bounded page of the download queue.
+# Variables: {"limit": 50, "offset": 0, "titleId": null}
+# Keep limit at 100 or less; filter with jq on displayState and attentionRequired.
+query DownloadQueuePage($limit: Int!, $offset: Int!, $titleId: ID) {
+  downloadQueuePage(
+    limit: $limit
+    offset: $offset
+    scryerSubmittedOnly: false
+    titleId: $titleId
+    sortKey: STATUS
+    sortDirection: ASC
+  ) {
+    totalCount
+    hasMore
+    ready
+    stale
+    updatedAt
+    items {
+      id
+      titleId
+      titleName
+      facet
+      clientName
+      clientType
+      displayState
+      trackedState
+      progressPercent
+      attentionRequired
+      attentionReasonCode
+      attentionReason
+      passwordFailureCode
+      importStatus
+      importErrorCode
+      importErrorMessage
+      trackedStatusMessages
+      queuedAt
+      lastUpdatedAt
+    }
+  }
+}

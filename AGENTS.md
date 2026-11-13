@@ -1,5 +1,11 @@
 # Repository instructions
 
+## Agents helping an operator
+
+- The rest of this file is for agents changing Scryer's code. If you are helping someone run, set up, migrate to, or troubleshoot their own Scryer instance, use the skills in [skills/](skills/) instead.
+- Each skill is a directory with a `SKILL.md` that states when it applies. Read the matching skill before acting, and follow its steps rather than exploring the source tree or the GraphQL schema from scratch.
+- Operator skills work through a running instance's API with a key the operator supplies. They do not require a checkout of this repository or changes to it.
+
 ## Task execution
 
 - Carry an implementation request through the authorized edits, relevant validation, and handoff. Resolve routine, reversible implementation choices from repository evidence without another approval round.
@@ -27,6 +33,16 @@
 - There is exactly one metadata gateway: SMG, a centrally operated SaaS service at `smg.scryer.media`. There is no self-hosted, operator-run, regional, or "custom" SMG, and there never will be: no operator setting or UI for an SMG URL, and no "their SMG". `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` exists only so tests and development builds can point at a mock; it is not an operator feature. When an operator wants SMG out of a flow (for example a bring-your-own OAuth app), the alternative is their own Scryer instance or the provider directly, never another gateway. Operators do not self-host or pin their own SMG version, and SMG is deployed ahead of any Scryer release that depends on its schema. Do not add capability probes, legacy query retries, or other fallbacks for Scryer running against an older SMG. Compatibility runs the other way: SMG changes must keep serving the Scryer releases already in the field.
 - Keep updates concise: state the outcome, material evidence, and remaining work. At handoff, record the changed scope, checks actually run, deferred checks, and concrete blockers. Do not claim a performance improvement without measurements.
 
+## Operator skills stay current
+
+The skills in [skills/](skills/) are how other agents drive a running Scryer instance. They name exact GraphQL operations, fields, enum values, reason codes, endpoints, settings and UI paths, so a product change can make one wrong without breaking any build.
+
+- **Check the skills in the same change.** When a change adds, renames, removes or alters something an operator or API client can see, search `skills/` for it and update every skill that names it. This covers GraphQL operations and their inputs and outputs, reason codes, permissions, REST endpoints, settings and their defaults, environment variables, UI paths, what the Sonarr and Radarr import carries over, and what the diagnostics bundle contains.
+- **Keep operation files valid.** Every file under `skills/*/operations/` must validate against `api/graphql/schema.graphql`. A schema change that breaks one is not done until that file and the steps that use it are fixed.
+- **Close gaps the product closes.** When a change makes possible something a skill marks as manual or unsupported, replace that step with the real procedure.
+- **Skills pass SkillSpector as safe.** Any change under `skills/` must pass [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpector) before it is committed. Run `skillspector scan ./skills --recursive --no-llm` from the repository root. The scan must report `SAFE` with complete coverage, and no skill may score above `LOW`. Fix a finding in the skill's wording or script; do not add `allowed-tools` or `permissions` frontmatter to quiet one. The only accepted findings are `LP3` (no declared tool scope) on a `SKILL.md` and `E1` on the `curl` call in `skills/scryer-connect/scripts/gql.sh`. Report any other finding you cannot clear instead of committing it.
+- **Report what you leave.** If a skill needs more than a direct correction, such as a new procedure or a new skill, say so at handoff instead of leaving it stale or guessing.
+
 ## Error reason codes
 
 An error's sentence is for people. Code never decides anything from it. Any condition a client, a caller or a later step needs to tell apart travels as a stable code beside the sentence. Lists is the reference implementation: `crates/scryer-application/src/lists/refusal.rs` on the server and `apps/scryer-web/lib/utils/list-error-message.ts` on the web.
@@ -41,10 +57,34 @@ An error's sentence is for people. Code never decides anything from it. Any cond
 - **The web translates codes.** Map each reason to an i18n key in the area's `*_REFUSAL_KEYS`-style table, and show the server sentence only as the fallback for a code the client does not know. Do not add text fallbacks behind a code check. Do not hardcode English for a server condition.
 - **Leave it better.** When you touch code that matches error text, or raises a sentence-only error a client acts on, convert that site to a code in the same change. Do this only when it is within the task's scope. Otherwise report it.
 
+## Performance invariants
+
+Scryer scales. Libraries hold 200,000+ files and tens of thousands of titles, and history, event and decision tables grow without bound. Never reason "this is low cardinality, so it does not matter". These rules apply to every change, and to review of every change.
+
+- **Know which data grows.** Before writing or changing a query, identify whether any table it touches grows with library size, activity or time (titles, episodes, media files, wanted items, imports, history and domain events, release decisions, download and cleanup rows, list memberships, discovery rows, run logs). A query against a growing table must be served by an index for its filter and its sort on both SQLite and Postgres. Check the migrations for an existing index before adding one, and read the query plan when in doubt. SQLite cannot use a partial index when the predicate value is a bound parameter.
+- **Every growing table has a retention story.** A new table that accumulates rows states what prunes it, or why it is kept forever. Run logs and history follow the standard history retention settings.
+- **Reads are bounded.** Every list has a limit with a default and a maximum, and pages in SQL, not in memory. Never load a whole table to filter, count, sort or page it in Rust. Counts and existence checks are `COUNT`, `GROUP BY` or `EXISTS` statements, not decoded rows.
+- **Read only what is used.** Select the columns the caller needs. Do not decode full rows, JSON columns or attached relations to obtain one field, and do not issue a read whose result is unused. A narrow read keeps the same fallbacks and defaults as the full decode it replaces.
+- **Id lists are bind-safe.** A statement that binds a caller-sized id list must work past the bind limits (32,766 on SQLite, 65,535 on Postgres) by chunking through the existing helpers or a single array parameter. A list that fits stays one statement.
+- **No query in a loop.** One statement per item of a list, page or batch is forbidden (N+1). Batch the read or write, or join. This includes permission checks, title and library lookups, existence checks and per-row writes.
+- **No quadratic work.** Do not nest a scan of one collection inside a loop over another, clone a large collection per item, or linearly search a list inside a loop. Build a map or set once. Any loop whose cost is the product of two sizes that both grow with the library is a defect.
+- **Resolvers do only the requested work.** A GraphQL resolver performs backend work only for fields the query selects. Totals, counts, nested lists, summaries and derived values are computed on demand or behind a look-ahead, never eagerly for every request. Sibling fields share one load per request instead of each reading the same data.
+- **The web asks only for what it shows.** Each front-end call selects exactly the fields its use case renders. Do not reuse a query or fragment written for a richer view when a leaner one is needed; write the lean query. Do not fetch a full list to show a count or a badge, and do not refetch data the page already holds and would discard.
+- **Idle loops do no writes.** A poller, scheduler tick or background pass that finds nothing to do performs no database write: no zero-row `UPDATE` or `DELETE`, no watermark rewrite, no event or run row. Prefer a wake signal over a short poll, and make every path that creates the work ring it. SQLite has a single writer; an idle write delays real ones.
+- **Writes are batched.** Do not open one write transaction per row, per file or per candidate. Group the writes of one unit of work into one transaction, with a row-by-row replay only as the failure path. Progress and telemetry are kept in memory and persisted at a bounded rate, never once per item.
+- **Checks do not rescan the catalog.** A guard, validator or permission check must not read every title, folder or file to judge one of them, and must not repeat the same full read for each item of a batch when one read per unit of work gives the same answer. Do not weaken a deletion or ownership safeguard to make it cheaper; find the equivalent cheaper form or report it.
+- **The async runtime is not blocked.** Filesystem calls, path resolution, large decodes and other CPU-heavy work run off the async runtime. Do not stat or canonicalize per row on a request path when the result is not shown or decided on.
+- **`lstat` is anathema.** Libraries live on network shares, where every `lstat` (`symlink_metadata`, and any `stat`, `metadata` or `exists` that amounts to the same probe) is a round trip. Make one only when the result is absolutely required to decide or show something and nothing already in hand answers it: the directory listing just read, the catalog, or evidence gathered earlier in the same pass. Never add one as a precaution, a sanity check, or just to see. Do not probe the same path twice in one unit of work. A change that adds an `lstat` to a scan, import or request path states why it is required and how many it adds per title and per file.
+- **Background tabs are quiet.** Web polling pauses while the tab is hidden and refreshes once on return. Prefer the event stream to an interval. Results of a load are not thrown away and reloaded back to back.
+- **Remote calls are not repeated.** Do not call SMG or another remote service on every page open for data that changes rarely; reuse the existing caches and single-flight helpers, and never cache a failure as a result.
+- **An optimisation keeps behaviour.** A performance change returns the same rows, order, counts, permission outcomes, reason codes and events unless the operator approved a difference. Prove it with a test that compares the new path with the old one over seeded data, and state measurements for any performance claim.
+
+When you touch code that breaks one of these rules, fix that site in the same change when it is within the task's scope. Otherwise report it.
+
 ## Markdown files
 
 - Do not create, modify, rename, or delete any Markdown file without the operator's explicit approval in the current conversation. This covers every `.md` file in the repository, including this one, READMEs, docs, specs, fixture notes, and any plan, report, proposal, or handoff file.
-- The one exception is creating release notes under `release-notes/` as part of the release process.
+- There are two exceptions. Creating release notes under `release-notes/` as part of the release process is one. Correcting an existing file under `skills/` so it matches a product change made in the same task is the other; creating a new skill, or deleting or restructuring one, still needs approval.
 - Keep plans, reports, and handoffs in the conversation or outside the repository. They never belong in a commit.
 
 ## Validation cadence

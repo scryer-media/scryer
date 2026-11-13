@@ -45,6 +45,7 @@ type ScopedRecentCompletedCalls = Vec<(Vec<String>, Vec<String>)>;
 #[derive(Default)]
 struct TestTitleRepo {
     titles: Arc<Mutex<Vec<Title>>>,
+    fail_matching: bool,
 }
 
 #[async_trait]
@@ -100,6 +101,12 @@ impl TitleRepository for TestTitleRepo {
         facet: Option<MediaFacet>,
         query: Option<String>,
     ) -> AppResult<Vec<Title>> {
+        if self.fail_matching {
+            return Err(AppError::not_found_reason(
+                "fixture_matcher_unavailable",
+                "synthetic matcher failure",
+            ));
+        }
         self.list(facet, query).await
     }
 
@@ -242,11 +249,10 @@ impl TitleRepository for TestTitleRepo {
         Ok(())
     }
 
-    async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
+    async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
         Ok(())
     }
-
-    async fn clear_folder_path(&self, _: &str) -> AppResult<()> {
+    async fn check_title_folder_writes(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
         Ok(())
     }
 
@@ -527,6 +533,7 @@ impl ShowRepository for TestShowRepo {
         &self,
         _: &str,
         _: &str,
+        _: &[String],
     ) -> AppResult<Vec<CalendarEpisode>> {
         Ok(vec![])
     }
@@ -1564,10 +1571,16 @@ impl DomainEventRepository for TestDomainEventRepo {
     async fn count_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
     ) -> AppResult<i64> {
+        let title_ids = title_scope.map(|scope| match scope {
+            crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+            crate::TitleHistoryTitleScope::Libraries(_) => {
+                unimplemented!("these tests never read history by library")
+            }
+        });
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -1589,13 +1602,19 @@ impl DomainEventRepository for TestDomainEventRepo {
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
-        title_ids: Option<&[String]>,
+        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
         _include_titleless: bool,
         download_id: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> AppResult<Vec<DomainEvent>> {
         let page_size = if limit == 0 { usize::MAX } else { limit };
+        let title_ids = title_scope.map(|scope| match scope {
+            crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
+            crate::TitleHistoryTitleScope::Libraries(_) => {
+                unimplemented!("these tests never read history by library")
+            }
+        });
         let events = self.events.lock().await;
         Ok(events
             .iter()
@@ -1782,6 +1801,7 @@ fn build_app_with_import_artifact_repository_and_repositories(
     let services = AppServices::builder(
         Arc::new(TestTitleRepo {
             titles: Arc::new(Mutex::new(titles)),
+            fail_matching: false,
         }),
         Arc::new(TestShowRepo {
             collections: Arc::new(Mutex::new(collections)),

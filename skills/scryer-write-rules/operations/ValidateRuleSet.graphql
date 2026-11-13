@@ -1,0 +1,15 @@
+# Compile and statically check a source without saving it.
+# Variables: {"input": {"regoSource": "...", "ruleSetId": null}}
+mutation ValidateRuleSet($input: ValidateRuleSetInput!) {
+  validateRuleSet(input: $input) {
+    valid
+    errors
+    diagnostics {
+      code
+      message
+      line
+      column
+      path
+    }
+  }
+}

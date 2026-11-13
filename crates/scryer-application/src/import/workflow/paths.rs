@@ -218,10 +218,17 @@ impl ReleaseEvidence {
         }
     }
 
-    /// Whether a completed download was selected by an operator. Client-only
-    /// observations have no such durable intent and remain automatic.
+    /// Who put this download in the client: an automatic Scryer grab, an
+    /// operator's Scryer grab, or nobody Scryer knows of.
     pub(crate) fn import_origin(&self) -> crate::import_decide::ImportOrigin {
-        crate::import_decide::ImportOrigin::from_submission_purpose(self.purpose())
+        match self {
+            Self::ScryerSubmission { purpose, .. } => {
+                crate::import_decide::ImportOrigin::from_submission_purpose(*purpose)
+            }
+            Self::DownloaderObservation { .. } => {
+                crate::import_decide::ImportOrigin::DownloaderObservation
+            }
+        }
     }
 
     /// The release name to parse and score: the persisted indexer title for a
@@ -514,6 +521,11 @@ async fn persist_title_folder_path_if_missing(
 ) -> AppResult<()> {
     crate::folder_ownership::ensure_title_folder_is_not_a_library_root(app, title).await?;
     let mut title = title.clone();
+    // An earlier step of this import may have claimed the folder already;
+    // claim against the recorded folder, not the copy the import started with.
+    if let Some(stored) = app.services.catalog.titles.get_by_id(&title.id).await? {
+        title.folder_path = stored.folder_path;
+    }
     crate::folder_ownership::claim_title_folder_if_missing(app, &mut title, folder_path).await
 }
 pub(crate) fn preserved_import_filename(source_path: &Path) -> String {

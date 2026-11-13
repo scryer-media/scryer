@@ -17,6 +17,7 @@ use crate::subtitles::scoring::{
     SubtitleScoreKind, normalized_score_percent, percent_to_raw_threshold,
 };
 use crate::subtitles::search::SubtitleSearchOrchestrator;
+use crate::subtitles::search_backoff::{self, SubtitleSearchBackoff, SubtitleSearchBackoffKey};
 use crate::subtitles::sync;
 use crate::subtitles::wanted::{SubtitleLanguagePref, compute_missing_subtitles_from_streams};
 use crate::{
@@ -663,8 +664,34 @@ async fn search_all_subtitle_providers(
     file_path: &Path,
     query: &SubtitleQuery,
     min_score: i32,
-    mut circuit: Option<&mut SubtitleProviderCircuit>,
+    circuit: Option<&mut SubtitleProviderCircuit>,
 ) -> AppResult<Vec<SubtitleMatch>> {
+    search_subtitle_providers_reporting(app, providers, file_path, query, min_score, circuit)
+        .await
+        .map(|search| search.matches)
+}
+
+/// What one search across the providers returned.
+struct SubtitleProviderSearch {
+    matches: Vec<SubtitleMatch>,
+    /// Every provider enabled for the query's facet was asked and answered.
+    /// False when one was skipped (open circuit, scheduler deferral) or failed,
+    /// or when none is enabled for the facet.
+    every_provider_answered: bool,
+}
+
+async fn search_subtitle_providers_reporting(
+    app: &AppUseCase,
+    providers: &[PluginSubtitleProviderAdapter],
+    file_path: &Path,
+    query: &SubtitleQuery,
+    min_score: i32,
+    mut circuit: Option<&mut SubtitleProviderCircuit>,
+) -> AppResult<SubtitleProviderSearch> {
+    let facet_providers = providers
+        .iter()
+        .filter(|provider| provider_enabled_for_query_facet(provider, query.facet.as_deref()))
+        .count();
     let filtered_providers = providers
         .iter()
         .filter(|provider| provider_enabled_for_query_facet(provider, query.facet.as_deref()))
@@ -676,8 +703,12 @@ async fn search_all_subtitle_providers(
         .cloned()
         .collect::<Vec<_>>();
     if filtered_providers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SubtitleProviderSearch {
+            matches: Vec::new(),
+            every_provider_answered: false,
+        });
     }
+    let mut answered = 0usize;
     let mut merged = HashMap::<(String, String), SubtitleMatch>::new();
     let mut first_error = None;
     let concurrency_limit = subtitle_provider_search_concurrency_limit();
@@ -732,6 +763,7 @@ async fn search_all_subtitle_providers(
             .map_err(|err| AppError::Repository(format!("subtitle provider task failed: {err}")))?;
         match result {
             Ok(results) => {
+                answered += 1;
                 record_subtitle_scheduler_feedback(
                     app,
                     &provider,
@@ -811,7 +843,10 @@ async fn search_all_subtitle_providers(
 
     let mut results = merged.into_values().collect::<Vec<_>>();
     results.sort_by_key(|result| std::cmp::Reverse(result.score));
-    Ok(results)
+    Ok(SubtitleProviderSearch {
+        matches: results,
+        every_provider_answered: answered == facet_providers,
+    })
 }
 
 async fn record_subtitle_provider_search_success(
@@ -2235,6 +2270,57 @@ struct AutomaticSubtitleSearch {
     providers: Option<Vec<PluginSubtitleProviderAdapter>>,
     circuit: SubtitleProviderCircuit,
     unusable_files: HashSet<(String, String)>,
+    backoffs: SubtitleSearchBackoffCache,
+}
+
+/// The "nothing found" rows an automatic search consults, read once per title
+/// on the first file of that title that is missing a language.
+#[derive(Default)]
+struct SubtitleSearchBackoffCache {
+    /// The media files of the title being walked; the first read covers all.
+    title_file_ids: Vec<String>,
+    covered: HashSet<String>,
+    by_file: HashMap<String, Vec<SubtitleSearchBackoff>>,
+}
+
+impl SubtitleSearchBackoffCache {
+    fn start_title(&mut self, file_ids: Vec<String>) {
+        self.title_file_ids = file_ids;
+        self.covered.clear();
+        self.by_file.clear();
+    }
+
+    async fn rows_for_file(
+        &mut self,
+        app: &AppUseCase,
+        media_file_id: &str,
+    ) -> AppResult<&[SubtitleSearchBackoff]> {
+        if !self.covered.contains(media_file_id) {
+            let ids = if self.title_file_ids.iter().any(|id| id == media_file_id) {
+                self.title_file_ids.clone()
+            } else {
+                vec![media_file_id.to_string()]
+            };
+            let rows = app
+                .services
+                .workflow
+                .subtitle_downloads
+                .list_search_backoffs_for_media_files(&ids)
+                .await?;
+            for row in rows {
+                self.by_file
+                    .entry(row.media_file_id.clone())
+                    .or_default()
+                    .push(row);
+            }
+            self.covered.extend(ids);
+        }
+        Ok(self
+            .by_file
+            .get(media_file_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default())
+    }
 }
 
 fn subtitle_sync_warning(result: Option<&sync::SyncResult>) -> Option<&'static str> {
@@ -2364,10 +2450,46 @@ async fn search_automatic_subtitles_for_file(
         return Ok(outcome);
     }
 
+    // A periodic cycle loads its providers once before the walk, so this loads
+    // only for an operator search or a one-off search after import.
     if actor.is_some() || search.providers.is_none() {
         search.providers = Some(configured_runtime_subtitle_providers(app, &settings).await?);
     }
     let providers = search.providers.as_deref().expect("providers initialized");
+
+    // An automatic search skips a language whose last searches found nothing
+    // until its delay has passed. A search an operator starts ignores it.
+    let automatic = actor.is_none();
+    let now = app.runtime.environment.now();
+    let wanted_key = search_backoff::wanted_languages_key(wanted_languages);
+    let providers_key = search_backoff::enabled_providers_key(
+        providers
+            .iter()
+            .filter(|provider| {
+                provider_enabled_for_query_facet(provider, Some(title.facet.as_str()))
+            })
+            .map(|provider| provider.config_id.as_str()),
+    );
+    let backoff_rows = if automatic {
+        search.backoffs.rows_for_file(app, &mf.id).await?.to_vec()
+    } else {
+        Vec::new()
+    };
+    let applying_row = |pref: &SubtitleLanguagePref| {
+        backoff_rows
+            .iter()
+            .find(|row| row.applies_to(mf, pref, &wanted_key, &providers_key))
+    };
+    let missing = missing
+        .into_iter()
+        .filter(|pref| applying_row(pref).is_none_or(|row| !row.holds_search_at(now)))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(outcome);
+    }
+    let mut backoff_upserts = Vec::new();
+    let mut backoff_cleared = Vec::new();
+
     let circuit = &mut search.circuit;
     let unusable_files = &mut search.unusable_files;
     let media_kind = subtitle_media_kind(title);
@@ -2398,7 +2520,7 @@ async fn search_automatic_subtitles_for_file(
             outcome.failed += 1;
             break;
         }
-        let results = match search_all_subtitle_providers(
+        let (results, every_provider_answered) = match search_subtitle_providers_reporting(
             app,
             providers,
             file_path.as_path(),
@@ -2408,7 +2530,7 @@ async fn search_automatic_subtitles_for_file(
         )
         .await
         {
-            Ok(r) => r,
+            Ok(search) => (search.matches, search.every_provider_answered),
             Err(err) => {
                 warn!(
                     error = %err,
@@ -2456,6 +2578,16 @@ async fn search_automatic_subtitles_for_file(
                     "no subtitle above min_score"
                 );
                 outcome.no_match += 1;
+                if automatic && every_provider_answered {
+                    backoff_upserts.push(SubtitleSearchBackoff::after_empty_search(
+                        applying_row(lang_pref),
+                        mf,
+                        lang_pref,
+                        &wanted_key,
+                        &providers_key,
+                        now,
+                    ));
+                }
                 continue;
             }
         };
@@ -2556,6 +2688,16 @@ async fn search_automatic_subtitles_for_file(
         .await;
         match download_result {
             Ok((dest_path, _file)) => {
+                let key = SubtitleSearchBackoffKey::from(lang_pref);
+                if !automatic
+                    || backoff_rows.iter().any(|row| {
+                        row.language == key.language
+                            && row.hearing_impaired == key.hearing_impaired
+                            && row.forced == key.forced
+                    })
+                {
+                    backoff_cleared.push(key);
+                }
                 // Record in database
                 let record = SubtitleDownload {
                     id: scryer_domain::Id::new().0,
@@ -2667,6 +2809,16 @@ async fn search_automatic_subtitles_for_file(
             _ = tokio::time::sleep(std::time::Duration::from_millis(1500)) => {}
         }
     }
+    if (!backoff_upserts.is_empty() || !backoff_cleared.is_empty())
+        && let Err(error) = app
+            .services
+            .workflow
+            .subtitle_downloads
+            .apply_search_backoffs(&mf.id, &backoff_upserts, &backoff_cleared)
+            .await
+    {
+        warn!(%error, media_file_id = %mf.id, "failed to record subtitle search backoff");
+    }
     Ok(outcome)
 }
 
@@ -2711,6 +2863,9 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
             .media_files
             .list_media_files_for_title(&title.id)
             .await?;
+        search
+            .backoffs
+            .start_title(media_files.iter().map(|file| file.id.clone()).collect());
         for mf in &media_files {
             if app.restore_coordinator().shutdown_workers.is_cancelled() {
                 return Ok(());

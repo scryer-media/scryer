@@ -745,15 +745,134 @@ impl AppUseCase {
             .await
     }
 
+    /// What opens metadata search and the series lookup the request dialog
+    /// uses: browsing a library, requesting into one, or managing its titles.
+    const METADATA_SEARCH_PERMISSIONS: &'static [scryer_domain::LibraryPermission] = &[
+        scryer_domain::LibraryPermission::View,
+        scryer_domain::LibraryPermission::Request,
+        scryer_domain::LibraryPermission::ManageTitles,
+    ];
+
+    /// For each metadata search result, the libraries of its facet that
+    /// already hold a title carrying one of its external ids, limited to the
+    /// libraries the actor may view, request into or manage titles in.
+    ///
+    /// Identities match the way a request submit refuses a title already in
+    /// its target library: source lowercased, value trimmed, kind ignored.
+    /// Only the ids the search item carries are used; nothing is fetched to
+    /// enrich them. One batched read covers every result, and an actor with
+    /// no such library, or results with no ids, read nothing.
+    pub async fn metadata_search_library_presence(
+        &self,
+        actor: &User,
+        items: &[(MediaFacet, &[ExternalId])],
+    ) -> AppResult<Vec<Vec<String>>> {
+        let mut presence = vec![Vec::new(); items.len()];
+        if items.is_empty() {
+            return Ok(presence);
+        }
+        let context = self.library_permission_context(actor, None).await?;
+        let eligible = context
+            .libraries_with_any(Self::METADATA_SEARCH_PERMISSIONS)
+            .map(|library| (library.id.clone(), library.facet.clone()))
+            .collect::<Vec<_>>();
+        if eligible.is_empty() {
+            return Ok(presence);
+        }
+
+        let item_lookups = items
+            .iter()
+            .map(|(facet, external_ids)| {
+                if !eligible
+                    .iter()
+                    .any(|(_, library_facet)| library_facet == facet)
+                {
+                    return Vec::new();
+                }
+                external_ids
+                    .iter()
+                    .filter_map(|external_id| {
+                        let source = external_id.source.trim().to_ascii_lowercase();
+                        let value = external_id.value.trim().to_string();
+                        (!source.is_empty() && !value.is_empty()).then(|| {
+                            crate::TitleExternalIdPresenceLookup {
+                                facet: facet.clone(),
+                                source,
+                                value,
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let lookups = item_lookups
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if lookups.is_empty() {
+            return Ok(presence);
+        }
+        let library_ids = eligible
+            .iter()
+            .map(|(library_id, _)| library_id.clone())
+            .collect::<Vec<_>>();
+        let found = self
+            .services
+            .catalog
+            .titles
+            .list_existing_external_ids_in_libraries(&library_ids, &lookups)
+            .await?;
+
+        let library_order = eligible
+            .iter()
+            .enumerate()
+            .map(|(index, (library_id, facet))| (library_id.as_str(), (index, facet)))
+            .collect::<HashMap<_, _>>();
+        let mut holders_by_lookup =
+            HashMap::<&crate::TitleExternalIdPresenceLookup, Vec<usize>>::new();
+        for hit in &found {
+            // A library of another facet never answers for this result, and
+            // a library outside the eligible set was never asked about.
+            if let Some((index, facet)) = library_order.get(hit.library_id.as_str())
+                && **facet == hit.lookup.facet
+            {
+                holders_by_lookup
+                    .entry(&hit.lookup)
+                    .or_default()
+                    .push(*index);
+            }
+        }
+        for (lookups, holders) in item_lookups.iter().zip(presence.iter_mut()) {
+            let mut indices = lookups
+                .iter()
+                .filter_map(|lookup| holders_by_lookup.get(lookup))
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            indices.sort_unstable();
+            indices.dedup();
+            *holders = indices
+                .into_iter()
+                .map(|index| eligible[index].0.clone())
+                .collect();
+        }
+        Ok(presence)
+    }
+
+    /// Refuses with `LIBRARY_ACCESS_DENIED` unless the actor holds at least
+    /// one of `permissions` on some library, read once for all of them.
     async fn require_any_library_permission_for_service(
         &self,
         actor: &User,
-        permission: scryer_domain::LibraryPermission,
+        permissions: &[scryer_domain::LibraryPermission],
     ) -> AppResult<()> {
-        if self
-            .authorized_library_ids(actor, None, permission)
+        if !self
+            .library_permission_context(actor, None)
             .await?
-            .is_empty()
+            .has_any_library_with_any(permissions)
         {
             Err(AppError::unauthorized_reason(
                 crate::error_reasons::services::LIBRARY_ACCESS_DENIED,
@@ -873,11 +992,8 @@ impl AppUseCase {
         language: &str,
         year: Option<i32>,
     ) -> AppResult<Vec<RichMetadataSearchItem>> {
-        self.require_any_library_permission_for_service(
-            actor,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_any_library_permission_for_service(actor, Self::METADATA_SEARCH_PERMISSIONS)
+            .await?;
         // Every kind goes through the title surface: a series SMG knows only
         // from TMDB has no TVDB id and is reachable nowhere else.
         let kind = type_hint.trim().to_ascii_lowercase();
@@ -897,7 +1013,7 @@ impl AppUseCase {
     ) -> AppResult<Vec<MetadataSearchItem>> {
         self.require_any_library_permission_for_service(
             actor,
-            scryer_domain::LibraryPermission::View,
+            &[scryer_domain::LibraryPermission::View],
         )
         .await?;
         self.services
@@ -915,7 +1031,7 @@ impl AppUseCase {
     ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
         self.require_any_library_permission_for_service(
             actor,
-            scryer_domain::LibraryPermission::View,
+            &[scryer_domain::LibraryPermission::View],
         )
         .await?;
         self.services
@@ -932,11 +1048,8 @@ impl AppUseCase {
         limit: i32,
         language: &str,
     ) -> AppResult<MultiMetadataSearchResult> {
-        self.require_any_library_permission_for_service(
-            actor,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_any_library_permission_for_service(actor, Self::METADATA_SEARCH_PERMISSIONS)
+            .await?;
         self.services
             .library
             .metadata_gateway
@@ -952,7 +1065,7 @@ impl AppUseCase {
     ) -> AppResult<MovieMetadata> {
         self.require_any_library_permission_for_service(
             actor,
-            scryer_domain::LibraryPermission::View,
+            &[scryer_domain::LibraryPermission::View],
         )
         .await?;
         self.services
@@ -970,7 +1083,7 @@ impl AppUseCase {
     ) -> AppResult<MovieMetadata> {
         self.require_any_library_permission_for_service(
             actor,
-            scryer_domain::LibraryPermission::View,
+            &[scryer_domain::LibraryPermission::View],
         )
         .await?;
         if movie_ref.smg_id.is_none()
@@ -1009,11 +1122,8 @@ impl AppUseCase {
         language: &str,
         include_episodes: bool,
     ) -> AppResult<SeriesMetadata> {
-        self.require_any_library_permission_for_service(
-            actor,
-            scryer_domain::LibraryPermission::View,
-        )
-        .await?;
+        self.require_any_library_permission_for_service(actor, Self::METADATA_SEARCH_PERMISSIONS)
+            .await?;
         if series_ref.smg_id.is_none()
             && series_ref.tvdb_id.is_none()
             && series_ref.tmdb_id.is_none()
@@ -1158,31 +1268,108 @@ impl AppUseCase {
         title_id: &str,
         episode_ids: &[String],
     ) -> AppResult<std::collections::HashMap<String, Vec<TitleMediaFile>>> {
-        if episode_ids.is_empty() {
+        Ok(self
+            .list_episode_media_files_for_titles(
+                actor,
+                &[(title_id.to_string(), episode_ids.to_vec())],
+            )
+            .await?
+            .into_iter()
+            .map(|((_, episode_id), files)| (episode_id, files))
+            .collect())
+    }
+
+    /// [`Self::list_episode_media_files_for_title`] for several titles at once,
+    /// keyed `(title id, episode id)`: one library lookup and one files read
+    /// for the whole batch.
+    pub async fn list_episode_media_files_for_titles(
+        &self,
+        actor: &User,
+        requests: &[(String, Vec<String>)],
+    ) -> AppResult<std::collections::HashMap<(String, String), Vec<TitleMediaFile>>> {
+        let requests = requests
+            .iter()
+            .filter(|(_, episode_ids)| !episode_ids.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let Some(title) = self.services.catalog.titles.get_by_id(title_id).await? else {
-            return Ok(std::collections::HashMap::new());
-        };
+        let title_ids = requests
+            .iter()
+            .map(|(title_id, _)| title_id.clone())
+            .collect::<Vec<_>>();
+        let library_by_title = self
+            .services
+            .catalog
+            .titles
+            .list_library_ids_for_titles(&title_ids)
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
         let allowed_library_ids = self
             .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
             .await?;
-        if !allowed_library_ids.contains(&title.library_id) {
+        let mut privileged_by_library = std::collections::HashMap::new();
+        let mut visible = Vec::new();
+        for (title_id, episode_ids) in requests {
+            let Some(library_id) = library_by_title.get(&title_id) else {
+                continue;
+            };
+            if !allowed_library_ids.contains(library_id) {
+                continue;
+            }
+            if !privileged_by_library.contains_key(library_id) {
+                let privileged = self
+                    .has_privileged_library_access(actor, library_id)
+                    .await?;
+                privileged_by_library.insert(library_id.clone(), privileged);
+            }
+            visible.push((title_id, episode_ids));
+        }
+        if visible.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let privileged = self
-            .has_privileged_library_access(actor, &title.library_id)
-            .await?;
-        let scoped_files = self
+        let scoped_by_title = self
             .services
             .library
             .media_files
-            .list_live_media_files_for_episode_ids(title_id, episode_ids)
+            .list_live_media_files_for_titles_episode_ids(&visible)
             .await?;
-        let mut files_by_episode: std::collections::HashMap<String, Vec<TitleMediaFile>> =
+
+        let mut files_by_episode: std::collections::HashMap<(String, String), Vec<TitleMediaFile>> =
             std::collections::HashMap::new();
+        for (title_id, scoped_files) in scoped_by_title {
+            let privileged = library_by_title
+                .get(&title_id)
+                .and_then(|library_id| privileged_by_library.get(library_id))
+                .copied()
+                .unwrap_or(false);
+            let episode_ids = visible
+                .iter()
+                .filter(|(id, _)| *id == title_id)
+                .flat_map(|(_, episode_ids)| episode_ids.iter())
+                .collect::<Vec<_>>();
+            Self::group_scoped_files_by_episode(
+                &title_id,
+                scoped_files,
+                &episode_ids,
+                privileged,
+                &mut files_by_episode,
+            );
+        }
+        Ok(files_by_episode)
+    }
+
+    fn group_scoped_files_by_episode(
+        title_id: &str,
+        scoped_files: Vec<crate::EpisodeScopedMediaFile>,
+        episode_ids: &[&String],
+        privileged: bool,
+        files_by_episode: &mut std::collections::HashMap<(String, String), Vec<TitleMediaFile>>,
+    ) {
         for scoped_file in scoped_files {
-            for episode_id in episode_ids {
+            for &episode_id in episode_ids {
                 if scoped_file
                     .episode_ids
                     .iter()
@@ -1200,7 +1387,7 @@ impl AppUseCase {
                         crate::MediaFileRole::Additional
                     };
                     files_by_episode
-                        .entry(episode_id.clone())
+                        .entry((title_id.to_string(), episode_id.clone()))
                         .or_default()
                         .push(if privileged {
                             media_file
@@ -1210,7 +1397,6 @@ impl AppUseCase {
                 }
             }
         }
-        Ok(files_by_episode)
     }
 
     pub async fn get_title_wanted_item(

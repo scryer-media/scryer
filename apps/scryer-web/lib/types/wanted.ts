@@ -91,6 +91,8 @@ export type ReleaseDecisionItem = {
   currentScore: number | null;
   scoreDelta: number | null;
   explanationJson: unknown;
+  /** Decision-order step that settled the comparison; null when none. */
+  decidedBy?: string | null;
   createdAt: string;
 };
 

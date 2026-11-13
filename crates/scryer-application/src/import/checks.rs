@@ -68,7 +68,6 @@ pub struct ImportCheckContext<'a> {
     pub dest_path: &'a Path,
     pub source_size: u64,
     pub import_mode: scryer_domain::ImportMode,
-    #[expect(dead_code)]
     pub parsed: &'a ParsedReleaseMetadata,
     pub existing_files: &'a [TitleMediaFile],
     /// Set only when a content probe qualified the extensionless source as
@@ -307,6 +306,41 @@ fn run_observed_checks(ctx: &ImportCheckContext<'_>) -> (ImportVerdict, Option<(
     run_checks_with_measurement(ctx, measured_disk_space)
 }
 
+/// `run_observed_checks` on the blocking pool: the checks stat the source,
+/// the destination and its volume, and may compare file contents.
+async fn run_observed_checks_off_runtime(
+    ctx: &ImportCheckContext<'_>,
+) -> (ImportVerdict, Option<(u64, String)>) {
+    let source_path = ctx.source_path.to_path_buf();
+    let dest_path = ctx.dest_path.to_path_buf();
+    let source_size = ctx.source_size;
+    let import_mode = ctx.import_mode;
+    let parsed = ctx.parsed.clone();
+    let existing_files = ctx.existing_files.to_vec();
+    let content_qualified_video = ctx.content_qualified_video;
+    let span = tracing::Span::current();
+    match tokio::task::spawn_blocking(move || {
+        span.in_scope(|| {
+            run_observed_checks(&ImportCheckContext {
+                source_path: &source_path,
+                dest_path: &dest_path,
+                source_size,
+                import_mode,
+                parsed: &parsed,
+                existing_files: &existing_files,
+                content_qualified_video,
+            })
+        })
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        // The blocking pool refused the task (runtime shutting down).
+        Err(_) => run_observed_checks(ctx),
+    }
+}
+
 fn run_checks_with_measurement(
     ctx: &ImportCheckContext<'_>,
     measure: impl FnOnce(&ImportCheckContext<'_>) -> (ImportVerdict, Option<(u64, String)>),
@@ -413,7 +447,7 @@ pub(crate) async fn run_import_checks_and_report(
     title: &scryer_domain::Title,
 ) -> ImportVerdict {
     use scryer_domain::import_space::{SpaceIncidentUpdate, SpaceMeasurement};
-    let (verdict, measured) = run_observed_checks(ctx);
+    let (verdict, measured) = run_observed_checks_off_runtime(ctx).await;
     if let Some((available_bytes, volume)) = measured {
         let destination = destination_directory(ctx.dest_path)
             .to_string_lossy()
@@ -816,5 +850,43 @@ mod tests {
     fn windows_disk_space_query_smoke_test() {
         let temp = tempfile::tempdir().expect("create temp directory");
         assert!(available_disk_space(temp.path()).expect("query available space") > 0);
+    }
+
+    #[tokio::test]
+    async fn off_runtime_checks_match_inline_checks() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let source = temp.path().join("Emberfall.S01E01.1080p.mkv");
+        let duplicate = temp.path().join("library").join("Emberfall - S01E01.mkv");
+        let different = temp.path().join("library").join("Emberfall - S01E02.mkv");
+        let missing = temp.path().join("absent").join("Emberfall - S01E03.mkv");
+        let sample = temp.path().join("sample-emberfall.mkv");
+        let text = temp.path().join("Emberfall.nfo");
+        std::fs::create_dir_all(duplicate.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"emberfall bytes").unwrap();
+        std::fs::write(&duplicate, b"emberfall bytes").unwrap();
+        std::fs::write(&different, b"cinderwake byte").unwrap();
+        std::fs::write(&sample, b"emberfall bytes").unwrap();
+        std::fs::write(&text, b"ashgrove").unwrap();
+        let parsed = parse_release_metadata("Emberfall.S01E01.1080p");
+        for (src, dest) in [
+            (&source, &duplicate),
+            (&source, &different),
+            (&source, &missing),
+            (&sample, &missing),
+            (&text, &missing),
+        ] {
+            let ctx = dummy_ctx(src, dest, 15, &parsed, &[]);
+            // Free space moves between calls; compare the verdict and volume.
+            let observed = |(verdict, measured): (ImportVerdict, Option<(u64, String)>)| {
+                (verdict, measured.map(|(_, volume)| volume))
+            };
+            assert_eq!(
+                observed(run_observed_checks_off_runtime(&ctx).await),
+                observed(run_observed_checks(&ctx)),
+                "{} -> {}",
+                src.display(),
+                dest.display()
+            );
+        }
     }
 }

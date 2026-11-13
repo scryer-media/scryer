@@ -11,7 +11,15 @@ pub(crate) fn most_specific_containing_root(path: &Path, roots: &[PathBuf]) -> O
 }
 
 pub(crate) fn resolve_available_root_for_path(path: &Path, roots: &[PathBuf]) -> AppResult<()> {
-    let root = most_specific_containing_root(path, roots).ok_or_else(|| {
+    let root = containing_root_for_path(path, roots)?;
+    ensure_root_available(&root)?;
+    Ok(())
+}
+
+/// The configured root `path` belongs to, refusing a path outside every root.
+/// Pure path arithmetic: it touches no filesystem.
+pub(crate) fn containing_root_for_path(path: &Path, roots: &[PathBuf]) -> AppResult<PathBuf> {
+    most_specific_containing_root(path, roots).ok_or_else(|| {
         AppError::validation_refused(
             crate::delete_refusal::PATH_OUTSIDE_ROOTS,
             format!(
@@ -19,9 +27,7 @@ pub(crate) fn resolve_available_root_for_path(path: &Path, roots: &[PathBuf]) ->
                 path.display()
             ),
         )
-    })?;
-    ensure_root_available(&root)?;
-    Ok(())
+    })
 }
 
 pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {
@@ -356,6 +362,152 @@ pub fn is_cross_device_error(error: &std::io::Error) -> bool {
     }
 }
 
+/// What a sync of a freshly written file achieved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSync {
+    /// The file reached stable storage.
+    Synced,
+    /// The filesystem has no sync at all, such as some macOS smbfs mounts. The
+    /// bytes were written; only verification can prove them.
+    Unsupported,
+}
+
+/// Syncs a file a copy has just written.
+///
+/// macOS `sync_all` is `F_FULLFSYNC`, which network filesystems such as smbfs
+/// reject, so plain `fsync` is tried next. Some smbfs mounts reject that too;
+/// that is [`FileSync::Unsupported`], not an error, and the caller must verify
+/// the copy before it relies on it. Any other sync failure is an error.
+pub fn sync_written_file(file: &std::fs::File) -> std::io::Result<FileSync> {
+    #[cfg(target_os = "macos")]
+    {
+        settle_file_sync(file.sync_all(), || plain_fsync(file))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        settle_file_sync(file.sync_all(), || {
+            Err(std::io::ErrorKind::Unsupported.into())
+        })
+    }
+}
+
+fn settle_file_sync(
+    full_sync: std::io::Result<()>,
+    fallback: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<FileSync> {
+    match full_sync {
+        Ok(()) => Ok(FileSync::Synced),
+        Err(error) if is_unsupported_sync_error(&error) => match fallback() {
+            Ok(()) => Ok(FileSync::Synced),
+            Err(error) if is_unsupported_sync_error(&error) => Ok(FileSync::Unsupported),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    }
+}
+
+/// Matched on the errno as well as the kind: std reports macOS `ENOTSUP`
+/// (errno 45) as `Uncategorized`, not `Unsupported`.
+fn is_unsupported_sync_error(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn plain_fsync(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    loop {
+        // SAFETY: the descriptor belongs to `file`, which outlives the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(test)]
+mod file_sync_tests {
+    use super::*;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn full_sync_falls_back_only_when_unsupported() {
+        assert_eq!(
+            settle_file_sync(Ok(()), || panic!("successful full sync needs no fallback"))
+                .expect("full sync succeeds"),
+            FileSync::Synced
+        );
+        assert_eq!(
+            settle_file_sync(Err(ErrorKind::Unsupported.into()), || Ok(()))
+                .expect("ordinary fsync succeeds when full sync is unsupported"),
+            FileSync::Synced
+        );
+        let error = settle_file_sync(Err(ErrorKind::PermissionDenied.into()), || {
+            panic!("real sync errors must not fall back")
+        })
+        .expect_err("permission failure must propagate");
+        assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        let error = settle_file_sync(Err(ErrorKind::Unsupported.into()), || {
+            Err(ErrorKind::Other.into())
+        })
+        .expect_err("fallback sync failure must propagate");
+        assert_eq!(error.kind(), ErrorKind::Other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enotsup_from_both_syncs_reports_a_filesystem_without_sync() {
+        // smbfs on macOS can reject both F_FULLFSYNC and fsync with ENOTSUP.
+        assert_eq!(
+            settle_file_sync(
+                Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)),
+                || { Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)) }
+            )
+            .expect("a filesystem with no sync is not an error"),
+            FileSync::Unsupported
+        );
+        assert_eq!(
+            settle_file_sync(
+                Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)),
+                || Ok(())
+            )
+            .expect("ENOTSUP from full sync falls back to fsync"),
+            FileSync::Synced
+        );
+    }
+
+    #[test]
+    fn sync_preserves_written_contents() {
+        use std::io::Write;
+
+        let directory = tempfile::tempdir().expect("temporary destination");
+        let path = directory.path().join("copied-video.mkv");
+        let mut file = std::fs::File::create(&path).expect("create destination");
+        file.write_all(b"verified-copy").expect("write destination");
+        sync_written_file(&file).expect("sync destination");
+        assert_eq!(
+            std::fs::read(path).expect("read destination"),
+            b"verified-copy"
+        );
+    }
+}
+
 /// Moves `source` onto `dest` without ever replacing a file the caller did not
 /// ask to replace.
 ///
@@ -585,15 +737,26 @@ async fn copy_into_destination(
         .open(dest)
         .await?;
     tokio::io::copy(&mut source_file, &mut dest_file).await?;
-    dest_file.sync_all().await?;
-    drop(dest_file);
+    tokio::io::AsyncWriteExt::flush(&mut dest_file).await?;
+    let dest_file = dest_file.into_std().await;
+    let sync = tokio::task::spawn_blocking(move || sync_written_file(&dest_file))
+        .await
+        .map_err(std::io::Error::other)??;
 
     // Carry the source's mode. Configured permissions are applied afterwards by
     // the caller and take precedence; this only stops a move from silently
     // changing access when nothing is configured.
     copy_permissions_best_effort(source, dest).await;
 
-    if options.verify_cross_device {
+    // A copy the filesystem could not sync is proven here even when the
+    // caller said it verifies for itself: the source goes next.
+    if options.verify_cross_device || sync == FileSync::Unsupported {
+        if sync == FileSync::Unsupported {
+            tracing::debug!(
+                dest = %dest.display(),
+                "move destination filesystem does not support fsync; verifying the copy"
+            );
+        }
         verify_copy_with_retry(source, dest).await?;
     }
 

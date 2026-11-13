@@ -1,0 +1,12 @@
+# Create one notification channel. Secrets go in secretValue. Side effect: confirm first.
+# Variables: {"input": {"name": "...", "channelType": "...", "config": [{"key": "...",
+#   "stringValue": "..."}, {"key": "...", "secretValue": "..."}], "isEnabled": true}}
+mutation CreateNotificationChannel($input: CreateNotificationChannelInput!) {
+  createNotificationChannel(input: $input) {
+    id
+    name
+    channelType
+    isEnabled
+    blockedReason
+  }
+}

@@ -63,6 +63,48 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Whether any download client and any indexer is configured, under the
+    /// same permission as listing them. Each read runs only when wanted.
+    pub async fn setup_integration_presence(
+        &self,
+        actor: &User,
+        want_download_clients: bool,
+        want_indexers: bool,
+    ) -> AppResult<(bool, bool)> {
+        let settings_permissions = scryer_domain::AppPermissionMask::from_permissions([
+            scryer_domain::AppPermission::ManageSystemSettings,
+            scryer_domain::AppPermission::ManageCatalogSettings,
+        ]);
+        if !self
+            .has_any_app_permission(actor, settings_permissions)
+            .await?
+        {
+            return Err(AppError::unauthorized_reason(
+                crate::error_reasons::integration::ACTION_PERMISSION_DENIED,
+                "You do not have permission to perform this action".to_string(),
+            ));
+        }
+        let has_download_clients = if want_download_clients {
+            self.services
+                .integrations
+                .download_client_configs
+                .any_configured()
+                .await?
+        } else {
+            false
+        };
+        let has_indexers = if want_indexers {
+            self.services
+                .integrations
+                .indexer_configs
+                .any_configured()
+                .await?
+        } else {
+            false
+        };
+        Ok((has_download_clients, has_indexers))
+    }
+
     pub async fn list_download_client_configs(
         &self,
         actor: &User,
@@ -110,11 +152,16 @@ impl AppUseCase {
         &self,
         configs: &mut [DownloadClientConfig],
     ) {
-        for config in configs.iter_mut() {
-            if let Some(reason) = self
-                .plugin_component_blocker_for_provider(&config.client_type)
-                .await
-            {
+        let provider_types: Vec<String> = configs
+            .iter()
+            .map(|config| config.client_type.clone())
+            .collect();
+        let provider_types: Vec<&str> = provider_types.iter().map(String::as_str).collect();
+        let reasons = self
+            .plugin_component_blockers_for_providers(&provider_types)
+            .await;
+        for (config, reason) in configs.iter_mut().zip(reasons) {
+            if let Some(reason) = reason {
                 config.status = scryer_domain::DownloadClientStatus::Error;
                 config.last_error = Some(reason);
             }

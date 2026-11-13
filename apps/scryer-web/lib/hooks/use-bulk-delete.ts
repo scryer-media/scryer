@@ -25,7 +25,6 @@ import type { SetGlobalStatus } from "@/lib/context/global-status-context";
 
 type UseBulkDeleteArgs = {
   selectedTitles: TitleRecord[];
-  selectedTitleLibraryIds: string[];
   bulkActionBusy: boolean;
   setBulkActionBusy: React.Dispatch<React.SetStateAction<boolean>>;
   /** Whether the dialog offers to exclude the removed titles from lists. */
@@ -46,7 +45,6 @@ type UseBulkDeleteArgs = {
 
 export function useBulkDelete({
   selectedTitles,
-  selectedTitleLibraryIds,
   bulkActionBusy,
   setBulkActionBusy,
   canExcludeFromLists,
@@ -374,11 +372,9 @@ export function useBulkDelete({
   ]);
 
   const openBulkTitleDelete = React.useCallback(() => {
+    // The selection may span libraries: the server checks delete rights on
+    // every title's library before it accepts the job.
     if (selectedTitles.length === 0 || bulkActionBusy) {
-      return;
-    }
-    if (selectedTitleLibraryIds.length !== 1) {
-      setGlobalStatus("Bulk actions require titles from one library.");
       return;
     }
     setBulkDeleteFilesOnDisk(false);
@@ -388,12 +384,7 @@ export function useBulkDelete({
     setBulkDeletePreviewError(null);
     setBulkDeletePreviewsByTitleId({});
     setBulkDeleteDialogOpen(true);
-  }, [
-    bulkActionBusy,
-    selectedTitleLibraryIds.length,
-    selectedTitles.length,
-    setGlobalStatus,
-  ]);
+  }, [bulkActionBusy, selectedTitles.length]);
 
   return {
     bulkDeleteDialogOpen,

@@ -1814,7 +1814,7 @@ function AuthenticatedHomePage({
         <GlobalStatusContext.Provider value={setGlobalStatus}>
           <div
             data-slot="root-app-frame"
-            className="flex min-h-dvh flex-col overflow-x-hidden text-[var(--scry-body)]"
+            className="flex min-h-dvh flex-col overflow-x-clip text-[var(--scry-body)]"
           >
             {serviceRestarting && <BackendRestartOverlay />}
             <Suspense fallback={<ViewLoadingFallback />}>

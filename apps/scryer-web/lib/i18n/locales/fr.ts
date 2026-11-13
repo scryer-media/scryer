@@ -761,6 +761,23 @@ const fr: LocaleDictionary = {
   "settings.qualityProfileUnknown":
     "ID de profil de qualité inconnu « {{id}} ».",
   "settings.qualitySettingsSaved": "Paramètres de qualité enregistrés.",
+  "settings.audioLanguagePreferences": "Préférences de langue audio",
+  "settings.audioLanguagePreferencesInfo":
+    "Classe les publications par langue audio sans en rejeter aucune. Contrairement aux langues requises, une publication sans ces langues est prise faute de mieux, puis remplacée dès qu’une meilleure apparaît.",
+  "settings.libraryAudioLanguagePreferencesHelp":
+    "Valeurs propres à cette bibliothèque. Une liste vide ou le choix d’hériter utilise la valeur par défaut du catalogue.",
+  "settings.audioPreferredLanguages": "Langues préférées",
+  "settings.audioPreferredLanguagesHint":
+    "Par ordre de préférence. Une publication avec la première langue est classée devant une publication qui n’a que la deuxième, et ainsi de suite. Un fichier sans aucune d’elles reste une cible d’amélioration.",
+  "settings.audioPreferredMoveUp": "Monter {{language}}",
+  "settings.audioPreferredMoveDown": "Descendre {{language}}",
+  "settings.audioOptionalLanguages": "Langues facultatives",
+  "settings.audioOptionalLanguagesHint":
+    "Appréciées sans être nécessaires. À qualité égale, la publication qui contient le plus de ces langues l’emporte.",
+  "settings.audioOptionalKeepSearching":
+    "Continuer à chercher les langues facultatives",
+  "settings.audioOptionalKeepSearchingHint":
+    "Activé, un fichier auquel il manque des langues facultatives reste une cible d’amélioration. Désactivé, de telles publications le remplacent encore si elles sont trouvées, mais aucune n’est recherchée.",
   "settings.downloadClientRoutingSaved":
     "Routage des clients de téléchargement enregistré.",
   "settings.downloadClientRoutingSavedFor":
@@ -1367,6 +1384,18 @@ const fr: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} surveillé(s)",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Récupérer le dernier",
+  "search.addConfigRequiredAudio": "Langue audio requise",
+  "search.addConfigPreferredAudio": "Langue audio préférée",
+  "search.addConfigAudioChoose": "Choisir des langues",
+  "search.addConfigAudioRequireNone": "N'en exiger aucune",
+  "title.preferredAudioLanguages": "Langues audio préférées",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer ne reconnaît pas cette langue audio.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer ne reconnaît pas la langue audio d'une route.",
+  "requests.requestedAudioLanguages": "Langues audio demandées",
+  "requests.requestedRequiredAudio": "Requises : {{languages}}",
+  "requests.requestedPreferredAudio": "Préférées : {{languages}}",
   "title.requiredAudioLanguages": "Langues audio requises",
   "title.originalAudioLanguagePerTitle": "Langue d’origine (par titre)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -1487,6 +1516,12 @@ const fr: LocaleDictionary = {
   "tvdb.searchPrompt": "Recherchez sur TVDB en saisissant un titre ci-dessus.",
   "tvdb.searchByTvdb": "Rechercher sur TVDB",
   "nzb.searchResultsFor": "Résultats NZB pour {{name}}",
+  "nzb.audioLanguagePreferred": "Langue préférée",
+  "nzb.audioLanguagePreferredRank": "Langue préférée n° {{rank}}",
+  "nzb.audioLanguageNotPreferred": "Aucune langue préférée",
+  "nzb.audioLanguageOptionalHits": "+{{count}} facultatives",
+  "nzb.audioLanguageHint":
+    "Classement de cette publication selon les préférences de langue audio",
   "nzb.noResultsYet": "Aucun résultat pour le moment.",
   "nzb.searchFailed": "La recherche de publications a échoué.",
   "nzb.queue": "File d'attente",
@@ -1635,6 +1670,18 @@ const fr: LocaleDictionary = {
   "importHistory.passwordPlaceholder": "Mot de passe de l'archive",
   "importHistory.retrySuccess": "Réimportation lancée",
   "system.title": "Santé du système",
+  "system.diagnosticsBundle.download": "Télécharger le paquet de diagnostic",
+  "system.diagnosticsBundle.preparing": "Préparation du diagnostic…",
+  "system.diagnosticsBundle.helper":
+    "Journaux, métriques et un résumé des paramètres dans un seul fichier pour le mainteneur. Les noms, adresses, chemins et secrets sont retirés au mieux ; vérifiez le paquet avant de le partager.",
+  "system.diagnosticsBundle.failed":
+    "Impossible de télécharger le paquet de diagnostic.",
+  "system.diagnosticsBundle.refusal.authenticationRequired":
+    "Reconnectez-vous pour télécharger le diagnostic.",
+  "system.diagnosticsBundle.refusal.permissionDenied":
+    "Le téléchargement du diagnostic nécessite l'autorisation des paramètres système.",
+  "system.diagnosticsBundle.refusal.failed":
+    "Le paquet de diagnostic n'a pas pu être créé. Consultez le journal du serveur pour plus de détails.",
   "system.jobsTitle": "Emplois",
   "system.notLoaded": "État du système non chargé.",
   "system.refreshing": "Actualisation",
@@ -2230,6 +2277,8 @@ const fr: LocaleDictionary = {
   "wanted.decision.eligible": "Éligible",
   "wanted.decision.titleMismatch": "Titre non correspondant",
   "wanted.decision.qualityBlocked": "Bloqué par la qualité",
+  "wanted.decision.episodeAvailabilityBlocked":
+    "En attente de la date de diffusion",
   "wanted.decision.upgradeRejected": "Mise à niveau rejetée",
   "wanted.decision.pendingDelay": "Délai en attente",
   "wanted.decision.alreadyActive": "Déjà actif",
@@ -3210,6 +3259,9 @@ const fr: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protocole",
   "indexerSearch.facet.resolution": "Résolution",
   "indexerSearch.facet.source": "Source",
+  "indexerSearch.facet.videoCodec": "Codec vidéo",
+  "indexerSearch.facet.audioCodec": "Codec audio",
+  "indexerSearch.facet.audioChannels": "Canaux audio",
   "indexerSearch.facet.audio": "Audio et HDR",
   "indexerSearch.facet.flags": "Indicateurs",
   "indexerSearch.facet.indexer": "Indexeur",
@@ -3951,6 +4003,55 @@ const fr: LocaleDictionary = {
   "setup.sourceImportState.failed": "Échec",
   "setup.sourceImportState.interrupted": "Interrompue",
   "setup.sourceImportState.skipped": "Ignorée",
+  "qualityProfile.decisionOrder": "Ordre de décision",
+  "qualityProfile.decisionOrderInfo":
+    "Lorsque deux releases respectent ce profil, Scryer examine ces étapes de haut en bas. La première étape qui les distingue tranche. Le score décide toujours en dernier.",
+  "qualityProfile.decisionGateQualityTier": "Niveau de qualité",
+  "qualityProfile.decisionGateQualityTierDescription":
+    "La release du niveau classé plus haut dans la préférence de qualité de ce profil l'emporte.",
+  "qualityProfile.decisionGateRevision": "PROPER/REPACK",
+  "qualityProfile.decisionGateRevisionDescription":
+    "Pour un même niveau et un même groupe, un PROPER ou REPACK plus récent l'emporte.",
+  "qualityProfile.decisionGatePreferredLanguage": "Langue préférée",
+  "qualityProfile.decisionGatePreferredLanguageDescription":
+    "La release dont l'audio est classé plus haut dans les langues audio préférées de la bibliothèque l'emporte.",
+  "qualityProfile.decisionGateOptionalLanguages": "Langues facultatives",
+  "qualityProfile.decisionGateOptionalLanguagesDescription":
+    "La release qui contient le plus de langues audio facultatives de la bibliothèque l'emporte.",
+  "qualityProfile.decisionGateUnknown": "Étape inconnue ({{value}})",
+  "qualityProfile.decisionGateUnknownDescription":
+    "Cette version de l'application web ne reconnaît pas cette étape. Elle reste à sa place.",
+  "qualityProfile.decisionGateScore": "Score",
+  "qualityProfile.decisionGateScoreDescription":
+    "Le score le plus élevé l'emporte. Le score est toujours la dernière étape.",
+  "qualityProfile.decisionScoreLocked": "Toujours en dernier",
+  "qualityProfile.decisionStepRemove":
+    "Retirer {{value}} de l'ordre de décision",
+  "qualityProfile.decisionStepAdd": "Ajouter {{value}} à l'ordre de décision",
+  "qualityProfile.decisionAvailableSteps": "Étapes non utilisées",
+  "qualityProfile.decisionAllStepsInUse": "Toutes les étapes sont utilisées.",
+  "qualityProfile.decisionWarningTierAbsent":
+    "Sans l'étape niveau de qualité, une release de niveau inférieur peut remplacer un fichier de niveau supérieur, et le niveau limite ne s'applique pas. Seul le score limite arrête la recherche de mises à niveau ; sans score limite, le profil est satisfait dès qu'il a un fichier.",
+  "qualityProfile.decisionNoteTierBelowLanguage":
+    "Une étape de langue précède le niveau de qualité : une release de niveau inférieur dans une langue préférée peut donc remplacer un fichier de niveau supérieur.",
+  "qualityProfile.decisionNoteRevisionAbsent":
+    "Sans l'étape PROPER/REPACK, les releases PROPER et REPACK ne sont pas préférées automatiquement. Les règles de score peuvent toujours les récompenser.",
+  "qualityProfile.decisionNoteLanguageGates":
+    "Les étapes de langue n'ont d'effet que si la bibliothèque a des langues audio préférées ou facultatives définies.",
+  "qualityProfile.cutoffTierNotApplicable":
+    "Non applicable sans l'étape niveau de qualité dans l'ordre de décision.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_DECISION_PIPELINE_DUPLICATE_GATE":
+    "Chaque étape ne peut apparaître qu'une seule fois dans l'ordre de décision d'un profil de qualité.",
+  "qualityProfile.qualityPreferenceHelp":
+    "Préférence la plus élevée en premier. Les releases sont comparées selon cet ordre à l'étape niveau de qualité de l'ordre de décision. Les nouveaux niveaux sont ajoutés avec la préférence la plus basse.",
+  "qualityProfile.decidedBy": "Décidé par : {{step}}",
+  "qualityProfile.cutoffScore": "Score limite",
+  "qualityProfile.cutoffScoreInfo":
+    "Dès que le fichier sur le disque atteint ce score, le profil cesse de chercher des mises à niveau. Laissez vide pour ne pas utiliser de score limite.",
+  "qualityProfile.cutoffScorePlaceholder": "Pas de score limite",
+  "qualityProfile.decisionStepDrag": "Faire glisser pour réordonner {{value}}",
+  "qualityProfile.decisionStepMoveUp": "Monter {{value}}",
+  "qualityProfile.decisionStepMoveDown": "Descendre {{value}}",
 };
 
 export default fr;

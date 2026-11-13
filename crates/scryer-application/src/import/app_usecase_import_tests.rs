@@ -2391,6 +2391,7 @@ fn series_movie_subject(
                         file_path: file.file_path.clone(),
                         release_group: file.release_group.clone(),
                         score: file.acquisition_score.unwrap_or(0),
+                        language: Default::default(),
                         covers: Vec::new(),
                         created_at: file.created_at.clone(),
                     },
@@ -2665,11 +2666,10 @@ impl TitleRepository for ManualImportCleanupTitleRepo {
         Ok(())
     }
 
-    async fn set_folder_path(&self, _: &str, _: &str) -> AppResult<()> {
+    async fn assign_title_folders(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
         Ok(())
     }
-
-    async fn clear_folder_path(&self, _: &str) -> AppResult<()> {
+    async fn check_title_folder_writes(&self, _: &[crate::TitleFolderWrite]) -> AppResult<()> {
         Ok(())
     }
 
@@ -3378,6 +3378,7 @@ fn test_admission_subject(
                     file_path: incumbent.media_file.file_path.clone(),
                     release_group: incumbent.media_file.release_group.clone(),
                     score: incumbent.media_file.acquisition_score.unwrap_or(0),
+                    language: Default::default(),
                     covers: incumbent.episode_ids.clone(),
                     created_at: incumbent.media_file.created_at.clone(),
                 },
