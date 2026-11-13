@@ -1439,7 +1439,8 @@ export const searchForSeriesMovieQuery = `query SearchReleasesForSeriesMovie($ti
 
 // Hotfix 0.17.1: server-side interactive release-search job; results stream in
 // as each indexer completes and are polled via this query.
-export const interactiveReleaseSearchQuery = interactiveReleaseSearchQueryWith();
+export const interactiveReleaseSearchQuery =
+  interactiveReleaseSearchQueryWith();
 
 /**
  * Parsed facts only the Indexers › Search refine rail reads. GraphQL merges

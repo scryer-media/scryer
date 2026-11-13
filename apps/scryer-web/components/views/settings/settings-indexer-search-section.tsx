@@ -788,10 +788,7 @@ function RefineRail({
       </div>
       <div className="divide-y divide-[var(--scry-line)]">
         {facetGroups.map((group) => {
-          const headingId = selectorId(
-            "indexer-search-facet-group",
-            group.key,
-          );
+          const headingId = selectorId("indexer-search-facet-group", group.key);
           return (
             <div
               key={group.key}

@@ -627,10 +627,7 @@ export function CalendarView({
   const lastDateRangeRef = useRef<string | null>(null);
   const handleDatesSet = useCallback(
     (arg: DatesSetInfo) => {
-      if (
-        arg.view.type === "dayGridMonth" ||
-        arg.view.type === "dayGridWeek"
-      ) {
+      if (arg.view.type === "dayGridMonth" || arg.view.type === "dayGridWeek") {
         writeStoredCalendarViewMode(arg.view.type);
       }
       const start = arg.startStr.slice(0, 10);

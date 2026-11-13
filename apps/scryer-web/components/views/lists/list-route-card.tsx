@@ -89,7 +89,10 @@ function ListRouteAudioLanguageFields({
   idPrefix: string;
   disabled?: boolean;
   onChange: (
-    patch: Pick<ListRoute, "requiredAudioLanguages" | "preferredAudioLanguages">,
+    patch: Pick<
+      ListRoute,
+      "requiredAudioLanguages" | "preferredAudioLanguages"
+    >,
   ) => void;
 }) {
   const [draft, setDraft] = React.useState<CatalogAudioLanguageDraft>(() =>

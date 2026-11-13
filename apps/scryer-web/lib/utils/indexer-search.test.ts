@@ -376,10 +376,13 @@ test("a release with several languages counts under each one", () => {
     release({ title: "Sample.English.1080p", languages: ["eng"] }),
     release({ title: "Sample.Silent.1080p" }),
   ];
-  assert.deepEqual(facetCounts(buildIndexerSearchFacets(releases), "language"), [
-    ["eng", 2],
-    ["deu", 1],
-  ]);
+  assert.deepEqual(
+    facetCounts(buildIndexerSearchFacets(releases), "language"),
+    [
+      ["eng", 2],
+      ["deu", 1],
+    ],
+  );
 
   const filtered = filterIndexerSearchReleases(
     releases,
@@ -394,19 +397,37 @@ test("a release with several languages counts under each one", () => {
 
 test("audio channels list widest first as the parser reports them", () => {
   const releases = [
-    release({ title: "Sample.Stereo", parsedRelease: parsed({ audioChannels: "2.0" }) }),
-    release({ title: "Sample.Wide", parsedRelease: parsed({ audioChannels: "7.1" }) }),
-    release({ title: "Sample.Surround.A", parsedRelease: parsed({ audioChannels: "5.1" }) }),
-    release({ title: "Sample.Surround.B", parsedRelease: parsed({ audioChannels: "5.1" }) }),
-    release({ title: "Sample.Mono", parsedRelease: parsed({ audioChannels: "1.0" }) }),
+    release({
+      title: "Sample.Stereo",
+      parsedRelease: parsed({ audioChannels: "2.0" }),
+    }),
+    release({
+      title: "Sample.Wide",
+      parsedRelease: parsed({ audioChannels: "7.1" }),
+    }),
+    release({
+      title: "Sample.Surround.A",
+      parsedRelease: parsed({ audioChannels: "5.1" }),
+    }),
+    release({
+      title: "Sample.Surround.B",
+      parsedRelease: parsed({ audioChannels: "5.1" }),
+    }),
+    release({
+      title: "Sample.Mono",
+      parsedRelease: parsed({ audioChannels: "1.0" }),
+    }),
     release({ title: "Sample.Undetected", parsedRelease: parsed({}) }),
   ];
-  assert.deepEqual(facetCounts(buildIndexerSearchFacets(releases), "audioChannels"), [
-    ["7.1", 1],
-    ["5.1", 2],
-    ["2.0", 1],
-    ["1.0", 1],
-  ]);
+  assert.deepEqual(
+    facetCounts(buildIndexerSearchFacets(releases), "audioChannels"),
+    [
+      ["7.1", 1],
+      ["5.1", 2],
+      ["2.0", 1],
+      ["1.0", 1],
+    ],
+  );
 });
 
 test("audio channel selections narrow other groups and are narrowed by them", () => {

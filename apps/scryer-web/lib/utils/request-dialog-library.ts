@@ -10,8 +10,6 @@ export function requestDialogLibraryId(
     return currentId;
   }
   return (
-    libraries.find((library) => library.isDefault)?.id ||
-    libraries[0]?.id ||
-    ""
+    libraries.find((library) => library.isDefault)?.id || libraries[0]?.id || ""
   );
 }
