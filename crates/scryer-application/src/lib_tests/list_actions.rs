@@ -986,8 +986,7 @@ async fn a_list_add_lands_the_route_audio_languages_on_the_title() {
     let (mut list, _) =
         series_list_with_options(&harness, ListMode::Add, &[LibraryPermission::View]).await;
     list.routes[0].required_audio_languages = Some(vec!["ja".to_string()]);
-    list.routes[0].preferred_audio_languages =
-        Some(vec!["original".to_string(), "en".to_string()]);
+    list.routes[0].preferred_audio_languages = Some(vec!["original".to_string(), "en".to_string()]);
     *harness.lists.subscriptions.lock().unwrap() = vec![list.clone()];
 
     let outcome = crate::lists::act::act_on_candidate(
@@ -1088,7 +1087,15 @@ async fn a_list_request_carries_the_route_audio_languages_through_approval() {
 
     let approved = harness
         .app
-        .approve_media_request(&harness.manager, &request_id, "1080p", None, None, None, None)
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("approved");
     assert_eq!(

@@ -123,18 +123,14 @@ pub struct DecisionPipeline {
     len: usize,
 }
 
-/// The order a profile uses when it does not choose one: tier, revision,
-/// preferred language, optional languages.
+/// The order a profile uses when it does not choose one: tier, then revision,
+/// which is how every profile compared releases before orders were
+/// configurable. The language steps are opt-in.
 ///
 /// Deliberately an explicit list and not [`DecisionGate::ALL`]: a step added
 /// later is not in it, so profiles that never chose an order keep comparing
 /// exactly as they did before that step existed.
-const DEFAULT_GATES: &[DecisionGate] = &[
-    DecisionGate::QualityTier,
-    DecisionGate::Revision,
-    DecisionGate::PreferredLanguage,
-    DecisionGate::OptionalLanguages,
-];
+const DEFAULT_GATES: &[DecisionGate] = &[DecisionGate::QualityTier, DecisionGate::Revision];
 
 /// The same gate was listed twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,8 +142,8 @@ impl DecisionPipeline {
         Self::from_const_gates(&[])
     }
 
-    /// Quality tier, revision, preferred language, optional languages: the
-    /// order every profile ran before orders were configurable.
+    /// Quality tier, then revision: the order every profile ran before orders
+    /// were configurable.
     pub const DEFAULT: Self = Self::from_const_gates(DEFAULT_GATES);
 
     /// A pipeline from a list known at compile time. The list must not repeat
@@ -667,15 +663,10 @@ mod tests {
 
     /// The default order is frozen: a step added later is not in it.
     #[test]
-    fn the_default_order_is_tier_revision_then_the_languages() {
+    fn the_default_order_is_tier_then_revision() {
         assert_eq!(
             DecisionPipeline::DEFAULT.gates(),
-            [
-                DecisionGate::QualityTier,
-                DecisionGate::Revision,
-                DecisionGate::PreferredLanguage,
-                DecisionGate::OptionalLanguages,
-            ]
+            [DecisionGate::QualityTier, DecisionGate::Revision]
         );
         assert!(DecisionPipeline::DEFAULT.is_default());
         assert_eq!(
