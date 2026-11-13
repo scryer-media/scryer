@@ -1387,10 +1387,11 @@ mod tests {
             request_reason(tracker.admit_monthly_request("budgeted", at).await),
             Some(reason::REQUEST_LIMIT_REACHED)
         );
-        // Grabs have no limit on this indexer, so they are not counted.
+        // A grab is refused while the request limit is reached, because its
+        // fetch would be refused. Nothing is counted for it.
         assert_eq!(
             request_reason(tracker.admit_monthly_grab("budgeted", at).await),
-            None
+            Some(reason::REQUEST_LIMIT_REACHED)
         );
         assert_eq!(usage().await, Some((1, 0)));
 

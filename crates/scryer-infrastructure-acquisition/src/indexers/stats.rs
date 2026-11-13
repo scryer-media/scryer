@@ -657,12 +657,40 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
         runtime.block_on(self.admit_monthly_usage(indexer_id, at, kind))
     }
 
+    /// Admit one grab against the indexer's monthly grab limit.
+    ///
+    /// A grab is followed by a fetch of the release from the indexer, which
+    /// passes request admission. While the indexer's request limit is
+    /// remembered as reached for this month and the current limit, that fetch
+    /// is already known to be refused, so the grab is refused here with the
+    /// request reason before anything is counted: from memory, with no
+    /// statement, and without spending a grab.
+    ///
+    /// This also refuses a grab that would not have contacted the indexer,
+    /// such as a magnet link. That is accepted: an indexer at its request
+    /// limit is treated as out of use for the rest of the month.
     fn admit_monthly_grab<'a>(
         &'a self,
         indexer_id: &'a str,
         at: DateTime<Utc>,
     ) -> Pin<Box<dyn Future<Output = scryer_application::AppResult<()>> + Send + 'a>> {
-        Box::pin(self.admit_monthly_usage(indexer_id, at, MonthlyUsageKind::Grab))
+        Box::pin(async move {
+            if self.datastore.is_some()
+                && let MonthlyLimitLookup::Limited(request_limit) = self
+                    .monthly_limits
+                    .lookup(indexer_id, MonthlyUsageKind::Request)
+                && self.is_refused_from_memory(
+                    indexer_id,
+                    MonthlyUsageKind::Request,
+                    at,
+                    request_limit,
+                )
+            {
+                return Err(monthly_limit_reached(MonthlyUsageKind::Request));
+            }
+            self.admit_monthly_usage(indexer_id, at, MonthlyUsageKind::Grab)
+                .await
+        })
     }
 
     fn all_stats(&self) -> Vec<IndexerQueryStats> {
@@ -1184,6 +1212,67 @@ mod tests {
         .await
         .expect("usage should be readable");
         assert_eq!(counted, 3, "refused attempts are not counted");
+    }
+
+    #[tokio::test]
+    async fn a_reached_request_limit_refuses_a_grab_before_it_is_counted() {
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = monthly_quota_pool().await;
+        sqlx::query("UPDATE indexers SET max_grabs_per_month = 5 WHERE id = 'idx-capped'")
+            .execute(&pool)
+            .await
+            .expect("grab limit should be set");
+        let tracker = monthly_tracker(&pool);
+        let march = utc("2026-03-10T12:00:00Z");
+        let grab_count = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT grab_count FROM indexer_monthly_usage WHERE indexer_id = 'idx-capped'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("usage should be readable")
+        };
+
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            None,
+            "a grab is admitted while requests remain"
+        );
+        for expected in [None, None, Some(reason::REQUEST_LIMIT_REACHED)] {
+            assert_eq!(
+                refusal(tracker.admit_monthly_request("idx-capped", march).await),
+                expected
+            );
+        }
+        assert_eq!(grab_count().await, 1);
+
+        // Park the usage table: a statement could only fail, which would
+        // surface as the accounting-unavailable reason instead.
+        sqlx::query("ALTER TABLE indexer_monthly_usage RENAME TO parked_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be parked");
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            Some(reason::REQUEST_LIMIT_REACHED),
+            "the fetch is already known to be refused, so the grab is too"
+        );
+        sqlx::query("ALTER TABLE parked_usage RENAME TO indexer_monthly_usage")
+            .execute(&pool)
+            .await
+            .expect("usage table should be restored");
+        assert_eq!(grab_count().await, 1, "the refused grab spent no slot");
+
+        // A new UTC month admits the grab again.
+        assert_eq!(
+            refusal(
+                tracker
+                    .admit_monthly_grab("idx-capped", utc("2026-04-01T00:00:00Z"))
+                    .await
+            ),
+            None
+        );
     }
 
     #[tokio::test]
