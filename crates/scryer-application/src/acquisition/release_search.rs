@@ -4143,6 +4143,36 @@ mod tests {
     use scryer_domain::{MediaFacet, TaggedAlias, Title};
 
     #[test]
+    fn cyrillic_bare_season_pack_preserves_neutral_title_identity() {
+        let mut title = spelling_title("Спецы", "rus");
+        title.facet = MediaFacet::Series;
+        title.year = Some(2026);
+        title.imdb_id = None;
+        title.external_ids.clear();
+        title.aliases.clear();
+        let evidence = canonical_title_evidence(&title);
+        for marker in ["[S1]", "[S01]", "S1", "S01"] {
+            let raw = format!("Спецы {marker} (2026) WEBRip 1080p-ExKinoRay RUS");
+            let anchors = context_free_identity_anchor_keys(&raw);
+            assert!(anchors.contains(&"спецы".to_string()), "{raw}: {anchors:?}");
+            assert!(
+                candidate_title_match(&make_candidate(&raw, None), &evidence).is_some(),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "Спецы [S1] (2017) WEBRip 1080p-ExKinoRay RUS",
+            "Новые Спецы [S1] (2026) WEBRip 1080p-ExKinoRay RUS",
+            "Спецы Возвращение [S1] (2026) WEBRip 1080p-ExKinoRay RUS",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_none(),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
     fn movie_availability_preserves_non_overridable_refusals() {
         for code in [
             ReleaseAutoDecisionCode::MinimumSeeders,
