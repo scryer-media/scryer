@@ -171,6 +171,7 @@ pub(crate) fn lex_lossless(input: &str) -> LexedRelease {
         hints.push("token_limit_reached".to_string());
     }
 
+    localize_season_words(&mut tokens);
     let cst = build_cst(&tokens);
     LexedRelease { tokens, cst, hints }
 }
@@ -190,7 +191,7 @@ fn build_token(
     }
     Some(Token {
         raw: raw.to_string(),
-        normalized: localize_season_word(normalize_token(raw)),
+        normalized: normalize_token(raw),
         span: TextSpan { start, end },
         separator_before,
         separator_before_has_space: input[..start]
@@ -285,17 +286,53 @@ fn build_cst(tokens: &[Token]) -> ReleaseCst {
     ReleaseCst { nodes }
 }
 
-/// French, Italian, Spanish and Polish season words read as `SEASON`, alone
-/// or fused to their number (`Saison3`), so every season rule applies to them.
-fn localize_season_word(normalized: String) -> String {
-    for word in ["SAISON", "STAGIONE", "TEMPORADA", "SEZON"] {
-        if let Some(number) = normalized.strip_prefix(word)
-            && number.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return format!("SEASON{number}");
+/// French, Italian, Spanish and Polish season words read as `SEASON` when they
+/// carry the season number themselves: fused (`Saison3`), or directly followed
+/// by a one- or two-digit number in the same bracket group (`Temporada 2`).
+/// An ordinal before the word (`2a temporada`, `3.ª Temporada`) already names
+/// the season, so a number after it is an episode and the word stays as written.
+fn localize_season_words(tokens: &mut [Token]) {
+    for index in 0..tokens.len() {
+        let Some(digits) = ["SAISON", "STAGIONE", "TEMPORADA", "SEZON"]
+            .iter()
+            .find_map(|word| tokens[index].normalized.strip_prefix(word))
+            .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
+        else {
+            continue;
+        };
+        let numbered = !digits.is_empty()
+            || tokens.get(index + 1).is_some_and(|next| {
+                next.group_id == tokens[index].group_id
+                    && next.separator_before != SeparatorKind::Hyphen
+                    && (1..=2).contains(&next.normalized.len())
+                    && next.normalized.bytes().all(|byte| byte.is_ascii_digit())
+            });
+        if numbered && !follows_ordinal(tokens, index) {
+            tokens[index].normalized = format!("SEASON{digits}");
         }
     }
-    normalized
+}
+
+/// `2A`, `2EME`, `1RE`, or the split `3.ª`: a short number with a letter suffix.
+fn follows_ordinal(tokens: &[Token], index: usize) -> bool {
+    let Some(previous) = index.checked_sub(1).map(|previous| &tokens[previous]) else {
+        return false;
+    };
+    let normalized = previous.normalized.as_str();
+    let digits = normalized.bytes().take_while(u8::is_ascii_digit).count();
+    let suffix = &normalized[digits..];
+    let letters = !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphabetic());
+    if (1..=2).contains(&digits) && letters && suffix.len() <= 4 {
+        return true;
+    }
+    matches!(normalized, "A" | "O" | "E")
+        && previous.separator_before == SeparatorKind::Dot
+        && index.checked_sub(2).is_some_and(|number| {
+            tokens[number]
+                .normalized
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        })
 }
 
 pub(crate) fn normalize_token(raw: &str) -> String {
