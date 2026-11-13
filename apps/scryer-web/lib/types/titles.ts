@@ -404,7 +404,6 @@ export type LibrarySettingsRecord = {
   metadataLanguage: string;
   useSeasonFoldersOverride: boolean | null;
   useSeasonFolders: boolean;
-  defaultMonitorType?: string | null;
   defaultMonitorTypeOverride?: string | null;
   qualityProfileIdOverride: string | null;
   qualityProfileId: string;
