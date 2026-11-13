@@ -4114,11 +4114,12 @@ mod tests {
         );
     }
 
-    /// Without a tier step the tier never decides: between files of one
-    /// language standing the bar does.
+    /// Without a tier step the tier never decides: the language step does,
+    /// and between files of one language standing the bar does.
     #[test]
     fn the_scan_never_elects_on_tier_when_the_profile_removed_it() {
-        let without_tier = crate::DecisionPipeline::DEFAULT.without(DecisionGate::QualityTier);
+        let without_tier =
+            crate::DecisionPipeline::try_from_gates([DecisionGate::PreferredLanguage]).unwrap();
         assert_eq!(
             elect(vec![
                 ranked_under(&without_tier, "uhd", bar(Some(0), 0, 100)),

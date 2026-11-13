@@ -3582,7 +3582,8 @@ mod keep_one_rank_tests {
     /// between files of one language standing the score does.
     #[test]
     fn a_profile_without_the_tier_step_never_keeps_on_tier() {
-        let pipeline = crate::DecisionPipeline::DEFAULT.without(DecisionGate::QualityTier);
+        let pipeline =
+            crate::DecisionPipeline::try_from_gates([DecisionGate::PreferredLanguage]).unwrap();
         assert_eq!(
             keeper(&pipeline, &french_uhd_and_english_hd()),
             "/library/Lanternwake (2031)/Lanternwake.720p.mkv"
