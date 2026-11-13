@@ -6037,8 +6037,9 @@ async fn regrab_import_records_a_visible_result_for_each_attempt() {
     );
 }
 
-/// A verified better library copy satisfies a foreign episode download without
-/// burning its release. A later accepted upgrade still replaces that copy.
+/// A foreign episode download that loses to a verified better library copy is
+/// held for manual import without burning its release or touching the copy.
+/// A later accepted upgrade still replaces that copy.
 #[tokio::test]
 async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accepted() {
     let (fixture, _) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
@@ -6098,7 +6099,7 @@ async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accept
     let incumbent = events[0].media_updates[0].path.clone();
     let incumbent_size = std::fs::metadata(&incumbent).unwrap().len();
     for (quality, width, height, expected) in [
-        ("480p", 640, 480, scryer_domain::ImportDecision::Skipped),
+        ("480p", 640, 480, scryer_domain::ImportDecision::Rejected),
         ("1080p", 1920, 1080, scryer_domain::ImportDecision::Imported),
     ] {
         let source = tempfile::tempdir().unwrap();
@@ -6117,10 +6118,12 @@ async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accept
             .unwrap();
         assert_eq!(result.title_id.as_deref(), Some(title.id.as_str()));
         assert_eq!(result.decision, expected, "{result:?}");
-        if expected == scryer_domain::ImportDecision::Skipped {
+        if expected == scryer_domain::ImportDecision::Rejected {
+            // Nobody grabbed it through Scryer, so losing to the library copy
+            // holds it for manual import instead of settling it.
             assert_eq!(
                 result.skip_reason,
-                Some(scryer_domain::ImportSkipReason::AlreadyImported)
+                Some(scryer_domain::ImportSkipReason::PolicyMismatch)
             );
             assert!(!result.release_burned, "{result:?}");
             assert_eq!(std::fs::metadata(&incumbent).unwrap().len(), incumbent_size);
@@ -6139,10 +6142,11 @@ async fn automatic_episode_downgrade_is_already_present_without_burning() {
             app,
             user,
             title,
+            episode,
             library_dir: _library_dir,
             ..
         },
-        _submissions,
+        submissions,
     ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
         series_root_at_library_dir: true,
         ..Default::default()
@@ -6180,6 +6184,17 @@ async fn automatic_episode_downgrade_is_already_present_without_burning() {
         rejected_source.path(),
         "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
     );
+    // Scryer's own automatic grab of the lower-quality release.
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "burned-upgrade-rejected",
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+        SubmissionScope::Episode {
+            episode_id: episode.id.clone(),
+        },
+    )
+    .await;
     let rejected = series_pack_completed_download(
         "burned-upgrade-rejected",
         &title.id,
@@ -6352,13 +6367,14 @@ async fn automatic_mixed_pack_with_better_incumbent(missing_incumbent: bool) {
             import_artifacts,
             ..
         },
-        _submissions,
+        submissions,
     ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
         series_root_at_library_dir: true,
         ..Default::default()
     })
     .await;
-    create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
+    let second_episode =
+        create_second_pack_episode(&app, &user, &title.id, episode.collection_id.clone()).await;
 
     let initial_source = tempfile::tempdir().expect("initial source tempdir");
     write_pack_video(
@@ -6398,6 +6414,17 @@ async fn automatic_mixed_pack_with_better_incumbent(missing_incumbent: bool) {
         mixed_source.path(),
         "Fail.Closed.Pack.S01E02.1080p.WEB-DL.mkv",
     );
+    // Scryer's own automatic grab of the pack covering both episodes.
+    record_pack_identity_submission(
+        &submissions,
+        &title.id,
+        "mixed-burn-release",
+        "Fail.Closed.Pack.S01.1080p.WEB-DL",
+        SubmissionScope::EpisodeSet {
+            episode_ids: vec![episode.id.clone(), second_episode.id.clone()],
+        },
+    )
+    .await;
     let mixed = series_pack_completed_download(
         "mixed-burn-release",
         &title.id,

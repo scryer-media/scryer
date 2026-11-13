@@ -162,12 +162,33 @@ async fn record_movie_grab_submission(
     title: &Title,
     source_title: &str,
 ) -> scryer_domain::download_identity::DownloadId {
+    record_grab_submission(
+        ctx,
+        completed,
+        title,
+        source_title,
+        "movie",
+        SubmissionScope::Title,
+    )
+    .await
+}
+
+/// [`record_movie_grab_submission`] for any facet and grab scope, such as a
+/// series season pack grabbed for its collection.
+async fn record_grab_submission(
+    ctx: &TestContext,
+    completed: &CompletedDownload,
+    title: &Title,
+    source_title: &str,
+    facet: &str,
+    scope: SubmissionScope,
+) -> scryer_domain::download_identity::DownloadId {
     let download_id = scryer_domain::download_identity::DownloadId::new();
     DownloadSubmissionStore::new(ctx.db.datastore())
         .record_submission(DownloadSubmission {
             download_id,
             title_id: title.id.clone(),
-            facet: "movie".to_string(),
+            facet: facet.to_string(),
             download_client_id: Some(completed.client_id.clone()),
             download_client_type: completed.client_type.clone(),
             download_client_item_id: completed.download_client_item_id.clone(),
@@ -180,7 +201,7 @@ async fn record_movie_grab_submission(
             release_size_bytes: None,
             request_signature: None,
             purpose: DownloadSubmissionPurpose::Standard,
-            scope: SubmissionScope::Title,
+            scope,
             release_listing_json: None,
         })
         .await
@@ -1950,6 +1971,18 @@ async fn import_pack_over_a_better_library_episode(
         "series",
     );
     pack.release_name = Some(BETTER_COPY_PACK_RELEASE.to_string());
+    // The pack is Scryer's own automatic grab for the season.
+    record_grab_submission(
+        &ctx,
+        &pack,
+        &title,
+        BETTER_COPY_PACK_RELEASE,
+        "series",
+        SubmissionScope::Collection {
+            collection_id: episode_1.collection_id.clone().expect("collection id"),
+        },
+    )
+    .await;
     let result = import_completed_download(&app, &user, &pack)
         .await
         .expect("import the pack");
