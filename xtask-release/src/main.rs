@@ -4400,6 +4400,8 @@ fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> 
         "RUSTSEC-2026-0391",
         "RUSTSEC-2026-0398",
         "RUSTSEC-2026-0403",
+        // Published SQLx 0.9 caps libsqlite3-sys below the patched 0.39 line.
+        "RUSTSEC-2026-0459",
     ];
     warn(format!(
         "Ignoring advisories pending upstream fixes: {}",
