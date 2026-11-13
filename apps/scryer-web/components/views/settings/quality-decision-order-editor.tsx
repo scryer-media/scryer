@@ -297,7 +297,11 @@ export function QualityDecisionOrderEditor({
             <Label className="mb-2 block text-[var(--scry-ink2)]">
               {t("qualityProfile.decisionAvailableSteps")}
             </Label>
-            <ul className={LIST_CLASS} data-reorder-list={AVAILABLE_LIST}>
+            <ul
+              className={LIST_CLASS}
+              data-reorder-list={AVAILABLE_LIST}
+              data-reorder-unordered
+            >
               {available.length === 0 ? (
                 <li className={`px-1 py-1 text-xs ${MUTED_TEXT_CLASS}`}>
                   {t("qualityProfile.decisionAllStepsInUse")}
@@ -313,6 +317,7 @@ export function QualityDecisionOrderEditor({
                         gate,
                       )}
                       className={ROW_CLASS}
+                      data-reorder-item={gate}
                     >
                       <PointerReorderHandle
                         id={selectorId(
