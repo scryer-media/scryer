@@ -121,10 +121,6 @@ impl ScoringLane {
     }
 }
 
-/// Keeps at most `cap` results, taken a round at a time across indexers in
-/// the order each indexer returned them, so one indexer's long feed cannot
-/// crowd out another's first page. Kept results stay in their original order.
-/// Returns the kept results and how many were dropped.
 /// A stored setting value as the string readers return it: `None` for empty,
 /// `null` or the inherit marker, the inner text of a JSON string, and the
 /// trimmed raw JSON for anything else.
@@ -150,6 +146,10 @@ pub(crate) fn normalize_setting_string_value(raw_value: &str) -> Option<String> 
     }
 }
 
+/// Keeps at most `cap` results, taken a round at a time across indexers in
+/// the order each indexer returned them, so one indexer's long feed cannot
+/// crowd out another's first page. Kept results stay in their original order.
+/// Returns the kept results and how many were dropped.
 fn cap_evaluated_results(
     results: Vec<IndexerSearchResult>,
     cap: Option<usize>,
