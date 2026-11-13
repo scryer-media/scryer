@@ -3553,7 +3553,7 @@ async fn deleting_a_title_prunes_only_its_own_per_title_settings() {
         }
     };
     for key in crate::settings::keys::TITLE_SCOPED_SETTING_KEYS {
-        assert_eq!(scoped(*key, doomed.id.clone()).await, None, "{key}");
+        assert_eq!(scoped(key, doomed.id.clone()).await, None, "{key}");
     }
     assert!(
         scoped(crate::TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, kept.id.clone())

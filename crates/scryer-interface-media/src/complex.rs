@@ -112,7 +112,7 @@ impl LibraryPayload {
         }
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.library_audio_language_defaults(&actor, &[self.id.to_string()])
+        app.library_audio_language_defaults(&actor, std::slice::from_ref(&*self.id))
             .await
             .map_err(to_gql_error)?
             .remove(self.id.as_str())

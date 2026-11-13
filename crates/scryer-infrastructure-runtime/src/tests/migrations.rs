@@ -7906,8 +7906,8 @@ async fn migration_0342_adds_requested_audio_language_columns() {
             sqlx::query_as("SELECT name, \"notnull\" FROM pragma_table_info(?1)")
                 .bind(table)
                 .fetch_all(&pool)
-        .await
-        .expect("read columns");
+                .await
+                .expect("read columns");
         for column in columns {
             let (_, not_null) = found
                 .iter()

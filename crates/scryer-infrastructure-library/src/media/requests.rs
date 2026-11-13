@@ -396,8 +396,7 @@ impl MediaRequestRepository for MediaRequestStore {
                 let requested_quality_profile_name = requested_quality_profile_name.clone();
                 let requested_monitor_type = requested_monitor_type.clone();
                 let requested_monitor_selection = requested_monitor_selection.clone();
-                let requested_required_audio_languages =
-                    requested_required_audio_languages.clone();
+                let requested_required_audio_languages = requested_required_audio_languages.clone();
                 let requested_preferred_audio_languages =
                     requested_preferred_audio_languages.clone();
                 let updated_event = updated_event.clone();
@@ -1493,7 +1492,9 @@ fn json_array_text(values: &[String]) -> AppResult<String> {
 
 /// A requested audio language list, or NULL when the request inherits.
 fn audio_languages_json(languages: Option<&[String]>) -> AppResult<Option<String>> {
-    languages.map(|languages| canonical_json_text(&languages)).transpose()
+    languages
+        .map(|languages| canonical_json_text(&languages))
+        .transpose()
 }
 
 /// A requested audio language column. NULL inherits; a value that is not a

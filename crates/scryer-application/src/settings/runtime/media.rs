@@ -110,6 +110,9 @@ pub(crate) fn validated_title_audio_override(
     Ok(Some(languages))
 }
 
+/// One audio language override: `None` inherits.
+type AudioLanguageOverride = Option<Vec<String>>;
+
 /// Normalize a title's (or a request's, or a list route's) requested audio
 /// language overrides. `required` keeps the `setTitleRequiredAudio`
 /// semantics: `None` inherits and an empty list requires nothing. An empty
@@ -117,7 +120,7 @@ pub(crate) fn validated_title_audio_override(
 pub fn validated_title_audio_overrides(
     required: Option<Vec<String>>,
     preferred: Option<Vec<String>>,
-) -> AppResult<(Option<Vec<String>>, Option<Vec<String>>)> {
+) -> AppResult<(AudioLanguageOverride, AudioLanguageOverride)> {
     Ok((
         validated_title_audio_override("required audio language", required, false)?,
         validated_title_audio_override("preferred audio language", preferred, true)?,

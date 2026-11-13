@@ -1948,7 +1948,7 @@ async fn a_rule_refuses_a_request_that_requires_no_audio_language() {
                     .iter()
                     .any(|id| id.source == "tvdb" && id.value == tvdb)
             })
-            .map(|request| request.status.clone())
+            .map(|request| request.status)
             .expect("request")
     };
     assert_eq!(status_of("9401"), MediaRequestStatus::Rejected);
