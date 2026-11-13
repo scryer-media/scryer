@@ -1295,6 +1295,9 @@ async fn execution_error_after_the_attempt_row_exists_never_writes_failed() {
             .is_some_and(|message| message.contains("root folder")),
         "{result:?}"
     );
+    // Import history lists only records it can tie to a title the reader may
+    // see: a failed attempt that recorded no title would never be listed.
+    assert_eq!(result.title_id.as_deref(), Some("title-a"), "{result:?}");
 }
 
 struct RetryObservationClient {
