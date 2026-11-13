@@ -1777,7 +1777,6 @@ export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
     useSeasonFoldersOverride
     useSeasonFolders
     defaultMonitorTypeOverride
-    defaultMonitorType
     qualityProfileIdOverride
     qualityProfileId
     requestQualityProfileIdsOverride

@@ -1,12 +1,13 @@
 ---
 name: scryer-migrate-from-arr
-description: Migrates a Sonarr and/or Radarr setup into Scryer through Scryer's GraphQL API and arr's v3 API, keeping bulk data in files. Use it when an operator wants to "move from Sonarr", "switch from Radarr", "import my arr library", bring over custom formats, quality profiles, delay profiles, naming, tags or notifications, compare Scryer scoring with arr history, or plan the cutover from arr to Scryer.
+description: Migrates a Sonarr and/or Radarr setup into Scryer. It runs the setup wizard's own Sonarr/Radarr import through Scryer's GraphQL API (the same calls, in the same order, as the web wizard), then verifies the result and carries over what the import leaves out, keeping bulk data in files. Use it when an operator wants to "move from Sonarr", "switch from Radarr", "import my arr library", bring over custom formats, quality profiles, delay profiles, naming, tags or notifications, compare Scryer scoring with arr history, or plan the cutover from arr to Scryer.
 ---
 
 # Migrate from Sonarr / Radarr
 
-Complete `scryer-connect` first. Then set the arr variables (URLs without a
-trailing slash, including any base path; keys from arr's Settings → General):
+Set the arr variables (URLs without a trailing slash, including any base
+path; keys from arr's Settings → General). Steps a and b need only these;
+`scryer-connect` comes in step c.
 
 ```sh
 export SONARR_URL=http://sonarr.example.lan:8989 SONARR_API_KEY=...   # and/or
@@ -42,28 +43,64 @@ jq . snap/summary.json
 `_error`. An older arr may lack an endpoint; carry on and mark that area
 manual. `HISTORY_LIMIT=1000` widens the history sample.
 
-## b. Tell the operator the plan
+## b. Plan and prepare (read-only)
 
-Before any change, present `references/what-migrates.md` filled in with the
-summary's counts: what the built-in import moves, what this skill moves step
-by step, and what stays manual. Ask which areas they want.
+Present `references/what-migrates.md` filled in with the summary's counts and
+ask which areas the operator wants. Then settle what the import will need:
 
-## c. Built-in import
+- **The arr URL as Scryer reaches it.** Scryer connects to arr itself. When
+  Scryer runs in a container, `localhost` is the container. Agree the URL
+  Scryer must use for each app, and for Prowlarr if they use it.
+- **A Scryer-side path for every root.** List `rootFolders` from the summary.
+  For each, ask where Scryer sees that folder and which library it belongs to
+  (anime is its own library facet).
+- **Secrets to enter again.** Arr hides some secrets from its API, so the
+  import cannot always copy them. The import's preview names each client and
+  indexer that needs one (`built-in-import.md`, step 4). Ask the operator to
+  have download client passwords and indexer API keys at hand, to put in
+  environment variables or files when that step asks.
 
-Follow `references/built-in-import.md`: validate the connection, warm up,
-preview, create the selected download clients and indexers, make sure every
-arr root has a Scryer library root, finalize, then scan each library. The
-import works after first-run setup too. Do not call `completeSetup`.
+## c. Setup state and the Scryer connection
 
-## d. Custom formats
+Only a signed-in browser session can create an API key, and until first-run
+setup is complete the web UI sends every page to the setup wizard. If Scryer
+still opens its wizard, ask the operator to choose **Skip setup entirely** on
+its first screen and then create the key. That is the only browser step; the
+agent then re-enters setup through the API (step d), as **Settings → General
+→ Run setup wizard** does in the web UI.
+
+Then complete `scryer-connect` and read the state:
+
+```sh
+gql "$O/SetupStatus.graphql" | jq -c .data.setupStatus
+```
+
+`setupComplete` is `true` once a key works. `hasDownloadClients` or
+`hasIndexers` `true` means some exist already: name them before importing.
+
+## d. The setup wizard's import (agent, through the API)
+
+Follow `references/built-in-import.md`. It is the wizard's Connect,
+Libraries, Quality, Sources and Summary steps in the wizard's order, ending
+with `completeSetup` for the import run and the hinted scans, as the wizard
+does. The import itself creates the download clients, indexers and library
+roots.
+
+## e. Check what the import produced (read-only)
+
+Run the first seven rows of `references/verification.md` (libraries and
+roots, titles, scan results, monitored state, download clients, indexers)
+against the snapshot. Report gaps before going on.
+
+## f. Custom formats
 
 Follow `references/custom-formats.md`:
 
 1. Translate in review mode and list formats that cannot be translated.
 2. Settle the score decision with the operator explicitly: arr scores are
-   per quality profile, Scryer rule sets are global. Use
+   per quality profile, the translated rule set applies to every profile. Use
    `qualityProfiles.distinctScoreSets` from the summary.
-3. Translate with the agreed scores, add a profile guard if needed, validate.
+3. Translate with the agreed scores and validate.
 4. Replay arr's grab history and report mismatches only:
 
 ```sh
@@ -72,20 +109,20 @@ Follow `references/custom-formats.md`:
 
 5. Save disabled, then enable after the operator agrees.
 
-## e. The rest
+## g. The rest
 
 `references/manual-areas.md` has one section per area with arr → Scryer field
 tables and the exact operations: titles with no files, quality profiles,
-delay profiles, naming, tags, notifications and Sonarr release profiles.
-Remote path mappings, import lists, list exclusions, auto-tagging and history
+delay profiles, naming, remote path mappings, tags, notifications and Sonarr
+release profiles. Import lists, list exclusions, auto-tagging and history
 are manual or unsupported; that file says what to tell the operator.
 
-## f. Scan and verify
+## h. Verify
 
-The scan runs in step c. Then work through `references/verification.md` and
-report one line per check with the gap.
+Work through the rest of `references/verification.md` and report one line per
+check with the gap.
 
-## g. Cutover
+## i. Cutover
 
 Follow `references/cutover.md`: run both side by side with Scryer's automatic
 search off, have the operator turn off arr's RSS, automatic search and
@@ -97,7 +134,7 @@ until the operator has verified Scryer. Rollback is the reverse.
 | Script | Does |
 |---|---|
 | `scripts/snapshot.sh <dir>` | GETs arr config and history into files, writes counts to `summary.json` |
-| `scripts/poll.sh <op> <vars> '<jq cond>' [interval] [max]` | Polls a status operation until the condition holds (exit 0), times out (3) or fails |
+| `scripts/poll.sh <op> <vars> '<jq cond>' [interval] [max]` | Polls an operation until the condition holds (exit 0), times out (3) or fails |
 | `scripts/replay-history.sh <snap/app> <rule.rego> <facets> [arr-profile-id]` | Scores arr's grabbed releases with a draft rule set; TSV of match, mismatch, skipped |
 
 All three need `curl` and `jq`, and find `gql.sh` in the sibling
@@ -109,5 +146,3 @@ All three need `curl` and `jq`, and find `gql.sh` in the sibling
   `scryer-connect/references/errors.md` or in the reference for that phase.
 - `MFA_STEP_UP_REQUIRED`: config writes need the security setting described
   in `scryer-connect`. Ask the operator; do not work around it.
-- A warm-up or finalize that ends `FAILED`: show `errorMessage` to the
-  operator and run that step again.

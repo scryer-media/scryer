@@ -38,6 +38,35 @@ type GqlError = async_graphql::Error;
 struct LoaderCtx {
     app: AppUseCase,
     actor: User,
+    /// Library rows read once per request and shared by every request-default
+    /// loader, so sibling fields do not read the library again.
+    request_default_libraries:
+        tokio::sync::OnceCell<Result<Arc<HashMap<String, Library>>, GqlError>>,
+}
+
+impl LoaderCtx {
+    async fn request_default_libraries(&self) -> Result<Arc<HashMap<String, Library>>, GqlError> {
+        self.request_default_libraries
+            .get_or_init(|| async {
+                self.app
+                    .libraries_for_request_defaults()
+                    .await
+                    .map(Arc::new)
+                    .map_err(to_gql_error)
+            })
+            .await
+            .clone()
+    }
+}
+
+/// Converts per-library application outcomes into loader values.
+fn per_library_outcomes<T>(
+    outcomes: HashMap<String, scryer_application::AppResult<T>>,
+) -> HashMap<String, Result<T, GqlError>> {
+    outcomes
+        .into_iter()
+        .map(|(library_id, outcome)| (library_id, outcome.map_err(to_gql_error)))
+        .collect()
 }
 
 /// Coalescing window for batching key lookups within one request.
@@ -116,16 +145,43 @@ loader!(
     String,
     Result<RequestQualityProfileSettings, GqlError>,
     |ctx, keys| {
-        let mut settings = HashMap::with_capacity(keys.len());
-        for library_id in keys {
-            let outcome = ctx
-                .app
-                .request_quality_profile_settings_for_library(&ctx.actor, library_id)
-                .await
-                .map_err(to_gql_error);
-            settings.insert(library_id.clone(), outcome);
-        }
-        Ok(settings)
+        let libraries = ctx.request_default_libraries().await?;
+        let outcomes = ctx
+            .app
+            .request_quality_profile_settings_for_libraries(&ctx.actor, keys, &libraries)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(per_library_outcomes(outcomes))
+    }
+);
+
+loader!(
+    DefaultMonitorTypeLoader,
+    String,
+    Result<String, GqlError>,
+    |ctx, keys| {
+        let libraries = ctx.request_default_libraries().await?;
+        let outcomes = ctx
+            .app
+            .default_monitor_types_for_libraries(&ctx.actor, keys, &libraries)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(per_library_outcomes(outcomes))
+    }
+);
+
+loader!(
+    TitleQualityProfileIdLoader,
+    String,
+    Result<String, GqlError>,
+    |ctx, keys| {
+        let libraries = ctx.request_default_libraries().await?;
+        let outcomes = ctx
+            .app
+            .title_quality_profile_ids_for_libraries(&ctx.actor, keys, &libraries)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(per_library_outcomes(outcomes))
     }
 );
 
@@ -561,6 +617,8 @@ pub struct RequestLoaders {
     pub title_for_management: DataLoader<TitleForManagementLoader>,
     pub library: DataLoader<LibraryLoader>,
     pub request_quality_profile_settings: DataLoader<RequestQualityProfileSettingsLoader>,
+    pub default_monitor_type: DataLoader<DefaultMonitorTypeLoader>,
+    pub title_quality_profile_id: DataLoader<TitleQualityProfileIdLoader>,
     pub collection: DataLoader<CollectionLoader>,
     pub episode: DataLoader<EpisodeLoader>,
     pub media_files_for_title: DataLoader<MediaFilesForTitleLoader>,
@@ -594,7 +652,11 @@ pub struct RequestLoaders {
 
 impl RequestLoaders {
     pub fn new(app: AppUseCase, actor: User) -> Arc<Self> {
-        let ctx = Arc::new(LoaderCtx { app, actor });
+        let ctx = Arc::new(LoaderCtx {
+            app,
+            actor,
+            request_default_libraries: tokio::sync::OnceCell::new(),
+        });
         macro_rules! dl {
             ($loader:ident) => {
                 DataLoader::new($loader(ctx.clone()), tokio::spawn).delay(LOAD_DELAY)
@@ -605,6 +667,8 @@ impl RequestLoaders {
             title_for_management: dl!(TitleForManagementLoader),
             library: dl!(LibraryLoader),
             request_quality_profile_settings: dl!(RequestQualityProfileSettingsLoader),
+            default_monitor_type: dl!(DefaultMonitorTypeLoader),
+            title_quality_profile_id: dl!(TitleQualityProfileIdLoader),
             collection: dl!(CollectionLoader),
             episode: dl!(EpisodeLoader),
             media_files_for_title: dl!(MediaFilesForTitleLoader),

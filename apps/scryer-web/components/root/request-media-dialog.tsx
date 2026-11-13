@@ -19,6 +19,7 @@ import {
   MONITOR_TYPE_LABEL_KEYS,
   defaultMonitorTypesForFacet,
 } from "@/lib/utils/default-monitor-type";
+import { requestDialogLibraryId } from "@/lib/utils/request-dialog-library";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import {
@@ -194,28 +195,43 @@ export function RequestMediaDialog({
     React.useState<RequestPreflightResult | null>(null);
   const client = useClient();
 
+  // The item and facet this dialog was last reset for. The choices reset
+  // when the dialog opens or the requested item changes; a refreshed library
+  // list keeps them and re-picks the library only when the chosen one is gone.
+  const resetForRef = React.useRef<{
+    facet: Facet;
+    result: MetadataTvdbSearchItem;
+  } | null>(null);
   React.useEffect(() => {
-    if (!open) return;
-    setLibraryId(
-      requestableLibraries.find((library) => library.isDefault)?.id ||
-        requestableLibraries[0]?.id ||
-        "",
+    if (!open) {
+      resetForRef.current = null;
+      return;
+    }
+    const resetFor = resetForRef.current;
+    const isNewRequest =
+      !resetFor || resetFor.facet !== facet || resetFor.result !== result;
+    const nextLibraryId = requestDialogLibraryId(
+      requestableLibraries,
+      isNewRequest ? "" : libraryId,
     );
-    setQualityProfileId("");
-    setMonitorType(
-      defaultMonitorTypeForFacet(
-        facet,
-        requestableLibraries.find((l) => l.isDefault)?.defaultMonitorType ??
-          requestableLibraries[0]?.defaultMonitorType,
-      ),
+    if (!isNewRequest && nextLibraryId === libraryId) return;
+    const nextMonitorType = defaultMonitorTypeForFacet(
+      facet,
+      requestableLibraries.find((library) => library.id === nextLibraryId)
+        ?.defaultMonitorType,
     );
+    setLibraryId(nextLibraryId);
+    setMonitorType(nextMonitorType);
     setMonitorSelection(EMPTY_MONITOR_SELECTION);
+    if (!isNewRequest) return;
+    resetForRef.current = { facet, result };
+    setQualityProfileId("");
     setMonitorSelectionLoading(false);
     setIsSubmitting(false);
     setLeaseChoice("forever");
     setCustomLeaseDays(30);
     setPreflight(null);
-  }, [facet, open, requestableLibraries]);
+  }, [facet, libraryId, open, requestableLibraries, result]);
 
   /// Null means forever, which is what the API models an absent lease as.
   const requestedLeaseDays =

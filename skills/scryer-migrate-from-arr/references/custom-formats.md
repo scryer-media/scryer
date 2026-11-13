@@ -26,18 +26,18 @@ Request refusals: `ARR_CUSTOM_FORMAT_JSON_INVALID`, `ARR_CUSTOM_FORMAT_JSON_TOO_
 
 ## 2. The score decision (ask the operator)
 
-Arr scores live on quality profiles; a Scryer rule set applies to every
-profile. Show `qualityProfiles.distinctScoreSets` from `summary.json`, then
-offer:
+Arr scores live on quality profiles. The translator, like the web UI's
+**Import Arr custom formats** dialog in the rules settings, takes one score
+per format and returns one rule set that applies to every Scryer profile.
+Show `qualityProfiles.distinctScoreSets` from `summary.json`, then:
 
 | distinctScoreSets | Choice |
 |---|---|
 | 0 | Nothing scores. Skip custom formats. |
 | 1 | One rule set with those scores. |
-| more | (a) one rule set from the profile the operator names, or (b) one rule set per arr profile, each guarded by the Scryer profile id it maps to. |
+| more | One rule set from the arr profile the operator names. Tell them the other profiles' scores are not carried over: the translator has no per-profile scores, and this skill does not edit the rules it returns. |
 
-Write the answer down: which arr profile id feeds which rule set, and for (b)
-which Scryer quality profile id each one guards.
+Write down which arr profile id feeds the rule set.
 
 ## 3. Build the score list
 
@@ -69,18 +69,8 @@ jq -c '.data.translateArrCustomFormats | {appliedFacets, translated: [.formats[]
   disabled: [.formats[] | select(.status == "DISABLED") | .name]}' cf.json
 ```
 
-For choice (b), add the profile guard to every scoring rule. `$pid` is the
-**Scryer** quality profile id:
-
-```sh
-jq -Rrs --arg pid "$SCRYER_PROFILE_ID" \
-  'gsub("(?<h>score_entry\\[\"[^\"]+\"\\] := -?[0-9]+ if \\{\\n)"; "\(.h)  input.profile.id == \"\($pid)\"\n")' \
-  arr-formats.rego > arr-formats-guarded.rego
-```
-
-Validate the file you will save with `ValidateRuleSet.graphql` (same
-variables as in `scryer-write-rules`). Do not edit the translated rules by
-hand beyond the guard. Use the guarded file in the steps below.
+Validate it with `ValidateRuleSet.graphql` (same variables as in
+`scryer-write-rules`). Do not edit the translated rules.
 
 ## 5. Replay arr history (read-only)
 
@@ -106,8 +96,9 @@ episodes Scryer numbers differently.
 
 ## 6. Save disabled, then enable (side effects: confirm each)
 
-Save with `CreateRuleSet.graphql`, name such as "Sonarr custom formats
-(profile HD)", the translated `appliedFacets`, `enabled: false`. Run the
+Save with `CreateRuleSet.graphql`: the translation's `name`, `description`,
+`regoSource` and `appliedFacets` (the web dialog fills its draft the same
+way; rename only if the operator asks), `enabled: false`. Run the
 replay again against the saved draft if anything changed, then enable with
 `ToggleRuleSet.graphql` once the operator agrees.
 

@@ -100,6 +100,14 @@ impl LibraryPayload {
 impl LibraryPayload {
     /// Initial monitoring choice for new titles, readable by authorized requesters.
     async fn default_monitor_type(&self, ctx: &Context<'_>) -> GqlResult<String> {
+        if let Some(loaders) = loaders_from_ctx(ctx)
+            && let Some(outcome) = loaders
+                .default_monitor_type
+                .load_one(self.id.to_string())
+                .await?
+        {
+            return outcome;
+        }
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.default_monitor_type_for_library(&actor, self.id.as_ref())
@@ -109,6 +117,14 @@ impl LibraryPayload {
 
     /// Effective title quality-profile ID for this library; requires title-management or catalog-settings access.
     async fn quality_profile_id(&self, ctx: &Context<'_>) -> GqlResult<ID> {
+        if let Some(loaders) = loaders_from_ctx(ctx)
+            && let Some(outcome) = loaders
+                .title_quality_profile_id
+                .load_one(self.id.to_string())
+                .await?
+        {
+            return outcome.map(Into::into);
+        }
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         app.title_quality_profile_id_for_library(&actor, self.id.as_ref())

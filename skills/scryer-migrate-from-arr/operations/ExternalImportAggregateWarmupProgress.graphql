@@ -1,0 +1,12 @@
+# Title warm-up progress across every arr warm-up session; the setup wizard waits
+# for COMPLETED before it finishes the import. Read-only.
+# Variables: {"input": {"sourceWarmupSessionIds": ["..."]}}
+query ExternalImportAggregateWarmupProgress($input: ExternalImportAggregateWarmupProgressInput!) {
+  externalImportAggregateWarmupProgress(input: $input) {
+    status
+    titlesTotalKnown
+    titlesFetched
+    titlesTotal
+    errorMessage
+  }
+}

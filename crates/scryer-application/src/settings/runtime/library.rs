@@ -644,6 +644,78 @@ fn configured_request_quality_profile_ids(
     Ok((!profile_ids.is_empty()).then_some(profile_ids))
 }
 
+fn library_not_found(library_id: &str) -> AppError {
+    AppError::not_found_reason(
+        crate::error_reasons::settings::LIBRARY_NOT_FOUND,
+        format!("library {library_id}"),
+    )
+}
+
+fn library_access_denied() -> AppError {
+    AppError::unauthorized_reason(
+        crate::error_reasons::settings::LIBRARY_ACCESS_DENIED,
+        "You do not have access to this library".to_string(),
+    )
+}
+
+/// Requesters, title managers, catalog-settings managers and permission
+/// managers may read a library's request defaults.
+fn can_read_request_defaults(
+    authorization: &scryer_domain::UserAuthorization,
+    library_id: &str,
+) -> bool {
+    crate::authorization::effective_library_permission(
+        authorization,
+        library_id,
+        scryer_domain::LibraryPermission::Request,
+    ) || crate::authorization::effective_library_permission(
+        authorization,
+        library_id,
+        scryer_domain::LibraryPermission::ManageTitles,
+    ) || authorization.has_app_permission(scryer_domain::AppPermission::ManageCatalogSettings)
+        || authorization.has_app_permission(scryer_domain::AppPermission::ManagePermissions)
+}
+
+/// Title managers and catalog-settings managers may read a library's title
+/// quality profile.
+fn can_read_title_quality_profile(
+    authorization: &scryer_domain::UserAuthorization,
+    library_id: &str,
+) -> bool {
+    crate::authorization::effective_library_permission(
+        authorization,
+        library_id,
+        scryer_domain::LibraryPermission::ManageTitles,
+    ) || authorization.has_app_permission(scryer_domain::AppPermission::ManageCatalogSettings)
+}
+
+/// Splits requested ids into ready outcomes (not found, access denied) and the
+/// libraries left to read, in the per-library readers' check order.
+fn readable_libraries<'a, T>(
+    library_ids: &[String],
+    libraries: &'a HashMap<String, Library>,
+    can_read: impl Fn(&str) -> bool,
+) -> (HashMap<String, AppResult<T>>, Vec<&'a Library>) {
+    let mut outcomes = HashMap::new();
+    let mut readable = Vec::new();
+    let mut seen = HashSet::new();
+    for library_id in library_ids {
+        if !seen.insert(library_id.as_str()) {
+            continue;
+        }
+        match libraries.get(library_id) {
+            None => {
+                outcomes.insert(library_id.clone(), Err(library_not_found(library_id)));
+            }
+            Some(library) if !can_read(&library.id) => {
+                outcomes.insert(library_id.clone(), Err(library_access_denied()));
+            }
+            Some(library) => readable.push(library),
+        }
+    }
+    (outcomes, readable)
+}
+
 fn fallback_request_quality_profile_id(
     profile_settings: &QualityProfileSettings,
     library_quality_profile_id: &str,
@@ -727,30 +799,10 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
-
-        let can_request = self
-            .has_library_permission(
-                actor,
-                &library.id,
-                scryer_domain::LibraryPermission::Request,
-            )
-            .await?;
-        let can_manage = self
-            .has_library_permission(
-                actor,
-                &library.id,
-                scryer_domain::LibraryPermission::ManageTitles,
-            )
-            .await?;
-        let can_manage_catalog = self
-            .has_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
-            .await?;
-        let can_manage_permissions = self
-            .has_app_permission(actor, scryer_domain::AppPermission::ManagePermissions)
-            .await?;
-        if !can_request && !can_manage && !can_manage_catalog && !can_manage_permissions {
-            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
+            .ok_or_else(|| library_not_found(library_id))?;
+        let authorization = self.authorization_for_actor(actor).await?;
+        if !can_read_request_defaults(&authorization, &library.id) {
+            return Err(library_access_denied());
         }
         Ok(library)
     }
@@ -780,23 +832,230 @@ impl AppUseCase {
             .libraries
             .get_by_id(library_id)
             .await?
-            .ok_or_else(|| AppError::not_found_reason(crate::error_reasons::settings::LIBRARY_NOT_FOUND, format!("library {library_id}")))?;
-        let can_manage_titles = self
-            .has_library_permission(
-                actor,
-                &library.id,
-                scryer_domain::LibraryPermission::ManageTitles,
-            )
-            .await?;
-        let can_manage_catalog = self
-            .has_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
-            .await?;
-        if !can_manage_titles && !can_manage_catalog {
-            return Err(AppError::unauthorized_reason(crate::error_reasons::settings::LIBRARY_ACCESS_DENIED, "You do not have access to this library".to_string()));
+            .ok_or_else(|| library_not_found(library_id))?;
+        let authorization = self.authorization_for_actor(actor).await?;
+        if !can_read_title_quality_profile(&authorization, &library.id) {
+            return Err(library_access_denied());
         }
 
         self.resolve_quality_profile_id(Some(&library.id), Some(library.facet.as_str()))
             .await
+    }
+
+    /// Every library row in one read, for the batched request-default readers
+    /// below. A requested id missing from it is reported as not found, as the
+    /// per-library readers do.
+    pub async fn libraries_for_request_defaults(&self) -> AppResult<HashMap<String, Library>> {
+        Ok(self
+            .services
+            .catalog
+            .libraries
+            .list(None)
+            .await?
+            .into_iter()
+            .map(|library| (library.id.clone(), library))
+            .collect())
+    }
+
+    /// [`Self::default_monitor_type_for_library`] for several libraries, with
+    /// one saved-value read for all of them. Each id keeps its own outcome.
+    pub async fn default_monitor_types_for_libraries(
+        &self,
+        actor: &User,
+        library_ids: &[String],
+        libraries: &HashMap<String, Library>,
+    ) -> AppResult<HashMap<String, AppResult<String>>> {
+        let authorization = self.authorization_for_actor(actor).await?;
+        let (mut outcomes, readable) =
+            readable_libraries(library_ids, libraries, |library_id| {
+                can_read_request_defaults(&authorization, library_id)
+            });
+        let saved = self
+            .read_explicit_setting_strings_for_libraries(DEFAULT_MONITOR_TYPE_KEY, &readable)
+            .await?;
+        for library in readable {
+            let saved = saved.get(&library.id).cloned().flatten();
+            outcomes.insert(
+                library.id.clone(),
+                Ok(effective_default_monitor_type(&library.facet, saved.as_deref())),
+            );
+        }
+        Ok(outcomes)
+    }
+
+    /// [`Self::title_quality_profile_id_for_library`] for several libraries,
+    /// with one library-override read for all of them.
+    pub async fn title_quality_profile_ids_for_libraries(
+        &self,
+        actor: &User,
+        library_ids: &[String],
+        libraries: &HashMap<String, Library>,
+    ) -> AppResult<HashMap<String, AppResult<String>>> {
+        let authorization = self.authorization_for_actor(actor).await?;
+        let (mut outcomes, readable) =
+            readable_libraries(library_ids, libraries, |library_id| {
+                can_read_title_quality_profile(&authorization, library_id)
+            });
+        outcomes.extend(self.resolve_library_quality_profile_ids(&readable).await?);
+        Ok(outcomes)
+    }
+
+    /// [`Self::request_quality_profile_settings_for_library`] for several
+    /// libraries: one override read per setting and one profile load for all
+    /// of them.
+    pub async fn request_quality_profile_settings_for_libraries(
+        &self,
+        actor: &User,
+        library_ids: &[String],
+        libraries: &HashMap<String, Library>,
+    ) -> AppResult<HashMap<String, AppResult<RequestQualityProfileSettings>>> {
+        let authorization = self.authorization_for_actor(actor).await?;
+        let (mut outcomes, readable) =
+            readable_libraries(library_ids, libraries, |library_id| {
+                can_read_request_defaults(&authorization, library_id)
+            });
+        if readable.is_empty() {
+            return Ok(outcomes);
+        }
+        let quality_profile_ids = self.resolve_library_quality_profile_ids(&readable).await?;
+        let profile_settings = self.load_quality_profile_settings().await;
+        let request_profile_ids = self
+            .read_setting_strings_with_defaults_for_libraries(
+                REQUEST_QUALITY_PROFILE_IDS_KEY,
+                &readable,
+            )
+            .await?;
+        for library in readable {
+            let outcome = (|| -> AppResult<RequestQualityProfileSettings> {
+                let quality_profile_id = quality_profile_ids
+                    .get(&library.id)
+                    .cloned()
+                    .unwrap_or_else(|| Err(library_not_found(&library.id)))?;
+                let profile_settings = profile_settings.clone()?;
+                let fallback_id =
+                    fallback_request_quality_profile_id(&profile_settings, &quality_profile_id);
+                let raw = request_profile_ids.get(&library.id).cloned().flatten();
+                let profile_ids = parse_setting_json_value::<Vec<String>>(
+                    REQUEST_QUALITY_PROFILE_IDS_KEY,
+                    raw,
+                )?
+                .map(|ids| configured_request_quality_profile_ids(ids, &profile_settings.profiles))
+                .transpose()?
+                .flatten()
+                .unwrap_or_else(|| vec![fallback_id.clone()]);
+                let default_profile_id = profile_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| fallback_id.clone());
+                Ok(RequestQualityProfileSettings {
+                    profile_ids,
+                    default_profile_id,
+                })
+            })();
+            outcomes.insert(library.id.clone(), outcome);
+        }
+        Ok(outcomes)
+    }
+
+    /// The effective title quality profile of each library, as
+    /// [`Self::resolve_quality_profile_id`] gives it: the library override
+    /// (one read for all libraries), else the facet override, else the global
+    /// profile, else the built-in default.
+    async fn resolve_library_quality_profile_ids(
+        &self,
+        libraries: &[&Library],
+    ) -> AppResult<HashMap<String, AppResult<String>>> {
+        let overrides = self
+            .read_explicit_setting_strings_for_libraries(QUALITY_PROFILE_ID_KEY, libraries)
+            .await?;
+        let mut canonical: HashMap<String, AppResult<String>> = HashMap::new();
+        let mut by_facet: HashMap<MediaFacet, AppResult<String>> = HashMap::new();
+        let mut resolved = HashMap::with_capacity(libraries.len());
+        for library in libraries {
+            let library_override = overrides
+                .get(&library.id)
+                .cloned()
+                .flatten()
+                .and_then(|value| normalize_optional_string(Some(value)));
+            let outcome = match library_override {
+                Some(profile_id) => match canonical.get(&profile_id) {
+                    Some(outcome) => outcome.clone(),
+                    None => {
+                        let outcome = self.canonical_quality_profile_id(&profile_id).await;
+                        canonical.insert(profile_id, outcome.clone());
+                        outcome
+                    }
+                },
+                None => match by_facet.get(&library.facet) {
+                    Some(outcome) => outcome.clone(),
+                    None => {
+                        let outcome = self
+                            .resolve_quality_profile_id(None, Some(library.facet.as_str()))
+                            .await;
+                        by_facet.insert(library.facet.clone(), outcome.clone());
+                        outcome
+                    }
+                },
+            };
+            resolved.insert(library.id.clone(), outcome);
+        }
+        Ok(resolved)
+    }
+
+    /// Each library's explicitly saved value for `key_name`, normalized as
+    /// [`Self::read_setting_string_value_explicit`] does, in one read. A library
+    /// with a saved row maps to its normalized value (`None` when that is empty
+    /// or inherit); a library without one is absent.
+    async fn read_explicit_setting_strings_for_libraries(
+        &self,
+        key_name: &str,
+        libraries: &[&Library],
+    ) -> AppResult<HashMap<String, Option<String>>> {
+        if libraries.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
+        let rows = self
+            .services
+            .config
+            .settings
+            .list_setting_json_explicit_for_scope_ids(SETTINGS_SCOPE_SYSTEM, key_name, &library_ids)
+            .await?;
+        let mut values = HashMap::with_capacity(rows.len());
+        for (library_id, raw_value) in rows {
+            // The single-value reader takes the first stored row for a scope id.
+            values.entry(library_id).or_insert_with(|| {
+                crate::catalog::release_search::normalize_setting_string_value(&raw_value)
+            });
+        }
+        Ok(values)
+    }
+
+    /// Each library's value for `key_name` as [`Self::read_setting_string_value`]
+    /// reads it: the saved value, else the setting's default. Saved values come
+    /// from one read; the default, which is the same for every library without a
+    /// saved value, from one more.
+    async fn read_setting_strings_with_defaults_for_libraries(
+        &self,
+        key_name: &str,
+        libraries: &[&Library],
+    ) -> AppResult<HashMap<String, Option<String>>> {
+        let mut values = self
+            .read_explicit_setting_strings_for_libraries(key_name, libraries)
+            .await?;
+        let unsaved: Vec<&&Library> = libraries
+            .iter()
+            .filter(|library| !values.contains_key(&library.id))
+            .collect();
+        if let Some(first) = unsaved.first() {
+            let default_value = self
+                .read_setting_string_value(key_name, Some(&first.id))
+                .await?;
+            for library in unsaved {
+                values.insert(library.id.clone(), default_value.clone());
+            }
+        }
+        Ok(values)
     }
 
     pub async fn get_library_settings(
