@@ -38,7 +38,8 @@ use crate::decision_pipeline::{CutoffEscape, DecisionGate, Facts, RankFacts, Sid
 ///    field on [`SideFacts`], filled in by its builders
 ///    ([`CandidateFacts::facts`], [`Incumbent::facts`],
 ///    [`crate::admission::QueuedRelease::facts`],
-///    [`crate::quality::landed_bar_memo::LandedBar::side`] and
+///    [`crate::quality::landed_bar_memo::LandedBar::side`],
+///    [`crate::quality::canonical_context::IncumbentFacts::side`] and
 ///    [`SideFacts::of_decision`]). A source that does not carry the property
 ///    yet has to learn it first.
 ///

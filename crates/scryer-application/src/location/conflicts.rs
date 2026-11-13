@@ -871,6 +871,7 @@ impl AppUseCase {
         let context = self
             .resolve_canonical_scoring_context(&title, &profile)
             .await;
+        let pipeline = profile.criteria.decision_pipeline;
         let mut ranked = files
             .iter()
             .filter(|file| file.media)
@@ -885,12 +886,7 @@ impl AppUseCase {
                     &context,
                     crate::quality_profile::CoverageSizeBasis::default(),
                 );
-                (
-                    crate::admission::tier_sort_key(bar.tier_index),
-                    std::cmp::Reverse(bar.score),
-                    std::cmp::Reverse(file.size_bytes),
-                    file.path.clone(),
-                )
+                keep_one_rank(&pipeline, &bar, file.size_bytes, &file.path)
             })
             .collect::<Vec<_>>();
         ranked.sort();
@@ -1603,6 +1599,30 @@ mod folder_name_rank_tests {
         assert_eq!(rank(&title, "Different Feature (2024)"), -1);
         assert_eq!(rank(&title, "Different.Feature.2160p.BluRay"), -1);
     }
+}
+
+/// Keep-one's ranking of one media file, best first: where its re-derived bar
+/// sits on the profile's decision order (the key admission ranks held files
+/// by), then the bar's score, then the larger file, then the path.
+type KeepOneRank = (
+    crate::decision_pipeline::GateKey,
+    std::cmp::Reverse<i32>,
+    std::cmp::Reverse<u64>,
+    String,
+);
+
+fn keep_one_rank(
+    pipeline: &crate::DecisionPipeline,
+    bar: &crate::quality::canonical_context::IncumbentFacts,
+    size_bytes: u64,
+    path: &str,
+) -> KeepOneRank {
+    (
+        bar.ladder_key(pipeline),
+        std::cmp::Reverse(bar.score),
+        std::cmp::Reverse(size_bytes),
+        path.to_owned(),
+    )
 }
 
 fn candidate_file(title_id: &str, file: &ConflictFile) -> TitleMediaFile {
@@ -3488,6 +3508,191 @@ mod hardlink_disposal_tests {
             }
             assert!(retained.exists());
             assert!(external.exists());
+        }
+    }
+}
+
+#[cfg(test)]
+mod keep_one_rank_tests {
+    use super::*;
+    use crate::decision_pipeline::DecisionGate;
+    use crate::quality::canonical_context::IncumbentFacts;
+
+    fn bar(tier_index: Option<usize>, preferred_rank: u16, score: i32) -> IncumbentFacts {
+        IncumbentFacts {
+            score,
+            tier_index,
+            revision: 0,
+            language: crate::AudioLanguageRank::for_test(preferred_rank, 0),
+        }
+    }
+
+    /// The path keep-one keeps out of `files`: the first by its rank.
+    fn keeper(pipeline: &crate::DecisionPipeline, files: &[(&str, IncumbentFacts, u64)]) -> String {
+        files
+            .iter()
+            .map(|(path, bar, size)| keep_one_rank(pipeline, bar, *size, path))
+            .min()
+            .expect("fixture is non-empty")
+            .3
+    }
+
+    /// A French 2160p file and an English 720p file of one title, with
+    /// English preferred: the 2160p file scores higher and is larger.
+    fn french_uhd_and_english_hd() -> Vec<(&'static str, IncumbentFacts, u64)> {
+        vec![
+            (
+                "/library/Lanternwake (2031)/Lanternwake.2160p.mkv",
+                bar(Some(0), 1, 300),
+                9_000,
+            ),
+            (
+                "/library/Lanternwake (2031)/Lanternwake.720p.mkv",
+                bar(Some(2), 0, 100),
+                1_000,
+            ),
+        ]
+    }
+
+    #[test]
+    fn language_ahead_of_tier_keeps_the_preferred_language_lower_tier_file() {
+        let pipeline = crate::DecisionPipeline::try_from_gates([
+            DecisionGate::PreferredLanguage,
+            DecisionGate::QualityTier,
+        ])
+        .unwrap();
+        assert_eq!(
+            keeper(&pipeline, &french_uhd_and_english_hd()),
+            "/library/Lanternwake (2031)/Lanternwake.720p.mkv"
+        );
+    }
+
+    #[test]
+    fn the_default_order_keeps_the_higher_tier_file() {
+        assert_eq!(
+            keeper(
+                &crate::DecisionPipeline::DEFAULT,
+                &french_uhd_and_english_hd()
+            ),
+            "/library/Lanternwake (2031)/Lanternwake.2160p.mkv"
+        );
+    }
+
+    /// Without a tier step the tier never decides: the language does, and
+    /// between files of one language standing the score does.
+    #[test]
+    fn a_profile_without_the_tier_step_never_keeps_on_tier() {
+        let pipeline = crate::DecisionPipeline::DEFAULT.without(DecisionGate::QualityTier);
+        assert_eq!(
+            keeper(&pipeline, &french_uhd_and_english_hd()),
+            "/library/Lanternwake (2031)/Lanternwake.720p.mkv"
+        );
+        let same_language = [
+            (
+                "/library/Lanternwake (2031)/Lanternwake.2160p.mkv",
+                bar(Some(0), 0, 100),
+                9_000,
+            ),
+            (
+                "/library/Lanternwake (2031)/Lanternwake.720p.mkv",
+                bar(Some(2), 0, 300),
+                1_000,
+            ),
+        ];
+        assert_eq!(
+            keeper(&pipeline, &same_language),
+            "/library/Lanternwake (2031)/Lanternwake.720p.mkv"
+        );
+        assert_eq!(
+            keeper(&crate::DecisionPipeline::DEFAULT, &same_language),
+            "/library/Lanternwake (2031)/Lanternwake.2160p.mkv"
+        );
+    }
+
+    /// The ranking keep-one used before it followed the decision order.
+    fn tier_then_score_rank(
+        bar: &IncumbentFacts,
+        size_bytes: u64,
+        path: &str,
+    ) -> (
+        usize,
+        std::cmp::Reverse<i32>,
+        std::cmp::Reverse<u64>,
+        String,
+    ) {
+        (
+            crate::admission::tier_sort_key(bar.tier_index),
+            std::cmp::Reverse(bar.score),
+            std::cmp::Reverse(size_bytes),
+            path.to_owned(),
+        )
+    }
+
+    /// Under the default order, every file of a title carrying the same
+    /// language standing (which every file does when no audio language
+    /// preference is configured), the new ranking orders a seeded set
+    /// exactly as the old tier-then-score ranking did.
+    #[test]
+    fn the_default_order_ranks_exactly_as_tier_then_score_did() {
+        for language in [
+            crate::AudioLanguageRank::default(),
+            crate::AudioLanguageRank::for_test(2, 1),
+        ] {
+            let mut files = Vec::new();
+            for (tier, tier_index) in [Some(0), Some(1), Some(3), None].into_iter().enumerate() {
+                for score in [-50, 0, 100, 300] {
+                    for size in [1_000_u64, 5_000] {
+                        for copy in 0..2 {
+                            let facts = IncumbentFacts {
+                                score,
+                                tier_index,
+                                revision: copy,
+                                language,
+                            };
+                            let path =
+                                format!("/library/Seed/t{tier}-s{score}-z{size}-c{copy}.mkv");
+                            files.push((path, facts, size));
+                        }
+                    }
+                }
+            }
+            let mut sorted_new = files
+                .iter()
+                .map(|(path, bar, size)| {
+                    keep_one_rank(&crate::DecisionPipeline::DEFAULT, bar, *size, path)
+                })
+                .collect::<Vec<_>>();
+            sorted_new.sort();
+            let new_order = sorted_new
+                .into_iter()
+                .map(|rank| rank.3)
+                .collect::<Vec<_>>();
+            let mut sorted_old = files
+                .iter()
+                .map(|(path, bar, size)| tier_then_score_rank(bar, *size, path))
+                .collect::<Vec<_>>();
+            sorted_old.sort();
+            let old_order = sorted_old
+                .into_iter()
+                .map(|rank| rank.3)
+                .collect::<Vec<_>>();
+            assert_eq!(new_order, old_order, "{language:?}");
+            // And for every pair, the keeper is the same file.
+            for left in &files {
+                for right in &files {
+                    let pair = [
+                        (left.0.as_str(), left.1, left.2),
+                        (right.0.as_str(), right.1, right.2),
+                    ];
+                    let old = pair
+                        .iter()
+                        .map(|(path, bar, size)| tier_then_score_rank(bar, *size, path))
+                        .min()
+                        .unwrap()
+                        .3;
+                    assert_eq!(keeper(&crate::DecisionPipeline::DEFAULT, &pair), old);
+                }
+            }
         }
     }
 }

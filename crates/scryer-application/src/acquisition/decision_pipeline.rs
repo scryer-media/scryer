@@ -418,8 +418,9 @@ impl ReleaseDecidingStep {
 ///
 /// The one place a property a step reads is declared. Each source has exactly
 /// one builder: [`crate::admission::CandidateFacts::facts`] (a candidate),
-/// [`crate::admission::Incumbent::facts`] and
-/// [`crate::quality::landed_bar_memo::LandedBar::side`] (a file on disk),
+/// [`crate::admission::Incumbent::facts`],
+/// [`crate::quality::landed_bar_memo::LandedBar::side`] and
+/// [`crate::quality::canonical_context::IncumbentFacts::side`] (a file on disk),
 /// [`crate::admission::QueuedRelease::facts`] (a queued release) and
 /// [`SideFacts::of_decision`] (a scored search result). A step that reads a
 /// new property adds a field here and fills it in those builders.
