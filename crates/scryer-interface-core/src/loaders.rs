@@ -647,12 +647,9 @@ pub struct RequestLoaders {
     pub title_for_management: DataLoader<TitleForManagementLoader>,
     pub library: DataLoader<LibraryLoader>,
     pub request_quality_profile_settings: DataLoader<RequestQualityProfileSettingsLoader>,
-<<<<<<< HEAD
     pub default_monitor_type: DataLoader<DefaultMonitorTypeLoader>,
     pub title_quality_profile_id: DataLoader<TitleQualityProfileIdLoader>,
-=======
     pub library_audio_language_defaults: DataLoader<LibraryAudioLanguageDefaultsLoader>,
->>>>>>> release-0.22.3
     pub collection: DataLoader<CollectionLoader>,
     pub episode: DataLoader<EpisodeLoader>,
     pub media_files_for_title: DataLoader<MediaFilesForTitleLoader>,
@@ -702,12 +699,9 @@ impl RequestLoaders {
             title_for_management: dl!(TitleForManagementLoader),
             library: dl!(LibraryLoader),
             request_quality_profile_settings: dl!(RequestQualityProfileSettingsLoader),
-<<<<<<< HEAD
             default_monitor_type: dl!(DefaultMonitorTypeLoader),
             title_quality_profile_id: dl!(TitleQualityProfileIdLoader),
-=======
             library_audio_language_defaults: dl!(LibraryAudioLanguageDefaultsLoader),
->>>>>>> release-0.22.3
             collection: dl!(CollectionLoader),
             episode: dl!(EpisodeLoader),
             media_files_for_title: dl!(MediaFilesForTitleLoader),
