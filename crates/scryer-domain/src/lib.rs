@@ -208,7 +208,6 @@ pub struct Library {
     pub name: String,
     pub slug: String,
     pub is_default: bool,
-    pub enabled: bool,
     pub roots: Vec<LibraryRoot>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

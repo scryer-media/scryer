@@ -2463,7 +2463,6 @@ async fn configure_default_library_root(
                 path: media_root_path.clone(),
                 is_default: true,
             }],
-            None,
         )
         .await
         .expect("configure default library root");

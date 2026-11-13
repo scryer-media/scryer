@@ -151,7 +151,6 @@ test("global search initializes library managers without reading catalog setting
     id: "library-a",
     facet: "SERIES",
     name: "Library A",
-    enabled: true,
     slug: "library-a",
     isDefault: false,
     qualityProfileId: "default",

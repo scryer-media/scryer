@@ -702,17 +702,13 @@ mod tests {
     }
 
     #[test]
-    fn library_and_indexer_policy_migrations_are_registered_for_both_engines() {
+    fn indexer_monthly_quota_migration_is_registered_for_both_engines() {
         let bundle = compile_source_bundle(&source_db_root()).expect("compile migration catalog");
-        for (version, name) in [
-            (331, "0331_smg_title_external_id_kind.sql"),
-            (332, "0332_library_enabled.sql"),
-            (333, "0333_indexer_monthly_quotas.sql"),
-        ] {
+        for (version, name) in [(333, "0333_indexer_monthly_quotas.sql")] {
             let migration = bundle
                 .catalog
                 .find_migration(version)
-                .expect("policy migration and its prerequisite must be registered");
+                .expect("monthly quota migration must be registered");
             for (engine, prefix) in [
                 (EngineScope::Sqlite, "migrations"),
                 (EngineScope::Postgres, "postgres/migrations"),

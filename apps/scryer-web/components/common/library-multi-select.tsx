@@ -7,10 +7,7 @@ import {
 import { localizedFacetLabel } from "@/components/views/overview-localization";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { LibraryRecord } from "@/lib/types";
-import {
-  normalizeLibraryFilterSelection,
-  selectableLibraries,
-} from "@/lib/utils/library-filter";
+import { normalizeLibraryFilterSelection } from "@/lib/utils/library-filter";
 
 const FACET_ORDER: LibraryRecord["facet"][] = ["MOVIE", "SERIES", "ANIME"];
 const MAX_INLINE_LIBRARY_LABELS = 2;
@@ -45,23 +42,18 @@ export function LibraryMultiSelect({
 }: LibraryMultiSelectProps) {
   const t = useTranslate();
 
-  const availableLibraries = React.useMemo(
-    () => selectableLibraries(libraries),
-    [libraries],
-  );
   const normalizedSelectedLibraryIds = React.useMemo(
-    () =>
-      normalizeLibraryFilterSelection(selectedLibraryIds, availableLibraries),
-    [availableLibraries, selectedLibraryIds],
+    () => normalizeLibraryFilterSelection(selectedLibraryIds, libraries),
+    [libraries, selectedLibraryIds],
   );
   const groupedLibraries = React.useMemo(
-    () => groupLibrariesByFacet(availableLibraries),
-    [availableLibraries],
+    () => groupLibrariesByFacet(libraries),
+    [libraries],
   );
   const showFacetGroups = groupedLibraries.length > 1;
   const libraryById = React.useMemo(
-    () => new Map(availableLibraries.map((library) => [library.id, library])),
-    [availableLibraries],
+    () => new Map(libraries.map((library) => [library.id, library])),
+    [libraries],
   );
   const selectedLibraries = React.useMemo(
     () =>
@@ -91,10 +83,10 @@ export function LibraryMultiSelect({
   }, [selectedLibraries, showFacetGroups, t]);
 
   const implicitAllSelected =
-    availableLibraries.length > 0 && normalizedSelectedLibraryIds.length === 0;
+    libraries.length > 0 && normalizedSelectedLibraryIds.length === 0;
   const allLibraryIds = React.useMemo(
-    () => availableLibraries.map((library) => library.id),
-    [availableLibraries],
+    () => libraries.map((library) => library.id),
+    [libraries],
   );
   const effectiveSelectedLibraryIds = implicitAllSelected
     ? allLibraryIds

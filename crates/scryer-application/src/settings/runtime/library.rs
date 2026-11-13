@@ -274,7 +274,6 @@ impl AppUseCase {
                     name: default_library_name(facet).to_string(),
                     slug: scryer_domain::default_library_slug_for_facet(facet).to_string(),
                     is_default: true,
-                    enabled: true,
                     roots: Vec::new(),
                     created_at: now,
                     updated_at: now,
@@ -308,7 +307,6 @@ impl AppUseCase {
                 library.name.clone(),
                 library.slug.clone(),
                 bootstrap_roots,
-                None,
             )
             .await?;
         info!(
@@ -369,13 +367,7 @@ impl AppUseCase {
             .services
             .catalog
             .libraries
-            .update(
-                &library.id,
-                library.name,
-                library.slug,
-                roots,
-                None,
-            )
+            .update(&library.id, library.name, library.slug, roots)
             .await?;
         let canonical_roots = root_folder_entries_from_library_roots(&library.roots);
         self.mirror_default_library_roots_to_legacy_settings(

@@ -142,8 +142,6 @@ pub mod library {
     pub const ROOT_CANNOT_USED: &str = "LIBRARY_ROOT_CANNOT_USED";
     /// Library was not found.
     pub const RESOURCE_NOT_FOUND: &str = "LIBRARY_RESOURCE_NOT_FOUND";
-    /// The library is disabled and cannot be selected as an operation target.
-    pub const DISABLED: &str = "LIBRARY_DISABLED";
     /// Library name is required.
     pub const NAME_REQUIRED: &str = "LIBRARY_NAME_REQUIRED";
     /// Libraries require at least one root folder.
@@ -377,7 +375,6 @@ pub mod library {
         ROOT_ALREADY_ASSIGNED,
         ROOT_CANNOT_USED,
         RESOURCE_NOT_FOUND,
-        DISABLED,
         NAME_REQUIRED,
         ROOT_REQUIRED,
         ROOT_TITLES_BUSY,

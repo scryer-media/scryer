@@ -620,7 +620,6 @@ async fn title_folder_recovery_uses_tracked_folder_in_another_root_of_the_same_l
                     is_default: false,
                 },
             ],
-            None,
         )
         .await
         .unwrap();

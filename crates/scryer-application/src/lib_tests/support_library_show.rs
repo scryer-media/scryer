@@ -46,7 +46,6 @@ pub(super) fn mock_default_library(facet: MediaFacet) -> Library {
         name: format!("Default {}", facet.as_str()),
         slug: scryer_domain::default_library_slug_for_facet(&facet).to_string(),
         is_default: true,
-        enabled: true,
         roots: vec![scryer_domain::LibraryRoot {
             id: scryer_domain::root_folder_id_for_path(&path),
             library_id,
@@ -141,7 +140,6 @@ impl LibraryRepository for MockLibraryRepo {
         name: String,
         slug: String,
         roots: Vec<LibraryRootDraft>,
-        enabled: Option<bool>,
     ) -> AppResult<Library> {
         let mut libraries = self.libraries.lock().await;
         let library = libraries
@@ -169,9 +167,6 @@ impl LibraryRepository for MockLibraryRepo {
         let mut claimed = HashSet::new();
         library.name = name;
         library.slug = slug;
-        if let Some(enabled) = enabled {
-            library.enabled = enabled;
-        }
         library.roots = roots
             .into_iter()
             .map(|root| {

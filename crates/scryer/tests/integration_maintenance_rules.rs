@@ -1687,7 +1687,6 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
             path: root.path().to_string_lossy().into_owned(),
             is_default: true,
         }],
-        None,
     )
     .await
     .expect("configure isolated maintenance root");

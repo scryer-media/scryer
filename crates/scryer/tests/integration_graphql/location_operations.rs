@@ -242,7 +242,6 @@ async fn configure_two_movie_roots(
                     is_default: false,
                 },
             ],
-            None,
         )
         .await
         .expect("configure two movie roots");
@@ -1261,7 +1260,6 @@ async fn create_second_movie_library(
                 slug: "archive-movies".to_string(),
                 facet: MediaFacet::Movie,
                 is_default: false,
-                enabled: true,
                 roots: Vec::new(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),

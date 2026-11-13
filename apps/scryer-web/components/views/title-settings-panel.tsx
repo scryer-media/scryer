@@ -115,17 +115,15 @@ export function TitleSettingsPanel({
   const moveLibraries = React.useMemo(
     () =>
       libraries.length > 0
-        ? libraries
-            .filter((entry) => entry.enabled !== false)
-            .map((entry) => ({
-              id: entry.id,
-              name:
-                entry.name?.trim() ||
-                (entry.id === title.libraryId
-                  ? title.libraryName?.trim() || entry.id
-                  : entry.id),
-              roots: entry.roots,
-            }))
+        ? libraries.map((entry) => ({
+            id: entry.id,
+            name:
+              entry.name?.trim() ||
+              (entry.id === title.libraryId
+                ? title.libraryName?.trim() || entry.id
+                : entry.id),
+            roots: entry.roots,
+          }))
         : [
             {
               id: title.libraryId,

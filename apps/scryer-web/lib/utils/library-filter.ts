@@ -1,45 +1,10 @@
-import type { Facet, LibraryRecord } from "@/lib/types";
-import { FACET_REGISTRY } from "../facets/registry.ts";
-
-type LibrariesByFacet = Record<Facet, LibraryRecord[]>;
-type NavigableLibraryAccess = {
-  viewable: LibrariesByFacet;
-  requestable: LibrariesByFacet;
-  manageable: LibrariesByFacet;
-};
-
-export function selectableLibraries(
-  libraries: LibraryRecord[],
-): LibraryRecord[] {
-  return libraries.filter((library) => library.enabled !== false);
-}
-
-export function defaultLibrariesInFacetOrder(
-  libraries: LibraryRecord[],
-): LibraryRecord[] {
-  return FACET_REGISTRY.flatMap((facet) =>
-    libraries.filter(
-      (library) => library.isDefault && library.facet === facet.id,
-    ),
-  );
-}
-
-export function facetHasEnabledLibrary(
-  facet: Facet,
-  access: NavigableLibraryAccess,
-): boolean {
-  return [access.viewable, access.requestable, access.manageable].some(
-    (librariesByFacet) =>
-      librariesByFacet[facet].some((library) => library.enabled !== false),
-  );
-}
+import type { LibraryRecord } from "@/lib/types";
 
 export function normalizeLibraryFilterSelection(
   selectedLibraryIds: string[],
   libraries: LibraryRecord[],
 ): string[] {
-  const selectable = selectableLibraries(libraries);
-  if (selectable.length === 0) {
+  if (libraries.length === 0) {
     return [];
   }
 
@@ -48,11 +13,11 @@ export function normalizeLibraryFilterSelection(
       .map((libraryId) => libraryId.trim())
       .filter((libraryId) => libraryId.length > 0),
   );
-  const normalized = selectable
+  const normalized = libraries
     .map((library) => library.id)
     .filter((libraryId) => selectedSet.has(libraryId));
 
-  return normalized.length === 0 || normalized.length === selectable.length
+  return normalized.length === 0 || normalized.length === libraries.length
     ? []
     : normalized;
 }

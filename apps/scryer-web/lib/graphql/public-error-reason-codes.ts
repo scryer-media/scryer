@@ -7,10 +7,7 @@ const GROUPS: readonly {
 }[] = [
   {
     codes: ["VALIDATION_ERROR"],
-    reasons: [
-      "LIBRARY_DISABLED",
-      "LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED",
-    ],
+    reasons: ["LIBRARY_RENAME_ADDITIONAL_FOLDER_MOVE_BLOCKED"],
   },
   {
     codes: ["VALIDATION_ERROR"],

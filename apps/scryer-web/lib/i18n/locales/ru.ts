@@ -51,8 +51,6 @@ const ru: LocaleDictionary = {
     "Не удалось скопировать. Текст выделен; нажмите Ctrl+C или ⌘C.",
   "status.copyFailed":
     "Не удалось скопировать: браузер запретил доступ к буферу обмена.",
-  "error.reason.LIBRARY_DISABLED":
-    "Эта библиотека отключена. Включите её, прежде чем выбирать её для добавления тайтлов или запускать сканирование.",
   "error.reason.MEDIA_UNVERIFIED_REPLACEMENT":
     "Не удалось проверить медиафайл, поэтому он не может заменить существующий файл библиотеки.",
   "error.reason.MEDIA_REFERENCES_REQUIRE_REVIEW":
@@ -743,17 +741,6 @@ const ru: LocaleDictionary = {
   "settings.librarySaveAndScanButton": "Сохранить и сканировать",
   "settings.librarySaveOnlyButton": "Только сохранить",
   "settings.libraryDeleteButton": "Удалить библиотеку",
-  "settings.libraryDisableButton": "Отключить",
-  "settings.libraryDisableConfirmTitle": "Отключить библиотеку {{name}}?",
-  "settings.libraryDisableConfirm":
-    "Библиотека {{name}} исчезнет из раздела «Каталоги» и станет недоступна для добавления тайтлов. Запланированные сканирования и обновления остановятся, а текущее сканирование будет отменено. Существующие тайтлы, файлы, папки и настройки сохранятся. Включить библиотеку снова можно в разделе «Настройки» > «Общие» > «Библиотеки по умолчанию».",
-  "settings.defaultLibrariesTitle": "Библиотеки по умолчанию",
-  "settings.defaultLibrariesHelp":
-    "Библиотеки по умолчанию нельзя удалить. При отключении библиотека исчезает из раздела «Каталоги», и через неё нельзя будет добавлять или запрашивать тайтлы. Запланированные сканирования и обновления остановятся, а текущие сканирования будут отменены. Существующие тайтлы, файлы, папки и настройки сохранятся. Включённые библиотеки настраиваются в разделе «Каталоги».",
-  "settings.defaultLibrariesEmpty": "Нет доступных библиотек по умолчанию.",
-  "settings.defaultLibrariesLoadFailed":
-    "Не удалось загрузить библиотеки по умолчанию.",
-  "settings.defaultLibraryToggleLabel": "Библиотека {{name}} включена",
   "settings.libraryDeleteConfirm":
     "Удалить библиотеку {{name}}? Медиафайлы на диске удалены не будут.",
   "settings.libraryRemoveRootsTitle": "Удаление корневых папок",
@@ -771,8 +758,6 @@ const ru: LocaleDictionary = {
   "settings.librarySaved": "Библиотека сохранена.",
   "settings.libraryDeleted": "Библиотека удалена.",
   "settings.librarySaveFailed": "Не удалось сохранить библиотеку.",
-  "settings.libraryEnabled": "Библиотека включена.",
-  "settings.libraryDisabled": "Библиотека отключена.",
   "settings.libraryDeleteFailed": "Не удалось удалить библиотеку.",
   "settings.libraryDeleteQueued":
     "Библиотека удаляется. Она останется в списке, пока не будут удалены её материалы.",

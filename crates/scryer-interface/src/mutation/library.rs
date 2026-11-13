@@ -165,9 +165,7 @@ impl LibraryMutations {
     async fn update_library(
         &self,
         ctx: &Context<'_>,
-        #[graphql(
-            desc = "Library identity and optional replacement name, enabled state, roots, or settings."
-        )]
+        #[graphql(desc = "Library identity and optional replacement name, roots, or settings.")]
         input: UpdateLibraryInput,
     ) -> GqlResult<LibraryPayload> {
         let app = app_from_ctx(ctx)?;
@@ -186,16 +184,13 @@ impl LibraryMutations {
             .removed_root_ids
             .map(|ids| ids.into_iter().map(|id| id.to_string()).collect());
         let updated = app
-            .update_library_with_enabled_outcome(
+            .update_library_with_outcome(
                 &actor,
                 input.library_id.as_ref(),
-                scryer_application::LibraryUpdateDraft {
-                    name: input.name,
-                    roots,
-                    removed_root_ids,
-                    enabled: input.enabled,
-                    settings: input.settings.map(library_settings_draft).transpose()?,
-                },
+                input.name,
+                roots,
+                removed_root_ids,
+                input.settings.map(library_settings_draft).transpose()?,
             )
             .await
             .map_err(to_gql_error)?;

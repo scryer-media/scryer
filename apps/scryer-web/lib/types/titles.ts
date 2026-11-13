@@ -309,7 +309,6 @@ export type LibraryRecord = {
   name: string;
   slug: string;
   isDefault: boolean;
-  enabled?: boolean;
   isBootstrapDefaultRootSet?: boolean;
   roots: LibraryRootRecord[];
   defaultMonitorType?: string | null;

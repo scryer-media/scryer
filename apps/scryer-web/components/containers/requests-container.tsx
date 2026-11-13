@@ -37,10 +37,7 @@ import {
   hasAnyLibraryPermission,
   LIBRARY_PERMISSIONS,
 } from "@/lib/utils/permissions";
-import {
-  normalizeLibraryFilterSelection,
-  selectableLibraries,
-} from "@/lib/utils/library-filter";
+import { normalizeLibraryFilterSelection } from "@/lib/utils/library-filter";
 import {
   requesterFilterOptions,
   type RequesterFilterOption,
@@ -395,14 +392,12 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
             return;
           }
 
-          nextAdminLibraries = selectableLibraries(
-            (adminLibrariesResult.data?.libraries ?? []) as LibraryRecord[],
-          );
+          nextAdminLibraries = (adminLibrariesResult.data?.libraries ??
+            []) as LibraryRecord[];
           // A title manager files held requests without the Request grant, so
           // their own requests live in the libraries they manage too.
-          const requestLibraries = selectableLibraries(
-            (requesterLibrariesResult.data?.libraries ?? []) as LibraryRecord[],
-          );
+          const requestLibraries = (requesterLibrariesResult.data?.libraries ??
+            []) as LibraryRecord[];
           const requestLibraryIds = new Set(
             requestLibraries.map((library) => library.id),
           );

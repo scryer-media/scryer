@@ -774,7 +774,6 @@ const LIBRARY_FIELDS = `
     name
     slug
     isDefault
-    enabled
     isBootstrapDefaultRootSet
     roots {
       id

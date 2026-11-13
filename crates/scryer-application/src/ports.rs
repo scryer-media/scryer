@@ -3447,35 +3447,13 @@ pub trait LibraryRepository: Send + Sync {
     async fn get_by_id(&self, id: &str) -> AppResult<Option<Library>>;
     async fn default_for_facet(&self, facet: MediaFacet) -> AppResult<Option<Library>>;
     async fn create(&self, library: Library, roots: Vec<LibraryRootDraft>) -> AppResult<Library>;
-    /// Replace a library's name and roots; `enabled` is changed only when
-    /// explicitly provided, so unrelated stale updates preserve its stored value.
     async fn update(
         &self,
         library_id: &str,
         name: String,
         slug: String,
         roots: Vec<LibraryRootDraft>,
-        enabled: Option<bool>,
     ) -> AppResult<Library>;
-    async fn set_enabled(&self, library_id: &str, enabled: bool) -> AppResult<Library> {
-        let library = self.get_by_id(library_id).await?.ok_or_else(|| {
-            AppError::not_found_reason(
-                crate::error_reasons::library::RESOURCE_NOT_FOUND,
-                format!("library {library_id}"),
-            )
-        })?;
-        let roots = library
-            .roots
-            .iter()
-            .map(|root| LibraryRootDraft {
-                id: Some(root.id.clone()),
-                path: root.path.clone(),
-                is_default: root.is_default,
-            })
-            .collect();
-        self.update(library_id, library.name, library.slug, roots, Some(enabled))
-            .await
-    }
     /// Replace one root's configured path, keeping its identity (FR-021,
     /// FR-078). Returns the library as it stands afterwards.
     ///

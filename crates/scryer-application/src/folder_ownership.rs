@@ -1560,7 +1560,6 @@ mod tests {
                     path: path_to_stored_string(root),
                     is_default: true,
                 }],
-                None,
             )
             .await
             .unwrap();

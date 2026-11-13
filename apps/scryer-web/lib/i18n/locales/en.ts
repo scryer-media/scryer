@@ -2454,8 +2454,6 @@ const en: LocaleDictionary = {
   "error.reason.MEDIA_IMAGE_SOURCE_REJECTED":
     "The image source failed public HTTP URL validation.",
   "error.reason.MEDIA_LIBRARY_NOT_FOUND": "The library could not be found.",
-  "error.reason.LIBRARY_DISABLED":
-    "This library is disabled. Enable it before using it as a title target or starting a scan.",
   "error.reason.MEDIA_LIBRARY_PATH_NOT_DIRECTORY":
     "Library path must be a directory.",
   "error.reason.MEDIA_LIBRARY_PATH_UNAVAILABLE": "Library path error.",
@@ -5238,18 +5236,6 @@ const en: LocaleDictionary = {
   "settings.librarySaved": "Library saved.",
   "settings.libraryDeleted": "Library deleted.",
   "settings.librarySaveFailed": "Failed to save library.",
-  "settings.libraryEnabled": "Library enabled.",
-  "settings.libraryDisabled": "Library disabled.",
-  "settings.libraryDisableButton": "Disable",
-  "settings.libraryDisableConfirmTitle": "Disable {{name}}?",
-  "settings.libraryDisableConfirm":
-    "{{name}} will disappear from Catalogs and be unavailable as a title target. Scheduled scans and refreshes will stop, and any active scan will be canceled. Existing titles, files, roots, and settings are kept. To re-enable it, go to Settings > General > Default libraries.",
-  "settings.defaultLibrariesTitle": "Default libraries",
-  "settings.defaultLibrariesHelp":
-    "Default libraries cannot be deleted. Disabling one removes it from Catalogs and prevents adding or requesting titles from it. Scheduled scans and refreshes stop, and active scans are canceled. Existing titles, files, roots, and settings are kept. Enabled libraries can be configured under Catalogs.",
-  "settings.defaultLibrariesEmpty": "No default libraries are available.",
-  "settings.defaultLibrariesLoadFailed": "Failed to load default libraries.",
-  "settings.defaultLibraryToggleLabel": "{{name}} library enabled",
   "settings.libraryDeleteFailed": "Failed to delete library.",
   "settings.libraryDeleteQueued":
     "Deleting the library. It stays listed until its titles are removed.",

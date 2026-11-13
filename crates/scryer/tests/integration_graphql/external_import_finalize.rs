@@ -84,7 +84,6 @@ async fn configure_movie_library(ctx: &TestContext) -> String {
                 path: SCRYER_ROOT.to_string(),
                 is_default: true,
             }],
-            None,
         )
         .await
         .expect("configure default movie library root");
