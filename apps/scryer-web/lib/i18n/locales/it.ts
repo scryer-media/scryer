@@ -3182,6 +3182,7 @@ const it: LocaleDictionary = {
   "indexerSearch.facet.source": "Sorgente",
   "indexerSearch.facet.videoCodec": "Codec video",
   "indexerSearch.facet.audioCodec": "Codec audio",
+  "indexerSearch.facet.audioChannels": "Canali audio",
   "indexerSearch.facet.audio": "Audio e HDR",
   "indexerSearch.facet.flags": "Contrassegni",
   "indexerSearch.facet.indexer": "Indexer",

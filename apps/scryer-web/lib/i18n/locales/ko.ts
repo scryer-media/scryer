@@ -3024,6 +3024,7 @@ const ko: LocaleDictionary = {
   "indexerSearch.facet.source": "소스",
   "indexerSearch.facet.videoCodec": "비디오 코덱",
   "indexerSearch.facet.audioCodec": "오디오 코덱",
+  "indexerSearch.facet.audioChannels": "오디오 채널",
   "indexerSearch.facet.audio": "오디오 및 HDR",
   "indexerSearch.facet.flags": "플래그",
   "indexerSearch.facet.indexer": "인덱서",

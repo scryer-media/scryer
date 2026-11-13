@@ -23108,6 +23108,14 @@ type ParsedReleasePayload {
 	"""
 	audio: String
 	"""
+	Audio channel layout such as `5.1`, or null when not detected.
+	"""
+	audioChannels: String
+	"""
+	Audio languages named in the release title as ISO 639-2 codes, in title order.
+	"""
+	audioLanguages: [String!]!
+	"""
 	Whether dual audio was detected.
 	"""
 	isDualAudio: Boolean!

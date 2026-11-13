@@ -4,7 +4,10 @@
 // every one of them is a plain function over `Release[]` that a test can drive.
 import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
 import type { Release } from "@/lib/types";
-import { formatSearchLanguageLabels } from "../constants/audio-languages.ts";
+import {
+  canonicalAudioLanguageCode,
+  formatSearchLanguageLabels,
+} from "../constants/audio-languages.ts";
 import { indexerSearchResultRowId } from "./dom-ids.ts";
 
 /** An indexer that answered slower than this reads as "slow" (D15). */
@@ -19,6 +22,7 @@ export type IndexerSearchFacetGroupKey =
   | "source"
   | "videoCodec"
   | "audioCodec"
+  | "audioChannels"
   | "audio"
   | "language"
   | "flags"
@@ -144,17 +148,29 @@ export function releaseFacetKeys(release: Release): string[] {
   if (audioCodec) {
     keys.push(facetKey("audioCodec", audioCodec));
   }
+  const audioChannels = parsed?.audioChannels?.trim();
+  if (audioChannels) {
+    keys.push(facetKey("audioChannels", audioChannels));
+  }
   if (parsed?.isAtmos) keys.push(facetKey("audio", "atmos"));
   if (parsed?.isDolbyVision) keys.push(facetKey("audio", "dolbyVision"));
   if (parsed?.detectedHdr) keys.push(facetKey("audio", "hdr"));
-  // The parsed release carries no languages; these are the audio languages
-  // the indexer reported, one key each.
-  const languages = new Set<string>();
-  for (const language of release.languages ?? []) {
+  // One key per audio language, from what the indexer reported and what the
+  // title names together. Both spell the same language differently ("ger",
+  // "deu", "German"), so a known language keys on its stored code and counts
+  // once per release.
+  const languages = new Map<string, string>();
+  for (const language of [
+    ...(release.languages ?? []),
+    ...(parsed?.audioLanguages ?? []),
+  ]) {
     const value = language.trim();
-    if (value) languages.add(value);
+    if (!value) continue;
+    const code = canonicalAudioLanguageCode(value) ?? value;
+    const identity = code.toLowerCase();
+    if (!languages.has(identity)) languages.set(identity, code);
   }
-  for (const language of languages) {
+  for (const language of languages.values()) {
     keys.push(facetKey("language", language));
   }
   if (release.freeleech === true) keys.push(facetKey("flags", "freeleech"));
@@ -182,6 +198,7 @@ const FACET_GROUPS: { key: IndexerSearchFacetGroupKey; labelKey: string }[] = [
   { key: "source", labelKey: "indexerSearch.facet.source" },
   { key: "videoCodec", labelKey: "indexerSearch.facet.videoCodec" },
   { key: "audioCodec", labelKey: "indexerSearch.facet.audioCodec" },
+  { key: "audioChannels", labelKey: "indexerSearch.facet.audioChannels" },
   { key: "audio", labelKey: "indexerSearch.facet.audio" },
   { key: "language", labelKey: "label.language" },
   { key: "flags", labelKey: "indexerSearch.facet.flags" },
@@ -303,6 +320,20 @@ export function buildIndexerSearchFacets(
           RESOLUTION_ORDER.indexOf(left.value) -
           RESOLUTION_ORDER.indexOf(right.value)
         );
+      }
+      if (groupKey === "audioChannels") {
+        // Widest layout first; a layout the parser spells otherwise sorts last.
+        const leftChannels = Number.parseFloat(left.value);
+        const rightChannels = Number.parseFloat(right.value);
+        const leftKnown = Number.isFinite(leftChannels);
+        const rightKnown = Number.isFinite(rightChannels);
+        if (leftKnown && rightKnown && leftChannels !== rightChannels) {
+          return rightChannels - leftChannels;
+        }
+        if (leftKnown !== rightKnown) {
+          return leftKnown ? -1 : 1;
+        }
+        return left.value.localeCompare(right.value);
       }
       const leftFull = fullCounts.get(left.key) ?? 0;
       const rightFull = fullCounts.get(right.key) ?? 0;

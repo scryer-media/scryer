@@ -2848,6 +2848,7 @@ const zh_CN: LocaleDictionary = {
   "indexerSearch.facet.source": "来源",
   "indexerSearch.facet.videoCodec": "视频编码",
   "indexerSearch.facet.audioCodec": "音频编码",
+  "indexerSearch.facet.audioChannels": "音频声道",
   "indexerSearch.facet.audio": "音频与 HDR",
   "indexerSearch.facet.flags": "标记",
   "indexerSearch.facet.indexer": "索引器",

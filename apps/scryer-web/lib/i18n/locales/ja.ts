@@ -3085,6 +3085,7 @@ const ja: LocaleDictionary = {
   "indexerSearch.facet.source": "ソース",
   "indexerSearch.facet.videoCodec": "映像コーデック",
   "indexerSearch.facet.audioCodec": "音声コーデック",
+  "indexerSearch.facet.audioChannels": "音声チャンネル",
   "indexerSearch.facet.audio": "音声・HDR",
   "indexerSearch.facet.flags": "フラグ",
   "indexerSearch.facet.indexer": "インデクサー",

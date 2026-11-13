@@ -5834,6 +5834,7 @@ const ru: LocaleDictionary = {
   "indexerSearch.facet.source": "Источник",
   "indexerSearch.facet.videoCodec": "Видеокодек",
   "indexerSearch.facet.audioCodec": "Аудиокодек",
+  "indexerSearch.facet.audioChannels": "Аудиоканалы",
   "indexerSearch.facet.audio": "Звук и HDR",
   "indexerSearch.facet.flags": "Метки",
   "indexerSearch.facet.indexer": "Индексатор",

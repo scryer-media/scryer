@@ -11108,6 +11108,7 @@ const en: LocaleDictionary = {
   "indexerSearch.facet.source": "Source",
   "indexerSearch.facet.videoCodec": "Video codec",
   "indexerSearch.facet.audioCodec": "Audio codec",
+  "indexerSearch.facet.audioChannels": "Audio channels",
   "indexerSearch.facet.audio": "Audio & HDR",
   "indexerSearch.facet.flags": "Flags",
   "indexerSearch.facet.indexer": "Indexer",

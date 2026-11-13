@@ -19,7 +19,14 @@ import {
 } from "@/components/views/settings/settings-indexer-search-section";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { indexersQuery } from "@/lib/graphql/queries";
+import {
+  indexerSearchContinueInteractiveReleaseSearchMutation,
+  indexerSearchStartInteractiveReleaseSearchMutation,
+} from "@/lib/graphql/mutations";
+import {
+  indexerSearchInteractiveReleaseSearchQuery,
+  indexersQuery,
+} from "@/lib/graphql/queries";
 import {
   isInteractiveReleaseSearchLifecycleError,
   runIterativeReleaseSearch,
@@ -61,6 +68,13 @@ import {
 
 /** Stable identity for the closed grab dialog, so it never re-renders on it. */
 const NO_GRAB_TARGETS: Release[] = [];
+
+/** The refine rail reads parsed facts title searches do not select. */
+const INDEXER_SEARCH_DOCUMENTS = {
+  start: indexerSearchStartInteractiveReleaseSearchMutation,
+  continue: indexerSearchContinueInteractiveReleaseSearchMutation,
+  poll: indexerSearchInteractiveReleaseSearchQuery,
+};
 // Indexer plugins add provider types, not indexers, so this pane has nothing to
 // reload after an install.
 const refreshNoProviderOptions = async () => {};
@@ -319,6 +333,7 @@ export function SettingsIndexerSearchContainer() {
           {
             signal: controller.signal,
             after: nextPage,
+            documents: INDEXER_SEARCH_DOCUMENTS,
             onError: () => {
               if (
                 !controller.signal.aborted &&

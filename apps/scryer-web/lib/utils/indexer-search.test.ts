@@ -96,6 +96,8 @@ test("facet keys cover every rail group", () => {
         source: "BluRay",
         videoCodec: "x265",
         audio: "TrueHD",
+        audioChannels: " 7.1 ",
+        audioLanguages: ["deu", "jpn"],
         isRemux: true,
         isAtmos: true,
         isDolbyVision: true,
@@ -109,12 +111,14 @@ test("facet keys cover every rail group", () => {
     "audio:atmos",
     "audio:dolbyVision",
     "audio:hdr",
+    "audioChannels:7.1",
     "audioCodec:TrueHD",
     "flags:freeleech",
     "flags:proper",
     "indexer:abNZB",
+    "language:deu",
     "language:eng",
-    "language:ger",
+    "language:jpn",
     "protocol:torrent",
     "resolution:2160p",
     "source:REMUX",
@@ -134,6 +138,7 @@ test("rail groups follow the fixed order and languages read as names", () => {
         source: "WEB-DL",
         videoCodec: "x265",
         audio: "DDP",
+        audioChannels: "5.1",
         isAtmos: true,
       }),
     }),
@@ -147,6 +152,7 @@ test("rail groups follow the fixed order and languages read as names", () => {
       "source",
       "videoCodec",
       "audioCodec",
+      "audioChannels",
       "audio",
       "language",
       "flags",
@@ -158,7 +164,7 @@ test("rail groups follow the fixed order and languages read as names", () => {
     language?.items.map((item) => [item.value, item.label]),
     [
       ["eng", "English"],
-      ["fre", "French"],
+      ["fra", "French"],
     ],
   );
 });
@@ -372,17 +378,140 @@ test("a release with several languages counts under each one", () => {
   ];
   assert.deepEqual(facetCounts(buildIndexerSearchFacets(releases), "language"), [
     ["eng", 2],
-    ["ger", 1],
+    ["deu", 1],
   ]);
 
   const filtered = filterIndexerSearchReleases(
     releases,
-    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["language:ger"] },
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["language:deu"] },
     NOW,
   );
   assert.deepEqual(
     filtered.map((entry) => entry.title),
     ["Sample.Multi.1080p"],
+  );
+});
+
+test("audio channels list widest first as the parser reports them", () => {
+  const releases = [
+    release({ title: "Sample.Stereo", parsedRelease: parsed({ audioChannels: "2.0" }) }),
+    release({ title: "Sample.Wide", parsedRelease: parsed({ audioChannels: "7.1" }) }),
+    release({ title: "Sample.Surround.A", parsedRelease: parsed({ audioChannels: "5.1" }) }),
+    release({ title: "Sample.Surround.B", parsedRelease: parsed({ audioChannels: "5.1" }) }),
+    release({ title: "Sample.Mono", parsedRelease: parsed({ audioChannels: "1.0" }) }),
+    release({ title: "Sample.Undetected", parsedRelease: parsed({}) }),
+  ];
+  assert.deepEqual(facetCounts(buildIndexerSearchFacets(releases), "audioChannels"), [
+    ["7.1", 1],
+    ["5.1", 2],
+    ["2.0", 1],
+    ["1.0", 1],
+  ]);
+});
+
+test("audio channel selections narrow other groups and are narrowed by them", () => {
+  const releases = [
+    release({
+      title: "Sample.Alpha.2160p.7.1",
+      parsedRelease: parsed({ quality: "2160p", audioChannels: "7.1" }),
+    }),
+    release({
+      title: "Sample.Beta.2160p.5.1",
+      parsedRelease: parsed({ quality: "2160p", audioChannels: "5.1" }),
+    }),
+    release({
+      title: "Sample.Gamma.1080p.5.1",
+      parsedRelease: parsed({ quality: "1080p", audioChannels: "5.1" }),
+    }),
+    release({
+      title: "Sample.Delta.1080p.2.0",
+      parsedRelease: parsed({ quality: "1080p", audioChannels: "2.0" }),
+    }),
+  ];
+
+  const byChannels = buildIndexerSearchFacets(
+    releases,
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["audioChannels:5.1"] },
+    NOW,
+  );
+  assert.deepEqual(facetCounts(byChannels, "resolution"), [
+    ["2160p", 1],
+    ["1080p", 1],
+  ]);
+  // Its own selection leaves the channel counts at the full set.
+  assert.deepEqual(facetCounts(byChannels, "audioChannels"), [
+    ["7.1", 1],
+    ["5.1", 2],
+    ["2.0", 1],
+  ]);
+
+  const byResolution = buildIndexerSearchFacets(
+    releases,
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["resolution:1080p"] },
+    NOW,
+  );
+  assert.deepEqual(facetCounts(byResolution, "audioChannels"), [
+    ["7.1", 0],
+    ["5.1", 1],
+    ["2.0", 1],
+  ]);
+
+  const filtered = filterIndexerSearchReleases(
+    releases,
+    {
+      ...EMPTY_INDEXER_SEARCH_FILTERS,
+      facets: ["audioChannels:5.1", "audioChannels:2.0", "resolution:1080p"],
+    },
+    NOW,
+  );
+  assert.deepEqual(
+    filtered.map((entry) => entry.title),
+    ["Sample.Gamma.1080p.5.1", "Sample.Delta.1080p.2.0"],
+  );
+});
+
+test("languages join indexer reports and the parsed title, once per release", () => {
+  const releases = [
+    // The indexer and the title name the same languages in different spellings.
+    release({
+      title: "Sample.Dual.1080p",
+      languages: ["English", "ger"],
+      parsedRelease: parsed({ audioLanguages: ["eng", "deu"] }),
+    }),
+    // Only the title names a language.
+    release({
+      title: "Sample.Titled.1080p",
+      parsedRelease: parsed({ audioLanguages: ["jpn"] }),
+    }),
+    // Only the indexer reports one.
+    release({ title: "Sample.Reported.1080p", languages: ["eng"] }),
+  ];
+
+  const groups = buildIndexerSearchFacets(releases);
+  assert.deepEqual(facetCounts(groups, "language"), [
+    ["eng", 2],
+    ["deu", 1],
+    ["jpn", 1],
+  ]);
+  assert.deepEqual(
+    groups
+      .find((group) => group.key === "language")
+      ?.items.map((item) => item.label),
+    ["English", "German", "Japanese"],
+  );
+  assert.deepEqual(
+    releaseFacetKeys(releases[0]).filter((key) => key.startsWith("language:")),
+    ["language:eng", "language:deu"],
+  );
+
+  const filtered = filterIndexerSearchReleases(
+    releases,
+    { ...EMPTY_INDEXER_SEARCH_FILTERS, facets: ["language:jpn"] },
+    NOW,
+  );
+  assert.deepEqual(
+    filtered.map((entry) => entry.title),
+    ["Sample.Titled.1080p"],
   );
 });
 

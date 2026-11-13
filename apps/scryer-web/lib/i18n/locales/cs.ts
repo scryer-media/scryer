@@ -6358,6 +6358,7 @@ const cs: LocaleDictionary = {
   "indexerSearch.facet.source": "Zdroj",
   "indexerSearch.facet.videoCodec": "Video kodek",
   "indexerSearch.facet.audioCodec": "Zvukový kodek",
+  "indexerSearch.facet.audioChannels": "Zvukové kanály",
   "indexerSearch.facet.audio": "Zvuk a HDR",
   "indexerSearch.facet.flags": "Příznaky",
   "indexerSearch.facet.indexer": "Indexer",
