@@ -3445,6 +3445,8 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _requested_quality_profile_name: String,
         _requested_monitor_type: Option<String>,
         _requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        _requested_required_audio_languages: Option<Vec<String>>,
+        _requested_preferred_audio_languages: Option<Vec<String>>,
         _requested_lease_days: Option<i64>,
         _updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {

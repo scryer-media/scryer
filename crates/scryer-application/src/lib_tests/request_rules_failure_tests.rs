@@ -244,6 +244,8 @@ approve if {
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
                 requested_lease_days: Some(Some(7)),
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await

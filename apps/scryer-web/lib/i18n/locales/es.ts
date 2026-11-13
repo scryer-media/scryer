@@ -1322,6 +1322,18 @@ const es: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} monitorizados",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Descargar último",
+  "search.addConfigRequiredAudio": "Idioma de audio requerido",
+  "search.addConfigPreferredAudio": "Idioma de audio preferido",
+  "search.addConfigAudioChoose": "Elegir idiomas",
+  "search.addConfigAudioRequireNone": "No requerir ninguno",
+  "title.preferredAudioLanguages": "Idiomas de audio preferidos",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer no reconoce ese idioma de audio.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer no reconoce el idioma de audio de una ruta.",
+  "requests.requestedAudioLanguages": "Idiomas de audio solicitados",
+  "requests.requestedRequiredAudio": "Requeridos: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferidos: {{languages}}",
   "title.requiredAudioLanguages": "Idiomas de audio requeridos",
   "title.originalAudioLanguagePerTitle": "Idioma original (por título)",
   "title.requiredAudioLanguagesFacetInfo":

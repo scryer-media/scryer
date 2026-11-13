@@ -1684,6 +1684,18 @@ const nl: LocaleDictionary = {
   "title.monitoredSection": "Gemonitorde {{facet}}",
   "title.searchReleasesAction": "Releases zoeken",
   "title.queueLatest": "Nieuwste in wachtrij",
+  "search.addConfigRequiredAudio": "Vereiste audiotaal",
+  "search.addConfigPreferredAudio": "Voorkeursaudiotaal",
+  "search.addConfigAudioChoose": "Talen kiezen",
+  "search.addConfigAudioRequireNone": "Geen vereisen",
+  "title.preferredAudioLanguages": "Voorkeursaudiotalen",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer herkent die audiotaal niet.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer herkent de audiotaal van een route niet.",
+  "requests.requestedAudioLanguages": "Aangevraagde audiotalen",
+  "requests.requestedRequiredAudio": "Vereist: {{languages}}",
+  "requests.requestedPreferredAudio": "Voorkeur: {{languages}}",
   "title.requiredAudioLanguages": "Vereiste audiotalen",
   "title.originalAudioLanguagePerTitle": "Oorspronkelijke taal (per titel)",
   "title.requiredAudioLanguagesFacetInfo":

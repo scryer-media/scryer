@@ -209,6 +209,13 @@ pub struct RequestDoc {
     /// has to say `not input.request.lease_forever` first.
     pub lease_forever: bool,
     pub lease_days: Option<i64>,
+    /// Audio languages the requester said the title must carry, normalized as
+    /// stored on the request. `null` means the requester left it to the
+    /// library; an empty list means they explicitly asked for no requirement.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Audio languages the requester prefers, in order, normalized as stored on
+    /// the request. `null` means the requester left it to the library.
+    pub preferred_audio_languages: Option<Vec<String>>,
     /// The list that submitted the request. Absent, not null, for a manual
     /// request, and for a list request whose list could not be read.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -773,6 +780,8 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             monitor_selection_season_count: Some(2),
             lease_forever: false,
             lease_days: Some(14),
+            required_audio_languages: None,
+            preferred_audio_languages: None,
             list: Some(RequestListDoc {
                 subscription_id: "subscription-1".to_string(),
                 name: Some("Fixture Picks".to_string()),

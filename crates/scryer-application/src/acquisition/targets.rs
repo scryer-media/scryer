@@ -1189,9 +1189,9 @@ impl AppUseCase {
         let memo = &self.runtime.acquisition.landed_bar_memo;
         let full_pass = title_id.is_none().then(|| memo.begin_pass());
 
-        // No profile asks the score question and no library or facet sets
-        // audio language preferences: nothing to load or score. This is every
-        // install that has set neither.
+        // No profile asks the score question and no title, library or facet
+        // sets audio language preferences: nothing to load or score. This is
+        // every install that has set none of them.
         let profile_settings = self.load_quality_profile_settings().await?;
         let default_profile = crate::builtin_default_quality_profile();
         let any_cutoff_score = profile_settings
@@ -1202,6 +1202,13 @@ impl AppUseCase {
                 profile.criteria.allow_upgrades && profile.criteria.cutoff_score.is_some()
             });
         let libraries = self.services.catalog.libraries.list(None).await?;
+        let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
+        let any_title_preferences = self.any_title_preferred_audio_override().await?;
+        // Without a cutoff score and without library or facet preferences,
+        // only titles holding their own preferred languages can be targets:
+        // load just those. An override left by a deleted title names no title
+        // and costs nothing.
+        let mut known_title_preferences = None;
         if !any_cutoff_score {
             let mut scopes: Vec<&str> = libraries
                 .iter()
@@ -1214,17 +1221,41 @@ impl AppUseCase {
                 .await?
                 .is_empty()
             {
-                if let Some(pass) = full_pass {
-                    memo.finish_pass(pass);
+                let overrides = if any_title_preferences {
+                    self.list_title_preferred_audio_overrides().await?
+                } else {
+                    Some(HashMap::new())
+                };
+                match overrides {
+                    Some(overrides) if overrides.is_empty() => {
+                        if let Some(pass) = full_pass {
+                            memo.finish_pass(pass);
+                        }
+                        return Ok(Vec::new());
+                    }
+                    Some(overrides) => known_title_preferences = Some(overrides),
+                    // The store cannot list them: take the library-wide path.
+                    None => {}
                 }
-                return Ok(Vec::new());
             }
         }
 
-        let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
-        let titles = self
-            .titles_with_profiles_for_search(None, &library_ids, title_id, respect_title_monitoring)
-            .await?;
+        let titles = match &known_title_preferences {
+            Some(overrides) if title_id.is_none() => {
+                let ids: Vec<String> = overrides.keys().cloned().collect();
+                self.titles_with_profiles_for_ids(&ids, &library_ids)
+                    .await?
+            }
+            _ => {
+                self.titles_with_profiles_for_search(
+                    None,
+                    &library_ids,
+                    title_id,
+                    respect_title_monitoring,
+                )
+                .await?
+            }
+        };
         // Titles whose library or facet sets audio language preferences can be
         // language targets without any `cutoff_score`: a file missing the
         // preferred language still lets a better-language release past its
@@ -1238,6 +1269,16 @@ impl AppUseCase {
         let language_scopes = self
             .scopes_with_audio_language_preferences(&preference_scopes)
             .await?;
+        // A title's own preferred languages make it a language target even
+        // when its library and facet set none. One read for every title.
+        let titles_with_preferences = match known_title_preferences {
+            Some(overrides) => overrides,
+            None if any_title_preferences => {
+                let ids: Vec<String> = titles.iter().map(|(title, _)| title.id.clone()).collect();
+                self.load_title_preferred_audio_overrides(&ids).await?
+            }
+            None => HashMap::new(),
+        };
         // A profile without a quality-tier gate ignores the tier cutoff, so
         // `cutoff_score` alone decides whether its files are done; without one
         // the first file satisfies the scope.
@@ -1245,7 +1286,8 @@ impl AppUseCase {
             .into_iter()
             .filter(|(_, profile)| profile.criteria.allow_upgrades)
             .filter_map(|(title, profile)| {
-                let language = language_scopes.contains(title.library_id.as_str())
+                let language = titles_with_preferences.contains_key(&title.id)
+                    || language_scopes.contains(title.library_id.as_str())
                     || language_scopes.contains(title.facet.as_str());
                 let cutoff_score = profile.criteria.cutoff_score;
                 (language || cutoff_score.is_some()).then_some((

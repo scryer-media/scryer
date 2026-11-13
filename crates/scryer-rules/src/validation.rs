@@ -381,7 +381,12 @@ fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCat
         for field in section.fields {
             let field_path = format!("{}.{}", section.path, field.field);
             known_paths.insert(field_path.clone());
-            if field.field_type.ends_with("[]") {
+            // `string[]?` is a list that may be null; it is still indexable.
+            let field_type = field
+                .field_type
+                .strip_suffix('?')
+                .unwrap_or(&field.field_type);
+            if field_type.ends_with("[]") {
                 array_container_paths.insert(field_path.clone());
                 known_paths.insert(format!("{field_path}[]"));
             }

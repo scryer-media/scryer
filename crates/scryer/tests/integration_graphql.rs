@@ -1866,6 +1866,15 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "media".into(),
                 scope: "system".into(),
+                key_name: "audio.preferred_languages.title_override".into(),
+                data_type: "json".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
                 key_name: "download_client.routing".into(),
                 data_type: "json".into(),
                 default_value_json: "{}".into(),

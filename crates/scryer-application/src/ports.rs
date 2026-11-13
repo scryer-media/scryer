@@ -141,6 +141,20 @@ pub struct TitleOptionsPatch {
     /// Explicit season/series-movie picks for the `advanced` monitor type.
     /// `Some(None)` clears the stored selection.
     pub monitor_selection: Option<Option<MonitorSelection>>,
+    /// The title's own required audio languages. `Some(None)` inherits the
+    /// library's and facet's; `Some(Some(vec![]))` requires nothing. Kept in
+    /// settings, not on the title row.
+    pub required_audio_languages: Option<Option<Vec<String>>>,
+    /// The title's own preferred audio languages, in order. `Some(None)` and
+    /// an empty list both inherit. Kept in settings, not on the title row.
+    pub preferred_audio_languages: Option<Option<Vec<String>>>,
+}
+
+impl TitleOptionsPatch {
+    /// Whether the patch sets either audio language override.
+    pub fn carries_audio_language_overrides(&self) -> bool {
+        self.required_audio_languages.is_some() || self.preferred_audio_languages.is_some()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3471,6 +3485,10 @@ pub struct NewMediaRequest {
     pub requested_monitor_type: Option<String>,
     /// Season/series-movie picks captured for the `advanced` monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Required audio languages for the new title; `None` inherits.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages for the new title; `None` inherits.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     /// Lease the requester asked for, in days; `None` means forever
     /// (spec 0003 FR-040).
     pub requested_lease_days: Option<i64>,
@@ -3581,6 +3599,8 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
@@ -5922,6 +5942,27 @@ pub trait SettingsRepository: Send + Sync {
         Ok(values)
     }
 
+    /// Whether any scope id holds an explicit row for this scope + key. A
+    /// store that cannot answer cheaply says `true`, so a caller using this
+    /// to skip work only ever does more of it.
+    async fn any_explicit_setting_json_for_scope_ids(
+        &self,
+        _scope: &str,
+        _key_name: &str,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    /// Every scope id holding an explicit row for this scope + key, or `None`
+    /// when the store cannot list them; a caller then takes its wider path.
+    async fn list_explicit_setting_scope_ids(
+        &self,
+        _scope: &str,
+        _key_name: &str,
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(None)
+    }
+
     async fn upsert_setting_json(
         &self,
         scope: &str,
@@ -5953,6 +5994,18 @@ pub trait SettingsRepository: Send + Sync {
     ) -> AppResult<()>;
 
     async fn delete_values_for_scope_id(&self, scope_id: &str) -> AppResult<u32>;
+
+    /// Delete the rows of `key_names` in `scope` scoped to any of `scope_ids`,
+    /// bind-safe for any number of ids. Rows of other keys, and rows scoped to
+    /// other ids, stay. Returns how many rows went.
+    async fn delete_values_for_keys_and_scope_ids(
+        &self,
+        _scope: &str,
+        _key_names: &[&str],
+        _scope_ids: &[String],
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
 }
 
 #[async_trait]

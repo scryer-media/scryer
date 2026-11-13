@@ -104,6 +104,8 @@ fn subscription(id: &str, scope: ListScope, owner: &str) -> ListSubscription {
             use_season_folders: None,
             release_numbering: None,
             tags: vec!["fixture".into()],
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         }],
         filters: vec![],
         max_per_sync: Some(25),
@@ -250,6 +252,8 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
         use_season_folders: Some(true),
         release_numbering: None,
         tags: vec![],
+        required_audio_languages: Some(Vec::new()),
+        preferred_audio_languages: Some(vec!["original".into(), "jpn".into()]),
     }];
     let updated = ListSubscriptionRepository::update(&store, edited)
         .await
@@ -258,6 +262,23 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
     assert_eq!(updated.routes.len(), 1);
     assert_eq!(updated.routes[0].monitor_type, "none");
     assert_eq!(updated.routes[0].use_season_folders, Some(true));
+    let reloaded = ListSubscriptionRepository::get_by_id(&store, "sub-1")
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(
+        reloaded.routes[0].required_audio_languages,
+        Some(Vec::new()),
+        "an empty required list is stored, distinct from inherit"
+    );
+    assert_eq!(
+        reloaded.routes[0].preferred_audio_languages,
+        Some(vec!["original".to_string(), "jpn".to_string()])
+    );
+    assert_eq!(
+        loaded.routes[0].required_audio_languages, None,
+        "an inheriting route reads back as inheriting"
+    );
 }
 
 #[tokio::test]

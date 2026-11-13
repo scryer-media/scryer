@@ -154,6 +154,16 @@
           "descKey": "settings.refReqRequestLeaseDays"
         },
         {
+          "field": "required_audio_languages",
+          "type": "string[]?",
+          "descKey": "settings.refReqRequestRequiredAudioLanguages"
+        },
+        {
+          "field": "preferred_audio_languages",
+          "type": "string[]?",
+          "descKey": "settings.refReqRequestPreferredAudioLanguages"
+        },
+        {
           "field": "list",
           "type": "object?",
           "descKey": "settings.refReqRequestList"

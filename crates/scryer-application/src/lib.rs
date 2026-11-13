@@ -488,9 +488,9 @@ pub use media_requests::snapshot::{
     MediaRequestMetadataSnapshotExt,
 };
 pub use media_requests::{
-    ApproveMediaRequestOutcome, CLAIM_RELEASE_REQUEST_CANCELED, CLAIM_RELEASE_REQUEST_REJECTED,
-    ListMediaRequestsInput, MediaRequestAdmission, SubmitMediaRequestInput,
-    SubmitMediaRequestOutcome, UpdateMediaRequestInput,
+    ApproveMediaRequestOutcome, ApprovedAudioLanguages, CLAIM_RELEASE_REQUEST_CANCELED,
+    CLAIM_RELEASE_REQUEST_REJECTED, ListMediaRequestsInput, MediaRequestAdmission,
+    SubmitMediaRequestInput, SubmitMediaRequestOutcome, UpdateMediaRequestInput,
 };
 pub use media_servers::{
     EmbyConnectionMode, EmbyLocalSetupMethod, MediaServerConnectionAccount,
@@ -536,6 +536,7 @@ pub use security::restore_job::{
 };
 pub use settings::settings::{
     AcquisitionSettings, AudioLanguagePreferenceOverrides, AudioLanguagePreferenceSettings,
+    LibraryAudioLanguageDefaults,
     AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
     ExternalImportLibrarySettingsAutoApplyDraft, ExternalImportLibrarySettingsAutoApplyResult,
     ExternalImportSettingsAutoApplySkip, FacetScoringPersonaSelection, GeneralSettings,
@@ -547,7 +548,8 @@ pub use settings::settings::{
     UpdateAutoBackupSettings, UpdateBackupSettings, UpdateFacetScoringPersonaSelection,
     UpdateGeneralSettings, UpdateMediaSettings, UpdatePluginAutoUpdateSettings,
     UpdateQualityProfileSelection, UpdateScriptInterpreterSettings, UpdateSecuritySettings,
-    UpdateServiceSettings, UpdateSubtitleSettings,
+    UpdateServiceSettings, UpdateSubtitleSettings, validated_title_audio_overrides,
+    validated_title_audio_patch,
 };
 pub use subtitles::orchestration::{
     DownloadSubtitleForMediaFileRequest, SubtitleSearchOutcome, SubtitleSearchStatus,
@@ -821,9 +823,9 @@ pub use settings::keys::{
     SETTINGS_SCOPE_SYSTEM, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
     SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
     SRRDB_FILENAME_RECOVERY_ENABLED_KEY, TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
-    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY, TLS_KEY_PATH_KEY,
-    TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY, USE_SEASON_FOLDERS_KEY,
-    VERIFICATION_DEPTH_KEY,
+    TITLE_PREFERRED_AUDIO_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY,
+    TLS_KEY_PATH_KEY, TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY,
+    USE_SEASON_FOLDERS_KEY, VERIFICATION_DEPTH_KEY,
 };
 pub use settings::runtime::is_bootstrap_default_library_root_set;
 pub use types::DeleteLibraryJobAccepted;

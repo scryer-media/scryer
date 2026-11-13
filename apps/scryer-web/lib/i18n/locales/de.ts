@@ -1296,6 +1296,18 @@ const de: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} überwacht",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Neuestes abrufen",
+  "search.addConfigRequiredAudio": "Erforderliche Audiosprache",
+  "search.addConfigPreferredAudio": "Bevorzugte Audiosprache",
+  "search.addConfigAudioChoose": "Sprachen wählen",
+  "search.addConfigAudioRequireNone": "Keine verlangen",
+  "title.preferredAudioLanguages": "Bevorzugte Audiosprachen",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Diese Audiosprache kennt Scryer nicht.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Die Audiosprache einer Route kennt Scryer nicht.",
+  "requests.requestedAudioLanguages": "Angefragte Audiosprachen",
+  "requests.requestedRequiredAudio": "Erforderlich: {{languages}}",
+  "requests.requestedPreferredAudio": "Bevorzugt: {{languages}}",
   "title.requiredAudioLanguages": "Erforderliche Audiosprachen",
   "title.originalAudioLanguagePerTitle": "Originalsprache (pro Titel)",
   "title.requiredAudioLanguagesFacetInfo":

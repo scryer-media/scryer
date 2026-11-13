@@ -77,6 +77,10 @@ pub struct RequestRuleSample {
     /// say, which is also treated as forever. The double option exists so a
     /// client can distinguish the two even though they behave alike today.
     pub lease_days: Option<Option<i64>>,
+    /// `None` leaves it to the library; an empty list asks for no requirement.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// `None` leaves it to the library.
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -452,6 +456,11 @@ impl AppUseCase {
             enriched_ids
         };
 
+        let (requested_required_audio_languages, requested_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                sample.required_audio_languages.clone(),
+                sample.preferred_audio_languages.clone(),
+            )?;
         let quality_profile_id = sample.quality_profile_id.clone();
         let quality_profile_name = match quality_profile_id.as_deref() {
             None => None,
@@ -475,6 +484,8 @@ impl AppUseCase {
             monitor_type: sample.monitor_type.clone(),
             monitor_selection: None,
             requested_lease_days: sample.lease_days.flatten(),
+            requested_required_audio_languages,
+            requested_preferred_audio_languages,
             origin: scryer_domain::MediaRequestOrigin::Manual,
             list_rank: None,
         };

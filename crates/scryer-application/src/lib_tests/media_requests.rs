@@ -1595,6 +1595,8 @@ async fn requester_can_update_pending_request_preferences() {
                 requested_monitor_type: Some("allEpisodes".to_string()),
                 requested_monitor_selection: None,
                 requested_lease_days: None,
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await
@@ -1610,6 +1612,8 @@ async fn requester_can_update_pending_request_preferences() {
                 requested_monitor_type: Some("allEpisodes".into()),
                 requested_monitor_selection: None,
                 requested_lease_days: Some(None),
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await
@@ -1695,6 +1699,8 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
                 requested_lease_days: None,
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await
@@ -1774,6 +1780,8 @@ async fn manager_reopens_a_dismissed_request_keeping_requester_and_recording_the
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
                 requested_lease_days: None,
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await
@@ -3044,4 +3052,281 @@ async fn dismissing_a_manual_request_creates_no_exclusion() {
         .expect("dismiss should succeed");
 
     assert!(harness.lists.exclusions.lock().unwrap().is_empty());
+}
+
+fn request_audio_codes(codes: &[&str]) -> Vec<String> {
+    crate::normalize_required_audio_requirements(codes.iter().map(|code| code.to_string()))
+}
+
+#[tokio::test]
+async fn a_request_stores_its_audio_languages_and_approval_lands_them_on_the_title() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9301);
+    input.requested_required_audio_languages = Some(vec!["en".to_string()]);
+    input.requested_preferred_audio_languages =
+        Some(vec!["original".to_string(), "fr".to_string()]);
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("request");
+    let request = harness.media_requests.requests.lock().await[0].clone();
+    assert_eq!(
+        request.requested_required_audio_languages,
+        Some(request_audio_codes(&["en"]))
+    );
+    assert_eq!(
+        request.requested_preferred_audio_languages,
+        Some(request_audio_codes(&["original", "fr"]))
+    );
+
+    let approved = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("approved");
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        Some(request_audio_codes(&["en"]))
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_title_preferred_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        Some(request_audio_codes(&["original", "fr"]))
+    );
+}
+
+#[tokio::test]
+async fn a_failed_audio_override_write_does_not_strand_the_approval() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9305);
+    input.requested_required_audio_languages = Some(vec!["en".to_string()]);
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("request");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+    *harness.settings.write_error_key.lock().await =
+        Some(crate::TITLE_REQUIRED_AUDIO_OVERRIDE_KEY.to_string());
+    let events_before = harness.domain_events.events.lock().await.len();
+
+    let approved = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            Some(Some(30)),
+            None,
+        )
+        .await
+        .expect("the approval completes although the override write failed");
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Approved);
+    assert_eq!(
+        requests[0].created_title_id.as_deref(),
+        Some(approved.title_id.as_str())
+    );
+    drop(requests);
+    let events = harness.domain_events.events.lock().await;
+    let published = &events[events_before..];
+    assert!(
+        published
+            .iter()
+            .any(|event| matches!(event.payload, DomainEventPayload::TitleAdded(_))),
+        "{published:?}"
+    );
+    assert!(
+        published
+            .iter()
+            .any(|event| matches!(event.payload, DomainEventPayload::MediaRequestApproved(_))),
+        "{published:?}"
+    );
+    drop(events);
+    assert!(approved.claim_error.is_none(), "{:?}", approved.claim_error);
+    assert_eq!(harness.lifecycle_claims.all().await.len(), 1);
+    // The title simply inherits.
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn an_approver_can_replace_or_drop_the_requested_audio_languages() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9302);
+    input.requested_required_audio_languages = Some(vec!["en".to_string()]);
+    input.requested_preferred_audio_languages = Some(vec!["fr".to_string()]);
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("request");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+
+    let approved = harness
+        .app
+        .approve_media_request_with_audio_languages(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+            crate::ApprovedAudioLanguages {
+                required: Some(None),
+                preferred: Some(Some(vec!["de".to_string()])),
+            },
+        )
+        .await
+        .expect("approved");
+    assert_eq!(
+        harness
+            .app
+            .load_title_required_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        None,
+        "the approver sent the required languages back to inheriting"
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_title_preferred_audio_override(&approved.title_id)
+            .await
+            .unwrap(),
+        Some(request_audio_codes(&["de"]))
+    );
+}
+
+#[tokio::test]
+async fn a_request_with_an_unknown_audio_language_is_refused() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9303);
+    input.requested_preferred_audio_languages = Some(vec!["zzzzzz".to_string()]);
+    let error = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect_err("refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::settings::AUDIO_LANGUAGE_UNKNOWN),
+        "{error:?}"
+    );
+    assert!(harness.media_requests.requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn updating_a_request_keeps_or_replaces_its_audio_languages() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9304);
+    input.requested_required_audio_languages = Some(vec!["en".to_string()]);
+    input.requested_preferred_audio_languages = Some(vec!["fr".to_string()]);
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("request");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+    let updated = harness
+        .app
+        .update_my_media_request(
+            &harness.user,
+            UpdateMediaRequestInput {
+                request_id,
+                requested_quality_profile_id: "1080p".to_string(),
+                requested_monitor_type: None,
+                requested_monitor_selection: None,
+                requested_lease_days: None,
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: Some(Some(vec!["de".to_string()])),
+            },
+        )
+        .await
+        .expect("updated");
+    assert_eq!(
+        updated.requested_required_audio_languages,
+        Some(request_audio_codes(&["en"])),
+        "an omitted field keeps the stored value"
+    );
+    assert_eq!(
+        updated.requested_preferred_audio_languages,
+        Some(request_audio_codes(&["de"]))
+    );
+}
+
+#[tokio::test]
+async fn an_approver_audio_override_is_validated_before_the_title_is_created() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, 9306);
+    input.requested_required_audio_languages = Some(vec!["en".to_string()]);
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("request");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+
+    let error = harness
+        .app
+        .approve_media_request_with_audio_languages(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+            crate::ApprovedAudioLanguages {
+                required: Some(Some(vec!["zzzzzz".to_string()])),
+                preferred: None,
+            },
+        )
+        .await
+        .expect_err("refused");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::settings::AUDIO_LANGUAGE_UNKNOWN),
+        "{error:?}"
+    );
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Pending);
+    assert_eq!(requests[0].created_title_id, None);
+    drop(requests);
+    assert!(
+        harness.titles.store.lock().await.is_empty(),
+        "a refused override creates no title"
+    );
 }

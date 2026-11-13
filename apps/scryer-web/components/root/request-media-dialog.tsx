@@ -20,6 +20,12 @@ import {
   defaultMonitorTypesForFacet,
 } from "@/lib/utils/default-monitor-type";
 import { previewMyRequestDecisionQuery } from "@/lib/graphql/queries";
+import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
+import {
+  catalogAudioLanguagesForSubmit,
+  INHERIT_CATALOG_AUDIO_LANGUAGES,
+  type CatalogAudioLanguageDraft,
+} from "@/lib/utils/catalog-audio-languages";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import {
   submitMediaRequestInput,
@@ -190,6 +196,8 @@ export function RequestMediaDialog({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [leaseChoice, setLeaseChoice] = React.useState<LeaseChoice>("forever");
   const [customLeaseDays, setCustomLeaseDays] = React.useState(30);
+  const [audioLanguages, setAudioLanguages] =
+    React.useState<CatalogAudioLanguageDraft>(INHERIT_CATALOG_AUDIO_LANGUAGES);
   const [preflight, setPreflight] =
     React.useState<RequestPreflightResult | null>(null);
   const client = useClient();
@@ -214,6 +222,7 @@ export function RequestMediaDialog({
     setIsSubmitting(false);
     setLeaseChoice("forever");
     setCustomLeaseDays(30);
+    setAudioLanguages(INHERIT_CATALOG_AUDIO_LANGUAGES);
     setPreflight(null);
   }, [facet, open, requestableLibraries]);
 
@@ -224,6 +233,10 @@ export function RequestMediaDialog({
       : leaseChoice === "custom"
         ? clampRequestLeaseDays(customLeaseDays)
         : Number(leaseChoice);
+  const requestedAudio = React.useMemo(
+    () => catalogAudioLanguagesForSubmit(audioLanguages),
+    [audioLanguages],
+  );
 
   const selectedLibrary =
     requestableLibraries.find((library) => library.id === libraryId) ?? null;
@@ -296,6 +309,10 @@ export function RequestMediaDialog({
           ? monitorSelectionInput(monitorSelection)
           : undefined,
         requestedLeaseDays: requestedLeaseDays ?? undefined,
+        // Request rules can read the requested audio languages, so the
+        // preview carries them and asks again when they change.
+        requestedRequiredAudioLanguages: requestedAudio.required,
+        requestedPreferredAudioLanguages: requestedAudio.preferred,
       });
       void client
         .query(
@@ -332,6 +349,7 @@ export function RequestMediaDialog({
     monitorType,
     open,
     qualityProfileId,
+    requestedAudio,
     requestedLeaseDays,
     result,
     selectedLibrary,
@@ -352,6 +370,8 @@ export function RequestMediaDialog({
           ? monitorSelectionInput(monitorSelection)
           : undefined,
         requestedLeaseDays: requestedLeaseDays ?? undefined,
+        requestedRequiredAudioLanguages: requestedAudio.required,
+        requestedPreferredAudioLanguages: requestedAudio.preferred,
       });
       if (accepted) {
         onOpenChange(false);
@@ -368,6 +388,7 @@ export function RequestMediaDialog({
     onOpenChange,
     onRequest,
     qualityProfileId,
+    requestedAudio,
     requestedLeaseDays,
     result,
     selectedLibrary,
@@ -566,6 +587,19 @@ export function RequestMediaDialog({
                 />
               </label>
             ) : null}
+
+            <CatalogAudioLanguageFields
+              idPrefix="request-media"
+              value={audioLanguages}
+              onChange={setAudioLanguages}
+              inheritedRequired={
+                selectedLibrary?.inheritedRequiredAudioLanguages ?? null
+              }
+              inheritedPreferred={
+                selectedLibrary?.inheritedPreferredAudioLanguages ?? null
+              }
+              disabled={isSubmitting}
+            />
           </div>
 
           <RequestPreflightBanner preflight={preflight} />

@@ -163,6 +163,8 @@ export type TitleDetail = {
   requiredAudioLanguagesOverride?: string[] | null;
   effectiveRequiredAudioLanguages?: string[];
   inheritsRequiredAudioLanguages?: boolean;
+  effectivePreferredAudioLanguages?: string[];
+  inheritsPreferredAudioLanguages?: boolean;
   qualityProfileId?: string | null;
   qualityTier?: string | null;
   rootFolderId?: string;

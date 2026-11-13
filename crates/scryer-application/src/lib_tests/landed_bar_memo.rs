@@ -655,3 +655,94 @@ async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on(
         BTreeSet::from([german_only.id.clone()])
     );
 }
+
+#[tokio::test]
+async fn a_title_preferred_language_override_alone_makes_a_language_target() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    let english = fixture
+        .add_movie(
+            "Override Cut",
+            "Override.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    let other = fixture
+        .add_movie(
+            "Plain Cut",
+            "Plain.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &english.id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([english.id.clone()]),
+        "only the title that prefers German is a target, with no library or facet preference"
+    );
+
+    // A facet preference the title's own ladder already satisfies leaves it alone.
+    fixture
+        .set_movie_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, "[\"de\"]")
+        .await;
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &english.id,
+            "[\"en\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([other.id.clone()]),
+        "the title override wins over the facet's preference"
+    );
+}
+
+#[tokio::test]
+async fn without_a_cutoff_score_only_titles_with_their_own_preference_are_targets() {
+    let fixture = fixture(score_cutoff_profile(None)).await;
+    let mut titles = Vec::new();
+    for index in 0..6 {
+        let name = format!("Fixture Reel {index}");
+        let release = format!("Fixture.Reel.{index}.2024.ENGLISH.1080p.BluRay.x264-GRP");
+        titles.push(fixture.add_movie(&name, &release, 8_000_000_000).await);
+    }
+
+    // An override whose title is gone matches nothing.
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            "title-that-was-deleted",
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &titles[3].id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([titles[3].id.clone()])
+    );
+}

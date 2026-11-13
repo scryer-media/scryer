@@ -1726,6 +1726,16 @@ const zh_TW: LocaleDictionary = {
   "title.monitoredSection": "監控中的 {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "加入最新佇列",
+  "search.addConfigRequiredAudio": "必要音訊語言",
+  "search.addConfigPreferredAudio": "偏好音訊語言",
+  "search.addConfigAudioChoose": "選擇語言",
+  "search.addConfigAudioRequireNone": "不要求任何語言",
+  "title.preferredAudioLanguages": "偏好音訊語言",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "Scryer 無法辨識該音訊語言。",
+  "lists.refusal.routeAudioLanguageUnknown": "Scryer 無法辨識某條路由的音訊語言。",
+  "requests.requestedAudioLanguages": "已請求的音訊語言",
+  "requests.requestedRequiredAudio": "必要：{{languages}}",
+  "requests.requestedPreferredAudio": "偏好：{{languages}}",
   "title.requiredAudioLanguages": "必需音訊語言",
   "title.originalAudioLanguagePerTitle": "原始語言（按標題）",
   "title.requiredAudioLanguagesFacetInfo":
@@ -4731,6 +4741,7 @@ const zh_TW: LocaleDictionary = {
   "requests.approvedLease": "保留時間",
   "requests.approvedLeaseKeepForever": "依請求永久保留",
   "requests.approvedLeaseKeepRequested": "依請求保留 {{count}} 天",
+  "requests.approvedAudioLanguages": "音訊語言",
   "requests.approvedTags": "標籤",
   "requests.approvedTagsHelp":
     "核准時套用於作品。已預先填入規則輸出的標籤；您可在「設定 > 標籤」中新增或移除管理員定義的任何標籤。",
@@ -4801,6 +4812,10 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequestLeaseForever": "請求者要求永久保留媒體時為 true",
   "settings.refReqRequestLeaseDays":
     "請求者要求保留的天數；若要求永久保留則缺失",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "請求者要求作品必須具備的音訊語言。null 表示交由媒體庫決定；空清單表示不設要求",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "請求者偏好的音訊語言（依順序）。null 表示交由媒體庫決定",
   "settings.refReqSectionExternalIds":
     "— input.request.external_ids 上的提供者識別碼",
   "settings.refReqExternalIdsTmdb": "TMDB 識別碼（若提供者有提供）",

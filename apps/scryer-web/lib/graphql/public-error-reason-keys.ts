@@ -8,6 +8,7 @@ export const PUBLIC_ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
   CATALOG_TAG_INVALID: "error.reason.CATALOG_TAG_INVALID",
   SETTINGS_DELAY_PROFILE_CATALOG_INVALID:
     "error.reason.SETTINGS_DELAY_PROFILE_CATALOG_INVALID",
+  SETTINGS_AUDIO_LANGUAGE_UNKNOWN: "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN",
   SETTINGS_TRUSTED_PROXY_POLICY_INVALID:
     "error.reason.SETTINGS_TRUSTED_PROXY_POLICY_INVALID",
   INTEGRATION_SEEDING_PROFILE_INVALID:
@@ -1835,6 +1836,7 @@ export const PUBLIC_ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
   LIST_PROVIDER_NOT_FOUND: "error.reason.LIST_PROVIDER_NOT_FOUND",
   LIST_PROVIDER_NOT_INSTALLED: "lists.refusal.providerNotInstalled",
   LIST_PROVIDER_UNAVAILABLE: "lists.refusal.providerUnavailable",
+  LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN: "lists.refusal.routeAudioLanguageUnknown",
   LIST_ROUTE_LIBRARY_NOT_FOUND: "lists.refusal.routeLibraryNotFound",
   LIST_ROUTE_LIBRARY_REQUIRED: "lists.refusal.routeLibraryRequired",
   LIST_ROUTE_MISSING_FOR_KIND: "lists.refusal.routeLibraryRequired",

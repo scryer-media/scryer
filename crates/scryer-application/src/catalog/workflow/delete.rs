@@ -993,6 +993,7 @@ impl AppUseCase {
         {
             return Ok(false);
         }
+        self.prune_title_scoped_settings(&ids).await;
         if let Some(handle) = self.runtime.acquisition.tracked_download_handle.as_ref() {
             handle.forget_many(ids.clone(), Vec::new());
         }
@@ -1275,6 +1276,36 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Remove the per-title settings rows ([`crate::settings::keys::TITLE_SCOPED_SETTING_KEYS`])
+    /// of titles whose rows are already gone, in bind-safe chunks. Like the
+    /// lifecycle-claim release, a failure is logged and left: the titles are
+    /// deleted either way, and a leftover row names a title that no longer
+    /// exists.
+    pub(crate) async fn prune_title_scoped_settings(&self, title_ids: &[String]) {
+        if title_ids.is_empty() {
+            return;
+        }
+        match self
+            .services
+            .config
+            .settings
+            .delete_values_for_keys_and_scope_ids(
+                crate::settings::keys::SETTINGS_SCOPE_SYSTEM,
+                crate::settings::keys::TITLE_SCOPED_SETTING_KEYS,
+                title_ids,
+            )
+            .await
+        {
+            Ok(0) => {}
+            Ok(deleted) => debug!(deleted, "pruned per-title settings of deleted titles"),
+            Err(error) => warn!(
+                error = %error,
+                titles = title_ids.len(),
+                "could not prune per-title settings of deleted titles"
+            ),
+        }
+    }
+
     pub(crate) async fn delete_title_row(
         &self,
         title: &scryer_domain::Title,
@@ -1293,6 +1324,8 @@ impl AppUseCase {
         } else {
             titles.delete(title_id).await?;
         }
+        self.prune_title_scoped_settings(std::slice::from_ref(&title.id))
+            .await;
         // Unconditional: `append_title_deleted_event` is false on the paths
         // that fold the delete into another event, and the row is gone either
         // way.

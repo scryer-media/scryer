@@ -4003,6 +4003,11 @@ impl MergedSourceRetirer for AppUseCaseMergedSourceRetirer {
         // through `delete_title_row`, so this is the only place the matcher
         // learns that identity is gone.
         self.app.invalidate_monitored_title_matcher().await;
+        // The destination keeps its own per-title settings; the source's
+        // name a title that is gone.
+        self.app
+            .prune_title_scoped_settings(std::slice::from_ref(&request.source_title_id))
+            .await;
         self.app
             .purge_merged_source_dependent_records(&request.identity_map)
             .await

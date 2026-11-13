@@ -96,6 +96,10 @@ export type MetadataCatalogAddOptions = {
   rootFolderId?: string;
   /** Only sent under `ADVANCED`, which the API rejects without one. */
   monitorSelection?: MonitorSelectionDraft;
+  /** The title's own required audio languages. Omitted inherits; an empty list requires none. */
+  requiredAudioLanguages?: string[];
+  /** The title's own preferred audio languages, in order. Omitted inherits. */
+  preferredAudioLanguages?: string[];
 };
 
 export type CatalogAddFeedback = {
@@ -116,6 +120,10 @@ export type MetadataCatalogRequestOptions = {
   /// forever, which is what Scryer granted before leases existed — there is no
   /// separate "forever" flag on the requester side.
   requestedLeaseDays?: number;
+  /** Required audio languages for the new title. Omitted inherits; an empty list requires none. */
+  requestedRequiredAudioLanguages?: string[];
+  /** Preferred audio languages, in order, for the new title. Omitted inherits. */
+  requestedPreferredAudioLanguages?: string[];
 };
 
 export type AnimeCatalogDefaults = {
@@ -446,6 +454,12 @@ export function submitMediaRequestInput(
         ? monitorSelectionInput(options.requestedMonitorSelection)
         : undefined,
     requestedLeaseDays: options.requestedLeaseDays ?? undefined,
+    requestedRequiredAudioLanguages:
+      options.requestedRequiredAudioLanguages ?? undefined,
+    requestedPreferredAudioLanguages: options.requestedPreferredAudioLanguages
+      ?.length
+      ? options.requestedPreferredAudioLanguages
+      : undefined,
   };
 }
 
@@ -1781,6 +1795,12 @@ export function useGlobalSearch({
                         options.monitorSelection,
                       ),
                     }
+                  : {}),
+                ...(options.requiredAudioLanguages
+                  ? { requiredAudioLanguages: options.requiredAudioLanguages }
+                  : {}),
+                ...(options.preferredAudioLanguages?.length
+                  ? { preferredAudioLanguages: options.preferredAudioLanguages }
                   : {}),
               },
               externalIds,

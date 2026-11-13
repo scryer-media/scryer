@@ -100,6 +100,12 @@ pub struct SubmitMediaRequestInput {
     pub requested_monitor_type: Option<String>,
     /// Season/series-movie picks; only meaningful with the `advanced` monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Required audio languages for the new title. `None` inherits; an empty
+    /// list requires nothing.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages for the new title. `None` or an empty list
+    /// inherits.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     /// How long the requester wants the media kept, in days. `None` is forever
     /// (spec 0003 FR-040).
     pub requested_lease_days: Option<i64>,
@@ -159,6 +165,21 @@ pub struct UpdateMediaRequestInput {
     pub requested_monitor_selection: Option<MonitorSelection>,
     /// Omission preserves the lease; `Some(None)` explicitly requests forever.
     pub requested_lease_days: Option<Option<i64>>,
+    /// Omission preserves the requested required audio languages;
+    /// `Some(None)` goes back to inheriting.
+    pub requested_required_audio_languages: Option<Option<Vec<String>>>,
+    /// Omission preserves the requested preferred audio languages;
+    /// `Some(None)` or an empty list goes back to inheriting.
+    pub requested_preferred_audio_languages: Option<Option<Vec<String>>>,
+}
+
+/// An approver's audio language decision for the title a request creates.
+/// A field left `None` grants what the requester asked for; `Some(None)`
+/// inherits; `Some(Some(_))` replaces the requester's choice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ApprovedAudioLanguages {
+    pub required: Option<Option<Vec<String>>>,
+    pub preferred: Option<Option<Vec<String>>>,
 }
 
 /// Where a resolution's policy provenance comes from, carried from the
@@ -327,6 +348,11 @@ impl AppUseCase {
         )?;
         let requested_lease_days =
             crate::request_rules::validate_lease_days(input.requested_lease_days)?;
+        let (requested_required_audio_languages, requested_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                input.requested_required_audio_languages,
+                input.requested_preferred_audio_languages,
+            )?;
         let poster_url = metadata_enrichment.poster_url;
         let background_url = metadata_enrichment.background_url;
         // Kept, not consumed: the same snapshot that is persisted on the row is
@@ -378,6 +404,8 @@ impl AppUseCase {
             requested_quality_profile_name: Some(requested_quality_profile_name),
             requested_monitor_type,
             requested_monitor_selection,
+            requested_required_audio_languages,
+            requested_preferred_audio_languages,
             requested_lease_days,
             metadata_snapshot_json,
             external_ids,
@@ -628,9 +656,45 @@ impl AppUseCase {
         lease_days: Option<Option<i64>>,
         tags: Option<Vec<String>>,
     ) -> AppResult<ApproveMediaRequestOutcome> {
+        self.approve_media_request_with_audio_languages(
+            actor,
+            request_id,
+            quality_profile_id,
+            monitor_type,
+            monitor_selection,
+            lease_days,
+            tags,
+            ApprovedAudioLanguages::default(),
+        )
+        .await
+    }
+
+    /// [`Self::approve_media_request`] with the approver's audio language
+    /// decision for the title the request creates.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn approve_media_request_with_audio_languages(
+        &self,
+        actor: &User,
+        request_id: &str,
+        quality_profile_id: &str,
+        monitor_type: Option<String>,
+        monitor_selection: Option<MonitorSelection>,
+        lease_days: Option<Option<i64>>,
+        tags: Option<Vec<String>>,
+        audio_languages: ApprovedAudioLanguages,
+    ) -> AppResult<ApproveMediaRequestOutcome> {
         let request = self
             .load_manageable_pending_media_request(actor, request_id)
             .await?;
+        let (approved_required_audio_languages, approved_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                audio_languages
+                    .required
+                    .unwrap_or_else(|| request.requested_required_audio_languages.clone()),
+                audio_languages
+                    .preferred
+                    .unwrap_or_else(|| request.requested_preferred_audio_languages.clone()),
+            )?;
         let approved_lease_days = match lease_days {
             Some(override_days) => crate::request_rules::validate_lease_days(override_days)?,
             None => crate::request_rules::validate_lease_days(request.requested_lease_days)?,
@@ -742,6 +806,13 @@ impl AppUseCase {
             )
             .await?;
         drop(profile_reference_guard);
+        self.apply_approved_request_audio_languages(
+            actor,
+            &created,
+            approved_required_audio_languages,
+            approved_preferred_audio_languages,
+        )
+        .await;
         // The approval created (or reused) a title row in one transaction; a
         // new row is a new matcher identity. `publish_stored_domain_event`
         // below would do this via `TitleAdded`, but only when the event was
@@ -797,6 +868,28 @@ impl AppUseCase {
             search_error: None,
             claim_error,
         })
+    }
+
+    /// Store the audio languages an approval grants on the title it created,
+    /// before anything searches for it. A title the approval reused keeps its
+    /// own settings: a request never edits a title already in the library.
+    async fn apply_approved_request_audio_languages(
+        &self,
+        actor: &User,
+        created: &CreateTitleOutcome,
+        required: Option<Vec<String>>,
+        preferred: Option<Vec<String>>,
+    ) {
+        self.store_new_title_audio_language_overrides(
+            created,
+            &TitleOptionsPatch {
+                required_audio_languages: required.map(Some),
+                preferred_audio_languages: preferred.map(Some),
+                ..TitleOptionsPatch::default()
+            },
+            Some(actor.id.clone()),
+        )
+        .await
     }
 
     pub async fn dismiss_media_request(&self, actor: &User, request_id: &str) -> AppResult<u64> {
@@ -972,6 +1065,15 @@ impl AppUseCase {
                 .requested_lease_days
                 .unwrap_or(request.requested_lease_days),
         )?;
+        let (requested_required_audio_languages, requested_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                input
+                    .requested_required_audio_languages
+                    .unwrap_or_else(|| request.requested_required_audio_languages.clone()),
+                input
+                    .requested_preferred_audio_languages
+                    .unwrap_or_else(|| request.requested_preferred_audio_languages.clone()),
+            )?;
         let mut submitted_event_data = media_request_submitted_event_data(
             &request,
             Some(requested_quality_profile_id.clone()),
@@ -994,6 +1096,8 @@ impl AppUseCase {
                 requested_quality_profile_name,
                 requested_monitor_type,
                 requested_monitor_selection,
+                requested_required_audio_languages,
+                requested_preferred_audio_languages,
                 requested_lease_days,
                 updated_event,
             )
@@ -1135,6 +1239,11 @@ impl AppUseCase {
         // The requester's own lease is what a policy approval grants: nobody
         // overrode it, so `approved` and `requested` are the same window.
         let approved_lease_days = request.requested_lease_days;
+        let (approved_required_audio_languages, approved_preferred_audio_languages) =
+            crate::validated_title_audio_overrides(
+                request.requested_required_audio_languages.clone(),
+                request.requested_preferred_audio_languages.clone(),
+            )?;
         let profile_reference_guard = self
             .runtime
             .catalog
@@ -1196,6 +1305,13 @@ impl AppUseCase {
             )
             .await?;
         drop(profile_reference_guard);
+        self.apply_approved_request_audio_languages(
+            actor,
+            &created,
+            approved_required_audio_languages,
+            approved_preferred_audio_languages,
+        )
+        .await;
         // The approval created (or reused) a title row in one transaction; a
         // new row is a new matcher identity. `publish_stored_domain_event`
         // below would do this via `TitleAdded`, but only when the event was
@@ -1974,6 +2090,8 @@ pub(crate) fn request_draft_from_media_request(
         monitor_type: request.requested_monitor_type.clone(),
         monitor_selection: request.requested_monitor_selection.clone(),
         requested_lease_days: request.requested_lease_days,
+        requested_required_audio_languages: request.requested_required_audio_languages.clone(),
+        requested_preferred_audio_languages: request.requested_preferred_audio_languages.clone(),
         origin: request.origin.clone(),
         list_rank: None,
     }
@@ -1998,6 +2116,8 @@ fn request_draft_from_new_media_request(
         monitor_type: request.requested_monitor_type.clone(),
         monitor_selection: request.requested_monitor_selection.clone(),
         requested_lease_days: request.requested_lease_days,
+        requested_required_audio_languages: request.requested_required_audio_languages.clone(),
+        requested_preferred_audio_languages: request.requested_preferred_audio_languages.clone(),
         origin: request.origin.clone(),
         list_rank,
     }

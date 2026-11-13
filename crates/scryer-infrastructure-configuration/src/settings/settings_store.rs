@@ -487,6 +487,92 @@ impl SettingsStore {
         )
         .await
     }
+
+    /// Delete the rows of `key_names` in `scope` whose scope id is one of
+    /// `scope_ids`, in one transaction. Each statement binds the scope and keys
+    /// plus one value per scope id, chunked under SQLite's 32,766 and Postgres's
+    /// 65,535 binds.
+    pub async fn delete_values_for_keys_and_scope_ids(
+        &self,
+        scope: &str,
+        key_names: &[&str],
+        scope_ids: &[String],
+    ) -> AppResult<u64> {
+        const BIND_BUDGET: usize = 30_000;
+        let chunk_size = BIND_BUDGET.saturating_sub(2 + key_names.len()).max(1);
+        self.delete_values_for_keys_and_scope_ids_in_chunks(scope, key_names, scope_ids, chunk_size)
+            .await
+    }
+
+    async fn delete_values_for_keys_and_scope_ids_in_chunks(
+        &self,
+        scope: &str,
+        key_names: &[&str],
+        scope_ids: &[String],
+        chunk_size: usize,
+    ) -> AppResult<u64> {
+        let scope = scope.trim().to_string();
+        let key_names = key_names
+            .iter()
+            .map(|key_name| key_name.trim().to_string())
+            .filter(|key_name| !key_name.is_empty())
+            .collect::<Vec<_>>();
+        let mut scope_ids = scope_ids
+            .iter()
+            .map(|scope_id| scope_id.trim())
+            .filter(|scope_id| !scope_id.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        scope_ids.sort_unstable();
+        scope_ids.dedup();
+        if scope.is_empty() || key_names.is_empty() || scope_ids.is_empty() {
+            return Ok(0);
+        }
+        let _invalidate = InvalidateOnDrop::keys(
+            &self.cache,
+            key_names
+                .iter()
+                .map(|key_name| setting_key(&scope, key_name))
+                .collect(),
+        );
+        let chunk_size = chunk_size.max(1);
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_settings_values_for_keys_and_scope_ids",
+            move |tx| {
+                let scope = scope.clone();
+                let key_names = key_names.clone();
+                let scope_ids = scope_ids.clone();
+                Box::pin(async move {
+                    let key_placeholders = std::iter::repeat_n("{}", key_names.len())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let mut deleted = 0u64;
+                    for chunk in scope_ids.chunks(chunk_size) {
+                        let id_placeholders = std::iter::repeat_n("{}", chunk.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let sql = format!(
+                            "DELETE FROM settings_values
+                              WHERE scope = {{}}
+                                AND setting_definition_id IN (
+                                    SELECT id FROM settings_definitions
+                                     WHERE scope = {{}} AND key_name IN ({key_placeholders})
+                                )
+                                AND scope_id IN ({id_placeholders})"
+                        );
+                        let mut args =
+                            vec![SqlArg::Text(scope.clone()), SqlArg::Text(scope.clone())];
+                        args.extend(key_names.iter().cloned().map(SqlArg::Text));
+                        args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                        deleted += SqlRuntime::execute(SqlExec::Tx(&mut *tx), &sql, &args).await?;
+                    }
+                    Ok(deleted)
+                })
+            },
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -581,51 +667,95 @@ impl SettingsRepository for SettingsStore {
         } else {
             "sv.updated_at"
         };
-        let placeholders = std::iter::repeat_n("{}", scope_ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT
-                d.id AS definition_id,
-                d.category,
-                d.scope,
-                d.key_name,
-                d.data_type,
-                d.default_value_json,
-                d.is_sensitive,
-                d.validation_json,
-                sv.value_json AS effective_value_json,
-                sv.value_json,
-                sv.source,
-                sv.scope_id,
-                sv.updated_by_user_id,
-                {created_at} AS created_at,
-                {updated_at} AS updated_at
-             FROM settings_definitions d
-             JOIN settings_values sv
-               ON sv.setting_definition_id = d.id
-              AND sv.scope = d.scope
-             WHERE d.scope = {{}}
-               AND d.key_name = {{}}
-               AND sv.scope = {{}}
-               AND sv.scope_id IN ({placeholders})"
-        );
-        let mut args = vec![
-            SqlArg::Text(scope.to_string()),
-            SqlArg::Text(key_name.to_string()),
-            SqlArg::Text(scope.to_string()),
-        ];
-        args.extend(scope_ids.iter().cloned().map(SqlArg::Text));
+        // Each statement binds three fixed values plus one per scope id; the
+        // chunk keeps that under SQLite's 32,766 and Postgres's 65,535.
+        const SCOPE_ID_CHUNK: usize = 30_000;
+        let mut values = Vec::new();
+        for chunk in scope_ids.chunks(SCOPE_ID_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT
+                    d.id AS definition_id,
+                    d.category,
+                    d.scope,
+                    d.key_name,
+                    d.data_type,
+                    d.default_value_json,
+                    d.is_sensitive,
+                    d.validation_json,
+                    sv.value_json AS effective_value_json,
+                    sv.value_json,
+                    sv.source,
+                    sv.scope_id,
+                    sv.updated_by_user_id,
+                    {created_at} AS created_at,
+                    {updated_at} AS updated_at
+                 FROM settings_definitions d
+                 JOIN settings_values sv
+                   ON sv.setting_definition_id = d.id
+                  AND sv.scope = d.scope
+                 WHERE d.scope = {{}}
+                   AND d.key_name = {{}}
+                   AND sv.scope = {{}}
+                   AND sv.scope_id IN ({placeholders})"
+            );
+            let mut args = vec![
+                SqlArg::Text(scope.to_string()),
+                SqlArg::Text(key_name.to_string()),
+                SqlArg::Text(scope.to_string()),
+            ];
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
 
-        let rows = SqlRuntime::fetch_all(exec, &sql, &args).await?;
-        let mut values = Vec::with_capacity(rows.len());
-        for row in rows.iter() {
-            let record = decode_settings_row(row, encryption_key.as_ref())?;
-            if let Some(scope_id) = record.scope_id {
-                values.push((scope_id, record.effective_value_json));
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            values.reserve(rows.len());
+            for row in rows.iter() {
+                let record = decode_settings_row(row, encryption_key.as_ref())?;
+                if let Some(scope_id) = record.scope_id {
+                    values.push((scope_id, record.effective_value_json));
+                }
             }
         }
         Ok(values)
+    }
+
+    async fn any_explicit_setting_json_for_scope_ids(
+        &self,
+        scope: &str,
+        key_name: &str,
+    ) -> AppResult<bool> {
+        let scope = scope.trim();
+        let key_name = key_name.trim();
+        if scope.is_empty() || key_name.is_empty() {
+            return Ok(false);
+        }
+        let encryption_key = self.encryption_key()?;
+        // The cached explicit rows are the same read every per-scope lookup of
+        // this key already uses. `None` means a stored row would not decode,
+        // so a row exists.
+        Ok(self
+            .cached_explicit_rows(scope, key_name, encryption_key.as_ref())
+            .await?
+            .is_none_or(|rows| !rows.scoped.is_empty()))
+    }
+
+    async fn list_explicit_setting_scope_ids(
+        &self,
+        scope: &str,
+        key_name: &str,
+    ) -> AppResult<Option<Vec<String>>> {
+        let scope = scope.trim();
+        let key_name = key_name.trim();
+        if scope.is_empty() || key_name.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let encryption_key = self.encryption_key()?;
+        // The same cached read as `any_explicit_setting_json_for_scope_ids`.
+        Ok(self
+            .cached_explicit_rows(scope, key_name, encryption_key.as_ref())
+            .await?
+            .map(|rows| rows.scoped.keys().cloned().collect()))
     }
 
     async fn upsert_setting_json(
@@ -704,6 +834,15 @@ impl SettingsRepository for SettingsStore {
 
     async fn delete_values_for_scope_id(&self, scope_id: &str) -> AppResult<u32> {
         SettingsStore::delete_values_for_scope_id(self, scope_id).await
+    }
+
+    async fn delete_values_for_keys_and_scope_ids(
+        &self,
+        scope: &str,
+        key_names: &[&str],
+        scope_ids: &[String],
+    ) -> AppResult<u64> {
+        SettingsStore::delete_values_for_keys_and_scope_ids(self, scope, key_names, scope_ids).await
     }
 }
 
@@ -1805,6 +1944,85 @@ mod cache_tests {
             .await
             .unwrap();
         assert_eq!(get(&store, DELTA).await.as_deref(), Some("\"seeded\""));
+    }
+
+    #[tokio::test]
+    async fn deleting_keys_for_scope_ids_takes_only_those_rows_across_chunks() {
+        let Fixture { store, .. } = fixture().await;
+        for title in [
+            "title-1",
+            "title-2",
+            "title-3",
+            "title-4",
+            "title-5",
+            "title-keep",
+        ] {
+            upsert(&store, ALPHA, Some(title), "\"a\"").await;
+            upsert(&store, BETA, Some(title), "\"b\"").await;
+        }
+        // Another key on a doomed id, and the same keys on a library id.
+        upsert(&store, GAMMA, Some("title-1"), "\"other-key\"").await;
+        upsert(&store, ALPHA, Some("library-1"), "\"library\"").await;
+        // Warm the explicit-rows cache so the delete has to invalidate it.
+        assert_eq!(list(&store, ALPHA, &["title-1"]).await.len(), 1);
+
+        let doomed = ["title-1", "title-2", "title-3", "title-4", "title-5"]
+            .map(str::to_string)
+            .to_vec();
+        // Two ids per statement, so five ids span three chunks.
+        let deleted = store
+            .delete_values_for_keys_and_scope_ids_in_chunks(SCOPE, &[ALPHA, BETA], &doomed, 2)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 10);
+
+        for title in &doomed {
+            assert_eq!(explicit(&store, ALPHA, Some(title)).await, None);
+            assert_eq!(explicit(&store, BETA, Some(title)).await, None);
+        }
+        assert_eq!(
+            list(&store, ALPHA, &["title-1", "title-2"]).await,
+            pairs(&[])
+        );
+        assert_eq!(
+            explicit(&store, ALPHA, Some("title-keep")).await.as_deref(),
+            Some("\"a\"")
+        );
+        assert_eq!(
+            explicit(&store, BETA, Some("title-keep")).await.as_deref(),
+            Some("\"b\"")
+        );
+        assert_eq!(
+            explicit(&store, GAMMA, Some("title-1")).await.as_deref(),
+            Some("\"other-key\"")
+        );
+        assert_eq!(
+            explicit(&store, ALPHA, Some("library-1")).await.as_deref(),
+            Some("\"library\"")
+        );
+        assert_eq!(
+            SettingsRepository::list_explicit_setting_scope_ids(&store, SCOPE, ALPHA)
+                .await
+                .unwrap()
+                .map(|mut ids| {
+                    ids.sort();
+                    ids
+                }),
+            Some(vec!["library-1".to_string(), "title-keep".to_string()])
+        );
+
+        // The bind-budget entry point takes the same rows.
+        assert_eq!(
+            SettingsRepository::delete_values_for_keys_and_scope_ids(
+                &store,
+                SCOPE,
+                &[ALPHA, BETA],
+                &["title-keep".to_string()],
+            )
+            .await
+            .unwrap(),
+            2
+        );
     }
 
     #[tokio::test]

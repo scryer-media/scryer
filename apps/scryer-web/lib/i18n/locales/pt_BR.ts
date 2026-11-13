@@ -1315,6 +1315,18 @@ const pt_BR: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} monitorados",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Baixar mais recente",
+  "search.addConfigRequiredAudio": "Idioma de áudio obrigatório",
+  "search.addConfigPreferredAudio": "Idioma de áudio preferido",
+  "search.addConfigAudioChoose": "Escolher idiomas",
+  "search.addConfigAudioRequireNone": "Não exigir nenhum",
+  "title.preferredAudioLanguages": "Idiomas de áudio preferidos",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "O Scryer não reconhece esse idioma de áudio.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "O Scryer não reconhece o idioma de áudio de uma rota.",
+  "requests.requestedAudioLanguages": "Idiomas de áudio solicitados",
+  "requests.requestedRequiredAudio": "Obrigatórios: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferidos: {{languages}}",
   "title.requiredAudioLanguages": "Idiomas de áudio obrigatórios",
   "title.originalAudioLanguagePerTitle": "Idioma original (por título)",
   "title.requiredAudioLanguagesFacetInfo":

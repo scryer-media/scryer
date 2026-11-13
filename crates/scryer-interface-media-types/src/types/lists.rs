@@ -616,6 +616,13 @@ pub struct ListRoutePayload {
     pub release_numbering: Option<String>,
     /// Tags put on new titles.
     pub tags: Vec<String>,
+    /// Required audio languages for new titles, or null when they inherit the
+    /// library's and facet's. An empty list requires none. The `original`
+    /// token stays unresolved.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, for new titles, or null when they
+    /// inherit. The `original` token stays unresolved.
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 /// Where a list's titles of one kind go, as entered.
@@ -642,6 +649,15 @@ pub struct ListRouteInput {
     /// Tags put on new titles.
     #[graphql(default)]
     pub tags: Vec<String>,
+    /// Required audio languages for new titles; null inherits the library's
+    /// and facet's, an empty list requires none. A request the list files
+    /// carries them. An unknown code is refused with
+    /// `LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN`.
+    pub required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, for new titles; null or an empty
+    /// list inherits. A request the list files carries them. An unknown code
+    /// is refused with `LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN`.
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 /// A minimum rating from one attributed rating source.

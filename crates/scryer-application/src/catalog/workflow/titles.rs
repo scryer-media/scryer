@@ -525,9 +525,42 @@ impl AppUseCase {
                 )
                 .await?
         };
+        self.attach_search_profiles(titles, !respect_title_monitoring && title_id.is_some())
+            .await
+    }
+
+    /// The monitored titles among `ids` in `library_ids`, each with its
+    /// resolved quality profile: [`Self::titles_with_profiles_for_search`] for
+    /// a known set of titles. One bind-safe batched read; an id that names no
+    /// title is simply absent.
+    pub(crate) async fn titles_with_profiles_for_ids(
+        &self,
+        ids: &[String],
+        library_ids: &[String],
+    ) -> AppResult<Vec<(scryer_domain::Title, std::sync::Arc<QualityProfile>)>> {
+        if ids.is_empty() || library_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .get_by_ids(ids)
+            .await?
+            .into_iter()
+            .filter(|title| library_ids.contains(&title.library_id))
+            .collect();
+        self.attach_search_profiles(titles, false).await
+    }
+
+    async fn attach_search_profiles(
+        &self,
+        titles: Vec<scryer_domain::Title>,
+        include_unmonitored: bool,
+    ) -> AppResult<Vec<(scryer_domain::Title, std::sync::Arc<QualityProfile>)>> {
         let monitored: Vec<scryer_domain::Title> = titles
             .into_iter()
-            .filter(|title| title.monitored || (!respect_title_monitoring && title_id.is_some()))
+            .filter(|title| title.monitored || include_unmonitored)
             .collect();
         if monitored.is_empty() {
             return Ok(Vec::new());

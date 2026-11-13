@@ -1992,6 +1992,18 @@ const cs: LocaleDictionary = {
   "title.monitoredSection": "Sledované: {{facet}}",
   "title.searchReleasesAction": "Hledat vydání",
   "title.queueLatest": "Zařadit nejnovější do fronty",
+  "search.addConfigRequiredAudio": "Požadovaný jazyk zvuku",
+  "search.addConfigPreferredAudio": "Preferovaný jazyk zvuku",
+  "search.addConfigAudioChoose": "Vybrat jazyky",
+  "search.addConfigAudioRequireNone": "Nevyžadovat žádný",
+  "title.preferredAudioLanguages": "Preferované jazyky zvuku",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Tento jazyk zvuku Scryer nezná.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Jazyk zvuku u trasy Scryer nezná.",
+  "requests.requestedAudioLanguages": "Požadované jazyky zvuku",
+  "requests.requestedRequiredAudio": "Vyžadováno: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferováno: {{languages}}",
   "title.requiredAudioLanguages": "Povinné jazyky zvuku",
   "title.originalAudioLanguagePerTitle": "Původní jazyk (podle titulu)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -5615,6 +5627,7 @@ const cs: LocaleDictionary = {
   "requests.approvedLease": "Uchovat po dobu",
   "requests.approvedLeaseKeepForever": "Navždy, jak bylo požadováno",
   "requests.approvedLeaseKeepRequested": "Požadovaných dní: {{count}}",
+  "requests.approvedAudioLanguages": "Jazyky zvuku",
   "requests.approvedTags": "Štítky",
   "requests.approvedTagsHelp":
     "Použije se na titul při schválení. Předvyplněno tím, co vytvořila pravidla; přidejte nebo odeberte libovolný štítek, který definoval administrátor v Nastavení > Štítky.",
@@ -5694,6 +5707,10 @@ const cs: LocaleDictionary = {
     "True, pokud žadatel požádal o trvalé uchování média",
   "settings.refReqRequestLeaseDays":
     "Kolik dní žadatel požádal o uchování; chybí, pokud žádal o navždy",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Jazyky zvuku, které titul podle žadatele musí mít. null ponechává volbu na knihovně; prázdný seznam žádá žádný požadavek",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Jazyky zvuku, které žadatel upřednostňuje, v pořadí. null ponechává volbu na knihovně",
   "settings.refReqRequestList":
     "Seznam, který žádost podal; viz input.request.list níže. Chybí u ruční žádosti",
   "settings.refReqSectionExternalIds":

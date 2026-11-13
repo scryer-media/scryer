@@ -1907,6 +1907,18 @@ const ru: LocaleDictionary = {
   "title.noWantedItem": "Нет активных желаемых материалов.",
   "title.searchReleasesAction": "Искать релизы",
   "title.queueLatest": "Добавить последний релиз в очередь",
+  "search.addConfigRequiredAudio": "Обязательный язык аудио",
+  "search.addConfigPreferredAudio": "Предпочитаемый язык аудио",
+  "search.addConfigAudioChoose": "Выбрать языки",
+  "search.addConfigAudioRequireNone": "Не требовать",
+  "title.preferredAudioLanguages": "Предпочитаемые языки аудио",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer не знает этот язык аудио.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer не знает язык аудио маршрута.",
+  "requests.requestedAudioLanguages": "Запрошенные языки аудио",
+  "requests.requestedRequiredAudio": "Обязательные: {{languages}}",
+  "requests.requestedPreferredAudio": "Предпочитаемые: {{languages}}",
   "title.requiredAudioLanguages": "Требуемые языки аудио",
   "title.originalAudioLanguagePerTitle":
     "Язык оригинала (для каждого произведения)",
@@ -5198,6 +5210,7 @@ const ru: LocaleDictionary = {
   "requests.approvedLease": "Хранить",
   "requests.approvedLeaseKeepForever": "Вечно, как и просили",
   "requests.approvedLeaseKeepRequested": "{{count}} дней, как и просили",
+  "requests.approvedAudioLanguages": "Языки аудио",
   "requests.approvedTags": "Метки",
   "requests.approvedTagsHelp":
     "Применяются к тайтлу при одобрении. Заполнены тем, что выдали правила; добавляйте и убирайте любой тег, определённый администратором в «Настройки › Теги».",
@@ -5278,6 +5291,10 @@ const ru: LocaleDictionary = {
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
     "Сколько дней запросивший просил хранить медиа; отсутствует, когда он попросил хранить вечно",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Языки аудио, которые, по словам запросившего, должны быть у тайтла. null оставляет выбор библиотеке; пустой список означает отсутствие требования",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Предпочитаемые запросившим языки аудио по порядку. null оставляет выбор библиотеке",
   "settings.refReqSectionExternalIds":
     "— Идентификаторы поставщиков в input.request.external_ids",
   "settings.refReqExternalIdsTmdb":

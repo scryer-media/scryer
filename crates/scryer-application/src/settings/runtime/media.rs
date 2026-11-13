@@ -38,6 +38,14 @@ pub struct AudioLanguagePreferenceSettings {
     pub optional_keep_searching: bool,
 }
 
+/// What a new title in a library inherits for audio: the library's languages,
+/// else its facet's. The `original` token stays unresolved.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LibraryAudioLanguageDefaults {
+    pub required: Vec<String>,
+    pub preferred: Vec<String>,
+}
+
 /// The audio language preferences one scope sets itself, where `None`
 /// inherits from the next scope. A library inherits from its facet.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -71,12 +79,81 @@ pub(crate) fn validated_preference_languages(
         !value.trim().is_empty()
             && normalize_required_audio_requirements([value.to_string()]).is_empty()
     }) {
-        return Err(AppError::Validation(format!(
-            "unknown {label} \"{}\"",
-            unknown.trim()
-        )));
+        return Err(AppError::validation_refused(
+            crate::error_reasons::settings::AUDIO_LANGUAGE_UNKNOWN,
+            format!("unknown {label} \"{}\"", unknown.trim()),
+        ));
     }
     Ok(normalize_required_audio_requirements(languages))
+}
+
+/// A per-title audio language override as a caller supplied it, normalized.
+/// `None` and, for preferred languages, an empty list both mean the title
+/// inherits; a required list may be empty on purpose, meaning the title
+/// requires no language whatever its library or facet asks.
+pub(crate) fn validated_title_audio_override(
+    label: &str,
+    languages: Option<Vec<String>>,
+    empty_inherits: bool,
+) -> AppResult<Option<Vec<String>>> {
+    let Some(languages) = languages else {
+        return Ok(None);
+    };
+    let languages = validated_preference_languages(label, languages)?;
+    if empty_inherits && languages.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(languages))
+}
+
+/// Normalize a title's (or a request's, or a list route's) requested audio
+/// language overrides. `required` keeps the `setTitleRequiredAudio`
+/// semantics: `None` inherits and an empty list requires nothing. An empty
+/// `preferred` list inherits.
+pub fn validated_title_audio_overrides(
+    required: Option<Vec<String>>,
+    preferred: Option<Vec<String>>,
+) -> AppResult<(Option<Vec<String>>, Option<Vec<String>>)> {
+    Ok((
+        validated_title_audio_override("required audio language", required, false)?,
+        validated_title_audio_override("preferred audio language", preferred, true)?,
+    ))
+}
+
+/// The patch with its audio language overrides validated and normalized. A
+/// preferred list that normalizes to empty becomes `Some(None)` (inherit); a
+/// required list keeps an empty value (require nothing).
+pub fn validated_title_audio_patch(
+    mut patch: crate::TitleOptionsPatch,
+) -> AppResult<crate::TitleOptionsPatch> {
+    if let Some(required) = patch.required_audio_languages.take() {
+        patch.required_audio_languages = Some(validated_title_audio_override(
+            "required audio language",
+            required,
+            false,
+        )?);
+    }
+    if let Some(preferred) = patch.preferred_audio_languages.take() {
+        patch.preferred_audio_languages = Some(validated_title_audio_override(
+            "preferred audio language",
+            preferred,
+            true,
+        )?);
+    }
+    Ok(patch)
+}
+
+/// A stored title preferred-audio override; `null` and `[]` inherit.
+fn parse_title_preferred_audio_override(raw_value: &str) -> AppResult<Option<Vec<String>>> {
+    let parsed = serde_json::from_str::<Option<Vec<String>>>(raw_value).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to parse setting '{}' JSON value: {error}",
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY
+        ))
+    })?;
+    Ok(parsed
+        .map(normalize_required_audio_requirements)
+        .filter(|languages| !languages.is_empty()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +373,92 @@ impl AppUseCase {
         Ok(overrides)
     }
 
+    /// A title's own preferred audio languages, in order, or `None` when it
+    /// inherits. A stored `null` or empty list inherits too. The `original`
+    /// token stays unresolved.
+    pub async fn load_title_preferred_audio_override(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Option<Vec<String>>> {
+        let raw_value = self
+            .services
+            .config
+            .settings
+            .get_setting_json_explicit(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                Some(title_id.to_string()),
+            )
+            .await?;
+        raw_value
+            .map(|raw_value| parse_title_preferred_audio_override(&raw_value))
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    /// Batch variant of [`Self::load_title_preferred_audio_override`]: one
+    /// read for every title. Titles that inherit are absent from the map.
+    pub async fn load_title_preferred_audio_overrides(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<String>>> {
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let raw_values = self
+            .services
+            .config
+            .settings
+            .list_setting_json_explicit_for_scope_ids(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                title_ids,
+            )
+            .await?;
+        let mut overrides = HashMap::with_capacity(raw_values.len());
+        for (title_id, raw_value) in raw_values {
+            if let Some(languages) = parse_title_preferred_audio_override(&raw_value)? {
+                overrides.insert(title_id, languages);
+            }
+        }
+        Ok(overrides)
+    }
+
+    /// Every title holding a preferred audio language override, with it, or
+    /// `None` when the store cannot list them. An id may name a title that no
+    /// longer exists.
+    pub(crate) async fn list_title_preferred_audio_overrides(
+        &self,
+    ) -> AppResult<Option<HashMap<String, Vec<String>>>> {
+        let Some(ids) = self
+            .services
+            .config
+            .settings
+            .list_explicit_setting_scope_ids(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(self.load_title_preferred_audio_overrides(&ids).await?))
+    }
+
+    /// Whether any title may carry a preferred audio language override. A
+    /// store that cannot tell answers `true`, so a gate built on this only
+    /// ever does more work, never less.
+    pub(crate) async fn any_title_preferred_audio_override(&self) -> AppResult<bool> {
+        self.services
+            .config
+            .settings
+            .any_explicit_setting_json_for_scope_ids(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            )
+            .await
+    }
+
     pub async fn load_title_metadata_language_overrides(
         &self,
         title_ids: &[String],
@@ -408,6 +571,55 @@ impl AppUseCase {
         Ok(Vec::new())
     }
 
+    /// Configured preferred audio languages after title, library and facet
+    /// inheritance, in order. An empty list at any scope inherits from the
+    /// next one. The `original` token stays unresolved.
+    pub async fn resolve_preferred_audio_languages(
+        &self,
+        title_id: Option<&str>,
+        library_id: Option<&str>,
+        scope_id: Option<&str>,
+    ) -> AppResult<Vec<String>> {
+        Ok(self
+            .resolve_audio_language_preference_settings(title_id, library_id, scope_id)
+            .await?
+            .preferred)
+    }
+
+    /// The one title → library → facet ladder for preferred and optional
+    /// audio languages. Each key resolves on its own; only preferred languages
+    /// have a title level. An empty list counts as unset. The `original` token
+    /// stays unresolved.
+    async fn resolve_audio_language_preference_settings(
+        &self,
+        title_id: Option<&str>,
+        library_id: Option<&str>,
+        scope_id: Option<&str>,
+    ) -> AppResult<AudioLanguagePreferenceSettings> {
+        let title = AudioLanguagePreferenceOverrides {
+            preferred: match title_id {
+                Some(title_id) => self.load_title_preferred_audio_override(title_id).await?,
+                None => None,
+            },
+            ..AudioLanguagePreferenceOverrides::default()
+        };
+        let library = match library_id {
+            Some(library_id) => {
+                self.load_audio_language_preference_overrides(library_id)
+                    .await?
+            }
+            None => AudioLanguagePreferenceOverrides::default(),
+        };
+        let facet = match scope_id {
+            Some(scope_id) => {
+                self.load_audio_language_preference_settings(scope_id)
+                    .await?
+            }
+            None => AudioLanguagePreferenceSettings::default(),
+        };
+        Ok(title.over(library.over(facet)))
+    }
+
     pub(crate) async fn resolve_required_audio_languages_for_title(
         &self,
         title: &scryer_domain::Title,
@@ -434,19 +646,20 @@ impl AppUseCase {
     /// Preferred and optional audio languages for a title.
     ///
     /// Each key resolves on its own: the library's value when it sets one,
-    /// otherwise the facet's. An empty list counts as unset, the same rule
+    /// otherwise the facet's. Preferred languages are first taken from the
+    /// title's own override. An empty list counts as unset, the same rule
     /// [`Self::resolve_required_audio_languages`] applies.
     pub(crate) async fn resolve_audio_language_preferences_for_title(
         &self,
         title: &scryer_domain::Title,
     ) -> AppResult<crate::AudioLanguagePreferences> {
         let settings = self
-            .load_audio_language_preference_overrides(&title.library_id)
-            .await?
-            .over(
-                self.load_audio_language_preference_settings(title.facet.as_str())
-                    .await?,
-            );
+            .resolve_audio_language_preference_settings(
+                Some(&title.id),
+                Some(&title.library_id),
+                Some(title.facet.as_str()),
+            )
+            .await?;
         let title_context = title_audio_language_context(
             title.language.as_deref(),
             title.country.as_deref(),
@@ -723,6 +936,215 @@ impl AppUseCase {
                 Some(actor.id.clone()),
             )
             .await
+    }
+
+    /// Apply the audio language overrides a title option patch carries to an
+    /// existing title. Needs the same grant as
+    /// [`Self::set_title_required_audio_override`]; a patch that carries
+    /// neither override reads and writes nothing.
+    pub async fn set_title_audio_language_overrides(
+        &self,
+        actor: &User,
+        title_id: &str,
+        patch: &crate::TitleOptionsPatch,
+    ) -> AppResult<()> {
+        if !patch.carries_audio_language_overrides() {
+            return Ok(());
+        }
+        let patch = validated_title_audio_patch(patch.clone())?;
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::not_found_reason(
+                    crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                    format!("title {title_id}"),
+                )
+            })?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        self.write_title_audio_language_overrides(&title.id, &patch, Some(actor.id.clone()))
+            .await
+    }
+
+    /// Store the audio language overrides a title option patch carries. The
+    /// caller has already authorized the write (title creation or update, an
+    /// approval, a list add) and validated the languages. A field the patch
+    /// leaves `None` is not touched.
+    pub(crate) async fn write_title_audio_language_overrides(
+        &self,
+        title_id: &str,
+        patch: &crate::TitleOptionsPatch,
+        updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        let title_id = title_id.trim().to_string();
+        if let Some(required) = &patch.required_audio_languages {
+            self.services
+                .config
+                .settings
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+                    Some(title_id.clone()),
+                    serde_json::to_string(required)
+                        .map_err(|error| AppError::Repository(error.to_string()))?,
+                    SETTINGS_SOURCE_TYPED_GRAPHQL,
+                    updated_by_user_id.clone(),
+                )
+                .await?;
+        }
+        match &patch.preferred_audio_languages {
+            None => {}
+            Some(Some(languages)) if !languages.is_empty() => {
+                self.services
+                    .config
+                    .settings
+                    .upsert_setting_json(
+                        SETTINGS_SCOPE_SYSTEM,
+                        crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                        Some(title_id),
+                        serde_json::to_string(languages)
+                            .map_err(|error| AppError::Repository(error.to_string()))?,
+                        SETTINGS_SOURCE_TYPED_GRAPHQL,
+                        updated_by_user_id,
+                    )
+                    .await?;
+            }
+            // Inheriting is the absence of a row, so the language-target gate
+            // only ever finds titles that really prefer something.
+            Some(_) => {
+                self.services
+                    .config
+                    .settings
+                    .delete_setting_value(
+                        SETTINGS_SCOPE_SYSTEM,
+                        crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                        Some(title_id),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The audio languages a new title in each of `library_ids` would inherit,
+    /// for labelling the "inherit" choice of the add, request and list forms.
+    ///
+    /// Anyone who can see a library may read them: its viewers, requesters
+    /// and title managers, and catalog-settings or permission managers. Each
+    /// library's outcome is kept apart, so one the actor may not see fails
+    /// alone. The library list and the actor's grants are read once for the
+    /// whole batch; the per-library setting reads are served from the settings
+    /// store's per-key cache.
+    pub async fn library_audio_language_defaults(
+        &self,
+        actor: &User,
+        library_ids: &[String],
+    ) -> AppResult<HashMap<String, AppResult<LibraryAudioLanguageDefaults>>> {
+        let mut outcomes = HashMap::with_capacity(library_ids.len());
+        if library_ids.is_empty() {
+            return Ok(outcomes);
+        }
+        let authorization = self.authorization_for_actor(actor).await?;
+        let app_wide = authorization
+            .has_app_permission(scryer_domain::AppPermission::ManageCatalogSettings)
+            || authorization.has_app_permission(scryer_domain::AppPermission::ManagePermissions);
+        let libraries: HashMap<String, scryer_domain::Library> = self
+            .services
+            .catalog
+            .libraries
+            .list(None)
+            .await?
+            .into_iter()
+            .map(|library| (library.id.clone(), library))
+            .collect();
+        for library_id in library_ids {
+            if outcomes.contains_key(library_id) {
+                continue;
+            }
+            let visible = app_wide
+                || [
+                    scryer_domain::LibraryPermission::View,
+                    scryer_domain::LibraryPermission::Request,
+                    scryer_domain::LibraryPermission::ManageTitles,
+                    scryer_domain::LibraryPermission::ManageLibrary,
+                ]
+                .into_iter()
+                .any(|permission| {
+                    crate::authorization::effective_library_permission(
+                        &authorization,
+                        library_id,
+                        permission,
+                    )
+                });
+            let outcome = match libraries.get(library_id) {
+                Some(library) if visible => {
+                    let facet = library.facet.as_str();
+                    async {
+                        Ok(LibraryAudioLanguageDefaults {
+                            required: self
+                                .resolve_required_audio_languages(
+                                    None,
+                                    Some(&library.id),
+                                    Some(facet),
+                                )
+                                .await?,
+                            preferred: self
+                                .resolve_preferred_audio_languages(
+                                    None,
+                                    Some(&library.id),
+                                    Some(facet),
+                                )
+                                .await?,
+                        })
+                    }
+                    .await
+                }
+                _ => Err(AppError::unauthorized_reason(
+                    crate::error_reasons::settings::LIBRARY_ACCESS_DENIED,
+                    "You do not have access to this library".to_string(),
+                )),
+            };
+            outcomes.insert(library_id.clone(), outcome);
+        }
+        Ok(outcomes)
+    }
+
+    /// Store the audio languages an add asks a newly created title to carry.
+    ///
+    /// The one rule for every add (direct, list, request approval): an add
+    /// that reuses a title already in the library leaves that title's audio
+    /// overrides alone. The title is already committed when this runs, so a
+    /// failed write is logged and the add carries on to its events, claims and
+    /// first search; the title then inherits until someone sets it again. The
+    /// languages were validated before the title was created, so only a
+    /// repository failure reaches the log.
+    pub(crate) async fn store_new_title_audio_language_overrides(
+        &self,
+        created: &crate::CreateTitleOutcome,
+        patch: &crate::TitleOptionsPatch,
+        updated_by_user_id: Option<String>,
+    ) {
+        if created.reused_existing || !patch.carries_audio_language_overrides() {
+            return;
+        }
+        if let Err(error) = self
+            .write_title_audio_language_overrides(&created.title.id, patch, updated_by_user_id)
+            .await
+        {
+            tracing::warn!(
+                title_id = %created.title.id,
+                error = %error,
+                "storing a new title's audio language overrides failed; it inherits its library's"
+            );
+        }
     }
 }
 impl AppUseCase {

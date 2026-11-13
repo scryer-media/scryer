@@ -48,6 +48,8 @@ pub(crate) fn route(kind: MediaFacet, library_id: &str) -> ListRoute {
         use_season_folders: None,
         release_numbering: None,
         tags: Vec::new(),
+        required_audio_languages: None,
+        preferred_audio_languages: None,
     }
 }
 

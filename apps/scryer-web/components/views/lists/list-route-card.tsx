@@ -1,3 +1,5 @@
+import * as React from "react";
+import { CatalogAudioLanguageFields } from "@/components/common/catalog-audio-language-fields";
 import { TitleTagsPicker } from "@/components/common/title-tags-picker";
 import {
   Calendar,
@@ -24,6 +26,12 @@ import { ListFacetFilters } from "./list-facet-filters";
 import { ListEpisodePolicyFields } from "./list-episode-policy-fields";
 import type { Facet, LibraryRecord } from "@/lib/types/titles";
 import { listKindLabelKey } from "@/lib/utils/lists";
+import {
+  catalogAudioLanguageDraftFrom,
+  catalogAudioLanguagesForSubmit,
+  type CatalogAudioLanguageDraft,
+} from "@/lib/utils/catalog-audio-languages";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { facetById } from "@/lib/facets/registry";
 import { facetStyle } from "@/lib/facets/style";
 
@@ -46,6 +54,53 @@ function RouteFieldLabel({
       />
       {label}
     </span>
+  );
+}
+
+/**
+ * The route's audio languages for new titles. The choice is held here so that
+ * "choose" stays open before any language is ticked; the route only ever
+ * carries what the choice sends: null to inherit, an empty required list to
+ * require none, or the chosen languages.
+ */
+function ListRouteAudioLanguageFields({
+  route,
+  library,
+  idPrefix,
+  disabled,
+  onChange,
+}: {
+  route: ListRoute;
+  /** The route's library, whose languages "inherit" stands for when known. */
+  library: LibraryRecord | null;
+  idPrefix: string;
+  disabled?: boolean;
+  onChange: (
+    patch: Pick<ListRoute, "requiredAudioLanguages" | "preferredAudioLanguages">,
+  ) => void;
+}) {
+  const [draft, setDraft] = React.useState<CatalogAudioLanguageDraft>(() =>
+    catalogAudioLanguageDraftFrom(
+      route.requiredAudioLanguages,
+      route.preferredAudioLanguages,
+    ),
+  );
+  return (
+    <CatalogAudioLanguageFields
+      idPrefix={idPrefix}
+      value={draft}
+      onChange={(next) => {
+        setDraft(next);
+        const sent = catalogAudioLanguagesForSubmit(next);
+        onChange({
+          requiredAudioLanguages: sent.required ?? null,
+          preferredAudioLanguages: sent.preferred ?? null,
+        });
+      }}
+      inheritedRequired={library?.inheritedRequiredAudioLanguages ?? null}
+      inheritedPreferred={library?.inheritedPreferredAudioLanguages ?? null}
+      disabled={Boolean(disabled)}
+    />
   );
 }
 
@@ -337,6 +392,13 @@ export function ListRouteCard({
                 />
               </div>
             ) : null}
+            <ListRouteAudioLanguageFields
+              route={route}
+              library={library}
+              idPrefix={selectorId(idPrefix, "route", kind.toLowerCase())}
+              disabled={disabled}
+              onChange={update}
+            />
           </div>
           <ListFacetFilters
             facet={kind}

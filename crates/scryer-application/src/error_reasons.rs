@@ -3784,10 +3784,14 @@ pub mod settings {
     pub const DELAY_PROFILE_CATALOG_INVALID: &str = "SETTINGS_DELAY_PROFILE_CATALOG_INVALID";
     /// The trusted proxy policy is invalid.
     pub const TRUSTED_PROXY_POLICY_INVALID: &str = "SETTINGS_TRUSTED_PROXY_POLICY_INVALID";
+    /// A required, preferred or optional audio language list names a language
+    /// Scryer does not know.
+    pub const AUDIO_LANGUAGE_UNKNOWN: &str = "SETTINGS_AUDIO_LANGUAGE_UNKNOWN";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         DELAY_PROFILE_CATALOG_INVALID,
         TRUSTED_PROXY_POLICY_INVALID,
+        AUDIO_LANGUAGE_UNKNOWN,
         CATALOG_VIEW_COLUMNS_INVALID,
         DASHBOARD_LAYOUT_COLUMNS_OUT_OF_RANGE,
         DASHBOARD_LAYOUT_TOO_MANY_ITEMS,

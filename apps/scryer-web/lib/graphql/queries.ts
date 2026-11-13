@@ -648,6 +648,8 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     requiredAudioLanguagesOverride
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     rootFolderPath
     renameEnabled
@@ -710,6 +712,8 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     qualityTier
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     useSeasonFolders
     useSeasonFoldersOverride
@@ -770,6 +774,8 @@ export const TITLE_MUTATION_RESULT_FIELDS = `
     requiredAudioLanguagesOverride
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
+    effectivePreferredAudioLanguages
+    inheritsPreferredAudioLanguages
     rootFolderId
     rootFolderPath
     monitorType
@@ -1738,6 +1744,8 @@ export const mediaRequestAdminLibrariesQuery = `query MediaRequestAdminLibraries
     qualityProfileId
     requestQualityProfileIds
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3083,6 +3091,8 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     slug
     isDefault
     qualityProfileId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3098,6 +3108,8 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3124,6 +3136,8 @@ export const globalSearchRequesterInitQuery = `query GlobalSearchRequesterInit {
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -3142,6 +3156,8 @@ export const requestableLibrariesQuery = `query RequestableLibraries {
     requestQualityProfileIds
     defaultMonitorType
     requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path
@@ -5135,6 +5151,8 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     createdAt
     updatedAt
     requestedLeaseDays
+    requestedRequiredAudioLanguages
+    requestedPreferredAudioLanguages
     approvedLeaseDays
     policyTags
     lease {
@@ -5208,6 +5226,8 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     createdAt
     updatedAt
     requestedLeaseDays
+    requestedRequiredAudioLanguages
+    requestedPreferredAudioLanguages
     approvedLeaseDays
     policyTags
     lease {
@@ -5881,6 +5901,8 @@ export const LIST_SUBSCRIPTION_FIELDS = `
       useSeasonFolders
       releaseNumbering
       tags
+      requiredAudioLanguages
+      preferredAudioLanguages
     }
     filters {
       facet
@@ -6166,6 +6188,8 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     slug
     isDefault
     qualityProfileId
+    inheritedRequiredAudioLanguages
+    inheritedPreferredAudioLanguages
     roots {
       id
       path

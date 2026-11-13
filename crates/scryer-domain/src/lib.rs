@@ -379,6 +379,15 @@ pub struct MediaRequest {
     /// Season/series-movie picks captured when the requester chose the
     /// `advanced` monitor type. `None` for every other monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Required audio languages the requester asked the new title to carry.
+    /// `None` inherits the library's and facet's; an empty list requires
+    /// nothing. The `original` token stays unresolved.
+    #[serde(default)]
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// Preferred audio languages, in order, the requester asked the new title
+    /// to carry. `None` inherits; never an empty list.
+    #[serde(default)]
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     pub resolved_by_user_id: Option<String>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub created_title_id: Option<String>,

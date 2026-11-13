@@ -257,6 +257,8 @@ fn from_route(route: ListRoute) -> ListRoutePayload {
         use_season_folders: route.use_season_folders,
         release_numbering: route.release_numbering,
         tags: route.tags,
+        required_audio_languages: route.required_audio_languages,
+        preferred_audio_languages: route.preferred_audio_languages,
     }
 }
 
@@ -268,6 +270,17 @@ fn route_from_input(input: ListRouteInput) -> Result<ListRoute, AppError> {
             "a list route needs a library",
         ));
     }
+    let (required_audio_languages, preferred_audio_languages) =
+        scryer_application::validated_title_audio_overrides(
+            input.required_audio_languages,
+            input.preferred_audio_languages,
+        )
+        .map_err(|_| {
+            refused(
+                refusal::ROUTE_AUDIO_LANGUAGE_UNKNOWN,
+                "a list route names an audio language Scryer does not know",
+            )
+        })?;
     Ok(ListRoute {
         kind: input.kind.into_domain(),
         library_id,
@@ -278,6 +291,8 @@ fn route_from_input(input: ListRouteInput) -> Result<ListRoute, AppError> {
         use_season_folders: input.use_season_folders,
         release_numbering: input.release_numbering,
         tags: input.tags,
+        required_audio_languages,
+        preferred_audio_languages,
     })
 }
 

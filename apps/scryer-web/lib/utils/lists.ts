@@ -755,6 +755,8 @@ export function defaultListRoute(
     useSeasonFolders: kind === "MOVIE" ? null : true,
     releaseNumbering: kind === "MOVIE" ? null : "AUTO",
     tags: [],
+    requiredAudioLanguages: null,
+    preferredAudioLanguages: null,
   };
 }
 
@@ -880,6 +882,12 @@ export function listRouteInput(route: ListRoute): ListRouteInput {
     useSeasonFolders: route.useSeasonFolders,
     releaseNumbering: route.releaseNumbering,
     tags: [...route.tags],
+    requiredAudioLanguages: route.requiredAudioLanguages
+      ? [...route.requiredAudioLanguages]
+      : null,
+    preferredAudioLanguages: route.preferredAudioLanguages?.length
+      ? [...route.preferredAudioLanguages]
+      : null,
   };
 }
 

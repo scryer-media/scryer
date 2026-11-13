@@ -381,6 +381,8 @@ impl MediaRequestRepository for MediaRequestStore {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
@@ -394,6 +396,10 @@ impl MediaRequestRepository for MediaRequestStore {
                 let requested_quality_profile_name = requested_quality_profile_name.clone();
                 let requested_monitor_type = requested_monitor_type.clone();
                 let requested_monitor_selection = requested_monitor_selection.clone();
+                let requested_required_audio_languages =
+                    requested_required_audio_languages.clone();
+                let requested_preferred_audio_languages =
+                    requested_preferred_audio_languages.clone();
                 let updated_event = updated_event.clone();
                 Box::pin(async move {
                     update_pending_request_preferences_tx(
@@ -403,6 +409,8 @@ impl MediaRequestRepository for MediaRequestStore {
                         requested_quality_profile_name,
                         requested_monitor_type,
                         requested_monitor_selection,
+                        requested_required_audio_languages,
+                        requested_preferred_audio_languages,
                         requested_lease_days,
                         updated_event,
                     )
@@ -766,6 +774,7 @@ const REQUEST_COLUMNS: &str = "id, library_id, facet, status, identity_fingerpri
         sort_title, slug, poster_url, background_url, year, overview, runtime_minutes, language,
         content_status, rating_summary_json,
         requested_quality_profile_id, requested_quality_profile_name, requested_monitor_type,
+        requested_required_audio_languages_json, requested_preferred_audio_languages_json,
         resolved_by_user_id, resolved_at, created_title_id,
         approved_quality_profile_id, approved_quality_profile_name,
         requested_lease_days, approved_lease_days, decision_id, decided_by_rule_set_ids,
@@ -795,6 +804,7 @@ async fn insert_media_request_tx(
             rating_summary_json,
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
+            requested_required_audio_languages_json, requested_preferred_audio_languages_json,
             requested_lease_days, metadata_snapshot_json,
             origin_kind, origin_subscription_id,
             created_by_user_id, created_at, updated_at
@@ -803,6 +813,7 @@ async fn insert_media_request_tx(
             {}, {}, {}, {}, {}, {}, {},
             {},
             {}, {}, {},
+            {}, {},
             {}, {},
             {}, {},
             {}, {}, {}
@@ -827,6 +838,12 @@ async fn insert_media_request_tx(
             SqlArg::OptText(request.requested_quality_profile_id.clone()),
             SqlArg::OptText(request.requested_quality_profile_name.clone()),
             SqlArg::OptText(request.requested_monitor_type.clone()),
+            SqlArg::OptText(audio_languages_json(
+                request.requested_required_audio_languages.as_deref(),
+            )?),
+            SqlArg::OptText(audio_languages_json(
+                request.requested_preferred_audio_languages.as_deref(),
+            )?),
             SqlArg::OptI64(request.requested_lease_days),
             SqlArg::Text(metadata_snapshot_json),
             SqlArg::Text(request.origin.as_str().to_string()),
@@ -1120,6 +1137,8 @@ async fn update_pending_request_preferences_tx(
     requested_quality_profile_name: String,
     requested_monitor_type: Option<String>,
     requested_monitor_selection: Option<MonitorSelection>,
+    requested_required_audio_languages: Option<Vec<String>>,
+    requested_preferred_audio_languages: Option<Vec<String>>,
     requested_lease_days: Option<i64>,
     updated_event: NewDomainEvent,
 ) -> AppResult<MediaRequestUpdateResult> {
@@ -1130,6 +1149,8 @@ async fn update_pending_request_preferences_tx(
                 SET requested_quality_profile_id = {},
                     requested_quality_profile_name = {},
                     requested_monitor_type = {},
+                    requested_required_audio_languages_json = {},
+                    requested_preferred_audio_languages_json = {},
                     requested_lease_days = {},
                     updated_at = {}
               WHERE id = {} AND status = {}",
@@ -1137,6 +1158,12 @@ async fn update_pending_request_preferences_tx(
                 SqlArg::Text(requested_quality_profile_id),
                 SqlArg::Text(requested_quality_profile_name),
                 SqlArg::OptText(requested_monitor_type),
+                SqlArg::OptText(audio_languages_json(
+                    requested_required_audio_languages.as_deref(),
+                )?),
+                SqlArg::OptText(audio_languages_json(
+                    requested_preferred_audio_languages.as_deref(),
+                )?),
                 SqlArg::OptI64(requested_lease_days),
                 SqlArg::Timestamp(now),
                 SqlArg::Text(request_id.to_string()),
@@ -1425,6 +1452,14 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         requested_quality_profile_name: row.opt_text("requested_quality_profile_name")?,
         requested_monitor_type: row.opt_text("requested_monitor_type")?,
         requested_monitor_selection: None,
+        requested_required_audio_languages: parse_audio_languages(
+            row,
+            "requested_required_audio_languages_json",
+        )?,
+        requested_preferred_audio_languages: parse_audio_languages(
+            row,
+            "requested_preferred_audio_languages_json",
+        )?,
         resolved_by_user_id: row.opt_text("resolved_by_user_id")?,
         resolved_at: row.opt_timestamp("resolved_at")?,
         created_title_id: row.opt_text("created_title_id")?,
@@ -1454,6 +1489,19 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
 /// Serialize a string list for one of the JSON text columns 0223 added.
 fn json_array_text(values: &[String]) -> AppResult<String> {
     canonical_json_text(&values)
+}
+
+/// A requested audio language list, or NULL when the request inherits.
+fn audio_languages_json(languages: Option<&[String]>) -> AppResult<Option<String>> {
+    languages.map(|languages| canonical_json_text(&languages)).transpose()
+}
+
+/// A requested audio language column. NULL inherits; a value that is not a
+/// string array also reads as inheriting rather than hiding the request.
+fn parse_audio_languages(row: &SqlRow, column: &str) -> AppResult<Option<Vec<String>>> {
+    Ok(row
+        .opt_text(column)?
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok()))
 }
 
 fn parse_json_array(row: &SqlRow, column: &str) -> AppResult<Vec<String>> {
