@@ -52,6 +52,11 @@ pub(crate) enum PendingGrabOutcome {
     /// deferral that never reached a download client, it is a failed
     /// submission that an acquisition job's accounting has to count.
     SubmitRefused(RefusedSubmission),
+    /// The indexer's monthly limit refused the grab before anything was sent.
+    /// That is no verdict on the release and no failed submission: the row is
+    /// kept as it was, and the caller moves on to a release from another
+    /// indexer, leaving this indexer's rows alone for the rest of its pass.
+    IndexerLimitRefused,
 }
 
 /// The read-only half of promoting a pending release: every check up to and
@@ -598,6 +603,9 @@ impl AppUseCase {
         }
 
         let mut grabbed_count = 0u32;
+        // Indexers whose monthly limit refused a grab in this pass. Their
+        // remaining rows are left pending and untried until a later pass.
+        let mut limit_refused_indexers: HashSet<String> = HashSet::new();
 
         for (wanted_item_id, mut releases) in by_wanted {
             let Some(wanted) = self
@@ -646,6 +654,13 @@ impl AppUseCase {
             // Try to grab the best release
             let mut grabbed = false;
             for pr in &releases {
+                if pr
+                    .indexer_id
+                    .as_deref()
+                    .is_some_and(|id| limit_refused_indexers.contains(id))
+                {
+                    continue;
+                }
                 match self
                     .try_grab_pending_release(
                         &wanted,
@@ -656,6 +671,13 @@ impl AppUseCase {
                     )
                     .await
                 {
+                    Ok(PendingGrabOutcome::IndexerLimitRefused) => {
+                        // Kept pending, untouched; a release from another
+                        // indexer may still be grabbed below.
+                        if let Some(indexer_id) = pr.indexer_id.as_ref() {
+                            limit_refused_indexers.insert(indexer_id.clone());
+                        }
+                    }
                     Ok(PendingGrabOutcome::Grabbed { .. }) => {
                         // Mark this one as grabbed
                         let _ = self
@@ -1985,6 +2007,26 @@ impl AppUseCase {
                     scope: pending_scope,
                     job: grabbed_job,
                 })
+            }
+            Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                // Nothing was sent, so this says nothing about the release:
+                // no failed attempt, no blocklist entry, no status change. An
+                // operator's own grab gets the coded refusal back; an
+                // automatic walk moves on to another indexer.
+                info!(
+                    title = title.name.as_str(),
+                    release = pr.release_title.as_str(),
+                    indexer_id = ?pr.indexer_id,
+                    reason = err.reason().unwrap_or_default(),
+                    "pending release: grab refused by the indexer's monthly limit"
+                );
+                if matches!(
+                    trigger,
+                    PendingGrabTrigger::Operator | PendingGrabTrigger::StandbyOperator
+                ) {
+                    return Err(err);
+                }
+                Ok(PendingGrabOutcome::IndexerLimitRefused)
             }
             Err(err) => {
                 // An ambiguous submit (the request may have been accepted but

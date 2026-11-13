@@ -3423,6 +3423,11 @@ impl AppUseCase {
 
         let mut ranked = Vec::with_capacity(scored.len());
         for (index, candidate) in scored.iter().enumerate() {
+            // An indexer whose monthly limit already refused a grab in this
+            // pass is passed over; its releases stay eligible for a later one.
+            if rss_indexer_limit_refused(grabbed_urls, candidate.indexer_id.as_deref()) {
+                continue;
+            }
             let scope = candidate
                 .coverage_scope
                 .as_ref()
@@ -4262,6 +4267,40 @@ impl AppUseCase {
 
                 report.releases_grabbed += 1;
             }
+            Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                // Nothing was sent, so this says nothing about the release:
+                // no failed attempt, no blocklist entry. The rest of the pass
+                // skips this indexer and the walk continues with the others.
+                debug!(
+                    title = title.name.as_str(),
+                    release = best.title.as_str(),
+                    indexer_id = ?best.indexer_id,
+                    reason = err.reason().unwrap_or_default(),
+                    "RSS sync: grab refused by the indexer's monthly limit"
+                );
+                let remaining = match best.indexer_id.as_deref() {
+                    Some(indexer_id) => {
+                        grabbed_urls.insert(rss_limit_refused_indexer_marker(indexer_id));
+                        scored
+                    }
+                    None => &scored[best_index + 1..],
+                };
+                Box::pin(self.try_grab_rss_release(
+                    reads,
+                    title,
+                    &wanted,
+                    remaining,
+                    _category,
+                    scope_override,
+                    dl_snapshot,
+                    queue,
+                    delay_profiles,
+                    grabbed_urls,
+                    report,
+                    now,
+                ))
+                .await;
+            }
             Err(err) => {
                 warn!(
                     title = title.name.as_str(),
@@ -4417,6 +4456,16 @@ impl AppUseCase {
             }
         }
     }
+}
+
+/// The pass-wide marker for an indexer whose monthly limit refused a grab.
+/// It lives beside the grabbed URLs so every title in the pass sees it.
+fn rss_limit_refused_indexer_marker(indexer_id: &str) -> String {
+    format!("__rss_limit_refused_indexer:{indexer_id}")
+}
+
+fn rss_indexer_limit_refused(pass_markers: &HashSet<String>, indexer_id: Option<&str>) -> bool {
+    indexer_id.is_some_and(|id| pass_markers.contains(&rss_limit_refused_indexer_marker(id)))
 }
 
 #[derive(Default, Debug)]

@@ -2306,8 +2306,18 @@ pub(crate) async fn try_saved_candidates_with_trigger(
         .await;
     let mut stale_indexer_ids = HashSet::new();
     let mut covered_scopes: Vec<SubmissionScope> = Vec::new();
+    // Indexers whose monthly limit refused a grab during this walk. Their
+    // other saved results stay `Standby`, unclaimed and untried.
+    let mut limit_refused_indexers: HashSet<String> = HashSet::new();
 
     for standby in standby_releases {
+        if standby
+            .indexer_id
+            .as_deref()
+            .is_some_and(|id| limit_refused_indexers.contains(id))
+        {
+            continue;
+        }
         let standby_scope = standby_scopes
             .get(&standby.id)
             .cloned()
@@ -2564,6 +2574,20 @@ pub(crate) async fn try_saved_candidates_with_trigger(
                     .update_pending_release_status(&standby.id, PendingReleaseStatus::Standby, None)
                     .await;
                 covered_scopes.push(standby_scope);
+            }
+            Ok(super::pending::PendingGrabOutcome::IndexerLimitRefused) => {
+                // The saved result is as good as it was; only its indexer is
+                // at a monthly limit. Hand the claim back and try a saved
+                // result from another indexer.
+                let _ = app
+                    .services
+                    .workflow
+                    .pending_releases
+                    .update_pending_release_status(&standby.id, PendingReleaseStatus::Standby, None)
+                    .await;
+                if let Some(indexer_id) = standby.indexer_id.as_ref() {
+                    limit_refused_indexers.insert(indexer_id.clone());
+                }
             }
             Ok(super::pending::PendingGrabOutcome::Parked) => {
                 return StandbyRecoveryOutcome::Parked {

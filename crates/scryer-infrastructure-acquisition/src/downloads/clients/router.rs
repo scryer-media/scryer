@@ -2539,6 +2539,16 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         .await;
                     return Err(error);
                 }
+                if error.is_indexer_monthly_limit_refusal() {
+                    // The indexer was never asked, so this is not a routing
+                    // failure of the mapped client.
+                    self.delete_staged_nzb(
+                        request.staged_nzb.as_ref(),
+                        "artifact_indexer_limit_reached",
+                    )
+                    .await;
+                    return Err(error);
+                }
                 if let (Some(indexer), Some(mapped_client_id)) =
                     (indexer_config.as_ref(), mapped_client_id)
                 {

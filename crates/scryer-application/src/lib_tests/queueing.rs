@@ -748,6 +748,20 @@ async fn exhausted_monthly_grab_limit_precedes_artifact_fetch_and_client_submiss
             .is_empty(),
         "quota denial must happen before download-client submission"
     );
+    assert!(
+        app.services
+            .workflow
+            .release_attempts
+            .list_failed_release_signatures_for_title(&title.id, 10)
+            .await
+            .expect("list failed signatures")
+            .is_empty(),
+        "a monthly limit refusal is not a failed attempt of the release"
+    );
+    assert!(
+        title_blocklist_entries(&app, &title.id).await.is_empty(),
+        "a monthly limit refusal must not blocklist the release"
+    );
 }
 
 #[tokio::test]

@@ -1444,6 +1444,9 @@ impl AppError {
             | Self::DownloadSubmitAmbiguousWithClient { .. }
             | Self::DownloadSubmitRejected(_)
             | Self::DownloadSourceGone(_) => self,
+            // A capped indexer says nothing about the download client, so the
+            // refusal keeps its own code.
+            _ if self.is_indexer_monthly_limit_refusal() => self,
             _ => Self::DownloadSubmitUnavailable(self.to_string()),
         }
     }
@@ -1466,6 +1469,19 @@ impl AppError {
             self,
             Self::DownloadSubmitUnavailable(_) | Self::DownloadSubmitFailoverExhausted(_)
         )
+    }
+
+    /// A local monthly indexer limit refused the request or grab, or its
+    /// usage could not be checked. Nothing was sent to the indexer, so this is
+    /// neither a verdict on a release nor a failure of the indexer or of a
+    /// download client. Decided by reason code alone.
+    pub fn is_indexer_monthly_limit_refusal(&self) -> bool {
+        use error_reasons::indexer_monthly_quota as quota;
+        self.reason().is_some_and(|reason| {
+            reason == quota::REQUEST_LIMIT_REACHED
+                || reason == quota::GRAB_LIMIT_REACHED
+                || reason == quota::ACCOUNTING_UNAVAILABLE
+        })
     }
 
     pub fn is_download_submit_ambiguous(&self) -> bool {
