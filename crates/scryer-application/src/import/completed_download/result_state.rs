@@ -682,6 +682,7 @@ pub(crate) async fn apply_import_result_with_completed(
             import_id = result.import_id.as_str(),
             decision = ?result.decision,
             skip_reason = ?result.skip_reason,
+            error = result.error_message.as_deref().unwrap_or_default(),
             attempts,
             "import: execution failed; scheduled automatic retry"
         );
