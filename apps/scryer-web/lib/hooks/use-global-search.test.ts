@@ -122,11 +122,11 @@ test("interactive search preserves gateway relevance over popularity in every fa
   const results = [
     searchItem({
       tvdbId: "1",
-      name: "Heroine? Saint? No, I'm an All-Works Maid!",
+      name: "Lantern? Harbor? No, I'm a Quiet Clerk!",
       popularity: 1,
     }),
-    searchItem({ tvdbId: "2", name: "TO BE HERO", popularity: 100 }),
-    searchItem({ tvdbId: "3", name: "Heroines Run the Show", popularity: 90 }),
+    searchItem({ tvdbId: "2", name: "TO BE LANTERN", popularity: 100 }),
+    searchItem({ tvdbId: "3", name: "Lanterns Cross the Bay", popularity: 90 }),
   ];
   for (const facet of ["MOVIE", "SERIES", "ANIME"] as const) {
     const { useGlobalSearch: renderSearch } = loadGlobalSearch({
@@ -158,7 +158,7 @@ test("interactive search preserves gateway relevance over popularity in every fa
       queueFacet: facet,
       uiLanguage: "eng",
     });
-    const actual = await search.runTvdbSearch("heroine? saint?");
+    const actual = await search.runTvdbSearch("lantern? harbor?");
     assert.deepEqual(
       actual.map((item) => item.tvdbId),
       ["1", "2", "3"],
