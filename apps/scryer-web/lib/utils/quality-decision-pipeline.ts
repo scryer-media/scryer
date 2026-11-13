@@ -15,6 +15,13 @@ export const DEFAULT_DECISION_PIPELINE: readonly KnownQualityDecisionGate[] = [
 ];
 
 /**
+ * The order a new profile starts with. The language steps start out of use;
+ * profiles that never chose an order keep the full default above.
+ */
+export const NEW_PROFILE_DECISION_PIPELINE: readonly KnownQualityDecisionGate[] =
+  ["QUALITY_TIER", "REVISION"];
+
+/**
  * Reads a stored or server-sent order. Values are trimmed and upper-cased,
  * empties and repeats dropped, unknown values kept in place. Returns null
  * when the input is not a list, so the caller can pick its own fallback.
