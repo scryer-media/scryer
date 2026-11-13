@@ -86,6 +86,10 @@ test("expiry clears results and dialog, blocks late snapshots, and permits a new
     },
     "@/lib/context/global-status-context": { useGlobalStatus: () => () => {} },
     "@/lib/graphql/queries": { indexersQuery: "indexers" },
+    "@/lib/graphql/mutations": {
+      indexerSearchStartInteractiveReleaseSearchMutation: "start-search",
+      indexerSearchContinueInteractiveReleaseSearchMutation: "continue-search",
+    },
     "@/lib/graphql/release-search": {
       runIterativeReleaseSearch: (
         _client: unknown,
