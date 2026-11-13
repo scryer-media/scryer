@@ -351,12 +351,18 @@ function dropTargetAt(
   };
 }
 
+/** Controls inside a row that keep their own press instead of starting a drag. */
+const INTERACTIVE =
+  "button, a, input, select, textarea, label, [role='button'], [contenteditable='true']";
+
 /**
- * A grip that drags its row with pointer capture. While dragging, the row
- * follows the pointer, its place in the list shows as an empty ghost box, and
- * the other rows slide aside to show where it will land. On release it
- * reports the list and item under the pointer. Lists mark themselves with
- * `data-reorder-list` and their rows with `data-reorder-item`. The grip is a
+ * A grip that drags its row with pointer capture. The whole row is the grab
+ * area with a mouse, except its buttons and other controls; on touch only the
+ * grip drags, so the rest of the row still scrolls the list. While dragging,
+ * the row follows the pointer, its place in the list shows as an empty ghost
+ * box, and the other rows slide aside to show where it will land. On release
+ * it reports the list and item under the pointer. Lists mark themselves with
+ * `data-reorder-list` and their rows with `data-reorder-item`. Dragging is a
  * pointer convenience; every list that uses it also offers buttons for the
  * same moves.
  */
@@ -371,133 +377,168 @@ export function PointerReorderHandle({
   onDrop: (target: ReorderDropTarget) => void;
   className?: string;
 }) {
+  const gripRef = React.useRef<HTMLSpanElement | null>(null);
   const dragRef = React.useRef<Drag | null>(null);
   const settleRef = React.useRef<number | null>(null);
+  const onDropRef = React.useRef(onDrop);
+  React.useLayoutEffect(() => {
+    onDropRef.current = onDrop;
+  });
 
-  React.useEffect(
-    () => () => {
+  React.useEffect(() => {
+    const grip = gripRef.current;
+    if (!grip) return;
+    const row =
+      grip.closest<HTMLElement>("[data-reorder-item]") ??
+      grip.closest<HTMLElement>("li");
+    const surface: HTMLElement = row ?? grip;
+    if (row) row.dataset.reorderGrab = "";
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || dragRef.current) return;
+      const target = event.target as Element | null;
+      const onGrip = !!target && grip.contains(target);
+      if (!onGrip) {
+        // Away from the grip the row drags only with a mouse or pen, and
+        // never from one of its controls.
+        if (event.pointerType === "touch") return;
+        if (target?.closest(INTERACTIVE)) return;
+      }
+      event.preventDefault();
+      surface.setPointerCapture(event.pointerId);
+      const list = row?.parentElement?.closest<HTMLElement>(
+        "[data-reorder-list]",
+      );
+      dragRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        row: row ?? null,
+        list: list && row?.dataset.reorderItem !== undefined ? list : null,
+        listId: list?.dataset.reorderList ?? null,
+        siblings: [],
+        from: -1,
+        gap: 0,
+        to: -1,
+        lifted: false,
+        clone: null,
+        grabX: 0,
+        grabY: 0,
+        rowStyle: null,
+        childVisibility: [],
+        hoveredList: null,
+        foreign: null,
+        height: 0,
+        reducedMotion:
+          window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+          false,
+      };
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!drag.lifted) {
+        if (
+          Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <
+          DRAG_THRESHOLD_PX
+        )
+          return;
+        lift(drag, event.clientX, event.clientY);
+      }
+      moveClone(drag, event.clientX, event.clientY);
+      const under = document.elementFromPoint(event.clientX, event.clientY);
+      const overList = under?.closest<HTMLElement>("[data-reorder-list]");
+      if (drag.list && drag.from >= 0) {
+        // Over another list the row leaves this one, so its slot stays put.
+        const to =
+          overList && overList !== drag.list
+            ? drag.from
+            : slotAt(drag, event.clientY);
+        if (to !== drag.to) {
+          drag.to = to;
+          applyShifts(drag);
+        }
+      }
+      setHoveredList(
+        drag,
+        overList && overList !== drag.list ? overList : null,
+      );
+      updateForeign(drag, overList ?? null, event.clientY);
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (surface.hasPointerCapture(event.pointerId)) {
+        surface.releasePointerCapture(event.pointerId);
+      }
+      if (!drag.lifted) {
+        // A press that never moved is a click, not a drop.
+        dragRef.current = null;
+        return;
+      }
+      const target = dropTargetAt(event.clientX, event.clientY, drag);
+      const finish = () => {
+        settleRef.current = null;
+        restore(drag);
+        dragRef.current = null;
+        if (target) onDropRef.current(target);
+      };
+      // The floating row glides into its ghost's slot before the list
+      // takes its new order.
+      const ghostRect =
+        !drag.clone || drag.reducedMotion || !target
+          ? null
+          : target.list === drag.listId && drag.row
+            ? drag.row.getBoundingClientRect()
+            : drag.foreign?.list.dataset.reorderList === target.list
+              ? foreignSlotRect(drag.foreign)
+              : null;
+      if (drag.clone && ghostRect) {
+        Object.assign(drag.clone.style, {
+          transition: `left ${SETTLE_MS}ms ${EASING}, top ${SETTLE_MS}ms ${EASING}, transform ${SETTLE_MS}ms ${EASING}, box-shadow ${SETTLE_MS}ms ${EASING}`,
+          left: `${ghostRect.left}px`,
+          top: `${ghostRect.top}px`,
+          transform: "scale(1)",
+          boxShadow: "0 0 0 rgba(0, 0, 0, 0)",
+        });
+        settleRef.current = window.setTimeout(finish, SETTLE_MS);
+      } else {
+        finish();
+      }
+    };
+
+    const onPointerCancel = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      restore(drag);
+      dragRef.current = null;
+    };
+
+    surface.addEventListener("pointerdown", onPointerDown);
+    surface.addEventListener("pointermove", onPointerMove);
+    surface.addEventListener("pointerup", onPointerUp);
+    surface.addEventListener("pointercancel", onPointerCancel);
+    return () => {
+      surface.removeEventListener("pointerdown", onPointerDown);
+      surface.removeEventListener("pointermove", onPointerMove);
+      surface.removeEventListener("pointerup", onPointerUp);
+      surface.removeEventListener("pointercancel", onPointerCancel);
+      if (row) delete row.dataset.reorderGrab;
       if (settleRef.current !== null) window.clearTimeout(settleRef.current);
+      settleRef.current = null;
       if (dragRef.current) restore(dragRef.current);
       dragRef.current = null;
-    },
-    [],
-  );
+    };
+  }, []);
 
   return (
     <span
+      ref={gripRef}
       id={id}
       className={cn("cursor-grab touch-none active:cursor-grabbing", className)}
       title={title}
-      onPointerDown={(event) => {
-        if (event.button !== 0 || dragRef.current) return;
-        event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        const row =
-          event.currentTarget.closest<HTMLElement>("[data-reorder-item]") ??
-          event.currentTarget.closest<HTMLElement>("li");
-        const list = row?.parentElement?.closest<HTMLElement>(
-          "[data-reorder-list]",
-        );
-        dragRef.current = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
-          row: row ?? null,
-          list: list && row?.dataset.reorderItem !== undefined ? list : null,
-          listId: list?.dataset.reorderList ?? null,
-          siblings: [],
-          from: -1,
-          gap: 0,
-          to: -1,
-          lifted: false,
-          clone: null,
-          grabX: 0,
-          grabY: 0,
-          rowStyle: null,
-          childVisibility: [],
-          hoveredList: null,
-          foreign: null,
-          height: 0,
-          reducedMotion:
-            window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
-            false,
-        };
-      }}
-      onPointerMove={(event) => {
-        const drag = dragRef.current;
-        if (!drag || drag.pointerId !== event.pointerId) return;
-        if (!drag.lifted) {
-          if (
-            Math.hypot(
-              event.clientX - drag.startX,
-              event.clientY - drag.startY,
-            ) < DRAG_THRESHOLD_PX
-          )
-            return;
-          lift(drag, event.clientX, event.clientY);
-        }
-        moveClone(drag, event.clientX, event.clientY);
-        const under = document.elementFromPoint(event.clientX, event.clientY);
-        const overList = under?.closest<HTMLElement>("[data-reorder-list]");
-        if (drag.list && drag.from >= 0) {
-          // Over another list the row leaves this one, so its slot stays put.
-          const to =
-            overList && overList !== drag.list
-              ? drag.from
-              : slotAt(drag, event.clientY);
-          if (to !== drag.to) {
-            drag.to = to;
-            applyShifts(drag);
-          }
-        }
-        setHoveredList(
-          drag,
-          overList && overList !== drag.list ? overList : null,
-        );
-        updateForeign(drag, overList ?? null, event.clientY);
-      }}
-      onPointerUp={(event) => {
-        const drag = dragRef.current;
-        if (!drag || drag.pointerId !== event.pointerId) return;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-        const target = dropTargetAt(event.clientX, event.clientY, drag);
-        const finish = () => {
-          settleRef.current = null;
-          restore(drag);
-          dragRef.current = null;
-          if (target) onDrop(target);
-        };
-        // The floating row glides into its ghost's slot before the list
-        // takes its new order.
-        const ghostRect =
-          !drag.clone || drag.reducedMotion || !target
-            ? null
-            : target.list === drag.listId && drag.row
-              ? drag.row.getBoundingClientRect()
-              : drag.foreign?.list.dataset.reorderList === target.list
-                ? foreignSlotRect(drag.foreign)
-                : null;
-        if (drag.clone && ghostRect) {
-          Object.assign(drag.clone.style, {
-            transition: `left ${SETTLE_MS}ms ${EASING}, top ${SETTLE_MS}ms ${EASING}, transform ${SETTLE_MS}ms ${EASING}, box-shadow ${SETTLE_MS}ms ${EASING}`,
-            left: `${ghostRect.left}px`,
-            top: `${ghostRect.top}px`,
-            transform: "scale(1)",
-            boxShadow: "0 0 0 rgba(0, 0, 0, 0)",
-          });
-          settleRef.current = window.setTimeout(finish, SETTLE_MS);
-        } else {
-          finish();
-        }
-      }}
-      onPointerCancel={(event) => {
-        const drag = dragRef.current;
-        if (!drag || drag.pointerId !== event.pointerId) return;
-        restore(drag);
-        dragRef.current = null;
-      }}
     >
       <GripVertical className="h-4 w-4" aria-hidden="true" />
     </span>
