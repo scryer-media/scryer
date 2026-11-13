@@ -774,8 +774,6 @@ export const TITLE_MUTATION_RESULT_FIELDS = `
     requiredAudioLanguagesOverride
     effectiveRequiredAudioLanguages
     inheritsRequiredAudioLanguages
-    effectivePreferredAudioLanguages
-    inheritsPreferredAudioLanguages
     rootFolderId
     rootFolderPath
     monitorType

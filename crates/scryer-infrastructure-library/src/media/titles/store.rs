@@ -2398,6 +2398,56 @@ impl TitleRepository for TitleStore {
         Ok(titles)
     }
 
+    async fn get_by_ids_with_projection(
+        &self,
+        ids: &[String],
+        projection: TitleListProjection,
+    ) -> AppResult<Vec<Title>> {
+        if projection.include_external_ids
+            || projection.row == scryer_application::TitleRowProjection::ALL
+        {
+            return self.get_by_ids(ids).await;
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let columns = TITLE_COLUMNS
+            .split(',')
+            .map(str::trim)
+            .filter(|column| title_column_selected(column, projection))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (ids, per_statement) = id_list_statements(
+            ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            TITLE_ID_LIST_BIND_CHUNK,
+        );
+        let base_path = normalized_base_path();
+        let mut titles = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("SELECT {columns} FROM titles WHERE id IN ({placeholders})");
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            for row in &rows {
+                titles.push(title_from_projection_row(
+                    &SelectedTitleRow { row, projection },
+                    PersistedTitleReadMode::Presentation,
+                    false,
+                    &base_path,
+                )?);
+            }
+        }
+        if projection.include_canonical_tags {
+            attach_metadata_tags_to_titles(self.datastore.read_exec(), &mut titles).await?;
+        }
+        Ok(titles)
+    }
+
     async fn list_library_ids_for_titles(
         &self,
         ids: &[String],

@@ -3630,6 +3630,67 @@ async fn pruning_many_deleted_titles_takes_each_of_their_rows() {
 }
 
 #[tokio::test]
+async fn deleting_many_titles_prunes_their_settings_once_and_skips_a_failed_row() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, user, titles) = bootstrap_with_cutoff_projection_state(
+        settings.clone(),
+        Arc::new(StoredQualityProfileRepo::default()),
+        Arc::new(MockMediaFileRepo::default()),
+    );
+    let mut created = Vec::new();
+    for name in ["Prune Once Alpha", "Prune Once Beta", "Prune Once Gamma"] {
+        created.push(
+            app.create_title_without_hydration_with_options_patch_in_library(
+                &user,
+                NewTitle {
+                    name: name.to_string(),
+                    facet: MediaFacet::Movie,
+                    monitored: true,
+                    ..Default::default()
+                },
+                scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+                TitleOptionsPatch {
+                    preferred_audio_languages: Some(Some(vec!["fr".to_string()])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("title")
+            .title,
+        );
+    }
+    // The last title's row is already gone, so its row delete fails.
+    let failed = created[2].clone();
+    titles
+        .store
+        .lock()
+        .await
+        .retain(|title| title.id != failed.id);
+
+    let outcome = app
+        .delete_titles_logically(&created, DomainEventActor::from(&user), false)
+        .await;
+
+    assert!(outcome.is_err(), "the missing row fails the delete");
+    assert_eq!(
+        settings.prune_log(),
+        vec![vec![created[0].id.clone(), created[1].id.clone()]],
+        "one prune, for the rows that went"
+    );
+    assert!(
+        settings
+            .get_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                &failed.id
+            )
+            .await
+            .is_some(),
+        "a title whose row delete failed keeps its settings"
+    );
+}
+
+#[tokio::test]
 async fn library_audio_defaults_take_the_library_value_then_the_facet() {
     let (app, user, settings, title) =
         audio_override_fixture("Defaults Harbor", TitleOptionsPatch::default())

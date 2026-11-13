@@ -740,11 +740,11 @@ impl SettingsRepository for SettingsStore {
             .is_none_or(|rows| !rows.scoped.is_empty()))
     }
 
-    async fn list_explicit_setting_scope_ids(
+    async fn list_explicit_setting_json_values(
         &self,
         scope: &str,
         key_name: &str,
-    ) -> AppResult<Option<Vec<String>>> {
+    ) -> AppResult<Option<Vec<(String, String)>>> {
         let scope = scope.trim();
         let key_name = key_name.trim();
         if scope.is_empty() || key_name.is_empty() {
@@ -755,7 +755,16 @@ impl SettingsRepository for SettingsStore {
         Ok(self
             .cached_explicit_rows(scope, key_name, encryption_key.as_ref())
             .await?
-            .map(|rows| rows.scoped.keys().cloned().collect()))
+            .map(|rows| {
+                rows.scoped
+                    .iter()
+                    .flat_map(|(scope_id, values)| {
+                        values
+                            .iter()
+                            .map(move |value| (scope_id.clone(), value.clone()))
+                    })
+                    .collect()
+            }))
     }
 
     async fn upsert_setting_json(
@@ -2001,14 +2010,17 @@ mod cache_tests {
             Some("\"library\"")
         );
         assert_eq!(
-            SettingsRepository::list_explicit_setting_scope_ids(&store, SCOPE, ALPHA)
+            SettingsRepository::list_explicit_setting_json_values(&store, SCOPE, ALPHA)
                 .await
                 .unwrap()
-                .map(|mut ids| {
-                    ids.sort();
-                    ids
+                .map(|mut rows| {
+                    rows.sort();
+                    rows
                 }),
-            Some(vec!["library-1".to_string(), "title-keep".to_string()])
+            Some(vec![
+                ("library-1".to_string(), "\"library\"".to_string()),
+                ("title-keep".to_string(), "\"a\"".to_string()),
+            ])
         );
 
         // The bind-budget entry point takes the same rows.

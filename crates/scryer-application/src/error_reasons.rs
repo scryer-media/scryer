@@ -3787,6 +3787,10 @@ pub mod settings {
     /// A required, preferred or optional audio language list names a language
     /// Scryer does not know.
     pub const AUDIO_LANGUAGE_UNKNOWN: &str = "SETTINGS_AUDIO_LANGUAGE_UNKNOWN";
+    /// The extension naming the rejected code on an
+    /// [`AUDIO_LANGUAGE_UNKNOWN`] refusal, and on the list route refusal that
+    /// relays it.
+    pub const AUDIO_LANGUAGE_FACT: &str = "audioLanguage";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         DELAY_PROFILE_CATALOG_INVALID,

@@ -3269,6 +3269,33 @@ async fn bulk_title_reads_hydrate_canonical_tags_only_when_the_projection_asks()
     assert_eq!(projected_library_scoped.len(), 1);
     assert!(projected_library_scoped[0].canonical_tags.is_empty());
 
+    // The by-id read with a narrow row keeps the selected values and tags,
+    // skips external ids, and leaves an unknown id out.
+    let narrow = TitleListProjection {
+        include_external_ids: false,
+        include_canonical_tags: true,
+        row: scryer_application::TitleRowProjection {
+            overview: false,
+            poster: false,
+            background: false,
+            ..scryer_application::TitleRowProjection::ALL
+        },
+    };
+    let by_ids = TitleRepository::get_by_ids_with_projection(
+        &catalog,
+        &[title.id.clone(), "title-that-does-not-exist".to_string()],
+        narrow,
+    )
+    .await
+    .expect("narrow by-id projection should load");
+    assert_eq!(by_ids.len(), 1);
+    assert_eq!(by_ids[0].id, title.id);
+    assert_eq!(by_ids[0].name, title.name);
+    assert_eq!(by_ids[0].library_id, title.library_id);
+    assert_eq!(by_ids[0].monitored, title.monitored);
+    assert_eq!(by_ids[0].canonical_tags, vec![tag.clone()]);
+    assert!(by_ids[0].external_ids.is_empty());
+
     // Matching reads index titles by name and id; they never render tags.
     let for_matching = TitleRepository::list_for_matching(&catalog, None, None)
         .await

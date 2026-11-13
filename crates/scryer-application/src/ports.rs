@@ -2656,6 +2656,17 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(titles)
     }
+    /// [`Self::get_by_ids`] with the projection spelled out, for callers that
+    /// read only part of each row. External ids are never loaded. The default
+    /// ignores the projection: a repository holding whole `Title` values loses
+    /// nothing by returning them.
+    async fn get_by_ids_with_projection(
+        &self,
+        ids: &[String],
+        _projection: TitleListProjection,
+    ) -> AppResult<Vec<Title>> {
+        self.get_by_ids(ids).await
+    }
     /// `(title id, library id)` for each id that exists, for permission checks
     /// that need nothing else from the row. Order is not guaranteed.
     async fn list_library_ids_for_titles(
@@ -5953,13 +5964,14 @@ pub trait SettingsRepository: Send + Sync {
         Ok(true)
     }
 
-    /// Every scope id holding an explicit row for this scope + key, or `None`
-    /// when the store cannot list them; a caller then takes its wider path.
-    async fn list_explicit_setting_scope_ids(
+    /// Every explicit `(scope_id, effective_value_json)` row for this scope +
+    /// key, or `None` when the store cannot list them; a caller then takes its
+    /// wider path.
+    async fn list_explicit_setting_json_values(
         &self,
         _scope: &str,
         _key_name: &str,
-    ) -> AppResult<Option<Vec<String>>> {
+    ) -> AppResult<Option<Vec<(String, String)>>> {
         Ok(None)
     }
 

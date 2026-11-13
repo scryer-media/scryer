@@ -228,6 +228,15 @@ pub fn refused(reason: &'static str, message: impl Into<String>) -> AppError {
     AppError::validation_refused(reason, message)
 }
 
+/// [`refused`] carrying the values a client needs, each as its own extension.
+pub fn refused_with_facts(
+    reason: &'static str,
+    message: impl Into<String>,
+    facts: Vec<crate::RefusalFact>,
+) -> AppError {
+    AppError::validation_refused_with_facts(reason, message, facts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

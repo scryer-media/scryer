@@ -66,6 +66,12 @@ pub(super) struct StoredSettingsRepo {
     /// Every key written through `upsert_setting_json`, in order. Shared by
     /// clones.
     write_log: Arc<std::sync::Mutex<Vec<String>>>,
+    /// The scope ids of every `delete_values_for_keys_and_scope_ids` call, one
+    /// entry per call. Shared by clones.
+    prune_log: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+    /// Answer `list_explicit_setting_json_values` with `None`, as a store that
+    /// cannot list a key's rows does. Shared by clones.
+    pub(super) cannot_list_explicit_values: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(super) type StoredSettingValues = Arc<Mutex<HashMap<(String, String, Option<String>), String>>>;
@@ -89,6 +95,14 @@ impl StoredSettingsRepo {
     /// The keys written since the last reset, in write order.
     pub(super) fn write_log(&self) -> Vec<String> {
         self.write_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The scope ids of each per-title prune call, in call order.
+    pub(super) fn prune_log(&self) -> Vec<Vec<String>> {
+        self.prune_log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -211,20 +225,28 @@ impl SettingsRepository for StoredSettingsRepo {
         Ok(())
     }
 
-    async fn list_explicit_setting_scope_ids(
+    async fn list_explicit_setting_json_values(
         &self,
         scope: &str,
         key_name: &str,
-    ) -> AppResult<Option<Vec<String>>> {
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        if self
+            .cannot_list_explicit_values
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(None);
+        }
         Ok(Some(
             self.values
                 .lock()
                 .await
-                .keys()
-                .filter(|(stored_scope, stored_key, _)| {
+                .iter()
+                .filter(|((stored_scope, stored_key, _), _)| {
                     stored_scope == scope && stored_key == key_name
                 })
-                .filter_map(|(_, _, scope_id)| scope_id.clone())
+                .filter_map(|((_, _, scope_id), value)| {
+                    scope_id.clone().map(|scope_id| (scope_id, value.clone()))
+                })
                 .collect(),
         ))
     }
@@ -270,6 +292,10 @@ impl SettingsRepository for StoredSettingsRepo {
         key_names: &[&str],
         scope_ids: &[String],
     ) -> AppResult<u64> {
+        self.prune_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(scope_ids.to_vec());
         let mut values = self.values.lock().await;
         let before = values.len();
         values.retain(|(stored_scope, stored_key, stored_scope_id), _| {

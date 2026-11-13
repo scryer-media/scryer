@@ -1203,13 +1203,19 @@ impl AppUseCase {
             });
         let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
-        let any_title_preferences = self.any_title_preferred_audio_override().await?;
+        // Every title's own preferred languages, from one listing; `None` when
+        // the store cannot list them.
+        let listed_title_preferences = if self.any_title_preferred_audio_override().await? {
+            self.list_title_preferred_audio_overrides().await?
+        } else {
+            Some(HashMap::new())
+        };
         // Without a cutoff score and without library or facet preferences,
         // only titles holding their own preferred languages can be targets:
         // load just those. An override left by a deleted title names no title
         // and costs nothing.
-        let mut known_title_preferences = None;
-        if !any_cutoff_score {
+        let mut only_overridden_titles = false;
+        if !any_cutoff_score && let Some(overrides) = &listed_title_preferences {
             let mut scopes: Vec<&str> = libraries
                 .iter()
                 .flat_map(|library| [library.id.as_str(), library.facet.as_str()])
@@ -1221,27 +1227,18 @@ impl AppUseCase {
                 .await?
                 .is_empty()
             {
-                let overrides = if any_title_preferences {
-                    self.list_title_preferred_audio_overrides().await?
-                } else {
-                    Some(HashMap::new())
-                };
-                match overrides {
-                    Some(overrides) if overrides.is_empty() => {
-                        if let Some(pass) = full_pass {
-                            memo.finish_pass(pass);
-                        }
-                        return Ok(Vec::new());
+                if overrides.is_empty() {
+                    if let Some(pass) = full_pass {
+                        memo.finish_pass(pass);
                     }
-                    Some(overrides) => known_title_preferences = Some(overrides),
-                    // The store cannot list them: take the library-wide path.
-                    None => {}
+                    return Ok(Vec::new());
                 }
+                only_overridden_titles = true;
             }
         }
 
-        let titles = match &known_title_preferences {
-            Some(overrides) if title_id.is_none() => {
+        let titles = match &listed_title_preferences {
+            Some(overrides) if only_overridden_titles && title_id.is_none() => {
                 let ids: Vec<String> = overrides.keys().cloned().collect();
                 self.titles_with_profiles_for_ids(&ids, &library_ids)
                     .await?
@@ -1271,13 +1268,12 @@ impl AppUseCase {
             .await?;
         // A title's own preferred languages make it a language target even
         // when its library and facet set none. One read for every title.
-        let titles_with_preferences = match known_title_preferences {
+        let titles_with_preferences = match listed_title_preferences {
             Some(overrides) => overrides,
-            None if any_title_preferences => {
+            None => {
                 let ids: Vec<String> = titles.iter().map(|(title, _)| title.id.clone()).collect();
                 self.load_title_preferred_audio_overrides(&ids).await?
             }
-            None => HashMap::new(),
         };
         // A profile without a quality-tier gate ignores the tier cutoff, so
         // `cutoff_score` alone decides whether its files are done; without one

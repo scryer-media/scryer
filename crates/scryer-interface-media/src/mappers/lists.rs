@@ -275,10 +275,12 @@ fn route_from_input(input: ListRouteInput) -> Result<ListRoute, AppError> {
             input.required_audio_languages,
             input.preferred_audio_languages,
         )
-        .map_err(|_| {
-            refused(
+        .map_err(|error| {
+            // The rejected code travels on as the settings refusal's fact.
+            refusal::refused_with_facts(
                 refusal::ROUTE_AUDIO_LANGUAGE_UNKNOWN,
                 "a list route names an audio language Scryer does not know",
+                error.refusal_facts().to_vec(),
             )
         })?;
     Ok(ListRoute {
@@ -650,6 +652,35 @@ mod episode_policy_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_route_with_an_unknown_audio_language_names_the_rejected_code() {
+        let error = route_from_input(ListRouteInput {
+            kind: MediaFacetValue::Movie,
+            library_id: async_graphql::ID::from("library-movie"),
+            quality_profile_id: None,
+            root_folder_id: None,
+            monitor_type: String::new(),
+            min_availability: None,
+            use_season_folders: None,
+            release_numbering: None,
+            tags: vec![],
+            required_audio_languages: None,
+            preferred_audio_languages: Some(vec!["en".to_string(), " @@ ".to_string()]),
+        })
+        .expect_err("an unknown code is refused");
+        assert_eq!(
+            error.validation_reason(),
+            Some(refusal::ROUTE_AUDIO_LANGUAGE_UNKNOWN)
+        );
+        assert_eq!(
+            error.refusal_facts(),
+            &[scryer_application::RefusalFact::new(
+                scryer_application::error_reasons::settings::AUDIO_LANGUAGE_FACT,
+                "@@",
+            )]
+        );
     }
 
     #[test]

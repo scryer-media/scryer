@@ -57,6 +57,19 @@ function RouteFieldLabel({
   );
 }
 
+function sameLanguageList(
+  left: readonly string[] | null | undefined,
+  right: readonly string[] | null | undefined,
+): boolean {
+  if (left == null || right == null) {
+    return (left == null) === (right == null);
+  }
+  return (
+    left.length === right.length &&
+    left.every((code, index) => code === right[index])
+  );
+}
+
 /**
  * The route's audio languages for new titles. The choice is held here so that
  * "choose" stays open before any language is ticked; the route only ever
@@ -85,6 +98,28 @@ function ListRouteAudioLanguageFields({
       route.preferredAudioLanguages,
     ),
   );
+  // The draft follows the route: when the route's stored languages are no
+  // longer what the draft sends (the route was replaced under the card), it
+  // starts again from them. A draft that sends what is stored is kept, so
+  // "choose" with nothing ticked stays open.
+  const sent = catalogAudioLanguagesForSubmit(draft);
+  if (
+    !sameLanguageList(sent.required ?? null, route.requiredAudioLanguages) ||
+    // An empty preferred list inherits, as null does.
+    !sameLanguageList(
+      sent.preferred ?? null,
+      route.preferredAudioLanguages?.length
+        ? route.preferredAudioLanguages
+        : null,
+    )
+  ) {
+    setDraft(
+      catalogAudioLanguageDraftFrom(
+        route.requiredAudioLanguages,
+        route.preferredAudioLanguages,
+      ),
+    );
+  }
   return (
     <CatalogAudioLanguageFields
       idPrefix={idPrefix}

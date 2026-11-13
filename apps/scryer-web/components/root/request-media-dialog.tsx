@@ -233,9 +233,18 @@ export function RequestMediaDialog({
       : leaseChoice === "custom"
         ? clampRequestLeaseDays(customLeaseDays)
         : Number(leaseChoice);
+  // Keyed on what would be sent, not on the draft: a draft change that sends
+  // the same lists (switching to "choose" before ticking any) keeps the same
+  // value, so the preview does not ask again with identical variables.
+  const requestedAudioKey = JSON.stringify(
+    catalogAudioLanguagesForSubmit(audioLanguages),
+  );
   const requestedAudio = React.useMemo(
-    () => catalogAudioLanguagesForSubmit(audioLanguages),
-    [audioLanguages],
+    () =>
+      JSON.parse(requestedAudioKey) as ReturnType<
+        typeof catalogAudioLanguagesForSubmit
+      >,
+    [requestedAudioKey],
   );
 
   const selectedLibrary =

@@ -79,9 +79,13 @@ pub(crate) fn validated_preference_languages(
         !value.trim().is_empty()
             && normalize_required_audio_requirements([value.to_string()]).is_empty()
     }) {
-        return Err(AppError::validation_refused(
+        return Err(AppError::validation_refused_with_facts(
             crate::error_reasons::settings::AUDIO_LANGUAGE_UNKNOWN,
             format!("unknown {label} \"{}\"", unknown.trim()),
+            vec![crate::RefusalFact::new(
+                crate::error_reasons::settings::AUDIO_LANGUAGE_FACT,
+                unknown.trim(),
+            )],
         ));
     }
     Ok(normalize_required_audio_requirements(languages))
@@ -154,6 +158,29 @@ fn parse_title_preferred_audio_override(raw_value: &str) -> AppResult<Option<Vec
     Ok(parsed
         .map(normalize_required_audio_requirements)
         .filter(|languages| !languages.is_empty()))
+}
+
+/// Stored title preferred-audio rows, keyed by title. A title that inherits is
+/// absent, and so is one whose row will not parse: one bad row is logged and
+/// read as inheriting rather than failing every other title in the batch.
+fn collect_title_preferred_audio_overrides(
+    raw_values: Vec<(String, String)>,
+) -> HashMap<String, Vec<String>> {
+    let mut overrides = HashMap::with_capacity(raw_values.len());
+    for (title_id, raw_value) in raw_values {
+        match parse_title_preferred_audio_override(&raw_value) {
+            Ok(Some(languages)) => {
+                overrides.insert(title_id, languages);
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                title_id = %title_id,
+                error = %error,
+                "ignoring a stored preferred audio language override that will not parse; the title inherits"
+            ),
+        }
+    }
+    overrides
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,13 +442,7 @@ impl AppUseCase {
                 title_ids,
             )
             .await?;
-        let mut overrides = HashMap::with_capacity(raw_values.len());
-        for (title_id, raw_value) in raw_values {
-            if let Some(languages) = parse_title_preferred_audio_override(&raw_value)? {
-                overrides.insert(title_id, languages);
-            }
-        }
-        Ok(overrides)
+        Ok(collect_title_preferred_audio_overrides(raw_values))
     }
 
     /// Every title holding a preferred audio language override, with it, or
@@ -430,19 +451,16 @@ impl AppUseCase {
     pub(crate) async fn list_title_preferred_audio_overrides(
         &self,
     ) -> AppResult<Option<HashMap<String, Vec<String>>>> {
-        let Some(ids) = self
+        Ok(self
             .services
             .config
             .settings
-            .list_explicit_setting_scope_ids(
+            .list_explicit_setting_json_values(
                 SETTINGS_SCOPE_SYSTEM,
                 crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
             )
             .await?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(self.load_title_preferred_audio_overrides(&ids).await?))
+            .map(collect_title_preferred_audio_overrides))
     }
 
     /// Whether any title may carry a preferred audio language override. A

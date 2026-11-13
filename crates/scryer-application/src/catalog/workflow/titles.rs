@@ -541,14 +541,23 @@ impl AppUseCase {
         if ids.is_empty() || library_ids.is_empty() {
             return Ok(Vec::new());
         }
+        let library_ids: HashSet<&str> = library_ids.iter().map(String::as_str).collect();
+        // The same narrow row the library-wide load reads.
         let titles = self
             .services
             .catalog
             .titles
-            .get_by_ids(ids)
+            .get_by_ids_with_projection(
+                ids,
+                crate::TitleListProjection {
+                    include_external_ids: false,
+                    include_canonical_tags: true,
+                    row: CUTOFF_SWEEP_TITLE_ROW,
+                },
+            )
             .await?
             .into_iter()
-            .filter(|title| library_ids.contains(&title.library_id))
+            .filter(|title| library_ids.contains(title.library_id.as_str()))
             .collect();
         self.attach_search_profiles(titles, false).await
     }
