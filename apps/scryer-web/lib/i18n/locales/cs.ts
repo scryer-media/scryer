@@ -7268,28 +7268,18 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Pořadí rozhodování",
   "qualityProfile.decisionOrderInfo":
     "Když dvě vydání splní tento profil, Scryer prochází tyto kroky shora. Rozhodne první krok, který je od sebe odliší. Skóre rozhoduje vždy jako poslední.",
-  "qualityProfile.decisionPresets": "Předvolby",
-  "qualityProfile.decisionPresetDefault": "Výchozí",
-  "qualityProfile.decisionPresetLanguageFirst": "Nejdřív jazyk",
-  "qualityProfile.decisionPresetScoreOnly": "Jen skóre",
   "qualityProfile.decisionGateQualityTier": "Úroveň kvality",
   "qualityProfile.decisionGateQualityTierDescription":
     "Vyhrává vydání v úrovni, která je v preferenci kvality tohoto profilu výše.",
-  "qualityProfile.decisionGateQualityTierSummary": "úrovně kvality",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Ve stejné úrovni a od stejné skupiny vyhrává novější PROPER nebo REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "revize PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Preferovaný jazyk",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Vyhrává vydání, jehož zvuk je v preferovaných jazycích zvuku knihovny výše.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "preferovaného jazyka zvuku",
   "qualityProfile.decisionGateOptionalLanguages": "Volitelné jazyky",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Vyhrává vydání, které obsahuje více volitelných jazyků zvuku knihovny.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "počtu volitelných jazyků zvuku",
   "qualityProfile.decisionGateUnknown": "Neznámý krok ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Tato verze webové aplikace tento krok nezná. Zůstává na svém místě.",
@@ -7301,11 +7291,6 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Přidat {{value}} do pořadí rozhodování",
   "qualityProfile.decisionAvailableSteps": "Nepoužité kroky",
   "qualityProfile.decisionAllStepsInUse": "Všechny kroky se používají.",
-  "qualityProfile.decisionSummary":
-    "Vydání se porovnávají podle {{steps}} a nakonec podle skóre.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, poté {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Vydání se porovnávají pouze podle skóre.",
   "qualityProfile.decisionWarningTierAbsent":
     "Bez kroku úroveň kvality může vydání nižší úrovně nahradit soubor vyšší úrovně a hraniční úroveň neplatí. Hledání upgradů zastaví jen hraniční skóre; bez něj je profil spokojen, jakmile má soubor.",
   "qualityProfile.decisionNoteTierBelowLanguage":

@@ -3893,28 +3893,18 @@ const de: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Entscheidungsreihenfolge",
   "qualityProfile.decisionOrderInfo":
     "Wenn zwei Releases dieses Profil erfüllen, prüft Scryer diese Schritte von oben nach unten. Der erste Schritt, der sie unterscheidet, entscheidet. Der Score entscheidet immer zuletzt.",
-  "qualityProfile.decisionPresets": "Vorlagen",
-  "qualityProfile.decisionPresetDefault": "Standard",
-  "qualityProfile.decisionPresetLanguageFirst": "Sprache zuerst",
-  "qualityProfile.decisionPresetScoreOnly": "Nur Score",
   "qualityProfile.decisionGateQualityTier": "Qualitätsstufe",
   "qualityProfile.decisionGateQualityTierDescription":
     "Das Release in der Stufe, die in der Qualitätspräferenz dieses Profils höher steht, gewinnt.",
-  "qualityProfile.decisionGateQualityTierSummary": "Qualitätsstufe",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Innerhalb derselben Stufe und Release-Gruppe gewinnt ein neueres PROPER oder REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK-Revision",
   "qualityProfile.decisionGatePreferredLanguage": "Bevorzugte Sprache",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Das Release, dessen Audiospur in den bevorzugten Audiosprachen der Bibliothek höher steht, gewinnt.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "bevorzugter Audiosprache",
   "qualityProfile.decisionGateOptionalLanguages": "Optionale Sprachen",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Das Release mit mehr optionalen Audiosprachen der Bibliothek gewinnt.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "Anzahl optionaler Audiosprachen",
   "qualityProfile.decisionGateUnknown": "Unbekannter Schritt ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Diese Version der Web-App kennt diesen Schritt nicht. Er bleibt an seiner Stelle.",
@@ -3928,11 +3918,6 @@ const de: LocaleDictionary = {
     "{{value}} zur Entscheidungsreihenfolge hinzufügen",
   "qualityProfile.decisionAvailableSteps": "Nicht verwendete Schritte",
   "qualityProfile.decisionAllStepsInUse": "Alle Schritte werden verwendet.",
-  "qualityProfile.decisionSummary":
-    "Releases werden nach {{steps}} und zuletzt nach Score verglichen.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, dann {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Releases werden nur nach Score verglichen.",
   "qualityProfile.decisionWarningTierAbsent":
     "Ohne den Schritt Qualitätsstufe kann ein Release einer niedrigeren Stufe eine Datei einer höheren Stufe ersetzen, und die Cutoff-Stufe gilt nicht. Nur der Cutoff-Score beendet die Suche nach Upgrades; ohne Cutoff-Score ist das Profil zufrieden, sobald eine Datei vorhanden ist.",
   "qualityProfile.decisionNoteTierBelowLanguage":

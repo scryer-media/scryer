@@ -3931,28 +3931,18 @@ const es: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Orden de decisión",
   "qualityProfile.decisionOrderInfo":
     "Cuando dos lanzamientos cumplen este perfil, Scryer revisa estos pasos desde arriba. Decide el primer paso que los distingue. La puntuación siempre decide al final.",
-  "qualityProfile.decisionPresets": "Ajustes predefinidos",
-  "qualityProfile.decisionPresetDefault": "Predeterminado",
-  "qualityProfile.decisionPresetLanguageFirst": "Primero el idioma",
-  "qualityProfile.decisionPresetScoreOnly": "Solo puntuación",
   "qualityProfile.decisionGateQualityTier": "Nivel de calidad",
   "qualityProfile.decisionGateQualityTierDescription":
     "Gana el lanzamiento del nivel situado más arriba en la preferencia de calidad de este perfil.",
-  "qualityProfile.decisionGateQualityTierSummary": "nivel de calidad",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Dentro del mismo nivel y grupo de lanzamiento, gana un PROPER o REPACK más reciente.",
-  "qualityProfile.decisionGateRevisionSummary": "revisión PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Idioma preferido",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Gana el lanzamiento cuyo audio está más arriba en los idiomas de audio preferidos de la biblioteca.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "idioma de audio preferido",
   "qualityProfile.decisionGateOptionalLanguages": "Idiomas opcionales",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Gana el lanzamiento que incluye más idiomas de audio opcionales de la biblioteca.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "cantidad de idiomas de audio opcionales",
   "qualityProfile.decisionGateUnknown": "Paso desconocido ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Esta versión de la aplicación web no reconoce este paso. Se mantiene en su lugar.",
@@ -3964,11 +3954,6 @@ const es: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Añadir {{value}} al orden de decisión",
   "qualityProfile.decisionAvailableSteps": "Pasos sin usar",
   "qualityProfile.decisionAllStepsInUse": "Todos los pasos están en uso.",
-  "qualityProfile.decisionSummary":
-    "Los lanzamientos se comparan por {{steps}} y, por último, por puntuación.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, luego {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Los lanzamientos se comparan solo por puntuación.",
   "qualityProfile.decisionWarningTierAbsent":
     "Sin el paso de nivel de calidad, un lanzamiento de nivel inferior puede reemplazar un archivo de nivel superior y el nivel de corte no se aplica. Solo la puntuación de corte detiene la búsqueda de mejoras; sin ella, el perfil queda satisfecho en cuanto tiene un archivo.",
   "qualityProfile.decisionNoteTierBelowLanguage":

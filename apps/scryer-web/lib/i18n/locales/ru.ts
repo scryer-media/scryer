@@ -13520,28 +13520,18 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Порядок решения",
   "qualityProfile.decisionOrderInfo":
     "Когда два релиза подходят под этот профиль, Scryer проверяет эти шаги сверху вниз. Решает первый шаг, который их различает. Оценка всегда решает последней.",
-  "qualityProfile.decisionPresets": "Предустановки",
-  "qualityProfile.decisionPresetDefault": "По умолчанию",
-  "qualityProfile.decisionPresetLanguageFirst": "Сначала язык",
-  "qualityProfile.decisionPresetScoreOnly": "Только оценка",
   "qualityProfile.decisionGateQualityTier": "Уровень качества",
   "qualityProfile.decisionGateQualityTierDescription":
     "Побеждает релиз из уровня, который стоит выше в предпочтениях качества этого профиля.",
-  "qualityProfile.decisionGateQualityTierSummary": "уровню качества",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "В пределах одного уровня и одной релиз-группы побеждает более новый PROPER или REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "ревизии PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Предпочитаемый язык",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Побеждает релиз, аудио которого стоит выше в списке предпочитаемых языков аудио библиотеки.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "предпочитаемому языку аудио",
   "qualityProfile.decisionGateOptionalLanguages": "Дополнительные языки",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Побеждает релиз, в котором больше дополнительных языков аудио библиотеки.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "числу дополнительных языков аудио",
   "qualityProfile.decisionGateUnknown": "Неизвестный шаг ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Эта версия веб-приложения не знает этот шаг. Он остаётся на своём месте.",
@@ -13553,11 +13543,6 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Добавить {{value}} в порядок решения",
   "qualityProfile.decisionAvailableSteps": "Неиспользуемые шаги",
   "qualityProfile.decisionAllStepsInUse": "Все шаги используются.",
-  "qualityProfile.decisionSummary":
-    "Релизы сравниваются по {{steps}} и в конце по оценке.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, затем по {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Релизы сравниваются только по оценке.",
   "qualityProfile.decisionWarningTierAbsent":
     "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень не действует. Поиск обновлений останавливает только пороговая оценка; без неё профиль считается выполненным, как только есть файл.",
   "qualityProfile.decisionNoteTierBelowLanguage":

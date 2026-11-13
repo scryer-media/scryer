@@ -1190,7 +1190,8 @@ const zh_CN: LocaleDictionary = {
   "search.addConfigAudioRequireNone": "不要求任何语言",
   "title.preferredAudioLanguages": "首选音频语言",
   "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "Scryer 无法识别该音频语言。",
-  "lists.refusal.routeAudioLanguageUnknown": "Scryer 无法识别某条路由的音频语言。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer 无法识别某条路由的音频语言。",
   "requests.requestedAudioLanguages": "请求的音频语言",
   "requests.requestedRequiredAudio": "必需：{{languages}}",
   "requests.requestedPreferredAudio": "首选：{{languages}}",
@@ -3528,26 +3529,18 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.decisionOrder": "判定顺序",
   "qualityProfile.decisionOrderInfo":
     "当两个发布都符合此配置文件时，Scryer 会从上到下检查这些步骤。第一个能区分它们的步骤做出决定。评分始终最后决定。",
-  "qualityProfile.decisionPresets": "预设",
-  "qualityProfile.decisionPresetDefault": "默认",
-  "qualityProfile.decisionPresetLanguageFirst": "语言优先",
-  "qualityProfile.decisionPresetScoreOnly": "仅评分",
   "qualityProfile.decisionGateQualityTier": "质量等级",
   "qualityProfile.decisionGateQualityTierDescription":
     "在此配置文件的质量偏好中排名更高的等级的发布胜出。",
-  "qualityProfile.decisionGateQualityTierSummary": "质量等级",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "在同一等级和同一发布组内，较新的 PROPER 或 REPACK 胜出。",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK 修订",
   "qualityProfile.decisionGatePreferredLanguage": "首选语言",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "音频在媒体库首选音频语言中排名更高的发布胜出。",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "首选音频语言",
   "qualityProfile.decisionGateOptionalLanguages": "可选语言",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "包含更多媒体库可选音频语言的发布胜出。",
-  "qualityProfile.decisionGateOptionalLanguagesSummary": "可选音频语言数量",
   "qualityProfile.decisionGateUnknown": "未知步骤（{{value}}）",
   "qualityProfile.decisionGateUnknownDescription":
     "此版本的网页应用无法识别该步骤，它会保留在原位。",
@@ -3559,9 +3552,6 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "将 {{value}} 加入判定顺序",
   "qualityProfile.decisionAvailableSteps": "未使用的步骤",
   "qualityProfile.decisionAllStepsInUse": "所有步骤均已使用。",
-  "qualityProfile.decisionSummary": "发布依次按{{steps}}比较，最后按评分比较。",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}，然后按{{next}}",
-  "qualityProfile.decisionSummaryScoreOnly": "发布仅按评分比较。",
   "qualityProfile.decisionWarningTierAbsent":
     "没有质量等级步骤时，较低等级的发布可能替换较高等级的文件，且截止等级不适用。只有截止评分会停止寻找升级；若也没有截止评分，配置文件在有文件后即视为满足。",
   "qualityProfile.decisionNoteTierBelowLanguage":

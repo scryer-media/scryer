@@ -1732,7 +1732,8 @@ const zh_TW: LocaleDictionary = {
   "search.addConfigAudioRequireNone": "不要求任何語言",
   "title.preferredAudioLanguages": "偏好音訊語言",
   "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "Scryer 無法辨識該音訊語言。",
-  "lists.refusal.routeAudioLanguageUnknown": "Scryer 無法辨識某條路由的音訊語言。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer 無法辨識某條路由的音訊語言。",
   "requests.requestedAudioLanguages": "已請求的音訊語言",
   "requests.requestedRequiredAudio": "必要：{{languages}}",
   "requests.requestedPreferredAudio": "偏好：{{languages}}",
@@ -5710,26 +5711,18 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionOrder": "判定順序",
   "qualityProfile.decisionOrderInfo":
     "當兩個發佈都符合此設定檔時，Scryer 會由上而下檢查這些步驟。第一個能區分它們的步驟做出決定。評分一律最後決定。",
-  "qualityProfile.decisionPresets": "預設組合",
-  "qualityProfile.decisionPresetDefault": "預設",
-  "qualityProfile.decisionPresetLanguageFirst": "語言優先",
-  "qualityProfile.decisionPresetScoreOnly": "僅評分",
   "qualityProfile.decisionGateQualityTier": "品質等級",
   "qualityProfile.decisionGateQualityTierDescription":
     "在此設定檔的品質偏好中排名較高之等級的發佈勝出。",
-  "qualityProfile.decisionGateQualityTierSummary": "品質等級",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "在同一等級與同一發佈群組內，較新的 PROPER 或 REPACK 勝出。",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK 修訂",
   "qualityProfile.decisionGatePreferredLanguage": "偏好語言",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "音訊在媒體庫偏好音訊語言中排名較高的發佈勝出。",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "偏好音訊語言",
   "qualityProfile.decisionGateOptionalLanguages": "選用語言",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "包含較多媒體庫選用音訊語言的發佈勝出。",
-  "qualityProfile.decisionGateOptionalLanguagesSummary": "選用音訊語言數量",
   "qualityProfile.decisionGateUnknown": "無法辨識的步驟（{{value}}）",
   "qualityProfile.decisionGateUnknownDescription":
     "此版本的網頁應用程式無法辨識這個步驟，它會保留在原位。",
@@ -5741,9 +5734,6 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "將 {{value}} 加入判定順序",
   "qualityProfile.decisionAvailableSteps": "未使用的步驟",
   "qualityProfile.decisionAllStepsInUse": "所有步驟皆已使用。",
-  "qualityProfile.decisionSummary": "發佈依序按{{steps}}比較，最後按評分比較。",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}，接著按{{next}}",
-  "qualityProfile.decisionSummaryScoreOnly": "發佈僅按評分比較。",
   "qualityProfile.decisionWarningTierAbsent":
     "沒有品質等級步驟時，較低等級的發佈可能取代較高等級的檔案，且截止等級不適用。只有截止評分會停止尋找升級；若也沒有截止評分，設定檔在有檔案後即視為滿足。",
   "qualityProfile.decisionNoteTierBelowLanguage":

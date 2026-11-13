@@ -1274,8 +1274,10 @@ const ja: LocaleDictionary = {
   "search.addConfigAudioChoose": "言語を選択",
   "search.addConfigAudioRequireNone": "何も必須にしない",
   "title.preferredAudioLanguages": "優先オーディオ言語",
-  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN": "そのオーディオ言語は Scryer で認識できません。",
-  "lists.refusal.routeAudioLanguageUnknown": "ルートのオーディオ言語は Scryer で認識できません。",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "そのオーディオ言語は Scryer で認識できません。",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "ルートのオーディオ言語は Scryer で認識できません。",
   "requests.requestedAudioLanguages": "リクエストされたオーディオ言語",
   "requests.requestedRequiredAudio": "必須: {{languages}}",
   "requests.requestedPreferredAudio": "優先: {{languages}}",
@@ -3818,26 +3820,18 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionOrder": "判定順序",
   "qualityProfile.decisionOrderInfo":
     "2つのリリースがどちらもこのプロファイルを満たす場合、Scryer は上からこれらのステップを確認します。最初に差がついたステップで決まります。スコアは常に最後に判定します。",
-  "qualityProfile.decisionPresets": "プリセット",
-  "qualityProfile.decisionPresetDefault": "デフォルト",
-  "qualityProfile.decisionPresetLanguageFirst": "言語優先",
-  "qualityProfile.decisionPresetScoreOnly": "スコアのみ",
   "qualityProfile.decisionGateQualityTier": "品質ティア",
   "qualityProfile.decisionGateQualityTierDescription":
     "このプロファイルの品質の優先順位で上位にあるティアのリリースが勝ちます。",
-  "qualityProfile.decisionGateQualityTierSummary": "品質ティア",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "同じティアかつ同じリリースグループでは、新しい PROPER または REPACK が勝ちます。",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK のリビジョン",
   "qualityProfile.decisionGatePreferredLanguage": "優先言語",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "ライブラリの優先音声言語で上位にある音声を持つリリースが勝ちます。",
-  "qualityProfile.decisionGatePreferredLanguageSummary": "優先音声言語",
   "qualityProfile.decisionGateOptionalLanguages": "任意の言語",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "ライブラリの任意の音声言語をより多く含むリリースが勝ちます。",
-  "qualityProfile.decisionGateOptionalLanguagesSummary": "任意の音声言語の数",
   "qualityProfile.decisionGateUnknown": "不明なステップ ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "このバージョンのウェブアプリはこのステップを認識できません。位置はそのまま保持されます。",
@@ -3849,11 +3843,6 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "{{value}} を判定順序に追加",
   "qualityProfile.decisionAvailableSteps": "未使用のステップ",
   "qualityProfile.decisionAllStepsInUse": "すべてのステップを使用中です。",
-  "qualityProfile.decisionSummary":
-    "リリースは {{steps}}、最後にスコアの順で比較されます。",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}、次に {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "リリースはスコアのみで比較されます。",
   "qualityProfile.decisionWarningTierAbsent":
     "品質ティアのステップがないと、下位ティアのリリースが上位ティアのファイルを置き換えることがあり、カットオフティアは適用されません。アップグレードの検索を止めるのはカットオフスコアだけです。カットオフスコアもない場合、ファイルがあればプロファイルは満たされます。",
   "qualityProfile.decisionNoteTierBelowLanguage":

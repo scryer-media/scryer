@@ -13,7 +13,6 @@ import {
   type ReorderDropTarget,
 } from "@/components/common/pointer-reorder-handle";
 import { InfoHelp } from "@/components/common/info-help";
-import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Label } from "@/components/ui/label";
 import {
@@ -25,13 +24,10 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
-  DECISION_PIPELINE_PRESETS,
   addDecisionGate,
   availableDecisionGates,
   decisionGateLabel,
   decisionPipelineNotices,
-  decisionPipelinePresetId,
-  describeDecisionPipeline,
   moveDecisionGate,
   removeDecisionGate,
   type DecisionPipelineNotice,
@@ -97,7 +93,6 @@ export function QualityDecisionOrderEditor({
 }) {
   const t = useTranslate();
   const available = availableDecisionGates(pipeline);
-  const activePreset = decisionPipelinePresetId(pipeline);
   const notices = decisionPipelineNotices(pipeline);
 
   const dropActiveGate = (
@@ -150,43 +145,6 @@ export function QualityDecisionOrderEditor({
         </span>
       </summary>
       <div className={`${SECTION_BODY_CLASS} space-y-4`}>
-        <div className="flex flex-wrap items-center gap-2">
-          <Label className={`text-xs ${MUTED_TEXT_CLASS}`}>
-            {t("qualityProfile.decisionPresets")}
-          </Label>
-          {DECISION_PIPELINE_PRESETS.map((preset) => {
-            const active = activePreset === preset.id;
-            return (
-              <Button
-                key={preset.id}
-                id={selectorId(
-                  "settings-quality-profile-decision-preset",
-                  preset.id,
-                )}
-                type="button"
-                variant="secondary"
-                size="sm"
-                aria-pressed={active}
-                className={cn(
-                  active &&
-                    "border border-[rgba(var(--scry-accent-rgb),0.45)] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-accent-text)] hover:bg-[rgba(var(--scry-accent-rgb),0.2)]",
-                )}
-                onClick={() => onChange([...preset.pipeline])}
-              >
-                {t(preset.labelKey)}
-              </Button>
-            );
-          })}
-        </div>
-
-        <p
-          id={selectorId("settings-quality-profile-decision-summary")}
-          className="text-sm text-[var(--scry-ink2)]"
-          aria-live="polite"
-        >
-          {describeDecisionPipeline(pipeline, t)}
-        </p>
-
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]">
           <ol className={LIST_CLASS} data-reorder-list={PIPELINE_LIST}>
             {pipeline.map((gate, index) => {

@@ -12599,28 +12599,18 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Decision order",
   "qualityProfile.decisionOrderInfo":
     "When two releases both pass this profile, Scryer checks these steps from the top. The first step that tells them apart decides. Score always decides last.",
-  "qualityProfile.decisionPresets": "Presets",
-  "qualityProfile.decisionPresetDefault": "Default",
-  "qualityProfile.decisionPresetLanguageFirst": "Language first",
-  "qualityProfile.decisionPresetScoreOnly": "Score only",
   "qualityProfile.decisionGateQualityTier": "Quality tier",
   "qualityProfile.decisionGateQualityTierDescription":
     "The release in the tier ranked higher in this profile's quality preference wins.",
-  "qualityProfile.decisionGateQualityTierSummary": "quality tier",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Within the same tier and release group, a newer PROPER or REPACK wins.",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK revision",
   "qualityProfile.decisionGatePreferredLanguage": "Preferred language",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "The release whose audio ranks higher in the library's preferred audio languages wins.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "preferred audio language",
   "qualityProfile.decisionGateOptionalLanguages": "Optional languages",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "The release carrying more of the library's optional audio languages wins.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "number of optional audio languages",
   "qualityProfile.decisionGateUnknown": "Unrecognized step ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "This version of the web app does not recognize this step. It stays where it is.",
@@ -12633,11 +12623,6 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Add {{value}} to the decision order",
   "qualityProfile.decisionAvailableSteps": "Steps not in use",
   "qualityProfile.decisionAllStepsInUse": "Every step is in use.",
-  "qualityProfile.decisionSummary":
-    "Releases are compared by {{steps}}, and finally by score.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, then {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Releases are compared by score alone.",
   "qualityProfile.decisionWarningTierAbsent":
     "Without the quality tier step, a lower-tier release can replace a higher-tier file, and the cutoff tier does not apply. Only the cutoff score stops the search for upgrades; with no cutoff score either, the profile is satisfied once it has a file.",
   "qualityProfile.decisionNoteTierBelowLanguage":

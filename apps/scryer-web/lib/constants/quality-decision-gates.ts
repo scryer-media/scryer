@@ -28,8 +28,6 @@ export type QualityDecisionGateDescriptor = {
   kind: QualityDecisionGateKind;
   labelKey: string;
   descriptionKey: string;
-  /** Lower-case phrase used inside the order summary sentence. */
-  summaryKey: string;
   icon: LucideIcon;
 };
 
@@ -41,7 +39,6 @@ export const QUALITY_DECISION_GATES: readonly QualityDecisionGateDescriptor[] =
       kind: "tier",
       labelKey: "qualityProfile.decisionGateQualityTier",
       descriptionKey: "qualityProfile.decisionGateQualityTierDescription",
-      summaryKey: "qualityProfile.decisionGateQualityTierSummary",
       icon: Layers,
     },
     {
@@ -49,7 +46,6 @@ export const QUALITY_DECISION_GATES: readonly QualityDecisionGateDescriptor[] =
       kind: "revision",
       labelKey: "qualityProfile.decisionGateRevision",
       descriptionKey: "qualityProfile.decisionGateRevisionDescription",
-      summaryKey: "qualityProfile.decisionGateRevisionSummary",
       icon: RefreshCw,
     },
     {
@@ -57,7 +53,6 @@ export const QUALITY_DECISION_GATES: readonly QualityDecisionGateDescriptor[] =
       kind: "language",
       labelKey: "qualityProfile.decisionGatePreferredLanguage",
       descriptionKey: "qualityProfile.decisionGatePreferredLanguageDescription",
-      summaryKey: "qualityProfile.decisionGatePreferredLanguageSummary",
       icon: Languages,
     },
     {
@@ -65,7 +60,6 @@ export const QUALITY_DECISION_GATES: readonly QualityDecisionGateDescriptor[] =
       kind: "language",
       labelKey: "qualityProfile.decisionGateOptionalLanguages",
       descriptionKey: "qualityProfile.decisionGateOptionalLanguagesDescription",
-      summaryKey: "qualityProfile.decisionGateOptionalLanguagesSummary",
       icon: ListPlus,
     },
   ];

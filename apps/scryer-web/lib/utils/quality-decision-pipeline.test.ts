@@ -1,16 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  DECISION_PIPELINE_PRESETS,
   DEFAULT_DECISION_PIPELINE,
   addDecisionGate,
   decidedByLabel,
   availableDecisionGates,
   decisionPipelineForIgnoreProperRepack,
   decisionPipelineNotices,
-  decisionPipelinePresetId,
   decisionPipelineUsesTierCutoff,
-  describeDecisionPipeline,
   ignoresProperRepack,
   moveDecisionGate,
   normalizeDecisionPipeline,
@@ -100,18 +97,6 @@ test("available gates are the known ones not in the order", () => {
   ]);
 });
 
-test("presets are recognised only by exact order", () => {
-  for (const preset of DECISION_PIPELINE_PRESETS) {
-    assert.equal(decisionPipelinePresetId(preset.pipeline), preset.id);
-  }
-  assert.deepEqual(
-    DECISION_PIPELINE_PRESETS.find((preset) => preset.id === "language_first")
-      ?.pipeline,
-    ["PREFERRED_LANGUAGE", "QUALITY_TIER", "REVISION", "OPTIONAL_LANGUAGES"],
-  );
-  assert.equal(decisionPipelinePresetId(["REVISION", "QUALITY_TIER"]), null);
-});
-
 test("notices follow tier, revision and language positions", () => {
   assert.deepEqual(decisionPipelineNotices(DEFAULT_DECISION_PIPELINE), [
     "language_needs_library_languages",
@@ -132,37 +117,6 @@ test("notices follow tier, revision and language positions", () => {
     decisionPipelineUsesTierCutoff(["REVISION", "QUALITY_TIER"]),
     true,
   );
-});
-
-test("the summary chains each step in order and handles score only", () => {
-  assert.equal(
-    describeDecisionPipeline([], translate),
-    "qualityProfile.decisionSummaryScoreOnly",
-  );
-  assert.equal(
-    describeDecisionPipeline(["QUALITY_TIER"], translate),
-    `qualityProfile.decisionSummary(${JSON.stringify({
-      steps: "qualityProfile.decisionGateQualityTierSummary",
-    })})`,
-  );
-  const steps: string[] = [];
-  const recording = (key: string, values?: Record<string, string | number>) => {
-    if (key === "qualityProfile.decisionSummaryJoin") {
-      return `${values?.previous} > ${values?.next}`;
-    }
-    if (key === "qualityProfile.decisionSummary") {
-      steps.push(String(values?.steps));
-      return "done";
-    }
-    return values?.value ? `?${values.value}` : key.split(".")[1];
-  };
-  describeDecisionPipeline(
-    ["PREFERRED_LANGUAGE", "FUTURE_GATE", "REVISION"],
-    recording,
-  );
-  assert.deepEqual(steps, [
-    "decisionGatePreferredLanguageSummary > ?FUTURE_GATE > decisionGateRevisionSummary",
-  ]);
 });
 
 test("the deciding step reads as a label, score and unknown steps included", () => {
