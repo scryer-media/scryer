@@ -303,7 +303,7 @@ struct ParentListing {
 }
 
 enum ListedEntry {
-    Unread(std::fs::DirEntry),
+    Unread(Box<std::fs::DirEntry>),
     /// Whether the entry is a directory and not a link.
     Read(bool),
 }
@@ -330,7 +330,7 @@ impl ParentListing {
                     let entry = entry.ok()?;
                     let name = entry.file_name();
                     folded.insert(name.to_string_lossy().to_lowercase());
-                    entries.insert(name, ListedEntry::Unread(entry));
+                    entries.insert(name, ListedEntry::Unread(Box::new(entry)));
                 }
             }
             // A directory that does not exist yet holds nothing; resolving
