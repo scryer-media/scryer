@@ -190,7 +190,7 @@ fn build_token(
     }
     Some(Token {
         raw: raw.to_string(),
-        normalized: normalize_token(raw),
+        normalized: localize_season_word(normalize_token(raw)),
         span: TextSpan { start, end },
         separator_before,
         separator_before_has_space: input[..start]
@@ -283,6 +283,19 @@ fn build_cst(tokens: &[Token]) -> ReleaseCst {
     }
 
     ReleaseCst { nodes }
+}
+
+/// French, Italian, Spanish and Polish season words read as `SEASON`, alone
+/// or fused to their number (`Saison3`), so every season rule applies to them.
+fn localize_season_word(normalized: String) -> String {
+    for word in ["SAISON", "STAGIONE", "TEMPORADA", "SEZON"] {
+        if let Some(number) = normalized.strip_prefix(word)
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return format!("SEASON{number}");
+        }
+    }
+    normalized
 }
 
 pub(crate) fn normalize_token(raw: &str) -> String {
