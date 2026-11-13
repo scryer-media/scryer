@@ -1,7 +1,7 @@
 import { DEFAULT_QUALITY_PROFILE_QUALITY_TIERS } from "@/lib/constants/quality-profiles";
 import { QUALITY_PROFILE_INHERIT_VALUE } from "@/lib/constants/settings";
 import {
-  NEW_PROFILE_DECISION_PIPELINE,
+  DEFAULT_DECISION_PIPELINE,
   decisionPipelineForIgnoreProperRepack,
   ignoresProperRepack,
   normalizeDecisionPipeline,
@@ -499,7 +499,7 @@ export function buildQualityProfileTemplate(
     min_score_to_grab: null,
     cutoff_score: null,
     min_upgrade_score_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
-    decision_pipeline: [...NEW_PROFILE_DECISION_PIPELINE],
+    decision_pipeline: [...DEFAULT_DECISION_PIPELINE],
   };
 }
 

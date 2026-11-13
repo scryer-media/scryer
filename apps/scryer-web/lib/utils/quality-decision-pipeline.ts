@@ -6,20 +6,15 @@ import {
   type QualityDecisionGateKind,
 } from "../constants/quality-decision-gates.ts";
 
-/** The order a profile uses when it does not set one. */
+/**
+ * The order a profile uses when it does not set one: tier, then revision, as
+ * every profile compared before orders were configurable. The language steps
+ * are opt-in.
+ */
 export const DEFAULT_DECISION_PIPELINE: readonly KnownQualityDecisionGate[] = [
   "QUALITY_TIER",
   "REVISION",
-  "PREFERRED_LANGUAGE",
-  "OPTIONAL_LANGUAGES",
 ];
-
-/**
- * The order a new profile starts with. The language steps start out of use;
- * profiles that never chose an order keep the full default above.
- */
-export const NEW_PROFILE_DECISION_PIPELINE: readonly KnownQualityDecisionGate[] =
-  ["QUALITY_TIER", "REVISION"];
 
 /**
  * Reads a stored or server-sent order. Values are trimmed and upper-cased,

@@ -44,8 +44,6 @@ test("the PROPER/REPACK setting is the presence of the revision step", () => {
   );
   assert.deepEqual(decisionPipelineForIgnoreProperRepack(true), [
     "QUALITY_TIER",
-    "PREFERRED_LANGUAGE",
-    "OPTIONAL_LANGUAGES",
   ]);
 });
 
@@ -89,7 +87,19 @@ test("adding inserts once at the clamped position; removing drops the gate", () 
 });
 
 test("available gates are the known ones not in the order", () => {
-  assert.deepEqual(availableDecisionGates(DEFAULT_DECISION_PIPELINE), []);
+  assert.deepEqual(availableDecisionGates(DEFAULT_DECISION_PIPELINE), [
+    "PREFERRED_LANGUAGE",
+    "OPTIONAL_LANGUAGES",
+  ]);
+  assert.deepEqual(
+    availableDecisionGates([
+      "QUALITY_TIER",
+      "REVISION",
+      "PREFERRED_LANGUAGE",
+      "OPTIONAL_LANGUAGES",
+    ]),
+    [],
+  );
   assert.deepEqual(availableDecisionGates(["REVISION", "FUTURE_GATE"]), [
     "QUALITY_TIER",
     "PREFERRED_LANGUAGE",
@@ -98,9 +108,14 @@ test("available gates are the known ones not in the order", () => {
 });
 
 test("notices follow tier, revision and language positions", () => {
-  assert.deepEqual(decisionPipelineNotices(DEFAULT_DECISION_PIPELINE), [
-    "language_needs_library_languages",
-  ]);
+  assert.deepEqual(decisionPipelineNotices(DEFAULT_DECISION_PIPELINE), []);
+  assert.deepEqual(
+    decisionPipelineNotices([
+      ...DEFAULT_DECISION_PIPELINE,
+      "PREFERRED_LANGUAGE",
+    ]),
+    ["language_needs_library_languages"],
+  );
   assert.deepEqual(decisionPipelineNotices([]), [
     "tier_absent",
     "revision_absent",
