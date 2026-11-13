@@ -36,6 +36,9 @@ permission named in the area's reference.
 | `INTEGRATION_MANAGED_CHILD_INDEXERS_CONTROLLED_THEIR_PARENT_SYNC_CANNOT_EDITED_DIRECTLY` | edit it in the indexer manager instead |
 | `INTEGRATION_MANAGED_INDEXERS_CANNOT_USE_PROXY` | remove the proxy from the input |
 | `INTEGRATION_PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS` | not supported for that indexer |
+| `INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID` | a monthly limit is below 1; send a value of at least 1, or `null` for no limit |
+| `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED`, `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED` | the indexer's `maxRequestsPerMonth` or `maxGrabsPerMonth` is used up for this UTC month; it resets on the 1st, or the operator can change the limit |
+| `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE` | usage against a monthly limit could not be recorded, so the request was refused; retry later |
 | `INDEXER_CATEGORY_MISMATCH` | categories do not fit the indexer's capabilities |
 | `INDEXER_CAPS_REFRESH_FAILED`, `INDEXER_CAPS_REFRESH_DEFERRED` | capabilities could not be refreshed now; retry later |
 | `TEMPORARY_UNAVAILABLE` code (with `retryAfterSeconds`) | wait that long; tell the operator the time in their local zone |

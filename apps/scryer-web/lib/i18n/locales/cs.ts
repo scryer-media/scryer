@@ -3,6 +3,14 @@ import type { LocaleDictionary } from "../types";
 const cs: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Tato verze Prowlarru není podporována. Aktualizujte Prowlarr na verzi 2.0 nebo novější.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Místně nastavený měsíční limit požadavků tohoto indexeru byl vyčerpán.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Místně nastavený měsíční limit stažení tohoto indexeru byl vyčerpán.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Měsíční využití indexeru se nepodařilo spolehlivě ověřit; požadavek byl odmítnut.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Měsíční limity požadavků a stažení musí být kladná celá čísla, nebo prázdné pro žádný limit.",
   "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",

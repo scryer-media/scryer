@@ -16,6 +16,8 @@ query ListIndexers($providerType: String) {
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     storedSecretKeys
     lastHealthStatus
     lastErrorAt
