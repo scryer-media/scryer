@@ -6,6 +6,7 @@ import type {
   LibrarySettingsRecord,
 } from "../types/titles.ts";
 import {
+  libraryChoiceSettingsInput,
   librarySettingsInput,
   storedLibraryOverridesInput,
 } from "./library-settings-input.ts";
@@ -75,8 +76,7 @@ test("optional movie availability fields retain their existing null defaults", (
   assert.equal(input?.movieAvailabilityDelayDays, null);
 });
 
-test("stored overrides go back as they are, without the effective values", () => {
-  const saved: LibrarySettingsRecord = {
+const saved: LibrarySettingsRecord = {
     searchLanguages: ["eng"],
     requiredAudioLanguagesOverride: ["jpn"],
     requiredAudioLanguages: ["jpn"],
@@ -130,8 +130,9 @@ test("stored overrides go back as they are, without the effective values", () =>
     movieAvailabilityDelayDays: 3,
     indexerRoutingOverride: [{ indexerId: "indexer" }],
     downloadClientRoutingOverride: [],
-  };
+};
 
+test("stored overrides go back as they are, without the effective values", () => {
   const input = storedLibraryOverridesInput(saved);
 
   assert.deepEqual(input, {
@@ -169,4 +170,48 @@ test("stored overrides go back as they are, without the effective values", () =>
   ]) {
     assert.equal(kept in input, false);
   }
+});
+
+test("a chosen profile and persona replace the stored ones and keep the rest", () => {
+  const input = libraryChoiceSettingsInput(saved, {
+    qualityProfileId: "chosen-profile",
+    scoringPersona: "AUDIOPHILE",
+  });
+
+  assert.equal(input.qualityProfileId, "chosen-profile");
+  assert.equal(input.scoringPersona, "AUDIOPHILE");
+  assert.equal(input.fileChmod, "664");
+  assert.equal(input.defaultMonitorType, "ALL_EPISODES");
+});
+
+test("a choice equal to the inherited value stays inherited", () => {
+  const inherited: LibrarySettingsRecord = {
+    ...saved,
+    qualityProfileIdOverride: null,
+    qualityProfileId: "global-profile",
+  };
+
+  const kept = libraryChoiceSettingsInput(inherited, {
+    qualityProfileId: "global-profile",
+    scoringPersona: "BALANCED",
+  });
+  assert.equal(kept.qualityProfileId, null);
+  assert.equal(kept.scoringPersona, null);
+
+  const changed = libraryChoiceSettingsInput(inherited, {
+    qualityProfileId: "chosen-profile",
+    scoringPersona: "EFFICIENT",
+  });
+  assert.equal(changed.qualityProfileId, "chosen-profile");
+  assert.equal(changed.scoringPersona, "EFFICIENT");
+});
+
+test("a choice equal to a stored override stays an override", () => {
+  const input = libraryChoiceSettingsInput(saved, {
+    qualityProfileId: "saved-profile",
+    scoringPersona: "BALANCED",
+  });
+
+  assert.equal(input.qualityProfileId, "saved-profile");
+  assert.equal(input.scoringPersona, null);
 });

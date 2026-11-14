@@ -1724,6 +1724,14 @@ export const librariesQuery = `query Libraries($facet: MediaFacetValue, $permiss
   }
 }`;
 
+/** The quality profile and scoring persona a library uses now, which the import wizard starts on. */
+export const externalImportLibraryChoicesQuery = `query ExternalImportLibraryChoices($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    qualityProfileId
+    scoringPersona
+  }
+}`;
+
 /** Every library's stored roots plus the server path style, read before an import updates a library. */
 export const externalImportLibraryRootsQuery = `query ExternalImportLibraryRoots {
   libraries {

@@ -103,3 +103,27 @@ export function storedLibraryOverridesInput(
   };
   return input;
 }
+
+/**
+ * The settings input for a save that chooses a library's quality profile and
+ * scoring persona and leaves its other stored overrides as they are. A choice
+ * equal to the value the library already inherits stays inherited.
+ */
+export function libraryChoiceSettingsInput(
+  saved: LibrarySettingsRecord,
+  chosen: { qualityProfileId: string | null; scoringPersona: string },
+): LibrarySettingsDraft {
+  return {
+    ...storedLibraryOverridesInput(saved),
+    qualityProfileId:
+      saved.qualityProfileIdOverride === null &&
+      chosen.qualityProfileId === saved.qualityProfileId
+        ? null
+        : chosen.qualityProfileId,
+    scoringPersona:
+      saved.scoringPersonaOverride === null &&
+      chosen.scoringPersona === saved.scoringPersona
+        ? null
+        : chosen.scoringPersona,
+  };
+}
