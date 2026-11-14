@@ -165,7 +165,6 @@ test("every template key resolves in the default locale and in Russian", () => {
   );
   const keys = [
     "settings.maintenanceTemplateGallery",
-    "settings.maintenanceTemplateGalleryDescription",
     "settings.maintenanceTemplateApply",
     "settings.maintenanceTemplateGraceBadge",
     "settings.maintenanceTemplateNoGraceBadge",

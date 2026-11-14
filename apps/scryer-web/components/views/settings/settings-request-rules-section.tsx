@@ -14,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { HelpLabel } from "@/components/common/info-help";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -243,9 +244,6 @@ function RequestContextReference() {
             className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
           />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.refReqSubtitle")}
-        </p>
       </CardHeader>
       {open ? (
         <CardContent
@@ -336,17 +334,16 @@ function RequestTemplateGallery({
       >
         <CardTitle className="flex items-center gap-2 text-base">
           <Sparkles className="h-4 w-4" />
-          {t("settings.requestTemplateGallery")}
+          <span onClick={(event) => event.stopPropagation()}>
+            <HelpLabel
+              label={t("settings.requestTemplateGallery")}
+              help={t("settings.requestTemplateGalleryTagNote")}
+            />
+          </span>
           <ChevronDown
             className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
           />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestTemplateGalleryDescription")}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestTemplateGalleryTagNote")}
-        </p>
       </CardHeader>
       {open ? (
         <CardContent
@@ -391,10 +388,12 @@ function RequestUserPicker({
 
   return (
     <div id="settings-request-users-picker" className="space-y-2">
-      <Label className="block">{t("settings.requestRuleRequesters")}</Label>
-      <p className="text-xs text-muted-foreground">
-        {t("settings.requestRuleRequestersHelp")}
-      </p>
+      <Label className="block">
+        <HelpLabel
+          label={t("settings.requestRuleRequesters")}
+          help={t("settings.requestRuleRequestersHelp")}
+        />
+      </Label>
       {users.length === 0 ? (
         <p
           id="settings-request-users-empty"
@@ -422,7 +421,7 @@ function RequestUserPicker({
           ))}
         </div>
       )}
-      {!writable ? (
+      {!writable && selected.length > 0 ? (
         <p
           id="settings-request-users-no-target"
           className="text-xs text-[var(--scry-warning-text)]"
@@ -567,11 +566,11 @@ function RequestPreviewPanel({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          {t("settings.requestPreviewTitle")}
+          <HelpLabel
+            label={t("settings.requestPreviewTitle")}
+            help={t("settings.requestPreviewSubtitle")}
+          />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestPreviewSubtitle")}
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 md:grid-cols-3">
@@ -871,11 +870,7 @@ function RequestPreviewPanel({
               </pre>
             ) : null}
           </div>
-        ) : previewError ? null : (
-          <p className="text-xs text-muted-foreground">
-            {t("settings.requestPreviewEmpty")}
-          </p>
-        )}
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -926,9 +921,6 @@ function RequestDecisionsPanel({
         <CardTitle className="text-base">
           {t("settings.requestDecisionsTitle")}
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.requestDecisionsSubtitle")}
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-end gap-3">
@@ -1098,17 +1090,14 @@ export function SettingsRequestRulesSection({
         <div className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
             {leaseRuleControl}
-            <p
-              id="settings-request-rules-default"
-              className="text-[13px] leading-5 text-muted-foreground"
-            >
-              {t("settings.requestRulesDefault")}
-            </p>
 
             <div className="overflow-hidden rounded border border-border bg-card">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <CardTitle className="text-base text-foreground">
-                  {t("settings.requestRules")}
+                  <HelpLabel
+                    label={t("settings.requestRules")}
+                    help={t("settings.requestRulesDefault")}
+                  />
                 </CardTitle>
                 <RegoAiPromptDialog
                   id="settings-request-rules-ai-prompt"
@@ -1346,11 +1335,11 @@ export function SettingsRequestRulesSection({
 
                     <div>
                       <Label className="mb-2 block">
-                        {t("settings.requestRuleLibraries")}
+                        <HelpLabel
+                          label={t("settings.requestRuleLibraries")}
+                          help={t("settings.requestRuleLibrariesHelp")}
+                        />
                       </Label>
-                      <p className="mb-2 text-xs text-muted-foreground">
-                        {t("settings.requestRuleLibrariesHelp")}
-                      </p>
                       <div className="flex flex-wrap items-center gap-4">
                         {libraries.length === 0 ? (
                           <span className="text-xs text-muted-foreground">
@@ -1384,10 +1373,6 @@ export function SettingsRequestRulesSection({
                         ))}
                       </div>
                     </div>
-
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.requestRuleSaveDisabledNote")}
-                    </p>
 
                     {!canManagePermissions &&
                     requestRuleReadsRequester(ruleSetDraft.regoSource) ? (

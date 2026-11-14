@@ -13,6 +13,24 @@ type InfoHelpProps = {
   ariaLabel: string;
 };
 
+/// A field or section label with its explanation behind an info icon.
+export function HelpLabel({
+  label,
+  help,
+  className,
+}: {
+  label: string;
+  help: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span className={`inline-flex items-center gap-1 ${className ?? ""}`}>
+      {label}
+      <InfoHelp text={help} ariaLabel={label} />
+    </span>
+  );
+}
+
 export function InfoHelp({ text, ariaLabel }: InfoHelpProps) {
   const isMobile = useIsMobile();
   const trigger = (

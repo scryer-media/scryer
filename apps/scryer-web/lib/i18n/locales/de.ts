@@ -2581,7 +2581,6 @@ const de: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Ziel-Qualitätsprofil",
   "settings.maintenanceRuleTargetProfileHelp":
     "Das Profil, auf das diese Aktion übereinstimmende Titel umstellen würde.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID des Qualitätsprofils.",
   "settings.maintenanceRuleLibraries": "Bibliotheksbereich",
   "settings.maintenanceRuleLibrariesHelp":
     "Lassen Sie alle Bibliotheken unmarkiert, damit die Regel für die gesamte Sammlung gilt.",
@@ -2633,8 +2632,6 @@ const de: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "Bis zu {{max}} Titel pro Durchlauf.",
   "settings.maintenancePreviewRun": "Vorschau ausführen",
   "settings.maintenancePreviewRunning": "Vorschau läuft...",
-  "settings.maintenancePreviewEmpty":
-    "Wählen Sie eine Bibliothek und führen Sie die Vorschau aus.",
   "settings.maintenancePreviewNoTitles": "Es wurden keine Titel ausgewertet.",
   "settings.maintenancePreviewColOutcome": "Ergebnis",
   "settings.maintenancePreviewColReasons": "Begründungscodes",
@@ -2705,8 +2702,6 @@ const de: LocaleDictionary = {
 
   // ── Wartungsregeln — Läufe und Verlauf ──
   "settings.maintenanceRunsTitle": "Läufe und Verlauf",
-  "settings.maintenanceRunsSubtitle":
-    "Aktuelle Auswertungsdurchläufe und Aktionsversuche, neueste zuerst.",
   "settings.maintenanceRunScope": "Umfang",
   "settings.maintenanceRunScopeAll": "Alle Regeln",
   "settings.maintenanceRunEvaluationNow": "Jetzt auswerten",
@@ -3305,8 +3300,6 @@ const de: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Verwendet {{title}}.",
   "settings.requestPreviewRun": "Vorschau ausführen",
   "settings.requestPreviewRunning": "Wird ausgeführt…",
-  "settings.requestPreviewEmpty":
-    "Beschreiben Sie eine Anfrage und führen Sie die Vorschau aus, um zu sehen, was diese Regel sagen würde.",
   "settings.requestPreviewMetadataPartial": "Metadaten unvollständig",
   "settings.requestPreviewShowInput": "Eingabe des Matchers anzeigen",
   "settings.requestPreviewHideInput": "Eingabe ausblenden",

@@ -2685,7 +2685,6 @@ const fr: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Profil de qualité cible",
   "settings.maintenanceRuleTargetProfileHelp":
     "Le profil vers lequel cette action déplacerait les titres correspondants.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID du profil de qualité.",
   "settings.maintenanceRuleLibraries": "Portée des bibliothèques",
   "settings.maintenanceRuleLibrariesHelp":
     "Ne cochez aucune bibliothèque pour appliquer la règle à toute la collection.",
@@ -2742,8 +2741,6 @@ const fr: LocaleDictionary = {
     "Jusqu'à {{max}} titres par exécution.",
   "settings.maintenancePreviewRun": "Lancer l'aperçu",
   "settings.maintenancePreviewRunning": "Aperçu en cours...",
-  "settings.maintenancePreviewEmpty":
-    "Choisissez une bibliothèque et lancez l'aperçu.",
   "settings.maintenancePreviewNoTitles": "Aucun titre n'a été évalué.",
   "settings.maintenancePreviewColOutcome": "Résultat",
   "settings.maintenancePreviewColReasons": "Codes de raison",
@@ -2813,8 +2810,6 @@ const fr: LocaleDictionary = {
 
   // ── Règles de maintenance — exécutions et historique ──
   "settings.maintenanceRunsTitle": "Exécutions et historique",
-  "settings.maintenanceRunsSubtitle":
-    "Passes d'évaluation et tentatives d'action récentes, les plus récentes d'abord.",
   "settings.maintenanceRunScope": "Portée",
   "settings.maintenanceRunScopeAll": "Toutes les règles",
   "settings.maintenanceRunEvaluationNow": "Évaluer maintenant",
@@ -3414,8 +3409,6 @@ const fr: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Utilise {{title}}.",
   "settings.requestPreviewRun": "Lancer l'aperçu",
   "settings.requestPreviewRunning": "En cours…",
-  "settings.requestPreviewEmpty":
-    "Décrivez une demande et lancez l'aperçu pour voir ce que dirait cette règle.",
   "settings.requestPreviewMetadataPartial": "Métadonnées incomplètes",
   "settings.requestPreviewShowInput": "Afficher l'entrée vue par le filtre",
   "settings.requestPreviewHideInput": "Masquer l'entrée",

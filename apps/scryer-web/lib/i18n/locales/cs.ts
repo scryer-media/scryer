@@ -4841,14 +4841,10 @@ const cs: LocaleDictionary = {
   "settings.maintenanceSequenceSearchUnconditional": "Vždy vyžádat vyhledávání",
   "settings.maintenanceSequenceSearchPreviousProfileChanged":
     "Pouze po změně profilu",
-  "settings.maintenanceSequenceSearchRequested":
-    "Tento krok vyžádá vyhledávání a zaznamená přijetí až po přijetí požadavku. Následné efekty získání a stahování lze stále pozdržet.",
   "settings.maintenanceSequenceHistoryWaiting": "čeká na dřívější krok",
   "settings.maintenanceSequenceHistorySearchRequested": "vyhledávání vyžádáno",
   "settings.maintenanceSequenceHistorySearchAccepted": "přijato",
   "settings.maintenanceSequenceHistoryJob": "úloha {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "Dokončeno po přijetí",
-  "settings.maintenanceSequenceCompletionCompleted": "Dokončeno po dokončení",
   "settings.maintenanceSequenceStepUnavailable":
     "Tento uložený krok není v aktuálním katalogu k dispozici. Před uložením nebo náhledem jej odeberte, nebo obnovte kompatibilní katalog.",
   "settings.maintenanceSequenceCatalogUnavailable":
@@ -4868,7 +4864,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Cílový profil kvality",
   "settings.maintenanceRuleTargetProfileHelp":
     "Profil, do kterého by tato akce přesunula odpovídající tituly.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID profilu kvality.",
   "settings.maintenanceRuleLibraries": "Rozsah knihoven",
   "settings.maintenanceRuleLibrariesHelp":
     "Ponecháním všech knihoven nezaškrtnutých rozšíříte rozsah pravidla na celou kolekci.",
@@ -4886,8 +4881,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleUpdate": "Aktualizovat pravidlo údržby",
   "settings.maintenanceRuleCopy": "Kopírovat jako nové pravidlo",
   "settings.maintenanceRuleCreateNew": "Vytvořit nové pravidlo údržby",
-  "settings.maintenanceRuleSaveDisabledNote":
-    "Nová pravidla jsou zpočátku vypnutá. Zkontrolujte náhled, vyzkoušejte zkušební běh a teprve poté pravidlo zapněte.",
   "settings.maintenanceRuleValidationRequired":
     "Je vyžadován název, zdroj porovnávání a akce.",
   "settings.maintenanceRuleConfirmDiscardTitle": "Zahodit neuložené změny?",
@@ -4925,7 +4918,6 @@ const cs: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "Subjektů na jeden běh: až {{max}}.",
   "settings.maintenancePreviewRun": "Spustit náhled",
   "settings.maintenancePreviewRunning": "Probíhá náhled...",
-  "settings.maintenancePreviewEmpty": "Vyberte knihovnu a spusťte náhled.",
   "settings.maintenancePreviewNoTitles": "Nebyl vyhodnocen žádný titul.",
   "settings.maintenancePreviewColOutcome": "Výsledek",
   "settings.maintenancePreviewColReasons": "Kódy důvodu",
@@ -5028,8 +5020,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceCountdownOverdueHours": "{{count}} h po splatnosti",
   "settings.maintenanceCountdownOverdueDays": "{{count}} d po splatnosti",
   "settings.maintenanceRunsTitle": "Běhy a historie",
-  "settings.maintenanceRunsSubtitle":
-    "Nedávné vyhodnocovací běhy a pokusy o akce, nejnovější první.",
   "settings.maintenanceRunScope": "Rozsah",
   "settings.maintenanceRunScopeAll": "Každé pravidlo",
   "settings.maintenanceRunEvaluationNow": "Vyhodnotit nyní",
@@ -5083,8 +5073,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Vyloučit",
   "settings.maintenanceExcluded": "Vyloučeno z údržby: {{title}}.",
   "settings.refMaintTitle": "Referenční vstupy údržby",
-  "settings.refMaintSubtitle":
-    "Kliknutím rozbalte každý fakt, který může porovnávání údržby číst.",
   "settings.refMaintIntro":
     "Každé pravidlo údržby dostane jeden vstupní objekt na subjekt: input.subject určuje, co se vyhodnocuje, input.library udává, kde to žije, input.facts nese snímek faktů a obálka vyhodnocení sedí přímo na input. Fakt je obyčejná hodnota a klíč jednoduše chybí, když není co hlásit — pište tedy input.facts.monitored, ne kontrolu stavu. Pokud pravidlo čte fakt, který Scryer pro daný subjekt nedokázal zjistit, Scryer za vás subjekt pozdrží; tuto pojistku nikdy nemusíte psát sami.",
   "settings.refMaintOutputTitle": "Výstup pravidla",
@@ -5384,8 +5372,6 @@ const cs: LocaleDictionary = {
   "settings.refMaintTagOscillationNote":
     "Dvě pravidla, která zapisují opačnou úpravu stejného štítku na stejný titul, pozdrží oba kandidáty s tag_patch_conflict místo toho, aby vyhrálo to, které běželo naposled. Pravidlo, které štítek přidá, a jiné, které jej v pozdějším běhu odebere, takto zachyceno není: jde o chybu v návrhu, která štítek navždy přepíná tam a zpět, takže rozsahy obou pravidel nastavte tak, aby se nemohly shodovat zároveň.",
   "settings.maintenanceTemplateGallery": "Úvodní šablony",
-  "settings.maintenanceTemplateGalleryDescription":
-    "Načte do editoru hotové porovnávání. Nic se neuloží, dokud jej nezkontrolujete a nestisknete vytvořit.",
   "settings.maintenanceTemplateApply": "Použít šablonu",
   "settings.maintenanceTemplateFacetMovie": "Filmy",
   "settings.maintenanceTemplateFacetShow": "Seriály",
@@ -5470,8 +5456,6 @@ const cs: LocaleDictionary = {
     "Smazat pravidlo žádosti {{name}}? Jeho zaznamenaná rozhodnutí zůstanou zachována.",
   "settings.requestRuleValidationRequired":
     "Pravidlo žádosti potřebuje název a podmínku (matcher).",
-  "settings.requestRuleSaveDisabledNote":
-    "Nové pravidlo se uloží vypnuté. Zaškrtněte Zapnuto v tabulce, aby mohlo rozhodovat o žádostech.",
   "settings.requestRuleConfirmDiscardTitle": "Zahodit neuložené změny?",
   "settings.requestRuleConfirmDiscardDescription":
     "Podmínka v editoru nebyla uložena. Pokračováním ji nahradíte.",
@@ -5505,8 +5489,6 @@ const cs: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Použit {{title}}.",
   "settings.requestPreviewRun": "Spustit náhled",
   "settings.requestPreviewRunning": "Probíhá…",
-  "settings.requestPreviewEmpty":
-    "Popište žádost a spusťte náhled, abyste viděli, co by toto pravidlo rozhodlo.",
   "settings.requestPreviewMetadataPartial": "Metadata jsou neúplná",
   "settings.requestPreviewShowInput": "Zobrazit vstup, který podmínka viděla",
   "settings.requestPreviewHideInput": "Skrýt vstup",
@@ -5515,8 +5497,6 @@ const cs: LocaleDictionary = {
   "settings.requestPreviewUndefinedTags":
     "Než je bude možné použít, definujte je v Nastavení › Štítky.",
   "settings.requestDecisionsTitle": "Nedávná rozhodnutí",
-  "settings.requestDecisionsSubtitle":
-    "Co pravidla žádostí v poslední době rozhodla.",
   "settings.requestDecisionsOutcomeFilter": "Výsledek",
   "settings.requestDecisionsOutcomeAll": "Libovolný výsledek",
   "settings.requestDecisionsColTime": "Vyhodnoceno",
@@ -5529,8 +5509,6 @@ const cs: LocaleDictionary = {
   "settings.requestDecisionNoVotes": "Žádné pravidlo nehlasovalo.",
   "settings.requestDecisionHeld": "pozdrženo",
   "settings.requestTemplateGallery": "Úvodní pravidla",
-  "settings.requestTemplateGalleryDescription":
-    "Hotové příklady, které lze načíst do editoru. Použitím se vyplní formulář; stále si ho musíte přečíst, pojmenovat, omezit rozsah a uložit.",
   "settings.requestTemplateGalleryTagNote":
     "Šablona, která vytváří štítek, potřebuje mít tento štítek definovaný v Nastavení › Štítky; nedefinované štítky se při rozhodování o žádosti zahodí.",
   "settings.requestTemplateApply": "Načíst do editoru",
@@ -5560,8 +5538,6 @@ const cs: LocaleDictionary = {
   "settings.requestTemplateDenyPersonalListAbove1080pDescription":
     "Zamítne žádost z osobního seznamu člena, pokud jeho profil kvality přesahuje 1080p. Veřejné seznamy a ruční žádosti zůstanou nedotčené.",
   "settings.refReqTitle": "Referenční přehled vstupu žádosti",
-  "settings.refReqSubtitle":
-    "Každá hodnota, kterou podmínka žádosti umí číst, a co znamená.",
   "settings.refReqIntro":
     "Pravidlo žádosti čte jeden dokument popisující žádost, osobu, která ji podala, knihovnu, na kterou míří, a co o médiu Scryer ví. Fakta jsou obyčejné hodnoty. Fakt, který Scryer nedokázal zjistit, jednoduše chybí, a pravidlo, které čte chybějící fakt, pozdrží žádost pro člověka místo hádání – tuto pojistku sami nepíšete.",
   "settings.refReqOutputTitle": "Co pravidlo žádosti definuje",

@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { HelpLabel } from "@/components/common/info-help";
 import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,7 +75,6 @@ import {
   actionStepKindLabelKey,
   previewOutcomeBadgeTone,
   previewOutcomeLabelKey,
-  ruleStateHelpKey,
   ruleStateLabelKey,
   ruleStateOptionsFor,
 } from "@/lib/utils/maintenance-rule-sets";
@@ -301,9 +301,6 @@ function MaintenanceContextReference() {
             className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
           />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.refMaintSubtitle")}
-        </p>
       </CardHeader>
       {open ? (
         <CardContent
@@ -435,9 +432,6 @@ function MaintenanceTemplateGallery({
             className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
           />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.maintenanceTemplateGalleryDescription")}
-        </p>
       </CardHeader>
       {open ? (
         <CardContent
@@ -554,11 +548,11 @@ function MaintenancePreviewPanel({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          {t("settings.maintenancePreviewTitle")}
+          <HelpLabel
+            label={t("settings.maintenancePreviewTitle")}
+            help={t("settings.maintenancePreviewSubtitle")}
+          />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.maintenancePreviewSubtitle")}
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 md:grid-cols-4">
@@ -621,7 +615,12 @@ function MaintenancePreviewPanel({
           />
           <label>
             <Label className="mb-2 block">
-              {t("settings.maintenancePreviewLimit")}
+              <HelpLabel
+                label={t("settings.maintenancePreviewLimit")}
+                help={t("settings.maintenancePreviewLimitHelp", {
+                  max: MAINTENANCE_PREVIEW_LIMIT_MAX,
+                })}
+              />
             </Label>
             <Input
               id="settings-maintenance-preview-limit"
@@ -631,11 +630,6 @@ function MaintenancePreviewPanel({
                 setPreviewLimit(Number(sanitizeDigits(event.target.value)) || 0)
               }
             />
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("settings.maintenancePreviewLimitHelp", {
-                max: MAINTENANCE_PREVIEW_LIMIT_MAX,
-              })}
-            </p>
           </label>
         </div>
 
@@ -813,11 +807,7 @@ function MaintenancePreviewPanel({
               </Table>
             </div>
           </div>
-        ) : previewError ? null : (
-          <p className="text-xs text-muted-foreground">
-            {t("settings.maintenancePreviewEmpty")}
-          </p>
-        )}
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -967,7 +957,10 @@ export function SettingsMaintenanceRulesSection({
                         {t("settings.maintenanceRuleGraceDays")}
                       </TableHead>
                       <TableHead className="w-[240px]">
-                        {t("settings.maintenanceRuleState")}
+                        <HelpLabel
+                          label={t("settings.maintenanceRuleState")}
+                          help={t("settings.maintenanceRuleStateHelp")}
+                        />
                       </TableHead>
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleRevision")}
@@ -979,7 +972,6 @@ export function SettingsMaintenanceRulesSection({
                   </TableHeader>
                   <TableBody>
                     {ruleSetRecords.map((record) => {
-                      const stateHelpKey = ruleStateHelpKey(record.state);
                       return (
                         <TableRow
                           data-ui="settings-table-row"
@@ -1064,10 +1056,6 @@ export function SettingsMaintenanceRulesSection({
                                     "settings.maintenanceRuleEditedSinceEnabled",
                                   )}
                                 </p>
-                              ) : stateHelpKey ? (
-                                <p className="text-xs text-muted-foreground">
-                                  {t(stateHelpKey)}
-                                </p>
                               ) : null}
                             </div>
                           </TableCell>
@@ -1130,9 +1118,6 @@ export function SettingsMaintenanceRulesSection({
                   </TableBody>
                 </Table>
               </div>
-              <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-                {t("settings.maintenanceRuleStateHelp")}
-              </p>
             </div>
 
             {isEditorOpen ? (
@@ -1269,7 +1254,10 @@ export function SettingsMaintenanceRulesSection({
 
                     <label className="block md:max-w-[50%]">
                       <Label className="mb-2 block">
-                        {t("settings.maintenanceRuleGraceDays")}
+                        <HelpLabel
+                          label={t("settings.maintenanceRuleGraceDays")}
+                          help={t("settings.maintenanceRuleGraceDaysHelp")}
+                        />
                       </Label>
                       <Input
                         id="settings-maintenance-rule-grace-days"
@@ -1285,18 +1273,15 @@ export function SettingsMaintenanceRulesSection({
                         }
                         placeholder="0"
                       />
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {t("settings.maintenanceRuleGraceDaysHelp")}
-                      </p>
                     </label>
 
                     <div>
                       <Label className="mb-2 block">
-                        {t("settings.maintenanceRuleLibraries")}
+                        <HelpLabel
+                          label={t("settings.maintenanceRuleLibraries")}
+                          help={t("settings.maintenanceRuleLibrariesHelp")}
+                        />
                       </Label>
-                      <p className="mb-2 text-xs text-muted-foreground">
-                        {t("settings.maintenanceRuleLibrariesHelp")}
-                      </p>
                       <div className="flex flex-wrap items-center gap-4">
                         {libraries.length === 0 ? (
                           <span className="text-xs text-muted-foreground">
@@ -1368,7 +1353,12 @@ export function SettingsMaintenanceRulesSection({
                       <div>
                         <SingleSelectField
                           id="settings-maintenance-rule-storage-root"
-                          label={t("settings.maintenanceRuleStorageRoot")}
+                          label={
+                            <HelpLabel
+                              label={t("settings.maintenanceRuleStorageRoot")}
+                              help={`${t("settings.maintenanceRuleStorageRootHelp")} ${t("settings.maintenanceRuleStorageRootUnmonitorHelp")}`}
+                            />
+                          }
                           placeholder={t(
                             "settings.maintenanceRuleStorageRootNone",
                           )}
@@ -1384,19 +1374,8 @@ export function SettingsMaintenanceRulesSection({
                             label: `${root.libraryName} · ${root.path}`,
                           }))}
                         />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settings.maintenanceRuleStorageRootHelp")}
-                        </p>
                         {ruleSetDraft.storageRootId ? (
-                          <div className="mt-1 space-y-1">
-                            <p
-                              id="settings-maintenance-rule-storage-root-retention"
-                              className="text-xs text-[var(--scry-warning-text)]"
-                            >
-                              {t(
-                                "settings.maintenanceRuleStorageRootUnmonitorHelp",
-                              )}
-                            </p>
+                          <div className="mt-2">
                             <Button
                               id="settings-maintenance-rule-storage-root-clear"
                               type="button"
@@ -1415,10 +1394,6 @@ export function SettingsMaintenanceRulesSection({
                         ) : null}
                       </div>
                     </MaintenanceRuleAdvanced>
-
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.maintenanceRuleSaveDisabledNote")}
-                    </p>
 
                     <div className="flex gap-2">
                       <Button

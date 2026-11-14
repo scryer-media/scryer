@@ -4628,8 +4628,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Целевой профиль качества",
   "settings.maintenanceRuleTargetProfileHelp":
     "Профиль, на который это действие перевело бы совпавшие тайтлы.",
-  "settings.maintenanceRuleTargetProfileIdHelp":
-    "Идентификатор профиля качества.",
   "settings.maintenanceRuleLibraries": "Область библиотек",
   "settings.maintenanceRuleLibrariesHelp":
     "Не отмечайте ни одной библиотеки, чтобы правило действовало на всю коллекцию.",
@@ -4680,8 +4678,6 @@ const ru: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "До {{max}} тайтлов за прогон.",
   "settings.maintenancePreviewRun": "Запустить предпросмотр",
   "settings.maintenancePreviewRunning": "Выполняется предпросмотр...",
-  "settings.maintenancePreviewEmpty":
-    "Выберите библиотеку и запустите предпросмотр.",
   "settings.maintenancePreviewNoTitles": "Ни один тайтл не был оценён.",
   "settings.maintenancePreviewColOutcome": "Результат",
   "settings.maintenancePreviewColReasons": "Коды причин",
@@ -4741,8 +4737,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceCountdownOverdueHours": "просрочено на {{count}} ч",
   "settings.maintenanceCountdownOverdueDays": "просрочено на {{count}} дн.",
   "settings.maintenanceRunsTitle": "Запуски и история",
-  "settings.maintenanceRunsSubtitle":
-    "Недавние проходы оценки и попытки действий, сначала новые.",
   "settings.maintenanceRunScope": "Охват",
   "settings.maintenanceRunScopeAll": "Все правила",
   "settings.maintenanceRunEvaluationNow": "Оценить сейчас",
@@ -4795,8 +4789,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "Исключить",
   "settings.maintenanceExcluded": "{{title}} исключён из обслуживания.",
   "settings.refMaintTitle": "Справочник входных данных обслуживания",
-  "settings.refMaintSubtitle":
-    "Нажмите, чтобы развернуть полный список фактов, доступных правилу обслуживания.",
   "settings.refMaintIntro":
     "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
   "settings.refMaintOutputTitle": "Результат правила",
@@ -4976,8 +4968,6 @@ const ru: LocaleDictionary = {
   "settings.refMaintTagOscillationNote":
     "Два правила, записывающие противоположные изменения одной метки на одном тайтле, удерживают обоих кандидатов с причиной tag_patch_conflict, а не отдают победу тому, кто отработал последним. Правило, которое добавляет метку, и другое, которое снимает её на следующем прогоне, так не ловится: это ошибка автора, из-за которой тег переключается бесконечно, поэтому ограничьте их так, чтобы они не совпадали одновременно.",
   "settings.maintenanceTemplateGallery": "Готовые шаблоны",
-  "settings.maintenanceTemplateGalleryDescription":
-    "Загрузите готовый матчер в редактор. Ничего не сохраняется, пока вы не проверите правило и не нажмёте «Создать».",
   "settings.maintenanceTemplateApply": "Использовать шаблон",
   "settings.maintenanceTemplateFacetMovie": "Фильмы",
   "settings.maintenanceTemplateFacetShow": "Сериалы",
@@ -5092,8 +5082,6 @@ const ru: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Используется {{title}}.",
   "settings.requestPreviewRun": "Выполнить проверку",
   "settings.requestPreviewRunning": "Выполняется…",
-  "settings.requestPreviewEmpty":
-    "Опишите запрос и запустите проверку, чтобы увидеть, что скажет это правило.",
   "settings.requestPreviewMetadataPartial": "Метаданные неполные",
   "settings.requestPreviewShowInput": "Показать входные данные сопоставителя",
   "settings.requestPreviewHideInput": "Скрыть входные данные",
@@ -5113,8 +5101,6 @@ const ru: LocaleDictionary = {
   "settings.requestDecisionNoVotes": "Ни одно правило не проголосовало.",
   "settings.requestDecisionHeld": "удержано",
   "settings.requestTemplateGallery": "Готовые правила",
-  "settings.requestTemplateGalleryDescription":
-    "Разобранные примеры, которые можно загрузить в редактор. Загрузка заполняет форму; вы всё равно читаете правило, называете его, задаёте область и сохраняете.",
   "settings.requestTemplateGalleryTagNote":
     "Шаблону, который выдаёт тег, нужен этот тег в «Настройки › Теги»; неопределённые теги отбрасываются при решении по запросу.",
   "settings.requestTemplateApply": "Загрузить в редактор",
@@ -5145,8 +5131,6 @@ const ru: LocaleDictionary = {
   "settings.requestTemplateDenyPersonalListAbove1080pDescription":
     "Отклоняет запрос из личного списка участника, когда его профиль качества выше 1080p. Публичные списки и ручные запросы не затрагиваются.",
   "settings.refReqTitle": "Справочник входных данных запросов",
-  "settings.refReqSubtitle":
-    "Все значения, которые может прочитать сопоставитель запроса, и что каждое из них означает.",
   "settings.refReqIntro":
     "Правило запроса читает один документ, описывающий запрос, того, кто его сделал, целевую библиотеку и то, что Scryer знает о медиа. Факты — это обычные значения. Факт, который Scryer не смог наблюдать, просто отсутствует, и правило, читающее отсутствующий факт, удерживает запрос для человека, а не гадает — эту защиту вы никогда не пишете сами.",
   "settings.refReqOutputTitle": "Что определяет правило запроса",
@@ -11871,15 +11855,10 @@ const ru: LocaleDictionary = {
   "settings.maintenanceSequenceSearchUnconditional": "Всегда запрашивать поиск",
   "settings.maintenanceSequenceSearchPreviousProfileChanged":
     "Только после изменения профиля",
-  "settings.maintenanceSequenceSearchRequested":
-    "Этот шаг запрашивает поиск и отмечается как принятый только после принятия запроса. Дальнейшие действия по получению и загрузке могут оставаться приостановленными.",
   "settings.maintenanceSequenceHistoryWaiting": "ожидание предыдущего шага",
   "settings.maintenanceSequenceHistorySearchRequested": "поиск запрошен",
   "settings.maintenanceSequenceHistorySearchAccepted": "принято",
   "settings.maintenanceSequenceHistoryJob": "задание {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "Завершается при принятии",
-  "settings.maintenanceSequenceCompletionCompleted":
-    "Завершается по окончании выполнения",
   "settings.maintenanceSequenceStepUnavailable":
     "Этот сохранённый шаг недоступен в текущем каталоге. Удалите его или восстановите совместимый каталог перед сохранением или предпросмотром.",
   "settings.maintenanceSequenceCatalogUnavailable":
@@ -11904,8 +11883,6 @@ const ru: LocaleDictionary = {
     "Сбросить корневую папку хранилища",
   "settings.maintenanceStorageRootFileSummary":
     "Выбранная корневая папка: файлов — {{count}} · {{size}}",
-  "settings.maintenanceRuleSaveDisabledNote":
-    "Новые правила создаются отключёнными. Проверьте предпросмотр, попробуйте пробный запуск, затем включите правило.",
   "settings.maintenanceRuleState": "Состояние",
   "settings.maintenanceRuleStateHelp":
     "Отключённые правила никогда не проверяются. Пробный запуск фиксирует кандидатов без выполнения действий. Включённые правила выполняют действия над кандидатами по окончании периода отсрочки для каждого из них.",
@@ -12051,10 +12028,6 @@ const ru: LocaleDictionary = {
   "settings.requestRuleEnabledUpdated": "Правило «{{name}}» обновлено.",
   "settings.requestRuleRequesterFieldsHint":
     "Это правило использует поля автора запроса; для сохранения требуется разрешение на управление.",
-  "settings.requestRuleSaveDisabledNote":
-    "Новое правило сохраняется отключённым. Установите флажок «Включено» в таблице, чтобы оно могло принимать решения по запросам.",
-  "settings.requestDecisionsSubtitle":
-    "Недавние решения правил обработки запросов.",
   "requests.fallbackLibraryPermission":
     "Одобрено на основании разрешения автора запроса «Автоодобрение запросов».",
   "settings.refReqRequestList":

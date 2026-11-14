@@ -2527,7 +2527,6 @@ const ja: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "対象の品質プロファイル",
   "settings.maintenanceRuleTargetProfileHelp":
     "このアクションが一致したタイトルを切り替える先のプロファイルです。",
-  "settings.maintenanceRuleTargetProfileIdHelp": "品質プロファイルの ID です。",
   "settings.maintenanceRuleLibraries": "ライブラリの適用範囲",
   "settings.maintenanceRuleLibrariesHelp":
     "すべてのライブラリのチェックを外すと、ルールはコレクション全体に適用されます。",
@@ -2581,8 +2580,6 @@ const ja: LocaleDictionary = {
     "1 回の実行につき最大 {{max}} 件のタイトルです。",
   "settings.maintenancePreviewRun": "プレビューを実行",
   "settings.maintenancePreviewRunning": "プレビューを実行中...",
-  "settings.maintenancePreviewEmpty":
-    "ライブラリを選択してプレビューを実行してください。",
   "settings.maintenancePreviewNoTitles": "評価されたタイトルはありません。",
   "settings.maintenancePreviewColOutcome": "結果",
   "settings.maintenancePreviewColReasons": "理由コード",
@@ -2652,8 +2649,6 @@ const ja: LocaleDictionary = {
 
   // ── メンテナンスルール — 実行と履歴 ──
   "settings.maintenanceRunsTitle": "実行と履歴",
-  "settings.maintenanceRunsSubtitle":
-    "最近の評価パスとアクションの試行を、新しい順に表示します。",
   "settings.maintenanceRunScope": "対象範囲",
   "settings.maintenanceRunScopeAll": "すべてのルール",
   "settings.maintenanceRunEvaluationNow": "今すぐ評価",
@@ -3238,8 +3233,6 @@ const ja: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "{{title}} を使用します。",
   "settings.requestPreviewRun": "プレビューを実行",
   "settings.requestPreviewRunning": "実行中…",
-  "settings.requestPreviewEmpty":
-    "リクエストを記述してプレビューを実行すると、このルールの判断がわかります。",
   "settings.requestPreviewMetadataPartial": "メタデータが不完全",
   "settings.requestPreviewShowInput": "マッチャーが見た入力を表示",
   "settings.requestPreviewHideInput": "入力を隠す",

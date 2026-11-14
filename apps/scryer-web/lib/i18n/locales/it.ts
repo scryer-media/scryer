@@ -2610,7 +2610,6 @@ const it: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Profilo di qualità di destinazione",
   "settings.maintenanceRuleTargetProfileHelp":
     "Il profilo a cui questa azione sposterebbe i titoli corrispondenti.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID del profilo di qualità.",
   "settings.maintenanceRuleLibraries": "Ambito delle librerie",
   "settings.maintenanceRuleLibrariesHelp":
     "Lascia tutte le librerie deselezionate per applicare la regola all'intera collezione.",
@@ -2665,8 +2664,6 @@ const it: LocaleDictionary = {
     "Fino a {{max}} titoli per esecuzione.",
   "settings.maintenancePreviewRun": "Esegui anteprima",
   "settings.maintenancePreviewRunning": "Anteprima in corso...",
-  "settings.maintenancePreviewEmpty":
-    "Scegli una libreria ed esegui l'anteprima.",
   "settings.maintenancePreviewNoTitles": "Nessun titolo è stato valutato.",
   "settings.maintenancePreviewColOutcome": "Esito",
   "settings.maintenancePreviewColReasons": "Codici motivo",
@@ -2737,8 +2734,6 @@ const it: LocaleDictionary = {
 
   // ── Regole di manutenzione — esecuzioni e cronologia ──
   "settings.maintenanceRunsTitle": "Esecuzioni e cronologia",
-  "settings.maintenanceRunsSubtitle":
-    "Passaggi di valutazione e tentativi di azione recenti, dal più recente.",
   "settings.maintenanceRunScope": "Ambito",
   "settings.maintenanceRunScopeAll": "Tutte le regole",
   "settings.maintenanceRunEvaluationNow": "Valuta ora",
@@ -3334,8 +3329,6 @@ const it: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Sto usando {{title}}.",
   "settings.requestPreviewRun": "Esegui anteprima",
   "settings.requestPreviewRunning": "In esecuzione…",
-  "settings.requestPreviewEmpty":
-    "Descrivi una richiesta ed esegui l'anteprima per vedere cosa direbbe questa regola.",
   "settings.requestPreviewMetadataPartial": "Metadati incompleti",
   "settings.requestPreviewShowInput": "Mostra l'input visto dal matcher",
   "settings.requestPreviewHideInput": "Nascondi l'input",

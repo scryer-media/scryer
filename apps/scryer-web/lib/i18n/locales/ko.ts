@@ -2471,7 +2471,6 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "대상 품질 프로필",
   "settings.maintenanceRuleTargetProfileHelp":
     "이 작업이 일치하는 타이틀을 옮길 프로필입니다.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "품질 프로필 ID입니다.",
   "settings.maintenanceRuleLibraries": "라이브러리 범위",
   "settings.maintenanceRuleLibrariesHelp":
     "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
@@ -2524,8 +2523,6 @@ const ko: LocaleDictionary = {
     "실행당 최대 {{max}}개의 타이틀입니다.",
   "settings.maintenancePreviewRun": "미리 보기 실행",
   "settings.maintenancePreviewRunning": "미리 보기 실행 중...",
-  "settings.maintenancePreviewEmpty":
-    "라이브러리를 선택하고 미리 보기를 실행하세요.",
   "settings.maintenancePreviewNoTitles": "평가된 타이틀이 없습니다.",
   "settings.maintenancePreviewColOutcome": "결과",
   "settings.maintenancePreviewColReasons": "사유 코드",
@@ -2594,8 +2591,6 @@ const ko: LocaleDictionary = {
 
   // ── 유지 관리 규칙 — 실행과 기록 ──
   "settings.maintenanceRunsTitle": "실행과 기록",
-  "settings.maintenanceRunsSubtitle":
-    "최근 평가 실행과 작업 시도를 최신순으로 보여줍니다.",
   "settings.maintenanceRunScope": "범위",
   "settings.maintenanceRunScopeAll": "모든 규칙",
   "settings.maintenanceRunEvaluationNow": "지금 평가",
@@ -3176,8 +3171,6 @@ const ko: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "{{title}}을(를) 사용합니다.",
   "settings.requestPreviewRun": "미리보기 실행",
   "settings.requestPreviewRunning": "실행 중…",
-  "settings.requestPreviewEmpty":
-    "요청을 설명하고 미리보기를 실행하면 이 규칙이 어떻게 판단하는지 알 수 있습니다.",
   "settings.requestPreviewMetadataPartial": "메타데이터 불완전",
   "settings.requestPreviewShowInput": "매처가 본 입력 보기",
   "settings.requestPreviewHideInput": "입력 숨기기",

@@ -9543,14 +9543,10 @@ const en: LocaleDictionary = {
   "settings.maintenanceSequenceSearchUnconditional": "Always request search",
   "settings.maintenanceSequenceSearchPreviousProfileChanged":
     "Only after the profile changed",
-  "settings.maintenanceSequenceSearchRequested":
-    "This step requests a search and records accepted only after the request is accepted. Later acquisition and download effects can still be held.",
   "settings.maintenanceSequenceHistoryWaiting": "waiting for an earlier step",
   "settings.maintenanceSequenceHistorySearchRequested": "search requested",
   "settings.maintenanceSequenceHistorySearchAccepted": "accepted",
   "settings.maintenanceSequenceHistoryJob": "job {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "Completes when accepted",
-  "settings.maintenanceSequenceCompletionCompleted": "Completes when finished",
   "settings.maintenanceSequenceStepUnavailable":
     "This saved step is unavailable from the current catalog. Remove it or restore a compatible catalog before saving or previewing.",
   "settings.maintenanceSequenceCatalogUnavailable":
@@ -9570,7 +9566,6 @@ const en: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Target quality profile",
   "settings.maintenanceRuleTargetProfileHelp":
     "The profile this action would move matching titles to.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "Quality profile ID.",
   "settings.maintenanceRuleLibraries": "Library scope",
   "settings.maintenanceRuleLibrariesHelp":
     "Leave every library unchecked to scope the rule to the whole collection.",
@@ -9588,8 +9583,6 @@ const en: LocaleDictionary = {
   "settings.maintenanceRuleUpdate": "Update maintenance rule",
   "settings.maintenanceRuleCopy": "Copy as a new rule",
   "settings.maintenanceRuleCreateNew": "Create new maintenance rule",
-  "settings.maintenanceRuleSaveDisabledNote":
-    "New rules start Disabled. Review the preview, try a Dry run, then set the rule to Enabled.",
   "settings.maintenanceRuleValidationRequired":
     "Name, matcher source, and an action are required.",
   "settings.maintenanceRuleConfirmDiscardTitle": "Discard unsaved changes?",
@@ -9627,7 +9620,6 @@ const en: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "Up to {{max}} subjects per run.",
   "settings.maintenancePreviewRun": "Run preview",
   "settings.maintenancePreviewRunning": "Running preview...",
-  "settings.maintenancePreviewEmpty": "Choose a library and run the preview.",
   "settings.maintenancePreviewNoTitles": "No titles were evaluated.",
   "settings.maintenancePreviewColOutcome": "Outcome",
   "settings.maintenancePreviewColReasons": "Reason codes",
@@ -9737,8 +9729,6 @@ const en: LocaleDictionary = {
 
   // ── Maintenance rules — runs and history ──
   "settings.maintenanceRunsTitle": "Runs and history",
-  "settings.maintenanceRunsSubtitle":
-    "Recent evaluation passes and action attempts, newest first.",
   "settings.maintenanceRunScope": "Scope",
   "settings.maintenanceRunScopeAll": "Every rule",
   "settings.maintenanceRunEvaluationNow": "Evaluate now",
@@ -9795,8 +9785,6 @@ const en: LocaleDictionary = {
 
   // ── Maintenance rules — input reference ──
   "settings.refMaintTitle": "Maintenance input reference",
-  "settings.refMaintSubtitle":
-    "Click to expand every fact a maintenance matcher can read.",
   "settings.refMaintIntro":
     "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
   "settings.refMaintOutputTitle": "Rule output",
@@ -10098,8 +10086,6 @@ const en: LocaleDictionary = {
     "Two rules that write the opposite patch for the same label on the same title hold both candidates with tag_patch_conflict rather than letting whichever ran last win. A rule that adds a label and another that removes it on a later run is not caught that way: it is an authoring mistake that flips the tag back and forth forever, so scope the two so they cannot both match.",
 
   "settings.maintenanceTemplateGallery": "Starter templates",
-  "settings.maintenanceTemplateGalleryDescription":
-    "Load a written-out matcher into the editor. Nothing is saved until you review it and press create.",
   "settings.maintenanceTemplateApply": "Use template",
   "settings.maintenanceTemplateFacetMovie": "Movies",
   "settings.maintenanceTemplateFacetShow": "Shows",
@@ -10183,8 +10169,6 @@ const en: LocaleDictionary = {
     "Delete the request rule {{name}}? Its recorded decisions are kept.",
   "settings.requestRuleValidationRequired":
     "A request rule needs a name and a matcher.",
-  "settings.requestRuleSaveDisabledNote":
-    "A new rule is saved disabled. Tick Enabled in the table to let it decide requests.",
   "settings.requestRuleConfirmDiscardTitle": "Discard unsaved changes?",
   "settings.requestRuleConfirmDiscardDescription":
     "The matcher in the editor has not been saved. Continuing replaces it.",
@@ -10219,8 +10203,6 @@ const en: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Using {{title}}.",
   "settings.requestPreviewRun": "Run preview",
   "settings.requestPreviewRunning": "Running…",
-  "settings.requestPreviewEmpty":
-    "Describe a request and run the preview to see what this rule would say.",
   "settings.requestPreviewMetadataPartial": "Metadata incomplete",
   "settings.requestPreviewShowInput": "Show the input the matcher saw",
   "settings.requestPreviewHideInput": "Hide the input",
@@ -10230,8 +10212,6 @@ const en: LocaleDictionary = {
     "Define these in Settings › Tags before they can be applied.",
 
   "settings.requestDecisionsTitle": "Recent decisions",
-  "settings.requestDecisionsSubtitle":
-    "What request rules have decided lately.",
   "settings.requestDecisionsOutcomeFilter": "Outcome",
   "settings.requestDecisionsOutcomeAll": "Any outcome",
   "settings.requestDecisionsColTime": "Evaluated",
@@ -10244,8 +10224,6 @@ const en: LocaleDictionary = {
   "settings.requestDecisionHeld": "held",
 
   "settings.requestTemplateGallery": "Starter rules",
-  "settings.requestTemplateGalleryDescription":
-    "Worked examples you can load into the editor. Applying one fills the form in; you still read it, name it, scope it and save it.",
   "settings.requestTemplateGalleryTagNote":
     "A template that emits a tag needs that tag defined in Settings › Tags; undefined ones are dropped when a request is decided.",
   "settings.requestTemplateApply": "Load into the editor",
@@ -10276,8 +10254,6 @@ const en: LocaleDictionary = {
     "Denies a request from a member's personal list when its quality profile goes above 1080p. Public lists and manual requests are left alone.",
 
   "settings.refReqTitle": "Request input reference",
-  "settings.refReqSubtitle":
-    "Every value a request matcher can read, and what each one means.",
   "settings.refReqIntro":
     "A request rule reads one document describing the request, the person who made it, the library it targets, and what Scryer knows about the media. Facts are plain values. A fact Scryer could not observe is simply missing, and a rule that reads a missing fact holds the request for a person instead of guessing — you never write that guard yourself.",
   "settings.refReqOutputTitle": "What a request rule defines",

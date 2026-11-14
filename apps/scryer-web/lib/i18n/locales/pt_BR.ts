@@ -2599,7 +2599,6 @@ const pt_BR: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Perfil de qualidade de destino",
   "settings.maintenanceRuleTargetProfileHelp":
     "O perfil para o qual esta ação moveria os títulos correspondentes.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID do perfil de qualidade.",
   "settings.maintenanceRuleLibraries": "Escopo de bibliotecas",
   "settings.maintenanceRuleLibrariesHelp":
     "Deixe todas as bibliotecas desmarcadas para aplicar a regra a toda a coleção.",
@@ -2651,8 +2650,6 @@ const pt_BR: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "Até {{max}} títulos por execução.",
   "settings.maintenancePreviewRun": "Executar prévia",
   "settings.maintenancePreviewRunning": "Executando a prévia...",
-  "settings.maintenancePreviewEmpty":
-    "Escolha uma biblioteca e execute a prévia.",
   "settings.maintenancePreviewNoTitles": "Nenhum título foi avaliado.",
   "settings.maintenancePreviewColOutcome": "Resultado",
   "settings.maintenancePreviewColReasons": "Códigos de motivo",
@@ -2722,8 +2719,6 @@ const pt_BR: LocaleDictionary = {
 
   // ── Regras de manutenção — execuções e histórico ──
   "settings.maintenanceRunsTitle": "Execuções e histórico",
-  "settings.maintenanceRunsSubtitle":
-    "Passagens de avaliação e tentativas de ação recentes, das mais novas para as mais antigas.",
   "settings.maintenanceRunScope": "Escopo",
   "settings.maintenanceRunScopeAll": "Todas as regras",
   "settings.maintenanceRunEvaluationNow": "Avaliar agora",
@@ -3318,8 +3313,6 @@ const pt_BR: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Usando {{title}}.",
   "settings.requestPreviewRun": "Executar prévia",
   "settings.requestPreviewRunning": "Executando…",
-  "settings.requestPreviewEmpty":
-    "Descreva uma solicitação e execute a prévia para ver o que esta regra diria.",
   "settings.requestPreviewMetadataPartial": "Metadados incompletos",
   "settings.requestPreviewShowInput": "Mostrar a entrada que o comparador viu",
   "settings.requestPreviewHideInput": "Ocultar a entrada",

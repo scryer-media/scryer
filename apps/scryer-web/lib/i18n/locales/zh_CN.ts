@@ -2329,7 +2329,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "目标质量配置",
   "settings.maintenanceRuleTargetProfileHelp":
     "此操作会将匹配的标题切换到的配置。",
-  "settings.maintenanceRuleTargetProfileIdHelp": "质量配置 ID。",
   "settings.maintenanceRuleLibraries": "媒体库范围",
   "settings.maintenanceRuleLibrariesHelp":
     "不勾选任何媒体库时，规则将作用于整个收藏。",
@@ -2379,7 +2378,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "每次运行最多 {{max}} 个标题。",
   "settings.maintenancePreviewRun": "运行预览",
   "settings.maintenancePreviewRunning": "正在运行预览...",
-  "settings.maintenancePreviewEmpty": "选择一个媒体库并运行预览。",
   "settings.maintenancePreviewNoTitles": "没有评估任何标题。",
   "settings.maintenancePreviewColOutcome": "结果",
   "settings.maintenancePreviewColReasons": "原因代码",
@@ -2445,7 +2443,6 @@ const zh_CN: LocaleDictionary = {
 
   // ── 维护规则 — 运行与历史 ──
   "settings.maintenanceRunsTitle": "运行与历史",
-  "settings.maintenanceRunsSubtitle": "最近的评估轮次与动作尝试，最新的在前。",
   "settings.maintenanceRunScope": "范围",
   "settings.maintenanceRunScopeAll": "全部规则",
   "settings.maintenanceRunEvaluationNow": "立即评估",
@@ -2988,8 +2985,6 @@ const zh_CN: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "正在使用 {{title}}。",
   "settings.requestPreviewRun": "运行预览",
   "settings.requestPreviewRunning": "正在运行…",
-  "settings.requestPreviewEmpty":
-    "描述一个请求并运行预览，即可看到此规则会怎么判断。",
   "settings.requestPreviewMetadataPartial": "元数据不完整",
   "settings.requestPreviewShowInput": "显示匹配器看到的输入",
   "settings.requestPreviewHideInput": "隐藏输入",
