@@ -158,6 +158,8 @@ test("global search initializes library managers without reading catalog setting
     requestQualityProfileIds: [],
     requestQualityProfileDefaultId: "default",
     defaultMonitorType: "MISSING_AND_FUTURE_EPISODES",
+    inheritedRequiredAudioLanguages: [],
+    inheritedPreferredAudioLanguages: ["original"],
   };
   let settingsReads = 0;
   const response = await graphql({

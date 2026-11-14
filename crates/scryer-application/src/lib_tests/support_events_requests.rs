@@ -638,6 +638,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             requested_quality_profile_name: request.requested_quality_profile_name,
             requested_monitor_type: request.requested_monitor_type,
             requested_monitor_selection: request.requested_monitor_selection,
+            requested_required_audio_languages: request.requested_required_audio_languages,
+            requested_preferred_audio_languages: request.requested_preferred_audio_languages,
             requested_lease_days: request.requested_lease_days,
             approved_lease_days: None,
             decision_id: None,
@@ -774,6 +776,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        requested_required_audio_languages: Option<Vec<String>>,
+        requested_preferred_audio_languages: Option<Vec<String>>,
         requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
@@ -790,6 +794,8 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         request.requested_quality_profile_name = Some(requested_quality_profile_name);
         request.requested_monitor_type = requested_monitor_type;
         request.requested_monitor_selection = requested_monitor_selection;
+        request.requested_required_audio_languages = requested_required_audio_languages;
+        request.requested_preferred_audio_languages = requested_preferred_audio_languages;
         request.requested_lease_days = requested_lease_days;
         request.updated_at = now;
         let updated = request.clone();

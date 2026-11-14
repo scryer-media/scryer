@@ -13,6 +13,9 @@ pub const OPTIONAL_AUDIO_LANGUAGES_KEY: &str = "audio.optional_languages";
 pub const OPTIONAL_AUDIO_LANGUAGES_KEEP_SEARCHING_KEY: &str =
     "audio.optional_languages_keep_searching";
 pub const TITLE_REQUIRED_AUDIO_OVERRIDE_KEY: &str = "audio.required_languages.title_override";
+/// A title's own preferred audio languages, in order. Absent means the title
+/// inherits its library's, then its facet's.
+pub const TITLE_PREFERRED_AUDIO_OVERRIDE_KEY: &str = "audio.preferred_languages.title_override";
 pub const AUDIO_PERSONA_MIGRATION_SENTINEL_KEY: &str = "audio_persona_settings_migrated";
 
 pub const DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY: &str = "download_client.routing";
@@ -41,6 +44,13 @@ pub(crate) const INDEXER_ROUTING_SERIES_DEFAULT_CATEGORIES: &[&str] = &["5000"];
 pub(crate) const INDEXER_ROUTING_ANIME_DEFAULT_CATEGORIES: &[&str] = &["5070"];
 pub const METADATA_LANGUAGE_KEY: &str = "metadata_language";
 pub const TITLE_METADATA_LANGUAGE_OVERRIDE_KEY: &str = "metadata_language.title_override";
+/// Every setting stored per title, under [`SETTINGS_SCOPE_SYSTEM`] with the
+/// title id as its scope id. A title delete prunes these rows.
+pub const TITLE_SCOPED_SETTING_KEYS: &[&str] = &[
+    TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
+    TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+    TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
+];
 pub const USE_SEASON_FOLDERS_KEY: &str = "rename.use_season_folders";
 /// Per-library initial monitoring choice in the Add and Request dialogs.
 pub const DEFAULT_MONITOR_TYPE_KEY: &str = "catalog.default_monitor_type";

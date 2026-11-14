@@ -59,11 +59,19 @@ impl SettingsRepository for MockSettingsRepo {
 pub(super) struct StoredSettingsRepo {
     pub(super) values: StoredSettingValues,
     pub(super) read_error_key: Arc<Mutex<Option<String>>>,
+    /// A key whose `upsert_setting_json` fails with a repository error.
+    pub(super) write_error_key: Arc<Mutex<Option<String>>>,
     /// Every key read, in order, across every scope id. Shared by clones.
     read_log: Arc<std::sync::Mutex<Vec<String>>>,
     /// Every key written through `upsert_setting_json`, in order. Shared by
     /// clones.
     write_log: Arc<std::sync::Mutex<Vec<String>>>,
+    /// The scope ids of every `delete_values_for_keys_and_scope_ids` call, one
+    /// entry per call. Shared by clones.
+    prune_log: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+    /// Answer `list_explicit_setting_json_values` with `None`, as a store that
+    /// cannot list a key's rows does. Shared by clones.
+    pub(super) cannot_list_explicit_values: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(super) type StoredSettingValues = Arc<Mutex<HashMap<(String, String, Option<String>), String>>>;
@@ -87,6 +95,14 @@ impl StoredSettingsRepo {
     /// The keys written since the last reset, in write order.
     pub(super) fn write_log(&self) -> Vec<String> {
         self.write_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The scope ids of each per-title prune call, in call order.
+    pub(super) fn prune_log(&self) -> Vec<Vec<String>> {
+        self.prune_log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -181,6 +197,9 @@ impl SettingsRepository for StoredSettingsRepo {
         _source: &str,
         _updated_by_user_id: Option<String>,
     ) -> AppResult<()> {
+        if self.write_error_key.lock().await.as_deref() == Some(key_name) {
+            return Err(AppError::Repository("settings write unavailable".into()));
+        }
         self.write_log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -206,6 +225,47 @@ impl SettingsRepository for StoredSettingsRepo {
         Ok(())
     }
 
+    async fn list_explicit_setting_json_values(
+        &self,
+        scope: &str,
+        key_name: &str,
+    ) -> AppResult<Option<Vec<(String, String)>>> {
+        if self
+            .cannot_list_explicit_values
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.values
+                .lock()
+                .await
+                .iter()
+                .filter(|((stored_scope, stored_key, _), _)| {
+                    stored_scope == scope && stored_key == key_name
+                })
+                .filter_map(|((_, _, scope_id), value)| {
+                    scope_id.clone().map(|scope_id| (scope_id, value.clone()))
+                })
+                .collect(),
+        ))
+    }
+
+    async fn any_explicit_setting_json_for_scope_ids(
+        &self,
+        scope: &str,
+        key_name: &str,
+    ) -> AppResult<bool> {
+        Ok(self
+            .values
+            .lock()
+            .await
+            .keys()
+            .any(|(stored_scope, stored_key, scope_id)| {
+                stored_scope == scope && stored_key == key_name && scope_id.is_some()
+            }))
+    }
+
     async fn delete_setting_value(
         &self,
         scope: &str,
@@ -224,6 +284,28 @@ impl SettingsRepository for StoredSettingsRepo {
         let before = values.len();
         values.retain(|(_, _, stored_scope_id), _| stored_scope_id.as_deref() != Some(scope_id));
         Ok((before - values.len()) as u32)
+    }
+
+    async fn delete_values_for_keys_and_scope_ids(
+        &self,
+        scope: &str,
+        key_names: &[&str],
+        scope_ids: &[String],
+    ) -> AppResult<u64> {
+        self.prune_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(scope_ids.to_vec());
+        let mut values = self.values.lock().await;
+        let before = values.len();
+        values.retain(|(stored_scope, stored_key, stored_scope_id), _| {
+            !(stored_scope == scope
+                && key_names.contains(&stored_key.as_str())
+                && stored_scope_id
+                    .as_ref()
+                    .is_some_and(|id| scope_ids.contains(id)))
+        });
+        Ok((before - values.len()) as u64)
     }
 }
 

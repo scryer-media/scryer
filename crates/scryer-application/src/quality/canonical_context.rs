@@ -1223,6 +1223,29 @@ pub(crate) struct IncumbentFacts {
     pub language: crate::AudioLanguageRank,
 }
 
+impl IncumbentFacts {
+    /// The stored file as the decision steps read it. The one builder for a
+    /// re-derived bar; see [`crate::decision_pipeline::SideFacts`].
+    pub(crate) fn side(&self) -> crate::decision_pipeline::SideFacts {
+        crate::decision_pipeline::SideFacts {
+            tier_sort_key: crate::admission::tier_sort_key(self.tier_index),
+            language: self.language,
+        }
+    }
+
+    /// Where the file sits on `pipeline`'s ladder before its score, lower
+    /// first: [`crate::admission::incumbent_ladder_key`] over [`Self::side`],
+    /// the same key admission ranks held files by. Choosing between files
+    /// already on disk goes through this, then the score, so no such choice
+    /// names a step.
+    pub(crate) fn ladder_key(
+        &self,
+        pipeline: &crate::DecisionPipeline,
+    ) -> crate::decision_pipeline::GateKey {
+        crate::admission::incumbent_ladder_key(pipeline, self.side())
+    }
+}
+
 /// What a scope row remembers about its last grab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GrabbedReleaseRecord {

@@ -751,6 +751,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            data_type: "json",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: AUDIO_PERSONA_MIGRATION_SENTINEL_KEY,
             data_type: "bool",
             default_value_json: "false",

@@ -1107,6 +1107,7 @@ export function useMediaSettings({
                       selectedProfile === QUALITY_PROFILE_INHERIT_VALUE,
                   },
                 ],
+                categoryPersonaSelections: [],
                 replaceExisting: false,
               },
             })

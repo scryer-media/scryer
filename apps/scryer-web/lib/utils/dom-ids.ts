@@ -310,6 +310,10 @@ export function mediaRequestMonitorSelectionId(requestId: string): string {
   return selectorId("media-request-monitor-selection", requestId);
 }
 
+export function mediaRequestAudioLanguagesId(requestId: string): string {
+  return selectorId("media-request-audio-languages", requestId);
+}
+
 export function mediaRequestMonitorOptionId(
   scope: string,
   monitorType: string,
@@ -369,6 +373,7 @@ export const APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID =
 /// button. The approver picks from the registry rather than typing, so the
 /// free-text field these ids used to name no longer exists.
 export const APPROVE_MEDIA_REQUEST_TAGS_PREFIX = "approve-media-request";
+export const APPROVE_MEDIA_REQUEST_AUDIO_PREFIX = "approve-media-request-audio";
 export const APPROVE_MEDIA_REQUEST_TAGS_ID = "approve-media-request-tags";
 export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID =
   "approve-media-request-tags-add";

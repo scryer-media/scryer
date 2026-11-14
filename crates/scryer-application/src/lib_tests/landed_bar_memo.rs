@@ -175,6 +175,23 @@ fn score_cutoff_profile(cutoff_score: Option<i32>) -> QualityProfile {
     profile
 }
 
+/// A profile without a cutoff score whose chosen order compares the tier and
+/// revision, then the languages. The language steps are opt-in, so a profile
+/// that should nominate language targets chooses them.
+fn language_order_profile() -> QualityProfile {
+    let mut profile = score_cutoff_profile(None);
+    profile.criteria.set_decision_pipeline(
+        crate::DecisionPipeline::try_from_gates([
+            crate::DecisionGate::QualityTier,
+            crate::DecisionGate::Revision,
+            crate::DecisionGate::PreferredLanguage,
+            crate::DecisionGate::OptionalLanguages,
+        ])
+        .unwrap(),
+    );
+    profile
+}
+
 fn scores(bars: Vec<Option<crate::quality::landed_bar_memo::LandedBar>>) -> Vec<Option<i32>> {
     bars.into_iter()
         .map(|bar| bar.map(|bar| bar.score))
@@ -574,7 +591,7 @@ async fn a_page_of_series_scopes_reads_episodes_once_and_a_changed_span_misses()
 
 #[tokio::test]
 async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_score() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let german = fixture
         .add_movie(
             "German Cut",
@@ -612,7 +629,7 @@ async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_sc
         "the best-placed preferred language decides, not any preferred language"
     );
 
-    let mut no_upgrades = score_cutoff_profile(None);
+    let mut no_upgrades = language_order_profile();
     no_upgrades.criteria.allow_upgrades = false;
     fixture
         .quality_profiles
@@ -627,7 +644,7 @@ async fn a_file_without_the_preferred_language_is_a_target_without_any_cutoff_sc
 
 #[tokio::test]
 async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on() {
-    let fixture = fixture(score_cutoff_profile(None)).await;
+    let fixture = fixture(language_order_profile()).await;
     let german_only = fixture
         .add_movie(
             "German Only",
@@ -653,5 +670,271 @@ async fn a_missing_optional_language_is_a_target_only_when_keep_searching_is_on(
     assert_eq!(
         fixture.target_titles().await,
         BTreeSet::from([german_only.id.clone()])
+    );
+}
+
+#[tokio::test]
+async fn a_title_preferred_language_override_alone_makes_a_language_target() {
+    let fixture = fixture(language_order_profile()).await;
+    let english = fixture
+        .add_movie(
+            "Override Cut",
+            "Override.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    let other = fixture
+        .add_movie(
+            "Plain Cut",
+            "Plain.Cut.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &english.id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([english.id.clone()]),
+        "only the title that prefers German is a target, with no library or facet preference"
+    );
+
+    // A facet preference the title's own ladder already satisfies leaves it alone.
+    fixture
+        .set_movie_setting(crate::PREFERRED_AUDIO_LANGUAGES_KEY, "[\"de\"]")
+        .await;
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &english.id,
+            "[\"en\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([other.id.clone()]),
+        "the title override wins over the facet's preference"
+    );
+}
+
+#[tokio::test]
+async fn without_a_cutoff_score_only_titles_with_their_own_preference_are_targets() {
+    let fixture = fixture(language_order_profile()).await;
+    let mut titles = Vec::new();
+    for index in 0..6 {
+        let name = format!("Fixture Reel {index}");
+        let release = format!("Fixture.Reel.{index}.2024.ENGLISH.1080p.BluRay.x264-GRP");
+        titles.push(fixture.add_movie(&name, &release, 8_000_000_000).await);
+    }
+
+    // An override whose title is gone matches nothing.
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            "title-that-was-deleted",
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(fixture.target_titles().await, BTreeSet::new());
+
+    fixture
+        .settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+            &titles[3].id,
+            "[\"de\"]",
+        )
+        .await;
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([titles[3].id.clone()])
+    );
+}
+
+#[tokio::test]
+async fn the_override_only_targets_pass_matches_the_library_wide_pass() {
+    let fixture = fixture(language_order_profile()).await;
+    let mut second_library = mock_default_library(MediaFacet::Movie);
+    second_library.id = "library-movie-second".to_string();
+    second_library.slug = "movies-second".to_string();
+    second_library.is_default = false;
+    fixture
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(second_library);
+
+    let mut titles = Vec::new();
+    for index in 0..7 {
+        let name = format!("Parity Reel {index}");
+        let release = format!("Parity.Reel.{index}.2024.ENGLISH.1080p.BluRay.x264-GRP");
+        titles.push(fixture.add_movie(&name, &release, 8_000_000_000).await);
+    }
+    // 0: default library, override. 1: second library, override.
+    // 2: second library, no override. 3: unmonitored, override.
+    // 4: in neither library, override. 5: default library, no override.
+    // 6: default library, an override its file already satisfies.
+    for index in [1, 2] {
+        fixture
+            .edit_title(&titles[index].id, |title| {
+                title.library_id = "library-movie-second".to_string();
+            })
+            .await;
+    }
+    fixture
+        .edit_title(&titles[3].id, |title| title.monitored = false)
+        .await;
+    fixture
+        .edit_title(&titles[4].id, |title| {
+            title.library_id = "library-that-is-not-listed".to_string();
+        })
+        .await;
+    let overrides = [
+        (titles[0].id.as_str(), "[\"de\"]"),
+        (titles[1].id.as_str(), "[\"fr\"]"),
+        (titles[3].id.as_str(), "[\"de\"]"),
+        (titles[4].id.as_str(), "[\"de\"]"),
+        (titles[6].id.as_str(), "[\"en\"]"),
+        ("title-that-was-deleted", "[\"de\"]"),
+    ];
+    for (title_id, value) in overrides {
+        fixture
+            .settings
+            .set_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                title_id,
+                value,
+            )
+            .await;
+    }
+
+    let derive = |title_id: Option<String>, respect_title_monitoring: bool| {
+        let app = &fixture.app;
+        async move {
+            app.derive_format_cutoff_targets_for_search(
+                &Utc::now(),
+                title_id.as_deref(),
+                respect_title_monitoring,
+                &[],
+            )
+            .await
+            .expect("derive format targets")
+            .into_iter()
+            .map(|target| (target.title_id, target.scope_key))
+            .collect::<BTreeSet<_>>()
+        }
+    };
+    let cases = [
+        (None, true),
+        (Some(titles[0].id.clone()), true),
+        (Some(titles[3].id.clone()), true),
+        (Some(titles[3].id.clone()), false),
+        (Some(titles[5].id.clone()), false),
+    ];
+    let mut listed = Vec::new();
+    for (title_id, respect) in cases.clone() {
+        listed.push(derive(title_id, respect).await);
+    }
+    // The store can no longer list the overrides: every case takes the
+    // library-wide path and batch-loads the overrides of the titles it found.
+    fixture
+        .settings
+        .cannot_list_explicit_values
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for ((title_id, respect), listed) in cases.into_iter().zip(listed) {
+        assert_eq!(
+            derive(title_id.clone(), respect).await,
+            listed,
+            "title {title_id:?}, respecting monitoring {respect}"
+        );
+    }
+
+    fixture
+        .settings
+        .cannot_list_explicit_values
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let titles_of = |targets: BTreeSet<(String, String)>| {
+        targets
+            .into_iter()
+            .map(|(title_id, _)| title_id)
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(
+        titles_of(derive(None, true).await),
+        BTreeSet::from([titles[0].id.clone(), titles[1].id.clone()]),
+        "only monitored, listed titles whose override their file misses"
+    );
+    assert_eq!(
+        titles_of(derive(Some(titles[3].id.clone()), false).await),
+        BTreeSet::from([titles[3].id.clone()]),
+        "an explicit title search reaches an unmonitored title"
+    );
+    assert!(derive(Some(titles[3].id.clone()), true).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_malformed_title_override_reads_as_inheriting_and_keeps_the_pass_going() {
+    let fixture = fixture(language_order_profile()).await;
+    let wanted = fixture
+        .add_movie(
+            "Sound Reel",
+            "Sound.Reel.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    let broken = fixture
+        .add_movie(
+            "Broken Reel",
+            "Broken.Reel.2024.ENGLISH.1080p.BluRay.x264-GRP",
+            8_000_000_000,
+        )
+        .await;
+    for (title_id, value) in [
+        (wanted.id.as_str(), "[\"de\"]"),
+        (broken.id.as_str(), "{not json"),
+    ] {
+        fixture
+            .settings
+            .set_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                crate::TITLE_PREFERRED_AUDIO_OVERRIDE_KEY,
+                title_id,
+                value,
+            )
+            .await;
+    }
+
+    let ids = vec![wanted.id.clone(), broken.id.clone()];
+    let loaded = fixture
+        .app
+        .load_title_preferred_audio_overrides(&ids)
+        .await
+        .expect("a bad row does not fail the batch");
+    assert_eq!(loaded.keys().collect::<Vec<_>>(), vec![&wanted.id]);
+    let listed = fixture
+        .app
+        .list_title_preferred_audio_overrides()
+        .await
+        .expect("a bad row does not fail the listing")
+        .expect("the store lists");
+    assert_eq!(listed, loaded);
+    assert_eq!(
+        fixture.target_titles().await,
+        BTreeSet::from([wanted.id.clone()])
     );
 }

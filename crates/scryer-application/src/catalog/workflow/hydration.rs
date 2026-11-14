@@ -663,6 +663,8 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<CreateTitleOutcome> {
+        // Refused before anything is created, so a bad language leaves no title.
+        let options_patch = crate::validated_title_audio_patch(options_patch)?;
         let title = self
             .new_title_for_library(actor, request, library_id)
             .await?;
@@ -677,6 +679,13 @@ impl AppUseCase {
         // episode monitoring is decided from this selection.
         self.apply_title_monitor_selection_patch(&created.title, &options_patch)
             .await?;
+        // Likewise before the first search, which reads these overrides.
+        self.store_new_title_audio_language_overrides(
+            &created,
+            &options_patch,
+            Some(actor.id.clone()),
+        )
+        .await;
         if !created.reused_existing {
             // A brand new title is a new matcher identity. Done here as well
             // as through `TitleAdded` so the guarantee does not depend on the

@@ -1037,6 +1037,10 @@ pub struct TitleOptionsInput {
     pub release_numbering: MaybeUndefined<ReleaseNumberingValue>,
     /// Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
     pub monitor_selection: MaybeUndefined<MonitorSelectionInput>,
+    /// The title's own required audio languages; omission preserves them, null clears them so the title inherits its library's and then its facet's, an empty list requires no language, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`. Needs the Manage titles grant, as `setTitleRequiredAudio` does.
+    pub required_audio_languages: MaybeUndefined<Vec<String>>,
+    /// The title's own preferred audio languages, in order; omission preserves them, null or an empty list clears them so the title inherits its library's and then its facet's, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+    pub preferred_audio_languages: MaybeUndefined<Vec<String>>,
 }
 
 #[derive(InputObject, Clone)]

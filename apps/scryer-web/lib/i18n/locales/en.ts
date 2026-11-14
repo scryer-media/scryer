@@ -3710,6 +3710,8 @@ const en: LocaleDictionary = {
     "Anime-specific settings require an anime library.",
   "error.reason.SETTINGS_ANIME_SPECIFIC_SETTINGS_REQUIRE_SCOPE_ANIME":
     "Anime-specific settings require scope anime.",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "That audio language is not one Scryer recognizes.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUPS_REQUIRE_BACKUP_KEY":
     "Automatic backups require a backup key.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_CANNOT_CLEARED_WHILE_AUTOMATIC_BACKUPS_DISABLED":
@@ -6284,6 +6286,10 @@ const en: LocaleDictionary = {
   "search.configureAdd": "Configure add options",
   "search.addConfigLibrary": "Library",
   "search.addConfigQualityProfile": "Quality profile",
+  "search.addConfigRequiredAudio": "Required audio language",
+  "search.addConfigPreferredAudio": "Preferred audio language",
+  "search.addConfigAudioChoose": "Choose languages",
+  "search.addConfigAudioRequireNone": "Require none",
   "search.addConfigInheritLibrary": "Inherit library",
   "search.addConfigRootFolder": "Root folder",
   "search.addConfigSeasonFolder": "Season folder",
@@ -6566,6 +6572,7 @@ const en: LocaleDictionary = {
   "title.monitoredSection": "Monitored {{facet}}",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Queue Latest",
+  "title.preferredAudioLanguages": "Preferred Audio Languages",
   "title.requiredAudioLanguages": "Required Audio Languages",
   "title.originalAudioLanguagePerTitle": "Original language (per title)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -8493,6 +8500,9 @@ const en: LocaleDictionary = {
   "requests.cancelRequest": "Cancel request",
   "requests.requesters": "Requesters",
   "requests.requestedQualityProfile": "Requested quality profile",
+  "requests.requestedAudioLanguages": "Requested audio languages",
+  "requests.requestedRequiredAudio": "Required: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferred: {{languages}}",
   "requests.requestedMonitorType": "Requested monitoring",
   "requests.libraryDefaultProfile": "Library default",
   "requests.updated": "Updated",
@@ -10337,6 +10347,7 @@ const en: LocaleDictionary = {
   "requests.approvedLease": "Keep for",
   "requests.approvedLeaseKeepForever": "Forever, as asked",
   "requests.approvedLeaseKeepRequested": "{{count}} days, as asked",
+  "requests.approvedAudioLanguages": "Audio languages",
   "requests.approvedTags": "Tags",
   "requests.approvedTagsHelp":
     "Applied to the title when you approve. Prefilled with what the rules emitted; add or remove any tag an administrator has defined in Settings > Tags.",
@@ -10420,6 +10431,10 @@ const en: LocaleDictionary = {
     "True when the requester asked to keep the media forever",
   "settings.refReqRequestLeaseDays":
     "How many days the requester asked to keep it for; absent when they asked for forever",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Audio languages the requester said the title must have. null leaves it to the library; an empty list asks for no requirement",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Audio languages the requester prefers, in order. null leaves it to the library",
   "settings.refReqRequestList":
     "The list that submitted the request; see input.request.list below. Absent for a manual request",
   "settings.refReqSectionExternalIds":
@@ -11091,6 +11106,9 @@ const en: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protocol",
   "indexerSearch.facet.resolution": "Resolution",
   "indexerSearch.facet.source": "Source",
+  "indexerSearch.facet.videoCodec": "Video codec",
+  "indexerSearch.facet.audioCodec": "Audio codec",
+  "indexerSearch.facet.audioChannels": "Audio channels",
   "indexerSearch.facet.audio": "Audio & HDR",
   "indexerSearch.facet.flags": "Flags",
   "indexerSearch.facet.indexer": "Indexer",
@@ -11613,6 +11631,8 @@ const en: LocaleDictionary = {
   "lists.refusal.routeLibraryRequired":
     "Choose a library for every kind of title.",
   "lists.refusal.routeLibraryNotFound": "A chosen library no longer exists.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "A route's audio language is not one Scryer recognizes.",
   "lists.refusal.syncCapInvalid":
     "The most titles per sync must be at least 1.",
   "lists.refusal.disabled": "This list is turned off. Turn it on to sync it.",
@@ -12579,28 +12599,18 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Decision order",
   "qualityProfile.decisionOrderInfo":
     "When two releases both pass this profile, Scryer checks these steps from the top. The first step that tells them apart decides. Score always decides last.",
-  "qualityProfile.decisionPresets": "Presets",
-  "qualityProfile.decisionPresetDefault": "Default",
-  "qualityProfile.decisionPresetLanguageFirst": "Language first",
-  "qualityProfile.decisionPresetScoreOnly": "Score only",
   "qualityProfile.decisionGateQualityTier": "Quality tier",
   "qualityProfile.decisionGateQualityTierDescription":
     "The release in the tier ranked higher in this profile's quality preference wins.",
-  "qualityProfile.decisionGateQualityTierSummary": "quality tier",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "Within the same tier and release group, a newer PROPER or REPACK wins.",
-  "qualityProfile.decisionGateRevisionSummary": "PROPER/REPACK revision",
   "qualityProfile.decisionGatePreferredLanguage": "Preferred language",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "The release whose audio ranks higher in the library's preferred audio languages wins.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "preferred audio language",
   "qualityProfile.decisionGateOptionalLanguages": "Optional languages",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "The release carrying more of the library's optional audio languages wins.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "number of optional audio languages",
   "qualityProfile.decisionGateUnknown": "Unrecognized step ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "This version of the web app does not recognize this step. It stays where it is.",
@@ -12613,11 +12623,6 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Add {{value}} to the decision order",
   "qualityProfile.decisionAvailableSteps": "Steps not in use",
   "qualityProfile.decisionAllStepsInUse": "Every step is in use.",
-  "qualityProfile.decisionSummary":
-    "Releases are compared by {{steps}}, and finally by score.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, then {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Releases are compared by score alone.",
   "qualityProfile.decisionWarningTierAbsent":
     "Without the quality tier step, a lower-tier release can replace a higher-tier file, and the cutoff tier does not apply. Only the cutoff score stops the search for upgrades; with no cutoff score either, the profile is satisfied once it has a file.",
   "qualityProfile.decisionNoteTierBelowLanguage":

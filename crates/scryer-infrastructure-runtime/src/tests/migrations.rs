@@ -7872,3 +7872,48 @@ async fn migration_0338_moves_plans_and_analyses_into_blob_tables() {
     .expect("count blobs");
     assert_eq!(left, 0);
 }
+
+#[tokio::test]
+async fn migration_0342_adds_requested_audio_language_columns() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("requested-audio-0342.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+
+    for (table, columns) in [
+        (
+            "media_requests",
+            [
+                "requested_required_audio_languages_json",
+                "requested_preferred_audio_languages_json",
+            ],
+        ),
+        (
+            "list_subscription_routes",
+            [
+                "required_audio_languages_json",
+                "preferred_audio_languages_json",
+            ],
+        ),
+    ] {
+        let found: Vec<(String, i64)> =
+            sqlx::query_as("SELECT name, \"notnull\" FROM pragma_table_info(?1)")
+                .bind(table)
+                .fetch_all(&pool)
+                .await
+                .expect("read columns");
+        for column in columns {
+            let (_, not_null) = found
+                .iter()
+                .find(|(name, _)| name == column)
+                .unwrap_or_else(|| panic!("{table}.{column} should exist after 0342"));
+            assert_eq!(*not_null, 0, "{table}.{column} is nullable: NULL inherits");
+        }
+    }
+}

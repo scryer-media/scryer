@@ -1403,12 +1403,23 @@ impl AppUseCase {
 
         self.delete_title_history_records(&title_ids).await?;
 
+        let mut deleted = Vec::with_capacity(titles.len());
+        let mut outcome = Ok(());
         for title in titles {
-            self.delete_title_row(title, actor.clone(), true, Vec::new(), false)
-                .await?;
+            if let Err(error) = self
+                .delete_title_row_keeping_settings(title, actor.clone(), true, Vec::new(), false)
+                .await
+            {
+                outcome = Err(error);
+                break;
+            }
+            deleted.push(title.id.clone());
             self.release_lifecycle_claims_for_deleted_title(&title.id)
                 .await;
         }
+        // One prune for the titles whose rows went, failed or not.
+        self.prune_title_scoped_settings(&deleted).await;
+        outcome?;
 
         Ok(titles.len())
     }

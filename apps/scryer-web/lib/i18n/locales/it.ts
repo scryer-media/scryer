@@ -1313,6 +1313,18 @@ const it: LocaleDictionary = {
   "title.monitoredSection": "{{facet}} monitorati",
   "title.searchReleasesAction": "Search Releases",
   "title.queueLatest": "Accoda ultimo",
+  "search.addConfigRequiredAudio": "Lingua audio richiesta",
+  "search.addConfigPreferredAudio": "Lingua audio preferita",
+  "search.addConfigAudioChoose": "Scegli le lingue",
+  "search.addConfigAudioRequireNone": "Non richiederne nessuna",
+  "title.preferredAudioLanguages": "Lingue audio preferite",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer non riconosce questa lingua audio.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer non riconosce la lingua audio di un percorso.",
+  "requests.requestedAudioLanguages": "Lingue audio richieste",
+  "requests.requestedRequiredAudio": "Richieste: {{languages}}",
+  "requests.requestedPreferredAudio": "Preferite: {{languages}}",
   "title.requiredAudioLanguages": "Lingue audio richieste",
   "title.originalAudioLanguagePerTitle": "Lingua originale (per titolo)",
   "title.requiredAudioLanguagesFacetInfo":
@@ -3168,6 +3180,9 @@ const it: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Protocollo",
   "indexerSearch.facet.resolution": "Risoluzione",
   "indexerSearch.facet.source": "Sorgente",
+  "indexerSearch.facet.videoCodec": "Codec video",
+  "indexerSearch.facet.audioCodec": "Codec audio",
+  "indexerSearch.facet.audioChannels": "Canali audio",
   "indexerSearch.facet.audio": "Audio e HDR",
   "indexerSearch.facet.flags": "Contrassegni",
   "indexerSearch.facet.indexer": "Indexer",
@@ -3908,28 +3923,18 @@ const it: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Ordine di decisione",
   "qualityProfile.decisionOrderInfo":
     "Quando due release soddisfano questo profilo, Scryer esamina questi passaggi dall'alto. Decide il primo passaggio che le distingue. Il punteggio decide sempre per ultimo.",
-  "qualityProfile.decisionPresets": "Preimpostazioni",
-  "qualityProfile.decisionPresetDefault": "Predefinito",
-  "qualityProfile.decisionPresetLanguageFirst": "Prima la lingua",
-  "qualityProfile.decisionPresetScoreOnly": "Solo punteggio",
   "qualityProfile.decisionGateQualityTier": "Livello di qualità",
   "qualityProfile.decisionGateQualityTierDescription":
     "Vince la release nel livello posto più in alto nella preferenza di qualità di questo profilo.",
-  "qualityProfile.decisionGateQualityTierSummary": "livello di qualità",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "A parità di livello e gruppo di release, vince un PROPER o REPACK più recente.",
-  "qualityProfile.decisionGateRevisionSummary": "revisione PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Lingua preferita",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Vince la release il cui audio è più in alto nelle lingue audio preferite della libreria.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "lingua audio preferita",
   "qualityProfile.decisionGateOptionalLanguages": "Lingue facoltative",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Vince la release che contiene più lingue audio facoltative della libreria.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "numero di lingue audio facoltative",
   "qualityProfile.decisionGateUnknown": "Passaggio sconosciuto ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Questa versione dell'app web non riconosce questo passaggio. Resta al suo posto.",
@@ -3943,11 +3948,6 @@ const it: LocaleDictionary = {
     "Aggiungi {{value}} all'ordine di decisione",
   "qualityProfile.decisionAvailableSteps": "Passaggi non usati",
   "qualityProfile.decisionAllStepsInUse": "Tutti i passaggi sono in uso.",
-  "qualityProfile.decisionSummary":
-    "Le release vengono confrontate per {{steps}} e infine per punteggio.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, poi {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Le release vengono confrontate solo per punteggio.",
   "qualityProfile.decisionWarningTierAbsent":
     "Senza il passaggio livello di qualità, una release di livello inferiore può sostituire un file di livello superiore e il livello di cutoff non si applica. Solo il punteggio di cutoff ferma la ricerca di upgrade; senza di esso, il profilo è soddisfatto appena ha un file.",
   "qualityProfile.decisionNoteTierBelowLanguage":

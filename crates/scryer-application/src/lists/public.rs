@@ -277,6 +277,8 @@ pub fn redact_hidden_routes(
         route.use_season_folders = None;
         route.release_numbering = None;
         route.tags = Vec::new();
+        route.required_audio_languages = None;
+        route.preferred_audio_languages = None;
     }
     subscription
 }
@@ -557,6 +559,8 @@ pub(super) fn preview_routes(kinds: &[MediaFacet]) -> Vec<ListRoute> {
             use_season_folders: None,
             release_numbering: None,
             tags: Vec::new(),
+            required_audio_languages: None,
+            preferred_audio_languages: None,
         })
         .collect()
 }

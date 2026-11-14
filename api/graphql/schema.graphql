@@ -937,6 +937,18 @@ input ApproveMediaRequestInput {
 	them.
 	"""
 	tags: [String!]
+	"""
+	Approver override for the new title's required audio languages.
+	Omission grants what the requester asked for, null inherits, an empty
+	list requires none, and a value replaces the request's.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Approver override for the new title's preferred audio languages.
+	Omission grants what the requester asked for, null or an empty list
+	inherits, and a value replaces the request's.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -10860,6 +10872,19 @@ type LibraryPayload {
 	"""
 	removedTitleCount: Int!
 	"""
+	Required audio languages a new title in this library inherits: the
+	library's own, else its facet's. An empty list requires none. The
+	`original` token stays unresolved. Readable by anyone who can see the
+	library.
+	"""
+	inheritedRequiredAudioLanguages: [String!]!
+	"""
+	Preferred audio languages, in order, a new title in this library
+	inherits: the library's own, else its facet's. The `original` token
+	stays unresolved. Readable by anyone who can see the library.
+	"""
+	inheritedPreferredAudioLanguages: [String!]!
+	"""
 	Initial monitoring choice for new titles, readable by authorized requesters.
 	"""
 	defaultMonitorType: String!
@@ -12764,6 +12789,19 @@ input ListRouteInput {
 	Tags put on new titles.
 	"""
 	tags: [String!]! = []
+	"""
+	Required audio languages for new titles; null inherits the library's
+	and facet's, an empty list requires none. A request the list files
+	carries them. An unknown code is refused with
+	`LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, for new titles; null or an empty
+	list inherits. A request the list files carries them. An unknown code
+	is refused with `LIST_ROUTE_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -12806,6 +12844,17 @@ type ListRoutePayload {
 	Tags put on new titles.
 	"""
 	tags: [String!]!
+	"""
+	Required audio languages for new titles, or null when they inherit the
+	library's and facet's. An empty list requires none. The `original`
+	token stays unresolved.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, for new titles, or null when they
+	inherit. The `original` token stays unresolved.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -18240,6 +18289,17 @@ type MediaRequestPayload {
 	"""
 	requestedMonitorSelection: MonitorSelectionPayload
 	"""
+	Required audio languages requested for the new title, or null when it
+	inherits its library's and facet's. An empty list requires none. The
+	`original` token stays unresolved.
+	"""
+	requestedRequiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, requested for the new title, or
+	null when it inherits. The `original` token stays unresolved.
+	"""
+	requestedPreferredAudioLanguages: [String!]
+	"""
 	ID of the user who resolved the request, or null while unresolved.
 	"""
 	resolvedByUserId: ID
@@ -23047,6 +23107,14 @@ type ParsedReleasePayload {
 	Audio description, or null when not detected.
 	"""
 	audio: String
+	"""
+	Audio channel layout such as `5.1`, or null when not detected.
+	"""
+	audioChannels: String
+	"""
+	Audio languages named in the release title as ISO 639-2 codes, in title order.
+	"""
+	audioLanguages: [String!]!
 	"""
 	Whether dual audio was detected.
 	"""
@@ -28545,6 +28613,16 @@ input RequestRuleSampleInput {
 	together with `leaseDays`.
 	"""
 	leaseForever: Boolean
+	"""
+	Audio languages the sample requires. Omit or send null to leave it to
+	the library; an empty list asks for no requirement.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	Audio languages the sample prefers, in order. Omit or send null to
+	leave it to the library.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -31280,6 +31358,18 @@ input SubmitMediaRequestInput {
 	forever, which is what Scryer granted before leases existed.
 	"""
 	requestedLeaseDays: Int
+	"""
+	Required audio languages for the new title. Omitted or null inherits
+	the library's and facet's; an empty list requires none. An unknown code
+	is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	requestedRequiredAudioLanguages: [String!]
+	"""
+	Preferred audio languages, in order, for the new title. Omitted, null
+	or an empty list inherits. An unknown code is refused with
+	`SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	requestedPreferredAudioLanguages: [String!]
 }
 
 """
@@ -33088,6 +33178,14 @@ input TitleOptionsInput {
 	Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
 	"""
 	monitorSelection: MonitorSelectionInput
+	"""
+	The title's own required audio languages; omission preserves them, null clears them so the title inherits its library's and then its facet's, an empty list requires no language, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`. Needs the Manage titles grant, as `setTitleRequiredAudio` does.
+	"""
+	requiredAudioLanguages: [String!]
+	"""
+	The title's own preferred audio languages, in order; omission preserves them, null or an empty list clears them so the title inherits its library's and then its facet's, and a value replaces them. The `original` token stands for the title's original language. An unknown code is refused with `SETTINGS_AUDIO_LANGUAGE_UNKNOWN`.
+	"""
+	preferredAudioLanguages: [String!]
 }
 
 """
@@ -33393,6 +33491,20 @@ type TitlePayload {
 	Whether the title uses the facet-level required audio-language setting without an override.
 	"""
 	inheritsRequiredAudioLanguages: Boolean!
+	"""
+	Title-specific preferred audio languages, in order, or null when the library's and then the facet's are inherited.
+	The `original` token remains unresolved in this configuration field.
+	"""
+	preferredAudioLanguagesOverride: [String!]
+	"""
+	Preferred audio languages, in order, after title, library, and facet inheritance.
+	The `original` token remains unresolved in this configuration field.
+	"""
+	effectivePreferredAudioLanguages: [String!]!
+	"""
+	Whether the title inherits its library's and then its facet's preferred audio languages.
+	"""
+	inheritsPreferredAudioLanguages: Boolean!
 	"""
 	Collections belonging to this title, or an empty list when none are available.
 	"""
@@ -34937,6 +35049,16 @@ input UpdateMediaRequestInput {
 	Replacement lease in days. Omission preserves the current lease; null requests forever.
 	"""
 	requestedLeaseDays: Int
+	"""
+	Replacement required audio languages. Omission preserves them, null
+	inherits, an empty list requires none.
+	"""
+	requestedRequiredAudioLanguages: [String!]
+	"""
+	Replacement preferred audio languages. Omission preserves them, null
+	or an empty list inherits.
+	"""
+	requestedPreferredAudioLanguages: [String!]
 }
 
 """

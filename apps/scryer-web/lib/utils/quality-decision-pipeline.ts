@@ -6,44 +6,14 @@ import {
   type QualityDecisionGateKind,
 } from "../constants/quality-decision-gates.ts";
 
-/** The order a profile uses when it does not set one. */
+/**
+ * The order a profile uses when it does not set one: tier, then revision, as
+ * every profile compared before orders were configurable. The language steps
+ * are opt-in.
+ */
 export const DEFAULT_DECISION_PIPELINE: readonly KnownQualityDecisionGate[] = [
   "QUALITY_TIER",
   "REVISION",
-  "PREFERRED_LANGUAGE",
-  "OPTIONAL_LANGUAGES",
-];
-
-export type DecisionPipelinePresetId =
-  "default" | "language_first" | "score_only";
-
-export type DecisionPipelinePreset = {
-  id: DecisionPipelinePresetId;
-  labelKey: string;
-  pipeline: readonly KnownQualityDecisionGate[];
-};
-
-export const DECISION_PIPELINE_PRESETS: readonly DecisionPipelinePreset[] = [
-  {
-    id: "default",
-    labelKey: "qualityProfile.decisionPresetDefault",
-    pipeline: DEFAULT_DECISION_PIPELINE,
-  },
-  {
-    id: "language_first",
-    labelKey: "qualityProfile.decisionPresetLanguageFirst",
-    pipeline: [
-      "PREFERRED_LANGUAGE",
-      "QUALITY_TIER",
-      "REVISION",
-      "OPTIONAL_LANGUAGES",
-    ],
-  },
-  {
-    id: "score_only",
-    labelKey: "qualityProfile.decisionPresetScoreOnly",
-    pipeline: [],
-  },
 ];
 
 /**
@@ -140,17 +110,6 @@ export function availableDecisionGates(
   );
 }
 
-export function decisionPipelinePresetId(
-  pipeline: readonly QualityDecisionGate[],
-): DecisionPipelinePresetId | null {
-  const preset = DECISION_PIPELINE_PRESETS.find(
-    (candidate) =>
-      candidate.pipeline.length === pipeline.length &&
-      candidate.pipeline.every((gate, index) => pipeline[index] === gate),
-  );
-  return preset?.id ?? null;
-}
-
 export type DecisionPipelineNotice =
   /** No tier step: a lower tier can replace a higher one; no tier cutoff. */
   | "tier_absent"
@@ -228,28 +187,4 @@ export function decidedByLabel(
       ? t("qualityProfile.decisionGateScore")
       : decisionGateLabel(value, t);
   return t("qualityProfile.decidedBy", { step: label });
-}
-
-/** One plain-language sentence describing the order, score included. */
-export function describeDecisionPipeline(
-  pipeline: readonly QualityDecisionGate[],
-  t: SummaryTranslate,
-): string {
-  if (pipeline.length === 0) {
-    return t("qualityProfile.decisionSummaryScoreOnly");
-  }
-  const phrases = pipeline.map((gate) => {
-    const descriptor = qualityDecisionGateDescriptor(gate);
-    return descriptor
-      ? t(descriptor.summaryKey)
-      : t("qualityProfile.decisionGateUnknown", { value: gate });
-  });
-  const steps = phrases
-    .slice(1)
-    .reduce(
-      (previous, next) =>
-        t("qualityProfile.decisionSummaryJoin", { previous, next }),
-      phrases[0],
-    );
-  return t("qualityProfile.decisionSummary", { steps });
 }

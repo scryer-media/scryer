@@ -52,13 +52,12 @@ jq --arg from "<scryer profile id>" --arg id "hd-from-sonarr" --arg name "HD (fr
 ```
 
 Show `qp-vars.json`'s profile to the operator, then `SaveQualityProfileSettings.graphql`.
-Always `replaceExisting: false`. Assign it per library with `UpdateLibrary`
-`settings.qualityProfileId` (send no `roots` in that call). `settings` replaces
-every saved override on that library: any field left out, such as
-`defaultMonitorType`, the languages or the routing, is reset to inherit. Send it
-only for a library this migration created and has not otherwise configured; for
-any other library, ask the operator to pick the profile in that library's
-settings instead.
+Always `replaceExisting: false`. To use it for a library, ask the operator to
+pick it in that library's settings in the web UI (**Quality**). Do not send
+`UpdateLibrary` `settings` for this: it replaces every saved override on the
+library, including the ones the import applied (NFO and plexmatch writing,
+permissions, scoring persona), while the web UI sends the library's full settings back
+with the one change.
 
 ## Delay profiles
 
@@ -111,22 +110,28 @@ Rewrite the arr format with these, show old and new side by side, and save
 with `UpdateMediaSettings.graphql` (`scope` plus only the changed fields).
 Arr tokens with no Scryer equivalent are dropped; name them to the operator.
 
-## Remote path mappings (manual)
+## Remote path mappings
 
-There is no API for them alone. Show the operator the arr list:
+Scryer keeps them on each download client, in its `remote_path_mappings`
+config key, as the web UI's download client editor does. Show the operator
+the arr list:
 
 ```sh
 jq -r '.[] | "\(.host): \(.remotePath) => \(.localPath)"' snap/sonarr/remotepathmapping.json
 ```
 
-The operator enters them in Scryer's web UI, in the matching download
-client's settings, one line per mapping: `REMOTE => LOCAL`. The local path is
-where Scryer sees the files and must be absolute.
+Arr keys a mapping by client host. Agree which Scryer client each one belongs
+to and where Scryer sees the local side (an absolute path), then follow
+`scryer-configure-acquisition`'s `references/download-clients.md`, **Edit a
+client**: one line per mapping, `REMOTE => LOCAL`, added to the client's
+existing `remote_path_mappings`.
 
 ## Tags
 
-`tag.json` holds `{id, label}`. Create each label used by titles or delay
-profiles with `CreateTitleTagDefinition.graphql`, after showing the list.
+`tag.json` holds `{id, label}`. Read Scryer's labels with
+`TitleTagDefinitions.graphql` and leave out the ones that exist. Create each
+remaining label used by titles or delay profiles with
+`CreateTitleTagDefinition.graphql`, after showing the list.
 Then tag titles in batches: group arr titles by tag, look up their Scryer ids
 with `TitlesByExternalIds`, and call `UpdateTitleTags.graphql` with
 `{input: {titleIds, add: [label]}}`.

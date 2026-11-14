@@ -21,10 +21,11 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { IndexerCategoryPicker } from "@/components/views/media-content/indexer-category-picker";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
+import { RangeSlider } from "@/components/ui/range-slider";
 import {
   Popover,
   PopoverContent,
@@ -171,6 +172,10 @@ const BADGE_TONE_CLASS: Record<BadgeTone, string> = {
   warning:
     "bg-[var(--scry-warning-bg)] border-[var(--scry-warning-border)] text-[var(--scry-warning-text)]",
 };
+
+/** Refine-rail group heading; the filter-panel label treatment. */
+const RAIL_HEADING_CLASS =
+  "mb-1.5 px-2 text-xs font-bold uppercase tracking-[0.05em] text-[var(--scry-muted2)]";
 
 const RESULT_GRID_CLASS =
   "grid grid-cols-[34px_minmax(0,1fr)_140px_92px_80px_112px_112px] items-center gap-2.5 px-4";
@@ -761,119 +766,113 @@ function RefineRail({
   const [low, high] = sizeRangeGiB ?? sizeBoundsGiB ?? [0, 0];
 
   return (
-    <aside className="w-full shrink-0 self-start rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] pb-2.5 pt-1.5 lg:sticky lg:top-0 lg:w-[232px]">
-      <div className="flex items-center justify-between border-b border-[var(--scry-line)] px-3.5 pb-2.5 pt-3">
-        <span className="flex items-center gap-1.5 text-[12px] font-bold uppercase tracking-[0.05em] text-[var(--scry-muted2)]">
-          <Funnel className="h-3.5 w-3.5" />
+    <aside className="w-full shrink-0 self-start rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] lg:sticky lg:top-0 lg:w-[232px]">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--scry-border)] px-4 py-3">
+        <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-[var(--scry-ink2)]">
+          <Funnel
+            className="h-3.5 w-3.5 shrink-0 text-[var(--scry-accent-text)]"
+            aria-hidden="true"
+          />
           {t("indexerSearch.refine.title")}
         </span>
-        <button
+        <Button
           id="indexer-search-refine-reset"
           type="button"
+          variant="link"
+          size="xs"
+          className="h-auto px-0"
           onClick={onResetRefine}
-          className="text-[11.5px] text-[var(--scry-accent-text)] hover:underline"
         >
           {t("indexerSearch.refine.reset")}
-        </button>
+        </Button>
       </div>
-      {facetGroups.map((group) => (
-        <div
-          key={group.key}
-          className="border-b border-[var(--scry-line2)] px-3.5 pb-2.5 pt-3"
-        >
-          <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]">
-            {t(group.labelKey)}
-          </div>
-          <div className="flex flex-col gap-0.5">
-            {group.items.map((item) => {
-              const checked = selectedFacets.includes(item.key);
-              return (
-                <label
-                  key={item.key}
-                  className={cn(
-                    "-mx-1.5 flex cursor-pointer items-center gap-2 rounded-[7px] px-1.5 py-1 transition hover:bg-[var(--scry-rowHover)]",
-                    checked && "bg-[rgba(var(--scry-accent-rgb),0.10)]",
-                  )}
-                >
-                  <Checkbox
-                    id={selectorId(
-                      "indexer-search-facet",
-                      group.key,
-                      item.value,
-                    )}
-                    size="compact"
-                    className="size-[15px]"
-                    checked={checked}
-                    onCheckedChange={() => onToggleFacet(item.key)}
-                  />
-                  <span
-                    className={cn(
-                      "min-w-0 flex-1 truncate text-[12.5px]",
-                      checked
-                        ? "text-[var(--scry-ink3)]"
-                        : "text-[var(--scry-text4)]",
-                    )}
-                  >
-                    {item.labelKey ? t(item.labelKey) : item.label}
-                  </span>
-                  <span className="text-[11px] tabular-nums text-[var(--scry-faint3)]">
-                    {item.count}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-      {sizeBoundsGiB ? (
-        <div className="px-3.5 pb-1 pt-3">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--scry-faint2)]">
-              {t("indexerSearch.facet.size")}
-            </span>
-            <span className="text-[11px] tabular-nums text-[var(--scry-text4)]">
-              {t("indexerSearch.sizeRange", {
-                min: low.toFixed(1),
-                max: high.toFixed(1),
-              })}
-            </span>
-          </div>
-          <div className="flex flex-col gap-2">
-            <input
-              id="indexer-search-size-min"
-              type="range"
-              aria-label={t("indexerSearch.advanced.minSize")}
+      <div className="divide-y divide-[var(--scry-line)]">
+        {facetGroups.map((group) => {
+          const headingId = selectorId("indexer-search-facet-group", group.key);
+          return (
+            <div
+              key={group.key}
+              role="group"
+              aria-labelledby={headingId}
+              className="px-2 py-3"
+            >
+              <div id={headingId} className={RAIL_HEADING_CLASS}>
+                {t(group.labelKey)}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {group.items.map((item) => {
+                  const checked = selectedFacets.includes(item.key);
+                  const empty = item.count === 0 && !checked;
+                  return (
+                    <CheckboxField
+                      key={item.key}
+                      id={selectorId(
+                        "indexer-search-facet",
+                        group.key,
+                        item.value,
+                      )}
+                      size="compact"
+                      checked={checked}
+                      onCheckedChange={() => onToggleFacet(item.key)}
+                      className="w-full items-center gap-2 rounded-[8px] px-2 py-1.5 transition-colors hover:bg-[var(--scry-hover)]"
+                      checkboxClassName="mt-0"
+                      labelClassName={cn(
+                        "block min-w-0 flex-1 truncate font-normal",
+                        empty
+                          ? "text-[var(--scry-muted3)]"
+                          : "text-[var(--scry-ink2)]",
+                      )}
+                      label={item.labelKey ? t(item.labelKey) : item.label}
+                      labelAccessory={
+                        <span
+                          className={cn(
+                            "shrink-0 text-xs tabular-nums",
+                            empty
+                              ? "text-[var(--scry-faint4)]"
+                              : "text-[var(--scry-faint)]",
+                          )}
+                        >
+                          {item.count}
+                        </span>
+                      }
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {sizeBoundsGiB ? (
+          <div className="px-4 pb-4 pt-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className={cn(RAIL_HEADING_CLASS, "mb-0 px-0")}>
+                {t("indexerSearch.facet.size")}
+              </span>
+              <span className="text-xs tabular-nums text-[var(--scry-faint)]">
+                {t("indexerSearch.sizeRange", {
+                  min: low.toFixed(1),
+                  max: high.toFixed(1),
+                })}
+              </span>
+            </div>
+            <RangeSlider
               min={sizeBoundsGiB[0]}
               max={sizeBoundsGiB[1]}
               step={0.1}
-              value={low}
-              onChange={(event) =>
-                onSizeRangeChange([
-                  Math.min(Number(event.target.value), high),
-                  high,
-                ])
-              }
-              className="h-1 w-full accent-[var(--scry-accent)]"
-            />
-            <input
-              id="indexer-search-size-max"
-              type="range"
-              aria-label={t("indexerSearch.advanced.maxSize")}
-              min={sizeBoundsGiB[0]}
-              max={sizeBoundsGiB[1]}
-              step={0.1}
-              value={high}
-              onChange={(event) =>
-                onSizeRangeChange([
-                  low,
-                  Math.max(Number(event.target.value), low),
-                ])
-              }
-              className="h-1 w-full accent-[var(--scry-accent)]"
+              value={[low, high]}
+              onValueChange={onSizeRangeChange}
+              lowThumb={{
+                id: "indexer-search-size-min",
+                ariaLabel: t("indexerSearch.advanced.minSize"),
+              }}
+              highThumb={{
+                id: "indexer-search-size-max",
+                ariaLabel: t("indexerSearch.advanced.maxSize"),
+              }}
             />
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </aside>
   );
 }
@@ -1157,7 +1156,6 @@ export function SettingsIndexerSearchSection(
     hasSearched,
     searching,
     indexers,
-    matchedCount,
     rows,
     sort,
     onSortChange,
@@ -1194,7 +1192,7 @@ export function SettingsIndexerSearchSection(
               id="indexer-search-totals"
               className="text-[13px] text-[var(--scry-text3)]"
             >
-              {t("indexerSearch.results.matched", { count: matchedCount })}
+              {t("indexerSearch.results.matched", { count: rows.length })}
             </span>
             {props.deadlineReached ? (
               <span

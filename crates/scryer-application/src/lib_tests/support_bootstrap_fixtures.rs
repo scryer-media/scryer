@@ -348,6 +348,8 @@ pub(super) struct MediaRequestTestHarness {
     /// The list store, so list-originated requests can be followed back to
     /// their subscription.
     pub(super) lists: Arc<crate::lists::test_support::MemoryListStore>,
+    /// The settings store, so a test can make a write fail.
+    pub(super) settings: Arc<StoredSettingsRepo>,
 }
 
 pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
@@ -410,7 +412,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         download_client,
         download_client_configs,
         release_attempts.clone(),
-        settings,
+        settings.clone(),
         quality_profiles.clone(),
         String::new(),
     )
@@ -473,6 +475,7 @@ pub(super) fn bootstrap_media_request_app_with_list_plugins(
         request_rule_decisions,
         lifecycle_claims,
         lists,
+        settings,
     }
 }
 
@@ -503,6 +506,8 @@ pub(super) fn media_request_input(
         origin: Default::default(),
         list_rank: None,
         admission: Default::default(),
+        requested_required_audio_languages: None,
+        requested_preferred_audio_languages: None,
     }
 }
 

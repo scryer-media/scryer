@@ -2634,3 +2634,128 @@ async fn a_completed_operation_keeps_its_plan_and_its_per_title_file_page() {
         files.files
     );
 }
+
+/// Gives the fixture title a profile with `decision_pipeline` (`None` for the
+/// default order) that lists 2160p, 1080p and 720p, and prefers French audio
+/// for movies.
+async fn order_the_fixture_title(fixture: &ConflictFixture, decision_pipeline: Option<Value>) {
+    seed_typed_settings_definitions(&fixture.ctx).await;
+    let languages = gql(
+        &fixture.ctx,
+        r#"mutation Update($input: UpdateMediaSettingsInput!) {
+              updateMediaSettings(input: $input) { preferredAudioLanguages }
+            }"#,
+        json!({"input": {"scope": "MOVIE", "preferredAudioLanguages": ["fra"]}}),
+    )
+    .await;
+    assert_no_errors(&languages);
+    let mut criteria = json!({
+        "qualityTiers": ["2160P", "1080P", "720P"],
+        "archivalQuality": "2160P",
+        "allowUnknownQuality": false,
+        "sourceAllowlist": [],
+        "sourceBlocklist": [],
+        "videoCodecAllowlist": [],
+        "videoCodecBlocklist": [],
+        "audioCodecAllowlist": [],
+        "audioCodecBlocklist": [],
+        "dolbyVisionAllowed": true,
+        "detectedHdrAllowed": true,
+        "preferRemux": false,
+        "allowBdDisk": true,
+        "allowUpgrades": true,
+        "scoringOverrides": {},
+        "cutoffTier": null,
+        "minScoreToGrab": null
+    });
+    if let Some(pipeline) = decision_pipeline {
+        criteria["decisionPipeline"] = pipeline;
+    }
+    let saved = gql(
+        &fixture.ctx,
+        r#"mutation Save($input: SaveQualityProfileSettingsInput!) {
+              saveQualityProfileSettings(input: $input) { profiles { id } }
+            }"#,
+        json!({"input": {
+            "profiles": [{ "id": "keeper-order", "name": "Keeper Order", "criteria": criteria }],
+            "categorySelections": [],
+            "categoryPersonaSelections": [],
+            "replaceExisting": false
+        }}),
+    )
+    .await;
+    assert_no_errors(&saved);
+    sqlx::query("UPDATE titles SET tags = ? WHERE id = ?")
+        .bind(r#"["scryer:quality-profile:keeper-order"]"#)
+        .bind(&fixture.title.id)
+        .execute(fixture.ctx.db.pool())
+        .await
+        .unwrap();
+}
+
+/// Keep-one keeps the file the title's profile ranks first on its decision
+/// order. With the preferred language ahead of the tier that is the French
+/// 720p file over an unlabelled 2160p one; under the default order it is the
+/// 2160p file. Either way only the conflict's other media is disposed of:
+/// files outside the conflict folders and the non-media files are preserved.
+#[tokio::test]
+async fn keep_one_keeps_the_file_the_profiles_decision_order_ranks_first() {
+    let french = "Emberfall.2024.720p.WEB-DL.FRENCH.mkv";
+    let uhd = "Emberfall.2024.2160p.BluRay.mkv";
+    for (pipeline, kept, disposed) in [
+        (
+            Some(json!(["PREFERRED_LANGUAGE", "QUALITY_TIER"])),
+            french,
+            uhd,
+        ),
+        (None, uhd, french),
+    ] {
+        let fixture = ConflictFixture::new().await;
+        order_the_fixture_title(&fixture, pipeline.clone()).await;
+        std::fs::write(fixture.junk.join(french), b"french movie").unwrap();
+        let unrelated = fixture.root.join("unrelated.mkv");
+        std::fs::write(&unrelated, b"unrelated movie").unwrap();
+
+        let task = fixture
+            .settle(
+                fixture.request(ConflictPolicy::KeepOne, ConflictLeftovers::PreserveAll),
+                false,
+            )
+            .await;
+        assert_eq!((task.settled_count, task.failed_count), (1, 0), "{task:?}");
+
+        let media = fixture
+            .ctx
+            .media_files
+            .list_media_files_for_title(&fixture.title.id)
+            .await
+            .unwrap();
+        assert_eq!(media.len(), 1, "{pipeline:?}: {media:?}");
+        assert!(
+            media[0].file_path.ends_with(kept),
+            "{pipeline:?}: kept {}",
+            media[0].file_path
+        );
+        assert!(fixture.named.join(kept).exists(), "{pipeline:?}");
+        assert!(!fixture.junk.join(disposed).exists(), "{pipeline:?}");
+        assert!(!fixture.named.join(disposed).exists(), "{pipeline:?}");
+        // Files outside the conflict folders and the conflict's non-media
+        // files are preserved.
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"unrelated movie");
+        assert_eq!(
+            std::fs::read(fixture.named.join("poster.jpg")).unwrap(),
+            b"artwork contents"
+        );
+        let recycled = fixture
+            .ctx
+            .app
+            .list_recycled_items(&fixture.actor, Some(vec![fixture.title.library_id.clone()]))
+            .await
+            .unwrap();
+        assert_eq!(
+            recycled.len(),
+            2,
+            "{pipeline:?}: disposed media is recycled, not lost"
+        );
+    }
+}

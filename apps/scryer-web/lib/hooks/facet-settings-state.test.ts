@@ -367,3 +367,69 @@ test("download-client state retains server order and appends newly configured cl
     ["b", "a", "new"],
   );
 });
+
+test(
+  "a category quality profile save sends every field the mutation input requires",
+  { timeout: 10_000 },
+  async () => {
+    const criteria = {
+      qualityTiers: ["1080P"],
+      sourceAllowlist: [],
+      sourceBlocklist: [],
+      videoCodecAllowlist: [],
+      videoCodecBlocklist: [],
+      audioCodecAllowlist: [],
+      audioCodecBlocklist: [],
+    };
+    const quality = {
+      profiles: [
+        { id: "custom", name: "Custom", criteria },
+        { id: "compact", name: "Compact", criteria },
+      ],
+      globalProfileId: "custom",
+      globalScoringPersona: "QUALITY",
+      categorySelections: [],
+      categoryPersonaSelections: [],
+    };
+    const media = {
+      scope: "ANIME",
+      libraryPath: "",
+      rootFolders: [],
+      requiredAudioLanguages: [],
+    };
+    const inputs: object[] = [];
+    const h = harness({
+      query: () => ({
+        toPromise: async () => ({
+          data: { qualityProfileSettings: quality, mediaSettings: media },
+        }),
+      }),
+      mutation: (_query: string, variables: { input: object }) => {
+        inputs.push(variables.input);
+        return {
+          toPromise: async () => ({
+            data: { saveQualityProfileSettings: quality },
+          }),
+        };
+      },
+    });
+    const render = () =>
+      h.render<UseMediaSettingsResult>(
+        "use-media-settings.ts",
+        "useMediaSettings",
+      );
+    await render().refreshMediaSettings();
+    await render().saveCategoryQualityProfileOverride("compact");
+    assert.deepEqual(inputs, [
+      {
+        profiles: [],
+        globalProfileId: null,
+        categorySelections: [
+          { scope: "ANIME", profileId: "compact", inheritGlobal: false },
+        ],
+        categoryPersonaSelections: [],
+        replaceExisting: false,
+      },
+    ]);
+  },
+);

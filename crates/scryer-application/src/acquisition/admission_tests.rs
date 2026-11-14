@@ -19,6 +19,19 @@ fn language_ahead_of_tier() -> DecisionPipeline {
     .unwrap()
 }
 
+/// The order that compares the quality tier and revision first, then the
+/// languages. The language steps are opt-in, so a test about language
+/// behaviour under a tier-first order chooses this one explicitly.
+fn tier_then_languages() -> DecisionPipeline {
+    DecisionPipeline::try_from_gates([
+        DecisionGate::QualityTier,
+        DecisionGate::Revision,
+        DecisionGate::PreferredLanguage,
+        DecisionGate::OptionalLanguages,
+    ])
+    .unwrap()
+}
+
 fn incumbent(id: &str, score: i32, covers: &[&str]) -> (Incumbent, bool) {
     (
         Incumbent {
@@ -1072,12 +1085,25 @@ fn missing_grab_history_at_cutoff_still_yields_to_a_language_step() {
             false,
             true,
         ),
+        // More optional languages pass only while the grab still wants them,
+        // as they do over a file on disk.
+        (
+            AudioLanguageRank {
+                wanted: true,
+                optional_wanted: true,
+                ..AudioLanguageRank::for_test(0, 0)
+            },
+            AudioLanguageRank::for_test(0, 1),
+            1,
+            false,
+            true,
+        ),
         (
             AudioLanguageRank::for_test(0, 0),
             AudioLanguageRank::for_test(0, 1),
             1,
             false,
-            true,
+            false,
         ),
         (
             AudioLanguageRank::for_test(1, 0),
@@ -1120,7 +1146,7 @@ fn missing_grab_history_at_cutoff_still_yields_to_a_language_step() {
             .with_pipeline(if language_ahead {
                 language_ahead_of_tier()
             } else {
-                DecisionPipeline::default_order()
+                tier_then_languages()
             });
         assert_eq!(
             evaluate_admission(&subject, candidate, &grab_policy_with_queue(10))
@@ -1613,7 +1639,7 @@ fn the_default_order_keeps_the_tier_ahead_of_the_preferred_language() {
 }
 
 #[test]
-fn the_default_order_upgrades_to_the_preferred_language_within_a_tier() {
+fn a_tier_first_order_upgrades_to_the_preferred_language_within_a_tier() {
     // Same tier and revision: the preferred language wins over any score.
     let subject = title_scope(spoken(
         "english-1080p",
@@ -1621,8 +1647,9 @@ fn the_default_order_upgrades_to_the_preferred_language_within_a_tier() {
         9_000,
         AudioLanguageRank::for_test(1, 0),
     ));
-    let candidate =
-        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(tier_then_languages());
     assert!(evaluate_admission(&subject, candidate, &grab_policy()).is_admitted());
 }
 
@@ -1638,8 +1665,9 @@ fn a_language_upgrade_ignores_the_format_cutoff_and_the_churn_threshold() {
         cutoff_score: Some(500),
         ..auto(5_000)
     };
-    let candidate =
-        CandidateFacts::new(Some(1), 0, 100).with_language(AudioLanguageRank::for_test(0, 0));
+    let candidate = CandidateFacts::new(Some(1), 0, 100)
+        .with_language(AudioLanguageRank::for_test(0, 0))
+        .with_pipeline(tier_then_languages());
     assert!(evaluate_admission(&subject, candidate, &policy).is_admitted());
 }
 
@@ -2296,12 +2324,12 @@ fn frozen_ladder(
     (score.saturating_sub(incumbent.score) < policy.min_delta).then_some("not_an_upgrade")
 }
 
-/// The default order is the old quality-first ladder, and the preferred
-/// language moved ahead of the tier is the old language-first one, verdict
-/// for verdict, over every combination of tier, group, revision, language and
-/// score the two sides can differ in.
+/// Tier, revision, then the languages is the old quality-first ladder, and
+/// the preferred language moved ahead of the tier is the old language-first
+/// one, verdict for verdict, over every combination of tier, group, revision,
+/// language and score the two sides can differ in.
 #[test]
-fn the_default_and_language_ahead_orders_reproduce_the_old_ladder() {
+fn the_tier_first_and_language_ahead_orders_reproduce_the_old_ladder() {
     let tiers = [Some(0), Some(1), None];
     let languages = [
         AudioLanguageRank::for_test(0, 0),
@@ -2323,7 +2351,7 @@ fn the_default_and_language_ahead_orders_reproduce_the_old_ladder() {
     ];
     let mut compared = 0;
     for (language_first, pipeline) in [
-        (false, DecisionPipeline::default_order()),
+        (false, tier_then_languages()),
         (true, language_ahead_of_tier()),
     ] {
         for held_tier in tiers {

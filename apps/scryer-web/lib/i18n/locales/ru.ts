@@ -1907,6 +1907,18 @@ const ru: LocaleDictionary = {
   "title.noWantedItem": "Нет активных желаемых материалов.",
   "title.searchReleasesAction": "Искать релизы",
   "title.queueLatest": "Добавить последний релиз в очередь",
+  "search.addConfigRequiredAudio": "Обязательный язык аудио",
+  "search.addConfigPreferredAudio": "Предпочитаемый язык аудио",
+  "search.addConfigAudioChoose": "Выбрать языки",
+  "search.addConfigAudioRequireNone": "Не требовать",
+  "title.preferredAudioLanguages": "Предпочитаемые языки аудио",
+  "error.reason.SETTINGS_AUDIO_LANGUAGE_UNKNOWN":
+    "Scryer не знает этот язык аудио.",
+  "lists.refusal.routeAudioLanguageUnknown":
+    "Scryer не знает язык аудио маршрута.",
+  "requests.requestedAudioLanguages": "Запрошенные языки аудио",
+  "requests.requestedRequiredAudio": "Обязательные: {{languages}}",
+  "requests.requestedPreferredAudio": "Предпочитаемые: {{languages}}",
   "title.requiredAudioLanguages": "Требуемые языки аудио",
   "title.originalAudioLanguagePerTitle":
     "Язык оригинала (для каждого произведения)",
@@ -5198,6 +5210,7 @@ const ru: LocaleDictionary = {
   "requests.approvedLease": "Хранить",
   "requests.approvedLeaseKeepForever": "Вечно, как и просили",
   "requests.approvedLeaseKeepRequested": "{{count}} дней, как и просили",
+  "requests.approvedAudioLanguages": "Языки аудио",
   "requests.approvedTags": "Метки",
   "requests.approvedTagsHelp":
     "Применяются к тайтлу при одобрении. Заполнены тем, что выдали правила; добавляйте и убирайте любой тег, определённый администратором в «Настройки › Теги».",
@@ -5278,6 +5291,10 @@ const ru: LocaleDictionary = {
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
     "Сколько дней запросивший просил хранить медиа; отсутствует, когда он попросил хранить вечно",
+  "settings.refReqRequestRequiredAudioLanguages":
+    "Языки аудио, которые, по словам запросившего, должны быть у тайтла. null оставляет выбор библиотеке; пустой список означает отсутствие требования",
+  "settings.refReqRequestPreferredAudioLanguages":
+    "Предпочитаемые запросившим языки аудио по порядку. null оставляет выбор библиотеке",
   "settings.refReqSectionExternalIds":
     "— Идентификаторы поставщиков в input.request.external_ids",
   "settings.refReqExternalIdsTmdb":
@@ -5815,6 +5832,9 @@ const ru: LocaleDictionary = {
   "indexerSearch.facet.protocol": "Протокол",
   "indexerSearch.facet.resolution": "Разрешение",
   "indexerSearch.facet.source": "Источник",
+  "indexerSearch.facet.videoCodec": "Видеокодек",
+  "indexerSearch.facet.audioCodec": "Аудиокодек",
+  "indexerSearch.facet.audioChannels": "Аудиоканалы",
   "indexerSearch.facet.audio": "Звук и HDR",
   "indexerSearch.facet.flags": "Метки",
   "indexerSearch.facet.indexer": "Индексатор",
@@ -13500,28 +13520,18 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionOrder": "Порядок решения",
   "qualityProfile.decisionOrderInfo":
     "Когда два релиза подходят под этот профиль, Scryer проверяет эти шаги сверху вниз. Решает первый шаг, который их различает. Оценка всегда решает последней.",
-  "qualityProfile.decisionPresets": "Предустановки",
-  "qualityProfile.decisionPresetDefault": "По умолчанию",
-  "qualityProfile.decisionPresetLanguageFirst": "Сначала язык",
-  "qualityProfile.decisionPresetScoreOnly": "Только оценка",
   "qualityProfile.decisionGateQualityTier": "Уровень качества",
   "qualityProfile.decisionGateQualityTierDescription":
     "Побеждает релиз из уровня, который стоит выше в предпочтениях качества этого профиля.",
-  "qualityProfile.decisionGateQualityTierSummary": "уровню качества",
   "qualityProfile.decisionGateRevision": "PROPER/REPACK",
   "qualityProfile.decisionGateRevisionDescription":
     "В пределах одного уровня и одной релиз-группы побеждает более новый PROPER или REPACK.",
-  "qualityProfile.decisionGateRevisionSummary": "ревизии PROPER/REPACK",
   "qualityProfile.decisionGatePreferredLanguage": "Предпочитаемый язык",
   "qualityProfile.decisionGatePreferredLanguageDescription":
     "Побеждает релиз, аудио которого стоит выше в списке предпочитаемых языков аудио библиотеки.",
-  "qualityProfile.decisionGatePreferredLanguageSummary":
-    "предпочитаемому языку аудио",
   "qualityProfile.decisionGateOptionalLanguages": "Дополнительные языки",
   "qualityProfile.decisionGateOptionalLanguagesDescription":
     "Побеждает релиз, в котором больше дополнительных языков аудио библиотеки.",
-  "qualityProfile.decisionGateOptionalLanguagesSummary":
-    "числу дополнительных языков аудио",
   "qualityProfile.decisionGateUnknown": "Неизвестный шаг ({{value}})",
   "qualityProfile.decisionGateUnknownDescription":
     "Эта версия веб-приложения не знает этот шаг. Он остаётся на своём месте.",
@@ -13533,11 +13543,6 @@ const ru: LocaleDictionary = {
   "qualityProfile.decisionStepAdd": "Добавить {{value}} в порядок решения",
   "qualityProfile.decisionAvailableSteps": "Неиспользуемые шаги",
   "qualityProfile.decisionAllStepsInUse": "Все шаги используются.",
-  "qualityProfile.decisionSummary":
-    "Релизы сравниваются по {{steps}} и в конце по оценке.",
-  "qualityProfile.decisionSummaryJoin": "{{previous}}, затем по {{next}}",
-  "qualityProfile.decisionSummaryScoreOnly":
-    "Релизы сравниваются только по оценке.",
   "qualityProfile.decisionWarningTierAbsent":
     "Без шага «Уровень качества» релиз более низкого уровня может заменить файл более высокого уровня, а пороговый уровень не действует. Поиск обновлений останавливает только пороговая оценка; без неё профиль считается выполненным, как только есть файл.",
   "qualityProfile.decisionNoteTierBelowLanguage":

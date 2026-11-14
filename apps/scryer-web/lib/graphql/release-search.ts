@@ -176,9 +176,23 @@ export async function runIterativeReleaseSearch(
     onUpdate?: (snapshot: InteractiveSearchProgress) => void;
     /** Polling failures retain partial results but must still be shown to the operator. */
     onError?: (error: unknown) => void;
+    /**
+     * Start, next-page and poll documents selecting more result fields than
+     * the shared ones; a caller that renders extra facts passes its own.
+     */
+    documents?: {
+      start: string;
+      continue: string;
+      poll: string;
+    };
   } = {},
 ): Promise<Release[]> {
   const { onUpdate, onError } = options;
+  const documents = options.documents ?? {
+    start: startInteractiveReleaseSearchMutation,
+    continue: continueInteractiveReleaseSearchMutation,
+    poll: interactiveReleaseSearchQuery,
+  };
   const requestController = new AbortController();
   const signal = options.signal
     ? AbortSignal.any([options.signal, requestController.signal])
@@ -240,9 +254,7 @@ export async function runIterativeReleaseSearch(
     try {
       const { data, error } = await boundedQuery(
         client.mutation(
-          options.after
-            ? continueInteractiveReleaseSearchMutation
-            : startInteractiveReleaseSearchMutation,
+          options.after ? documents.continue : documents.start,
           options.after
             ? { after: options.after, first: input.aggregatePageSize }
             : { input },
@@ -290,7 +302,7 @@ export async function runIterativeReleaseSearch(
       try {
         const { data: pollData, error: pollError } = await boundedQuery(
           client.query(
-            interactiveReleaseSearchQuery,
+            documents.poll,
             { id: jobId },
             { requestPolicy: "network-only", ...fetchOptions },
           ),

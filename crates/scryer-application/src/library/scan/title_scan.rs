@@ -362,7 +362,7 @@ fn title_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str> {
 }
 
 /// Rank a scanned movie file for the primary role, exactly the way admission
-/// would: **tier first, then bar**.
+/// ranks held files: **the profile's decision order, then bar**.
 ///
 /// Scan is not exempt from invariant I1, and it is not exempt from I3 either.
 /// The file the scan promotes to primary is the file every later upgrade
@@ -374,28 +374,34 @@ fn title_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str> {
 /// — after which the 2160p file on disk reads as an upgrade candidate.
 ///
 /// [`crate::AppUseCase::incumbent_bar`] is the same derivation the grab path
-/// uses, so the pair this returns is the pair the gate will see for that file.
+/// uses, so the pair this returns is the pair the gate will see for that file,
+/// and the ladder key is the one
+/// [`crate::admission::AdmissionSubject::best_incumbent_record`] orders by.
 /// Mandatory rejections carry no points. All numeric penalties remain in the
 /// same canonical score used by import and subsequent upgrade comparisons.
 fn rank_movie_media_file_for_primary(
     app: &AppUseCase,
     context: &crate::quality::canonical_context::ResolvedScoringContext,
     file: &TitleMediaFile,
-) -> (usize, i32) {
+) -> (crate::decision_pipeline::GateKey, i32) {
     let bar = app.incumbent_bar(
         file,
         context,
         // A movie is one member: the title's own runtime, filled in by `view`.
         crate::quality_profile::CoverageSizeBasis::default(),
     );
-    (crate::admission::tier_sort_key(bar.tier_index), bar.score)
+    (
+        bar.ladder_key(&context.profile().criteria.decision_pipeline),
+        bar.score,
+    )
 }
 
 /// One candidate for the primary role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RankedMovieFile {
-    /// Profile tier position, ascending; [`crate::admission::tier_sort_key`].
-    tier_key: usize,
+    /// Position on the profile's decision order, ascending;
+    /// [`crate::quality::canonical_context::IncumbentFacts::ladder_key`].
+    ladder_key: crate::decision_pipeline::GateKey,
     /// The file's canonical bar, descending.
     score: i32,
     size_bytes: i64,
@@ -404,20 +410,20 @@ struct RankedMovieFile {
 }
 
 impl RankedMovieFile {
-    /// Best-first ordering key: tier, then bar, then the long-standing
-    /// size / path / id tie-breaks that keep the election deterministic when
-    /// two files are genuinely equivalent.
+    /// Best-first ordering key: the profile's decision order, then bar, then
+    /// the long-standing size / path / id tie-breaks that keep the election
+    /// deterministic when two files are genuinely equivalent.
     fn sort_key(
         &self,
     ) -> (
-        usize,
+        crate::decision_pipeline::GateKey,
         std::cmp::Reverse<i32>,
         std::cmp::Reverse<i64>,
         &str,
         &str,
     ) {
         (
-            self.tier_key,
+            self.ladder_key,
             std::cmp::Reverse(self.score),
             std::cmp::Reverse(self.size_bytes),
             self.file_path.as_str(),
@@ -466,7 +472,8 @@ async fn normalize_movie_file_roles_after_scan(
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
     // Two primaries is a contradiction the scan has to resolve, and it must
-    // resolve it on the ladder the gate uses — tier, then bar, then size — not
+    // resolve it on the ladder the gate uses — the profile's decision order,
+    // then bar, then size — not
     // on age. Oldest-wins demoted a freshly imported Remux behind an 800p
     // WEB-DL that had been on disk a week longer, after which every gate read
     // the scope through the WEB-DL and admitted the same BluRay release
@@ -513,9 +520,9 @@ async fn normalize_movie_file_roles_after_scan(
         // Additional.
         let mut ranked = Vec::with_capacity(primary_files.len());
         for file in primary_files.iter().copied() {
-            let (tier_key, score) = rank_movie_media_file_for_primary(app, &context, file);
+            let (ladder_key, score) = rank_movie_media_file_for_primary(app, &context, file);
             ranked.push(RankedMovieFile {
-                tier_key,
+                ladder_key,
                 score,
                 size_bytes: file.size_bytes,
                 file_path: file.file_path.clone(),
@@ -3785,7 +3792,9 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decision_pipeline::DecisionGate;
     use crate::library_filename_parser::parse_library_filename;
+    use crate::quality::canonical_context::IncumbentFacts;
     use chrono::Utc;
     use scryer_domain::{Episode, ExternalId, MediaFacet, Title};
     use std::path::Path;
@@ -4021,14 +4030,37 @@ mod tests {
         assert_eq!(episode.episode_numbers, vec![1]);
     }
 
-    fn ranked(file_id: &str, tier_key: usize, score: i32) -> RankedMovieFile {
-        RankedMovieFile {
-            tier_key,
+    fn bar(tier_index: Option<usize>, preferred_rank: u16, score: i32) -> IncumbentFacts {
+        IncumbentFacts {
             score,
+            tier_index,
+            revision: 0,
+            language: crate::AudioLanguageRank::for_test(preferred_rank, 0),
+        }
+    }
+
+    fn ranked_under(
+        pipeline: &crate::DecisionPipeline,
+        file_id: &str,
+        bar: IncumbentFacts,
+    ) -> RankedMovieFile {
+        RankedMovieFile {
+            ladder_key: bar.ladder_key(pipeline),
+            score: bar.score,
             size_bytes: 1_000,
             file_path: format!("/movies/{file_id}.mkv"),
             file_id: file_id.to_string(),
         }
+    }
+
+    /// A file at `tier_index` under the default order, every file carrying
+    /// the same language standing.
+    fn ranked(file_id: &str, tier_index: Option<usize>, score: i32) -> RankedMovieFile {
+        ranked_under(
+            &crate::DecisionPipeline::DEFAULT,
+            file_id,
+            bar(tier_index, 0, score),
+        )
     }
 
     fn elect(mut candidates: Vec<RankedMovieFile>) -> String {
@@ -4046,9 +4078,126 @@ mod tests {
     #[test]
     fn the_scan_elects_the_better_tier_even_when_it_scores_lower() {
         assert_eq!(
-            elect(vec![ranked("uhd", 0, 100), ranked("hd", 2, 300)]),
+            elect(vec![
+                ranked("uhd", Some(0), 100),
+                ranked("hd", Some(2), 300)
+            ]),
             "uhd"
         );
+    }
+
+    /// A French 2160p file and an English 720p file, English preferred.
+    fn french_uhd_and_english_hd(pipeline: &crate::DecisionPipeline) -> Vec<RankedMovieFile> {
+        vec![
+            ranked_under(pipeline, "french-uhd", bar(Some(0), 1, 300)),
+            ranked_under(pipeline, "english-hd", bar(Some(2), 0, 100)),
+        ]
+    }
+
+    /// The election follows the profile's decision order: with the preferred
+    /// language ahead of the tier the English 720p file is primary, under the
+    /// default order the 2160p file is.
+    #[test]
+    fn the_scan_elects_on_the_profiles_decision_order() {
+        let language_first = crate::DecisionPipeline::try_from_gates([
+            DecisionGate::PreferredLanguage,
+            DecisionGate::QualityTier,
+        ])
+        .unwrap();
+        assert_eq!(
+            elect(french_uhd_and_english_hd(&language_first)),
+            "english-hd"
+        );
+        assert_eq!(
+            elect(french_uhd_and_english_hd(&crate::DecisionPipeline::DEFAULT)),
+            "french-uhd"
+        );
+    }
+
+    /// Without a tier step the tier never decides: the language step does,
+    /// and between files of one language standing the bar does.
+    #[test]
+    fn the_scan_never_elects_on_tier_when_the_profile_removed_it() {
+        let without_tier =
+            crate::DecisionPipeline::try_from_gates([DecisionGate::PreferredLanguage]).unwrap();
+        assert_eq!(
+            elect(vec![
+                ranked_under(&without_tier, "uhd", bar(Some(0), 0, 100)),
+                ranked_under(&without_tier, "hd", bar(Some(2), 0, 300)),
+            ]),
+            "hd"
+        );
+        assert_eq!(
+            elect(french_uhd_and_english_hd(&without_tier)),
+            "english-hd"
+        );
+    }
+
+    /// The election key before it followed the decision order.
+    fn tier_then_score_key(
+        file: &RankedMovieFile,
+        bar: &IncumbentFacts,
+    ) -> (
+        usize,
+        std::cmp::Reverse<i32>,
+        std::cmp::Reverse<i64>,
+        String,
+        String,
+    ) {
+        (
+            crate::admission::tier_sort_key(bar.tier_index),
+            std::cmp::Reverse(bar.score),
+            std::cmp::Reverse(file.size_bytes),
+            file.file_path.clone(),
+            file.file_id.clone(),
+        )
+    }
+
+    /// Under the default order, with every file carrying the same language
+    /// standing (which every file does when no audio language preference is
+    /// configured), a seeded set sorts exactly as tier-then-bar sorted it.
+    #[test]
+    fn the_default_order_elects_exactly_as_tier_then_bar_did() {
+        for language in [
+            crate::AudioLanguageRank::default(),
+            crate::AudioLanguageRank::for_test(2, 1),
+        ] {
+            let mut seeded = Vec::new();
+            for (tier, tier_index) in [Some(0), Some(1), Some(3), None].into_iter().enumerate() {
+                for score in [-50, 0, 100, 300] {
+                    for size_bytes in [1_000_i64, 5_000] {
+                        for revision in 0..2 {
+                            let facts = IncumbentFacts {
+                                score,
+                                tier_index,
+                                revision,
+                                language,
+                            };
+                            let mut file = ranked_under(
+                                &crate::DecisionPipeline::DEFAULT,
+                                &format!("t{tier}-s{score}-z{size_bytes}-r{revision}"),
+                                facts,
+                            );
+                            file.size_bytes = size_bytes;
+                            seeded.push((file, facts));
+                        }
+                    }
+                }
+            }
+            let mut new_order = seeded.clone();
+            new_order.sort_by(|(left, _), (right, _)| left.sort_key().cmp(&right.sort_key()));
+            let mut old_order = seeded.clone();
+            old_order.sort_by(|(left, left_bar), (right, right_bar)| {
+                tier_then_score_key(left, left_bar).cmp(&tier_then_score_key(right, right_bar))
+            });
+            let ids = |order: &[(RankedMovieFile, IncumbentFacts)]| {
+                order
+                    .iter()
+                    .map(|(file, _)| file.file_id.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&new_order), ids(&old_order), "{language:?}");
+        }
     }
 
     /// A quality the profile does not list sorts last, matching
@@ -4058,8 +4207,8 @@ mod tests {
     fn an_untiered_file_never_wins_the_primary_role_over_a_tiered_one() {
         assert_eq!(
             elect(vec![
-                ranked("unlisted", crate::admission::tier_sort_key(None), 9_000),
-                ranked("listed", 3, -50),
+                ranked("unlisted", None, 9_000),
+                ranked("listed", Some(3), -50),
             ]),
             "listed"
         );
@@ -4070,13 +4219,19 @@ mod tests {
     #[test]
     fn within_a_tier_the_bar_then_the_tie_breaks_decide() {
         assert_eq!(
-            elect(vec![ranked("weak", 1, 100), ranked("strong", 1, 400)]),
+            elect(vec![
+                ranked("weak", Some(1), 100),
+                ranked("strong", Some(1), 400)
+            ]),
             "strong"
         );
 
-        let mut bigger = ranked("bigger", 1, 400);
+        let mut bigger = ranked("bigger", Some(1), 400);
         bigger.size_bytes = 5_000;
-        assert_eq!(elect(vec![ranked("smaller", 1, 400), bigger]), "bigger");
+        assert_eq!(
+            elect(vec![ranked("smaller", Some(1), 400), bigger]),
+            "bigger"
+        );
     }
 
     /// An import or a pending bind carries its original path and a series

@@ -4826,17 +4826,13 @@ async fn process_single_target(
         .await
         .unwrap_or_default();
     let cutoff_scope = app.cutoff_scope_for(&subject.submission_scope).await;
-    let analyzed_cutoff_quality =
-        crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
-            &existing_files,
-            &cutoff_scope,
-        );
 
     let upgrade_context = match app
-        .resolve_upgrade_context_for_title_with_category_and_quality(
+        .resolve_upgrade_context_for_scope(
             &search_title,
             Some(subject.category.as_str()),
-            analyzed_cutoff_quality,
+            &existing_files,
+            &cutoff_scope,
         )
         .await
     {

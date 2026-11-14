@@ -72,6 +72,10 @@ pub struct RequestDraft {
     pub monitor_selection: Option<MonitorSelection>,
     /// `None` means forever (spec 0003 FR-040).
     pub requested_lease_days: Option<i64>,
+    /// `None` leaves it to the library; `Some(vec![])` asks for no requirement.
+    pub requested_required_audio_languages: Option<Vec<String>>,
+    /// `None` leaves it to the library.
+    pub requested_preferred_audio_languages: Option<Vec<String>>,
     pub origin: MediaRequestOrigin,
     /// The item's rank on the list that submitted it, when the list ranks it.
     pub list_rank: Option<i64>,
@@ -938,6 +942,8 @@ fn request_doc(draft: &RequestDraft, list: Option<RequestListDoc>) -> RequestDoc
             .map(|selection| selection.seasons.len() as i64),
         lease_forever: draft.requested_lease_days.is_none(),
         lease_days: draft.requested_lease_days,
+        required_audio_languages: draft.requested_required_audio_languages.clone(),
+        preferred_audio_languages: draft.requested_preferred_audio_languages.clone(),
         list,
     }
 }

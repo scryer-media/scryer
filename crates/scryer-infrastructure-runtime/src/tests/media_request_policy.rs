@@ -481,25 +481,35 @@ async fn pending_request_writes_carry_the_verdict_and_the_edited_lease() {
             "1080P".to_string(),
             None,
             None,
+            Some(Vec::new()),
+            Some(vec!["original".to_string(), "deu".to_string()]),
             Some(7),
             request_event("request-1"),
         )
         .await
         .expect("edit preferences");
+    let edited = store
+        .get("request-1")
+        .await
+        .unwrap()
+        .expect("request exists");
+    assert_eq!(edited.requested_lease_days, Some(7));
     assert_eq!(
-        store
-            .get("request-1")
-            .await
-            .unwrap()
-            .expect("request exists")
-            .requested_lease_days,
-        Some(7)
+        edited.requested_required_audio_languages,
+        Some(Vec::new()),
+        "an empty required list survives the store, distinct from inherit"
+    );
+    assert_eq!(
+        edited.requested_preferred_audio_languages,
+        Some(vec!["original".to_string(), "deu".to_string()])
     );
     store
         .update_pending_request_preferences(
             "request-1",
             "1080p".to_string(),
             "1080P".to_string(),
+            None,
+            None,
             None,
             None,
             None,

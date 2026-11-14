@@ -965,6 +965,8 @@ async fn editing_a_pending_request_re_evaluates_it() {
                 requested_monitor_type: None,
                 requested_monitor_selection: None,
                 requested_lease_days: Some(Some(7)),
+                requested_required_audio_languages: None,
+                requested_preferred_audio_languages: None,
             },
         )
         .await
@@ -1879,5 +1881,178 @@ fn sample(harness: &MediaRequestTestHarness, library_id: &str, tvdb_id: i64) -> 
         quality_profile_id: Some("1080p".to_string()),
         monitor_type: None,
         lease_days: Some(Some(14)),
+        required_audio_languages: None,
+        preferred_audio_languages: None,
     }
+}
+
+const DENY_REQUIRING_NO_AUDIO: &str = r#"package rules
+import rego.v1
+
+deny if {
+	input.request.required_audio_languages == []
+}
+"#;
+
+const MANUAL_WHEN_AUDIO_LEFT_TO_LIBRARY: &str = r#"package rules
+import rego.v1
+
+manual if {
+	input.request.required_audio_languages == null
+}
+"#;
+
+fn audio_request_input(
+    library_id: &str,
+    tvdb_id: i64,
+    required: Option<Vec<String>>,
+    preferred: Option<Vec<String>>,
+) -> crate::SubmitMediaRequestInput {
+    let mut input = media_request_input(library_id.to_string(), tvdb_id);
+    input.requested_required_audio_languages = required;
+    input.requested_preferred_audio_languages = preferred;
+    input
+}
+
+#[tokio::test]
+async fn a_rule_refuses_a_request_that_requires_no_audio_language() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "No silent requests", DENY_REQUIRING_NO_AUDIO).await;
+    enable(&harness, &detail.rule_set.id).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    harness
+        .app
+        .submit_media_request(
+            &harness.user,
+            audio_request_input(&library_id, 9401, Some(Vec::new()), None),
+        )
+        .await
+        .expect("submit");
+    harness
+        .app
+        .submit_media_request(
+            &harness.user,
+            audio_request_input(&library_id, 9402, None, None),
+        )
+        .await
+        .expect("submit");
+
+    let requests = harness.media_requests.requests.lock().await;
+    let status_of = |tvdb: &str| {
+        requests
+            .iter()
+            .find(|request| {
+                request
+                    .external_ids
+                    .iter()
+                    .any(|id| id.source == "tvdb" && id.value == tvdb)
+            })
+            .map(|request| request.status)
+            .expect("request")
+    };
+    assert_eq!(status_of("9401"), MediaRequestStatus::Rejected);
+    assert_eq!(
+        status_of("9402"),
+        MediaRequestStatus::Pending,
+        "leaving it to the library is not requiring none"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_can_approve_on_a_specific_requested_audio_language() {
+    let harness = bootstrap_media_request_app();
+    let code = crate::normalize_required_audio_requirements(["ja".to_string()])
+        .pop()
+        .expect("a normalized code");
+    let source = format!(
+        "package rules\nimport rego.v1\n\napprove if {{\n\t\"{code}\" in input.request.required_audio_languages\n}}\n"
+    );
+    let detail = create_rule(&harness, "Japanese audio", &source).await;
+    enable(&harness, &detail.rule_set.id).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let asked = audio_request_input(&library_id, 9403, Some(vec!["ja".to_string()]), None);
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, asked.clone())
+        .await
+        .expect("preflight");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::AutoApprove);
+    let other = audio_request_input(&library_id, 9404, Some(vec!["en".to_string()]), None);
+    assert_ne!(
+        harness
+            .app
+            .preview_my_request_decision(&harness.user, other)
+            .await
+            .expect("preflight")
+            .outcome,
+        RequestDecisionOutcome::AutoApprove
+    );
+
+    harness
+        .app
+        .submit_media_request(&harness.user, asked)
+        .await
+        .expect("submit");
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Approved);
+}
+
+#[tokio::test]
+async fn preflight_and_submit_see_the_same_audio_facts() {
+    let harness = bootstrap_media_request_app();
+    let deny = create_rule(&harness, "No silent requests", DENY_REQUIRING_NO_AUDIO).await;
+    enable(&harness, &deny.rule_set.id).await;
+    let manual = create_rule(
+        &harness,
+        "Review inherited audio",
+        MANUAL_WHEN_AUDIO_LEFT_TO_LIBRARY,
+    )
+    .await;
+    enable(&harness, &manual.rule_set.id).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let none = audio_request_input(
+        &library_id,
+        9405,
+        Some(Vec::new()),
+        Some(vec!["fr".to_string()]),
+    );
+    let inherit = audio_request_input(&library_id, 9406, None, None);
+    let preview = |input: crate::SubmitMediaRequestInput| {
+        let harness = &harness;
+        async move {
+            harness
+                .app
+                .preview_my_request_decision(&harness.user, input)
+                .await
+                .expect("preflight")
+        }
+    };
+    let none_preview = preview(none.clone()).await;
+    assert_eq!(none_preview.outcome, RequestDecisionOutcome::Deny);
+    let inherit_preview = preview(inherit.clone()).await;
+    assert_eq!(
+        inherit_preview.outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(
+        inherit_preview.fallback_reason.as_deref(),
+        Some(FALLBACK_RULE_MANUAL)
+    );
+
+    harness
+        .app
+        .submit_media_request(&harness.user, none)
+        .await
+        .expect("submit");
+    harness
+        .app
+        .submit_media_request(&harness.user, inherit)
+        .await
+        .expect("submit");
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests[0].status, MediaRequestStatus::Rejected);
+    assert_eq!(requests[1].status, MediaRequestStatus::Pending);
 }

@@ -993,6 +993,7 @@ impl AppUseCase {
         {
             return Ok(false);
         }
+        self.prune_title_scoped_settings(&ids).await;
         if let Some(handle) = self.runtime.acquisition.tracked_download_handle.as_ref() {
             handle.forget_many(ids.clone(), Vec::new());
         }
@@ -1088,22 +1089,36 @@ impl AppUseCase {
         }
         // A title without downloads adds no events of its own while its
         // dependents go, so the history cleared above stays cleared.
+        let mut deleted = Vec::with_capacity(titles.len());
+        let mut outcome = Ok(());
         for title in titles {
-            if !cleared.contains(title.id.as_str()) {
-                self.purge_title_logical_dependents(
-                    title,
-                    false,
-                    actor.clone(),
-                    &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
-                )
-                .await?;
+            if !cleared.contains(title.id.as_str())
+                && let Err(error) = self
+                    .purge_title_logical_dependents(
+                        title,
+                        false,
+                        actor.clone(),
+                        &mut crate::recycle_bin::TitleRecycleEntryIndex::default(),
+                    )
+                    .await
+            {
+                outcome = Err(error);
+                break;
             }
-            self.delete_title_row(title, actor.clone(), true, Vec::new(), false)
-                .await?;
+            if let Err(error) = self
+                .delete_title_row_keeping_settings(title, actor.clone(), true, Vec::new(), false)
+                .await
+            {
+                outcome = Err(error);
+                break;
+            }
+            deleted.push(title.id.clone());
             self.release_lifecycle_claims_for_deleted_title(&title.id)
                 .await;
         }
-        Ok(())
+        // One prune for the titles whose rows went, failed or not.
+        self.prune_title_scoped_settings(&deleted).await;
+        outcome
     }
 
     async fn acquire_title_delete_guard(
@@ -1275,7 +1290,60 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// Remove the per-title settings rows ([`crate::settings::keys::TITLE_SCOPED_SETTING_KEYS`])
+    /// of titles whose rows are already gone, in bind-safe chunks. Like the
+    /// lifecycle-claim release, a failure is logged and left: the titles are
+    /// deleted either way, and a leftover row names a title that no longer
+    /// exists.
+    pub(crate) async fn prune_title_scoped_settings(&self, title_ids: &[String]) {
+        if title_ids.is_empty() {
+            return;
+        }
+        match self
+            .services
+            .config
+            .settings
+            .delete_values_for_keys_and_scope_ids(
+                crate::settings::keys::SETTINGS_SCOPE_SYSTEM,
+                crate::settings::keys::TITLE_SCOPED_SETTING_KEYS,
+                title_ids,
+            )
+            .await
+        {
+            Ok(0) => {}
+            Ok(deleted) => debug!(deleted, "pruned per-title settings of deleted titles"),
+            Err(error) => warn!(
+                error = %error,
+                titles = title_ids.len(),
+                "could not prune per-title settings of deleted titles"
+            ),
+        }
+    }
+
     pub(crate) async fn delete_title_row(
+        &self,
+        title: &scryer_domain::Title,
+        actor: DomainEventActor,
+        append_title_deleted_event: bool,
+        deleted_paths: Vec<String>,
+        record_recycle_purge: bool,
+    ) -> AppResult<()> {
+        self.delete_title_row_keeping_settings(
+            title,
+            actor,
+            append_title_deleted_event,
+            deleted_paths,
+            record_recycle_purge,
+        )
+        .await?;
+        self.prune_title_scoped_settings(std::slice::from_ref(&title.id))
+            .await;
+        Ok(())
+    }
+
+    /// `delete_title_row` without the per-title settings prune, for loops
+    /// over many titles that prune the deleted ones together afterwards.
+    pub(crate) async fn delete_title_row_keeping_settings(
         &self,
         title: &scryer_domain::Title,
         actor: DomainEventActor,

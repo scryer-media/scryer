@@ -69,10 +69,12 @@ export const personalListRouteOptionsQuery = `query PersonalListRouteOptions {
   qualityProfileSettings { profiles { id name } }
   manageableLibraries: libraries(permission: MANAGE_TITLES) {
     id facet name slug isDefault qualityProfileId
+    inheritedRequiredAudioLanguages inheritedPreferredAudioLanguages
     roots { id path isDefault }
   }
   requestableLibraries: libraries(permission: REQUEST) {
     id facet name slug isDefault requestQualityProfileIds requestQualityProfileDefaultId
+    inheritedRequiredAudioLanguages inheritedPreferredAudioLanguages
     roots { id path isDefault }
   }
 }`;

@@ -78,7 +78,7 @@ impl MediaRequestMutations {
         let actor = actor_from_ctx(ctx)?;
         let request_id = String::from(input.request_id);
         let outcome = app
-            .approve_media_request(
+            .approve_media_request_with_audio_languages(
                 &actor,
                 &request_id,
                 input.quality_profile_id.as_ref(),
@@ -88,6 +88,10 @@ impl MediaRequestMutations {
                 input.monitor_selection.map(monitor_selection_from_input),
                 lease_override(input.lease_days, input.lease_forever)?,
                 input.tags,
+                scryer_application::ApprovedAudioLanguages {
+                    required: maybe_undefined_override(input.required_audio_languages),
+                    preferred: maybe_undefined_override(input.preferred_audio_languages),
+                },
             )
             .await
             .map_err(to_gql_error)?;
@@ -166,6 +170,12 @@ impl MediaRequestMutations {
                         async_graphql::MaybeUndefined::Null => Some(None),
                         async_graphql::MaybeUndefined::Value(days) => Some(Some(i64::from(days))),
                     },
+                    requested_required_audio_languages: maybe_undefined_override(
+                        input.requested_required_audio_languages,
+                    ),
+                    requested_preferred_audio_languages: maybe_undefined_override(
+                        input.requested_preferred_audio_languages,
+                    ),
                 },
             )
             .await
@@ -198,5 +208,14 @@ impl MediaRequestMutations {
         Ok(MediaRequestActionPayload {
             request_id: ID::from(request_id),
         })
+    }
+}
+
+/// Omitted keeps what is there, null clears it, a value replaces it.
+fn maybe_undefined_override<T>(value: async_graphql::MaybeUndefined<T>) -> Option<Option<T>> {
+    match value {
+        async_graphql::MaybeUndefined::Undefined => None,
+        async_graphql::MaybeUndefined::Null => Some(None),
+        async_graphql::MaybeUndefined::Value(value) => Some(Some(value)),
     }
 }

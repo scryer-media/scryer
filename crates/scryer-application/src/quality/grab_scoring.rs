@@ -9,21 +9,23 @@ pub(crate) fn capture(
     admission: &AdmissionSubject,
     decision_code: &str,
 ) -> GrabScoringSnapshot {
-    let mut snapshot = capture_values(
+    capture_values(
         decision.preference_score,
         &decision.scoring_log,
         admission,
         decision_code,
-    );
-    snapshot.decided_by = decision.decided_by.map(|step| step.as_str().to_string());
-    snapshot
+        decision.decided_by,
+    )
 }
 
+/// `decided_by` is the step of the profile's pipeline that settled the grab,
+/// as [`crate::admission::AdmissionVerdict::decided_by`] reports it.
 pub(crate) fn capture_values(
     candidate_score: i32,
     entries: &[crate::quality_profile::ScoringEntry],
     admission: &AdmissionSubject,
     decision_code: &str,
+    decided_by: Option<crate::ReleaseDecidingStep>,
 ) -> GrabScoringSnapshot {
     let comparisons: Vec<_> = admission
         .incumbents()
@@ -60,7 +62,7 @@ pub(crate) fn capture_values(
         },
         comparisons,
         entries: entries.iter().map(ScoreEvaluationEntry::from).collect(),
-        decided_by: None,
+        decided_by: decided_by.map(|step| step.as_str().to_string()),
     }
 }
 
@@ -129,22 +131,22 @@ mod tests {
 
     #[test]
     fn grab_scoring_preserves_zero_negative_and_differing_pack_comparisons() {
-        let first = capture_values(0, &[], &subject(&[]), "eligible");
+        let first = capture_values(0, &[], &subject(&[]), "eligible", None);
         assert_eq!(first.candidate_score, 0);
         assert_eq!(first.previous_score, None);
         assert_eq!(first.decision_code, "initial");
-        let upgrade = capture_values(-10, &[], &subject(&[-20]), "eligible");
+        let upgrade = capture_values(-10, &[], &subject(&[-20]), "eligible", None);
         assert_eq!(upgrade.previous_score, Some(-20));
         assert_eq!(upgrade.delta, Some(10));
         assert_eq!(upgrade.decision_code, "upgrade");
-        let pack = capture_values(5, &[], &subject(&[-10, 20]), "eligible");
+        let pack = capture_values(5, &[], &subject(&[-10, 20]), "eligible", None);
         assert_eq!(pack.previous_score, None);
         assert_eq!(pack.delta, None);
         assert_eq!(
             pack.comparisons.iter().map(|c| c.delta).collect::<Vec<_>>(),
             vec![-15, 15]
         );
-        let overflow = capture_values(i32::MAX, &[], &subject(&[i32::MIN]), "eligible");
+        let overflow = capture_values(i32::MAX, &[], &subject(&[i32::MIN]), "eligible", None);
         assert_eq!(overflow.delta, Some(4_294_967_295));
     }
 
@@ -152,7 +154,7 @@ mod tests {
     fn grab_scoring_survives_listing_round_trip_and_legacy_is_absent() {
         let json = r#"{"v":1,"captured_at":"2026-01-01T00:00:00Z"}"#.to_owned();
         assert!(from_listing(Some(&json)).is_none());
-        let snapshot = capture_values(-1, &[], &subject(&[0]), "manual_override");
+        let snapshot = capture_values(-1, &[], &subject(&[0]), "manual_override", None);
         let saved = with_snapshot(Some(json), Some(snapshot.clone()));
         assert_eq!(from_listing(saved.as_deref()), Some(snapshot));
     }

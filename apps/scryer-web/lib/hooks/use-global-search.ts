@@ -96,6 +96,10 @@ export type MetadataCatalogAddOptions = {
   rootFolderId?: string;
   /** Only sent under `ADVANCED`, which the API rejects without one. */
   monitorSelection?: MonitorSelectionDraft;
+  /** The title's own required audio languages. Omitted inherits; an empty list requires none. */
+  requiredAudioLanguages?: string[];
+  /** The title's own preferred audio languages, in order. Omitted inherits. */
+  preferredAudioLanguages?: string[];
 };
 
 export type CatalogAddFeedback = {
@@ -116,6 +120,10 @@ export type MetadataCatalogRequestOptions = {
   /// forever, which is what Scryer granted before leases existed — there is no
   /// separate "forever" flag on the requester side.
   requestedLeaseDays?: number;
+  /** Required audio languages for the new title. Omitted inherits; an empty list requires none. */
+  requestedRequiredAudioLanguages?: string[];
+  /** Preferred audio languages, in order, for the new title. Omitted inherits. */
+  requestedPreferredAudioLanguages?: string[];
 };
 
 export type AnimeCatalogDefaults = {
@@ -446,6 +454,12 @@ export function submitMediaRequestInput(
         ? monitorSelectionInput(options.requestedMonitorSelection)
         : undefined,
     requestedLeaseDays: options.requestedLeaseDays ?? undefined,
+    requestedRequiredAudioLanguages:
+      options.requestedRequiredAudioLanguages ?? undefined,
+    requestedPreferredAudioLanguages: options.requestedPreferredAudioLanguages
+      ?.length
+      ? options.requestedPreferredAudioLanguages
+      : undefined,
   };
 }
 
@@ -560,28 +574,6 @@ export function useGlobalSearch({
     selectMetadataSearchQueryVariant(authenticatedUser) === "requester";
   const [queueFacet, setQueueFacet] = useState<Facet>(initialQueueFacet);
   const catalogChangeSignal = 0;
-  const sortByRelevance = useCallback(
-    (results: MetadataTvdbSearchItem[], query: string) => {
-      const q = query.trim().toLowerCase();
-
-      function score(item: MetadataTvdbSearchItem): number {
-        const name = (item.name || "").toLowerCase();
-        const pop = Math.max(item.popularity ?? 0, 1);
-        if (name === q) return 1e9 + pop;
-        if (name.startsWith(q)) return pop * 5;
-        if (name.includes(q)) return pop * 3;
-        return pop;
-      }
-
-      return [...results].sort((left, right) => {
-        const ls = score(left);
-        const rs = score(right);
-        if (ls !== rs) return rs - ls;
-        return (right.year ?? 0) - (left.year ?? 0);
-      });
-    },
-    [],
-  );
 
   const [globalSearch, setGlobalSearch] = useState("");
   const globalSearchInputRef = useRef<HTMLInputElement>(null);
@@ -1175,10 +1167,8 @@ export function useGlobalSearch({
           )
           .toPromise();
         if (searchError) throw searchError;
-        const rankedMatches = sortByRelevance(
-          (searchData.searchMetadata || []) as MetadataTvdbSearchItem[],
-          query,
-        );
+        const rankedMatches = (searchData.searchMetadata ||
+          []) as MetadataTvdbSearchItem[];
         const catalogLookup = canViewCatalog
           ? buildCatalogTitleLookupByMetadataId(
               await lookupCatalogTitlesForMetadataResults(rankedMatches),
@@ -1217,7 +1207,6 @@ export function useGlobalSearch({
       needsLibraryPresence,
       queueFacet,
       setGlobalStatus,
-      sortByRelevance,
       t,
       uiLanguage,
       visibleRequestableLibrariesByFacet,
@@ -1334,18 +1323,10 @@ export function useGlobalSearch({
             series: [],
             anime: [],
           };
-          const rankedMovies = sortByRelevance(
-            (multi.movies || []) as MetadataTvdbSearchItem[],
-            trimmed,
-          );
-          const rankedAnime = sortByRelevance(
-            (multi.anime || []) as MetadataTvdbSearchItem[],
-            trimmed,
-          );
-          const rankedSeries = sortByRelevance(
-            (multi.series || []) as MetadataTvdbSearchItem[],
-            trimmed,
-          );
+          // SMG ranks lexical relevance before normalized popularity.
+          const rankedMovies = (multi.movies || []) as MetadataTvdbSearchItem[];
+          const rankedAnime = (multi.anime || []) as MetadataTvdbSearchItem[];
+          const rankedSeries = (multi.series || []) as MetadataTvdbSearchItem[];
           if (canViewCatalog) {
             promotedCatalogEntries =
               await lookupCatalogTitlesForMetadataResults(
@@ -1488,7 +1469,6 @@ export function useGlobalSearch({
       primeCatalogConfigForMetadataActions,
       resolveCatalogPosterUrl,
       setGlobalStatus,
-      sortByRelevance,
       t,
       uiLanguage,
     ],
@@ -1781,6 +1761,12 @@ export function useGlobalSearch({
                         options.monitorSelection,
                       ),
                     }
+                  : {}),
+                ...(options.requiredAudioLanguages
+                  ? { requiredAudioLanguages: options.requiredAudioLanguages }
+                  : {}),
+                ...(options.preferredAudioLanguages?.length
+                  ? { preferredAudioLanguages: options.preferredAudioLanguages }
                   : {}),
               },
               externalIds,

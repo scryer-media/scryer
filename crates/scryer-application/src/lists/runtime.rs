@@ -236,6 +236,22 @@ impl ListActions for AppListActions<'_> {
                 .create_or_get_existing_preserving_options(title, series_movie_selection(item))
                 .await?;
             let reused = created.reused_existing;
+            // Before hydration or any search reads them; a parent the list
+            // reused keeps its own audio settings.
+            self.app
+                .store_new_title_audio_language_overrides(
+                    &created,
+                    &TitleOptionsPatch {
+                        required_audio_languages: route.required_audio_languages.clone().map(Some),
+                        preferred_audio_languages: route
+                            .preferred_audio_languages
+                            .clone()
+                            .map(Some),
+                        ..TitleOptionsPatch::default()
+                    },
+                    Some(actor.id.clone()),
+                )
+                .await;
             if !reused {
                 self.app.invalidate_monitored_title_matcher().await;
                 self.app
@@ -310,6 +326,9 @@ impl ListActions for AppListActions<'_> {
                 let numbering = ReleaseNumbering::from_str_or_default(value);
                 (numbering != ReleaseNumbering::Auto).then(|| numbering.as_str().to_string())
             }),
+            // An inheriting route leaves the title's audio settings alone.
+            required_audio_languages: route.required_audio_languages.clone().map(Some),
+            preferred_audio_languages: route.preferred_audio_languages.clone().map(Some),
             ..TitleOptionsPatch::default()
         };
         let outcome = self
@@ -412,6 +431,8 @@ impl ListActions for AppListActions<'_> {
                         .as_ref()
                         .map(|_| series_movie_selection(item)),
                     requested_lease_days: None,
+                    requested_required_audio_languages: route.required_audio_languages.clone(),
+                    requested_preferred_audio_languages: route.preferred_audio_languages.clone(),
                     external_ids: item
                         .series_movie
                         .as_ref()
