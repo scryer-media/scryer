@@ -1976,7 +1976,7 @@ fn enrichment_reads_ukrainian_release_language_tags() {
     }
 
     let (audio, subtitles) = projected_languages(
-        "[Groupa] Lantern Orchard Ep. 04 (1280x720_x264_AAC) Ukrainian_Sub [556e3829]",
+        "[Groupa] Lantern Orchard - 04 (1280x720_x264_AAC) Ukrainian_Sub [556e3829]",
         &context(ContextFacetHint::Anime, "Lantern Orchard"),
     );
     assert_eq!(subtitles, ukr);
@@ -5735,4 +5735,49 @@ fn localized_season_words_without_their_own_number_stay_as_written() {
     let episode = parsed.episode.expect("episode");
     assert_eq!(episode.absolute_episode_numbers, vec![11]);
     assert!(!episode.full_season);
+}
+
+#[test]
+fn a_resolution_is_never_read_as_a_season_and_episode() {
+    for facet in [
+        ContextFacetHint::Series,
+        ContextFacetHint::Anime,
+        ContextFacetHint::Unknown,
+    ] {
+        let target = context(facet, "");
+        let raw = "[Grp] Show A Season 1 Episode 01 (1920x1080) Dubbed";
+        let parsed = crate::best_parse_for_target(raw, &target);
+        assert_eq!(parsed.quality.as_deref(), Some("1080p"), "{raw}");
+        assert_eq!(parsed.normalized_title, "SHOW A", "{raw}");
+        let episode = parsed.episode.expect("episode");
+        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(episode.episode_numbers, vec![1], "{raw}");
+        assert_eq!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SingleEpisode,
+            "{raw}"
+        );
+
+        // Without the season and episode words the name carries no numbering.
+        let raw = "[Grp] Show A (1920x1080) Dubbed";
+        let parsed = crate::best_parse_for_target(raw, &target);
+        assert_eq!(parsed.quality.as_deref(), Some("1080p"), "{raw}");
+        assert_eq!(parsed.normalized_title, "SHOW A", "{raw}");
+        assert!(parsed.episode.is_none(), "{raw}");
+    }
+}
+
+#[test]
+fn a_width_by_height_token_gives_the_quality_of_its_height() {
+    for (raw, quality) in [
+        ("[Grp] Show A - 06 (TV 1440x1080 MPEG2 AAC).ts", "1080p"),
+        ("[Grp] Show A - 06 (TV 1440x1080i MPEG2 AAC).ts", "1080i"),
+        ("[Grp] Show A - 06 (TV 1920x1080 MPEG2 AAC).ts", "1080p"),
+        ("[Grp] Show A - 06 (TV 1280x720 x264 AAC).mkv", "720p"),
+        ("[Grp] Show A - 06 (TV 720x480 MPEG2 AAC).ts", "480p"),
+        ("[Grp] Show A - 06 (WEB 1440p x264 AAC).mkv", "1440p"),
+    ] {
+        let parsed = crate::best_parse_for_target(raw, &context(ContextFacetHint::Anime, "Show A"));
+        assert_eq!(parsed.quality.as_deref(), Some(quality), "{raw}");
+    }
 }

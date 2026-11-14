@@ -6672,7 +6672,8 @@ fn split_episode_revision(token: &str) -> Option<(&str, u32)> {
 fn parse_standard_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
     let revision = split_episode_revision(token);
     let token = revision.map_or(token, |(episode, _)| episode);
-    if revision.is_some() && is_resolution_dimension(token) {
+    // `1920x1080` is display geometry, with or without a revision suffix.
+    if is_resolution_dimension(token) {
         return None;
     }
     if token.starts_with('S') && token.contains('E') {
@@ -9042,14 +9043,27 @@ fn detect_compound_metadata(token: &str) -> CompoundMetadata {
 }
 
 fn detect_compound_quality(token: &str) -> Option<String> {
-    parse_resolution_quality_token(token).or_else(|| {
-        [
-            8640u32, 4320, 2160, 1440, 1080, 864, 720, 576, 540, 480, 360, 240,
-        ]
-        .into_iter()
-        .find(|resolution| token.contains(&resolution.to_string()))
-        .map(|resolution| format!("{resolution}p"))
-    })
+    const RESOLUTIONS: [u32; 12] = [
+        8640, 4320, 2160, 1440, 1080, 864, 720, 576, 540, 480, 360, 240,
+    ];
+    parse_resolution_quality_token(token)
+        .or_else(|| {
+            // `1440x1080` is 1080 lines: a `WIDTHxHEIGHT` token is its height.
+            let (dimensions, scan_type) = match token.strip_suffix('I') {
+                Some(dimensions) => (dimensions, 'i'),
+                None => (token.strip_suffix('P').unwrap_or(token), 'p'),
+            };
+            let (_, height) = dimensions.split_once('X')?;
+            let height = height.parse::<u32>().ok()?;
+            (is_resolution_dimension(dimensions) && RESOLUTIONS.contains(&height))
+                .then(|| format!("{height}{scan_type}"))
+        })
+        .or_else(|| {
+            RESOLUTIONS
+                .into_iter()
+                .find(|resolution| token.contains(&resolution.to_string()))
+                .map(|resolution| format!("{resolution}p"))
+        })
 }
 
 fn contains_any(token: &str, needles: &[&str]) -> bool {
