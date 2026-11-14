@@ -4377,20 +4377,44 @@ async fn movie_full_scan_records_duplicate_same_title_sibling_folder_as_ownershi
     assert!(second_path.exists());
 }
 
-#[cfg(not(windows))]
-#[tokio::test]
-async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
+/// A series title recording `CASE SPLIT FIXTURE` while its library lists
+/// `Case Split Fixture`, with the episode stored the way the catalog holds it.
+struct CaseSplitSeriesFixture {
+    _tempdir: tempfile::TempDir,
+    app: AppUseCase,
+    user: User,
+    title_id: String,
+    unmatched_items: Arc<TrackingLibraryScanUnmatchedItemRepo>,
+    owned_folder: PathBuf,
+    candidate_folder: PathBuf,
+    episode_path: PathBuf,
+    stored_episode_path: String,
+    /// Whether the two spellings are two directories. On a case-insensitive
+    /// volume the owned spelling aliases the candidate folder.
+    volume_is_case_sensitive: bool,
+}
+
+async fn case_split_series_fixture() -> CaseSplitSeriesFixture {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let owned_folder = tempdir.path().join("CASE SPLIT FIXTURE");
     let candidate_folder = tempdir.path().join("Case Split Fixture");
     std::fs::create_dir(&candidate_folder).expect("create case-distinct series folder");
     // The owned folder has to be on disk for this to be a conflict rather
-    // than stale ownership. On a case-insensitive filesystem it aliases the
-    // candidate folder: the same directory, so the title's own folder and no
-    // conflict at all.
+    // than stale ownership.
     let volume_is_case_sensitive = std::fs::create_dir(&owned_folder).is_ok();
     let episode_path = candidate_folder.join("Case Split Fixture - S01E01.mkv");
     std::fs::write(&episode_path, vec![0_u8; 128]).expect("write episode file");
+    // A case-sensitive volume holds the file only in the losing folder. A
+    // case-insensitive one stores it under the recorded spelling, as a
+    // catalog built before the root was respelled does.
+    let stored_episode_path = if volume_is_case_sensitive {
+        episode_path.to_string_lossy().to_string()
+    } else {
+        owned_folder
+            .join("Case Split Fixture - S01E01.mkv")
+            .to_string_lossy()
+            .to_string()
+    };
 
     let settings = Arc::new(StoredSettingsRepo::default());
     settings
@@ -4433,66 +4457,167 @@ async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
         .media_files
         .insert_media_file(&InsertMediaFileInput {
             title_id: title.id.clone(),
-            file_path: episode_path.to_string_lossy().to_string(),
+            file_path: stored_episode_path.clone(),
             size_bytes: 128,
             role: MediaFileRole::Primary,
             ..Default::default()
         })
         .await
-        .expect("seed catalog row in losing folder");
+        .expect("seed catalog row");
 
-    let summary = app
-        .scan_library(&user, MediaFacet::Series)
-        .await
-        .expect("scan series library");
+    CaseSplitSeriesFixture {
+        app,
+        user,
+        title_id: title.id,
+        unmatched_items,
+        owned_folder,
+        candidate_folder,
+        episode_path,
+        stored_episode_path,
+        volume_is_case_sensitive,
+        _tempdir: tempdir,
+    }
+}
 
-    if !volume_is_case_sensitive {
-        // The walk still counts the episode it cannot place (the stub gateway
-        // has no episodes), but nothing is recorded against the folder.
-        assert!(unmatched_items.items().await.is_empty());
-        let kept = app
+impl CaseSplitSeriesFixture {
+    /// The conflict an earlier scan recorded against the candidate spelling.
+    async fn seed_earlier_conflict(&self) {
+        let title = self
+            .app
             .services
             .catalog
             .titles
-            .get_by_id(&title.id)
+            .get_by_id(&self.title_id)
             .await
             .expect("load title")
             .expect("title exists");
+        let candidate = self.candidate_folder.to_string_lossy().to_string();
+        let root = self
+            .candidate_folder
+            .parent()
+            .expect("candidate parent")
+            .to_string_lossy()
+            .to_string();
+        let item = crate::library_scan_unmatched::build_title_bound_unmatched_scan_item(
+            &MediaFacet::Series,
+            &title.library_id,
+            &title.id,
+            None,
+            &root,
+            &candidate,
+            "Case Split Fixture",
+            "Case Split Fixture",
+            None,
+            crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER,
+            None,
+        );
+        crate::library_scan_unmatched::persist_library_scan_unmatched_item(&self.app, &item)
+            .await
+            .expect("seed earlier conflict");
+    }
+
+    async fn recorded_folder(&self) -> Option<String> {
+        self.app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&self.title_id)
+            .await
+            .expect("load title")
+            .expect("title exists")
+            .folder_path
+    }
+
+    async fn media_file_paths(&self) -> Vec<String> {
+        self.app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title_id)
+            .await
+            .expect("list media files")
+            .into_iter()
+            .map(|file| file.file_path)
+            .collect()
+    }
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
+    let fixture = case_split_series_fixture().await;
+    fixture.seed_earlier_conflict().await;
+
+    let summary = fixture
+        .app
+        .scan_library(&fixture.user, MediaFacet::Series)
+        .await
+        .expect("scan series library");
+
+    if !fixture.volume_is_case_sensitive {
+        // One directory under two spellings: the title's own folder. The scan
+        // walks it under the recorded spelling, keeps the stored row as the
+        // only one, and clears the conflict an earlier scan recorded.
+        assert_eq!(summary.matched, 1);
+        assert!(fixture.unmatched_items.items().await.is_empty());
         assert_eq!(
-            kept.folder_path.as_deref(),
-            Some(owned_folder.to_string_lossy().as_ref())
+            fixture.recorded_folder().await.as_deref(),
+            Some(fixture.owned_folder.to_string_lossy().as_ref())
         );
-        assert!(episode_path.exists());
-        assert!(
-            !app.services
-                .library
-                .media_files
-                .list_media_files_for_title(&title.id)
-                .await
-                .expect("list media files")
-                .is_empty()
+        assert_eq!(
+            fixture.media_file_paths().await,
+            vec![fixture.stored_episode_path.clone()]
         );
+        assert!(fixture.episode_path.exists());
         return;
     }
 
     assert_eq!(summary.unmatched, 1);
-    let unmatched = unmatched_items.items().await;
+    let unmatched = fixture.unmatched_items.items().await;
     assert_eq!(unmatched.len(), 1);
     assert_eq!(
         unmatched[0].reason_code,
         crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
     );
-    assert_eq!(unmatched[0].title_id.as_ref(), Some(&title.id));
-    assert_eq!(unmatched[0].item_path, candidate_folder.to_string_lossy());
-    assert!(episode_path.exists());
-    assert!(
-        app.services
-            .library
-            .media_files
-            .list_media_files_for_title(&title.id)
-            .await
-            .expect("list media files")
-            .is_empty()
+    assert_eq!(unmatched[0].title_id.as_ref(), Some(&fixture.title_id));
+    assert_eq!(
+        unmatched[0].item_path,
+        fixture.candidate_folder.to_string_lossy()
+    );
+    assert!(fixture.episode_path.exists());
+    assert!(fixture.media_file_paths().await.is_empty());
+}
+
+/// The background refresh reaches the same folder by name, because its
+/// folder index keys the recorded spelling. It must accept the title's own
+/// folder too, and not abort the run or file the stored episode again.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn series_background_refresh_accepts_the_recorded_folder_under_another_case() {
+    let fixture = case_split_series_fixture().await;
+    if fixture.volume_is_case_sensitive {
+        // Two directories: the full-scan test covers that conflict.
+        return;
+    }
+
+    fixture
+        .app
+        .background_library_refresh_with_tracking(
+            &fixture.user,
+            MediaFacet::Series,
+            "series-refresh-case-split-fixture",
+        )
+        .await
+        .expect("refresh completes");
+
+    assert!(fixture.unmatched_items.items().await.is_empty());
+    assert_eq!(
+        fixture.recorded_folder().await.as_deref(),
+        Some(fixture.owned_folder.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fixture.media_file_paths().await,
+        vec![fixture.stored_episode_path.clone()]
     );
 }
 

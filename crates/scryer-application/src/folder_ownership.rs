@@ -491,8 +491,10 @@ pub(crate) async fn title_folder_is_stale(title: &Title) -> bool {
 /// are different directories and this returns `false`.
 ///
 /// Only paths that already match ignoring case are probed, one metadata read
-/// per spelling; directory identity is required as well as the spelling, so
-/// two distinct folders on a case-sensitive volume are never taken for one.
+/// per spelling; directory-entry identity is required as well as the
+/// spelling, so two distinct folders on a case-sensitive volume are never
+/// taken for one. Links are not followed: a differently cased link to some
+/// folder is a separate entry, not the recorded one.
 pub(crate) async fn title_folder_is_case_variant_of(title: &Title, folder_path: &Path) -> bool {
     let Some(owned_path) = non_empty_folder_path(title.folder_path.as_deref()) else {
         return false;
@@ -503,26 +505,23 @@ pub(crate) async fn title_folder_is_case_variant_of(title: &Title, folder_path: 
     ) {
         return false;
     }
-    let (owned, scanned) = tokio::join!(
-        tokio::fs::metadata(stored_path_to_path_buf(owned_path)),
-        tokio::fs::metadata(folder_path),
-    );
-    let (Ok(owned), Ok(scanned)) = (owned, scanned) else {
-        return false;
-    };
-    if !owned.is_dir() || !scanned.is_dir() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let (owned, scanned) = tokio::join!(
+            tokio::fs::symlink_metadata(stored_path_to_path_buf(owned_path)),
+            tokio::fs::symlink_metadata(folder_path),
+        );
+        let (Ok(owned), Ok(scanned)) = (owned, scanned) else {
+            return false;
+        };
         owned.ino() != 0 && owned.dev() == scanned.dev() && owned.ino() == scanned.ino()
     }
     #[cfg(not(unix))]
     {
-        // Windows volumes ignore case unless a directory opts in, and both
-        // spellings resolved to a directory.
-        true
+        // Ownership already compares folders ignoring case on Windows, so a
+        // case-only difference never reaches this check there.
+        false
     }
 }
 

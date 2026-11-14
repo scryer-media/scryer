@@ -103,12 +103,31 @@ async fn claim_series_candidate_folder(
     title: &mut Title,
     candidate: &PreparedSeriesLibraryScanCandidate,
 ) -> AppResult<()> {
-    crate::folder_ownership::claim_title_folder_for_scan_if_missing(
-        app,
-        title,
-        &candidate.folder_path,
-    )
-    .await
+    let folder_path = series_title_folder_for_candidate(title, &candidate.folder_path);
+    crate::folder_ownership::claim_title_folder_for_scan_if_missing(app, title, &folder_path).await
+}
+
+/// The folder the scan works in for a title that
+/// [`prepare_series_title_for_candidate`] accepted for `candidate_folder`.
+///
+/// A scanned folder that differs from the recorded one only by letter case
+/// got past preparation only because both spellings are one directory, so
+/// the title keeps the spelling its media rows are stored under. Claims,
+/// walks and probes use that spelling; the scanned spelling would be refused
+/// by the case-sensitive ownership checks and would read every stored file as
+/// new.
+fn series_title_folder_for_candidate(title: &Title, candidate_folder: &Path) -> std::path::PathBuf {
+    match crate::folder_ownership::title_folder_path(title) {
+        Some(recorded)
+            if crate::stored_paths::paths_match_ignoring_case(
+                recorded,
+                &path_to_stored_string(candidate_folder),
+            ) =>
+        {
+            stored_path_to_path_buf(recorded)
+        }
+        _ => candidate_folder.to_path_buf(),
+    }
 }
 
 #[expect(
@@ -829,10 +848,11 @@ async fn merge_series_title_work_for_index(
     mode: LibraryScanTitleWalkMode,
     created_in_scan: bool,
 ) -> AppResult<()> {
+    let folder_path = series_title_folder_for_candidate(&existing_titles[index], folder_path);
     crate::folder_ownership::claim_title_folder_for_scan_if_missing(
         app,
         &mut existing_titles[index],
-        folder_path,
+        &folder_path,
     )
     .await?;
     heal_scanned_title_root_folder_id(app, library, &mut existing_titles[index]).await?;
@@ -1932,10 +1952,11 @@ async fn refresh_existing_series_title_match(
         return Ok(());
     }
     update_series_title_folder_path_index(existing_titles_by_folder_path, title, index);
+    let folder_path = series_title_folder_for_candidate(title, &candidate.folder_path);
     maybe_probe_existing_series_title_for_background_refresh(
         app,
         title,
-        &candidate.folder_path,
+        &folder_path,
         executor,
         summary,
     )
