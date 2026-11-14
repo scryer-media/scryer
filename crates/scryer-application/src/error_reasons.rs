@@ -3148,7 +3148,7 @@ pub mod folder_ownership {
     pub const TITLE_FOLDER_INVALID: &str = "FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID";
     /// Cannot resolve title folder the selected value.
     pub const CANNOT_RESOLVE_TITLE_FOLDER: &str = "FOLDER_OWNERSHIP_CANNOT_RESOLVE_TITLE_FOLDER";
-    /// Title folder has no existing ancestor.
+    /// The drive or volume of the title folder is missing.
     pub const TITLE_FOLDER_NO_EXISTING_ANCESTOR: &str =
         "FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR";
     /// Cannot inspect title folder the selected value.
