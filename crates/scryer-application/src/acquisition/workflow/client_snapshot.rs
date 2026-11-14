@@ -2318,6 +2318,14 @@ pub(crate) async fn try_saved_candidates_with_trigger(
         {
             continue;
         }
+        // Already known to be at its limit: the saved result stays `Standby`
+        // with no claim, no attempt and no restore.
+        if let Some(indexer_id) = standby.indexer_id.as_ref()
+            && app.indexer_monthly_grab_refused_now(Some(indexer_id))
+        {
+            limit_refused_indexers.insert(indexer_id.clone());
+            continue;
+        }
         let standby_scope = standby_scopes
             .get(&standby.id)
             .cloned()

@@ -8,11 +8,13 @@ const CAPPED_INDEXER: &str = "indexer-capped";
 const OPEN_INDEXER: &str = "indexer-open";
 
 /// Refuses monthly grab admission for the listed indexers and counts every
-/// admission asked of each indexer.
+/// admission asked of each indexer. Like the real tracker, it remembers a
+/// reached limit once admission has refused it, and not a failed check.
 struct PerIndexerGrabLimit {
     /// Indexer id to the reason code its admission is refused with.
     refused: HashMap<String, &'static str>,
     admissions: std::sync::Mutex<HashMap<String, usize>>,
+    remembered: std::sync::Mutex<HashSet<String>>,
 }
 
 impl PerIndexerGrabLimit {
@@ -27,6 +29,7 @@ impl PerIndexerGrabLimit {
         Self {
             refused: HashMap::from([(indexer_id.to_string(), reason)]),
             admissions: std::sync::Mutex::new(HashMap::new()),
+            remembered: std::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -75,13 +78,30 @@ impl crate::IndexerStatsTracker for PerIndexerGrabLimit {
                         None,
                     ))
                 }
-                Some(reason) => Err(AppError::validation_refused(
-                    reason,
-                    "monthly limit reached",
-                )),
+                Some(reason) => {
+                    self.remembered
+                        .lock()
+                        .expect("remembered refusals")
+                        .insert(indexer_id.to_string());
+                    Err(AppError::validation_refused(
+                        reason,
+                        "monthly limit reached",
+                    ))
+                }
                 None => Ok(()),
             }
         })
+    }
+
+    fn monthly_grab_refusal_remembered(
+        &self,
+        indexer_id: &str,
+        _at: chrono::DateTime<Utc>,
+    ) -> bool {
+        self.remembered
+            .lock()
+            .expect("remembered refusals")
+            .contains(indexer_id)
     }
 
     fn all_stats(&self) -> Vec<crate::IndexerQueryStats> {
@@ -255,6 +275,91 @@ async fn auto_search_skips_an_indexer_at_its_monthly_limit_and_grabs_from_anothe
 }
 
 #[tokio::test]
+async fn auto_search_writes_nothing_for_an_indexer_already_known_to_be_at_its_limit() {
+    let first_capped = "Limit.First.Subject.2024.1080p.WEB-DL-ONE";
+    let second_capped = "Limit.Second.Subject.2023.1080p.WEB-DL-ONE";
+    let second_open = "Limit.Second.Subject.2023.1080p.WEB-DL-OPEN";
+    let fixture = fixture(
+        vec![
+            listed_release(CAPPED_INDEXER, first_capped),
+            listed_release(OPEN_INDEXER, "Limit.First.Subject.2024.1080p.WEB-DL-OPEN"),
+            listed_release(CAPPED_INDEXER, second_capped),
+            listed_release(OPEN_INDEXER, second_open),
+        ],
+        PerIndexerGrabLimit::refusing(CAPPED_INDEXER),
+    );
+    seed_movie_wanted_for_acquisition(
+        &fixture.app,
+        &fixture.user,
+        &fixture.wanted_items,
+        "Limit First Subject",
+        2024,
+    )
+    .await;
+
+    // The first pass meets the limit through real admission.
+    fixture.app.run_background_acquisition_cycle_once().await;
+    assert_eq!(fixture.limit.admissions(CAPPED_INDEXER), 1);
+    let attempts_after_first_pass = fixture.release_attempts.attempts.lock().await.len();
+    let pending_after_first_pass = fixture.pending_releases.store.lock().await.clone();
+
+    let (second_title, _) = seed_movie_wanted_for_acquisition(
+        &fixture.app,
+        &fixture.user,
+        &fixture.wanted_items,
+        "Limit Second Subject",
+        2023,
+    )
+    .await;
+    fixture.app.run_background_acquisition_cycle_once().await;
+
+    assert_eq!(
+        fixture.limit.admissions(CAPPED_INDEXER),
+        1,
+        "an indexer known to be at its limit is not put through admission again"
+    );
+    let attempts = fixture.release_attempts.attempts.lock().await.clone();
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| attempt.source_title.as_deref() != Some(second_capped)),
+        "no attempt row is written for the capped indexer's release: {:?}",
+        attempts
+            .iter()
+            .map(|attempt| (&attempt.source_title, &attempt.outcome))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        attempts.len() > attempts_after_first_pass,
+        "the open indexer's grab is still recorded"
+    );
+    let pending = fixture.pending_releases.store.lock().await.clone();
+    assert_eq!(
+        format!("{pending:?}"),
+        format!("{pending_after_first_pass:?}"),
+        "the second pass writes no pending release"
+    );
+    let submissions = fixture.download_submissions.store.lock().await.clone();
+    assert!(
+        submissions
+            .iter()
+            .any(|submission| submission.source_title.as_deref() == Some(second_open)),
+        "the open indexer is still grabbed: {submissions:?}"
+    );
+    assert!(
+        submissions
+            .iter()
+            .all(|submission| submission.source_title.as_deref() != Some(second_capped)),
+        "{submissions:?}"
+    );
+    assert!(
+        title_blocklist_entries(&fixture.app, &second_title.id)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn auto_search_keeps_a_release_eligible_when_monthly_usage_cannot_be_checked() {
     let open_release = "Limit.Unchecked.Subject.2024.1080p.WEB-DL-OPEN";
     let fixture = fixture(
@@ -365,6 +470,100 @@ async fn rss_sync_skips_an_indexer_at_its_monthly_limit_and_grabs_from_another()
         1,
         "the indexer's other feed items are passed over after the first refusal"
     );
+    fixture
+        .assert_only_the_open_indexer_was_grabbed(&title, open_release)
+        .await;
+}
+
+#[tokio::test]
+async fn rss_sync_decides_a_held_release_once_when_a_monthly_limit_refuses_the_next_one() {
+    const HELD_INDEXER: &str = "indexer-held";
+    let held_release = "Limit.Held.Subject.2024.1080p.WEB-DL-HELD";
+    let capped_release = "Limit.Held.Subject.2024.1080p.WEB-DL-ONE";
+    let open_release = "Limit.Held.Subject.2024.1080p.WEB-DL-OPEN";
+    // Listed first and too new for the delay; the other two are long past it.
+    let mut held = listed_release(HELD_INDEXER, held_release);
+    held.published_at = Some(Utc::now().to_rfc3339());
+    let fixture = fixture(
+        vec![
+            held,
+            listed_release(CAPPED_INDEXER, capped_release),
+            listed_release(OPEN_INDEXER, open_release),
+        ],
+        PerIndexerGrabLimit::refusing(CAPPED_INDEXER),
+    );
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Limit Held Subject".into(),
+                sort_title: Some("Limit Held Subject".into()),
+                slug: Some("limit-held-subject".into()),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                year: Some(2024),
+                content_status: Some("Released".into()),
+                min_availability: Some("announced".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create monitored movie");
+    fixture
+        .wanted_items
+        .remember_title_facet(&title.id, MediaFacet::Movie)
+        .await;
+    let delay_profiles = &fixture.app.services.config.delay_profiles;
+    for profile in delay_profiles.list().await.expect("list delay profiles") {
+        delay_profiles
+            .delete(&profile.id)
+            .await
+            .expect("delete delay profile");
+    }
+    let profiles = crate::parse_delay_profile_catalog(
+        &serde_json::json!([{
+            "id": "delay-new-releases",
+            "name": "Delay new releases",
+            "usenet_delay_minutes": 120,
+        }])
+        .to_string(),
+    )
+    .expect("parse delay profile catalog")
+    .into_iter()
+    .map(crate::normalize_delay_profile)
+    .collect();
+    delay_profiles
+        .save_many(profiles)
+        .await
+        .expect("seed delay profile catalog");
+
+    let report = fixture
+        .app
+        .run_scheduled_rss_sync()
+        .await
+        .expect("run RSS sync");
+
+    assert_eq!(fixture.limit.admissions(CAPPED_INDEXER), 1);
+    assert_eq!(
+        report.releases_held, 1,
+        "the held release is counted once, not again after the refusal"
+    );
+    assert_eq!(
+        fixture
+            .pending_releases
+            .observation_writes_for(held_release),
+        1,
+        "the held release is parked once, not again after the refusal"
+    );
+    assert_eq!(
+        fixture
+            .pending_releases
+            .observation_writes_for(capped_release),
+        0,
+        "a release refused by the monthly limit is not parked"
+    );
+    assert_eq!(report.releases_grabbed, 1);
     fixture
         .assert_only_the_open_indexer_was_grabbed(&title, open_release)
         .await;

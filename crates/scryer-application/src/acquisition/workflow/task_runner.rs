@@ -5578,8 +5578,13 @@ async fn commit_scope_grab(
             .unwrap_or(0);
 
         // An indexer whose monthly limit already refused a grab this cycle
-        // is passed over without spending one of the attempts.
+        // is passed over without spending one of the attempts. So is one
+        // already known to be at its limit, before anything is written.
         if cycle.indexer_limit_refused(candidate.indexer_id.as_deref()) {
+            continue;
+        }
+        if app.indexer_monthly_grab_refused_now(candidate.indexer_id.as_deref()) {
+            cycle.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
             continue;
         }
 

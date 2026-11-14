@@ -681,6 +681,23 @@ impl AppUseCase {
             .await
     }
 
+    /// Whether an automatic grab from this indexer is already known to be
+    /// refused by a monthly limit. A memory read: automatic passes use it to
+    /// pass a capped indexer's release over before writing anything for it.
+    /// Operator grabs do not; they go through admission and get the refusal.
+    pub(crate) fn indexer_monthly_grab_refused_now(&self, indexer_id: Option<&str>) -> bool {
+        let Some(indexer_id) = indexer_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && crate::indexer_error_history_is_persistable(id))
+        else {
+            return false;
+        };
+        self.services
+            .integrations
+            .indexer_stats
+            .monthly_grab_refusal_remembered(indexer_id, self.runtime.environment.now())
+    }
+
     pub async fn cached_health_check_results(
         &self,
         actor: &User,

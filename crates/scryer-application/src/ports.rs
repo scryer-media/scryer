@@ -6229,6 +6229,15 @@ pub trait IndexerStatsTracker: Send + Sync {
         Box::pin(std::future::ready(Ok(())))
     }
 
+    /// Whether a grab from this indexer is already known to be refused by a
+    /// monthly limit: its grab limit, or its request limit, is remembered as
+    /// reached for the current month and the current limit. Answered from
+    /// memory; it counts nothing and runs no statement. `false` means "not
+    /// known to be refused", so the real admission still decides.
+    fn monthly_grab_refusal_remembered(&self, _indexer_id: &str, _at: DateTime<Utc>) -> bool {
+        false
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
 
     fn is_at_quota(&self, indexer_id: &str) -> bool {

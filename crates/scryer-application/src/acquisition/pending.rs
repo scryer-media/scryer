@@ -661,6 +661,14 @@ impl AppUseCase {
                 {
                     continue;
                 }
+                // Already known to be at its limit: left pending with no
+                // attempt and no status write.
+                if let Some(indexer_id) = pr.indexer_id.as_ref()
+                    && self.indexer_monthly_grab_refused_now(Some(indexer_id))
+                {
+                    limit_refused_indexers.insert(indexer_id.clone());
+                    continue;
+                }
                 match self
                     .try_grab_pending_release(
                         &wanted,

@@ -693,6 +693,20 @@ impl IndexerStatsTracker for InMemoryIndexerStatsTracker {
         })
     }
 
+    fn monthly_grab_refusal_remembered(&self, indexer_id: &str, at: DateTime<Utc>) -> bool {
+        if self.datastore.is_none() {
+            return false;
+        }
+        [MonthlyUsageKind::Grab, MonthlyUsageKind::Request]
+            .into_iter()
+            .any(|kind| match self.monthly_limits.lookup(indexer_id, kind) {
+                MonthlyLimitLookup::Limited(limit) => {
+                    self.is_refused_from_memory(indexer_id, kind, at, limit)
+                }
+                MonthlyLimitLookup::Unlimited | MonthlyLimitLookup::NotLoaded => false,
+            })
+    }
+
     fn all_stats(&self) -> Vec<IndexerQueryStats> {
         self.collect_stats()
     }
@@ -1273,6 +1287,70 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn a_remembered_refusal_answers_whether_a_grab_would_be_refused() {
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = monthly_quota_pool().await;
+        sqlx::query("UPDATE indexers SET max_grabs_per_month = 1 WHERE id = 'idx-capped'")
+            .execute(&pool)
+            .await
+            .expect("grab limit should be set");
+        let tracker = monthly_tracker(&pool);
+        let march = utc("2026-03-10T12:00:00Z");
+        let april = utc("2026-04-01T00:00:00Z");
+        let usage = || async {
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT request_count, grab_count FROM indexer_monthly_usage
+                 WHERE indexer_id = 'idx-capped'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("usage should be readable")
+        };
+
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", march),
+            "nothing is remembered before admission has refused"
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            None
+        );
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", march),
+            "an admitted grab is not a refusal"
+        );
+        assert_eq!(
+            refusal(tracker.admit_monthly_grab("idx-capped", march).await),
+            Some(reason::GRAB_LIMIT_REACHED)
+        );
+
+        assert!(tracker.monthly_grab_refusal_remembered("idx-capped", march));
+        assert!(!tracker.monthly_grab_refusal_remembered("idx-open", march));
+        assert_eq!(usage().await, (0, 1), "asking counts nothing");
+
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", april),
+            "a new UTC month is not remembered as refused"
+        );
+        tracker.monthly_limits.set("idx-capped", Some(2), Some(5));
+        assert!(
+            !tracker.monthly_grab_refusal_remembered("idx-capped", march),
+            "a raised limit is not remembered as refused"
+        );
+
+        // A reached request limit refuses a grab too.
+        for expected in [None, None, Some(reason::REQUEST_LIMIT_REACHED)] {
+            assert_eq!(
+                refusal(tracker.admit_monthly_request("idx-capped", march).await),
+                expected
+            );
+        }
+        assert!(tracker.monthly_grab_refusal_remembered("idx-capped", march));
+        assert_eq!(usage().await, (2, 1));
     }
 
     #[tokio::test]
