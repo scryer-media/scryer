@@ -4379,6 +4379,7 @@ async fn movie_full_scan_records_duplicate_same_title_sibling_folder_as_ownershi
 
 /// A series title recording `CASE SPLIT FIXTURE` while its library lists
 /// `Case Split Fixture`, with the episode stored the way the catalog holds it.
+#[cfg(not(windows))]
 struct CaseSplitSeriesFixture {
     _tempdir: tempfile::TempDir,
     app: AppUseCase,
@@ -4394,6 +4395,7 @@ struct CaseSplitSeriesFixture {
     volume_is_case_sensitive: bool,
 }
 
+#[cfg(not(windows))]
 async fn case_split_series_fixture() -> CaseSplitSeriesFixture {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let owned_folder = tempdir.path().join("CASE SPLIT FIXTURE");
@@ -4479,6 +4481,7 @@ async fn case_split_series_fixture() -> CaseSplitSeriesFixture {
     }
 }
 
+#[cfg(not(windows))]
 impl CaseSplitSeriesFixture {
     /// The conflict an earlier scan recorded against the candidate spelling.
     async fn seed_earlier_conflict(&self) {

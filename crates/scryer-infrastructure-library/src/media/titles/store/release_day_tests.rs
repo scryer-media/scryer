@@ -83,7 +83,13 @@ const UNPARSEABLE: &str = "unparseable-json";
 
 /// `(id, first_aired, digital_release_date, movie_release_dates_json)`, written
 /// straight into the columns so the stored text is exactly what is listed.
-const MOVIE_FIXTURES: &[(&str, Option<&str>, Option<&str>, Option<&str>)] = &[
+type MovieFixture = (
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+    Option<&'static str>,
+);
+const MOVIE_FIXTURES: &[MovieFixture] = &[
     (
         "listed-theatrical-inside",
         None,
