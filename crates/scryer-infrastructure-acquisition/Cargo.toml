@@ -29,7 +29,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 toml = { workspace = true }
 tracing = { workspace = true }
@@ -52,4 +52,6 @@ tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }
 
 [build-dependencies]
-graphql-parser = "0.4"
+# Build-time validation of the GraphQL documents, with the parser the server
+# already ships.
+async-graphql-parser = "=7.2.1"
