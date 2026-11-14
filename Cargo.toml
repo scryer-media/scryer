@@ -79,7 +79,7 @@ quick-xml = "0.42.0"
 # across cores; without it every cold plugin compile, at install and at startup
 # rehydration, runs on one thread.
 wasmtime = { version = "~50.0.0", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache", "parallel-compilation"] }
-wasmtime-wasi = { version = "~50.0.0", default-features = false, features = ["p1", "p2"] }
+wasmtime-wasi = { version = "~50.0.0", default-features = false, features = ["p2"] }
 semver = "1"
 metrics = "0.24"
 security-framework = "3"
@@ -87,7 +87,7 @@ security-framework-sys = "2"
 keyring-core = "1"
 windows-native-keyring-store = "1"
 wiremock = "0.6"
-strum = { version = "0.28", features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
 governor = "0.10.4"
 fixedbitset = "0.5"
 # SIMD-accelerated CRC used as the streaming move-corruption check during
