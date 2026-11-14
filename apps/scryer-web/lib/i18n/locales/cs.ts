@@ -5330,6 +5330,82 @@ const cs: LocaleDictionary = {
   "settings.maintenanceActionHeadMoveToRoot": "Přesunout do kořenové složky",
   "settings.maintenanceActionHeadNotify": "Upozornit",
   "settings.maintenanceActionHeadFetchSubtitles": "Stáhnout titulky",
+  "settings.maintenanceBuilderTitle": "Pravidlo",
+  "settings.maintenanceBuilderModeLabel": "Editor",
+  "settings.maintenanceBuilderModeSimple": "Jednoduchý",
+  "settings.maintenanceBuilderModeHelp":
+    "Jednoduchý režim sestaví pravidlo z podmínek a akcí a napíše Rego za vás. Pokročilý režim umožňuje upravovat Rego přímo. Přepnutím do pokročilého režimu se vygenerovaný kód zachová, ale po ruční úpravě pravidlo zůstane v pokročilém režimu.",
+  "settings.maintenanceBuilderUnavailable":
+    "Kód tohoto pravidla byl upraven ručně nebo nevznikl v jednoduchém editoru, takže jej lze upravovat jen jako Rego.",
+  "settings.maintenanceBuilderDetached":
+    "Kód jste upravili ručně, takže pravidlo už není propojeno s jednoduchým editorem. Od teď se bude otevírat v pokročilém režimu.",
+  "settings.maintenanceBuilderIncomplete":
+    "Před uložením dokončete podmínky a akce.",
+  "settings.maintenanceBuilderConditions": "Podmínky",
+  "settings.maintenanceBuilderConditionsHelp":
+    "Každá podmínka ověřuje jeden údaj o položce. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se akce použily.",
+  "settings.maintenanceBuilderJoinAll": "Platí všechny podmínky",
+  "settings.maintenanceBuilderJoinAny": "Platí kterákoli podmínka",
+  "settings.maintenanceBuilderAddCondition": "Přidat podmínku",
+  "settings.maintenanceBuilderFact": "Údaj",
+  "settings.maintenanceBuilderFactPlaceholder": "Vyberte údaj",
+  "settings.maintenanceBuilderOperator": "Porovnání",
+  "settings.maintenanceBuilderValue": "Hodnota",
+  "settings.maintenanceBuilderDays": "Dny",
+  "settings.maintenanceBuilderActionsHelp":
+    "Akce proběhnou v uvedeném pořadí. Akce, které nelze kombinovat, se po výběru konfliktní akce zakážou.",
+  "settings.maintenanceBuilderActionTitleOnly":
+    "Dostupné jen pro pravidla titulů.",
+  "settings.maintenanceBuilderActionConflict":
+    "Nelze kombinovat s: {{actions}}.",
+  "settings.maintenanceBuilderQualityProfilePlaceholder":
+    "Vyberte profil kvality",
+  "settings.maintenanceBuilderLibraryPlaceholder": "Vyberte knihovnu",
+  "settings.maintenanceBuilderRootPlaceholder": "Vyberte kořenovou složku",
+  "settings.maintenanceBuilderTagsPlaceholder": "Vyberte štítky",
+  "settings.maintenanceBuilderNoTags": "Zatím nejsou vytvořeny žádné štítky.",
+  "settings.maintenanceBuilderNotifyPlaceholder": "Text oznámení",
+  "settings.maintenanceBuilderGeneratedSource": "Vygenerované Rego",
+  "settings.maintenanceBuilderGeneratedSourceHelp":
+    "Kód, který editor napíše podle vašich voleb. Právě ten se ověřuje, zobrazuje v náhledu a ukládá.",
+  "settings.maintenanceBuilderGeneratedSourceEmpty":
+    "Dokud nejsou podmínky a akce dokončeny, nic se negeneruje.",
+  "settings.maintenanceBuilderOpIsTrue": "je pravda",
+  "settings.maintenanceBuilderOpIsFalse": "není pravda",
+  "settings.maintenanceBuilderOpEquals": "se rovná",
+  "settings.maintenanceBuilderOpNotEquals": "se nerovná",
+  "settings.maintenanceBuilderOpGreaterThan": "je větší než",
+  "settings.maintenanceBuilderOpGreaterOrEqual": "je alespoň",
+  "settings.maintenanceBuilderOpLessThan": "je menší než",
+  "settings.maintenanceBuilderOpLessOrEqual": "je nejvýše",
+  "settings.maintenanceBuilderOpContains": "obsahuje",
+  "settings.maintenanceBuilderOpNotContains": "neobsahuje",
+  "settings.maintenanceBuilderOpIsEmpty": "je prázdné",
+  "settings.maintenanceBuilderOpIsNotEmpty": "není prázdné",
+  "settings.maintenanceBuilderOpMoreThanDaysAgo": "je před více než N dny",
+  "settings.maintenanceBuilderOpLessThanDaysAgo": "je před méně než N dny",
+  "settings.maintenanceBuilderOpHasValue": "má hodnotu",
+  "settings.maintenanceBuilderOpHasNoValue": "nemá hodnotu",
+  "settings.maintenanceBuilderProblemNoConditions":
+    "Přidejte alespoň jednu podmínku.",
+  "settings.maintenanceBuilderProblemNoActions": "Vyberte alespoň jednu akci.",
+  "settings.maintenanceBuilderProblemFactRequired": "Vyberte údaj.",
+  "settings.maintenanceBuilderProblemFactUnknown":
+    "Tento údaj není pro tento rozsah dostupný.",
+  "settings.maintenanceBuilderProblemOperatorInvalid":
+    "Vyberte porovnání pro tento údaj.",
+  "settings.maintenanceBuilderProblemValueRequired": "Zadejte hodnotu.",
+  "settings.maintenanceBuilderProblemValueNotNumber": "Zadejte číslo.",
+  "settings.maintenanceBuilderProblemValueNotDays":
+    "Zadejte celý počet dní, nejvýše 100000.",
+  "settings.maintenanceBuilderProblemValueUnrepresentable":
+    "Tato hodnota obsahuje znaky, které pravidlo nemůže obsahovat.",
+  "settings.maintenanceBuilderProblemValueDuplicate":
+    "Každý štítek lze uvést jen jednou.",
+  "settings.maintenanceBuilderProblemActionNotInScope":
+    "Tato akce není pro tento rozsah dostupná.",
+  "settings.maintenanceBuilderProblemActionsConflict":
+    "Tuto akci nelze kombinovat s jinou vybranou akcí.",
   "settings.maintenanceDeclaredActionsTitle": "Deklarované akce",
   "settings.maintenanceDeclaredActionsHelp":
     "Akce, které definuje zdroj pravidla. Odpovídající subjekt dostane jen ty, jejichž podmínky pro něj platí, a to v tomto pořadí: {{order}}.",

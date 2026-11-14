@@ -4187,8 +4187,18 @@ export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
     declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
     }`;
 
+/// Opening the editor is the one reader of the builder model, so it is
+/// selected here and not on the mutation payloads that share the detail fields.
 export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
   maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+    builderModel
+  }
+}`;
+
+/// Tag names for the builder's tag pickers; nothing else about a tag shows there.
+export const maintenanceBuilderTagLabelsQuery = `query MaintenanceBuilderTagLabels {
+  titleTagDefinitions {
+    label
   }
 }`;
 

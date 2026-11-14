@@ -4958,6 +4958,83 @@ const ru: LocaleDictionary = {
   "settings.maintenanceActionHeadMoveToRoot": "Переместить в корневую папку",
   "settings.maintenanceActionHeadNotify": "Уведомить",
   "settings.maintenanceActionHeadFetchSubtitles": "Загрузить субтитры",
+  "settings.maintenanceBuilderTitle": "Правило",
+  "settings.maintenanceBuilderModeLabel": "Редактор",
+  "settings.maintenanceBuilderModeSimple": "Простой",
+  "settings.maintenanceBuilderModeHelp":
+    "Простой режим собирает правило из условий и действий и сам пишет Rego. Расширенный режим позволяет редактировать Rego напрямую. При переходе в расширенный режим сгенерированный код сохраняется, но после ручной правки правило остаётся в расширенном режиме.",
+  "settings.maintenanceBuilderUnavailable":
+    "Код этого правила был изменён вручную или создан не простым конструктором, поэтому его можно редактировать только как Rego.",
+  "settings.maintenanceBuilderDetached":
+    "Вы изменили код вручную, поэтому правило больше не связано с простым конструктором. Теперь оно будет открываться в расширенном режиме.",
+  "settings.maintenanceBuilderIncomplete":
+    "Перед сохранением заполните условия и действия.",
+  "settings.maintenanceBuilderConditions": "Условия",
+  "settings.maintenanceBuilderConditionsHelp":
+    "Каждое условие проверяет один факт об объекте. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применились действия.",
+  "settings.maintenanceBuilderJoinAll": "Выполняются все условия",
+  "settings.maintenanceBuilderJoinAny": "Выполняется любое условие",
+  "settings.maintenanceBuilderAddCondition": "Добавить условие",
+  "settings.maintenanceBuilderFact": "Факт",
+  "settings.maintenanceBuilderFactPlaceholder": "Выберите факт",
+  "settings.maintenanceBuilderOperator": "Сравнение",
+  "settings.maintenanceBuilderValue": "Значение",
+  "settings.maintenanceBuilderDays": "Дней",
+  "settings.maintenanceBuilderActionsHelp":
+    "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
+  "settings.maintenanceBuilderActionTitleOnly":
+    "Доступно только для правил тайтлов.",
+  "settings.maintenanceBuilderActionConflict":
+    "Нельзя сочетать с: {{actions}}.",
+  "settings.maintenanceBuilderQualityProfilePlaceholder":
+    "Выберите профиль качества",
+  "settings.maintenanceBuilderLibraryPlaceholder": "Выберите библиотеку",
+  "settings.maintenanceBuilderRootPlaceholder": "Выберите корневую папку",
+  "settings.maintenanceBuilderTagsPlaceholder": "Выберите теги",
+  "settings.maintenanceBuilderNoTags": "Теги ещё не созданы.",
+  "settings.maintenanceBuilderNotifyPlaceholder": "Текст уведомления",
+  "settings.maintenanceBuilderGeneratedSource": "Сгенерированный Rego",
+  "settings.maintenanceBuilderGeneratedSourceHelp":
+    "Код, который конструктор пишет по вашему выбору. Именно он проверяется, используется в предпросмотре и сохраняется.",
+  "settings.maintenanceBuilderGeneratedSourceEmpty":
+    "Код не создаётся, пока условия и действия не заполнены.",
+  "settings.maintenanceBuilderOpIsTrue": "истинно",
+  "settings.maintenanceBuilderOpIsFalse": "ложно",
+  "settings.maintenanceBuilderOpEquals": "равно",
+  "settings.maintenanceBuilderOpNotEquals": "не равно",
+  "settings.maintenanceBuilderOpGreaterThan": "больше",
+  "settings.maintenanceBuilderOpGreaterOrEqual": "не меньше",
+  "settings.maintenanceBuilderOpLessThan": "меньше",
+  "settings.maintenanceBuilderOpLessOrEqual": "не больше",
+  "settings.maintenanceBuilderOpContains": "содержит",
+  "settings.maintenanceBuilderOpNotContains": "не содержит",
+  "settings.maintenanceBuilderOpIsEmpty": "пусто",
+  "settings.maintenanceBuilderOpIsNotEmpty": "не пусто",
+  "settings.maintenanceBuilderOpMoreThanDaysAgo": "более N дней назад",
+  "settings.maintenanceBuilderOpLessThanDaysAgo": "менее N дней назад",
+  "settings.maintenanceBuilderOpHasValue": "задано",
+  "settings.maintenanceBuilderOpHasNoValue": "не задано",
+  "settings.maintenanceBuilderProblemNoConditions":
+    "Добавьте хотя бы одно условие.",
+  "settings.maintenanceBuilderProblemNoActions":
+    "Выберите хотя бы одно действие.",
+  "settings.maintenanceBuilderProblemFactRequired": "Выберите факт.",
+  "settings.maintenanceBuilderProblemFactUnknown":
+    "Этот факт недоступен для этой области.",
+  "settings.maintenanceBuilderProblemOperatorInvalid":
+    "Выберите сравнение для этого факта.",
+  "settings.maintenanceBuilderProblemValueRequired": "Введите значение.",
+  "settings.maintenanceBuilderProblemValueNotNumber": "Введите число.",
+  "settings.maintenanceBuilderProblemValueNotDays":
+    "Введите целое число дней, не больше 100000.",
+  "settings.maintenanceBuilderProblemValueUnrepresentable":
+    "Это значение содержит символы, которые нельзя записать в правило.",
+  "settings.maintenanceBuilderProblemValueDuplicate":
+    "Каждый тег можно указать только один раз.",
+  "settings.maintenanceBuilderProblemActionNotInScope":
+    "Это действие недоступно для этой области.",
+  "settings.maintenanceBuilderProblemActionsConflict":
+    "Это действие нельзя сочетать с другим выбранным действием.",
   "settings.maintenanceDeclaredActionsTitle": "Объявленные действия",
   "settings.maintenanceDeclaredActionsHelp":
     "Действия, которые определяет исходный код правила. Подходящий объект получает только те, чьи условия для него выполняются, в таком порядке: {{order}}.",

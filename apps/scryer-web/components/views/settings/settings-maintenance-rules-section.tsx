@@ -83,10 +83,19 @@ import {
   ruleStateLabelKey,
   ruleStateOptionsFor,
   templateActionHeads,
+  withMaintenanceBuilderModel,
 } from "@/lib/utils/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
+import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
+import { InfoHelp } from "@/components/common/info-help";
+import {
+  MaintenanceRuleBuilder,
+  type MaintenanceBuilderOptions,
+} from "@/components/views/settings/maintenance-rule-builder";
+import { generateMaintenanceRuleSource } from "@/lib/utils/maintenance-rule-builder";
 
+export type MaintenanceRuleEditorMode = "simple" | "advanced";
 export type MaintenanceLibraryOption = { id: string; name: string };
 export type MaintenanceStorageRootOption = {
   id: string;
@@ -101,6 +110,16 @@ type SettingsMaintenanceRulesSectionProps = {
   setRuleSetDraft: React.Dispatch<
     React.SetStateAction<MaintenanceRuleSetDraft>
   >;
+  /// Which editor the rule form shows. Simple is only offered while the draft
+  /// is still the builder's.
+  editorMode: MaintenanceRuleEditorMode;
+  setEditorMode: (mode: MaintenanceRuleEditorMode) => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  builderDetached: boolean;
+  builderOptions: MaintenanceBuilderOptions;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -905,6 +924,11 @@ export function SettingsMaintenanceRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  editorMode,
+  setEditorMode,
+  editRegoSource,
+  builderDetached,
+  builderOptions,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -927,6 +951,28 @@ export function SettingsMaintenanceRulesSection({
   const t = useTranslate();
   const editingSystemOwned = ruleSetRecords.some(
     (record) => record.id === editingRuleSetId && record.systemOwned,
+  );
+  const builderAvailable =
+    ruleSetDraft.builderModel !== null && !editingSystemOwned;
+  const showBuilder = builderAvailable && editorMode === "simple";
+  const builderResult =
+    showBuilder && ruleSetDraft.builderModel
+      ? generateMaintenanceRuleSource(
+          ruleSetDraft.builderModel,
+          ruleSetDraft.subjectKind,
+        )
+      : null;
+  const builderProblems =
+    builderResult && !builderResult.ok ? builderResult.problems : [];
+  const validationStatus = (
+    <EditorValidationStatus
+      id="settings-maintenance-rule-validation"
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+    />
   );
 
   // Candidates and history are one pane each. They keep the instance switches,
@@ -1221,41 +1267,101 @@ export function SettingsMaintenanceRulesSection({
                     ) : null}
 
                     <div>
-                      <Label className="mb-2 block">
-                        {t("settings.ruleRegoSource")}
-                      </Label>
-                      <LazyRegoEditor
-                        ruleFamily="maintenance"
-                        id="settings-maintenance-rule-rego-source"
-                        value={ruleSetDraft.regoSource}
-                        readOnly={editingSystemOwned}
-                        onChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            regoSource: value,
-                          }))
-                        }
-                        diagnostics={regoDiagnostics(
-                          ruleSetDraft.regoSource,
-                          validationResult,
-                          t,
-                        )}
-                        feedback={
-                          <EditorValidationStatus
-                            id="settings-maintenance-rule-validation"
-                            checking={validating}
-                            result={validationResult}
-                            formatError={(error) =>
-                              formatRegoValidationError(
-                                error,
-                                ruleSetDraft.regoSource,
-                              )
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <Label className="block">
+                          {showBuilder
+                            ? t("settings.maintenanceBuilderTitle")
+                            : t("settings.ruleRegoSource")}
+                        </Label>
+                        <div className="flex items-center gap-1">
+                          <ToggleGroupPrimitive.Root
+                            type="single"
+                            aria-label={t("settings.maintenanceBuilderModeLabel")}
+                            className="inline-flex rounded-md border border-border p-1"
+                            value={showBuilder ? "simple" : "advanced"}
+                            onValueChange={(value) => {
+                              if (value === "simple" || value === "advanced")
+                                setEditorMode(value);
+                            }}
+                          >
+                            <ToggleGroupPrimitive.Item
+                              value="simple"
+                              disabled={!builderAvailable}
+                              asChild
+                            >
+                              <Button
+                                type="button"
+                                size="sm"
+                                id="settings-maintenance-rule-editor-simple"
+                                variant={showBuilder ? "default" : "ghost"}
+                              >
+                                {t("settings.maintenanceBuilderModeSimple")}
+                              </Button>
+                            </ToggleGroupPrimitive.Item>
+                            <ToggleGroupPrimitive.Item
+                              value="advanced"
+                              asChild
+                            >
+                              <Button
+                                type="button"
+                                size="sm"
+                                id="settings-maintenance-rule-editor-advanced"
+                                variant={showBuilder ? "ghost" : "default"}
+                              >
+                                {t("label.advanced")}
+                              </Button>
+                            </ToggleGroupPrimitive.Item>
+                          </ToggleGroupPrimitive.Root>
+                          <InfoHelp
+                            ariaLabel={t("settings.maintenanceBuilderModeLabel")}
+                            text={
+                              builderAvailable
+                                ? t("settings.maintenanceBuilderModeHelp")
+                                : t("settings.maintenanceBuilderUnavailable")
                             }
                           />
-                        }
-                        minLines={12}
-                        maxLines={35}
-                      />
+                        </div>
+                      </div>
+                      {builderDetached ? (
+                        <p
+                          id="settings-maintenance-rule-builder-detached"
+                          role="status"
+                          className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-2 py-1 text-xs text-[var(--scry-warning-text)]"
+                        >
+                          {t("settings.maintenanceBuilderDetached")}
+                        </p>
+                      ) : null}
+                      {showBuilder && ruleSetDraft.builderModel ? (
+                        <MaintenanceRuleBuilder
+                          model={ruleSetDraft.builderModel}
+                          scope={ruleSetDraft.subjectKind}
+                          problems={builderProblems}
+                          options={builderOptions}
+                          onChange={(model) =>
+                            setRuleSetDraft((prev) =>
+                              withMaintenanceBuilderModel(prev, model),
+                            )
+                          }
+                          generatedSource={ruleSetDraft.regoSource}
+                          feedback={validationStatus}
+                        />
+                      ) : (
+                        <LazyRegoEditor
+                          ruleFamily="maintenance"
+                          id="settings-maintenance-rule-rego-source"
+                          value={ruleSetDraft.regoSource}
+                          readOnly={editingSystemOwned}
+                          onChange={editRegoSource}
+                          diagnostics={regoDiagnostics(
+                            ruleSetDraft.regoSource,
+                            validationResult,
+                            t,
+                          )}
+                          feedback={validationStatus}
+                          minLines={12}
+                          maxLines={35}
+                        />
+                      )}
                     </div>
 
                     <MaintenanceRuleSourceFindings
@@ -1349,11 +1455,21 @@ export function SettingsMaintenanceRulesSection({
                         value={ruleSetDraft.subjectKind}
                         disabled={Boolean(editingRuleSetId)}
                         onValueChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            subjectKind:
-                              value as MaintenanceRuleSetDraft["subjectKind"],
-                          }))
+                          setRuleSetDraft((prev) => {
+                            const next = {
+                              ...prev,
+                              subjectKind:
+                                value as MaintenanceRuleSetDraft["subjectKind"],
+                            };
+                            // The builder writes for one scope, so a builder
+                            // rule regenerates for the new one.
+                            return prev.builderModel
+                              ? withMaintenanceBuilderModel(
+                                  next,
+                                  prev.builderModel,
+                                )
+                              : next;
+                          })
                         }
                         options={[
                           { value: "TITLE", label: t("label.title") },

@@ -166,6 +166,7 @@ test("matcher and metadata updates split along the API's versioned and unversion
   const metadata = updateMaintenanceRuleMetadataInput("rule-1", draft);
 
   assert.deepEqual(Object.keys(matcher).sort(), [
+    "builderModel",
     "graceDays",
     "id",
     "regoSource",

@@ -1,4 +1,12 @@
 import { graphQlErrorNumberExtension } from "../graphql/error-message.ts";
+import {
+  emptyMaintenanceBuilderModel,
+  generateMaintenanceRuleSource,
+  isBlankMaintenanceBuilderModel,
+  isMaintenanceBuilderSource,
+  parseMaintenanceBuilderModel,
+  type MaintenanceBuilderModel,
+} from "./maintenance-rule-builder.ts";
 import type {
   MaintenanceActionHead,
   MaintenanceActionKind,
@@ -185,6 +193,8 @@ export function templateActionHeads(source: string): MaintenanceActionHead[] {
   );
 }
 
+/// A draft written as Rego from the start, as templates and the advanced
+/// editor are.
 export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
   return {
     subjectKind: "TITLE",
@@ -194,12 +204,105 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     graceDays: 0,
     storageRootId: "",
     libraryIds: [],
+    builderModel: null,
   };
 }
 
+/// A new rule starts in the simple builder with nothing chosen, so it has no
+/// source until the builder can write one.
+export function newMaintenanceRuleBuilderDraft(): MaintenanceRuleSetDraft {
+  return withMaintenanceBuilderModel(
+    initialMaintenanceRuleDraft(),
+    emptyMaintenanceBuilderModel(),
+  );
+}
+
+/// Apply a builder change: the source becomes exactly what the builder writes
+/// for the model, or nothing while the model cannot be written yet.
+export function withMaintenanceBuilderModel(
+  draft: MaintenanceRuleSetDraft,
+  model: MaintenanceBuilderModel,
+): MaintenanceRuleSetDraft {
+  const result = generateMaintenanceRuleSource(model, draft.subjectKind);
+  return {
+    ...draft,
+    builderModel: model,
+    regoSource: result.ok ? result.source : "",
+  };
+}
+
+/// Apply a hand edit of the source. An edit that leaves anything other than
+/// the builder's own source detaches the rule from the builder for good.
+export function withMaintenanceRuleSourceEdit(
+  draft: MaintenanceRuleSetDraft,
+  regoSource: string,
+): { draft: MaintenanceRuleSetDraft; detached: boolean } {
+  const detached =
+    draft.builderModel !== null &&
+    !isMaintenanceBuilderSource(
+      draft.builderModel,
+      draft.subjectKind,
+      regoSource,
+    );
+  return {
+    draft: {
+      ...draft,
+      regoSource,
+      builderModel: detached ? null : draft.builderModel,
+    },
+    detached,
+  };
+}
+
+/// Leaving the builder for the Rego editor keeps the generated source. A
+/// builder nobody has touched yet has nothing to keep, so the editor starts
+/// from the starter source instead and the rule is Rego from then on.
+export function withMaintenanceAdvancedEditor(
+  draft: MaintenanceRuleSetDraft,
+): MaintenanceRuleSetDraft {
+  if (
+    draft.builderModel &&
+    draft.regoSource === "" &&
+    isBlankMaintenanceBuilderModel(draft.builderModel)
+  ) {
+    return {
+      ...draft,
+      regoSource: MAINTENANCE_STARTER_SOURCE,
+      builderModel: null,
+    };
+  }
+  return draft;
+}
+
+/// The model to store with a save: only when the saved source is exactly
+/// what the builder writes from it.
+export function maintenanceBuilderModelToSave(
+  draft: MaintenanceRuleSetDraft,
+): MaintenanceBuilderModel | null {
+  return draft.builderModel &&
+    isMaintenanceBuilderSource(
+      draft.builderModel,
+      draft.subjectKind,
+      draft.regoSource,
+    )
+    ? draft.builderModel
+    : null;
+}
+
+/// A stored model counts only while regenerating it reproduces the stored
+/// source; otherwise the rule opens as Rego and the stored model is left
+/// alone until the next save.
 export function maintenanceRuleDraftFromDetail(
   detail: MaintenanceRuleSetDetail,
 ): MaintenanceRuleSetDraft {
+  const model = parseMaintenanceBuilderModel(detail.builderModel);
+  const attached =
+    model !== null &&
+    isMaintenanceBuilderSource(
+      model,
+      detail.ruleSet.subjectKind,
+      detail.revision.regoSource,
+    );
   return {
     subjectKind: detail.ruleSet.subjectKind,
     name: detail.ruleSet.name,
@@ -208,6 +311,7 @@ export function maintenanceRuleDraftFromDetail(
     graceDays: detail.revision.graceDays,
     storageRootId: detail.revision.storageRootId ?? "",
     libraryIds: [...detail.ruleSet.libraryIds],
+    builderModel: attached ? model : null,
   };
 }
 
@@ -230,6 +334,7 @@ export function createMaintenanceRuleSetInput(draft: MaintenanceRuleSetDraft) {
     graceDays: draft.graceDays,
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
+    builderModel: maintenanceBuilderModelToSave(draft),
   };
 }
 
@@ -244,6 +349,8 @@ export function updateMaintenanceRuleMatcherInput(
     // Always send the explicit editor value. Old clients omit this field and
     // preserve a root they cannot render; this client may intentionally clear it.
     storageRootId: draft.storageRootId || null,
+    // Null clears a stored model, so a hand-edited rule stops claiming one.
+    builderModel: maintenanceBuilderModelToSave(draft),
   };
 }
 

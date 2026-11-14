@@ -5,6 +5,7 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -24,8 +25,11 @@ import {
 import {
   SettingsMaintenanceRulesSection,
   type MaintenanceLibraryOption,
+  type MaintenanceRuleEditorMode,
   type MaintenanceStorageRootOption,
 } from "@/components/views/settings/settings-maintenance-rules-section";
+import type { MaintenanceBuilderOptions } from "@/components/views/settings/maintenance-rule-builder";
+import { generateMaintenanceRuleSource } from "@/lib/utils/maintenance-rule-builder";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
@@ -58,11 +62,16 @@ import {
   maintenanceFilterArgument,
   maintenancePreviewInput,
   maintenanceRuleDraftFromDetail,
+  newMaintenanceRuleBuilderDraft,
   updateMaintenanceRuleMatcherInput,
   updateMaintenanceRuleMetadataInput,
+  withMaintenanceAdvancedEditor,
+  withMaintenanceRuleSourceEdit,
 } from "@/lib/utils/maintenance-rule-sets";
 import {
   librariesQuery,
+  maintenanceBuilderTagLabelsQuery,
+  qualityProfileOptionsQuery,
   maintenanceActionRunsQuery,
   maintenanceCandidatesQuery,
   maintenanceEvaluationRunsQuery,
@@ -202,26 +211,132 @@ export function SettingsMaintenanceRulesContainer({
     useState<PendingExclusion | null>(null);
   const [excluding, setExcluding] = useState(false);
 
+  const [editorMode, setEditorModeState] =
+    useState<MaintenanceRuleEditorMode>("advanced");
+  const [builderDetached, setBuilderDetached] = useState(false);
+  /// Picker catalogs for the builder, loaded the first time a chosen action
+  /// needs one and kept for the page's lifetime. Null until loaded.
+  const [qualityProfileNames, setQualityProfileNames] = useState<
+    string[] | null
+  >(null);
+  const [tagLabels, setTagLabels] = useState<string[] | null>(null);
+
   const isDraftDirty =
     JSON.stringify(ruleSetDraft) !== JSON.stringify(ruleSetDraftBaseline);
+
+  /// Every editor opening goes through here: a rule still made by the builder
+  /// opens in it, anything else opens as Rego.
+  const startEditorSession = useCallback(
+    (next: MaintenanceRuleSetDraft, baseline: MaintenanceRuleSetDraft) => {
+      setRuleSetDraft(next);
+      setRuleSetDraftBaseline(baseline);
+      setEditorModeState(next.builderModel ? "simple" : "advanced");
+      setBuilderDetached(false);
+      setValidationResult(null);
+    },
+    [setValidationResult],
+  );
 
   const closeEditor = useCallback(() => {
     const next = initialMaintenanceRuleDraft();
     setIsEditorOpen(false);
     setEditingRuleSetId(null);
-    setRuleSetDraft(next);
-    setRuleSetDraftBaseline(next);
-    setValidationResult(null);
-  }, [setValidationResult]);
+    startEditorSession(next, next);
+  }, [startEditorSession]);
 
   const openCreateEditor = useCallback(() => {
-    const next = initialMaintenanceRuleDraft();
+    const next = newMaintenanceRuleBuilderDraft();
     setEditingRuleSetId(null);
-    setRuleSetDraft(next);
-    setRuleSetDraftBaseline(next);
-    setValidationResult(null);
+    startEditorSession(next, next);
     setIsEditorOpen(true);
-  }, [setValidationResult]);
+  }, [startEditorSession]);
+
+  const editRegoSource = useCallback((source: string) => {
+    setRuleSetDraft((prev) => {
+      const edit = withMaintenanceRuleSourceEdit(prev, source);
+      // Idempotent, so a replayed updater sets the same notice.
+      if (edit.detached) setBuilderDetached(true);
+      return edit.draft;
+    });
+  }, []);
+
+  const setEditorMode = useCallback((mode: MaintenanceRuleEditorMode) => {
+    if (mode === "advanced") {
+      setRuleSetDraft((prev) => withMaintenanceAdvancedEditor(prev));
+    }
+    setEditorModeState(mode);
+  }, []);
+
+  const builderShown =
+    isEditorOpen && editorMode === "simple" && ruleSetDraft.builderModel !== null;
+  const builderActions = ruleSetDraft.builderModel?.actions;
+  const needsQualityProfiles =
+    builderShown && builderActions?.SET_QUALITY_PROFILE !== undefined;
+  const needsTags =
+    builderShown &&
+    (builderActions?.ADD_TAGS !== undefined ||
+      builderActions?.REMOVE_TAGS !== undefined);
+
+  useEffect(() => {
+    if (!needsQualityProfiles || qualityProfileNames !== null) return;
+    let cancelled = false;
+    void client
+      .query(qualityProfileOptionsQuery, {})
+      .toPromise()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) throw error;
+        const profiles: { name: string }[] =
+          data?.qualityProfileSettings?.profiles ?? [];
+        setQualityProfileNames(profiles.map((profile) => profile.name));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setQualityProfileNames([]);
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, needsQualityProfiles, qualityProfileNames, setGlobalStatus, t]);
+
+  useEffect(() => {
+    if (!needsTags || tagLabels !== null) return;
+    let cancelled = false;
+    void client
+      .query(maintenanceBuilderTagLabelsQuery, {})
+      .toPromise()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) throw error;
+        const tags: { label: string }[] = data?.titleTagDefinitions ?? [];
+        setTagLabels(tags.map((tag) => tag.label));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setTagLabels([]);
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+          { level: "ERROR" },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, needsTags, setGlobalStatus, t, tagLabels]);
+
+  const builderOptions = useMemo<MaintenanceBuilderOptions>(
+    () => ({
+      qualityProfileNames,
+      tagLabels,
+      libraryNames: libraries.map((library) => library.name),
+      rootPaths: [...new Set(storageRoots.map((root) => root.path))],
+    }),
+    [libraries, qualityProfileNames, storageRoots, tagLabels],
+  );
 
   /// Load the source and declared actions for one rule set, surfacing failure
   /// instead of silently refusing to open the editor.
@@ -255,12 +370,10 @@ export function SettingsMaintenanceRulesContainer({
       if (!detail) return;
       const next = maintenanceRuleDraftFromDetail(detail);
       setEditingRuleSetId(record.id);
-      setRuleSetDraft(next);
-      setRuleSetDraftBaseline(next);
-      setValidationResult(null);
+      startEditorSession(next, next);
       setIsEditorOpen(true);
     },
-    [setValidationResult, fetchRuleSetDetail],
+    [startEditorSession, fetchRuleSetDetail],
   );
 
   const openCopyEditor = useCallback(
@@ -269,12 +382,10 @@ export function SettingsMaintenanceRulesContainer({
       if (!detail) return;
       const next = copyMaintenanceRuleDraft(detail);
       setEditingRuleSetId(null);
-      setRuleSetDraft(next);
-      setRuleSetDraftBaseline(next);
-      setValidationResult(null);
+      startEditorSession(next, next);
       setIsEditorOpen(true);
     },
-    [setValidationResult, fetchRuleSetDetail],
+    [startEditorSession, fetchRuleSetDetail],
   );
 
   /// Load a starter template into the create-rule editor. A template prefills
@@ -294,14 +405,12 @@ export function SettingsMaintenanceRulesContainer({
         graceDays: template.graceDays,
       };
       setEditingRuleSetId(null);
-      setRuleSetDraft(next);
       /// Baseline stays at the empty draft on purpose: a freshly applied
       /// template counts as unsaved work, so navigating away from it asks.
-      setRuleSetDraftBaseline(initialMaintenanceRuleDraft());
-      setValidationResult(null);
+      startEditorSession(next, initialMaintenanceRuleDraft());
       setIsEditorOpen(true);
     },
-    [setValidationResult, t],
+    [startEditorSession, t],
   );
 
   const requestCreateEditor = useCallback(() => {
@@ -627,6 +736,20 @@ export function SettingsMaintenanceRulesContainer({
   /// API keeps on separate mutations because only one of them versions.
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (
+      builderShown &&
+      ruleSetDraft.builderModel &&
+      !generateMaintenanceRuleSource(
+        ruleSetDraft.builderModel,
+        ruleSetDraft.subjectKind,
+      ).ok
+    ) {
+      setValidationResult({
+        valid: false,
+        errors: [t("settings.maintenanceBuilderIncomplete")],
+      });
+      return;
+    }
     if (!ruleSetDraft.name.trim() || !ruleSetDraft.regoSource.trim()) {
       setValidationResult({
         valid: false,
@@ -986,6 +1109,11 @@ export function SettingsMaintenanceRulesContainer({
         ruleSetRecords={ruleSetRecords}
         libraries={libraries}
         storageRoots={storageRoots}
+        editorMode={editorMode}
+        setEditorMode={setEditorMode}
+        editRegoSource={editRegoSource}
+        builderDetached={builderDetached}
+        builderOptions={builderOptions}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={deleteRuleSet}

@@ -10051,6 +10051,80 @@ const en: LocaleDictionary = {
   "settings.maintenanceActionHeadMoveToRoot": "Move to root folder",
   "settings.maintenanceActionHeadNotify": "Notify",
   "settings.maintenanceActionHeadFetchSubtitles": "Fetch subtitles",
+  "settings.maintenanceBuilderTitle": "Rule",
+  "settings.maintenanceBuilderModeLabel": "Editor",
+  "settings.maintenanceBuilderModeSimple": "Simple",
+  "settings.maintenanceBuilderModeHelp":
+    "Simple builds the rule from conditions and actions and writes the Rego for you. Advanced lets you edit the Rego directly. Switching to Advanced keeps the generated source, but once you edit it by hand the rule stays in Advanced.",
+  "settings.maintenanceBuilderUnavailable":
+    "This rule's source was edited by hand or did not come from the simple builder, so it can only be edited as Rego.",
+  "settings.maintenanceBuilderDetached":
+    "You edited the source by hand, so this rule is no longer linked to the simple builder. It will open in Advanced from now on.",
+  "settings.maintenanceBuilderIncomplete":
+    "Finish the conditions and actions before saving.",
+  "settings.maintenanceBuilderConditions": "Conditions",
+  "settings.maintenanceBuilderConditionsHelp":
+    "Each condition checks one fact about the subject. Choose whether every condition or any one of them must hold for the actions to apply.",
+  "settings.maintenanceBuilderJoinAll": "All conditions match",
+  "settings.maintenanceBuilderJoinAny": "Any condition matches",
+  "settings.maintenanceBuilderAddCondition": "Add condition",
+  "settings.maintenanceBuilderFact": "Fact",
+  "settings.maintenanceBuilderFactPlaceholder": "Choose a fact",
+  "settings.maintenanceBuilderOperator": "Comparison",
+  "settings.maintenanceBuilderValue": "Value",
+  "settings.maintenanceBuilderDays": "Days",
+  "settings.maintenanceBuilderActionsHelp":
+    "Actions run in the order listed. Actions that cannot be combined are disabled once a conflicting one is chosen.",
+  "settings.maintenanceBuilderActionTitleOnly": "Only available for title rules.",
+  "settings.maintenanceBuilderActionConflict":
+    "Cannot be combined with {{actions}}.",
+  "settings.maintenanceBuilderQualityProfilePlaceholder":
+    "Choose a quality profile",
+  "settings.maintenanceBuilderLibraryPlaceholder": "Choose a library",
+  "settings.maintenanceBuilderRootPlaceholder": "Choose a root folder",
+  "settings.maintenanceBuilderTagsPlaceholder": "Choose tags",
+  "settings.maintenanceBuilderNoTags": "No tags have been created yet.",
+  "settings.maintenanceBuilderNotifyPlaceholder": "Notification text",
+  "settings.maintenanceBuilderGeneratedSource": "Generated Rego",
+  "settings.maintenanceBuilderGeneratedSourceHelp":
+    "The source the builder writes from your choices. This is what is validated, previewed and saved.",
+  "settings.maintenanceBuilderGeneratedSourceEmpty":
+    "Nothing is generated until the conditions and actions are complete.",
+  "settings.maintenanceBuilderOpIsTrue": "is true",
+  "settings.maintenanceBuilderOpIsFalse": "is false",
+  "settings.maintenanceBuilderOpEquals": "equals",
+  "settings.maintenanceBuilderOpNotEquals": "does not equal",
+  "settings.maintenanceBuilderOpGreaterThan": "is greater than",
+  "settings.maintenanceBuilderOpGreaterOrEqual": "is at least",
+  "settings.maintenanceBuilderOpLessThan": "is less than",
+  "settings.maintenanceBuilderOpLessOrEqual": "is at most",
+  "settings.maintenanceBuilderOpContains": "contains",
+  "settings.maintenanceBuilderOpNotContains": "does not contain",
+  "settings.maintenanceBuilderOpIsEmpty": "is empty",
+  "settings.maintenanceBuilderOpIsNotEmpty": "is not empty",
+  "settings.maintenanceBuilderOpMoreThanDaysAgo": "is more than N days ago",
+  "settings.maintenanceBuilderOpLessThanDaysAgo": "is less than N days ago",
+  "settings.maintenanceBuilderOpHasValue": "has a value",
+  "settings.maintenanceBuilderOpHasNoValue": "has no value",
+  "settings.maintenanceBuilderProblemNoConditions": "Add at least one condition.",
+  "settings.maintenanceBuilderProblemNoActions": "Choose at least one action.",
+  "settings.maintenanceBuilderProblemFactRequired": "Choose a fact.",
+  "settings.maintenanceBuilderProblemFactUnknown":
+    "This fact is not available for this scope.",
+  "settings.maintenanceBuilderProblemOperatorInvalid":
+    "Choose a comparison for this fact.",
+  "settings.maintenanceBuilderProblemValueRequired": "Enter a value.",
+  "settings.maintenanceBuilderProblemValueNotNumber": "Enter a number.",
+  "settings.maintenanceBuilderProblemValueNotDays":
+    "Enter a whole number of days, up to 100000.",
+  "settings.maintenanceBuilderProblemValueUnrepresentable":
+    "This value contains characters a rule cannot hold.",
+  "settings.maintenanceBuilderProblemValueDuplicate":
+    "Each tag can be listed only once.",
+  "settings.maintenanceBuilderProblemActionNotInScope":
+    "This action is not available for this scope.",
+  "settings.maintenanceBuilderProblemActionsConflict":
+    "This action cannot be combined with another chosen action.",
   "settings.maintenanceDeclaredActionsTitle": "Declared actions",
   "settings.maintenanceDeclaredActionsHelp":
     "The actions this rule's source defines. A matched subject gets only the ones whose conditions hold for it, applied in this order: {{order}}.",
