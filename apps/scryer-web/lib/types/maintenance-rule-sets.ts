@@ -127,6 +127,12 @@ export type MaintenanceRuleSetRecord = {
   /// the list payload so rendering badges never needs a per-rule detail fetch.
   graceDays: number;
   declaredActions: MaintenanceDeclaredActions;
+  /// When the rule runs. One run evaluates the rule, then applies its
+  /// candidates whose grace period has ended. A rule setting like its
+  /// libraries: changing it makes no new revision.
+  schedule: import("./scripts").ScriptSchedule;
+  /// Null for a manual schedule and for a disabled rule.
+  nextRunAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -166,10 +172,12 @@ export type MaintenanceRuleSetDraft = {
   /// Empty when storage capacity and root-filtered deletion do not apply.
   storageRootId: string;
   libraryIds: string[];
+  schedule: import("./scripts").ScriptSchedule;
   /// Set while the rule is still the simple builder's: `regoSource` is then
   /// what the builder generated from this model. Null once the source is
   /// edited by hand, and for every rule the builder did not make.
-  builderModel: import("../utils/maintenance-rule-builder").MaintenanceBuilderModel | null;
+  builderModel:
+    import("../utils/maintenance-rule-builder").MaintenanceBuilderModel | null;
 };
 
 export type MaintenanceValidationResult = {

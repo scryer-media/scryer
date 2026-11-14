@@ -62,9 +62,8 @@ import {
   maintenanceFilterArgument,
   maintenancePreviewInput,
   maintenanceRuleDraftFromDetail,
+  maintenanceRuleUpdatePlan,
   newMaintenanceRuleBuilderDraft,
-  updateMaintenanceRuleMatcherInput,
-  updateMaintenanceRuleMetadataInput,
   withMaintenanceAdvancedEditor,
   withMaintenanceRuleSourceEdit,
 } from "@/lib/utils/maintenance-rule-sets";
@@ -144,6 +143,9 @@ export function SettingsMaintenanceRulesContainer({
   );
   const [ruleSetDraftBaseline, setRuleSetDraftBaseline] =
     useState<MaintenanceRuleSetDraft>(initialMaintenanceRuleDraft);
+  /// Changes with every editor opening, so controls that keep their own
+  /// typing state start again from the new draft.
+  const [editorSessionKey, setEditorSessionKey] = useState(0);
   const { validating, validationResult, setValidationResult, validateDraft } =
     useRegoValidation(
       "maintenance",
@@ -230,6 +232,7 @@ export function SettingsMaintenanceRulesContainer({
     (next: MaintenanceRuleSetDraft, baseline: MaintenanceRuleSetDraft) => {
       setRuleSetDraft(next);
       setRuleSetDraftBaseline(baseline);
+      setEditorSessionKey((key) => key + 1);
       setEditorModeState(next.builderModel ? "simple" : "advanced");
       setBuilderDetached(false);
       setValidationResult(null);
@@ -268,7 +271,9 @@ export function SettingsMaintenanceRulesContainer({
   }, []);
 
   const builderShown =
-    isEditorOpen && editorMode === "simple" && ruleSetDraft.builderModel !== null;
+    isEditorOpen &&
+    editorMode === "simple" &&
+    ruleSetDraft.builderModel !== null;
   const builderActions = ruleSetDraft.builderModel?.actions;
   const needsQualityProfiles =
     builderShown && builderActions?.SET_QUALITY_PROFILE !== undefined;
@@ -731,9 +736,10 @@ export function SettingsMaintenanceRulesContainer({
     }
   };
 
-  /// Editing a saved rule writes both halves: the matcher (a new immutable
-  /// revision) and the metadata (name, description, library scope), which the
-  /// API keeps on separate mutations because only one of them versions.
+  /// Editing a saved rule writes up to two halves: the matcher (a new
+  /// immutable revision) and the metadata (name, description, library scope,
+  /// schedule), which the API keeps on separate mutations because only one of
+  /// them versions. A half the editor did not change is not sent.
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (
@@ -765,24 +771,27 @@ export function SettingsMaintenanceRulesContainer({
     setMutatingRuleSetId(editingRuleSetId || "new");
     try {
       if (editingRuleSetId) {
-        const matcher = await client
-          .mutation(updateMaintenanceRuleMatcherMutation, {
-            input: updateMaintenanceRuleMatcherInput(
-              editingRuleSetId,
-              ruleSetDraft,
-            ),
-          })
-          .toPromise();
-        if (matcher.error) throw matcher.error;
-        const metadata = await client
-          .mutation(updateMaintenanceRuleMetadataMutation, {
-            input: updateMaintenanceRuleMetadataInput(
-              editingRuleSetId,
-              ruleSetDraft,
-            ),
-          })
-          .toPromise();
-        if (metadata.error) throw metadata.error;
+        const plan = maintenanceRuleUpdatePlan(
+          editingRuleSetId,
+          ruleSetDraftBaseline,
+          ruleSetDraft,
+        );
+        if (plan.matcher) {
+          const matcher = await client
+            .mutation(updateMaintenanceRuleMatcherMutation, {
+              input: plan.matcher,
+            })
+            .toPromise();
+          if (matcher.error) throw matcher.error;
+        }
+        if (plan.metadata) {
+          const metadata = await client
+            .mutation(updateMaintenanceRuleMetadataMutation, {
+              input: plan.metadata,
+            })
+            .toPromise();
+          if (metadata.error) throw metadata.error;
+        }
         setGlobalStatus(t("settings.maintenanceRuleUpdated"), {
           level: "SUCCESS",
         });
@@ -1101,6 +1110,7 @@ export function SettingsMaintenanceRulesContainer({
         editingRuleSetId={editingRuleSetId}
         ruleSetDraft={ruleSetDraft}
         setRuleSetDraft={setRuleSetDraft}
+        editorSessionKey={editorSessionKey}
         submitRuleSet={submitRuleSet}
         mutatingRuleSetId={mutatingRuleSetId}
         resetRuleSetDraft={requestCloseEditor}

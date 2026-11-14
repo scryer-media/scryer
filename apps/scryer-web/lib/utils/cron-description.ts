@@ -1,5 +1,8 @@
 import cronstrue from "cronstrue";
 
+import type { ScriptSchedule } from "../types/scripts.ts";
+import { scheduleDescriptionKey } from "./script-schedule.ts";
+
 /**
  * The cronstrue locale for each interface language that cronstrue translates.
  * Hong Kong Chinese reads the traditional-script locale; languages missing
@@ -148,4 +151,31 @@ export function describeScriptSchedule(
     if (described) return described;
   }
   return serverDescription || null;
+}
+
+/**
+ * A schedule in words, in the interface language, for a schedule the server
+ * sends without a description of its own. A cron schedule that cannot be
+ * described reads as its expression.
+ */
+export function describeSchedule(
+  schedule: ScriptSchedule,
+  translate: (
+    key: string,
+    values?: Record<string, string | number | undefined>,
+  ) => string,
+  uiLanguage: string | null | undefined,
+  options: CronDescriptionOptions = {},
+): string {
+  const described = scheduleDescriptionKey(schedule);
+  if (!described) {
+    const expression = schedule.expression ?? "";
+    return (
+      describeCronExpression(expression, uiLanguage, options) ?? expression
+    );
+  }
+  const days = described.days
+    ?.map((day) => translate(`script.schedule.day.${day.toLowerCase()}`))
+    .join(", ");
+  return translate(described.key, { ...described.values, days });
 }

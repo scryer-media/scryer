@@ -4158,6 +4158,14 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
     graceDays
     declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
     }
+    schedule {
+      kind
+      everySeconds
+      timeLocal
+      days
+      expression
+    }
+    nextRunAt
     createdAt
     updatedAt`;
 

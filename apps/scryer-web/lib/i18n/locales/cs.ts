@@ -4829,6 +4829,10 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Dny ochranné doby",
   "settings.maintenanceRuleGraceDaysHelp":
     "Počet dní od první shody každého subjektu, než se jeho akce stane splatnou.",
+  "settings.maintenanceRuleScheduleHelp":
+    "Každé pravidlo běží podle vlastního plánu. Běh pravidlo vyhodnotí a poté provede akce u kandidátů, jejichž ochranná doba uplynula. Změna plánu stav pravidla nemění. Denní, týdenní a cron časy používají místní čas serveru.",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "Toto pravidlo se samo nikdy nespustí. Spusťte ho z části Běhy a historie.",
   "settings.maintenanceRuleLibraries": "Rozsah knihoven",
   "settings.maintenanceRuleLibrariesHelp":
     "Ponecháním všech knihoven nezaškrtnutých rozšíříte rozsah pravidla na celou kolekci.",
@@ -7194,6 +7198,19 @@ const cs: LocaleDictionary = {
   "script.schedule.cronUnreadable": "Tento výraz nelze popsat.",
   "script.schedule.invalid": "Neplatný plán",
   "script.schedule.nextRuns": "Příští spuštění",
+  "script.schedule.describe.everySeconds": "Každých {{count}} sekund",
+  "script.schedule.describe.everySeconds.few": "Každé {{count}} sekundy",
+  "script.schedule.describe.everyMinute": "Každou minutu",
+  "script.schedule.describe.everyMinutes": "Každých {{count}} minut",
+  "script.schedule.describe.everyMinutes.few": "Každé {{count}} minuty",
+  "script.schedule.describe.everyHour": "Každou hodinu",
+  "script.schedule.describe.everyHours": "Každých {{count}} hodin",
+  "script.schedule.describe.everyHours.few": "Každé {{count}} hodiny",
+  "script.schedule.describe.everyDay": "Každý den",
+  "script.schedule.describe.everyDays": "Každých {{count}} dní",
+  "script.schedule.describe.everyDays.few": "Každé {{count}} dny",
+  "script.schedule.describe.daily": "Každý den v {{time}}",
+  "script.schedule.describe.weekly": "{{days}} v {{time}}",
   "settings.scriptInterpreters.title": "Interprety skriptů",
   "settings.scriptInterpreters.description":
     "Programy, kterými Scryer spouští skripty napsané v jednotlivých jazycích. Ponechte pole prázdné pro použití programu nalezeného v PATH.",

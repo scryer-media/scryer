@@ -36,6 +36,8 @@ import {
   maintenancePreviewInput,
   maintenanceSearchHistoryState,
   maintenanceRuleDraftFromDetail,
+  maintenanceRuleUpdatePlan,
+  newMaintenanceRuleBuilderDraft,
   nonTerminalCandidateCount,
   parseAcknowledgedCandidateCountMismatch,
   runStatusBadgeTone,
@@ -85,6 +87,14 @@ const detail: MaintenanceRuleSetDetail = {
     currentRevisionNumber: 3,
     graceDays: 30,
     declaredActions: profileThenSearch,
+    schedule: {
+      kind: "WEEKLY",
+      everySeconds: null,
+      timeLocal: "04:30",
+      days: ["FRIDAY", "MONDAY"],
+      expression: null,
+    },
+    nextRunAt: "2026-01-05T04:30:00Z",
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-02T00:00:00Z",
   },
@@ -177,7 +187,123 @@ test("matcher and metadata updates split along the API's versioned and unversion
     "id",
     "libraryIds",
     "name",
+    "schedule",
   ]);
+});
+
+test("a new rule runs every eight hours until the operator picks otherwise", () => {
+  const expected = {
+    kind: "INTERVAL",
+    everySeconds: 8 * 60 * 60,
+    timeLocal: null,
+    days: null,
+    expression: null,
+  };
+  assert.deepEqual(initialMaintenanceRuleDraft().schedule, expected);
+  assert.deepEqual(newMaintenanceRuleBuilderDraft().schedule, expected);
+  assert.deepEqual(
+    createMaintenanceRuleSetInput(newMaintenanceRuleBuilderDraft()).schedule,
+    expected,
+  );
+});
+
+test("a saved rule's schedule is read into the draft and sent back on create and metadata update", () => {
+  const draft = maintenanceRuleDraftFromDetail(detail);
+  const weekly = {
+    kind: "WEEKLY",
+    everySeconds: null,
+    timeLocal: "04:30",
+    days: ["MONDAY", "FRIDAY"],
+    expression: null,
+  };
+
+  assert.deepEqual(draft.schedule, weekly);
+  assert.deepEqual(copyMaintenanceRuleDraft(detail).schedule, weekly);
+  assert.deepEqual(createMaintenanceRuleSetInput(draft).schedule, weekly);
+  assert.deepEqual(
+    updateMaintenanceRuleMetadataInput("rule-1", draft).schedule,
+    weekly,
+  );
+  assert.equal(
+    Object.hasOwn(
+      updateMaintenanceRuleMatcherInput("rule-1", draft),
+      "schedule",
+    ),
+    false,
+  );
+});
+
+test("a schedule input carries only the fields its kind reads", () => {
+  const draft = {
+    ...maintenanceRuleDraftFromDetail(detail),
+    schedule: {
+      kind: "CRON" as const,
+      everySeconds: 3600,
+      timeLocal: "04:30",
+      days: ["MONDAY" as const],
+      expression: "  0 3 * * *  ",
+    },
+  };
+  const cron = {
+    kind: "CRON",
+    everySeconds: null,
+    timeLocal: null,
+    days: null,
+    expression: "0 3 * * *",
+  };
+
+  assert.deepEqual(createMaintenanceRuleSetInput(draft).schedule, cron);
+  assert.deepEqual(
+    updateMaintenanceRuleMetadataInput("rule-1", draft).schedule,
+    cron,
+  );
+});
+
+test("a schedule change alone is saved through the metadata update, never the matcher", () => {
+  const baseline = maintenanceRuleDraftFromDetail(detail);
+  const plan = maintenanceRuleUpdatePlan("rule-1", baseline, {
+    ...baseline,
+    schedule: {
+      kind: "DAILY",
+      everySeconds: null,
+      timeLocal: "02:00",
+      days: null,
+      expression: null,
+    },
+  });
+
+  assert.equal(plan.matcher, null);
+  assert.deepEqual(plan.metadata?.schedule, {
+    kind: "DAILY",
+    everySeconds: null,
+    timeLocal: "02:00",
+    days: null,
+    expression: null,
+  });
+});
+
+test("an update sends only the halves the editor changed", () => {
+  const baseline = maintenanceRuleDraftFromDetail(detail);
+
+  assert.deepEqual(maintenanceRuleUpdatePlan("rule-1", baseline, baseline), {
+    matcher: null,
+    metadata: null,
+  });
+
+  const grace = maintenanceRuleUpdatePlan("rule-1", baseline, {
+    ...baseline,
+    graceDays: 21,
+  });
+  assert.equal(grace.matcher?.graceDays, 21);
+  assert.equal(grace.metadata, null);
+
+  const both = maintenanceRuleUpdatePlan("rule-1", baseline, {
+    ...baseline,
+    regoSource: "search if input.facts.has_file\n",
+    name: "Renamed",
+  });
+  assert.equal(both.matcher?.regoSource, "search if input.facts.has_file\n");
+  assert.equal(both.metadata?.name, "Renamed");
 });
 
 test("a selected root follows create, update, and inline preview inputs", () => {

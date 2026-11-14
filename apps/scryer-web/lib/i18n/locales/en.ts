@@ -9539,6 +9539,10 @@ const en: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Grace days",
   "settings.maintenanceRuleGraceDaysHelp":
     "Days after each subject first matches before its action becomes due.",
+  "settings.maintenanceRuleScheduleHelp":
+    "Each rule runs on its own schedule. A run evaluates the rule, then applies its candidates whose grace period has ended. Changing the schedule keeps the rule's state. Daily, weekly and cron times use the server's local time.",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "This rule never runs on its own. Start it from Runs and history.",
   "settings.maintenanceRuleLibraries": "Library scope",
   "settings.maintenanceRuleLibrariesHelp":
     "Leave every library unchecked to scope the rule to the whole collection.",
@@ -11952,6 +11956,15 @@ const en: LocaleDictionary = {
   "script.schedule.cronUnreadable": "This expression can't be described.",
   "script.schedule.invalid": "Invalid schedule",
   "script.schedule.nextRuns": "Next runs",
+  "script.schedule.describe.everySeconds": "Every {{count}} seconds",
+  "script.schedule.describe.everyMinute": "Every minute",
+  "script.schedule.describe.everyMinutes": "Every {{count}} minutes",
+  "script.schedule.describe.everyHour": "Every hour",
+  "script.schedule.describe.everyHours": "Every {{count}} hours",
+  "script.schedule.describe.everyDay": "Every day",
+  "script.schedule.describe.everyDays": "Every {{count}} days",
+  "script.schedule.describe.daily": "Every day at {{time}}",
+  "script.schedule.describe.weekly": "{{days}} at {{time}}",
   "settings.scriptInterpreters.title": "Script interpreters",
   "settings.scriptInterpreters.description":
     "Programs Scryer uses to run scripts written in each language. Leave a field empty to use the program found on the PATH.",

@@ -94,6 +94,11 @@ import {
   type MaintenanceBuilderOptions,
 } from "@/components/views/settings/maintenance-rule-builder";
 import { generateMaintenanceRuleSource } from "@/lib/utils/maintenance-rule-builder";
+import {
+  MaintenanceRuleScheduleField,
+  MaintenanceRuleScheduleSummary,
+} from "@/components/views/settings/maintenance-rule-schedule";
+import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
 
 export type MaintenanceRuleEditorMode = "simple" | "advanced";
 export type MaintenanceLibraryOption = { id: string; name: string };
@@ -110,6 +115,9 @@ type SettingsMaintenanceRulesSectionProps = {
   setRuleSetDraft: React.Dispatch<
     React.SetStateAction<MaintenanceRuleSetDraft>
   >;
+  /// Changes with every editor opening; controls that keep their own typing
+  /// state are keyed on it.
+  editorSessionKey: number;
   /// Which editor the rule form shows. Simple is only offered while the draft
   /// is still the builder's.
   editorMode: MaintenanceRuleEditorMode;
@@ -735,9 +743,7 @@ function MaintenancePreviewPanel({
                     <TableHead className="w-[140px]">
                       {t("settings.maintenancePreviewColOutcome")}
                     </TableHead>
-                    <TableHead>
-                      {t("settings.maintenanceRuleAction")}
-                    </TableHead>
+                    <TableHead>{t("settings.maintenanceRuleAction")}</TableHead>
                     <TableHead>
                       {t("settings.maintenancePreviewColReasons")}
                     </TableHead>
@@ -924,6 +930,7 @@ export function SettingsMaintenanceRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  editorSessionKey,
   editorMode,
   setEditorMode,
   editRegoSource,
@@ -949,9 +956,18 @@ export function SettingsMaintenanceRulesSection({
   ...previewProps
 }: SettingsMaintenanceRulesSectionProps) {
   const t = useTranslate();
-  const editingSystemOwned = ruleSetRecords.some(
-    (record) => record.id === editingRuleSetId && record.systemOwned,
-  );
+  const editingRecord = editingRuleSetId
+    ? ruleSetRecords.find((record) => record.id === editingRuleSetId)
+    : undefined;
+  const editingSystemOwned = editingRecord?.systemOwned === true;
+  // The saved next run describes the saved schedule, so it shows only while
+  // the editor still holds that schedule.
+  const editingNextRunAt =
+    editingRecord &&
+    JSON.stringify(toScriptScheduleInput(editingRecord.schedule)) ===
+      JSON.stringify(toScriptScheduleInput(ruleSetDraft.schedule))
+      ? editingRecord.nextRunAt
+      : null;
   const builderAvailable =
     ruleSetDraft.builderModel !== null && !editingSystemOwned;
   const showBuilder = builderAvailable && editorMode === "simple";
@@ -1026,6 +1042,12 @@ export function SettingsMaintenanceRulesSection({
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleGraceDays")}
                       </TableHead>
+                      <TableHead>
+                        <HelpLabel
+                          label={t("jobs.column.schedule")}
+                          help={t("settings.maintenanceRuleScheduleHelp")}
+                        />
+                      </TableHead>
                       <TableHead className="w-[240px]">
                         <HelpLabel
                           label={t("settings.maintenanceRuleState")}
@@ -1092,6 +1114,15 @@ export function SettingsMaintenanceRulesSection({
                           </TableCell>
                           <TableCell className="text-center">
                             {record.graceDays}
+                          </TableCell>
+                          <TableCell className="min-w-[10rem] text-muted-foreground">
+                            <MaintenanceRuleScheduleSummary
+                              record={record}
+                              idPrefix={selectorId(
+                                "settings-maintenance-rule-schedule",
+                                record.id,
+                              )}
+                            />
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
@@ -1276,7 +1307,9 @@ export function SettingsMaintenanceRulesSection({
                         <div className="flex items-center gap-1">
                           <ToggleGroupPrimitive.Root
                             type="single"
-                            aria-label={t("settings.maintenanceBuilderModeLabel")}
+                            aria-label={t(
+                              "settings.maintenanceBuilderModeLabel",
+                            )}
                             className="inline-flex rounded-md border border-border p-1"
                             value={showBuilder ? "simple" : "advanced"}
                             onValueChange={(value) => {
@@ -1298,10 +1331,7 @@ export function SettingsMaintenanceRulesSection({
                                 {t("settings.maintenanceBuilderModeSimple")}
                               </Button>
                             </ToggleGroupPrimitive.Item>
-                            <ToggleGroupPrimitive.Item
-                              value="advanced"
-                              asChild
-                            >
+                            <ToggleGroupPrimitive.Item value="advanced" asChild>
                               <Button
                                 type="button"
                                 size="sm"
@@ -1313,7 +1343,9 @@ export function SettingsMaintenanceRulesSection({
                             </ToggleGroupPrimitive.Item>
                           </ToggleGroupPrimitive.Root>
                           <InfoHelp
-                            ariaLabel={t("settings.maintenanceBuilderModeLabel")}
+                            ariaLabel={t(
+                              "settings.maintenanceBuilderModeLabel",
+                            )}
                             text={
                               builderAvailable
                                 ? t("settings.maintenanceBuilderModeHelp")
@@ -1397,6 +1429,16 @@ export function SettingsMaintenanceRulesSection({
                         placeholder="0"
                       />
                     </label>
+
+                    <MaintenanceRuleScheduleField
+                      key={editorSessionKey}
+                      idPrefix="settings-maintenance-rule-form-schedule"
+                      value={ruleSetDraft.schedule}
+                      onChange={(schedule) =>
+                        setRuleSetDraft((prev) => ({ ...prev, schedule }))
+                      }
+                      nextRunAt={editingNextRunAt}
+                    />
 
                     <div>
                       <Label className="mb-2 block">

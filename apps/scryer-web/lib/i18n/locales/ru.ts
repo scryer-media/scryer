@@ -4625,6 +4625,10 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Дни отсрочки",
   "settings.maintenanceRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
+  "settings.maintenanceRuleScheduleHelp":
+    "Каждое правило выполняется по собственному расписанию. При запуске правило проверяется, а затем выполняются действия над кандидатами, у которых закончился период отсрочки. Изменение расписания не меняет состояние правила. Для ежедневного, еженедельного и cron-расписания используется местное время сервера.",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "Это правило никогда не запускается само. Запустите его в разделе «Запуски и история».",
   "settings.maintenanceRuleLibraries": "Область библиотек",
   "settings.maintenanceRuleLibrariesHelp":
     "Не отмечайте ни одной библиотеки, чтобы правило действовало на всю коллекцию.",
@@ -12545,6 +12549,27 @@ const ru: LocaleDictionary = {
   "script.schedule.cronUnreadable": "Не удалось описать это выражение.",
   "script.schedule.invalid": "Некорректное расписание",
   "script.schedule.nextRuns": "Ближайшие запуски",
+  "script.schedule.describe.everySeconds": "Каждые {{count}} секунды",
+  "script.schedule.describe.everySeconds.one": "Каждую {{count}} секунду",
+  "script.schedule.describe.everySeconds.few": "Каждые {{count}} секунды",
+  "script.schedule.describe.everySeconds.many": "Каждые {{count}} секунд",
+  "script.schedule.describe.everyMinute": "Каждую минуту",
+  "script.schedule.describe.everyMinutes": "Каждые {{count}} минуты",
+  "script.schedule.describe.everyMinutes.one": "Каждую {{count}} минуту",
+  "script.schedule.describe.everyMinutes.few": "Каждые {{count}} минуты",
+  "script.schedule.describe.everyMinutes.many": "Каждые {{count}} минут",
+  "script.schedule.describe.everyHour": "Каждый час",
+  "script.schedule.describe.everyHours": "Каждые {{count}} часа",
+  "script.schedule.describe.everyHours.one": "Каждый {{count}} час",
+  "script.schedule.describe.everyHours.few": "Каждые {{count}} часа",
+  "script.schedule.describe.everyHours.many": "Каждые {{count}} часов",
+  "script.schedule.describe.everyDay": "Каждый день",
+  "script.schedule.describe.everyDays": "Каждые {{count}} дня",
+  "script.schedule.describe.everyDays.one": "Каждый {{count}} день",
+  "script.schedule.describe.everyDays.few": "Каждые {{count}} дня",
+  "script.schedule.describe.everyDays.many": "Каждые {{count}} дней",
+  "script.schedule.describe.daily": "Каждый день в {{time}}",
+  "script.schedule.describe.weekly": "{{days}} в {{time}}",
   "settings.scriptInterpreters.title": "Интерпретаторы скриптов",
   "settings.scriptInterpreters.description":
     "Программы, которые Scryer использует для запуска скриптов на каждом языке. Оставьте поле пустым, чтобы использовать программу, найденную в PATH.",

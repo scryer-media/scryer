@@ -7,6 +7,12 @@ import {
   parseMaintenanceBuilderModel,
   type MaintenanceBuilderModel,
 } from "./maintenance-rule-builder.ts";
+import {
+  normalizeScriptSchedule,
+  scheduleForKind,
+  toScriptScheduleInput,
+} from "./script-schedule.ts";
+import type { ScriptSchedule } from "../types/scripts.ts";
 import type {
   MaintenanceActionHead,
   MaintenanceActionKind,
@@ -193,6 +199,17 @@ export function templateActionHeads(source: string): MaintenanceActionHead[] {
   );
 }
 
+/// How often a new rule runs until the operator picks otherwise. The server
+/// applies the same default to a rule created without a schedule.
+export const MAINTENANCE_DEFAULT_SCHEDULE_SECONDS = 8 * 60 * 60;
+
+export function defaultMaintenanceRuleSchedule(): ScriptSchedule {
+  return {
+    ...scheduleForKind("INTERVAL", null),
+    everySeconds: MAINTENANCE_DEFAULT_SCHEDULE_SECONDS,
+  };
+}
+
 /// A draft written as Rego from the start, as templates and the advanced
 /// editor are.
 export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
@@ -204,6 +221,7 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     graceDays: 0,
     storageRootId: "",
     libraryIds: [],
+    schedule: defaultMaintenanceRuleSchedule(),
     builderModel: null,
   };
 }
@@ -311,6 +329,9 @@ export function maintenanceRuleDraftFromDetail(
     graceDays: detail.revision.graceDays,
     storageRootId: detail.revision.storageRootId ?? "",
     libraryIds: [...detail.ruleSet.libraryIds],
+    schedule:
+      normalizeScriptSchedule(detail.ruleSet.schedule) ??
+      defaultMaintenanceRuleSchedule(),
     builderModel: attached ? model : null,
   };
 }
@@ -334,6 +355,7 @@ export function createMaintenanceRuleSetInput(draft: MaintenanceRuleSetDraft) {
     graceDays: draft.graceDays,
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
+    schedule: toScriptScheduleInput(draft.schedule),
     builderModel: maintenanceBuilderModelToSave(draft),
   };
 }
@@ -363,6 +385,30 @@ export function updateMaintenanceRuleMetadataInput(
     name: draft.name.trim(),
     description: draft.description.trim() || undefined,
     libraryIds: [...draft.libraryIds],
+    schedule: toScriptScheduleInput(draft.schedule),
+  };
+}
+
+/// What saving an edited rule sends. Each half goes only when the editor
+/// changed something it carries, so a schedule, name or library change alone
+/// never writes a new matcher revision, and so never drops an Enabled rule
+/// to Dry run.
+export function maintenanceRuleUpdatePlan(
+  id: string,
+  baseline: MaintenanceRuleSetDraft,
+  draft: MaintenanceRuleSetDraft,
+) {
+  const matcher = updateMaintenanceRuleMatcherInput(id, draft);
+  const metadata = updateMaintenanceRuleMetadataInput(id, draft);
+  const same = (left: unknown, right: unknown) =>
+    JSON.stringify(left) === JSON.stringify(right);
+  return {
+    matcher: same(matcher, updateMaintenanceRuleMatcherInput(id, baseline))
+      ? null
+      : matcher,
+    metadata: same(metadata, updateMaintenanceRuleMetadataInput(id, baseline))
+      ? null
+      : metadata,
   };
 }
 
