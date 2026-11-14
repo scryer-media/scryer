@@ -148,9 +148,20 @@ pub enum InteractiveIndexerSkipReason {
     BackedOff,
     /// The indexer takes no text query.
     NoTextSearch,
+    /// A local monthly limit on the indexer refused the search, or its usage
+    /// could not be checked. `code` is the stable reason of the refusal.
+    MonthlyLimit { code: &'static str },
 }
 
 impl InteractiveIndexerSkipReason {
+    /// The stable code beside the reason, when the reason carries one.
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            Self::MonthlyLimit { code } => Some(code),
+            _ => None,
+        }
+    }
+
     /// Plain-text form of the reason, for logs and API clients that do not
     /// read the structured reason.
     fn describe(self, until: Option<DateTime<Utc>>) -> String {
@@ -162,6 +173,7 @@ impl InteractiveIndexerSkipReason {
                 None => "in backoff after recent failures".to_string(),
             },
             Self::NoTextSearch => "does not support text search".to_string(),
+            Self::MonthlyLimit { .. } => "not asked because of a local monthly limit".to_string(),
         }
     }
 
@@ -170,6 +182,9 @@ impl InteractiveIndexerSkipReason {
         match outcome {
             crate::IndexerSearchOutcome::Unsupported => Some((Self::NoTextSearch, None)),
             crate::IndexerSearchOutcome::BackedOff { until } => Some((Self::BackedOff, until)),
+            crate::IndexerSearchOutcome::LocalLimit { reason } => {
+                Some((Self::MonthlyLimit { code: reason }, None))
+            }
             _ => None,
         }
     }
@@ -664,7 +679,7 @@ impl AppUseCase {
                 result_count: 0,
                 elapsed_ms: None,
                 failure_reason: skip.map(|(reason, _)| reason.describe(None)),
-                failure_reason_code: None,
+                failure_reason_code: skip.and_then(|(reason, _)| reason.code()),
                 caps: None,
                 rate_limited: false,
                 skip_reason: skip.map(|(reason, _)| reason),
@@ -970,7 +985,9 @@ impl AppUseCase {
             } else {
                 source.outcome.and_then(incomplete_indexer_reason)
             };
-            view.failure_reason_code = incomplete.as_ref().and_then(|reason| reason.code);
+            view.failure_reason_code = skip
+                .and_then(|(reason, _)| reason.code())
+                .or_else(|| incomplete.as_ref().and_then(|reason| reason.code));
             view.failure_reason = skip
                 .map(|(reason, until)| reason.describe(until))
                 .or_else(|| incomplete.map(|reason| reason.message));
@@ -1386,7 +1403,7 @@ impl AppUseCase {
             indexer.result_count = 0;
             indexer.elapsed_ms = Some(elapsed_ms);
             indexer.failure_reason = Some(reason.describe(until));
-            indexer.failure_reason_code = None;
+            indexer.failure_reason_code = reason.code();
             indexer.rate_limited = false;
             indexer.skip_reason = Some(reason);
             indexer.skipped_until = until;

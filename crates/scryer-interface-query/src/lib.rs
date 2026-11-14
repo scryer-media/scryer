@@ -751,6 +751,9 @@ pub fn from_interactive_release_search_snapshot(
                     }
                     Reason::BackedOff => InteractiveReleaseSearchSkipReasonValue::BackedOff,
                     Reason::NoTextSearch => InteractiveReleaseSearchSkipReasonValue::NoTextSearch,
+                    Reason::MonthlyLimit { .. } => {
+                        InteractiveReleaseSearchSkipReasonValue::MonthlyLimit
+                    }
                 }
             }),
             skipped_until: indexer.skipped_until,

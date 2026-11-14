@@ -2977,6 +2977,12 @@ pub enum IndexerSearchOutcome {
     ClientUnavailable {
         reason: &'static str,
     },
+    /// A local monthly limit on the indexer refused the request, or its usage
+    /// could not be checked. Nothing was sent, so the indexer did not fail and
+    /// its health is untouched. `reason` is the stable code of the refusal.
+    LocalLimit {
+        reason: &'static str,
+    },
     Errored,
 }
 

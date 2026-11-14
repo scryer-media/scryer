@@ -1476,12 +1476,21 @@ impl AppError {
     /// neither a verdict on a release nor a failure of the indexer or of a
     /// download client. Decided by reason code alone.
     pub fn is_indexer_monthly_limit_refusal(&self) -> bool {
+        self.indexer_monthly_limit_refusal_reason().is_some()
+    }
+
+    /// The stable code of a local monthly indexer limit refusal, when this
+    /// error is one. See [`Self::is_indexer_monthly_limit_refusal`].
+    pub fn indexer_monthly_limit_refusal_reason(&self) -> Option<&'static str> {
         use error_reasons::indexer_monthly_quota as quota;
-        self.reason().is_some_and(|reason| {
-            reason == quota::REQUEST_LIMIT_REACHED
-                || reason == quota::GRAB_LIMIT_REACHED
-                || reason == quota::ACCOUNTING_UNAVAILABLE
-        })
+        let reason = self.reason()?;
+        [
+            quota::REQUEST_LIMIT_REACHED,
+            quota::GRAB_LIMIT_REACHED,
+            quota::ACCOUNTING_UNAVAILABLE,
+        ]
+        .into_iter()
+        .find(|code| *code == reason)
     }
 
     pub fn is_download_submit_ambiguous(&self) -> bool {

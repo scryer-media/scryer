@@ -1776,6 +1776,9 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     BackedOff,
     /// The indexer takes no text query.
     NoTextSearch,
+    /// A local monthly limit on the indexer refused the search, or its usage
+    /// could not be checked. `failureReasonCode` carries the reason code.
+    MonthlyLimit,
 }
 
 /// How Scryer obtained the capabilities it used to search an indexer.
@@ -1819,7 +1822,9 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub failure_reason: Option<String>,
     /// Stable code for a failure the operator must act on, such as
     /// `ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
-    /// not loaded; null for other failures and when the indexer did not fail.
+    /// not loaded, or the monthly limit reason when `skipReason` is
+    /// `MONTHLY_LIMIT`; null for other failures and when the indexer did not
+    /// fail.
     pub failure_reason_code: Option<String>,
     /// How the capabilities used for this indexer were obtained, or null
     /// before they were resolved.

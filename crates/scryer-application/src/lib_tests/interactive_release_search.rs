@@ -434,6 +434,13 @@ async fn a_raw_query_reports_indexers_that_were_never_asked_as_skipped_with_a_re
                 until: Some(backoff_until),
             },
         )
+        .await
+        .with_outcome(
+            "idx-monthly-limit",
+            IndexerSearchOutcome::LocalLimit {
+                reason: crate::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+            },
+        )
         .await;
     let (app, user) = bootstrap_search(
         Arc::new(StoredSettingsRepo::default()),
@@ -442,6 +449,7 @@ async fn a_raw_query_reports_indexers_that_were_never_asked_as_skipped_with_a_re
             synthetic_direct_nab_indexer_config("idx-answers", "newznab"),
             synthetic_direct_nab_indexer_config("idx-no-text", "newznab"),
             synthetic_direct_nab_indexer_config("idx-backed-off", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-monthly-limit", "newznab"),
         ],
     );
 
@@ -469,6 +477,13 @@ async fn a_raw_query_reports_indexers_that_were_never_asked_as_skipped_with_a_re
             InteractiveIndexerSkipReason::BackedOff,
             Some(backoff_until),
         ),
+        (
+            "idx-monthly-limit",
+            InteractiveIndexerSkipReason::MonthlyLimit {
+                code: crate::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+            },
+            None,
+        ),
     ] {
         let view = indexer_view(&done, indexer_id);
         assert_eq!(
@@ -487,6 +502,11 @@ async fn a_raw_query_reports_indexers_that_were_never_asked_as_skipped_with_a_re
         );
         assert!(!view.rate_limited, "{indexer_id}");
     }
+    assert_eq!(
+        indexer_view(&done, "idx-monthly-limit").failure_reason_code,
+        Some(crate::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED),
+        "the monthly limit travels as a code beside the sentence"
+    );
 }
 
 #[tokio::test]

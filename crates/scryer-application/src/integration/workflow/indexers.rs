@@ -691,7 +691,12 @@ impl AppUseCase {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    self.record_caps_refresh_failure(&config, &error).await;
+                    // A local monthly limit refused the request before it was
+                    // sent. The indexer did not fail, so its health is left
+                    // alone and nothing is written.
+                    if !error.is_indexer_monthly_limit_refusal() {
+                        self.record_caps_refresh_failure(&config, &error).await;
+                    }
                     tracing::warn!(
                         config_id = %config.id,
                         provider_type = %config.provider_type,

@@ -10060,7 +10060,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	Stable code for a failure the operator must act on, such as
 	`ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
-	not loaded; null for other failures and when the indexer did not fail.
+	not loaded, or the monthly limit reason when `skipReason` is
+	`MONTHLY_LIMIT`; null for other failures and when the indexer did not
+	fail.
 	"""
 	failureReasonCode: String
 	"""
@@ -10194,6 +10196,11 @@ enum InteractiveReleaseSearchSkipReasonValue {
 	The indexer takes no text query.
 	"""
 	NO_TEXT_SEARCH
+	"""
+	A local monthly limit on the indexer refused the search, or its usage
+	could not be checked. `failureReasonCode` carries the reason code.
+	"""
+	MONTHLY_LIMIT
 }
 
 """
