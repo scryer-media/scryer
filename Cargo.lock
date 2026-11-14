@@ -3623,9 +3623,9 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lz4_flex"
-version = "0.14.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+checksum = "0f5af6ecc17202a60aebe8502b4e8160bd745820e5a8417c8e5d048af838aec5"
 
 [[package]]
 name = "mach2"
@@ -4707,9 +4707,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.253"
+version = "2.1.254"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82576eafaa94759a92a0cf047f34d227665811d5cdf70f4b11e25cd813f3de54"
+checksum = "cb958e602bc5c9e07a3bdb78ce240402a490cd08f01e51deacfe637ed903d743"
 dependencies = [
  "psl-types",
 ]
@@ -5529,7 +5529,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "application-updater",
  "async-graphql",
@@ -5605,7 +5605,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-application"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "application-updater",
  "argon2",
@@ -5670,7 +5670,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-domain"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "blake3",
  "chrono",
@@ -5689,7 +5689,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-acquisition"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -5732,7 +5732,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-configuration"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5750,7 +5750,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-crypto"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -5760,7 +5760,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-datastore"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5796,7 +5796,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-identity"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5821,7 +5821,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5856,7 +5856,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-library-search"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "scryer-application",
@@ -5873,7 +5873,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-metadata"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5900,7 +5900,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-notifications"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5917,7 +5917,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-runtime"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5953,7 +5953,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-sql"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "blake3",
  "chrono",
@@ -5970,7 +5970,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-infrastructure-workflow"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5992,7 +5992,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6019,7 +6019,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-acquisition"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6031,7 +6031,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-core"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -6042,7 +6042,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-import"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6060,7 +6060,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6076,7 +6076,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-media-types"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6088,7 +6088,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-metadata"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "scryer-application",
@@ -6099,7 +6099,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-query"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "base64 0.23.1",
@@ -6117,7 +6117,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-security"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6129,7 +6129,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-settings"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6142,7 +6142,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-subscription"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6156,7 +6156,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-interface-system"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-graphql",
  "chrono",
@@ -6169,14 +6169,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-launcher"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scryer-logging"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "chrono",
  "serde",
@@ -6187,14 +6187,14 @@ dependencies = [
 
 [[package]]
 name = "scryer-media-types"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "scryer-mediainfo"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "bytes",
  "isolang",
@@ -6212,7 +6212,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mock-apis"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "axum",
  "serde",
@@ -6224,7 +6224,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-outbound-http"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "chrono",
  "governor",
@@ -6252,7 +6252,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugins"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -6293,7 +6293,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-release-parser"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "aho-corasick",
  "chrono",
@@ -6307,7 +6307,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-rules"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "blake3",
  "chrono",
@@ -6321,11 +6321,11 @@ dependencies = [
 
 [[package]]
 name = "scryer-runtime-info"
-version = "0.22.3"
+version = "0.22.4"
 
 [[package]]
 name = "scryer-webauthn"
-version = "0.22.3"
+version = "0.22.4"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
