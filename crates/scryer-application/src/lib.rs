@@ -241,7 +241,7 @@ pub use ports::{
     DiscoverySectionItemsRecord, DiscoverySectionRecord, DiscoverySectionResult,
     DiscoverySectionSort, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
     DiscoverySyncRunRecord, DiscoverySyncStateRecord, DiscoverySyncStatus, EpisodeImageUrlUpdate,
-    LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
+    EpisodeWrite, LibraryGraphClusterRecord, LibraryGraphEdgeRecord, LibraryGraphNodeRecord,
     LibraryGraphRunRecord, LibraryGraphSnapshotRecord, MediaRequestQualityProfileReferenceCounts,
     MediaRequestResolution, MediaRequestResolutionResult, MediaRequestSubmissionResult,
     MediaRequestUpdateResult, SeriesMovieExternalIdLookupMatch, SubtitleSyncClient,

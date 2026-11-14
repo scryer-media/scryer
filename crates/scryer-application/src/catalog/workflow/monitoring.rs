@@ -302,6 +302,16 @@ impl AppUseCase {
                 },
             )
             .await?;
+        self.after_episode_monitoring_persisted(&episode, monitored)
+            .await;
+        Ok(episode)
+    }
+
+    /// The follow-ups of a stored episode monitoring change. Split out so a
+    /// caller that stores the change as part of a batch still runs them once
+    /// per episode.
+    async fn after_episode_monitoring_persisted(&self, episode: &Episode, monitored: bool) {
+        let episode_id = episode.id.as_str();
         self.runtime
             .acquisition
             .target_cache
@@ -321,8 +331,6 @@ impl AppUseCase {
                 "failed to delete wanted items after disabling episode monitoring"
             );
         }
-
-        Ok(episode)
     }
 }
 impl AppUseCase {

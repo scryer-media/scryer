@@ -341,7 +341,8 @@ impl LocationOperationRepository for LocationOperationStore {
     ) -> AppResult<Option<scryer_domain::DomainEvent>> {
         let operation_id = operation_id.to_owned();
         let plan = std::sync::Arc::new(plan.clone());
-        let event = event.clone();
+        // Serialized and compressed here so the transaction only binds it.
+        let event = std::sync::Arc::new(crate::workflow::stores::prepare_domain_event(event)?);
         let scope = crate::media::titles::store::TitleFolderWriteScope::open();
         let proof = scope.proof();
         let mut evidence_reads_left = RECOVERY_PLAN_EVIDENCE_READS;
@@ -360,7 +361,7 @@ impl LocationOperationRepository for LocationOperationStore {
             let step = SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", |tx| {
             let operation_id = operation_id.clone();
             let plan = std::sync::Arc::clone(&plan);
-            let event = event.clone();
+            let event = std::sync::Arc::clone(&event);
             let proof = proof.clone();
             let evidence = std::sync::Arc::clone(&evidence);
             Box::pin(async move {
@@ -439,7 +440,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "DELETE FROM library_scan_unmatched_items WHERE library_id = {} AND title_id = {} AND item_path = {} AND status = 'pending' AND reason_code = 'title_already_owns_another_folder'",
                     &[SqlArg::Text(plan.title.library_id.clone()), SqlArg::Text(plan.title.id.clone()), SqlArg::OptText(plan.destination.clone())]).await?;
-                let stored = crate::media::images::title_image_store::append_domain_event_tx(tx, &event).await?;
+                let stored = crate::workflow::stores::append_prepared_domain_event_tx(tx, &event).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE location_operations SET recovery_committed_at = {} WHERE id = {}",
                     &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id)]).await?;

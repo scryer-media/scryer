@@ -117,14 +117,24 @@ pub async fn append_domain_event_tx(
     event: NewDomainEvent,
 ) -> AppResult<DomainEvent> {
     let prepared = prepare_domain_event(&event)?;
-    insert_prepared_domain_event_tx(tx, &prepared, false)
+    append_prepared_domain_event_tx(tx, &prepared).await
+}
+
+/// Appends an event prepared with [`prepare_domain_event`]. A caller that
+/// holds the event before it opens its transaction prepares it there, so the
+/// transaction only binds and inserts.
+pub async fn append_prepared_domain_event_tx(
+    tx: &mut SqlTx<'_>,
+    event: &PreparedDomainEvent,
+) -> AppResult<DomainEvent> {
+    insert_prepared_domain_event_tx(tx, event, false)
         .await?
         .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))
 }
 
 /// One domain event ready to store: the values its insert binds, and the
 /// payload as a read of the stored row returns it.
-struct PreparedDomainEvent {
+pub struct PreparedDomainEvent {
     event_id: String,
     insert_args: Vec<SqlArg>,
     /// Deserialized from the JSON the stored bytes decode to, not copied from
@@ -133,7 +143,7 @@ struct PreparedDomainEvent {
     stored_payload: scryer_domain::DomainEventPayload,
 }
 
-fn prepare_domain_event(event: &NewDomainEvent) -> AppResult<PreparedDomainEvent> {
+pub fn prepare_domain_event(event: &NewDomainEvent) -> AppResult<PreparedDomainEvent> {
     let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
     let event_type = event.payload.event_type().as_str();
     let (encoded_payload, stored_json) = encode_domain_event_payload_with_stored_json(&payload)

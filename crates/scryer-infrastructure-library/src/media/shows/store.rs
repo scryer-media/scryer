@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, CatalogOwnedProbe, CatalogOwnedSeriesMovieRecord, CollectionUpdate,
-    EpisodeImageUrlUpdate, EpisodeUpdate, PrimaryCollectionSummary, ScopedExternalId,
+    EpisodeImageUrlUpdate, EpisodeUpdate, EpisodeWrite, PrimaryCollectionSummary, ScopedExternalId,
     SeriesMovieExternalIdLookupMatch, ShowRepository, TitleExternalIdLookup,
 };
 use scryer_domain::{
@@ -214,6 +214,13 @@ impl ShowRepository for ShowStore {
         title_id: &str,
         retained_link_ids: &[String],
     ) -> AppResult<()> {
+        // Most refreshes retain every link the title has. The update would
+        // then match no row, so the writer gate is not taken for it.
+        if !has_stale_series_movie_links_query(self.read_target(), title_id, retained_link_ids)
+            .await?
+        {
+            return Ok(());
+        }
         let title_id = title_id.to_string();
         let retained_link_ids = retained_link_ids.to_vec();
         SqlRuntime::run_in_transaction(
@@ -524,27 +531,56 @@ impl ShowRepository for ShowStore {
         SqlRuntime::run_in_transaction(&self.datastore, "update_episode", move |tx| {
             let episode_id = episode_id.clone();
             let update = update.clone();
-            Box::pin(async move {
-                if !update.has_changes() {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::MEDIA_EPISODE_UPDATE_EMPTY,
-                        "at least one episode field must be provided",
-                    ));
-                }
-
-                let mut episode = load_episode_tx(tx, &episode_id).await?.ok_or_else(|| {
-                    AppError::not_found_reason(
-                        crate::error_reasons::MEDIA_EPISODE_NOT_FOUND,
-                        format!("episode {episode_id}"),
-                    )
-                })?;
-
-                apply_episode_update(&mut episode, update);
-                persist_episode_tx(tx, &episode).await?;
-                Ok(episode)
-            })
+            Box::pin(async move { update_episode_tx(tx, &episode_id, update).await })
         })
         .await
+    }
+
+    async fn apply_episode_writes(&self, writes: Vec<EpisodeWrite>) -> Vec<AppResult<Episode>> {
+        let mut results = Vec::with_capacity(writes.len());
+        for chunk in writes.chunks(EPISODE_WRITE_CHUNK) {
+            let shared: Arc<[EpisodeWrite]> = Arc::from(chunk);
+            let batched = SqlRuntime::run_in_transaction(
+                &self.datastore,
+                "apply_episode_writes",
+                move |tx| {
+                    let chunk = Arc::clone(&shared);
+                    Box::pin(async move {
+                        let mut applied = Vec::with_capacity(chunk.len());
+                        for write in chunk.iter() {
+                            applied.push(match write {
+                                EpisodeWrite::Create(episode) => {
+                                    insert_episode_tx(tx, episode).await?;
+                                    episode.clone()
+                                }
+                                EpisodeWrite::Update { episode_id, update } => {
+                                    update_episode_tx(tx, episode_id, update.clone()).await?
+                                }
+                            });
+                        }
+                        Ok(applied)
+                    })
+                },
+            )
+            .await;
+            match batched {
+                Ok(applied) => results.extend(applied.into_iter().map(Ok)),
+                // One refused write fails the transaction for the whole
+                // chunk. Replaying the chunk one write at a time lands every
+                // other write and reports each failure for its own row.
+                Err(_) => {
+                    for write in chunk {
+                        results.push(match write.clone() {
+                            EpisodeWrite::Create(episode) => self.create_episode(episode).await,
+                            EpisodeWrite::Update { episode_id, update } => {
+                                self.update_episode(&episode_id, update).await
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        results
     }
 
     async fn set_episodes_monitored(
@@ -1173,6 +1209,31 @@ async fn load_series_movie_link_tx(
         attach_movie_entity_ratings(SqlExec::Tx(tx), std::slice::from_mut(link)).await?;
     }
     Ok(link)
+}
+
+/// Whether [`delete_stale_series_movie_links_tx`] would match a row: the
+/// title has an anibridge link that is not retained. A title's links are few
+/// and read through the title index; the retained ids are compared here
+/// rather than bound, so the read has one bind however many are retained.
+async fn has_stale_series_movie_links_query(
+    target: SqlTarget<'_>,
+    title_id: &str,
+    retained_link_ids: &[String],
+) -> AppResult<bool> {
+    let rows = SqlRuntime::fetch_all(
+        SqlExec::Target(target),
+        "SELECT id FROM series_movie_links
+         WHERE series_title_id = {} AND COALESCE(source, '') = 'anibridge'",
+        &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?;
+    let retained: HashSet<&str> = retained_link_ids.iter().map(String::as_str).collect();
+    for row in &rows {
+        if !retained.contains(row.text("id")?.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn delete_stale_series_movie_links_tx(
@@ -1919,6 +1980,35 @@ async fn insert_episode_tx(tx: &mut SqlTx<'_>, episode: &Episode) -> AppResult<(
     Ok(())
 }
 
+/// Episode writes applied per transaction by `apply_episode_writes`. An
+/// update reads its row before it writes it, so this bounds how long one
+/// refresh holds the writer gate at a time.
+const EPISODE_WRITE_CHUNK: usize = 100;
+
+async fn update_episode_tx(
+    tx: &mut SqlTx<'_>,
+    episode_id: &str,
+    update: EpisodeUpdate,
+) -> AppResult<Episode> {
+    if !update.has_changes() {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::MEDIA_EPISODE_UPDATE_EMPTY,
+            "at least one episode field must be provided",
+        ));
+    }
+
+    let mut episode = load_episode_tx(tx, episode_id).await?.ok_or_else(|| {
+        AppError::not_found_reason(
+            crate::error_reasons::MEDIA_EPISODE_NOT_FOUND,
+            format!("episode {episode_id}"),
+        )
+    })?;
+
+    apply_episode_update(&mut episode, update);
+    persist_episode_tx(tx, &episode).await?;
+    Ok(episode)
+}
+
 async fn persist_episode_tx(tx: &mut SqlTx<'_>, episode: &Episode) -> AppResult<()> {
     let args = vec![
         SqlArg::Text(episode.title_id.clone()),
@@ -1998,28 +2088,117 @@ async fn replace_anibridge_scoped_external_ids_for_title_tx(
     collection_ids: &[ScopedExternalId],
     episode_ids: &[ScopedExternalId],
 ) -> AppResult<()> {
-    tx.execute(
-        "DELETE FROM collection_external_ids WHERE title_id = {} AND provenance = 'anibridge'",
-        &[SqlArg::Text(title_id.to_string())],
-    )
-    .await?;
-    tx.execute(
-        "DELETE FROM episode_external_ids WHERE title_id = {} AND provenance = 'anibridge'",
-        &[SqlArg::Text(title_id.to_string())],
-    )
-    .await?;
-
     let now = Utc::now();
-    match tx {
-        SqlTx::Sqlite(_) => {
-            insert_scoped_collection_ids_sqlite(tx, title_id, collection_ids, now).await?;
-            insert_scoped_episode_ids_sqlite(tx, title_id, episode_ids, now).await?;
-        }
-        SqlTx::Postgres(_) => {
-            insert_scoped_collection_ids_postgres(tx, title_id, collection_ids, now).await?;
-            insert_scoped_episode_ids_postgres(tx, title_id, episode_ids, now).await?;
-        }
+    replace_anibridge_scoped_ids_tx(
+        tx,
+        "collection_external_ids",
+        "collection_id",
+        title_id,
+        collection_ids,
+        now,
+    )
+    .await?;
+    replace_anibridge_scoped_ids_tx(
+        tx,
+        "episode_external_ids",
+        "episode_id",
+        title_id,
+        episode_ids,
+        now,
+    )
+    .await
+}
+
+/// Leaves one scoped id table holding exactly the rows a delete of the
+/// title's anibridge rows followed by an insert of `scoped_ids` would leave,
+/// but writes only the difference. A hydration that maps the same ids as the
+/// last one therefore issues no statement, and rows that stay keep their id
+/// and timestamps.
+async fn replace_anibridge_scoped_ids_tx(
+    tx: &mut SqlTx<'_>,
+    table: &str,
+    scope_column: &str,
+    title_id: &str,
+    scoped_ids: &[ScopedExternalId],
+    now: chrono::DateTime<Utc>,
+) -> AppResult<()> {
+    let stored_rows = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT id, {scope_column} AS scope_id, source, external_id, source_scope \
+             FROM {table} WHERE title_id = {{}} AND provenance = 'anibridge'"
+        ),
+        &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?;
+    let mut stored = HashMap::with_capacity(stored_rows.len());
+    for row in &stored_rows {
+        stored.insert(
+            (
+                row.text("scope_id")?,
+                row.text("source")?,
+                row.text("external_id")?,
+                row.opt_text("source_scope")?.unwrap_or_default(),
+            ),
+            row.text("id")?,
+        );
     }
+
+    // A key repeated in the input is one row, as the unique index made it.
+    let mut wanted = HashSet::with_capacity(scoped_ids.len());
+    let mut missing: Vec<Vec<SqlArg>> = Vec::new();
+    for scoped_id in scoped_ids {
+        let Some(key) = normalized_scoped_external_id(scoped_id) else {
+            continue;
+        };
+        if !wanted.insert(key.clone()) || stored.contains_key(&key) {
+            continue;
+        }
+        let (scope_id, source, external_id, source_scope) = key;
+        missing.push(vec![
+            SqlArg::Text(Id::new().0),
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(scope_id),
+            SqlArg::Text(source),
+            SqlArg::Text(external_id),
+            SqlArg::Text("anibridge".to_string()),
+            SqlArg::Text(source_scope),
+            SqlArg::Timestamp(now),
+            SqlArg::Timestamp(now),
+        ]);
+    }
+
+    let stale: Vec<SqlArg> = stored
+        .into_iter()
+        .filter(|(key, _)| !wanted.contains(key))
+        .map(|(_, id)| SqlArg::Text(id))
+        .collect();
+    for chunk in stale.chunks(SQL_BIND_CHUNK) {
+        let placeholders = bind_placeholders(chunk.len());
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE id IN ({placeholders})"),
+            chunk,
+        )
+        .await?;
+    }
+
+    // A row another title already holds under the same key is left alone, as
+    // it was when each row was its own ignoring insert.
+    let (insert_verb, suffix) = match tx {
+        SqlTx::Sqlite(_) => ("INSERT OR IGNORE INTO", ""),
+        SqlTx::Postgres(_) => ("INSERT INTO", "ON CONFLICT DO NOTHING"),
+    };
+    SqlRuntime::execute_batch_insert(
+        tx,
+        &format!(
+            "{insert_verb} {table} (id, title_id, {scope_column}, source, external_id, \
+             provenance, source_scope, created_at, updated_at)"
+        ),
+        9,
+        missing,
+        suffix,
+    )
+    .await?;
 
     Ok(())
 }
@@ -2361,134 +2540,6 @@ fn row_to_calendar_episode(row: &SqlRow) -> AppResult<CalendarEpisode> {
         air_date_estimated: false,
         monitored: row.bool("monitored")?,
     })
-}
-
-async fn insert_scoped_collection_ids_sqlite(
-    tx: &mut SqlTx<'_>,
-    title_id: &str,
-    collection_ids: &[ScopedExternalId],
-    now: chrono::DateTime<Utc>,
-) -> AppResult<()> {
-    for scoped_id in collection_ids {
-        let Some((collection_id, source, external_id, source_scope)) =
-            normalized_scoped_external_id(scoped_id)
-        else {
-            continue;
-        };
-        tx.execute(
-            "INSERT OR IGNORE INTO collection_external_ids \
-             (id, title_id, collection_id, source, external_id, provenance, source_scope, created_at, updated_at) \
-             VALUES ({}, {}, {}, {}, {}, 'anibridge', {}, {}, {})",
-            &[
-                SqlArg::Text(Id::new().0),
-                SqlArg::Text(title_id.to_string()),
-                SqlArg::Text(collection_id),
-                SqlArg::Text(source),
-                SqlArg::Text(external_id),
-                SqlArg::Text(source_scope),
-                SqlArg::Timestamp(now),
-                SqlArg::Timestamp(now),
-            ],
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn insert_scoped_episode_ids_sqlite(
-    tx: &mut SqlTx<'_>,
-    title_id: &str,
-    episode_ids: &[ScopedExternalId],
-    now: chrono::DateTime<Utc>,
-) -> AppResult<()> {
-    for scoped_id in episode_ids {
-        let Some((episode_id, source, external_id, source_scope)) =
-            normalized_scoped_external_id(scoped_id)
-        else {
-            continue;
-        };
-        tx.execute(
-            "INSERT OR IGNORE INTO episode_external_ids \
-             (id, title_id, episode_id, source, external_id, provenance, source_scope, created_at, updated_at) \
-             VALUES ({}, {}, {}, {}, {}, 'anibridge', {}, {}, {})",
-            &[
-                SqlArg::Text(Id::new().0),
-                SqlArg::Text(title_id.to_string()),
-                SqlArg::Text(episode_id),
-                SqlArg::Text(source),
-                SqlArg::Text(external_id),
-                SqlArg::Text(source_scope),
-                SqlArg::Timestamp(now),
-                SqlArg::Timestamp(now),
-            ],
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn insert_scoped_collection_ids_postgres(
-    tx: &mut SqlTx<'_>,
-    title_id: &str,
-    collection_ids: &[ScopedExternalId],
-    now: chrono::DateTime<Utc>,
-) -> AppResult<()> {
-    for scoped_id in collection_ids {
-        let Some((collection_id, source, external_id, source_scope)) =
-            normalized_scoped_external_id(scoped_id)
-        else {
-            continue;
-        };
-        tx.execute(
-            "INSERT INTO collection_external_ids \
-             (id, title_id, collection_id, source, external_id, provenance, source_scope, created_at, updated_at) \
-             VALUES ({}, {}, {}, {}, {}, 'anibridge', {}, {}, {}) ON CONFLICT DO NOTHING",
-            &[
-                SqlArg::Text(Id::new().0),
-                SqlArg::Text(title_id.to_string()),
-                SqlArg::Text(collection_id),
-                SqlArg::Text(source),
-                SqlArg::Text(external_id),
-                SqlArg::Text(source_scope),
-                SqlArg::Timestamp(now),
-                SqlArg::Timestamp(now),
-            ],
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn insert_scoped_episode_ids_postgres(
-    tx: &mut SqlTx<'_>,
-    title_id: &str,
-    episode_ids: &[ScopedExternalId],
-    now: chrono::DateTime<Utc>,
-) -> AppResult<()> {
-    for scoped_id in episode_ids {
-        let Some((episode_id, source, external_id, source_scope)) =
-            normalized_scoped_external_id(scoped_id)
-        else {
-            continue;
-        };
-        tx.execute(
-            "INSERT INTO episode_external_ids \
-             (id, title_id, episode_id, source, external_id, provenance, source_scope, created_at, updated_at) \
-             VALUES ({}, {}, {}, {}, {}, 'anibridge', {}, {}, {}) ON CONFLICT DO NOTHING",
-            &[
-                SqlArg::Text(Id::new().0),
-                SqlArg::Text(title_id.to_string()),
-                SqlArg::Text(episode_id),
-                SqlArg::Text(source),
-                SqlArg::Text(external_id),
-                SqlArg::Text(source_scope),
-                SqlArg::Timestamp(now),
-                SqlArg::Timestamp(now),
-            ],
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -3202,6 +3253,528 @@ mod collection_ordered_path_tests {
             .await
             .expect("batched lookup");
         assert!(batched.is_empty());
+    }
+
+    use super::{
+        EpisodeUpdate, EpisodeWrite, Id, ScopedExternalId, ShowRepository, ShowStore,
+        StoreDatastore,
+    };
+
+    const SCOPED_ID_TABLES: [(&str, &str); 2] = [
+        ("collection_external_ids", "collection_id"),
+        ("episode_external_ids", "episode_id"),
+    ];
+
+    /// Both scoped id tables with the unique indexes of the shipped schema,
+    /// plus two rows the replace must never touch: one of another provenance
+    /// on the same title, and one another title holds under a key the test
+    /// input also names.
+    async fn scoped_id_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite pool");
+        for (table, scope_column) in SCOPED_ID_TABLES {
+            for sql in [
+                format!(
+                    "CREATE TABLE {table} (
+                        id TEXT PRIMARY KEY NOT NULL, title_id TEXT NOT NULL,
+                        {scope_column} TEXT NOT NULL, source TEXT NOT NULL,
+                        external_id TEXT NOT NULL, provenance TEXT NOT NULL,
+                        source_scope TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                    )"
+                ),
+                format!(
+                    "CREATE UNIQUE INDEX idx_{table}_unique ON {table}
+                     ({scope_column}, source, external_id, provenance, source_scope)"
+                ),
+                format!(
+                    "CREATE INDEX idx_{table}_title_provenance ON {table} (title_id, provenance)"
+                ),
+                format!(
+                    "INSERT INTO {table} VALUES
+                     ('kept-manual', 'title-a', 'scope-1', 'anidb', '100', 'manual', '', 't0', 't0'),
+                     ('kept-other', 'title-other', 'scope-shared', 'anidb', '900', 'anibridge', '', 't0', 't0')"
+                ),
+            ] {
+                sqlx::query(sqlx::AssertSqlSafe(sql))
+                    .execute(&pool)
+                    .await
+                    .expect("prepare scoped id table");
+            }
+        }
+        pool
+    }
+
+    /// What the replace did before it wrote only the difference: drop the
+    /// title's anibridge rows, then insert every id, ignoring repeats.
+    async fn replace_scoped_ids_by_delete_then_insert(
+        pool: &sqlx::SqlitePool,
+        table: &str,
+        scope_column: &str,
+        title_id: &str,
+        scoped_ids: &[ScopedExternalId],
+    ) {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM {table} WHERE title_id = ? AND provenance = 'anibridge'"
+        )))
+        .bind(title_id)
+        .execute(pool)
+        .await
+        .expect("delete anibridge rows");
+        for scoped_id in scoped_ids {
+            let Some((scope_id, source, external_id, source_scope)) =
+                super::normalized_scoped_external_id(scoped_id)
+            else {
+                continue;
+            };
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT OR IGNORE INTO {table}
+                 (id, title_id, {scope_column}, source, external_id, provenance, source_scope, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, 'anibridge', ?, 't1', 't1')"
+            )))
+            .bind(Id::new().0)
+            .bind(title_id)
+            .bind(scope_id)
+            .bind(source)
+            .bind(external_id)
+            .bind(source_scope)
+            .execute(pool)
+            .await
+            .expect("insert anibridge row");
+        }
+    }
+
+    /// Every column a reader can tell rows apart by, in a stable order.
+    async fn scoped_id_rows(
+        pool: &sqlx::SqlitePool,
+        table: &str,
+        scope_column: &str,
+    ) -> Vec<(String, String, String, String, String, String)> {
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT title_id, {scope_column}, source, external_id, provenance, source_scope
+             FROM {table} ORDER BY 1, 2, 3, 4, 5, 6"
+        )))
+        .fetch_all(pool)
+        .await
+        .expect("read scoped id rows")
+    }
+
+    /// Row id and creation time per key, to show which rows were rewritten.
+    async fn scoped_id_row_identities(
+        pool: &sqlx::SqlitePool,
+        table: &str,
+        scope_column: &str,
+    ) -> Vec<(String, String, String, String, String, String)> {
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {scope_column}, source, external_id, source_scope, id, created_at
+             FROM {table} ORDER BY 1, 2, 3, 4"
+        )))
+        .fetch_all(pool)
+        .await
+        .expect("read scoped id row identities")
+    }
+
+    async fn sqlite_total_changes(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT total_changes()")
+            .fetch_one(pool)
+            .await
+            .expect("read total_changes")
+    }
+
+    fn scoped(
+        scope_id: &str,
+        source: &str,
+        external_id: &str,
+        scope: Option<&str>,
+    ) -> ScopedExternalId {
+        ScopedExternalId {
+            scope_id: scope_id.to_string(),
+            source: source.to_string(),
+            external_id: external_id.to_string(),
+            provenance: "anibridge".to_string(),
+            source_scope: scope.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn anibridge_scoped_id_replace_matches_delete_then_insert_and_writes_only_changes() {
+        let pool = scoped_id_pool().await;
+        let reference = scoped_id_pool().await;
+        let store = ShowStore::new(StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        });
+
+        let first = vec![
+            scoped("scope-1", "AniDB", "100", None),
+            // The same key again, spelled differently, and once more verbatim.
+            scoped(" scope-1 ", "anidb", " 100 ", Some("")),
+            scoped("scope-1", "AniDB", "100", None),
+            scoped("scope-1", "anidb", "100", Some("s1")),
+            scoped("scope-2", "mal", "200", Some(" part-a ")),
+            // Another title already holds this key.
+            scoped("scope-shared", "anidb", "900", None),
+            // Skipped: nothing to key the row on.
+            scoped("", "anidb", "300", None),
+            scoped("scope-3", " ", "300", None),
+            scoped("scope-3", "anidb", "", None),
+        ];
+        let changed = vec![
+            scoped("scope-1", "anidb", "100", None),
+            scoped("scope-2", "mal", "201", Some("part-a")),
+            scoped("scope-4", "anilist", "400", None),
+            scoped("scope-4", "anilist", "400", None),
+        ];
+        // More rows than one statement binds, on the insert and on the delete.
+        let wide: Vec<ScopedExternalId> = (0..2_300)
+            .map(|index| scoped(&format!("scope-{index}"), "anidb", &index.to_string(), None))
+            .collect();
+        let narrow = wide[..3].to_vec();
+
+        let steps: [(&str, &[ScopedExternalId], &[ScopedExternalId]); 7] = [
+            ("first", &first, &changed),
+            ("unchanged", &first, &changed),
+            ("changed", &changed, &first),
+            ("swapped back", &first, &changed),
+            ("wide", &wide, &wide),
+            ("narrow", &narrow, &narrow),
+            ("empty", &[], &[]),
+        ];
+        for (step, collection_ids, episode_ids) in steps {
+            let identities_before = [
+                scoped_id_row_identities(&pool, "collection_external_ids", "collection_id").await,
+                scoped_id_row_identities(&pool, "episode_external_ids", "episode_id").await,
+            ];
+            let changes_before = sqlite_total_changes(&pool).await;
+
+            store
+                .replace_anibridge_scoped_external_ids_for_title(
+                    "title-a",
+                    collection_ids.to_vec(),
+                    episode_ids.to_vec(),
+                )
+                .await
+                .expect("replace scoped ids");
+
+            if step == "unchanged" {
+                assert_eq!(
+                    sqlite_total_changes(&pool).await,
+                    changes_before,
+                    "an unchanged mapping must not write a row"
+                );
+                assert_eq!(
+                    [
+                        scoped_id_row_identities(&pool, "collection_external_ids", "collection_id")
+                            .await,
+                        scoped_id_row_identities(&pool, "episode_external_ids", "episode_id").await,
+                    ],
+                    identities_before,
+                    "an unchanged mapping must keep every row as it was"
+                );
+            }
+
+            for ((table, scope_column), scoped_ids) in SCOPED_ID_TABLES
+                .into_iter()
+                .zip([collection_ids, episode_ids])
+            {
+                replace_scoped_ids_by_delete_then_insert(
+                    &reference,
+                    table,
+                    scope_column,
+                    "title-a",
+                    scoped_ids,
+                )
+                .await;
+                assert_eq!(
+                    scoped_id_rows(&pool, table, scope_column).await,
+                    scoped_id_rows(&reference, table, scope_column).await,
+                    "{table} differs from delete-then-insert after the {step} step"
+                );
+            }
+        }
+
+        // Only the rows the replace does not own are left.
+        for (table, scope_column) in SCOPED_ID_TABLES {
+            assert_eq!(scoped_id_rows(&pool, table, scope_column).await.len(), 2);
+        }
+    }
+
+    fn sqlite_show_store(pool: &sqlx::SqlitePool) -> ShowStore {
+        ShowStore::new(StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    /// An `episodes` table holding three stored episodes.
+    async fn episode_write_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite pool");
+        sqlx::query(
+            "CREATE TABLE episodes (
+                id TEXT PRIMARY KEY, title_id TEXT NOT NULL, collection_id TEXT,
+                episode_type TEXT NOT NULL, episode_number TEXT, season_number TEXT,
+                episode_label TEXT, title TEXT, air_date TEXT, duration_seconds INTEGER,
+                has_multi_audio INTEGER NOT NULL, has_subtitle INTEGER NOT NULL,
+                is_filler INTEGER, is_recap INTEGER, absolute_number TEXT,
+                contiguous_absolute_number INTEGER, overview TEXT,
+                tvdb_id TEXT, tmdb_id TEXT, image_url TEXT, monitored INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create episodes table");
+        let store = sqlite_show_store(&pool);
+        for number in 1..=3 {
+            let mut stored = fixture_episode(&format!("stored-{number}"), number);
+            stored.contiguous_absolute_number = Some(number);
+            store
+                .create_episode(stored)
+                .await
+                .expect("seed stored episode");
+        }
+        pool
+    }
+
+    fn fixture_episode(id: &str, number: i32) -> scryer_domain::Episode {
+        scryer_domain::Episode {
+            id: id.to_string(),
+            title_id: "title-a".to_string(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some(number.to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some(format!("Fixture {number}")),
+            title: Some(format!("Fixture {number}")),
+            air_date: None,
+            duration_seconds: Some(1_440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: chrono::DateTime::from_timestamp(1_767_225_600, 0)
+                .expect("fixture timestamp"),
+        }
+    }
+
+    fn fixture_update(episode_id: &str, update: EpisodeUpdate) -> EpisodeWrite {
+        EpisodeWrite::Update {
+            episode_id: episode_id.to_string(),
+            update,
+        }
+    }
+
+    #[tokio::test]
+    async fn batched_episode_writes_match_one_call_per_write_through_failing_rows() {
+        let batched_pool = episode_write_pool().await;
+        let per_row_pool = episode_write_pool().await;
+        let batched_store = sqlite_show_store(&batched_pool);
+        let per_row_store = sqlite_show_store(&per_row_pool);
+
+        // The first chunk holds three writes that fail on their own, so it
+        // is replayed write by write; the chunks after it commit whole.
+        let mut writes = vec![
+            fixture_update(
+                "stored-1",
+                EpisodeUpdate {
+                    title: Some(Some("Refreshed".to_string())),
+                    ..Default::default()
+                },
+            ),
+            fixture_update(
+                "stored-1",
+                EpisodeUpdate {
+                    monitored: Some(false),
+                    ..Default::default()
+                },
+            ),
+            EpisodeWrite::Create(fixture_episode("created-10", 10)),
+            fixture_update(
+                "never-stored",
+                EpisodeUpdate {
+                    monitored: Some(false),
+                    ..Default::default()
+                },
+            ),
+            // The id is taken by the create two writes up.
+            EpisodeWrite::Create(fixture_episode("created-10", 11)),
+            fixture_update(
+                "stored-2",
+                EpisodeUpdate {
+                    contiguous_absolute_number: Some(None),
+                    ..Default::default()
+                },
+            ),
+            fixture_update("stored-3", EpisodeUpdate::default()),
+            // Reads the episode an earlier write of the same batch created.
+            fixture_update(
+                "created-10",
+                EpisodeUpdate {
+                    air_date: Some(Some("2026-02-02".to_string())),
+                    ..Default::default()
+                },
+            ),
+        ];
+        let failing = [3_usize, 4, 6];
+        for number in 100..(100 + 2 * super::EPISODE_WRITE_CHUNK as i32 + 7) {
+            writes.push(EpisodeWrite::Create(fixture_episode(
+                &format!("created-{number}"),
+                number,
+            )));
+        }
+
+        let batched = batched_store.apply_episode_writes(writes.clone()).await;
+        let mut per_row = Vec::with_capacity(writes.len());
+        for write in writes.clone() {
+            per_row.push(match write {
+                EpisodeWrite::Create(episode) => per_row_store.create_episode(episode).await,
+                EpisodeWrite::Update { episode_id, update } => {
+                    per_row_store.update_episode(&episode_id, update).await
+                }
+            });
+        }
+
+        assert_eq!(batched.len(), writes.len());
+        for (index, (batched, per_row)) in batched.iter().zip(&per_row).enumerate() {
+            assert_eq!(
+                batched.is_err(),
+                failing.contains(&index),
+                "write {index} outcome"
+            );
+            match (batched, per_row) {
+                (Ok(batched), Ok(per_row)) => assert_eq!(batched, per_row, "write {index}"),
+                (Err(batched), Err(per_row)) => assert_eq!(
+                    std::mem::discriminant(batched),
+                    std::mem::discriminant(per_row),
+                    "write {index} error kind"
+                ),
+                _ => panic!("write {index} succeeded on one path and failed on the other"),
+            }
+        }
+        assert_eq!(
+            batched[6]
+                .as_ref()
+                .expect_err("an empty update is refused")
+                .validation_reason(),
+            Some(crate::error_reasons::MEDIA_EPISODE_UPDATE_EMPTY)
+        );
+
+        let stored = |pool: sqlx::SqlitePool| async move {
+            super::list_episodes_for_title_query(SqlTarget::Sqlite(&pool), "title-a")
+                .await
+                .expect("list stored episodes")
+        };
+        let batched_rows = stored(batched_pool).await;
+        assert_eq!(batched_rows, stored(per_row_pool).await);
+        assert_eq!(batched_rows.len(), writes.len() - failing.len() - 4 + 3);
+        let refreshed = batched_rows
+            .iter()
+            .find(|episode| episode.id == "stored-1")
+            .expect("stored-1 kept");
+        assert_eq!(refreshed.title.as_deref(), Some("Refreshed"));
+        assert!(!refreshed.monitored);
+    }
+
+    #[tokio::test]
+    async fn stale_series_movie_link_check_matches_the_rows_the_update_would_touch() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite pool");
+        for sql in [
+            "CREATE TABLE series_movie_links (
+                id TEXT PRIMARY KEY, series_title_id TEXT NOT NULL, source TEXT,
+                metadata_active INTEGER NOT NULL, monitored INTEGER NOT NULL,
+                monitoring_override INTEGER, updated_at TEXT NOT NULL
+            )",
+            "CREATE INDEX idx_series_movie_links_title ON series_movie_links(series_title_id)",
+            "INSERT INTO series_movie_links VALUES
+             ('link-a1', 'title-a', 'anibridge', 1, 1, NULL, 't0'),
+             ('link-a2', 'title-a', 'anibridge', 1, 1, NULL, 't0'),
+             ('link-a3', 'title-a', 'manual', 1, 1, NULL, 't0'),
+             ('link-a4', 'title-a', NULL, 1, 1, NULL, 't0'),
+             ('link-b1', 'title-b', 'anibridge', 1, 1, NULL, 't0'),
+             ('link-c1', 'title-c', 'manual', 1, 1, NULL, 't0')",
+        ] {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("prepare series movie links");
+        }
+        let store = sqlite_show_store(&pool);
+        let ids = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+
+        // (title, retained links, links the update deactivates)
+        let cases: [(&str, Vec<String>, &[&str]); 7] = [
+            ("title-a", ids(&["link-a1", "link-a2"]), &[]),
+            (
+                "title-a",
+                ids(&["link-a2", "link-a1", "link-elsewhere"]),
+                &[],
+            ),
+            ("title-c", ids(&[]), &[]),
+            ("title-none", ids(&[]), &[]),
+            ("title-a", ids(&["link-a1"]), &["link-a2"]),
+            ("title-b", ids(&["link-a1"]), &["link-b1"]),
+            ("title-a", ids(&[]), &["link-a1", "link-a2"]),
+        ];
+        for (title_id, retained, deactivated) in cases {
+            let active_before: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM series_movie_links WHERE metadata_active = 1 ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("read active links");
+            let changes_before = sqlite_total_changes(&pool).await;
+            assert_eq!(
+                super::has_stale_series_movie_links_query(
+                    SqlTarget::Sqlite(&pool),
+                    title_id,
+                    &retained
+                )
+                .await
+                .expect("stale link check"),
+                !deactivated.is_empty(),
+                "{title_id} retaining {retained:?}"
+            );
+
+            store
+                .delete_stale_series_movie_links(title_id, &retained)
+                .await
+                .expect("deactivate stale links");
+
+            let active_after: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM series_movie_links WHERE metadata_active = 1 ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("read active links");
+            let expected: Vec<String> = active_before
+                .into_iter()
+                .filter(|id| !deactivated.contains(&id.as_str()))
+                .collect();
+            assert_eq!(active_after, expected, "{title_id} retaining {retained:?}");
+            assert_eq!(
+                sqlite_total_changes(&pool).await - changes_before,
+                deactivated.len() as i64,
+                "{title_id} retaining {retained:?} wrote only the rows it deactivated"
+            );
+        }
     }
 }
 
