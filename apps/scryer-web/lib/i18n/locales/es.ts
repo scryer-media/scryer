@@ -2476,6 +2476,7 @@ const es: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} episodios",
   "history.unknownEvent": "Desconocido",
   "history.noMore": "No hay más eventos",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Cargar más",
   "settings.recycleBin": "Papelera de reciclaje",
   "settings.recycleBinEnabled": "Activar papelera de reciclaje",

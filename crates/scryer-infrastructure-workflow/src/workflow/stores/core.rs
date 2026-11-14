@@ -36,8 +36,9 @@ const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
             event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
             title_id, facet, correlation_id, causation_id, schema_version,
             stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id, import_skip_reason
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+            media_file_delete_reason, download_id, import_skip_reason,
+            media_request_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 pub const DOWNLOAD_SUBMISSION_COLUMNS: &str = "id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, release_listing_json, request_signature, purpose, episode_id, collection_id, series_movie_link_id";
 pub const IMPORT_COLUMNS: &str = "id, source_client_id, source_system, source_ref, import_type, status, payload_json, result_json, download_id, import_transfer_phase, import_transfer_bytes, import_transfer_total_bytes, import_transfer_started_at, import_transfer_updated_at, started_at, finished_at, created_at, updated_at";
 pub const DOWNLOAD_QUEUE_COMMAND_COLUMNS: &str = "id, action, canonical_download_id, client_id, client_type, download_client_item_id, is_history, status, error_text, requested_by_user_id, started_at, finished_at, created_at, updated_at";
@@ -124,6 +125,7 @@ async fn append_domain_events_with_replay(
                         SqlArg::OptText(projections.media_file_delete_reason),
                         SqlArg::OptText(projections.download_id),
                         SqlArg::OptText(projections.import_skip_reason),
+                        SqlArg::OptText(projections.media_request_id),
                     ],
                 )
                 .await?;
@@ -185,6 +187,7 @@ pub async fn append_domain_event_tx(
             SqlArg::OptText(projections.media_file_delete_reason),
             SqlArg::OptText(projections.download_id),
             SqlArg::OptText(projections.import_skip_reason),
+            SqlArg::OptText(projections.media_request_id),
         ],
     )
     .await?;
@@ -1108,11 +1111,24 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     };
     let mut where_clauses = Vec::new();
     let mut args = Vec::new();
+    // A read by request key names its event type too, and the planner would
+    // otherwise walk every event of that type in sequence order instead of
+    // seeking the few with these keys. The concatenation leaves the type test
+    // exact while keeping it from choosing the index.
+    let keyed_by_request = filter
+        .media_request_ids
+        .as_ref()
+        .is_some_and(|keys| !keys.request_ids.is_empty() || keys.and_removed);
     if let Some(event_types) = filter.event_types.as_ref()
         && !event_types.is_empty()
     {
         where_clauses.push(format!(
-            "event_type IN ({})",
+            "{} IN ({})",
+            if keyed_by_request {
+                "event_type || ''"
+            } else {
+                "event_type"
+            },
             placeholders(event_types.len())
         ));
         args.extend(
@@ -1133,6 +1149,28 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
         where_clauses.push("stream_id = {}".to_string());
         args.push(SqlArg::Text(stream_id.clone()));
     }
+    if let Some(keys) = filter.media_request_ids.as_ref() {
+        let named = (!keys.request_ids.is_empty()).then(|| {
+            format!(
+                "media_request_id IN ({})",
+                placeholders(keys.request_ids.len())
+            )
+        });
+        // A removed request is one whose key no stored request has. The
+        // leading test keeps the whole read on the index of request keys,
+        // which holds submissions only.
+        const REMOVED: &str = "NOT EXISTS (SELECT 1 FROM media_requests \
+             WHERE media_requests.id = domain_events.media_request_id)";
+        where_clauses.push(match (named, keys.and_removed) {
+            (None, false) => "1 = 0".to_string(),
+            (Some(named), false) => named,
+            (None, true) => format!("media_request_id IS NOT NULL AND {REMOVED}"),
+            (Some(named), true) => {
+                format!("media_request_id IS NOT NULL AND ({named} OR {REMOVED})")
+            }
+        });
+        args.extend(keys.request_ids.iter().cloned().map(SqlArg::Text));
+    }
     if let Some(after_sequence) = filter.after_sequence {
         where_clauses.push("sequence > {}".to_string());
         args.push(SqlArg::I64(after_sequence));
@@ -1151,10 +1189,23 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     } else {
         "DESC"
     };
+    // Removed requests are found by passing over the request keys, and the
+    // rows kept are then sorted. Ordering by the bare column would instead
+    // invite a walk of every event in sequence order; the unary plus leaves
+    // the order the same and takes that choice away.
+    let order_by = if filter
+        .media_request_ids
+        .as_ref()
+        .is_some_and(|keys| keys.and_removed)
+    {
+        "+sequence"
+    } else {
+        "sequence"
+    };
     args.push(SqlArg::I64(limit as i64));
     (
         format!(
-            "SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events{where_sql} ORDER BY sequence {order} LIMIT {{}}"
+            "SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events{where_sql} ORDER BY {order_by} {order} LIMIT {{}}"
         ),
         args,
     )
@@ -1194,174 +1245,209 @@ pub fn build_title_history_filter_sql(
                     .map(|event_type| SqlArg::Text(event_type.as_str().to_string())),
             );
         }
-        Some([]) => clauses.push("0".to_string()),
+        Some([]) => clauses.push("1 = 0".to_string()),
         Some(event_types) => {
             let mut parts = Vec::new();
-            for event_type in event_types {
-                match event_type {
-                    TitleHistoryEventType::Requested => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaRequestSubmitted.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::Grabbed => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::ReleaseGrabbed.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::DownloadFailed => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::DownloadFailed.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::Blocklisted => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::ReleaseBlocklisted.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::Scanned => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileAnalyzed.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::Imported => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::ImportCompleted.as_str().into(),
-                        ));
-                    }
-                    // A rule's refusal is its own history type, so it is
-                    // excluded from the failed and skipped filters it would
-                    // otherwise fall under by status.
-                    TitleHistoryEventType::ImportFailed => {
-                        parts.push(format!(
-                            "(event_type = {{}} AND import_status = {{}} AND {NOT_RULE_REJECTION_SQL})"
-                        ));
-                        args.push(SqlArg::Text(
-                            DomainEventType::ImportRejected.as_str().into(),
-                        ));
-                        args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
-                        args.push(SqlArg::Text(
-                            ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::ImportSkipped => {
-                        parts.push(format!(
-                            "(event_type = {{}} AND import_status = {{}} AND {NOT_RULE_REJECTION_SQL})"
-                        ));
-                        args.push(SqlArg::Text(
-                            DomainEventType::ImportRejected.as_str().into(),
-                        ));
-                        args.push(SqlArg::Text(ImportStatus::Skipped.as_str().into()));
-                        args.push(SqlArg::Text(
-                            ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::ImportRejectedByRule => {
-                        parts.push(
-                            "(event_type = {} AND import_status IN ({}, {}) AND import_skip_reason = {})"
-                                .to_string(),
-                        );
-                        args.push(SqlArg::Text(
-                            DomainEventType::ImportRejected.as_str().into(),
-                        ));
-                        args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
-                        args.push(SqlArg::Text(ImportStatus::Skipped.as_str().into()));
-                        args.push(SqlArg::Text(
-                            ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::FileUpgraded => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileUpgraded.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::FileRecycled => {
-                        parts.push(
-                            "(event_type = {} AND media_file_delete_reason = {})".to_string(),
-                        );
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileDeleted.as_str().into(),
-                        ));
-                        args.push(SqlArg::Text(
-                            MediaFileDeletedReason::UpgradeCleanup.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::FileDeleted => {
-                        parts.push("(event_type = {} AND (media_file_delete_reason IS NULL OR media_file_delete_reason <> {}))".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileDeleted.as_str().into(),
-                        ));
-                        args.push(SqlArg::Text(
-                            MediaFileDeletedReason::UpgradeCleanup.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::FileRestored => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileRestored.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::FileRenamed => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileRenamed.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::Rematched => {
-                        parts.push("event_type IN ({}, {})".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::TitleRematched.as_str().into(),
-                        ));
-                        args.push(SqlArg::Text(
-                            DomainEventType::MediaFileReassigned.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::TitleMoved => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(DomainEventType::TitleMoved.as_str().into()));
-                    }
-                    TitleHistoryEventType::SeedingStarted => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::SeedingStarted.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::SeedingCompleted => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::SeedingCompleted.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::DownloadMissing => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::DownloadMissing.as_str().into(),
-                        ));
-                    }
-                    TitleHistoryEventType::DownloadIgnored => {
-                        parts.push("event_type = {}".to_string());
-                        args.push(SqlArg::Text(
-                            DomainEventType::DownloadIgnored.as_str().into(),
-                        ));
-                    }
-                    // No `DomainEventType::DownloadCompleted` exists and no
-                    // projection ever produces this history type, so nothing
-                    // is stored that could match: a never-match clause is the
-                    // correct filter, not a bug. Give it a real event type
-                    // here if one is ever recorded.
-                    TitleHistoryEventType::DownloadCompleted => parts.push("0".to_string()),
-                }
+            for (part, part_args) in title_history_event_type_parts(event_types) {
+                parts.push(part);
+                args.extend(part_args);
             }
             clauses.push(format!("({})", parts.join(" OR ")));
         }
     }
+    let (scope_clauses, scope_args) =
+        title_history_scope_clauses(title_scope, include_titleless, download_id);
+    clauses.extend(scope_clauses);
+    args.extend(scope_args);
+    // Every `event_types` arm pushes a clause, so this is never empty today;
+    // emit no WHERE at all rather than a dangling one if that ever changes.
+    if clauses.is_empty() {
+        return (String::new(), args);
+    }
+    (format!(" WHERE {}", clauses.join(" AND ")), args)
+}
+
+/// One predicate per requested history type, each with its own binds in
+/// placeholder order. Distinct types never match the same event.
+fn title_history_event_type_parts(
+    event_types: &[TitleHistoryEventType],
+) -> Vec<(String, Vec<SqlArg>)> {
+    let mut out = Vec::new();
+    for event_type in event_types {
+        let mut parts: Vec<String> = Vec::new();
+        let mut args = Vec::new();
+        match event_type {
+            TitleHistoryEventType::Requested => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaRequestSubmitted.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::Grabbed => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::ReleaseGrabbed.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::DownloadFailed => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::DownloadFailed.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::Blocklisted => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::ReleaseBlocklisted.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::Scanned => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileAnalyzed.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::Imported => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::ImportCompleted.as_str().into(),
+                ));
+            }
+            // A rule's refusal is its own history type, so it is
+            // excluded from the failed and skipped filters it would
+            // otherwise fall under by status.
+            TitleHistoryEventType::ImportFailed => {
+                parts.push(format!(
+                    "(event_type = {{}} AND import_status = {{}} AND {NOT_RULE_REJECTION_SQL})"
+                ));
+                args.push(SqlArg::Text(
+                    DomainEventType::ImportRejected.as_str().into(),
+                ));
+                args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
+                args.push(SqlArg::Text(
+                    ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::ImportSkipped => {
+                parts.push(format!(
+                    "(event_type = {{}} AND import_status = {{}} AND {NOT_RULE_REJECTION_SQL})"
+                ));
+                args.push(SqlArg::Text(
+                    DomainEventType::ImportRejected.as_str().into(),
+                ));
+                args.push(SqlArg::Text(ImportStatus::Skipped.as_str().into()));
+                args.push(SqlArg::Text(
+                    ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::ImportRejectedByRule => {
+                parts.push(
+                    "(event_type = {} AND import_status IN ({}, {}) AND import_skip_reason = {})"
+                        .to_string(),
+                );
+                args.push(SqlArg::Text(
+                    DomainEventType::ImportRejected.as_str().into(),
+                ));
+                args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
+                args.push(SqlArg::Text(ImportStatus::Skipped.as_str().into()));
+                args.push(SqlArg::Text(
+                    ImportSkipReason::PostDownloadRuleBlocked.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::FileUpgraded => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileUpgraded.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::FileRecycled => {
+                parts.push("(event_type = {} AND media_file_delete_reason = {})".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileDeleted.as_str().into(),
+                ));
+                args.push(SqlArg::Text(
+                    MediaFileDeletedReason::UpgradeCleanup.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::FileDeleted => {
+                parts.push("(event_type = {} AND (media_file_delete_reason IS NULL OR media_file_delete_reason <> {}))".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileDeleted.as_str().into(),
+                ));
+                args.push(SqlArg::Text(
+                    MediaFileDeletedReason::UpgradeCleanup.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::FileRestored => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileRestored.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::FileRenamed => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileRenamed.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::Rematched => {
+                parts.push("event_type IN ({}, {})".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::TitleRematched.as_str().into(),
+                ));
+                args.push(SqlArg::Text(
+                    DomainEventType::MediaFileReassigned.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::TitleMoved => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(DomainEventType::TitleMoved.as_str().into()));
+            }
+            TitleHistoryEventType::SeedingStarted => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::SeedingStarted.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::SeedingCompleted => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::SeedingCompleted.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::DownloadMissing => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::DownloadMissing.as_str().into(),
+                ));
+            }
+            TitleHistoryEventType::DownloadIgnored => {
+                parts.push("event_type = {}".to_string());
+                args.push(SqlArg::Text(
+                    DomainEventType::DownloadIgnored.as_str().into(),
+                ));
+            }
+            // No `DomainEventType::DownloadCompleted` exists and no
+            // projection ever produces this history type, so nothing
+            // is stored that could match: a never-match clause is the
+            // correct filter, not a bug. Give it a real event type
+            // here if one is ever recorded.
+            TitleHistoryEventType::DownloadCompleted => parts.push("1 = 0".to_string()),
+        }
+        out.extend(parts.pop().map(|part| (part, args)));
+    }
+    out
+}
+
+/// The title-scope and download clauses of a title-history read, with their
+/// binds in placeholder order.
+fn title_history_scope_clauses(
+    title_scope: Option<TitleHistoryTitleScope<'_>>,
+    include_titleless: bool,
+    download_id: Option<&str>,
+) -> (Vec<String>, Vec<SqlArg>) {
+    let mut clauses: Vec<String> = Vec::new();
+    let mut args = Vec::new();
     if let Some(title_scope) = title_scope {
         // `include_titleless` widens a title scope to also admit rows with no
         // catalog title. It is set when the scope is the caller's library
@@ -1372,7 +1458,7 @@ pub fn build_title_history_filter_sql(
         // them. A user-chosen title or title search never sets it.
         let scope = match title_scope {
             TitleHistoryTitleScope::Titles([]) | TitleHistoryTitleScope::Libraries([]) => {
-                "0".to_string()
+                "1 = 0".to_string()
             }
             TitleHistoryTitleScope::Titles([title_id]) => {
                 args.push(SqlArg::Text(title_id.clone()));
@@ -1402,12 +1488,89 @@ pub fn build_title_history_filter_sql(
         clauses.push("download_id = {}".to_string());
         args.push(SqlArg::Text(download_id.to_string()));
     }
-    // Every `event_types` arm pushes a clause, so this is never empty today;
-    // emit no WHERE at all rather than a dangling one if that ever changes.
-    if clauses.is_empty() {
-        return (String::new(), args);
+    (clauses, args)
+}
+
+/// The title-history page read as one bounded newest-first walk per history
+/// type, merged, for the pages where that returns the same rows as
+/// [`build_title_history_filter_sql`] with `ORDER BY sequence DESC LIMIT
+/// page_size OFFSET offset`.
+///
+/// A predicate naming several event types cannot be answered in sequence
+/// order from the per-type index, so SQLite collects and sorts every match
+/// before the limit applies. Each branch here names one history type, stops
+/// after `offset + page_size` rows, and the merge keeps the newest of those.
+/// The branches are disjoint, so nothing is returned twice.
+///
+/// `None` leaves the page to the single statement: a page scoped to chosen
+/// titles or to one download is narrowed by that scope first, and a page of
+/// one history type is already a single ordered walk.
+pub fn build_title_history_merged_page_sql(
+    event_types: Option<&[TitleHistoryEventType]>,
+    title_scope: Option<TitleHistoryTitleScope<'_>>,
+    include_titleless: bool,
+    download_id: Option<&str>,
+    page_size: usize,
+    offset: usize,
+) -> Option<(String, Vec<SqlArg>)> {
+    if download_id.is_some()
+        || matches!(
+            title_scope,
+            Some(TitleHistoryTitleScope::Titles(_) | TitleHistoryTitleScope::Libraries([]))
+        )
+    {
+        return None;
     }
-    (format!(" WHERE {}", clauses.join(" AND ")), args)
+    let parts = match event_types {
+        None => TITLE_HISTORY_PAGE_DOMAIN_EVENT_TYPES
+            .iter()
+            .map(|event_type| {
+                (
+                    "event_type = {}".to_string(),
+                    vec![SqlArg::Text(event_type.as_str().to_string())],
+                )
+            })
+            .collect::<Vec<_>>(),
+        Some(event_types) => {
+            let mut distinct: Vec<TitleHistoryEventType> = Vec::new();
+            for event_type in event_types {
+                if !distinct.contains(event_type) {
+                    distinct.push(*event_type);
+                }
+            }
+            title_history_event_type_parts(&distinct)
+        }
+    };
+    if parts.len() < 2 {
+        return None;
+    }
+    let branch_limit = i64::try_from(offset.saturating_add(page_size)).unwrap_or(i64::MAX);
+    let mut args = Vec::new();
+    let mut branches = Vec::with_capacity(parts.len());
+    for (index, (part, part_args)) in parts.into_iter().enumerate() {
+        let (scope_clauses, scope_args) =
+            title_history_scope_clauses(title_scope, include_titleless, None);
+        let mut predicate = part;
+        for clause in scope_clauses {
+            predicate.push_str(" AND ");
+            predicate.push_str(&clause);
+        }
+        args.extend(part_args);
+        args.extend(scope_args);
+        args.push(SqlArg::I64(branch_limit));
+        branches.push(format!(
+            "SELECT * FROM (SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events WHERE {predicate} ORDER BY sequence DESC LIMIT {{}}) AS history_type_{index}"
+        ));
+    }
+    args.push(SqlArg::I64(page_size as i64));
+    args.push(SqlArg::I64(offset as i64));
+    Some((
+        format!(
+            "SELECT * FROM ({}) AS history_page ORDER BY sequence DESC LIMIT {{}} OFFSET {{}}",
+            branches.join(" UNION ALL ")
+        ),
+        args,
+    ))
 }
 
 /// Domain event types counted by the dashboard activity aggregate, in the

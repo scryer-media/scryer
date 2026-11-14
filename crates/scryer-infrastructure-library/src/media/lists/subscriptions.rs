@@ -195,6 +195,27 @@ impl ListSubscriptionRepository for ListStore {
         Ok(subscriptions.pop())
     }
 
+    async fn get_by_ids(&self, ids: &[String]) -> AppResult<Vec<ListSubscription>> {
+        let mut subscriptions = Vec::with_capacity(ids.len());
+        // One statement for a page of ids; a longer list is split to stay
+        // under the bind limits.
+        for chunk in ids.chunks(SUBSCRIPTION_ID_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                &format!(
+                    "SELECT {SUBSCRIPTION_COLUMNS} FROM list_subscriptions WHERE id IN ({placeholders})"
+                ),
+                &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+            )
+            .await?;
+            subscriptions.extend(self.hydrate_subscriptions(rows).await?);
+        }
+        Ok(subscriptions)
+    }
+
     async fn list(&self, query: ListSubscriptionQuery) -> AppResult<Vec<ListSubscription>> {
         let mut clauses = Vec::new();
         let mut args = Vec::new();
@@ -463,6 +484,9 @@ impl ListStore {
         Ok(subscriptions)
     }
 }
+
+/// Subscription ids bound per statement of a read by ids.
+const SUBSCRIPTION_ID_CHUNK: usize = 10_000;
 
 const SUBSCRIPTION_WIDTH: usize = 36;
 

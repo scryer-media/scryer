@@ -132,8 +132,27 @@ fn history_filter(title_ids: Vec<String>, limit: usize, offset: usize) -> TitleH
     }
 }
 
-fn has_more(page: &TitleHistoryPage, offset: usize) -> bool {
-    ((offset + page.records.len()) as i64) < page.total_count
+/// Every record a filter matches, read page by page until a page comes back
+/// empty. It never consults `has_more`, so it is the reference for it.
+async fn whole_history(app: &AppUseCase, actor: &User, base: &TitleHistoryFilter) -> Vec<String> {
+    let mut all = Vec::new();
+    loop {
+        let page = app
+            .list_title_history(
+                actor,
+                &TitleHistoryFilter {
+                    limit: 500,
+                    offset: all.len(),
+                    ..base.clone()
+                },
+            )
+            .await
+            .expect("history page");
+        if page.records.is_empty() {
+            return all;
+        }
+        all.extend(page_shape(&page));
+    }
 }
 
 fn page_shape(page: &TitleHistoryPage) -> Vec<String> {
@@ -159,7 +178,9 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
         )
         .await
         .expect("full walk");
-    assert!(full.total_count > 500);
+    let total = full.records.len();
+    assert!(total > 500);
+    assert!(!full.has_more);
     assert!(
         full.records
             .iter()
@@ -173,11 +194,12 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
         (50, 2),
         (500, 0),
         (501, 499),
-        (50, full.total_count as usize - 1),
-        (50, full.total_count as usize),
-        (50, full.total_count as usize + 7),
-        (full.total_count as usize, 0),
-        (full.total_count as usize + 1, 0),
+        (50, total - 1),
+        (50, total),
+        (50, total + 7),
+        (total - 1, 0),
+        (total, 0),
+        (total + 1, 0),
     ] {
         let oracle = app
             .list_title_history(
@@ -186,6 +208,11 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
             )
             .await
             .expect("oracle page");
+        assert_eq!(
+            oracle.has_more,
+            offset + oracle.records.len() < total,
+            "{limit}/{offset}"
+        );
         fixture.domain_events.list_filters.lock().await.clear();
         let merged = app
             .list_title_history(
@@ -195,8 +222,9 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
             .await
             .expect("merged page");
         assert_eq!(page_shape(&merged), page_shape(&oracle), "{limit}/{offset}");
-        assert_eq!(merged.total_count, oracle.total_count, "{limit}/{offset}");
-        // The merged read never walks every title's history.
+        assert_eq!(merged.has_more, oracle.has_more, "{limit}/{offset}");
+        // The merged read never walks every title's history, and reads only
+        // the submissions of the requests that share an id with the title.
         assert!(
             fixture
                 .domain_events
@@ -205,38 +233,28 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
                 .await
                 .iter()
                 .all(|filter| filter.title_id.is_some()
-                    || filter.event_types.as_deref()
-                        == Some(&[DomainEventType::MediaRequestSubmitted][..]))
+                    || (filter.event_types.as_deref()
+                        == Some(&[DomainEventType::MediaRequestSubmitted][..])
+                        && filter.media_request_ids.as_ref().is_some_and(|keys| {
+                            keys.and_removed
+                                && keys.request_ids.len() == 205
+                                && keys.request_ids.contains(&"request-0".to_string())
+                        })))
         );
-
-        for title_ids in [vec![emberfall.clone()], oracle_ids.clone()] {
-            let lazy = app
-                .list_title_history_page(
-                    &fixture.admin,
-                    &history_filter(title_ids, limit, offset),
-                    false,
-                )
-                .await
-                .expect("lazy page");
-            assert_eq!(page_shape(&lazy), page_shape(&oracle), "{limit}/{offset}");
-            assert_eq!(has_more(&lazy, offset), has_more(&oracle, offset));
-        }
     }
 
-    // A title with no history: empty either way.
+    // A title with no history: an empty page with nothing after it.
     let empty = history_filter(vec![fixture.ashgrove.id.clone()], 10, 0);
-    for include_total in [true, false] {
-        let page = app
-            .list_title_history_page(&fixture.admin, &empty, include_total)
-            .await
-            .expect("empty page");
-        assert!(page.records.is_empty());
-        assert_eq!(page.total_count, 0);
-    }
+    let page = app
+        .list_title_history(&fixture.admin, &empty)
+        .await
+        .expect("empty page");
+    assert!(page.records.is_empty());
+    assert!(!page.has_more);
 }
 
 #[tokio::test]
-async fn lazy_totals_keep_pages_and_has_more_for_every_path() {
+async fn has_more_is_exact_at_every_page_boundary_for_every_path() {
     let fixture = seed_history().await;
     let app = &fixture.app;
     let filters = [
@@ -262,47 +280,62 @@ async fn lazy_totals_keep_pages_and_has_more_for_every_path() {
         },
     ];
     for base in filters {
-        let everything = app
-            .list_title_history(
-                &fixture.admin,
-                &TitleHistoryFilter {
-                    limit: 100_000,
-                    ..base.clone()
-                },
-            )
-            .await
-            .expect("whole history");
-        let total = everything.total_count as usize;
-        assert!(total > 0);
+        let everything = whole_history(app, &fixture.admin, &base).await;
+        let total = everything.len();
+        assert!(total > 500, "{total}");
+        // One grouped read returns at most 500 rows whatever limit it is given.
+        let page_cap = if base.group_by_event { 500 } else { usize::MAX };
         for (limit, offset) in [
             (1, 0),
             (2, 1),
             (499, 0),
             (500, 0),
+            (501, 0),
+            // A full page that ends exactly on the last record.
+            (25, total - 25),
+            (499, total - 499),
+            (500, total - 500),
+            // The same pages with exactly one record after them.
+            (25, total - 26),
+            (499, total - 500),
+            (500, total - 501),
             (25, total - 1),
             (25, total),
             (25, total + 3),
             (total, 0),
             (total - 1, 0),
+            (total + 1, 0),
         ] {
-            let filter = TitleHistoryFilter {
-                limit,
-                offset,
-                ..base.clone()
-            };
-            let full = app
-                .list_title_history_page(&fixture.admin, &filter, true)
+            let page = app
+                .list_title_history(
+                    &fixture.admin,
+                    &TitleHistoryFilter {
+                        limit,
+                        offset,
+                        ..base.clone()
+                    },
+                )
                 .await
-                .expect("counted page");
-            let lazy = app
-                .list_title_history_page(&fixture.admin, &filter, false)
-                .await
-                .expect("lazy page");
-            assert_eq!(page_shape(&lazy), page_shape(&full), "{limit}/{offset}");
+                .expect("page");
+            let expected = everything
+                .iter()
+                .skip(offset)
+                .take(limit.min(page_cap))
+                .cloned()
+                .collect::<Vec<_>>();
             assert_eq!(
-                has_more(&lazy, offset),
-                has_more(&full, offset),
-                "{limit}/{offset}"
+                page.records.len(),
+                expected.len(),
+                "{limit}/{offset} grouped={} titles={:?}",
+                base.group_by_event,
+                base.title_ids
+            );
+            assert_eq!(page_shape(&page), expected, "{limit}/{offset}");
+            assert_eq!(
+                page.has_more,
+                offset + expected.len() < total,
+                "{limit}/{offset} grouped={}",
+                base.group_by_event
             );
         }
     }
@@ -367,7 +400,7 @@ async fn chosen_titles_in_a_library_scope_keep_only_titles_in_scope() {
         .await
         .expect("in-scope titles");
     assert_eq!(page_shape(&mixed), page_shape(&in_scope));
-    assert_eq!(mixed.total_count, in_scope.total_count);
+    assert_eq!(mixed.has_more, in_scope.has_more);
     assert!(
         mixed
             .records
@@ -380,7 +413,7 @@ async fn chosen_titles_in_a_library_scope_keep_only_titles_in_scope() {
         .await
         .expect("out-of-scope title");
     assert!(none_in_scope.records.is_empty());
-    assert_eq!(none_in_scope.total_count, 0);
+    assert!(!none_in_scope.has_more);
 }
 
 #[tokio::test]
@@ -559,12 +592,7 @@ async fn library_scoped_history_matches_the_listed_title_read() {
             for (title_ids, title_search) in &title_choices {
                 for event_types in &event_type_choices {
                     for group_by_event in [true, false] {
-                        for (limit, offset, include_total) in [
-                            (1, 0, true),
-                            (7, 3, false),
-                            (25, 1_000, false),
-                            (5_000, 0, true),
-                        ] {
+                        for (limit, offset) in [(1, 0), (7, 3), (25, 1_000), (5_000, 0)] {
                             let filter = TitleHistoryFilter {
                                 event_types: event_types.clone(),
                                 title_ids: title_ids.clone(),
@@ -576,25 +604,13 @@ async fn library_scoped_history_matches_the_listed_title_read() {
                                 ..TitleHistoryFilter::default()
                             };
                             let shape = |page: AppResult<TitleHistoryPage>| {
-                                page.map(|page| (page_shape(&page), page.total_count))
+                                page.map(|page| (page_shape(&page), page.has_more))
                                     .map_err(|error| format!("{error:?}"))
                             };
-                            let scoped = shape(
-                                app.list_title_history_page(actor, &filter, include_total)
-                                    .await,
-                            );
-                            let listed = shape(
-                                app.list_title_history_page_with_title_ids(
-                                    actor,
-                                    &filter,
-                                    include_total,
-                                )
-                                .await,
-                            );
-                            assert_eq!(
-                                scoped, listed,
-                                "actor {actor_index}: {filter:?} include_total={include_total}"
-                            );
+                            let scoped = shape(app.list_title_history(actor, &filter).await);
+                            let listed =
+                                shape(app.list_title_history_with_title_ids(actor, &filter).await);
+                            assert_eq!(scoped, listed, "actor {actor_index}: {filter:?}");
                             compared += 1;
                             if scoped.is_ok_and(|(records, _)| !records.is_empty()) {
                                 non_empty += 1;

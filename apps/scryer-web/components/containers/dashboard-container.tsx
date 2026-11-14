@@ -221,7 +221,11 @@ export function DashboardContainer() {
         "requests",
         async () => {
           const { data, error } = await client
-            .query(dashboardPendingRequestsQuery, {})
+            // The preview leads with the request that has waited longest, so
+            // it asks for the oldest few and nothing else.
+            .query(dashboardPendingRequestsQuery, {
+              limit: PREVIEW_FETCH_LIMIT,
+            })
             .toPromise();
           if (error) throw error;
 

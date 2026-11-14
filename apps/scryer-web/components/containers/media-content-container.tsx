@@ -3483,13 +3483,32 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       });
     };
 
-    refreshPendingHydrationPosters();
+    // A hidden tab skips refreshes and runs one when it becomes visible.
+    let missedWhileHidden = false;
+    const refreshWhileVisible = () => {
+      if (document.hidden) {
+        missedWhileHidden = true;
+        return;
+      }
+      refreshPendingHydrationPosters();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || !missedWhileHidden) {
+        return;
+      }
+      missedWhileHidden = false;
+      refreshPendingHydrationPosters();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    refreshWhileVisible();
     const intervalId = window.setInterval(
-      refreshPendingHydrationPosters,
+      refreshWhileVisible,
       HYDRATION_POSTER_REFRESH_INTERVAL_MS,
     );
 
     return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.clearInterval(intervalId);
     };
   }, [

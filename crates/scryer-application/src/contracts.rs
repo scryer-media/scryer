@@ -1059,6 +1059,15 @@ pub struct AcquisitionScopeStatesQuery {
     pub offset: i64,
 }
 
+/// Which scope an acquisition state row is about, without the rest of the row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcquisitionScopeCoordinates {
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
+    pub series_movie_link_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseDecisionsQuery {
     pub wanted_item_id: Option<String>,
@@ -1348,10 +1357,12 @@ pub struct TitleHistoryFilter {
     pub offset: usize,
 }
 
+/// One page of title history. It carries no count of the matching records:
+/// `has_more` says whether any follow this page.
 #[derive(Clone, Debug)]
 pub struct TitleHistoryPage {
     pub records: Vec<TitleHistoryRecord>,
-    pub total_count: i64,
+    pub has_more: bool,
 }
 
 /// Title-history event counts for one trailing time window, aggregated in SQL.

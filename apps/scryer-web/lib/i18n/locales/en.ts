@@ -1013,7 +1013,7 @@ const en: LocaleDictionary = {
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
     "Title folder must be an absolute path without parent traversal.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":
-    "Title folder has no existing ancestor.",
+    "The drive or volume of the title folder is missing.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Title folder path is required.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":
@@ -9175,6 +9175,7 @@ const en: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} episodes",
   "history.unknownEvent": "Unknown",
   "history.noMore": "No more events",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Load more",
 
   // Indexer error diagnostics

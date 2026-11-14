@@ -54,7 +54,9 @@ pub use facts::{
     us_certification_label,
 };
 pub use preflight::RequestPreflight;
-pub use read_model::{MediaRequestPolicyFacts, RequestRuleDecisionView};
+pub use read_model::{
+    MediaRequestPolicyFacts, MediaRequestPolicySelection, RequestRuleDecisionView,
+};
 pub use service::{
     REQUEST_MAX_LEASE_DAYS, RequestRuleDraft, RequestRulePreviewMatcher, RequestRulePreviewRequest,
     RequestRulePreviewResult, RequestRuleSample, RequestRuleSetDetail, validate_lease_days,

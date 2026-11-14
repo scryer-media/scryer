@@ -185,6 +185,7 @@ pub(super) async fn title_updated_events(app: &AppUseCase, title_id: &str) -> Ve
             title_id: Some(title_id.to_string()),
             facet: None,
             stream_id: None,
+            media_request_ids: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 100,

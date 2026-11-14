@@ -185,7 +185,11 @@ impl MediaRequestMutations {
         // re-evaluates the request, and returning it without the fresh verdict
         // would show the requester the decision they had before they edited.
         let policy = app
-            .media_request_policy_facts(&actor, std::slice::from_ref(&request))
+            .media_request_policy_facts(
+                &actor,
+                std::slice::from_ref(&request),
+                scryer_application::request_rules::MediaRequestPolicySelection::ALL,
+            )
             .await
             .unwrap_or_default();
         let facts = policy.get(&request.id).cloned().unwrap_or_default();

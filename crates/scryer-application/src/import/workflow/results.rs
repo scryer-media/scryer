@@ -285,6 +285,10 @@ async fn execute_history_retry(
                 skip_reason,
                 error_message: Some(error.to_string()),
                 release_burned: false,
+                title_id: release_evidence
+                    .title_id()
+                    .map(str::to_string)
+                    .or_else(|| target_title_id.map(str::to_string)),
                 ..base_completed_import_result(import_id, completed, release_evidence, started_at)
             };
             let result_json = serde_json::to_string(&result).ok();

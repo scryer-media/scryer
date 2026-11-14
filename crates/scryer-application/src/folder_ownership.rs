@@ -71,11 +71,7 @@ pub(crate) async fn run_folder_check_blocking<T: Send + 'static>(
 /// Resolve links in the existing prefix without requiring a destination to
 /// exist yet. Callers must repeat this check after creating the destination.
 pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::PathBuf> {
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|part| matches!(part, std::path::Component::ParentDir))
-    {
+    if !absolute_without_parent_traversal(path) {
         return Err(AppError::validation_refused(
             crate::error_reasons::folder_ownership::TITLE_FOLDER_INVALID,
             "title folder must be an absolute path without parent traversal",
@@ -101,19 +97,13 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
                 return Ok(resolved);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let component = ancestor.file_name().ok_or_else(|| {
-                    AppError::validation_refused(
-                        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
-                        "title folder has no existing ancestor",
-                    )
-                })?;
+                let component = ancestor
+                    .file_name()
+                    .ok_or_else(|| missing_drive_refusal(path))?;
                 missing.push(component.to_os_string());
-                ancestor = ancestor.parent().ok_or_else(|| {
-                    AppError::validation_refused(
-                        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
-                        "title folder has no existing ancestor",
-                    )
-                })?;
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| missing_drive_refusal(path))?;
             }
             Err(error) => {
                 return Err(AppError::validation_refused(
@@ -128,6 +118,20 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
     }
 }
 
+/// Nothing on the way to `path` exists, down to its drive or volume. The
+/// refusal names both, so the reader knows which drive to bring back.
+fn missing_drive_refusal(path: &Path) -> AppError {
+    let drive = path.ancestors().last().unwrap_or(path);
+    AppError::validation_refused(
+        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
+        format!(
+            "title folder {} cannot be reached: drive or volume {} is missing",
+            path.display(),
+            drive.display(),
+        ),
+    )
+}
+
 /// Whether two stored folders are the same folder or one holds the other, as
 /// spelled. Nothing on disk is read, so a link or a case-insensitive
 /// filesystem can make two folders overlap that this calls unrelated;
@@ -138,8 +142,20 @@ pub(crate) fn stored_title_folders_overlap(left: &str, right: &str) -> bool {
         || crate::title_folder_rules::path_is_strictly_within(right, left)
 }
 
+fn absolute_without_parent_traversal(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+}
+
+/// Whether two stored folders overlap once links are resolved.
+///
+/// `left` is the folder the caller is about to use, so it must resolve.
+/// `right` is another title's folder: when part of it cannot be read it is
+/// still compared, as [`UnreadableFolders`] describes, and never refuses.
 pub(crate) fn title_folders_overlap(left: &str, right: &str) -> AppResult<bool> {
-    title_folders_overlap_with(left, &mut None, right)
+    OverlapLeft::new(left).overlaps(right)
 }
 
 /// One folder compared with many others by [`title_folders_overlap`],
@@ -148,6 +164,7 @@ pub(crate) fn title_folders_overlap(left: &str, right: &str) -> AppResult<bool> 
 pub(crate) struct OverlapLeft {
     stored: String,
     resolved: Option<std::path::PathBuf>,
+    others: UnreadableFolders,
 }
 
 impl OverlapLeft {
@@ -155,53 +172,204 @@ impl OverlapLeft {
         Self {
             stored: stored.to_string(),
             resolved: None,
+            others: UnreadableFolders::default(),
         }
     }
 
     pub(crate) fn overlaps(&mut self, right: &str) -> AppResult<bool> {
-        title_folders_overlap_with(&self.stored, &mut self.resolved, right)
+        fn overlaps(left: &str, right: &str) -> bool {
+            stored_title_folders_overlap(left, right)
+        }
+        if overlaps(&self.stored, right) {
+            return Ok(true);
+        }
+        let left = match &self.resolved {
+            Some(resolved) => resolved.clone(),
+            None => {
+                let resolved = resolved_folder_identity(&stored_path_to_path_buf(&self.stored))?;
+                self.resolved = Some(resolved.clone());
+                resolved
+            }
+        };
+        let other = stored_path_to_path_buf(right);
+        if !absolute_without_parent_traversal(&other) {
+            tracing::debug!(
+                folder = right,
+                "invalid unrelated stored folder omitted from alias comparison"
+            );
+            return Ok(false);
+        }
+        let right = self.others.resolve(&other);
+        let left_string = path_to_stored_string(&left);
+        let right_string = path_to_stored_string(&right.path);
+        // The case behaviour of a folder that cannot be read is unknown, so
+        // it is compared without regard to case.
+        Ok(overlaps(&left_string, &right_string)
+            || (overlaps(&left_string.to_lowercase(), &right_string.to_lowercase())
+                && (!right.whole
+                    || folder_case_insensitive(&left)
+                    || folder_case_insensitive(&right.path))))
     }
 }
 
-fn title_folders_overlap_with(
-    left: &str,
-    resolved_left: &mut Option<std::path::PathBuf>,
-    right: &str,
-) -> AppResult<bool> {
-    fn overlaps(left: &str, right: &str) -> bool {
-        stored_title_folders_overlap(left, right)
-    }
-    if overlaps(left, right) {
-        return Ok(true);
-    }
-    let left = match resolved_left {
-        Some(resolved) => resolved.clone(),
-        None => {
-            let resolved = resolved_folder_identity(&stored_path_to_path_buf(left))?;
-            *resolved_left = Some(resolved.clone());
-            resolved
-        }
-    };
-    let right = match resolved_folder_identity(&stored_path_to_path_buf(right)) {
-        Ok(path) => path,
-        Err(error) => {
-            let other = stored_path_to_path_buf(right);
-            if !other.is_absolute()
-                || other
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
-                tracing::debug!(%error, "invalid unrelated stored folder omitted from alias comparison");
-                return Ok(false);
+/// Another title's folder, resolved as far as it can be read.
+struct OtherFolder {
+    path: std::path::PathBuf,
+    /// False when part of the folder could not be read and is kept as spelled.
+    whole: bool,
+}
+
+/// Resolves the folders of other titles for one check.
+///
+/// Another title's folder can sit on a drive that is unplugged, a share that
+/// is down or a directory this process may not read. That says nothing about
+/// the folder being checked, so it never refuses the check: links are
+/// resolved in the part of the folder that can be read, and the rest is
+/// compared as spelled. A link at or below the unreadable point cannot be
+/// seen.
+///
+/// What a folder answered is remembered for the rest of the check, so the
+/// folders that many titles share are read once, and nothing below a folder
+/// that is missing or dead is probed at all.
+#[derive(Default)]
+struct UnreadableFolders {
+    seen: std::collections::HashMap<std::path::PathBuf, SeenFolder>,
+    #[cfg(test)]
+    probes: u64,
+}
+
+enum SeenFolder {
+    /// It exists and resolves to this. Kept only for a folder reached
+    /// through one below it, which other titles are likely to share.
+    Resolved(std::path::PathBuf),
+    /// It does not exist, so nothing below it does.
+    Missing,
+    /// It refused access, or it is there and does not resolve, as a link
+    /// that cannot be followed. A folder inside it can still answer (on
+    /// Windows, inside a folder that refuses), so only this folder is known
+    /// to be unreadable.
+    Refused,
+    /// It could not be inspected at all, and nothing below it can be either.
+    Dead,
+}
+
+impl UnreadableFolders {
+    fn resolve(&mut self, path: &Path) -> OtherFolder {
+        let mut whole = true;
+        // The highest folder known missing or dead: nothing from `path` up
+        // to it needs a probe.
+        let mut skip_through = None;
+        if !self.seen.is_empty() {
+            for ancestor in path.ancestors() {
+                match self.seen.get(ancestor) {
+                    Some(SeenFolder::Dead) => {
+                        whole = false;
+                        skip_through = Some(ancestor);
+                    }
+                    Some(SeenFolder::Missing) => skip_through = Some(ancestor),
+                    Some(SeenFolder::Resolved(_) | SeenFolder::Refused) | None => {}
+                }
             }
-            return Err(error);
         }
-    };
-    let left_string = path_to_stored_string(&left);
-    let right_string = path_to_stored_string(&right);
-    Ok(overlaps(&left_string, &right_string)
-        || (overlaps(&left_string.to_lowercase(), &right_string.to_lowercase())
-            && (folder_case_insensitive(&left) || folder_case_insensitive(&right))))
+        let mut ancestor = path;
+        let mut below = Vec::new();
+        loop {
+            if let Some(skipped) = skip_through {
+                if ancestor == skipped {
+                    skip_through = None;
+                }
+            } else {
+                match self.seen.get(ancestor) {
+                    Some(SeenFolder::Resolved(resolved)) => {
+                        let mut resolved = resolved.clone();
+                        resolved.extend(below.iter().rev());
+                        return OtherFolder {
+                            path: resolved,
+                            whole,
+                        };
+                    }
+                    Some(SeenFolder::Refused | SeenFolder::Dead) => whole = false,
+                    Some(SeenFolder::Missing) => {}
+                    None => match self.probe(ancestor, ancestor != path) {
+                        Ok(mut resolved) => {
+                            resolved.extend(below.iter().rev());
+                            return OtherFolder {
+                                path: resolved,
+                                whole,
+                            };
+                        }
+                        Err(readable_above) => whole &= readable_above,
+                    },
+                }
+            }
+            let (Some(name), Some(parent)) = (ancestor.file_name(), ancestor.parent()) else {
+                return OtherFolder {
+                    path: path.to_path_buf(),
+                    whole: false,
+                };
+            };
+            below.push(name);
+            ancestor = parent;
+        }
+    }
+
+    /// Read `folder` and remember what it answered. The error says whether
+    /// the folder is only missing, which leaves the folder above it to answer
+    /// for it in full.
+    fn probe(&mut self, folder: &Path, shared: bool) -> Result<std::path::PathBuf, bool> {
+        self.probed();
+        let (failure, seen) = match std::fs::symlink_metadata(folder) {
+            Ok(_) => {
+                self.probed();
+                match std::fs::canonicalize(folder) {
+                    Ok(resolved) => {
+                        if shared {
+                            self.seen.insert(
+                                folder.to_path_buf(),
+                                SeenFolder::Resolved(resolved.clone()),
+                            );
+                        }
+                        return Ok(resolved);
+                    }
+                    Err(error) => (error, SeenFolder::Refused),
+                }
+            }
+            // A missing folder resolves through its parent. A missing drive
+            // or share has none, and nothing on it can be read.
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && folder.parent().is_some() =>
+            {
+                self.seen.insert(folder.to_path_buf(), SeenFolder::Missing);
+                return Err(true);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                (error, SeenFolder::Refused)
+            }
+            Err(error) => (error, SeenFolder::Dead),
+        };
+        tracing::debug!(
+            folder = %folder.display(),
+            error = %failure,
+            "folder of another title cannot be read; compared as spelled"
+        );
+        self.seen.insert(folder.to_path_buf(), seen);
+        Err(false)
+    }
+
+    /// Whether `folder` is at or below a folder that could not be inspected
+    /// at all.
+    fn dead(&self, folder: &Path) -> bool {
+        folder
+            .ancestors()
+            .any(|ancestor| matches!(self.seen.get(ancestor), Some(SeenFolder::Dead)))
+    }
+
+    fn probed(&mut self) {
+        #[cfg(test)]
+        {
+            self.probes += 1;
+        }
+    }
 }
 
 /// Probe existing directory entries without writing to the library. Unknown
@@ -549,16 +717,57 @@ fn overlap_keys_related(left: &str, right: &str) -> bool {
     within(left, right) || within(right, left)
 }
 
+/// One library root as the overlap prefilter compares owners against it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RootOverlapKeys {
+    key: String,
+    /// The key of the root with its links resolved as far as it can be read,
+    /// or `None` when the root is not a path that can be resolved.
+    resolved: Option<String>,
+    /// The root as spelled. Keys ignore case, so on a volume that does not, a
+    /// folder can share a root's key and be another folder: only a folder
+    /// spelled as the root is taken for it.
+    spelled: std::path::PathBuf,
+    /// Nothing at or below the root can be read: an owner under it is
+    /// compared by its keys alone.
+    dead: bool,
+}
+
+/// What one probe of a folder says to the link walk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkProbe {
+    /// Not a link, or a folder that refused access: whether that one is a
+    /// link cannot be told, which is part of what an unreadable folder costs.
+    /// A folder inside it can still answer on Windows, so the walk goes on.
+    Plain,
+    Link,
+    /// Missing, or failed some other way: nothing at or below it can be
+    /// inspected, so nothing there is probed.
+    Gone,
+}
+
+impl LinkProbe {
+    pub(crate) fn of(metadata: &std::io::Result<std::fs::Metadata>) -> Self {
+        match metadata {
+            Ok(metadata) if metadata.file_type().is_symlink() => Self::Link,
+            Ok(_) => Self::Plain,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Self::Plain,
+            Err(_) => Self::Gone,
+        }
+    }
+}
+
 /// Keys for comparing one move candidate against every recorded owner while
 /// resolving the candidate and each library root only once.
 pub(crate) struct FolderOverlapKeys {
     candidate: Vec<String>,
-    /// Library root keys with their resolved spelling, or `None` when the
-    /// root could not be resolved.
-    roots: Vec<(String, Option<String>)>,
-    /// Whether a folder below a library root is a link, shared by owners
-    /// under the same organizing folders.
-    links: std::collections::HashMap<std::path::PathBuf, bool>,
+    candidate_resolved: std::path::PathBuf,
+    roots: Vec<RootOverlapKeys>,
+    /// What each folder walked for links answered, shared by owners under
+    /// the same organizing folders.
+    links: std::collections::HashMap<std::path::PathBuf, LinkProbe>,
+    /// Whether `links` holds a folder that is gone.
+    gone: bool,
     link_probes: u64,
 }
 
@@ -585,43 +794,74 @@ impl FolderOverlapKeys {
         .flatten()
         .collect();
         candidate.dedup();
+        // A root that cannot be read does not refuse the check. It is
+        // resolved as far as it can be read, as another title's folder is.
+        let mut unreadable = UnreadableFolders::default();
         let roots = root_paths
             .iter()
             .filter_map(|root| {
                 let key = overlap_prefilter_key(root)?;
-                let resolved = resolved_folder_identity(&stored_path_to_path_buf(root))
-                    .ok()
-                    .and_then(|resolved| overlap_prefilter_key(&path_to_stored_string(&resolved)));
-                Some((key, resolved))
+                let path = stored_path_to_path_buf(root);
+                if !absolute_without_parent_traversal(&path) {
+                    return Some(RootOverlapKeys {
+                        key,
+                        resolved: None,
+                        spelled: path,
+                        dead: true,
+                    });
+                }
+                let resolved = unreadable.resolve(&path);
+                Some(RootOverlapKeys {
+                    key,
+                    resolved: overlap_prefilter_key(&path_to_stored_string(&resolved.path)),
+                    dead: unreadable.dead(&path),
+                    spelled: path,
+                })
             })
             .collect();
         Ok(Self {
             candidate,
+            candidate_resolved: resolved,
             roots,
             links: Default::default(),
+            gone: false,
             link_probes: 0,
         })
+    }
+
+    /// The exact comparison for the candidate these keys were built for,
+    /// `folder_path`, without resolving it a second time.
+    pub(crate) fn exact_comparison(&self, folder_path: &str) -> OverlapLeft {
+        OverlapLeft {
+            stored: folder_path.to_string(),
+            resolved: Some(self.candidate_resolved.clone()),
+            others: UnreadableFolders::default(),
+        }
     }
 
     /// Whether `owned_path` needs the exact, resolving overlap comparison.
     /// An owner unrelated by key, also after substituting its resolved library
     /// root, with no link between that root and its folder, cannot overlap.
-    pub(crate) fn needs_exact_comparison(&mut self, owned_path: &str) -> AppResult<bool> {
-        self.needs_exact_comparison_with_evidence(owned_path, &mut |_| false)
+    /// A folder on the way that cannot be inspected is not counted as a link:
+    /// the exact comparison could not read through it either.
+    pub(crate) fn needs_exact_comparison(&mut self, owned_path: &str) -> bool {
+        self.needs_exact_comparison_with_evidence(owned_path, &mut |_| None)
     }
 
+    /// `evidence` answers for a folder it already knows or probes itself, and
+    /// `None` for one it did not probe.
     fn needs_exact_comparison_with_evidence(
         &mut self,
         owned_path: &str,
-        verified_directory: &mut impl FnMut(&Path) -> bool,
-    ) -> AppResult<bool> {
+        evidence: &mut impl FnMut(&Path) -> Option<LinkProbe>,
+    ) -> bool {
         let prepared = OwnerOverlapPrefilter::prepare(owned_path, &self.roots);
-        self.needs_exact_comparison_prepared(&prepared, owned_path, verified_directory)
+        self.needs_exact_comparison_prepared(&prepared, evidence)
     }
 
     /// The library root keys these keys were built with, which an
     /// [`OwnerOverlapPrefilter`] must have been prepared with.
-    pub(crate) fn root_keys(&self) -> &[(String, Option<String>)] {
+    pub(crate) fn root_keys(&self) -> &[RootOverlapKeys] {
         &self.roots
     }
 
@@ -630,51 +870,53 @@ impl FolderOverlapKeys {
     pub(crate) fn needs_exact_comparison_prepared(
         &mut self,
         prepared: &OwnerOverlapPrefilter,
-        owned_path: &str,
-        verified_directory: &mut impl FnMut(&Path) -> bool,
-    ) -> AppResult<bool> {
+        evidence: &mut impl FnMut(&Path) -> Option<LinkProbe>,
+    ) -> bool {
         let OwnerOverlapPrefilter::Keys {
             keys: owner_keys,
             path,
             chain,
         } = prepared
         else {
-            return Ok(true);
+            return true;
         };
         if owner_keys.iter().any(|owner| {
             self.candidate
                 .iter()
                 .any(|candidate| overlap_keys_related(owner, candidate))
         }) {
-            return Ok(true);
+            return true;
         }
-        for ancestor in path.ancestors().take(*chain) {
-            let is_link = match self.links.get(ancestor) {
-                Some(is_link) => *is_link,
-                None => {
-                    if verified_directory(ancestor) {
-                        self.links.insert(ancestor.to_path_buf(), false);
-                        continue;
-                    }
-                    self.link_probes += 1;
-                    let is_link = match std::fs::symlink_metadata(ancestor) {
-                        Ok(metadata) => metadata.file_type().is_symlink(),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                        Err(error) => {
-                            return Err(AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE, format!(
-                                "cannot inspect folder {owned_path} owned by another title: {error}"
-                            )));
-                        }
-                    };
-                    self.links.insert(ancestor.to_path_buf(), is_link);
-                    is_link
+        // Nothing at or below a folder already found gone is probed: a share
+        // that is down is asked once, not once for every owner on it.
+        let mut skip = 0;
+        if self.gone {
+            for (depth, ancestor) in path.ancestors().take(*chain).enumerate() {
+                match self.links.get(ancestor) {
+                    Some(LinkProbe::Link) => return true,
+                    Some(LinkProbe::Gone) => skip = depth + 1,
+                    Some(LinkProbe::Plain) | None => {}
                 }
-            };
-            if is_link {
-                return Ok(true);
             }
         }
-        Ok(false)
+        for ancestor in path.ancestors().take(*chain).skip(skip) {
+            let probe = match self.links.get(ancestor) {
+                Some(probe) => *probe,
+                None => {
+                    let probe = evidence(ancestor).unwrap_or_else(|| {
+                        self.link_probes += 1;
+                        LinkProbe::of(&std::fs::symlink_metadata(ancestor))
+                    });
+                    self.gone |= probe == LinkProbe::Gone;
+                    self.links.insert(ancestor.to_path_buf(), probe);
+                    probe
+                }
+            };
+            if probe == LinkProbe::Link {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -684,30 +926,39 @@ impl FolderOverlapKeys {
 /// file and no catalog row.
 pub(crate) enum OwnerOverlapPrefilter {
     /// The owner needs the exact comparison whatever the candidate: its folder
-    /// has no key, lies under a root that could not be resolved, or is
-    /// relative.
+    /// has no key or is relative.
     Exact,
     Keys {
-        /// The owner's key and its key under each resolved root it lies in.
+        /// The owner's key and its key under each root it lies in, with that
+        /// root resolved as far as it can be read.
         keys: Vec<String>,
         path: std::path::PathBuf,
         /// How many of `path`'s ancestors, from `path` itself, lie below the
-        /// nearest resolved root and are walked for links.
+        /// nearest library root spelled as one of them, and are walked for
+        /// links. Every ancestor when there is no such root: the scan index
+        /// then asks this owner on every claim. Zero when nothing at or below
+        /// that root can be read: the owner is then compared by its keys,
+        /// which is all the exact comparison could do.
         chain: usize,
     },
 }
 
 impl OwnerOverlapPrefilter {
-    pub(crate) fn prepare(owned_path: &str, roots: &[(String, Option<String>)]) -> Self {
+    pub(crate) fn prepare(owned_path: &str, roots: &[RootOverlapKeys]) -> Self {
         let Some(owner) = overlap_prefilter_key(owned_path) else {
             return Self::Exact;
         };
         let mut keys = vec![owner.clone()];
-        for (root, resolved) in roots {
-            if overlap_keys_related(&owner, root) && owner.len() >= root.len() {
-                let Some(resolved) = resolved else {
-                    return Self::Exact;
-                };
+        for root in roots {
+            let RootOverlapKeys {
+                key: root,
+                resolved,
+                ..
+            } = root;
+            if let Some(resolved) = resolved
+                && overlap_keys_related(&owner, root)
+                && owner.len() >= root.len()
+            {
                 let rest = owner[root.len()..].trim_start_matches('/');
                 keys.push(if rest.is_empty() {
                     resolved.clone()
@@ -720,16 +971,25 @@ impl OwnerOverlapPrefilter {
         if !path.is_absolute() {
             return Self::Exact;
         }
-        let chain = path
-            .ancestors()
-            .take_while(|ancestor| {
-                !overlap_prefilter_key(&path_to_stored_string(ancestor)).is_some_and(|key| {
-                    roots
-                        .iter()
-                        .any(|(root, resolved)| resolved.is_some() && *root == key)
-                })
-            })
-            .count();
+        let mut chain = 0;
+        for ancestor in path.ancestors() {
+            let key = overlap_prefilter_key(&path_to_stored_string(ancestor));
+            // Root keys ignore case. A folder that shares a root's key and is
+            // spelled another way can be another folder, and a link: the
+            // root's resolved key says nothing of it, so the walk goes on
+            // through it and above it.
+            let mut here = roots
+                .iter()
+                .filter(|root| key.as_ref() == Some(&root.key) && root.spelled == ancestor)
+                .peekable();
+            if here.peek().is_some() {
+                if here.all(|root| root.dead) {
+                    chain = 0;
+                }
+                break;
+            }
+            chain += 1;
+        }
         Self::Keys { keys, path, chain }
     }
 }
@@ -787,12 +1047,12 @@ pub(crate) async fn ensure_folder_move_available_to_title(
     let root_paths = FolderOverlapKeys::root_paths(app).await?;
     let mut scan = MoveOverlapScan {
         title_id: title.id.clone(),
+        left: OverlapLeft::new(&folder_path),
         folder_path,
         owners,
         next: first,
         keys: None,
         root_paths,
-        left: None,
     };
     loop {
         let (returned, found) = run_folder_check_blocking(move || {
@@ -836,7 +1096,7 @@ struct MoveOverlapScan {
     next: usize,
     keys: Option<FolderOverlapKeys>,
     root_paths: Vec<String>,
-    left: Option<std::path::PathBuf>,
+    left: OverlapLeft,
 }
 
 impl MoveOverlapScan {
@@ -859,12 +1119,12 @@ impl MoveOverlapScan {
                 .keys
                 .as_mut()
                 .expect("overlap keys loaded")
-                .needs_exact_comparison(owned_path)?
+                .needs_exact_comparison(owned_path)
             {
                 continue;
             }
             let folder_path = &self.folder_path;
-            let overlaps = title_folders_overlap_with(folder_path, &mut self.left, owned_path)
+            let overlaps = self.left.overlaps(owned_path)
                 .map_err(|error| {
                     AppError::validation_refused(crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE, format!(
                         "cannot compare folder {folder_path} with folder {owned_path} owned by title {}: {error}",
@@ -1418,7 +1678,7 @@ mod tests {
         ];
         for owner in owners {
             let exact = title_folders_overlap(&candidate, &owner);
-            let filtered = if keys.needs_exact_comparison(&owner).unwrap_or(true) {
+            let filtered = if keys.needs_exact_comparison(&owner) {
                 title_folders_overlap(&candidate, &owner)
             } else {
                 Ok(false)
@@ -1444,13 +1704,12 @@ mod tests {
                 .unwrap();
         for owner in [alias, looping] {
             let owner = path_to_stored_string(owner);
-            assert!(keys.needs_exact_comparison(&owner).unwrap_or(true));
-            let exact = title_folders_overlap(&candidate, &owner);
-            if owner.ends_with("Loop") {
-                assert!(exact.is_err());
-            } else {
-                assert!(exact.unwrap());
-            }
+            assert!(keys.needs_exact_comparison(&owner));
+            // A link that cannot be followed is compared as spelled.
+            assert_eq!(
+                title_folders_overlap(&candidate, &owner).unwrap(),
+                !owner.ends_with("Loop")
+            );
         }
     }
 
@@ -1491,6 +1750,415 @@ mod tests {
                 &path_to_stored_string(root.path().join("Alias/Example/Season 01")),
             )
             .unwrap()
+        );
+    }
+
+    /// `real` with a folder in it, `alias` linked to `real`, `real/Dead`, a
+    /// link that cannot be followed, and `real/Blocker`, a file: nothing at
+    /// or below the link, or below the file, can be read, whoever runs the
+    /// test.
+    #[cfg(unix)]
+    fn unreadable_folder_fixture(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::fs::canonicalize(temp).unwrap();
+        let real = base.join("real");
+        std::fs::create_dir_all(real.join("Lantern")).unwrap();
+        std::os::unix::fs::symlink(&real, base.join("alias")).unwrap();
+        let dead = real.join("Dead");
+        std::os::unix::fs::symlink(&dead, &dead).unwrap();
+        // A file where a folder is recorded: nothing below it can even be
+        // inspected, as on a drive that is unplugged.
+        std::fs::write(real.join("Blocker"), b"").unwrap();
+        (base, dead)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn another_titles_unreadable_folder_is_compared_as_spelled() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, dead) = unreadable_folder_fixture(temp.path());
+        let real = base.join("real");
+        let overlap = |left: &Path, right: &Path| {
+            title_folders_overlap(&path_to_stored_string(left), &path_to_stored_string(right))
+        };
+        // Unrelated to the unreadable folder: compared, and no overlap.
+        assert!(!overlap(&real.join("Lantern"), &dead.join("Owned")).unwrap());
+        assert!(!overlap(&real.join("Lantern"), &dead).unwrap());
+        // As spelled, the folder holds the unreadable one.
+        assert!(overlap(&real, &dead.join("Owned")).unwrap());
+        // The readable part is still resolved: `alias` is `real`.
+        assert!(overlap(&real, &base.join("alias/Dead/Owned")).unwrap());
+        assert!(!overlap(&real.join("Lantern"), &base.join("alias/Dead/Owned")).unwrap());
+        // The folder being checked must itself resolve.
+        assert_eq!(
+            overlap(&dead.join("Owned"), &real.join("Lantern"))
+                .unwrap_err()
+                .validation_reason(),
+            Some(crate::error_reasons::folder_ownership::CANNOT_INSPECT_TITLE_FOLDER)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn another_titles_unreadable_folder_is_compared_without_regard_to_case() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let locked = base.join("Locked");
+        std::fs::create_dir_all(locked.join("Owned")).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A privileged test user reads the folder anyway and proves nothing.
+        let unreadable = std::fs::symlink_metadata(locked.join("Owned")).is_err();
+        let overlaps = title_folders_overlap(
+            &path_to_stored_string(base.join("locked")),
+            &path_to_stored_string(locked.join("Owned")),
+        );
+        let unrelated = title_folders_overlap(
+            &path_to_stored_string(base.join("Lantern")),
+            &path_to_stored_string(locked.join("Owned")),
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!unrelated.unwrap());
+        if unreadable {
+            assert!(overlaps.unwrap());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_below_an_unreadable_folder_is_probed_twice() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, dead) = unreadable_folder_fixture(temp.path());
+        let mut others = UnreadableFolders::default();
+        let first = others.resolve(&dead.join("Owned"));
+        assert_eq!(first.path, base.join("real/Dead/Owned"));
+        assert!(!first.whole);
+        // The folder, the link, following the link, then `real` twice.
+        assert_eq!(others.probes, 5);
+        let second = others.resolve(&base.join("alias/Lantern/Season 01"));
+        assert_eq!(second.path, base.join("real/Lantern/Season 01"));
+        assert!(second.whole);
+        let before = others.probes;
+        let third = others.resolve(&dead.join("Other/Season 01"));
+        assert_eq!(third.path, base.join("real/Dead/Other/Season 01"));
+        assert!(!third.whole);
+        // The two folders below the link, once each. The link and `real`
+        // above it have already answered.
+        assert_eq!(others.probes - before, 2);
+        let fourth = others.resolve(&dead.join("Other/Season 02"));
+        assert_eq!(fourth.path, base.join("real/Dead/Other/Season 02"));
+        assert!(!fourth.whole);
+        assert_eq!(others.probes - before, 2, "nothing below `Other` is asked");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folders_shared_by_other_titles_are_read_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir_all(base.join("Present")).unwrap();
+        let mut others = UnreadableFolders::default();
+        // Titles whose organizing folder is missing: the folder is asked
+        // once, then nothing under it is asked at all.
+        for name in ["One", "Two", "Three"] {
+            let other = others.resolve(&base.join("Missing/Movies").join(name));
+            assert_eq!(other.path, base.join("Missing/Movies").join(name));
+            assert!(other.whole, "a missing folder is not an unreadable one");
+        }
+        // One, Movies, Missing, then the folder above them twice.
+        assert_eq!(others.probes, 5);
+
+        // Titles under a folder that refuses access: each title's own folder
+        // is asked, since a folder inside a refusing one can still answer on
+        // Windows, but the folders they share are not asked again.
+        let locked = base.join("Locked");
+        std::fs::create_dir_all(locked.join("Movies")).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A privileged test user reads the folder anyway and proves nothing.
+        let refused = std::fs::symlink_metadata(locked.join("Movies")).is_err();
+        let mut others = UnreadableFolders::default();
+        let mut probes = Vec::new();
+        let mut resolved = Vec::new();
+        for name in ["One", "Two", "Three"] {
+            let before = others.probes;
+            resolved.push(others.resolve(&locked.join("Movies").join(name)));
+            probes.push(others.probes - before);
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if refused {
+            // One, Movies, then `Locked` itself twice; then one probe each.
+            assert_eq!(probes, [4, 1, 1]);
+            for (other, name) in resolved.iter().zip(["One", "Two", "Three"]) {
+                assert_eq!(other.path, locked.join("Movies").join(name));
+                assert!(!other.whole);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_walk_asks_a_folder_that_is_gone_once_for_every_owner_under_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir_all(base.join("library/Lantern")).unwrap();
+        // A file where a folder is recorded fails every path through it, as a
+        // share that is down does.
+        std::fs::write(base.join("down"), b"").unwrap();
+        let roots = vec![path_to_stored_string(base.join("library"))];
+        let candidate = path_to_stored_string(base.join("library/Lantern"));
+        for other_library in ["down/share", "missing"] {
+            // Owners of another library, outside the roots the check was given.
+            let owner = |name: &str| {
+                path_to_stored_string(base.join(other_library).join("Movies").join(name))
+            };
+            let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
+            assert!(!keys.needs_exact_comparison(&owner("First")));
+            let first = keys.link_probes;
+            assert!(first > 0);
+            for index in 0..50 {
+                assert!(!keys.needs_exact_comparison(&owner(&format!("Owner {index}"))));
+            }
+            assert_eq!(keys.link_probes, first, "{other_library}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_under_a_dead_root_is_walked_only_when_it_shares_no_more_than_its_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, dead) = unreadable_folder_fixture(temp.path());
+        let real = base.join("real");
+        let blocked = real.join("Blocker/Library");
+        let roots = vec![
+            path_to_stored_string(&real),
+            path_to_stored_string(&blocked),
+            path_to_stored_string(&dead),
+        ];
+        let keys =
+            FolderOverlapKeys::from_roots(&path_to_stored_string(real.join("Lantern")), &roots)
+                .unwrap();
+        let chain = |owner: std::path::PathBuf| match OwnerOverlapPrefilter::prepare(
+            &path_to_stored_string(owner),
+            keys.root_keys(),
+        ) {
+            OwnerOverlapPrefilter::Keys { chain, .. } => chain,
+            OwnerOverlapPrefilter::Exact => panic!("an absolute owner has keys"),
+        };
+        assert_eq!(chain(blocked.join("Owned")), 0);
+        assert_eq!(chain(blocked.join("Shelf/Owned")), 0);
+        // Root keys ignore case. On a volume that does not, `library` is
+        // another folder, under the readable root: it is walked up to that
+        // root.
+        assert_eq!(chain(real.join("Blocker/library/Owned")), 3);
+        assert_eq!(chain(real.join("Lantern")), 1);
+        // A root that is there but does not resolve is not dead.
+        assert_eq!(chain(dead.join("Owned")), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_under_an_unreadable_library_root_is_prefiltered_as_spelled() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, dead) = unreadable_folder_fixture(temp.path());
+        let real = base.join("real");
+        let blocked = real.join("Blocker/Library");
+        let roots = vec![
+            path_to_stored_string(&real),
+            path_to_stored_string(&blocked),
+            path_to_stored_string(&dead),
+        ];
+        let candidate = path_to_stored_string(real.join("Lantern"));
+        let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
+        for owner in [blocked.join("Owned"), blocked.join("O/Owned")] {
+            assert!(!keys.needs_exact_comparison(&path_to_stored_string(owner)));
+        }
+        assert_eq!(keys.link_probes, 0, "nothing under the root is probed");
+        // A root that is a link that cannot be followed is there, so the
+        // folders in it are asked, once each.
+        for owner in [dead.join("Owned"), dead.join("Other")] {
+            assert!(!keys.needs_exact_comparison(&path_to_stored_string(owner)));
+        }
+        assert_eq!(keys.link_probes, 2);
+        // Related as spelled, so it still goes to the exact comparison.
+        let mut holding =
+            FolderOverlapKeys::from_roots(&path_to_stored_string(&real), &roots).unwrap();
+        for owner in [blocked.join("Owned"), dead.join("Owned")] {
+            assert!(holding.needs_exact_comparison(&path_to_stored_string(owner)));
+        }
+        assert_eq!(holding.link_probes, 0);
+    }
+
+    /// An import, rename or scan claim of `candidate` while another title's
+    /// folder cannot be read, outside a scan and inside one.
+    #[cfg(unix)]
+    async fn move_check_with_unreadable_owner(
+        owned: &Path,
+        candidate: &Path,
+        roots: &[&Path],
+    ) -> [AppResult<()>; 2] {
+        let (app, title) = unowned_scan_title_with_roots(MediaFacet::Movie, roots).await;
+        let mut owner = title.clone();
+        owner.id = "other-owner".into();
+        owner.name = "Other Owner".into();
+        owner.folder_path = Some(path_to_stored_string(owned));
+        app.services
+            .catalog
+            .titles
+            .create_or_get_existing(owner)
+            .await
+            .unwrap();
+        let outside_scan = ensure_folder_move_available_to_title(&app, &title, candidate).await;
+        let in_scan = with_scan_ownership(
+            Some(ScanOwnershipContext::new()),
+            ensure_folder_move_available_to_title(&app, &title, candidate),
+        )
+        .await;
+        [outside_scan, in_scan]
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_check_is_not_refused_by_another_titles_unreadable_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, dead) = unreadable_folder_fixture(temp.path());
+        let real = base.join("real");
+        let candidate = real.join("Lantern");
+        let sentinel = candidate.join("preserved.mkv");
+        std::fs::write(&sentinel, b"preserved").unwrap();
+        // The other title's folder is under a library root that cannot be
+        // read, then under an unreadable folder of the candidate's own root.
+        for roots in [vec![real.as_path(), dead.as_path()], vec![real.as_path()]] {
+            for outcome in
+                move_check_with_unreadable_owner(&dead.join("Owned"), &candidate, &roots).await
+            {
+                outcome.unwrap();
+            }
+        }
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_check_still_refuses_a_folder_holding_an_unreadable_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, _) = unreadable_folder_fixture(temp.path());
+        let real = base.join("real");
+        let shelf = real.join("Shelf");
+        std::fs::create_dir(&shelf).unwrap();
+        let dead = shelf.join("Dead");
+        std::os::unix::fs::symlink(&dead, &dead).unwrap();
+        // Recorded under the shelf as spelled, then through the linked root.
+        for owned in [dead.join("Owned"), base.join("alias/Shelf/Dead/Owned")] {
+            for outcome in move_check_with_unreadable_owner(&owned, &shelf, &[&real]).await {
+                assert_eq!(
+                    outcome.unwrap_err().validation_reason(),
+                    Some(
+                        crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE
+                    )
+                );
+            }
+        }
+    }
+
+    /// The other title is recorded under a root that cannot be read, and that
+    /// root is spelled through a link above it. The readable part of the root
+    /// is still resolved, so the folder that holds it is still refused.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_check_refuses_holder_of_owner_under_unresolved_root_reached_through_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let (base, _) = unreadable_folder_fixture(temp.path());
+        let real = base.join("real");
+        let shelf = real.join("Shelf");
+        std::fs::create_dir(&shelf).unwrap();
+        let dead = shelf.join("Dead");
+        std::os::unix::fs::symlink(&dead, &dead).unwrap();
+        let dead_root = base.join("alias/Shelf/Dead");
+        let owned = dead_root.join("Owned");
+        let stored = path_to_stored_string;
+        assert!(title_folders_overlap(&stored(&shelf), &stored(&owned)).unwrap());
+        let mut keys =
+            FolderOverlapKeys::from_roots(&stored(&shelf), &[stored(&real), stored(&dead_root)])
+                .unwrap();
+        assert!(keys.needs_exact_comparison(&stored(&owned)));
+        for outcome in move_check_with_unreadable_owner(&owned, &shelf, &[&real, &dead_root]).await
+        {
+            assert_eq!(
+                outcome.unwrap_err().validation_reason(),
+                Some(crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE)
+            );
+        }
+    }
+
+    /// Root keys ignore case. Where the volume does not, `srv/TV` beside the
+    /// root `srv/tv` is another folder, here a link into the folder being
+    /// claimed. The other title recorded through it must still be found.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn move_check_refuses_owner_recorded_through_a_link_that_only_shares_a_roots_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let root = base.join("srv/tv");
+        let data = base.join("data");
+        let candidate = data.join("elsewhere/Show");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&candidate).unwrap();
+        let sentinel = candidate.join("preserved.mkv");
+        std::fs::write(&sentinel, b"preserved").unwrap();
+        let owned = base.join("srv/TV/Show");
+        let stored = |path: &Path| path_to_stored_string(path);
+        let roots = [stored(&root), stored(&data)];
+
+        // Whatever the volume: the folder that shares the root's key is
+        // walked, and so is everything above it. A folder spelled as the
+        // root is walked only below it.
+        let keys = FolderOverlapKeys::from_roots(&stored(&candidate), &roots).unwrap();
+        let chain =
+            |owner: &Path| match OwnerOverlapPrefilter::prepare(&stored(owner), keys.root_keys()) {
+                OwnerOverlapPrefilter::Keys { chain, .. } => chain,
+                OwnerOverlapPrefilter::Exact => panic!("an absolute owner has keys"),
+            };
+        assert_eq!(chain(&owned), owned.ancestors().count());
+        assert_eq!(chain(&root.join("Show")), 1);
+
+        // The link can exist only where `TV` and `tv` are two names.
+        let linked = std::os::unix::fs::symlink(data.join("elsewhere"), base.join("srv/TV"));
+        if linked.is_ok() {
+            assert!(title_folders_overlap(&stored(&candidate), &stored(&owned)).unwrap());
+            let mut keys = FolderOverlapKeys::from_roots(&stored(&candidate), &roots).unwrap();
+            assert!(keys.needs_exact_comparison(&stored(&owned)));
+            for outcome in
+                move_check_with_unreadable_owner(&owned, &candidate, &[&root, &data]).await
+            {
+                assert_eq!(
+                    outcome.unwrap_err().validation_reason(),
+                    Some(
+                        crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE
+                    )
+                );
+            }
+        }
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
+    }
+
+    /// On Windows a drive that is unplugged leaves no folder at all on the way
+    /// to a title folder. The refusal says which folder and which drive.
+    #[test]
+    fn missing_drive_refusal_names_the_folder_and_its_drive() {
+        #[cfg(windows)]
+        let (folder, drive) = (r"O:\Videos\Movies\Fixture (1992)", r"O:\");
+        #[cfg(not(windows))]
+        let (folder, drive) = ("/Videos/Movies/Fixture (1992)", "/");
+        let error = missing_drive_refusal(Path::new(folder));
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR)
+        );
+        assert!(
+            error.to_string().ends_with(&format!(
+                "title folder {folder} cannot be reached: drive or volume {drive} is missing"
+            )),
+            "{error}"
         );
     }
 
@@ -1538,6 +2206,14 @@ mod tests {
     }
 
     async fn unowned_scan_title(facet: MediaFacet, root: &Path) -> (AppUseCase, Title) {
+        unowned_scan_title_with_roots(facet, &[root]).await
+    }
+
+    /// An unowned title in a library with `roots`, the first the default.
+    async fn unowned_scan_title_with_roots(
+        facet: MediaFacet,
+        roots: &[&Path],
+    ) -> (AppUseCase, Title) {
         let (app, user) = crate::lib_tests::bootstrap();
         let library_id = scryer_domain::default_library_id_for_facet(&facet);
         let library = app
@@ -1555,11 +2231,15 @@ mod tests {
                 &library_id,
                 library.name,
                 library.slug,
-                vec![crate::LibraryRootDraft {
-                    id: None,
-                    path: path_to_stored_string(root),
-                    is_default: true,
-                }],
+                roots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, root)| crate::LibraryRootDraft {
+                        id: None,
+                        path: path_to_stored_string(root),
+                        is_default: index == 0,
+                    })
+                    .collect(),
             )
             .await
             .unwrap();
@@ -1893,8 +2573,9 @@ mod tests {
     }
 
     /// The guards before their comparison loops moved off the runtime and
-    /// stopped re-resolving the compared folder per owner, kept verbatim so
-    /// the current guards can be held to their decisions.
+    /// stopped re-resolving the compared folder per owner, kept so the current
+    /// guards can be held to their decisions. They share today's comparison,
+    /// so another title's unreadable folder refuses neither.
     mod previous {
         use super::super::*;
 
@@ -1935,7 +2616,7 @@ mod tests {
                 if !keys
                     .as_mut()
                     .expect("overlap keys loaded")
-                    .needs_exact_comparison(owned_path)?
+                    .needs_exact_comparison(owned_path)
                 {
                     continue;
                 }

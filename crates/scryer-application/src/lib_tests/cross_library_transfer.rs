@@ -1186,7 +1186,7 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
         )
         .await
         .unwrap();
-    assert_eq!(history.total_count, 1);
+    assert_eq!(history.records.len(), 1);
     let entry = &history.records[0];
     assert_eq!(entry.title_id.as_deref(), Some(destination.id.as_str()));
     assert_eq!(entry.source_path, title.folder_path);

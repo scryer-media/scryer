@@ -901,7 +901,6 @@ query RecentImportHistory($titleId: ID!) {
   titleHistory(
     filter: { titleIds: [$titleId], eventTypes: [IMPORTED, FILE_UPGRADED], limit: 20 }
   ) {
-    totalCount
     items { id eventType libraryId sizeBytes }
   }
 }
@@ -947,7 +946,12 @@ async fn graphql_title_history_exposes_library_id_and_size_bytes() {
     )
     .await;
     assert_no_errors(&body);
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
 
     let imported = history_row_by_event_type(&body, "imported");
     assert_eq!(imported["libraryId"], library_id.as_str());
@@ -997,7 +1001,12 @@ async fn graphql_title_history_reads_legacy_events_without_size_as_null() {
     )
     .await;
     assert_no_errors(&body);
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 1);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
 
     let imported = history_row_by_event_type(&body, "imported");
     assert!(

@@ -147,12 +147,20 @@ async fn library_scope_selects_the_rows_of_its_listed_titles() {
                 let by_library = Some(TitleHistoryTitleScope::Libraries(library_ids));
                 let by_titles = Some(TitleHistoryTitleScope::Titles(&listed));
                 let count = |scope| {
-                    domain_events.count_title_history_page_events(
-                        event_types,
-                        scope,
-                        include_titleless,
-                        None,
-                    )
+                    let domain_events = &domain_events;
+                    async move {
+                        domain_events
+                            .list_title_history_page_events(
+                                event_types,
+                                scope,
+                                include_titleless,
+                                None,
+                                500,
+                                0,
+                            )
+                            .await
+                            .map(|events| events.len())
+                    }
                 };
                 let library_count = count(by_library).await.expect("library count");
                 let title_count = count(by_titles).await.expect("title count");
@@ -185,16 +193,19 @@ async fn library_scope_selects_the_rows_of_its_listed_titles() {
 
     // The movie library holds four titles' rows; nothing outside it leaks in.
     let movie_rows = domain_events
-        .count_title_history_page_events(
+        .list_title_history_page_events(
             None,
             Some(TitleHistoryTitleScope::Libraries(std::slice::from_ref(
                 &movie,
             ))),
             false,
             None,
+            500,
+            0,
         )
         .await
-        .expect("movie count");
+        .expect("movie count")
+        .len() as i64;
     assert!(movie_rows > 0);
 }
 

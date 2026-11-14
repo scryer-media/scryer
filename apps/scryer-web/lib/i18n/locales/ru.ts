@@ -4350,6 +4350,7 @@ const ru: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} эпизодов",
   "history.unknownEvent": "Неизвестно",
   "history.noMore": "Больше событий нет",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Загрузить ещё",
   "convenience.title": "Упрощённые правила",
   "convenience.requiredAudioLabel": "Обязательные языки аудиодорожек",
@@ -7359,7 +7360,7 @@ const ru: LocaleDictionary = {
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
     "Путь к папке тайтла должен быть абсолютным и не содержать переходов к родительским каталогам.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":
-    "У папки тайтла нет существующего родительского каталога ни на одном уровне.",
+    "Диск или том, на котором находится папка тайтла, отсутствует.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Требуется путь к папке тайтла.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":

@@ -33,7 +33,7 @@ export function TitleHistoryContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const [events, setEvents] = React.useState<TitleHistoryEvent[]>([]);
-  const [totalCount, setTotalCount] = React.useState(0);
+  const [hasMore, setHasMore] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [activeFilters, setActiveFilters] = React.useState<string[]>([]);
@@ -91,7 +91,7 @@ export function TitleHistoryContainer({
         }
 
         setEvents(result.data?.titleHistory.items ?? []);
-        setTotalCount(result.data?.titleHistory.totalCount ?? 0);
+        setHasMore(result.data?.titleHistory.hasMore ?? false);
         setError(null);
       } catch (fetchError) {
         if (requestSequenceRef.current !== requestId) return;
@@ -103,7 +103,7 @@ export function TitleHistoryContainer({
           ),
         );
         setEvents([]);
-        setTotalCount(0);
+        setHasMore(false);
       } finally {
         if (requestSequenceRef.current === requestId) {
           setLoading(false);
@@ -252,7 +252,6 @@ export function TitleHistoryContainer({
   return (
     <TitleHistoryView
       events={events}
-      totalCount={totalCount}
       loading={loading}
       error={error}
       activeFilters={activeFilters}
@@ -270,7 +269,7 @@ export function TitleHistoryContainer({
       onNextPage={handleNextPage}
       onRetry={showRetryActions ? handleRetry : undefined}
       hasPreviousPage={page > 0}
-      hasNextPage={offset + events.length < totalCount}
+      hasNextPage={hasMore}
     />
   );
 }

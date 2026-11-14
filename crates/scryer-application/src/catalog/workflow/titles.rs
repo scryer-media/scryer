@@ -835,10 +835,14 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// Bounded view: one page of cutoff-unmet targets plus the full
-    /// count. Computes the unmet set then slices — this bounds what reaches the
-    /// browser (the immediate large-library pain); paging the server-side
-    /// compute is a follow-up. `limit == 0` returns just the total with no items.
+    /// Bounded view: one page of cutoff-unmet targets plus the full count.
+    /// `limit == 0` returns just the total with no items.
+    ///
+    /// Answers what [`Self::list_cutoff_unmet_titles`] sliced would, from the
+    /// instance-wide item set kept per projection generation: the actor's
+    /// library scope, the facet and the requested libraries are applied to
+    /// those rows, which are already in listing order. Library names are read
+    /// per request, as before, so a renamed library never waits on the cache.
     pub async fn list_cutoff_unmet_titles_page(
         &self,
         actor: &User,
@@ -847,11 +851,63 @@ impl AppUseCase {
         limit: usize,
         offset: usize,
     ) -> AppResult<CutoffUnmetPage> {
-        let all = self
-            .list_cutoff_unmet_titles(actor, facet, requested_library_ids)
-            .await?;
-        let total = all.len();
-        let items = all.into_iter().skip(offset).take(limit).collect();
+        let mut library_ids = self
+            .require_privileged_library_ids(actor, facet.clone())
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let requested_library_ids = requested_library_ids
+            .as_ref()
+            .map(|requested| {
+                requested
+                    .iter()
+                    .map(|library_id| library_id.trim())
+                    .filter(|library_id| !library_id.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if !requested_library_ids.is_empty() {
+            library_ids.retain(|library_id| requested_library_ids.contains(library_id.as_str()));
+        }
+        let libraries = self
+            .services
+            .catalog
+            .libraries
+            .list(facet.clone())
+            .await?
+            .into_iter()
+            .filter(|library| library_ids.contains(&library.id))
+            .map(|library| (library.id, (library.name, library.slug)))
+            .collect::<HashMap<_, _>>();
+        if libraries.is_empty() {
+            return Ok(CutoffUnmetPage {
+                items: Vec::new(),
+                total: 0,
+            });
+        }
+
+        let all = self.current_cutoff_unmet_items().await?;
+        let in_scope = |item: &&CutoffUnmetItem| {
+            libraries.contains_key(&item.library_id)
+                && facet
+                    .as_ref()
+                    .is_none_or(|facet| facet == &item.title_facet)
+        };
+        let total = all.iter().filter(in_scope).count();
+        let items = all
+            .iter()
+            .filter(in_scope)
+            .skip(offset)
+            .take(limit)
+            .map(|item| {
+                let mut item = item.clone();
+                if let Some((name, slug)) = libraries.get(&item.library_id) {
+                    item.library_name = Some(name.clone());
+                    item.library_slug = Some(slug.clone());
+                }
+                item
+            })
+            .collect();
         Ok(CutoffUnmetPage { items, total })
     }
 

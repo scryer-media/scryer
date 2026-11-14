@@ -5590,6 +5590,18 @@ pub struct NewDomainEvent {
     pub payload: DomainEventPayload,
 }
 
+/// The media requests whose submission events a read is scoped to.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaRequestKeys {
+    /// Requests named by id.
+    pub request_ids: Vec<String>,
+    /// Also every request that was submitted and is no longer stored. Such a
+    /// request cannot be looked up by what it asked for, so a reader that
+    /// selects requests by their stored ids asks for these as well and judges
+    /// each submission by what it recorded.
+    pub and_removed: bool,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DomainEventFilter {
     pub event_types: Option<Vec<DomainEventType>>,
@@ -5601,6 +5613,10 @@ pub struct DomainEventFilter {
     /// database narrows to that stream instead of handing every stored event
     /// of those types to the caller to filter in memory.
     pub stream_id: Option<String>,
+    /// Scope the read to the submission events of media requests. Only
+    /// `MediaRequestSubmitted` events carry a request key, so a read with
+    /// this set returns no event of any other type.
+    pub media_request_ids: Option<MediaRequestKeys>,
     pub after_sequence: Option<i64>,
     pub before_sequence: Option<i64>,
     pub limit: usize,

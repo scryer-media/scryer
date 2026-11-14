@@ -2455,6 +2455,7 @@ const pt_BR: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} episódios",
   "history.unknownEvent": "Desconhecido",
   "history.noMore": "Sem mais eventos",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Carregar mais",
   "settings.recycleBin": "Lixeira",
   "settings.recycleBinEnabled": "Ativar lixeira",
