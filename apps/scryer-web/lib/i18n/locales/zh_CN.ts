@@ -2204,6 +2204,7 @@ const zh_CN: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} 集",
   "history.unknownEvent": "未知事件",
   "history.noMore": "没有更多事件",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "加载更多",
   "settings.recycleBin": "回收站",
   "settings.recycleBinEnabled": "启用回收站",

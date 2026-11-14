@@ -1364,6 +1364,7 @@ async fn list_media_requests_filters_by_facet_and_manageable_libraries() {
                 library_ids: Some(vec![default_library_id, alternate_library_id.clone()]),
                 status: Some(MediaRequestStatus::Pending),
                 requester_user_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -1426,6 +1427,7 @@ async fn manager_queue_filters_by_requester_within_manageable_libraries() {
                 library_ids: None,
                 status: None,
                 requester_user_id,
+                ..Default::default()
             },
         )
     };
@@ -1483,6 +1485,7 @@ async fn list_my_media_requests_filters_to_requester_owned_requests() {
                 library_ids: None,
                 status: None,
                 requester_user_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -1535,6 +1538,7 @@ async fn request_only_user_can_list_submitted_bluey_series_request() {
                 library_ids: None,
                 status: Some(MediaRequestStatus::Pending),
                 requester_user_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -2297,6 +2301,7 @@ async fn media_request_admin_surfaces_require_manage_titles_library_permission()
                 library_ids: None,
                 status: Some(MediaRequestStatus::Pending),
                 requester_user_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -2960,6 +2965,7 @@ async fn a_title_manager_sees_and_cancels_their_own_held_request() {
                 library_ids: None,
                 status: None,
                 requester_user_id: None,
+                ..Default::default()
             },
         )
         .await

@@ -62,6 +62,40 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         .transpose()
     }
 
+    async fn latest_for_requests(
+        &self,
+        request_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, RequestRuleDecisionRecord>> {
+        let mut latest = std::collections::HashMap::with_capacity(request_ids.len());
+        // One statement for a page of requests; a longer list is split to stay
+        // under the bind limits. The ranking is the order of
+        // `latest_for_request`.
+        for chunk in request_ids.chunks(LATEST_DECISION_REQUEST_CHUNK) {
+            let placeholders = std::iter::repeat_n("{}", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {DECISION_COLUMNS}
+                   FROM (
+                        SELECT {DECISION_COLUMNS},
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY request_id
+                                   ORDER BY evaluated_at DESC, id DESC
+                               ) AS decision_rank
+                          FROM request_rule_decisions
+                         WHERE request_id IN ({placeholders})
+                        ) AS ranked_decisions
+                  WHERE decision_rank = 1"
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                let decision = row_to_decision(&row)?;
+                latest.insert(decision.request_id.clone(), decision);
+            }
+        }
+        Ok(latest)
+    }
+
     async fn list_recent(
         &self,
         limit: usize,
@@ -117,6 +151,9 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
         Ok(row.i64("decision_count")?.max(0) as u64)
     }
 }
+
+/// Request ids bound per latest-decision statement.
+const LATEST_DECISION_REQUEST_CHUNK: usize = 10_000;
 
 const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, mode, effective_outcome,
     policy_outcome, fallback_reason, votes_json, tags_json, input_hash,

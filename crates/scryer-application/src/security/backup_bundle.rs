@@ -560,6 +560,13 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "title_search_meta",
         classification: BackupTableClassification::Rebuild,
     },
+    // Derived from three `titles` columns by triggers on `titles`. Clearing
+    // `titles` empties it through the cascade and importing the title rows
+    // refills it, so exporting it as well would write every row twice.
+    BackupTableCatalogEntry {
+        table: "title_release_days",
+        classification: BackupTableClassification::Rebuild,
+    },
     BackupTableCatalogEntry {
         table: "blocklist",
         classification: BackupTableClassification::Export,

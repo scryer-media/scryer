@@ -1627,3 +1627,105 @@ async fn release_decision_batch_failure_keeps_per_row_outcomes() {
     assert_decision_batch_matches_per_row("scryer_decision_batch_fail", Some("Emberfall.S01.720p"))
         .await;
 }
+
+#[tokio::test]
+async fn scope_coordinates_by_status_match_the_full_state_read() {
+    let (services, db) = temp_services("scryer_scope_coordinates_by_status").await;
+    let (catalog, workflow, _index_dir) = super::search_stores(&services).await;
+    TitleRepository::create(&catalog, make_test_title("title-emberfall", None))
+        .await
+        .expect("title should insert");
+
+    // State rows of every status, some for a title no longer in the catalog.
+    let mut conn = services.pool().acquire().await.expect("connection");
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("waive foreign keys");
+    let statuses = ["wanted", "paused", "grabbed", "completed"];
+    for n in 0..48_usize {
+        sqlx::query(
+            "INSERT INTO wanted_items
+                (id, title_id, episode_id, collection_id, series_movie_link_id, media_type,
+                 status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'episode', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(format!("wanted-{n:02}"))
+        // A scope with no episode and no collection is the title's own, and
+        // a title has one of those.
+        .bind(if n % 3 == 2 {
+            format!("title-whole-{n}")
+        } else if n % 5 == 0 {
+            "title-not-in-catalog".to_string()
+        } else {
+            "title-emberfall".to_string()
+        })
+        .bind((n % 3 == 0).then(|| format!("episode-{n}")))
+        .bind((n % 3 == 1).then(|| format!("collection-{n}")))
+        .bind((n % 7 == 2).then(|| format!("link-{n}")))
+        .bind(statuses[n % statuses.len()])
+        .execute(&mut *conn)
+        .await
+        .expect("state row should insert");
+    }
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await
+        .expect("restore foreign keys");
+    drop(conn);
+
+    for wanted in [
+        vec![
+            AcquisitionScopeStatus::Paused,
+            AcquisitionScopeStatus::Grabbed,
+        ],
+        vec![AcquisitionScopeStatus::Grabbed],
+        vec![AcquisitionScopeStatus::Wanted],
+        Vec::new(),
+    ] {
+        let mut full = workflow
+            .list_acquisition_scope_states(scryer_application::AcquisitionScopeStatesQuery {
+                statuses: wanted
+                    .iter()
+                    .map(|status| status.as_str().to_string())
+                    .collect(),
+                limit: i64::MAX,
+                ..Default::default()
+            })
+            .await
+            .expect("full state read")
+            .into_iter()
+            .filter(|state| wanted.contains(&state.status))
+            .map(|state| {
+                (
+                    state.title_id,
+                    state.episode_id,
+                    state.collection_id,
+                    state.series_movie_link_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut narrow = workflow
+            .list_acquisition_scope_coordinates_for_statuses(&wanted)
+            .await
+            .expect("coordinate read")
+            .into_iter()
+            .map(|scope| {
+                (
+                    scope.title_id,
+                    scope.episode_id,
+                    scope.collection_id,
+                    scope.series_movie_link_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        full.sort();
+        narrow.sort();
+        assert_eq!(narrow, full, "{wanted:?}");
+        if wanted.len() == 2 {
+            assert_eq!(narrow.len(), 24);
+        }
+    }
+
+    let _ = std::fs::remove_file(db);
+}

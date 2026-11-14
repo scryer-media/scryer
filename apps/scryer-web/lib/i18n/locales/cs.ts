@@ -4484,6 +4484,7 @@ const cs: LocaleDictionary = {
   "history.episodeCountMultiple": "Epizod: {{count}}",
   "history.unknownEvent": "Neznámá",
   "history.noMore": "Žádné další události",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Načíst další",
   "indexerErrors.title": "Historie chyb indexeru",
   "indexerErrors.scopedTitle": "{{indexer}} — historie chyb",

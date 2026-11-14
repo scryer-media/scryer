@@ -205,8 +205,6 @@ pub struct TitleHistoryEventPayload {
 pub struct TitleHistoryPagePayload {
     /// Events in the requested page.
     pub items: Vec<TitleHistoryEventPayload>,
-    /// Total matching events across all pages.
-    pub total_count: i64,
     /// Whether more matching events exist after this page.
     pub has_more: bool,
 }

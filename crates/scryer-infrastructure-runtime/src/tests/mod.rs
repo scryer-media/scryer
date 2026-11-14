@@ -41,6 +41,7 @@ mod library_scan_unmatched;
 mod lifecycle_claims;
 mod maintenance_candidates;
 mod maintenance_rule_sets;
+mod media_request_history_key;
 mod media_request_policy;
 mod media_request_requesters;
 mod media_server_signals;

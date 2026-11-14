@@ -2542,6 +2542,7 @@ const fr: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} épisodes",
   "history.unknownEvent": "Inconnu",
   "history.noMore": "Plus d'événements",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Charger plus",
   "settings.recycleBin": "Corbeille",
   "settings.recycleBinEnabled": "Activer la corbeille",

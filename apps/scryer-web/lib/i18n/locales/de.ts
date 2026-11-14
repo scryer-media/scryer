@@ -2436,6 +2436,7 @@ const de: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} Folgen",
   "history.unknownEvent": "Unbekannt",
   "history.noMore": "Keine weiteren Ereignisse",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Mehr laden",
   "settings.recycleBin": "Papierkorb",
   "settings.recycleBinEnabled": "Papierkorb aktivieren",

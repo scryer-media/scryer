@@ -74,16 +74,8 @@ impl AppUseCase {
             return Ok(HashMap::new());
         }
 
-        let mappings = self
-            .services
-            .integrations
-            .media_server_connections
-            .list_playback_items_for_entities(&entities)
-            .await?;
-        if mappings.is_empty() {
-            return Ok(HashMap::new());
-        }
-
+        // A caller with no linked account has no link to show, so the
+        // mappings are read only once one is known.
         let active_account_connections = self
             .services
             .identity
@@ -95,6 +87,16 @@ impl AppUseCase {
             .map(|account| (account.connection_id, account.provider))
             .collect::<HashSet<_>>();
         if active_account_connections.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mappings = self
+            .services
+            .integrations
+            .media_server_connections
+            .list_playback_items_for_entities(&entities)
+            .await?;
+        if mappings.is_empty() {
             return Ok(HashMap::new());
         }
 

@@ -138,6 +138,11 @@ test("global search loads the manageable library quality-profile override", () =
   );
 
   assert.equal(manageableLibrariesSelection.includes("qualityProfileId"), true);
+  // The Add dialog starts its monitor type on the library's saved default.
+  assert.equal(
+    manageableLibrariesSelection.includes("defaultMonitorType"),
+    true,
+  );
 });
 
 test("global search initializes library managers without reading catalog settings", async () => {

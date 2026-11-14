@@ -129,7 +129,6 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
                 r#"
         query TitleHistory($titleId: ID!) {
           titleHistory(filter: { titleIds: [$titleId], eventTypes: [REMATCHED], limit: 10 }) {
-            totalCount
             items {
               eventType
             }
@@ -140,7 +139,12 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
             )
             .await;
             assert_no_errors(&history);
-            assert_eq!(history["data"]["titleHistory"]["totalCount"], 1);
+            assert_eq!(
+                history["data"]["titleHistory"]["items"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(1)
+            );
             assert_eq!(
                 history["data"]["titleHistory"]["items"][0]["eventType"],
                 "rematched"

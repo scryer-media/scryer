@@ -3,7 +3,6 @@
 # eventTypes example: ["GRABBED", "DOWNLOAD_FAILED", "IMPORT_FAILED", "IMPORT_SKIPPED"]
 query TitleHistory($titleIds: [ID!], $eventTypes: [TitleHistoryEventTypeValue!], $limit: Int) {
   titleHistory(filter: { titleIds: $titleIds, eventTypes: $eventTypes, limit: $limit }) {
-    totalCount
     hasMore
     items {
       eventType

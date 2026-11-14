@@ -5455,7 +5455,9 @@ async fn migration_0206_rebuilds_media_requests_without_losing_child_rows() {
             "idx_media_requests_fingerprint_created".to_string(),
             "idx_media_requests_library_facet_status".to_string(),
             "idx_media_requests_requester_created".to_string(),
+            "idx_media_requests_status_created".to_string(),
             "idx_media_requests_status_updated".to_string(),
+            "idx_media_requests_updated_order".to_string(),
         ]
     );
     let leftovers: Vec<String> = sqlx::query_scalar(

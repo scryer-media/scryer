@@ -274,6 +274,25 @@ pub enum MediaRequestStatusValue {
     Canceled,
 }
 
+/// Order of a media request list.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MediaRequestOrderValue {
+    /// Most recently changed first.
+    RecentlyUpdated,
+    /// Longest waiting first, by when the request was created.
+    OldestCreated,
+}
+
+impl MediaRequestOrderValue {
+    pub fn into_application(self) -> scryer_application::MediaRequestOrder {
+        match self {
+            Self::RecentlyUpdated => scryer_application::MediaRequestOrder::RecentlyUpdated,
+            Self::OldestCreated => scryer_application::MediaRequestOrder::OldestCreated,
+        }
+    }
+}
+
 impl MediaRequestStatusValue {
     pub fn from_domain(value: MediaRequestStatus) -> Self {
         match value {

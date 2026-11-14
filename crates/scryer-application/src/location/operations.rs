@@ -3972,6 +3972,12 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
         // A library transfer can convert the facet, and the matcher buckets
         // candidates by facet.
         self.app.invalidate_monitored_title_matcher().await;
+        // It also changes the library, and possibly the facet and the profile
+        // tag, that the wanted and cutoff views filter and derive from.
+        self.app
+            .runtime
+            .acquisition
+            .invalidate_wanted_projection_cache();
         Ok(())
     }
 }

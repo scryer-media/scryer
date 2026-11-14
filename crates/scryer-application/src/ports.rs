@@ -3590,12 +3590,32 @@ pub struct MediaRequestUpdateResult {
     pub event: DomainEvent,
 }
 
+/// The order a request list is read in.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MediaRequestOrder {
+    /// Most recently changed first.
+    #[default]
+    RecentlyUpdated,
+    /// Longest waiting first, by when the request was created.
+    OldestCreated,
+}
+
+/// The most requests [`MediaRequestRepository::request_ids_for_title_identity`]
+/// names. A title with more is answered `None`.
+pub const MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS: usize = 500;
+
 #[derive(Clone, Debug, Default)]
 pub struct MediaRequestQuery {
     pub facet: Option<MediaFacet>,
     pub library_ids: Option<Vec<String>>,
     pub status: Option<scryer_domain::MediaRequestStatus>,
     pub requester_user_id: Option<String>,
+    pub order: MediaRequestOrder,
+    /// The most rows to return, taken after `offset` in the list order. `None`
+    /// reads every matching row, for the internal passes that need them all.
+    pub limit: Option<usize>,
+    /// Rows to skip in the list order. Read only with `limit`.
+    pub offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3772,6 +3792,21 @@ pub trait MediaRequestRepository: Send + Sync {
     }
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>>;
+
+    /// The stored requests of `library_id` that carry any of `external_ids`,
+    /// matched the way a title is matched to a request: source without regard
+    /// to ASCII case, value exactly. A request removed with the account that
+    /// submitted it is not among them, since its ids went with it. `None`
+    /// when the store cannot name them, or when there are more than
+    /// [`MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS`]; the caller then considers
+    /// every request.
+    async fn request_ids_for_title_identity(
+        &self,
+        _library_id: &str,
+        _external_ids: &[ExternalId],
+    ) -> AppResult<Option<Vec<String>>> {
+        Ok(None)
+    }
 
     /// How many requests `user_id` submitted, optionally narrowed to one status
     /// and to requests created at or after `since`. Edits exclude their own
@@ -5485,13 +5520,6 @@ pub trait DomainEventRepository: Send + Sync {
     /// never be named by a title id, and a page scoped only by the caller's
     /// library authorization would otherwise drop it. It is ignored when
     /// `title_scope` is `None`, where nothing is excluded anyway.
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_scope: Option<TitleHistoryTitleScope<'_>>,
-        include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64>;
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
@@ -10300,6 +10328,34 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<Vec<AcquisitionScopeState>>;
 
+    /// The scope coordinates of every state row in one of `statuses`, and
+    /// nothing else of the row. The default reads the full rows; SQL stores
+    /// override with a read of the four coordinate columns.
+    async fn list_acquisition_scope_coordinates_for_statuses(
+        &self,
+        statuses: &[AcquisitionScopeStatus],
+    ) -> AppResult<Vec<AcquisitionScopeCoordinates>> {
+        Ok(self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                statuses: statuses
+                    .iter()
+                    .map(|status| status.as_str().to_string())
+                    .collect(),
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?
+            .into_iter()
+            .filter(|state| statuses.contains(&state.status))
+            .map(|state| AcquisitionScopeCoordinates {
+                title_id: state.title_id,
+                episode_id: state.episode_id,
+                collection_id: state.collection_id,
+                series_movie_link_id: state.series_movie_link_id,
+            })
+            .collect())
+    }
+
     /// Batch-load every acquisition scope state for many titles. Returns a flat
     /// list (each state carries `title_id`); callers group by that field. The
     /// default fans out via `list_acquisition_scope_states`; SQL stores override
@@ -11366,6 +11422,22 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
         &self,
         request_id: &str,
     ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>>;
+
+    /// [`Self::latest_for_request`] for a page of requests, keyed by request
+    /// id. A request with no recorded decision is absent.
+    async fn latest_for_requests(
+        &self,
+        request_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_domain::RequestRuleDecisionRecord>>
+    {
+        let mut latest = std::collections::HashMap::with_capacity(request_ids.len());
+        for request_id in request_ids {
+            if let Some(record) = self.latest_for_request(request_id).await? {
+                latest.insert(request_id.clone(), record);
+            }
+        }
+        Ok(latest)
+    }
 
     /// Newest first, optionally narrowed to one effective outcome.
     async fn list_recent(

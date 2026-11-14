@@ -201,6 +201,11 @@ impl IndexerRequestTally {
             Ok(admission) => admission,
             Err(()) => return false,
         };
+        self.count_sent_call(call);
+        true
+    }
+
+    fn count_sent_call(&self, call: &'static str) {
         if crate::indexer_error_history_is_persistable(&self.indexer_id) {
             self.stats.record_api_request_sent_at(
                 &self.indexer_id,
@@ -209,7 +214,33 @@ impl IndexerRequestTally {
             );
         }
         self.note_pending(call);
-        true
+    }
+
+    /// Admit a probe: an attempt on an address the indexer did not advertise,
+    /// which may reach nothing at all. It is not counted here. The caller
+    /// reports it with [`Self::note_probe_reached`] or
+    /// [`Self::note_auxiliary_probe_reached`] unless no connection was made.
+    pub fn try_admit_probe(&self) -> bool {
+        self.try_admit_dispatch().is_ok()
+    }
+
+    /// An admitted probe of `url` got as far as a connection, so the indexer
+    /// was asked. Counts it the way [`Self::try_note_sent`] counts a send.
+    pub fn note_probe_reached(&self, url: &str) {
+        if self.indexer_origin.as_ref().is_some_and(|origin| {
+            url::Url::parse(url)
+                .map(|url| url.origin().ascii_serialization() != *origin)
+                .unwrap_or(false)
+        }) {
+            return self.note_pending(CALL_EXTERNAL_REDIRECT);
+        }
+        self.count_sent_call(newznab_call_label(url));
+    }
+
+    /// As [`Self::note_probe_reached`], for a probe that is not against the
+    /// indexer's own quota.
+    pub fn note_auxiliary_probe_reached(&self, call: &'static str) {
+        self.note_pending(call);
     }
 
     /// Admit and record an actual outbound transport hop that is associated
@@ -358,6 +389,23 @@ mod tests {
             headers: Vec::new(),
             body: body.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn a_probe_counts_only_once_it_is_reported_as_reached() {
+        let stats = Arc::new(CountingTracker::default());
+        let tally = tally(Arc::clone(&stats));
+        assert!(tally.try_admit_probe());
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(tally.pending_len(), 0);
+        // With nothing pending, an outcome has nothing to resolve.
+        tally.note_result(IndexerRequestResult::NoResponse);
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 0);
+
+        assert!(tally.try_admit_probe());
+        tally.note_probe_reached("https://indexer.test/api?t=get&id=1");
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 1);
+        assert_eq!(tally.pending_len(), 1);
     }
 
     #[test]

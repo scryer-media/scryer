@@ -2465,6 +2465,7 @@ const it: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} episodi",
   "history.unknownEvent": "Sconosciuto",
   "history.noMore": "Nessun altro evento",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Carica altri",
   "settings.recycleBin": "Cestino",
   "settings.recycleBinEnabled": "Abilita cestino",

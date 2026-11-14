@@ -395,6 +395,14 @@ impl DomainEventRepository for MockDomainEventRepo {
                             .iter()
                             .any(|event_type| &event.payload.event_type() == event_type)
                     })
+                    // Every request this fake knows is still stored.
+                    && filter.media_request_ids.as_ref().is_none_or(|keys| {
+                        matches!(
+                            &event.payload,
+                            DomainEventPayload::MediaRequestSubmitted(data)
+                                if keys.request_ids.contains(&data.request_id)
+                        )
+                    })
             })
             .take(limit)
             .cloned()
@@ -409,33 +417,6 @@ impl DomainEventRepository for MockDomainEventRepo {
         _: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<crate::DashboardActivityStats> {
         Ok(crate::DashboardActivityStats::default())
-    }
-
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
-        _include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64> {
-        let title_ids = self.history_scope_title_ids(title_scope).await?;
-        let title_ids = title_ids.as_deref();
-        let events = self.events.lock().await;
-        Ok(events
-            .iter()
-            .rev()
-            .filter_map(crate::event_views::title_history_record_from_domain_event)
-            .filter(|record| {
-                event_types.is_none_or(|values| values.contains(&record.event_type))
-                    && title_ids.is_none_or(|values| {
-                        record
-                            .title_id
-                            .as_ref()
-                            .is_some_and(|title_id| values.contains(title_id))
-                    })
-                    && download_id.is_none_or(|value| record.download_id.as_deref() == Some(value))
-            })
-            .count() as i64)
     }
 
     async fn list_title_history_page_events(
@@ -572,6 +553,36 @@ pub(super) async fn append_mock_media_request_event(
 
 #[async_trait]
 impl MediaRequestRepository for MockMediaRequestRepo {
+    /// Every request is stored with the ids its submission carries, so the
+    /// requests sharing an id with a title are those of the submissions that
+    /// share one.
+    async fn request_ids_for_title_identity(
+        &self,
+        library_id: &str,
+        external_ids: &[ExternalId],
+    ) -> AppResult<Option<Vec<String>>> {
+        let Some(domain_events) = &self.domain_events else {
+            return Ok(None);
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        for event in domain_events.events.lock().await.iter() {
+            let DomainEventPayload::MediaRequestSubmitted(data) = &event.payload else {
+                continue;
+            };
+            let shares_an_id = data.external_ids.iter().any(|request_id| {
+                external_ids.iter().any(|title_id| {
+                    title_id.source.eq_ignore_ascii_case(&request_id.source)
+                        && title_id.value == request_id.value
+                })
+            });
+            if data.library_id == library_id && shares_an_id {
+                ids.insert(data.request_id.clone());
+            }
+        }
+        Ok((ids.len() <= crate::MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS)
+            .then(|| ids.into_iter().collect()))
+    }
+
     async fn approve_with_title(
         &self,
         request: &MediaRequest,
@@ -923,8 +934,14 @@ impl MediaRequestRepository for MockMediaRequestRepo {
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
         let requests = self.requests.lock().await;
-        Ok(requests
-            .iter()
+        let mut ordered = requests.iter().collect::<Vec<_>>();
+        if query.order == crate::MediaRequestOrder::OldestCreated {
+            ordered.sort_by(|left, right| {
+                (left.created_at, &left.id).cmp(&(right.created_at, &right.id))
+            });
+        }
+        Ok(ordered
+            .into_iter()
             .filter(|request| {
                 query
                     .facet
@@ -941,6 +958,12 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                             .any(|requester| &requester.user_id == user_id)
                     })
             })
+            .skip(if query.limit.is_some() {
+                query.offset
+            } else {
+                0
+            })
+            .take(query.limit.unwrap_or(usize::MAX))
             .cloned()
             .collect())
     }
