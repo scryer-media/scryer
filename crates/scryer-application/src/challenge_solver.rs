@@ -462,6 +462,28 @@ pub fn sanitize_proxy_error(message: &str) -> String {
     sanitized
 }
 
+/// The [`SolvedSessionCache`] scope for a solver config.
+///
+/// A clearance belongs to the address that earned it. A solver reached
+/// directly is scoped by its id alone. A solver reached through a proxy or
+/// tunnel also carries that route's revision, so setting, changing, clearing
+/// or editing the route starts a fresh session instead of presenting cookies
+/// earned on one address from another.
+pub fn solved_session_scope(config: &scryer_domain::ProxyConfig) -> String {
+    match (
+        config.reach_through_proxy_config_id.as_deref(),
+        config.reach_through.as_deref(),
+    ) {
+        (Some(_), Some(route)) => format!(
+            "{}+{}",
+            config.id,
+            crate::transport_proxy::transport_proxy_revision(route)
+        ),
+        (Some(route_id), None) => format!("{}+{route_id}@unresolved", config.id),
+        (None, _) => config.id.clone(),
+    }
+}
+
 #[derive(Clone)]
 struct SolvedSession {
     headers: Vec<(String, String)>,

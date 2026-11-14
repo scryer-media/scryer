@@ -19491,6 +19491,26 @@ async fn a_route_in_use_by_a_solver_cannot_be_disabled_or_deleted() {
         Some(reasons::PROXY_REACH_THROUGH_DISABLED)
     );
 
+    // A patch that repeats the stored route is not a route change, so the
+    // disabled solver stays editable while its route is disabled.
+    let renamed = app
+        .update_proxy_config(
+            &user,
+            crate::ProxyConfigUpdate {
+                id: solver.id.clone(),
+                name: Some("Renamed solver".to_string()),
+                reach_through_proxy_config_id: Some(Some("retained-proxy".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("an unchanged route is not re-checked");
+    assert_eq!(renamed.name, "Renamed solver");
+    assert_eq!(
+        renamed.reach_through_proxy_config_id.as_deref(),
+        Some("retained-proxy")
+    );
+
     // Clearing the route frees the transport for deletion.
     let cleared = app
         .update_proxy_config(

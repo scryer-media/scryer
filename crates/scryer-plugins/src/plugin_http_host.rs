@@ -805,7 +805,7 @@ impl PluginHttpHost {
             .filter(|policy| request_is_get && policy.config.is_challenge_solver())
             .map(|policy| {
                 solver::SolvedSessionCache::shared()
-                    .session_headers(&policy.config.id, &request.url)
+                    .session_headers(&solver::solved_session_scope(&policy.config), &request.url)
             })
             .unwrap_or_default();
         let tally = Self::request_tally(state);
@@ -876,7 +876,8 @@ impl PluginHttpHost {
             }
             if !session_headers.is_empty() {
                 // The cached session no longer clears the challenge.
-                solver::SolvedSessionCache::shared().invalidate(&policy.config.id, &request.url);
+                solver::SolvedSessionCache::shared()
+                    .invalidate(&solver::solved_session_scope(&policy.config), &request.url);
             }
 
             tracing::debug!(
@@ -1859,7 +1860,7 @@ fn execute_challenge_solver_request(
         // Cache the clearance session so follow-up requests to this origin skip
         // the solver until the session expires or stops clearing challenges.
         solver::SolvedSessionCache::shared().store_solution(
-            &policy.config.id,
+            &solver::solved_session_scope(&policy.config),
             &request.url,
             &solution,
         );
@@ -1930,7 +1931,7 @@ fn execute_challenge_solver_request(
         };
         if terminal_error.is_none() {
             solver::SolvedSessionCache::shared().store_solution(
-                &policy.config.id,
+                &solver::solved_session_scope(&policy.config),
                 &request.url,
                 &solution,
             );

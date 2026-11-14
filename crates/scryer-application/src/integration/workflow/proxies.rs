@@ -372,9 +372,14 @@ impl AppUseCase {
         // The route is checked when this patch sets it, and again when it
         // enables a solver that kept one, so an enabled solver never names a
         // route that has since gone or been disabled.
-        let reach_through_changed = update.reach_through_proxy_config_id.is_some();
+        // A patch that repeats the stored route changes nothing and is not
+        // re-checked, so a disabled solver stays editable while its route is
+        // disabled too.
+        let mut reach_through_changed = false;
         if let Some(reach_through) = update.reach_through_proxy_config_id {
-            config.reach_through_proxy_config_id = normalize_reach_through_id(reach_through);
+            let reach_through = normalize_reach_through_id(reach_through);
+            reach_through_changed = reach_through != config.reach_through_proxy_config_id;
+            config.reach_through_proxy_config_id = reach_through;
         }
         if reach_through_changed || (update.is_enabled == Some(true) && !config.is_enabled) {
             self.validate_solver_reach_through(
@@ -1587,6 +1592,11 @@ async fn send_solver_probe_request(
     provider: scryer_domain::ProxyProviderType,
     deadline: tokio::time::Instant,
 ) -> AppResult<reqwest::Response> {
+    // The probe is bounded by the solver's own timeout. A client built for the
+    // route the solver is reached through carries the route's timeout, which
+    // must not cut a slow solve short.
+    let request =
+        request.timeout(deadline.saturating_duration_since(tokio::time::Instant::now()));
     tokio::time::timeout_at(
         deadline,
         scryer_outbound_http::send_reqwest_request_with_cooldown_budget(

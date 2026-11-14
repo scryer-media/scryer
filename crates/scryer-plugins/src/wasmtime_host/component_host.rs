@@ -580,7 +580,8 @@ impl ComponentHost {
         // origin bytes rather than browser-rendered solver content. These
         // attempts remain one logical guest operation under the same deadline.
         let session_headers = request.method.eq_ignore_ascii_case("GET").then(|| {
-            solver::SolvedSessionCache::shared().session_headers(&policy.config.id, &request.url)
+            solver::SolvedSessionCache::shared()
+                .session_headers(&solver::solved_session_scope(&policy.config), &request.url)
         });
         if let Some(session_headers) = session_headers.filter(|headers| !headers.is_empty()) {
             let direct = self
@@ -597,7 +598,8 @@ impl ComponentHost {
                 &component_header_map(&direct.response.headers),
                 &direct.response.body,
             ) {
-                solver::SolvedSessionCache::shared().invalidate(&policy.config.id, &request.url);
+                solver::SolvedSessionCache::shared()
+                    .invalidate(&solver::solved_session_scope(&policy.config), &request.url);
             } else {
                 self.capture_indexer_response(direct.captured_response.clone());
                 return Ok(direct.response);
@@ -927,7 +929,7 @@ impl ComponentHost {
                 &replay.response.body,
             ) {
                 solver::SolvedSessionCache::shared().store_solution(
-                    &policy.config.id,
+                    &solver::solved_session_scope(&policy.config),
                     &request.url,
                     &solution,
                 );

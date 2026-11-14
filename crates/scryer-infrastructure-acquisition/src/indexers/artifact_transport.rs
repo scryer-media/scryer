@@ -563,7 +563,8 @@ impl IndexerArtifactTransport {
                 ArtifactEgress::Direct
             }
         };
-        let headers = solver::SolvedSessionCache::shared().session_headers(&proxy.id, url);
+        let headers = solver::SolvedSessionCache::shared()
+            .session_headers(&solver::solved_session_scope(proxy), url);
         let timeout =
             scryer_outbound_http::effective_proxy_request_timeout(proxy.request_timeout_seconds);
         match self
@@ -588,7 +589,8 @@ impl IndexerArtifactTransport {
             Err(_) => {}
         }
         if !headers.is_empty() {
-            solver::SolvedSessionCache::shared().invalidate(&proxy.id, url);
+            solver::SolvedSessionCache::shared()
+                .invalidate(&solver::solved_session_scope(proxy), url);
         }
         let solver_client = match route {
             Some(route) => self.proxy_client(route).map_err(|message| {
@@ -654,7 +656,11 @@ impl IndexerArtifactTransport {
             tally.note_result(IndexerRequestResult::NoResponse);
             AppError::DownloadSubmitUnavailable(e.message(provider).into())
         })?;
-        solver::SolvedSessionCache::shared().store_solution(&proxy.id, url, &solution);
+        solver::SolvedSessionCache::shared().store_solution(
+            &solver::solved_session_scope(proxy),
+            url,
+            &solution,
+        );
         let solution_status = solution.status.unwrap_or(status.as_u16());
         tally.note_response(&CapturedIndexerHttpResponse {
             status: solution_status,
