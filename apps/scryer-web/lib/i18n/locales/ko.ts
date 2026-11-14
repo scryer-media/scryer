@@ -3785,6 +3785,21 @@ const ko: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "드래그하여 {{value}} 순서 변경",
   "qualityProfile.decisionStepMoveUp": "{{value}} 위로 이동",
   "qualityProfile.decisionStepMoveDown": "{{value}} 아래로 이동",
+  "settings.proxyReachThrough": "경유",
+  "settings.proxyReachThroughHelp":
+    "Scryer는 선택한 전송 프록시 또는 터널을 통해 이 솔버로 요청을 보냅니다. 직접 연결은 Scryer 자체 네트워크에서 솔버에 연결합니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "챌린지 솔버는 다른 챌린지 솔버를 경유할 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "챌린지 솔버는 자기 자신을 경유할 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "솔버에 연결할 경유 프록시 또는 터널을 찾을 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "솔버에 연결할 경유 프록시 또는 터널이 비활성화되어 있습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "다른 프록시를 경유할 수 있는 것은 챌린지 솔버뿐입니다.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "하나 이상의 챌린지 솔버가 이 프록시를 경유합니다. 먼저 변경하세요.",
 };
 
 export default ko;

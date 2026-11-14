@@ -481,6 +481,7 @@ const PROXY_CONFIG_FIELDS = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled

@@ -7919,3 +7919,65 @@ async fn migration_0342_adds_requested_audio_language_columns() {
         }
     }
 }
+
+#[tokio::test]
+async fn migration_0345_adds_nullable_solver_reach_through_column() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("proxy-reach-through-0345.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("migrations should apply");
+    let pool = services.pool().clone();
+
+    let found: Vec<(String, i64)> =
+        sqlx::query_as("SELECT name, \"notnull\" FROM pragma_table_info('proxy_configs')")
+            .fetch_all(&pool)
+            .await
+            .expect("read columns");
+    let (_, not_null) = found
+        .iter()
+        .find(|(name, _)| name == "reach_through_proxy_config_id")
+        .expect("proxy_configs.reach_through_proxy_config_id should exist after 0345");
+    assert_eq!(*not_null, 0, "NULL keeps the solver reached directly");
+
+    let indexes: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_index_list('proxy_configs')")
+            .fetch_all(&pool)
+            .await
+            .expect("read indexes");
+    assert!(
+        indexes
+            .iter()
+            .any(|(name,)| name == "idx_proxy_configs_reach_through"),
+        "the solver reference count is index-served"
+    );
+}
+
+#[test]
+fn migration_0345_is_registered_for_sqlite_and_postgres() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("crate should live under repo/crates");
+    let manifest =
+        std::fs::read_to_string(repo_root.join("crates/scryer/src/db/migration_manifest.toml"))
+            .expect("migration manifest should load");
+    for file in [
+        "migrations/0345_proxy_reach_through.sql",
+        "postgres/migrations/0345_proxy_reach_through.sql",
+    ] {
+        assert!(
+            manifest.contains(&format!("file = \"{file}\"")),
+            "{file} should be registered"
+        );
+        let sql = std::fs::read_to_string(repo_root.join("crates/scryer/src/db").join(file))
+            .unwrap_or_else(|error| panic!("{file} should load: {error}"));
+        assert!(sql.contains("reach_through_proxy_config_id"), "{file}");
+        assert!(sql.contains("idx_proxy_configs_reach_through"), "{file}");
+    }
+}

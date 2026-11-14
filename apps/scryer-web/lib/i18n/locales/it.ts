@@ -3964,6 +3964,21 @@ const it: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Trascina per riordinare {{value}}",
   "qualityProfile.decisionStepMoveUp": "Sposta {{value}} in alto",
   "qualityProfile.decisionStepMoveDown": "Sposta {{value}} in basso",
+  "settings.proxyReachThrough": "Raggiungi tramite",
+  "settings.proxyReachThroughHelp":
+    "Scryer invia le sue richieste a questo risolutore tramite il proxy di trasporto o il tunnel scelto. Diretto raggiunge il risolutore dalla rete di Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Un risolutore di challenge non può essere raggiunto tramite un altro risolutore di challenge.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Un risolutore di challenge non può essere raggiunto tramite se stesso.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Il proxy o tunnel per raggiungere il risolutore non è stato trovato.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Il proxy o tunnel per raggiungere il risolutore è disattivato.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Solo un risolutore di challenge può essere raggiunto tramite un altro proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Uno o più risolutori di challenge vengono raggiunti tramite questo proxy. Modificali prima.",
 };
 
 export default it;

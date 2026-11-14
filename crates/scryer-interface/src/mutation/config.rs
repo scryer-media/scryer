@@ -538,6 +538,9 @@ impl ConfigMutations {
                         input.tunnel_keepalive_seconds,
                         "tunnel keepalive seconds",
                     )?,
+                    reach_through_proxy_config_id: input
+                        .reach_through_proxy_config_id
+                        .map(|id| id.to_string()),
                 },
             )
             .await
@@ -594,6 +597,9 @@ impl ConfigMutations {
                         input.tunnel_keepalive_seconds,
                         "tunnel keepalive seconds",
                     )?,
+                    reach_through_proxy_config_id: optional_id_input(
+                        input.reach_through_proxy_config_id,
+                    ),
                 },
             )
             .await

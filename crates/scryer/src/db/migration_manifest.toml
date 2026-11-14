@@ -4092,6 +4092,23 @@ hook_id = "backfill_media_request_id_projection"
 engine = "all"
 scope = "all"
 
+[[migration]]
+version = 345
+description = "proxy reach through"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0345_proxy_reach_through.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0345_proxy_reach_through.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

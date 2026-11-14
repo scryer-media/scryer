@@ -826,6 +826,7 @@ pub fn from_proxy_config(config: ProxyConfig) -> ProxyConfigPayload {
         tunnel_dns_servers: config.tunnel_dns_servers,
         tunnel_mtu: config.tunnel_mtu.map(i32::from),
         tunnel_keepalive_seconds: config.tunnel_keepalive_seconds.map(i32::from),
+        reach_through_proxy_config_id: config.reach_through_proxy_config_id.map(Into::into),
         host_key_fingerprint: config.host_key_fingerprint,
         host_key_pinned_at: config.host_key_pinned_at,
         is_enabled: config.is_enabled,

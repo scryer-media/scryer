@@ -4474,6 +4474,25 @@ pub mod integration {
     /// Proxy config is assigned to one or more download clients.
     pub const PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS: &str =
         "INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS";
+    /// A solver's reach-through names another challenge solver; only a
+    /// transport proxy or tunnel can carry a solver's traffic.
+    pub const PROXY_REACH_THROUGH_IS_SOLVER: &str = "INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER";
+    /// A solver's reach-through names the solver itself.
+    pub const PROXY_REACH_THROUGH_SELF: &str = "INTEGRATION_PROXY_REACH_THROUGH_SELF";
+    /// A solver's reach-through names a proxy config that does not exist.
+    pub const PROXY_REACH_THROUGH_NOT_FOUND: &str = "INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND";
+    /// A solver's reach-through names a disabled proxy config.
+    pub const PROXY_REACH_THROUGH_DISABLED: &str = "INTEGRATION_PROXY_REACH_THROUGH_DISABLED";
+    /// A reach-through was set on a proxy config that is not a challenge solver.
+    pub const PROXY_REACH_THROUGH_REQUIRES_SOLVER: &str =
+        "INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER";
+    /// The proxy config is how one or more challenge solvers are reached, so
+    /// it cannot be deleted, or disabled while any of them is enabled.
+    pub const PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS: &str =
+        "INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS";
+    /// Fact on `PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS`: how many solvers
+    /// stand in the way.
+    pub const PROXY_REACHED_THROUGH_SOLVER_COUNT_FACT: &str = "solverCount";
     /// Only SSH tunnel proxies pin a host key.
     pub const ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY: &str =
         "INTEGRATION_ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY";
@@ -4734,6 +4753,12 @@ pub mod integration {
         PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S,
         PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS,
         PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS,
+        PROXY_REACH_THROUGH_IS_SOLVER,
+        PROXY_REACH_THROUGH_SELF,
+        PROXY_REACH_THROUGH_NOT_FOUND,
+        PROXY_REACH_THROUGH_DISABLED,
+        PROXY_REACH_THROUGH_REQUIRES_SOLVER,
+        PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS,
         ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY,
         WIREGUARD_TUNNELS_NO_HOST_KEY_RESET,
         ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE,

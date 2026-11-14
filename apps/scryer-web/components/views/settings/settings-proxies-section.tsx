@@ -55,10 +55,12 @@ import {
   groupProxiesByFamily,
   isProxyProviderType,
   isWireguardProxyProvider,
+  proxyReachThroughOptions,
   supportsProxyCredentials,
   supportsProxyHostKey,
   supportsProxyPrivateKey,
   supportsProxyPrivateKeyPassphrase,
+  supportsProxyReachThrough,
   supportsProxyRemoteDns,
   supportsProxyWireguardFields,
 } from "@/lib/types";
@@ -70,6 +72,10 @@ import type {
 import { selectorId } from "@/lib/utils/dom-ids";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import { LoadingMark } from "@/components/common/loading-mark";
+
+/// The reach-through select's "direct" option. An empty string cannot be a
+/// Radix item value, so the two are translated at this boundary only.
+const REACH_THROUGH_DIRECT_VALUE = "direct";
 
 export type SettingsProxiesSectionProps = {
   proxyConfigs: ProxyRecord[];
@@ -225,6 +231,24 @@ export function SettingsProxiesSection({
     supportsProxyPrivateKeyPassphrase(proxyDraft.providerType) &&
     !proxyDraft.clearPrivateKey &&
     (proxyDraft.privateKey.trim() !== "" || proxyDraft.hasStoredPrivateKey);
+  // A solver may be reached through a transport proxy or tunnel. The proxy
+  // being edited is never offered as its own route.
+  const acceptsReachThrough = supportsProxyReachThrough(
+    proxyDraft.providerType,
+  );
+  const reachThroughOptions = React.useMemo(
+    () =>
+      proxyReachThroughOptions(
+        proxyConfigs,
+        proxyDraft.reachThroughProxyConfigId,
+      ).filter((proxy) => proxy.id !== editingProxyId),
+    [proxyConfigs, proxyDraft.reachThroughProxyConfigId, editingProxyId],
+  );
+  const reachThroughMissing =
+    proxyDraft.reachThroughProxyConfigId !== "" &&
+    !proxyConfigs.some(
+      (proxy) => proxy.id === proxyDraft.reachThroughProxyConfigId,
+    );
 
   React.useEffect(() => {
     if (editingProxyId !== null && isWireguardDraft) {
@@ -574,6 +598,60 @@ export function SettingsProxiesSection({
                     />
                   </label>
                 </div>
+                {acceptsReachThrough ? (
+                  <div className="max-w-md">
+                    <Label
+                      className="mb-2 h-5 gap-1.5"
+                      htmlFor="settings-indexer-proxy-reach-through"
+                    >
+                      {t("settings.proxyReachThrough")}
+                      <InfoHelp
+                        ariaLabel={t("settings.proxyReachThrough")}
+                        text={t("settings.proxyReachThroughHelp")}
+                      />
+                    </Label>
+                    <Select
+                      value={
+                        proxyDraft.reachThroughProxyConfigId ||
+                        REACH_THROUGH_DIRECT_VALUE
+                      }
+                      onValueChange={(value) =>
+                        setProxyDraft((prev) => ({
+                          ...prev,
+                          reachThroughProxyConfigId:
+                            value === REACH_THROUGH_DIRECT_VALUE ? "" : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger
+                        id="settings-indexer-proxy-reach-through"
+                        className="w-full"
+                      >
+                        <SelectValue placeholder={t("settings.proxyDirect")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={REACH_THROUGH_DIRECT_VALUE}>
+                          {t("settings.proxyDirect")}
+                        </SelectItem>
+                        {reachThroughMissing ? (
+                          <SelectItem
+                            value={proxyDraft.reachThroughProxyConfigId}
+                            disabled
+                          >
+                            {t("settings.proxyMissing")}
+                          </SelectItem>
+                        ) : null}
+                        {reachThroughOptions.map((proxy) => (
+                          <SelectItem key={proxy.id} value={proxy.id}>
+                            {proxy.isEnabled
+                              ? `${proxy.name} (${formatProxyProvider(proxy.providerType)})`
+                              : `${proxy.name} ${t("settings.proxyDisabledSuffix")}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
                 {isWireguardDraft && !isWireguardDetailsOpen ? (
                   <div
                     id="settings-indexer-proxy-import-config"

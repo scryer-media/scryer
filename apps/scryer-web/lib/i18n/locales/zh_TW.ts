@@ -5740,6 +5740,21 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
   "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
+  "settings.proxyReachThrough": "經由",
+  "settings.proxyReachThroughHelp":
+    "Scryer 透過所選的傳輸代理或通道向此求解器傳送請求。直連表示從 Scryer 自身的網路存取求解器。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "挑戰求解器不能經由另一個挑戰求解器存取。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "挑戰求解器不能經由自身存取。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "找不到用於存取求解器的代理或通道。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "用於存取求解器的代理或通道已停用。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "只有挑戰求解器可以經由其他代理存取。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "有一個或多個挑戰求解器經由此代理存取。請先修改它們。",
 };
 
 export default zh_TW;

@@ -5838,6 +5838,10 @@ pub trait ProxyConfigRepository: Send + Sync {
     /// purpose is that the next connection be a new one, so any cached client
     /// or session built on the old pin has to go.
     async fn clear_host_key(&self, id: &str) -> AppResult<()>;
+    /// How many challenge solvers name `id` as the proxy or tunnel they are
+    /// reached through, counting only enabled solvers when `enabled_only`.
+    /// One counting statement; the stored reference is the only input.
+    async fn count_solvers_reaching_through(&self, id: &str, enabled_only: bool) -> AppResult<u64>;
 }
 
 /// Fetches an indexer's caps document with a request Scryer issues itself,
