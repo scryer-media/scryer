@@ -2,20 +2,16 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use serde_json::Value;
-use zstd::dict::{DecoderDictionary, EncoderDictionary};
+use zstd::dict::DecoderDictionary;
 
 pub const DOMAIN_EVENT_PAYLOAD_FORMAT_V1: u8 = 1;
 pub const DOMAIN_EVENT_PAYLOAD_MAX_BYTES: usize = 256 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
 const DICTIONARY_V1: &[u8] = include_bytes!("domain_event_payload_v1.dict");
 
-// The dictionary is digested once per process. Loading the raw bytes into a
-// fresh context on every call rebuilt the same tables for each event.
-static ENCODER_DICTIONARY_V1: LazyLock<Result<EncoderDictionary<'static>, String>> =
-    LazyLock::new(|| {
-        EncoderDictionary::try_copy(DICTIONARY_V1, COMPRESSION_LEVEL)
-            .map_err(|error| error.to_string())
-    });
+// The decoder dictionary is digested once per process. The encoder still
+// loads the raw dictionary per payload: a prepared encoder dictionary
+// compresses large payloads to different bytes.
 static DECODER_DICTIONARY_V1: LazyLock<Result<DecoderDictionary<'static>, String>> =
     LazyLock::new(|| DecoderDictionary::try_copy(DICTIONARY_V1).map_err(|error| error.to_string()));
 
@@ -110,10 +106,7 @@ fn compact_payload(payload: &Value) -> Result<Vec<u8>, DomainEventPayloadCodecEr
 }
 
 fn compress_compact_payload(compact: &[u8]) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
-    let dictionary = (*ENCODER_DICTIONARY_V1)
-        .as_ref()
-        .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
-    let mut compressor = zstd::bulk::Compressor::with_prepared_dictionary(dictionary)
+    let mut compressor = zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
         .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
     let compressed = compressor
         .compress(compact)
@@ -294,8 +287,8 @@ mod tests {
         );
     }
 
-    /// The codec as it was before the dictionary was prepared once: the raw
-    /// dictionary loaded into a fresh context for every payload.
+    /// The encoding stored rows were written with: the raw dictionary loaded
+    /// into a fresh context for every payload.
     fn encode_with_per_call_dictionary(payload: &Value) -> Vec<u8> {
         let compact = serde_json::to_vec(payload).unwrap();
         let mut compressor =
@@ -337,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_dictionary_leaves_encoded_bytes_unchanged() {
+    fn encoded_bytes_match_a_fresh_per_call_dictionary() {
         for payload in codec_sample_payloads() {
             let encoded = encode_domain_event_payload(&payload).expect("payload should encode");
             assert_eq!(
