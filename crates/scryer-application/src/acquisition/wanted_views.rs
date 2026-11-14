@@ -273,9 +273,10 @@ impl AppUseCase {
                     .map(missing_target_to_view)
                     .collect::<Vec<_>>(),
                 WantedKind::CutoffUpgrade => self
-                    .compute_cutoff_unmet_items(None, None)
+                    .cutoff_unmet_items_under_build_lock()
                     .await?
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .filter_map(cutoff_item_to_view)
                     .collect::<Vec<_>>(),
             };
@@ -333,6 +334,84 @@ impl AppUseCase {
         unreachable!("wanted projection rebuild attempts are bounded")
     }
 
+    /// Every cutoff-unmet item of the instance, across all libraries and
+    /// facets, in the order [`Self::compute_cutoff_unmet_items`] returns them.
+    /// Rebuilt only when the wanted projection generation moves, so a request
+    /// that finds it warm reads nothing that grows with the library. Callers
+    /// apply the actor's library scope and their own filters to the rows.
+    pub(crate) async fn current_cutoff_unmet_items(&self) -> AppResult<Arc<[CutoffUnmetItem]>> {
+        use std::sync::atomic::Ordering;
+
+        let generation = self
+            .runtime
+            .acquisition
+            .wanted_projection_generation
+            .load(Ordering::Acquire);
+        if let Some(cached) = self
+            .runtime
+            .acquisition
+            .cutoff_unmet_items_cache
+            .read()
+            .await
+            .as_ref()
+            .filter(|cached| cached.generation == generation)
+        {
+            return Ok(cached.items.clone());
+        }
+        let _build_guard = self
+            .runtime
+            .acquisition
+            .wanted_projection_build_lock
+            .lock()
+            .await;
+        self.cutoff_unmet_items_under_build_lock().await
+    }
+
+    /// [`Self::current_cutoff_unmet_items`] for a caller that already holds
+    /// `wanted_projection_build_lock`. A set computed while the generation
+    /// moved is returned without being kept: it is as fresh as an uncached
+    /// compute, and the next request rebuilds.
+    async fn cutoff_unmet_items_under_build_lock(&self) -> AppResult<Arc<[CutoffUnmetItem]>> {
+        use std::sync::atomic::Ordering;
+
+        let generation = self
+            .runtime
+            .acquisition
+            .wanted_projection_generation
+            .load(Ordering::Acquire);
+        if let Some(cached) = self
+            .runtime
+            .acquisition
+            .cutoff_unmet_items_cache
+            .read()
+            .await
+            .as_ref()
+            .filter(|cached| cached.generation == generation)
+        {
+            return Ok(cached.items.clone());
+        }
+        let items: Arc<[CutoffUnmetItem]> =
+            Arc::from(self.compute_cutoff_unmet_items(None, None).await?);
+        let unchanged = self
+            .runtime
+            .acquisition
+            .wanted_projection_generation
+            .load(Ordering::Acquire)
+            == generation;
+        if unchanged {
+            *self
+                .runtime
+                .acquisition
+                .cutoff_unmet_items_cache
+                .write()
+                .await = Some(crate::services::CachedCutoffUnmetItems {
+                generation,
+                items: items.clone(),
+            });
+        }
+        Ok(items)
+    }
+
     /// Scope keys whose state row is paused or grabbed — excluded from the active
     /// derived view. One list query, keyed by the same scope identity the cursor
     /// uses.
@@ -379,11 +458,20 @@ impl AppUseCase {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        // Only the name and the slug are read, so the tag and external-id
+        // queries and the rest of the row are skipped.
         let names = self
             .services
             .catalog
             .titles
-            .get_by_ids(&unique_title_ids)
+            .get_by_ids_with_projection(
+                &unique_title_ids,
+                crate::TitleListProjection {
+                    include_external_ids: false,
+                    include_canonical_tags: false,
+                    row: VIEW_TITLE_ROW,
+                },
+            )
             .await
             .unwrap_or_default()
             .into_iter()
@@ -641,6 +729,40 @@ impl AppUseCase {
         })
     }
 }
+
+/// The title columns a derived view row shows.
+const VIEW_TITLE_ROW: crate::TitleRowProjection = crate::TitleRowProjection {
+    name: true,
+    slug: true,
+    monitored: false,
+    tags: false,
+    root_folder_id: false,
+    created_by: false,
+    created_at: false,
+    year: false,
+    overview: false,
+    poster: false,
+    background: false,
+    sort_title: false,
+    catalog_sort_key: false,
+    imdb_id: false,
+    runtime_minutes: false,
+    popularity: false,
+    content_status: false,
+    language: false,
+    first_aired: false,
+    network: false,
+    studio: false,
+    country: false,
+    aliases: false,
+    tagged_aliases: false,
+    metadata_language: false,
+    metadata_fetched_at: false,
+    min_availability: false,
+    digital_release_date: false,
+    movie_release_dates: false,
+    folder_path: false,
+};
 
 /// A missing target's coordinates as a view row (state/enrichment/convergence
 /// filled in later).

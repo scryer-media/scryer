@@ -1415,7 +1415,14 @@ fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlAr
         args.push(SqlArg::Text(requester_user_id.clone()));
     }
 
-    sql.push_str(" ORDER BY updated_at DESC, created_at DESC");
+    // `id` settles ties, so a page boundary never splits or repeats requests
+    // written in the same instant.
+    sql.push_str(" ORDER BY updated_at DESC, created_at DESC, id DESC");
+    if let Some(limit) = query.limit {
+        sql.push_str(" LIMIT {} OFFSET {}");
+        args.push(SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)));
+        args.push(SqlArg::I64(i64::try_from(query.offset).unwrap_or(i64::MAX)));
+    }
     (sql, args)
 }
 
@@ -1957,6 +1964,103 @@ mod tests {
             .expect("grouped counts");
         let counts = &grouped["library-under-test"];
         assert_eq!((counts.movie, counts.series, counts.anime), (1, 1, 0));
+    }
+
+    #[tokio::test]
+    async fn paged_list_walks_the_unpaged_list_in_order() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_library(&store, "library-cinderwake", "series").await;
+        let base = Utc::now();
+        // Several rows share an update instant, so page boundaries fall
+        // inside a tie.
+        for n in 0..23_i64 {
+            let id = format!("paged-{n:02}");
+            let (library, facet, status) = match n % 4 {
+                0 => ("library-under-test", "movie", "pending"),
+                1 => ("library-under-test", "movie", "approved"),
+                2 => ("library-cinderwake", "series", "pending"),
+                _ => ("library-cinderwake", "series", "rejected"),
+            };
+            seed_batch_row(&store, &id, library, facet, status, &format!("fp-{n}")).await;
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "set_media_request_times_for_paging",
+                "UPDATE media_requests SET updated_at = {}, created_at = {} WHERE id = {}",
+                vec![
+                    SqlArg::Timestamp(base - chrono::Duration::minutes(n / 5)),
+                    SqlArg::Timestamp(base - chrono::Duration::minutes(n / 10)),
+                    SqlArg::Text(id),
+                ],
+            )
+            .await
+            .expect("set the request times");
+        }
+
+        let ids = |requests: Vec<MediaRequest>| {
+            requests
+                .into_iter()
+                .map(|request| request.id)
+                .collect::<Vec<_>>()
+        };
+        for filter in [
+            MediaRequestQuery::default(),
+            MediaRequestQuery {
+                status: Some(MediaRequestStatus::Pending),
+                ..Default::default()
+            },
+            MediaRequestQuery {
+                library_ids: Some(vec!["library-cinderwake".to_string()]),
+                ..Default::default()
+            },
+            MediaRequestQuery {
+                requester_user_id: Some("requester-unknown".to_string()),
+                ..Default::default()
+            },
+        ] {
+            let whole = ids(store.list(filter.clone()).await.expect("unpaged list"));
+            for limit in [1_usize, 2, 5, 7, 23, 24, 100] {
+                let mut walked = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let page = ids(store
+                        .list(MediaRequestQuery {
+                            limit: Some(limit),
+                            offset,
+                            ..filter.clone()
+                        })
+                        .await
+                        .expect("paged list"));
+                    assert!(page.len() <= limit);
+                    let short = page.len() < limit;
+                    walked.extend(page);
+                    if short {
+                        break;
+                    }
+                    offset += limit;
+                }
+                assert_eq!(walked, whole, "limit {limit}");
+            }
+            // An offset without a limit is not a page.
+            assert_eq!(
+                ids(store
+                    .list(MediaRequestQuery {
+                        offset: 3,
+                        ..filter.clone()
+                    })
+                    .await
+                    .expect("unpaged list")),
+                whole
+            );
+        }
+        assert_eq!(
+            store
+                .list(MediaRequestQuery::default())
+                .await
+                .expect("unpaged list")
+                .len(),
+            23
+        );
     }
 
     fn sorted(

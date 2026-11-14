@@ -1915,8 +1915,17 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeMediaAvailability>> {
+        // One statement for a list that fits the binds; only a longer list
+        // is split.
+        let (episode_ids, per_statement) = id_list_statements(
+            episode_ids,
+            1,
+            0,
+            max_binds(&self.datastore.read_exec()),
+            EPISODE_AVAILABILITY_ID_CHUNK,
+        );
         let mut availability = Vec::new();
-        for chunk in episode_ids.chunks(EPISODE_AVAILABILITY_ID_CHUNK) {
+        for chunk in episode_ids.chunks(per_statement) {
             availability.extend(
                 list_episode_media_availability_query(
                     &self.datastore,
@@ -7868,6 +7877,16 @@ mod tests {
         expected.sort_by(|left, right| left.episode_id.cmp(&right.episode_id));
         assert_eq!(scoped.len(), 4);
         assert_eq!(scoped, expected);
+        // A list longer than the binds allow is split and gives the same rows.
+        let mut split = {
+            let _limit = crate::media::id_list_statements::lower_max_binds_for_tests(2);
+            media_files
+                .list_episode_media_availability_for_episodes(&requested)
+                .await
+                .expect("split episode-scoped availability should load")
+        };
+        split.sort_by(|left, right| left.episode_id.cmp(&right.episode_id));
+        assert_eq!(split, expected);
         assert!(
             media_files
                 .list_episode_media_availability_for_episodes(&[])

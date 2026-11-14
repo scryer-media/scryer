@@ -102,7 +102,13 @@ function mountContainer(adminRequests: unknown[]) {
       queries.push({ query, variables });
       const data =
         query === "mediaRequests"
-          ? { mediaRequests: adminRequests }
+          ? {
+              mediaRequests: adminRequests.slice(
+                Number(variables.offset ?? 0),
+                Number(variables.offset ?? 0) +
+                  Number(variables.limit ?? adminRequests.length),
+              ),
+            }
           : query === "adminLibraries"
             ? { libraries: [{ id: "library-1" }] }
             : { libraries: [] };
@@ -268,4 +274,34 @@ test("switching accounts clears the queue filters chosen by the previous account
     .at(-1);
   assert.equal(latest?.variables.requesterUserId, null);
   assert.equal(latest?.variables.libraryIds, null);
+});
+
+test("a queue longer than one page is read to the end", async (t) => {
+  const requests = Array.from({ length: 201 }, (_, index) => ({
+    ...rejectedRequest(
+      `request-${index}`,
+      "2026-01-01T00:00:00Z",
+      "requester-a",
+    ),
+    externalIds: [{ source: "tmdb", value: String(5000 + index) }],
+  }));
+  const screen = mountContainer(requests);
+  t.after(screen.unmount);
+
+  screen.render();
+  await settle();
+  await settle();
+  const view = screen.render();
+
+  assert.deepEqual(
+    screen.queries
+      .filter((call) => call.query === "mediaRequests")
+      .map((call) => [call.variables.limit, call.variables.offset])
+      .slice(0, 2),
+    [
+      [200, 0],
+      [200, 200],
+    ],
+  );
+  assert.equal(view.requests.length, 201);
 });

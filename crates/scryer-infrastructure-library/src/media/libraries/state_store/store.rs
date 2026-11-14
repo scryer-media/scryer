@@ -125,7 +125,7 @@ impl WantedStore {
         self
     }
 
-    async fn typo_ranks(
+    async fn title_match_ranks(
         &self,
         query: &AcquisitionScopeStatesQuery,
     ) -> AppResult<Vec<(String, i64)>> {
@@ -136,8 +136,11 @@ impl WantedStore {
         else {
             return Ok(Vec::new());
         };
-        scryer_infrastructure_library_search::resolve_typo_title_ranks(self.fuzzy.as_deref(), &plan)
-            .await
+        scryer_infrastructure_library_search::resolve_title_match_ranks(
+            self.fuzzy.as_deref(),
+            &plan,
+        )
+        .await
     }
 }
 
@@ -1440,8 +1443,8 @@ impl AcquisitionScopeStateRepository for WantedStore {
         if let StoreDatastore::Sqlite { pool, .. } = &self.datastore
             && sqlite_title_search_has_text(&query)
         {
-            let typo_ranks = self.typo_ranks(&query).await?;
-            return crate::queries::wanted::list_wanted_items_query(pool, &query, &typo_ranks)
+            let match_ranks = self.title_match_ranks(&query).await?;
+            return crate::queries::wanted::list_wanted_items_query(pool, &query, &match_ranks)
                 .await;
         }
 
@@ -1473,8 +1476,8 @@ impl AcquisitionScopeStateRepository for WantedStore {
         if let StoreDatastore::Sqlite { pool, .. } = &self.datastore
             && sqlite_title_search_has_text(&query)
         {
-            let typo_ranks = self.typo_ranks(&query).await?;
-            return crate::queries::wanted::count_wanted_items_query(pool, &query, &typo_ranks)
+            let match_ranks = self.title_match_ranks(&query).await?;
+            return crate::queries::wanted::count_wanted_items_query(pool, &query, &match_ranks)
                 .await;
         }
 

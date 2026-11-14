@@ -35,8 +35,8 @@ const MAX_TYPO_QUERY_TOKENS: usize = 16;
 
 /// A search resolved once and shared by page and aggregate queries.
 pub struct ResolvedTitleSearch {
-    normalized_query: String,
-    typo_ranks: Vec<(String, i64)>,
+    ranks: Vec<(String, i64)>,
+    dialect: fuzzy::TermSourceDialect,
 }
 
 impl ResolvedTitleSearch {
@@ -50,40 +50,113 @@ impl ResolvedTitleSearch {
         };
         let Some(plan) = build_title_search_plan(facet, query) else {
             return Ok(Some(Self {
-                normalized_query: String::new(),
-                typo_ranks: Vec::new(),
+                ranks: Vec::new(),
+                dialect: fuzzy::TermSourceDialect::Sqlite,
             }));
         };
-        let typo_ranks = resolve_typo_title_ranks(index, &plan).await?;
+        let ranks = resolve_title_match_ranks(index, &plan).await?;
         Ok(Some(Self {
-            normalized_query: plan.normalized_query,
-            typo_ranks,
+            ranks,
+            dialect: index
+                .map(TitleFuzzyIndex::dialect)
+                .unwrap_or(fuzzy::TermSourceDialect::Sqlite),
         }))
     }
 
     /// `title_id_column` is a caller-owned SQL identifier, never user input.
-    /// Bind markers use the infrastructure SQL runtime's `{}` convention.
+    /// Bind markers use the infrastructure SQL runtime's `{}` convention. The
+    /// matched titles travel as one array argument, however many there are.
     pub fn predicate(&self, title_id_column: &str) -> (String, Vec<String>) {
-        if self.normalized_query.is_empty() {
+        if self.ranks.is_empty() {
             return ("1 = 0".into(), Vec::new());
         }
-        let mut sql = format!(
-            "(EXISTS (SELECT 1 FROM title_search_terms search_term \
-             WHERE search_term.title_id = {title_id_column} \
-             AND search_term.term_kind NOT LIKE '%_token' \
-             AND search_term.normalized_term LIKE {{}})"
+        let matched = match self.dialect {
+            fuzzy::TermSourceDialect::Postgres => {
+                "SELECT matched.value \
+                 FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS matched(value)"
+            }
+            fuzzy::TermSourceDialect::Sqlite => "SELECT value FROM json_each({})",
+        };
+        let ids = serde_json::Value::from(
+            self.ranks
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
         );
-        let mut args = vec![format!("%{}%", self.normalized_query)];
-        if !self.typo_ranks.is_empty() {
-            let placeholders = std::iter::repeat_n("{}", self.typo_ranks.len())
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(" OR {title_id_column} IN ({placeholders})"));
-            args.extend(self.typo_ranks.iter().map(|(id, _)| id.clone()));
-        }
-        sql.push(')');
-        (sql, args)
+        (
+            format!("{title_id_column} IN ({matched})"),
+            vec![ids.to_string()],
+        )
     }
+}
+
+/// Every title the search matches and its rank: the direct lanes and the typo
+/// lane together, the lower rank winning where both name a title.
+///
+/// A missing or unavailable index is an error: both lanes read it.
+pub async fn resolve_title_match_ranks(
+    index: Option<&fuzzy::TitleFuzzyIndex>,
+    plan: &TitleSearchPlan,
+) -> AppResult<Vec<(String, i64)>> {
+    let index =
+        index.ok_or_else(|| AppError::Repository("title fuzzy index is not attached".into()))?;
+    let mut best = index
+        .ui_contains_ranks(
+            &plan.normalized_query,
+            &plan.facet_names(),
+            fuzzy::ContainsLaneRanks {
+                exact: DIRECT_EXACT_BASE_RANK,
+                prefix: DIRECT_PREFIX_BASE_RANK,
+                contains: DIRECT_CONTAINS_BASE_RANK,
+            },
+        )
+        .await?
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    for (title_id, rank) in typo_title_ranks(plan, &fuzzy_typo_hits(index, plan).await?) {
+        best.entry(title_id)
+            .and_modify(|current| *current = (*current).min(rank))
+            .or_insert(rank);
+    }
+    let mut ranks = best.into_iter().collect::<Vec<_>>();
+    ranks.sort();
+    Ok(ranks)
+}
+
+/// [`resolve_title_match_ranks`]'s answer as one argument: an array of
+/// `[title_id, rank]` pairs.
+pub fn title_match_ranks_json(ranks: &[(String, i64)]) -> String {
+    serde_json::Value::from(
+        ranks
+            .iter()
+            .map(|(title_id, rank)| serde_json::json!([title_id, rank]))
+            .collect::<Vec<_>>(),
+    )
+    .to_string()
+}
+
+/// A `SELECT` of `title_id, rank` rows over one [`title_match_ranks_json`]
+/// argument, in the infrastructure SQL runtime's `{}` convention.
+pub fn title_match_ranks_rows_sql(postgres: bool) -> &'static str {
+    if postgres {
+        "SELECT pair.value->>0 AS title_id, CAST(pair.value->>1 AS BIGINT) AS rank \
+         FROM jsonb_array_elements(CAST({} AS JSONB)) AS pair(value)"
+    } else {
+        "SELECT json_extract(value, '$[0]') AS title_id, json_extract(value, '$[1]') AS rank \
+         FROM json_each({})"
+    }
+}
+
+/// The ranking CTE for the UI library search on SQLite: `ranked_title_matches`
+/// holds `ranks`, bound as one argument.
+pub fn push_title_match_ranks_cte(builder: &mut QueryBuilder<Sqlite>, ranks: &[(String, i64)]) {
+    builder.push(
+        "WITH ranked_title_matches(title_id, rank) AS (
+             SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
+             FROM json_each(",
+    );
+    builder.push_bind(title_match_ranks_json(ranks));
+    builder.push(")) ");
 }
 
 #[derive(Clone, Debug)]
@@ -180,23 +253,6 @@ impl TitleSearchProjectionSource {
         let mut source = self.clone();
         source.tagged_aliases.extend(extra);
         source
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum DirectLane {
-    Exact,
-    Prefix,
-    Contains,
-}
-
-impl DirectLane {
-    fn base_rank(self) -> i64 {
-        match self {
-            Self::Exact => DIRECT_EXACT_BASE_RANK,
-            Self::Prefix => DIRECT_PREFIX_BASE_RANK,
-            Self::Contains => DIRECT_CONTAINS_BASE_RANK,
-        }
     }
 }
 
@@ -314,94 +370,6 @@ pub fn build_title_search_plan(facet: Option<MediaFacet>, query: &str) -> Option
     })
 }
 
-/// The ranking query for the UI library search.
-///
-/// `typo_ranks` is the bounded-distance lane, resolved by the fuzzy index and
-/// aggregated by [`typo_title_ranks`] before it gets here. It arrives as
-/// values rather than as a join because the lane is no longer expressible in
-/// SQL: `spellfix1` and its `editdist3` are gone, and an index that can
-/// answer "within n edits of" is not a SQL index.
-pub fn push_ranked_title_matches_cte(
-    builder: &mut QueryBuilder<Sqlite>,
-    plan: &TitleSearchPlan,
-    typo_ranks: &[(String, i64)],
-) {
-    builder.push("WITH direct_title_matches(title_id, rank) AS (");
-    push_direct_match_select(
-        builder,
-        plan,
-        DirectLane::Exact,
-        plan.normalized_query.clone(),
-    );
-    builder.push(" UNION ALL ");
-    push_direct_match_select(
-        builder,
-        plan,
-        DirectLane::Prefix,
-        format!("{}%", plan.normalized_query),
-    );
-    builder.push(" UNION ALL ");
-    push_direct_match_select(
-        builder,
-        plan,
-        DirectLane::Contains,
-        format!("%{}%", plan.normalized_query),
-    );
-    builder.push("), typo_title_matches(title_id, rank) AS (");
-    if typo_ranks.is_empty() {
-        builder.push("SELECT NULL, NULL WHERE 0");
-    } else {
-        let mut first = true;
-        for (title_id, rank) in typo_ranks {
-            if !first {
-                builder.push(" UNION ALL ");
-            }
-            first = false;
-            builder.push("SELECT ");
-            builder.push_bind(title_id.clone());
-            builder.push(", ");
-            builder.push_bind(*rank);
-        }
-    }
-    builder.push(
-        "), ranked_title_matches(title_id, rank) AS (
-             SELECT title_id, MIN(rank) AS rank
-             FROM (
-                 SELECT title_id, rank FROM direct_title_matches
-                 UNION ALL
-                 SELECT title_id, rank FROM typo_title_matches
-             )
-             GROUP BY title_id
-         ) ",
-    );
-}
-
-fn push_direct_match_select(
-    builder: &mut QueryBuilder<Sqlite>,
-    plan: &TitleSearchPlan,
-    lane: DirectLane,
-    pattern: String,
-) {
-    builder.push("SELECT title_id, MIN(");
-    builder.push_bind(lane.base_rank());
-    builder.push(
-        " + weight) AS rank
-         FROM title_search_terms
-         WHERE term_kind NOT LIKE '%_token' AND ",
-    );
-    match lane {
-        DirectLane::Exact => {
-            builder.push("normalized_term = ");
-        }
-        DirectLane::Prefix | DirectLane::Contains => {
-            builder.push("normalized_term LIKE ");
-        }
-    }
-    builder.push_bind(pattern);
-    push_facet_filter(builder, &plan.facets);
-    builder.push(" GROUP BY title_id");
-}
-
 fn required_typo_token_matches(token_count: usize) -> i64 {
     if token_count <= 1 { 1 } else { 2 }
 }
@@ -479,21 +447,6 @@ pub fn typo_title_ranks(plan: &TitleSearchPlan, hits: &[UiFuzzyHit]) -> Vec<(Str
     ranks
 }
 
-/// The typo lane end to end: ask the index, then apply the precision rules.
-///
-/// A missing or unavailable index is an error whenever the typo lane is needed.
-pub async fn resolve_typo_title_ranks(
-    index: Option<&fuzzy::TitleFuzzyIndex>,
-    plan: &TitleSearchPlan,
-) -> AppResult<Vec<(String, i64)>> {
-    if plan.query_tokens.is_empty() {
-        return Ok(Vec::new());
-    }
-    let index =
-        index.ok_or_else(|| AppError::Repository("title fuzzy index is not attached".into()))?;
-    Ok(typo_title_ranks(plan, &fuzzy_typo_hits(index, plan).await?))
-}
-
 /// Ask the fuzzy index for this plan's typo candidates.
 pub async fn fuzzy_typo_hits(
     index: &fuzzy::TitleFuzzyIndex,
@@ -510,19 +463,6 @@ pub async fn fuzzy_typo_hits(
             TYPO_TOP_LIMIT as usize,
         )
         .await
-}
-
-fn push_facet_filter(builder: &mut QueryBuilder<Sqlite>, facets: &[MediaFacet]) {
-    if facets.len() == 3 {
-        return;
-    }
-
-    builder.push(" AND facet IN (");
-    let mut separated = builder.separated(", ");
-    for facet in facets {
-        separated.push_bind(facet.as_str());
-    }
-    separated.push_unseparated(")");
 }
 
 /// One row's spelling facts, computed once from the raw name and shared by

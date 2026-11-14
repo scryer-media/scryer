@@ -155,6 +155,22 @@ pub struct ListMediaRequestsInput {
     /// Restrict the queue to requests this user is a requester on. Only the
     /// manager queue reads it; the caller's own list is always their own.
     pub requester_user_id: Option<String>,
+    /// Page size; `None` is [`MEDIA_REQUEST_LIST_DEFAULT_LIMIT`], and a value
+    /// is held to `1..=`[`MEDIA_REQUEST_LIST_MAX_LIMIT`].
+    pub limit: Option<usize>,
+    /// Requests to skip, newest first.
+    pub offset: usize,
+}
+
+/// Requests one list read returns when the caller names no page size.
+pub const MEDIA_REQUEST_LIST_DEFAULT_LIMIT: usize = 200;
+/// The most requests one list read returns.
+pub const MEDIA_REQUEST_LIST_MAX_LIMIT: usize = 1_000;
+
+fn media_request_page_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(MEDIA_REQUEST_LIST_DEFAULT_LIMIT)
+        .clamp(1, MEDIA_REQUEST_LIST_MAX_LIMIT)
 }
 
 #[derive(Clone, Debug)]
@@ -592,6 +608,8 @@ impl AppUseCase {
                     .requester_user_id
                     .map(|user_id| user_id.trim().to_string())
                     .filter(|user_id| !user_id.is_empty()),
+                limit: Some(media_request_page_limit(input.limit)),
+                offset: input.offset,
             })
             .await
     }
@@ -630,6 +648,8 @@ impl AppUseCase {
                 library_ids: Some(library_ids),
                 status: input.status,
                 requester_user_id: Some(actor.id.clone()),
+                limit: Some(media_request_page_limit(input.limit)),
+                offset: input.offset,
             })
             .await
     }

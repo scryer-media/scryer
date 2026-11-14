@@ -9175,6 +9175,7 @@ const en: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} episodes",
   "history.unknownEvent": "Unknown",
   "history.noMore": "No more events",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Load more",
 
   // Indexer error diagnostics

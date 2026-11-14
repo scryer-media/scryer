@@ -9,7 +9,8 @@
 use async_trait::async_trait;
 use scryer_application::AppResult;
 use scryer_infrastructure_library_search::fuzzy::{
-    IndexedTerm, ProjectionStamp, QueuedTitle, TitleTermSource,
+    ContainsLaneRanks, IndexedTerm, ProjectionStamp, QueuedTitle, TermSourceDialect,
+    TitleTermSource,
 };
 use scryer_infrastructure_sql::runtime::{SqlArg, SqlRow, SqlRuntime, StoreDatastore};
 
@@ -129,5 +130,65 @@ impl TitleTermSource for DatastoreTitleTermSource {
             collation_version: row.text("collation_version")?,
             projection_generation: row.i64("projection_generation")?,
         })
+    }
+
+    fn dialect(&self) -> TermSourceDialect {
+        match self.datastore {
+            StoreDatastore::Postgres { .. } => TermSourceDialect::Postgres,
+            _ => TermSourceDialect::Sqlite,
+        }
+    }
+
+    async fn contains_ranks(
+        &self,
+        term_ids: &[i64],
+        lenient_query: &str,
+        facets: &[&str],
+        lanes: ContainsLaneRanks,
+    ) -> AppResult<Vec<(String, i64)>> {
+        if term_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One array argument whatever the batch holds, read by primary key.
+        let candidates = match self.dialect() {
+            TermSourceDialect::Postgres => {
+                "SELECT CAST(candidate.value AS BIGINT) \
+                 FROM jsonb_array_elements_text(CAST({} AS JSONB)) AS candidate(value)"
+            }
+            TermSourceDialect::Sqlite => "SELECT value FROM json_each({})",
+        };
+        // The lenient form holds letters, digits and spaces only, so the query
+        // carries no pattern character of its own.
+        let mut sql = format!(
+            "SELECT title_id, \
+                    MIN(CASE WHEN normalized_term = {{}} THEN {{}} \
+                             WHEN normalized_term LIKE {{}} THEN {{}} \
+                             ELSE {{}} END + weight) AS match_rank \
+             FROM title_search_terms \
+             WHERE term_id IN ({candidates}) \
+               AND term_kind NOT LIKE '%_token' \
+               AND normalized_term LIKE {{}}"
+        );
+        let mut args = vec![
+            SqlArg::Text(lenient_query.to_string()),
+            SqlArg::I64(lanes.exact),
+            SqlArg::Text(format!("{lenient_query}%")),
+            SqlArg::I64(lanes.prefix),
+            SqlArg::I64(lanes.contains),
+            SqlArg::Json(serde_json::Value::from(term_ids.to_vec())),
+            SqlArg::Text(format!("%{lenient_query}%")),
+        ];
+        if facets.len() < 3 {
+            let placeholders = std::iter::repeat_n("{}", facets.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" AND facet IN ({placeholders})"));
+            args.extend(facets.iter().map(|facet| SqlArg::Text(facet.to_string())));
+        }
+        sql.push_str(" GROUP BY title_id");
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter()
+            .map(|row| Ok((row.text("title_id")?, row.i64("match_rank")?)))
+            .collect()
     }
 }

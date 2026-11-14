@@ -69,6 +69,15 @@ pub trait ListSubscriptionRepository: Send + Sync {
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ListSubscription>>;
 
+    /// The subscriptions among `ids` that exist, in no particular order.
+    async fn get_by_ids(&self, ids: &[String]) -> AppResult<Vec<ListSubscription>> {
+        let mut subscriptions = Vec::with_capacity(ids.len());
+        for id in ids {
+            subscriptions.extend(self.get_by_id(id).await?);
+        }
+        Ok(subscriptions)
+    }
+
     async fn list(&self, query: ListSubscriptionQuery) -> AppResult<Vec<ListSubscription>>;
 
     /// Enabled subscriptions whose next sync is at or before `now` and that

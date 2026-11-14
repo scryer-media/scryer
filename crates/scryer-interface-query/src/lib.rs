@@ -538,12 +538,20 @@ fn optional_ids_to_strings(ids: Option<Vec<ID>>) -> Option<Vec<String>> {
 /// list that errors because a trace row could not be read is strictly worse than
 /// one that shows the requests.
 async fn media_requests_with_policy(
+    ctx: &Context<'_>,
     app: &scryer_application::AppUseCase,
     actor: &scryer_domain::User,
     requests: Vec<scryer_domain::MediaRequest>,
 ) -> Vec<MediaRequestPayload> {
+    // The decision trace and the list name are read only for a query that
+    // selects them. The list name is shown inside `origin`.
+    let look_ahead = ctx.look_ahead();
+    let selection = scryer_application::request_rules::MediaRequestPolicySelection {
+        decision: look_ahead.field("decision").exists(),
+        public_list_name: look_ahead.field("origin").exists(),
+    };
     let facts = app
-        .media_request_policy_facts(actor, &requests)
+        .media_request_policy_facts(actor, &requests, selection)
         .await
         .unwrap_or_default();
     requests
@@ -1679,6 +1687,14 @@ impl CatalogQueries {
             desc = "Restrict requests to those this user is a requester on; omitted includes every requester."
         )]
         requester_user_id: Option<ID>,
+        #[graphql(
+            desc = "Maximum requests to return, newest first; omitted returns 200, values below 1 become 1, and values above 1000 become 1000."
+        )]
+        limit: Option<i32>,
+        #[graphql(
+            desc = "Requests to skip, newest first; omitted or negative starts at the first."
+        )]
+        offset: Option<i32>,
     ) -> GqlResult<Vec<MediaRequestPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1690,11 +1706,13 @@ impl CatalogQueries {
                     library_ids: optional_ids_to_strings(library_ids),
                     status: status.map(MediaRequestStatusValue::into_domain),
                     requester_user_id: requester_user_id.map(String::from),
+                    limit: limit.map(|limit| limit.max(1) as usize),
+                    offset: offset.unwrap_or(0).max(0) as usize,
                 },
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(media_requests_with_policy(&app, &actor, requests).await)
+        Ok(media_requests_with_policy(ctx, &app, &actor, requests).await)
     }
 
     /// List only the caller's media requests, optionally filtered by facet, libraries, and status.
@@ -1709,6 +1727,14 @@ impl CatalogQueries {
         library_ids: Option<Vec<ID>>,
         #[graphql(desc = "Restrict requests to one status; omitted includes all statuses.")]
         status: Option<MediaRequestStatusValue>,
+        #[graphql(
+            desc = "Maximum requests to return, newest first; omitted returns 200, values below 1 become 1, and values above 1000 become 1000."
+        )]
+        limit: Option<i32>,
+        #[graphql(
+            desc = "Requests to skip, newest first; omitted or negative starts at the first."
+        )]
+        offset: Option<i32>,
     ) -> GqlResult<Vec<MediaRequestPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1720,11 +1746,13 @@ impl CatalogQueries {
                     library_ids: optional_ids_to_strings(library_ids),
                     status: status.map(MediaRequestStatusValue::into_domain),
                     requester_user_id: None,
+                    limit: limit.map(|limit| limit.max(1) as usize),
+                    offset: offset.unwrap_or(0).max(0) as usize,
                 },
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(media_requests_with_policy(&app, &actor, requests).await)
+        Ok(media_requests_with_policy(ctx, &app, &actor, requests).await)
     }
 
     /// Read settings for a library by ID, subject to the caller's library-settings permission.
@@ -2524,14 +2552,11 @@ impl CatalogQueries {
             offset: filter.offset.unwrap_or(0).max(0) as usize,
         };
 
-        let offset = f.offset;
-        // Without totalCount, the walk stops one record past the page.
-        let include_total = ctx.look_ahead().field("totalCount").exists();
         let page = app
-            .list_title_history_page(&actor, &f, include_total)
+            .list_title_history(&actor, &f)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_title_history_page(page, offset).map_err(to_gql_error)?)
+        Ok(from_title_history_page(page).map_err(to_gql_error)?)
     }
 
     /// List blocklisted releases for one title; the limit defaults to 100 and values below 1 become 1.
@@ -3755,14 +3780,10 @@ impl SystemQueries {
             .recycled_item_history(&actor, id.as_str())
             .await
             .map_err(to_gql_error)?;
-        let total_count = summary.records.len() as i64;
-        let page = from_title_history_page(
-            scryer_application::TitleHistoryPage {
-                records: summary.records,
-                total_count,
-            },
-            0,
-        )
+        let page = from_title_history_page(scryer_application::TitleHistoryPage {
+            records: summary.records,
+            has_more: false,
+        })
         .map_err(to_gql_error)?;
         Ok(RecycledItemHistoryPayload {
             items: page.items,

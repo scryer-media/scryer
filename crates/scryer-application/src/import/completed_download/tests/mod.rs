@@ -1568,37 +1568,6 @@ impl DomainEventRepository for TestDomainEventRepo {
         Ok(crate::DashboardActivityStats::default())
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
-        _include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64> {
-        let title_ids = title_scope.map(|scope| match scope {
-            crate::TitleHistoryTitleScope::Titles(title_ids) => title_ids,
-            crate::TitleHistoryTitleScope::Libraries(_) => {
-                unimplemented!("these tests never read history by library")
-            }
-        });
-        let events = self.events.lock().await;
-        Ok(events
-            .iter()
-            .rev()
-            .filter_map(crate::event_views::title_history_record_from_domain_event)
-            .filter(|record| {
-                event_types.is_none_or(|values| values.contains(&record.event_type))
-                    && title_ids.is_none_or(|values| {
-                        record
-                            .title_id
-                            .as_ref()
-                            .is_some_and(|title_id| values.contains(title_id))
-                    })
-                    && download_id.is_none_or(|value| record.download_id.as_deref() == Some(value))
-            })
-            .count() as i64)
-    }
-
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,

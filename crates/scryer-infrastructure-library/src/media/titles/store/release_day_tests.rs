@@ -172,7 +172,7 @@ const MOVIE_FIXTURES: &[(&str, Option<&str>, Option<&str>, Option<&str>)] = &[
     (UNPARSEABLE, None, None, Some("{not json")),
 ];
 
-async fn root_for(datastore: &StoreDatastore, library_id: &str) -> String {
+pub(super) async fn root_for(datastore: &StoreDatastore, library_id: &str) -> String {
     SqlRuntime::fetch_optional(
         datastore.read_exec(),
         "SELECT id FROM library_roots WHERE library_id = {} LIMIT 1",

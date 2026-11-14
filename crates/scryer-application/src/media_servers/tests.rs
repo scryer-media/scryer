@@ -23,6 +23,7 @@ use scryer_domain::{
 struct TestMediaServerConnectionRepository {
     connections: Mutex<Vec<MediaServerConnection>>,
     playback_items: Mutex<Vec<MediaServerPlaybackItem>>,
+    playback_entity_reads: AtomicUsize,
     fail_create: bool,
     fail_update: bool,
 }
@@ -32,6 +33,7 @@ impl TestMediaServerConnectionRepository {
         Self {
             connections: Mutex::new(connections),
             playback_items: Mutex::new(Vec::new()),
+            playback_entity_reads: AtomicUsize::new(0),
             fail_create: false,
             fail_update: false,
         }
@@ -41,6 +43,7 @@ impl TestMediaServerConnectionRepository {
         Self {
             connections: Mutex::new(connections),
             playback_items: Mutex::new(Vec::new()),
+            playback_entity_reads: AtomicUsize::new(0),
             fail_create: create,
             fail_update: update,
         }
@@ -118,6 +121,7 @@ impl MediaServerConnectionRepository for TestMediaServerConnectionRepository {
         &self,
         entities: &[(MediaServerPlaybackEntityKind, String)],
     ) -> AppResult<Vec<MediaServerPlaybackItem>> {
+        self.playback_entity_reads.fetch_add(1, Ordering::SeqCst);
         Ok(self
             .playback_items
             .lock()
@@ -608,16 +612,6 @@ impl DomainEventRepository for TestDomainEventRepository {
         Ok(Vec::new())
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        _: Option<&[TitleHistoryEventType]>,
-        _: Option<crate::TitleHistoryTitleScope<'_>>,
-        _: bool,
-        _: Option<&str>,
-    ) -> AppResult<i64> {
-        Ok(0)
-    }
-
     async fn count_dashboard_activity_events(
         &self,
         _: &[String],
@@ -811,6 +805,32 @@ fn assert_unauthorized(error: AppError) {
         ),
         "expected unauthorized error, got {error:?}",
     );
+}
+
+#[tokio::test]
+async fn playback_links_for_a_caller_with_no_linked_account_read_no_mappings() {
+    let repository = Arc::new(TestMediaServerConnectionRepository::new(vec![
+        grant_bearing_jellyfin_connection(),
+    ]));
+    let app = app_with_repository_and_verifier(
+        repository.clone(),
+        Arc::new(NoopExternalIdentityVerifier),
+    );
+    let actor = system_settings_user();
+
+    let links = app
+        .media_server_playback_links_for_authorized_entities(
+            &actor,
+            &[(
+                MediaServerPlaybackEntityKind::Episode,
+                "episode-emberfall-1".to_string(),
+            )],
+        )
+        .await
+        .expect("playback links should load");
+
+    assert!(links.is_empty());
+    assert_eq!(repository.playback_entity_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

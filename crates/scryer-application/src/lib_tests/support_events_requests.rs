@@ -411,33 +411,6 @@ impl DomainEventRepository for MockDomainEventRepo {
         Ok(crate::DashboardActivityStats::default())
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_scope: Option<crate::TitleHistoryTitleScope<'_>>,
-        _include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64> {
-        let title_ids = self.history_scope_title_ids(title_scope).await?;
-        let title_ids = title_ids.as_deref();
-        let events = self.events.lock().await;
-        Ok(events
-            .iter()
-            .rev()
-            .filter_map(crate::event_views::title_history_record_from_domain_event)
-            .filter(|record| {
-                event_types.is_none_or(|values| values.contains(&record.event_type))
-                    && title_ids.is_none_or(|values| {
-                        record
-                            .title_id
-                            .as_ref()
-                            .is_some_and(|title_id| values.contains(title_id))
-                    })
-                    && download_id.is_none_or(|value| record.download_id.as_deref() == Some(value))
-            })
-            .count() as i64)
-    }
-
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
@@ -941,6 +914,12 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                             .any(|requester| &requester.user_id == user_id)
                     })
             })
+            .skip(if query.limit.is_some() {
+                query.offset
+            } else {
+                0
+            })
+            .take(query.limit.unwrap_or(usize::MAX))
             .cloned()
             .collect())
     }

@@ -8,6 +8,8 @@ mod blake3_identities_upgrade_tests;
 mod blocklist_release_identity_upgrade_tests;
 pub mod canonical_download_identity;
 #[cfg(test)]
+mod catalog_sort_indexes_upgrade_tests;
+#[cfg(test)]
 #[path = "cropped_resolution_relabel_upgrade_tests.rs"]
 mod cropped_resolution_relabel_upgrade_tests;
 pub mod delay_profile_tables;

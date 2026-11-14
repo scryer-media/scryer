@@ -4350,6 +4350,7 @@ const ru: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} эпизодов",
   "history.unknownEvent": "Неизвестно",
   "history.noMore": "Больше событий нет",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Загрузить ещё",
   "convenience.title": "Упрощённые правила",
   "convenience.requiredAudioLabel": "Обязательные языки аудиодорожек",

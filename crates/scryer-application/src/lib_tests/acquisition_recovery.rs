@@ -2224,7 +2224,7 @@ async fn process_download_failure_returns_already_handled_for_duplicate_failed_d
         )
         .await
         .expect("list title history");
-    assert_eq!(history.total_count, 2);
+    assert_eq!(history.records.len(), 2);
 }
 
 #[tokio::test]
@@ -3173,7 +3173,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         .await
         .expect("list title history");
 
-    assert_eq!(history.total_count, 4);
+    assert_eq!(history.records.len(), 4);
     assert!(history.records.iter().any(|record| {
         record.event_type == TitleHistoryEventType::DownloadFailed
             && record.collection_id.as_deref() == Some(season.id.as_str())

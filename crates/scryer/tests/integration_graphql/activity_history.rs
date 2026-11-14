@@ -13,13 +13,18 @@ async fn graphql_title_history_empty() {
     let ctx = TestContext::new().await;
     let body = gql(
         &ctx,
-        r#"{ titleHistory(filter: { limit: 10 }) { items { id eventType sourceTitle } totalCount } }"#,
+        r#"{ titleHistory(filter: { limit: 10 }) { items { id eventType sourceTitle } hasMore } }"#,
         json!({}),
     )
     .await;
     assert_no_errors(&body);
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 0);
-    assert!(body["data"]["titleHistory"]["items"].is_array());
+    assert_eq!(body["data"]["titleHistory"]["hasMore"], false);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
 }
 
 #[tokio::test]
@@ -27,7 +32,7 @@ async fn graphql_title_history_rejects_unsupported_event_type_filters() {
     let ctx = TestContext::new().await;
     let body = gql(
         &ctx,
-        r#"{ titleHistory(filter: { eventTypes: [DOWNLOAD_COMPLETED], limit: 10 }) { totalCount } }"#,
+        r#"{ titleHistory(filter: { eventTypes: [DOWNLOAD_COMPLETED], limit: 10 }) { hasMore } }"#,
         json!({}),
     )
     .await;
@@ -121,7 +126,6 @@ async fn graphql_title_history_page_lists_an_untitled_grab() {
         r#"
         query TitleHistory($filter: TitleHistoryFilterInput!) {
           titleHistory(filter: $filter) {
-            totalCount
             items {
               id
               titleId
@@ -175,7 +179,12 @@ async fn graphql_title_history_page_lists_an_untitled_grab() {
             .any(|item| item["sourceTitle"] == "Linked.Release.2026.1080p.WEB-DL"),
         "and the titled grab is still there: {items:#?}"
     );
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
 }
 
 #[tokio::test]
@@ -228,7 +237,6 @@ async fn graphql_title_history_includes_download_ignored_events() {
         r#"
         query TitleHistory($titleId: ID!) {
           titleHistory(filter: { titleIds: [$titleId], eventTypes: [DOWNLOAD_IGNORED], limit: 10 }) {
-            totalCount
             items { eventType downloadId sourceTitle displayTitle sourceProvider sourceHint }
           }
         }
@@ -237,7 +245,12 @@ async fn graphql_title_history_includes_download_ignored_events() {
     )
     .await;
     assert_no_errors(&body);
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 1);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
     let record = &body["data"]["titleHistory"]["items"][0];
     assert_eq!(record["eventType"], "download_ignored");
     assert_eq!(record["downloadId"], "ignored-job-1");
@@ -386,7 +399,6 @@ async fn graphql_title_history_includes_download_failed_and_blocklisted_events()
         r#"
         query TitleHistory($titleId: ID!) {
           titleHistory(filter: { titleIds: [$titleId], eventTypes: [DOWNLOAD_FAILED, BLOCKLISTED], limit: 10 }) {
-            totalCount
             items {
               eventType
               sourceTitle
@@ -406,7 +418,12 @@ async fn graphql_title_history_includes_download_failed_and_blocklisted_events()
     .await;
     assert_no_errors(&body);
 
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
     let records = body["data"]["titleHistory"]["items"]
         .as_array()
         .expect("title history items array");
@@ -618,7 +635,6 @@ async fn graphql_title_history_filters_by_episode_id() {
         r#"
         query TitleHistory($titleId: ID!, $episodeId: ID!) {
           titleHistory(filter: { titleIds: [$titleId], episodeId: $episodeId, limit: 10 }) {
-            totalCount
             items {
               eventType
               episodeId
@@ -632,7 +648,12 @@ async fn graphql_title_history_filters_by_episode_id() {
     .await;
     assert_no_errors(&body);
 
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
     let records = body["data"]["titleHistory"]["items"]
         .as_array()
         .expect("title history items array");
@@ -749,7 +770,6 @@ async fn graphql_title_history_filters_skipped_import_by_episode_id() {
         r#"
         query TitleHistory($titleId: ID!, $episodeId: ID!) {
           titleHistory(filter: { titleIds: [$titleId], episodeId: $episodeId, limit: 10 }) {
-            totalCount
             items {
               eventType
               episodeId
@@ -765,7 +785,12 @@ async fn graphql_title_history_filters_skipped_import_by_episode_id() {
     .await;
     assert_no_errors(&body);
 
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 1);
+    assert_eq!(
+        body["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
     let records = body["data"]["titleHistory"]["items"]
         .as_array()
         .expect("title history items array");
@@ -1089,7 +1114,7 @@ async fn graphql_season_history_scopes_packs_and_pagination() {
             .unwrap();
     }
     let query = r#"query($filter: TitleHistoryFilterInput!) {
-        titleHistory(filter: $filter) { totalCount items { sourceTitle episodeId } }
+        titleHistory(filter: $filter) { hasMore items { sourceTitle episodeId } }
     }"#;
     let first = gql(
         &ctx,
@@ -1099,7 +1124,7 @@ async fn graphql_season_history_scopes_packs_and_pagination() {
     )
     .await;
     assert_no_errors(&first);
-    assert_eq!(first["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(first["data"]["titleHistory"]["hasMore"], true);
     assert_eq!(
         first["data"]["titleHistory"]["items"][0]["sourceTitle"],
         "Cross.Season.Pack"
@@ -1112,7 +1137,7 @@ async fn graphql_season_history_scopes_packs_and_pagination() {
     )
     .await;
     assert_no_errors(&second);
-    assert_eq!(second["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(second["data"]["titleHistory"]["hasMore"], false);
     assert_eq!(
         second["data"]["titleHistory"]["items"][0]["sourceTitle"],
         "First.Season"
@@ -1125,7 +1150,12 @@ async fn graphql_season_history_scopes_packs_and_pagination() {
     )
     .await;
     assert_no_errors(&ungrouped);
-    assert_eq!(ungrouped["data"]["titleHistory"]["totalCount"], 2);
+    assert_eq!(
+        ungrouped["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
     for row in ungrouped["data"]["titleHistory"]["items"]
         .as_array()
         .unwrap()
@@ -1140,5 +1170,10 @@ async fn graphql_season_history_scopes_packs_and_pagination() {
     )
     .await;
     assert_no_errors(&mismatch);
-    assert_eq!(mismatch["data"]["titleHistory"]["totalCount"], 0);
+    assert_eq!(
+        mismatch["data"]["titleHistory"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
 }

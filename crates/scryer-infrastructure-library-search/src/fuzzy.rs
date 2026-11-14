@@ -46,18 +46,24 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use scryer_application::{AppError, AppResult};
-use tantivy::collector::TopDocs;
+use tantivy::collector::{DocSetCollector, TopDocs};
 use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryClone, TermQuery};
 use tantivy::schema::{
     FAST, Field, INDEXED, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions, Value,
 };
-use tantivy::tokenizer::{LowerCaser, NgramTokenizer, RawTokenizer, SimpleTokenizer, TextAnalyzer};
+use tantivy::tokenizer::{
+    LowerCaser, NgramTokenizer, PreTokenizedString, RawTokenizer, SimpleTokenizer, TextAnalyzer,
+    Token,
+};
 use tantivy::{Index, IndexReader, ReloadPolicy, TantivyDocument, Term};
 
 /// Bumped whenever the schema or the analysis below changes in a way that
 /// makes existing segments answer differently. A changed value is a rebuild.
-pub const FUZZY_SCHEMA_VERSION: u32 = 1;
+///
+/// 2: name rows also index the grams of their lenient form, which the
+/// contains lane reads.
+pub const FUZZY_SCHEMA_VERSION: u32 = 2;
 
 const META_FILE: &str = "scryer_fuzzy.json";
 /// The directory name under the data dir. Named so an operator can delete it
@@ -68,6 +74,8 @@ pub const FUZZY_INDEX_DIR: &str = "title-fuzzy-index";
 const BATCH_TERMS: usize = 20_000;
 /// Titles read out of the queue per drain pass.
 const QUEUE_DRAIN_BATCH: i64 = 512;
+/// The most queue batches one search drains before it answers.
+const SEARCH_DRAIN_MAX_BATCHES: usize = 4;
 /// The longest a fuzzy read may lag a write the database has accepted.
 ///
 /// Every drain is a tantivy commit: a new segment, a merge sooner or later,
@@ -86,6 +94,20 @@ const WRITER_HEAP_BYTES: usize = 15_000_000;
 /// The widest distance tantivy's automaton can be asked for. Beyond it the
 /// gram filter below carries the lane.
 const MAX_AUTOMATON_DISTANCE: u8 = 2;
+/// Leads every gram of a name's lenient form in the `grams` field.
+///
+/// That field already holds the grams of the match form, which the resolver's
+/// gram lane reads. The lenient grams share the field rather than take one of
+/// their own because a schema with another field no longer opens the directory
+/// an installation already has. No name contains this character once it is
+/// normalized and the gram tokenizer never emits it, so the two sets of grams
+/// cannot meet: a resolver query never names a marked gram and a contains query
+/// never names an unmarked one.
+const LENIENT_GRAM_MARK: char = '\u{1}';
+/// The longest gram of the lenient form that is indexed. A query at least this
+/// long asks for every gram of this length it holds; a shorter one is itself a
+/// gram.
+const LENIENT_GRAM_MAX_CHARS: usize = 3;
 
 /// The projection row as the index stores it. Every field here is already on
 /// `title_search_terms`; the index adds no derivation of its own, which is
@@ -137,7 +159,40 @@ pub trait TitleTermSource: Send + Sync {
     /// picked up by the next one rather than lost.
     async fn clear_queued(&self, seqs: &[i64]) -> AppResult<()>;
     async fn projection_stamp(&self) -> AppResult<ProjectionStamp>;
+    /// Which SQL the projection's database speaks, for callers that hand the
+    /// index's answer back to it.
+    fn dialect(&self) -> TermSourceDialect;
+    /// The contains lane's exact half. Of the rows `term_ids` names, those
+    /// that are full names in `facets` and whose lenient form contains
+    /// `lenient_query`, as one rank per title: the lowest of each row's lane
+    /// rank plus its weight, where a row equal to the query is in the exact
+    /// lane, one that starts with it in the prefix lane and any other in the
+    /// contains lane. `term_ids` is ascending and bounded by the caller.
+    async fn contains_ranks(
+        &self,
+        term_ids: &[i64],
+        lenient_query: &str,
+        facets: &[&str],
+        lanes: ContainsLaneRanks,
+    ) -> AppResult<Vec<(String, i64)>>;
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermSourceDialect {
+    Sqlite,
+    Postgres,
+}
+
+/// The base rank of each direct lane.
+#[derive(Clone, Copy, Debug)]
+pub struct ContainsLaneRanks {
+    pub exact: i64,
+    pub prefix: i64,
+    pub contains: i64,
+}
+
+/// How many candidate rows one statement of the contains lane tests.
+const CONTAINS_VERIFY_BATCH: usize = 5_000;
 
 #[derive(Clone, Copy)]
 struct Fields {
@@ -260,6 +315,11 @@ enum Freshness {
     Current,
     /// Drain only if the last drain is older than the drain interval.
     Bounded,
+    /// Drain what was queued when the read arrived, and no more than
+    /// [`SEARCH_DRAIN_MAX_BATCHES`] of it: a read that kept draining while a
+    /// scan kept writing titles would hold the index for as long as the scan
+    /// ran. What it leaves is the next read's.
+    Arrived,
 }
 
 /// A resolver-lane request: one bucket of the name index, the same
@@ -451,6 +511,7 @@ impl TitleFuzzyIndex {
         freshness: Freshness,
         now: Instant,
     ) -> AppResult<()> {
+        let mut drained_batches = 0;
         loop {
             let stamp = self.source.projection_stamp().await?;
             if !self.ready() || !self.stamp_matches(&stamp) {
@@ -458,6 +519,9 @@ impl TitleFuzzyIndex {
                 continue;
             }
             if freshness == Freshness::Bounded && self.drained_within_interval(now) {
+                return Ok(());
+            }
+            if freshness == Freshness::Arrived && drained_batches == SEARCH_DRAIN_MAX_BATCHES {
                 return Ok(());
             }
             let queued = self.source.queued_titles(QUEUE_DRAIN_BATCH).await?;
@@ -477,6 +541,12 @@ impl TitleFuzzyIndex {
             self.reload()?;
             let seqs = queued.iter().map(|entry| entry.seq).collect::<Vec<_>>();
             self.source.clear_queued(&seqs).await?;
+            drained_batches += 1;
+            // A short batch was the whole queue as this read found it.
+            if freshness == Freshness::Arrived && (queued.len() as i64) < QUEUE_DRAIN_BATCH {
+                self.record_drain(now);
+                return Ok(());
+            }
         }
     }
 
@@ -801,6 +871,109 @@ impl TitleFuzzyIndex {
         }
         Ok(hits)
     }
+
+    pub fn dialect(&self) -> TermSourceDialect {
+        self.source.dialect()
+    }
+
+    /// The direct lanes of the UI search, one rank per title whose full name
+    /// contains `lenient_query` in its lenient form.
+    ///
+    /// The index names the rows that can match and the projection decides
+    /// which do, by primary key, a bounded batch of ascending ids at a time.
+    /// The answer is therefore the projection's own, whatever the index holds:
+    /// a row the index names that no longer matches is dropped there.
+    pub async fn ui_contains_ranks(
+        &self,
+        lenient_query: &str,
+        facets: &[&str],
+        lanes: ContainsLaneRanks,
+    ) -> AppResult<Vec<(String, i64)>> {
+        let term_ids = self.ui_contains_candidates(lenient_query, facets).await?;
+        let mut best: HashMap<String, i64> = HashMap::new();
+        for batch in term_ids.chunks(CONTAINS_VERIFY_BATCH) {
+            for (title_id, rank) in self
+                .source
+                .contains_ranks(batch, lenient_query, facets, lanes)
+                .await?
+            {
+                best.entry(title_id)
+                    .and_modify(|current| *current = (*current).min(rank))
+                    .or_insert(rank);
+            }
+        }
+        let mut ranks = best.into_iter().collect::<Vec<_>>();
+        ranks.sort();
+        Ok(ranks)
+    }
+
+    /// Term ids, ascending, of the full names whose lenient form may contain
+    /// `lenient_query`.
+    ///
+    /// A name that contains the query holds every gram the query does, so no
+    /// containing name is left out; a name can hold them all without holding
+    /// them in that order, so the caller still tests each returned row, by
+    /// primary key and in bounded batches.
+    ///
+    /// What is queued when the search arrives is drained first, whatever the
+    /// drain interval: this lane replaces a read of the projection itself,
+    /// which saw a title as soon as its write committed. A human search finds
+    /// the queue empty, and writes nothing, except while a scan or an import
+    /// is writing titles; then it drains a bounded part and answers.
+    async fn ui_contains_candidates(
+        &self,
+        lenient_query: &str,
+        facets: &[&str],
+    ) -> AppResult<Vec<i64>> {
+        let grams = lenient_query_grams(lenient_query);
+        if grams.is_empty() {
+            return Ok(Vec::new());
+        }
+        let guard = self.write_guard().await;
+        self.sync_locked(&guard, Freshness::Arrived, Instant::now())
+            .await?;
+        let searcher = self.reader.searcher();
+        drop(guard);
+        let fields = self.fields;
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = grams
+            .iter()
+            .map(|gram| (Occur::Must, term_clause(fields.grams, gram)))
+            .collect();
+        if facets.len() < 3 {
+            clauses.push((
+                Occur::Must,
+                Box::new(BooleanQuery::new(
+                    facets
+                        .iter()
+                        .map(|facet| (Occur::Should, term_clause(fields.facet, facet)))
+                        .collect(),
+                )),
+            ));
+        }
+        let boolean = BooleanQuery::new(clauses);
+        tokio::task::spawn_blocking(move || -> tantivy::Result<Vec<i64>> {
+            let mut by_segment: HashMap<u32, Vec<u32>> = HashMap::new();
+            for address in searcher.search(&boolean, &DocSetCollector)? {
+                by_segment
+                    .entry(address.segment_ord)
+                    .or_default()
+                    .push(address.doc_id);
+            }
+            let mut term_ids = Vec::new();
+            for (segment_ord, doc_ids) in by_segment {
+                let column = searcher
+                    .segment_reader(segment_ord)
+                    .fast_fields()
+                    .i64("term_id")?;
+                term_ids.extend(doc_ids.into_iter().filter_map(|doc| column.first(doc)));
+            }
+            term_ids.sort_unstable();
+            Ok(term_ids)
+        })
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?
+        .map_err(|error| AppError::Repository(error.to_string()))
+    }
 }
 
 /// The durable record, read once at open. Everything after that reads the
@@ -1022,21 +1195,57 @@ fn document_for(fields: &Fields, term: &IndexedTerm) -> TantivyDocument {
     doc.add_text(fields.script, &term.script);
     doc.add_text(fields.numbers_key, &term.numbers_key);
     doc.add_text(fields.term_kind, &term.term_kind);
-    doc.add_text(
-        fields.token_row,
-        if term.term_kind.ends_with("_token") {
-            "1"
-        } else {
-            "0"
-        },
-    );
+    let is_token_row = term.term_kind.ends_with("_token");
+    doc.add_text(fields.token_row, if is_token_row { "1" } else { "0" });
     doc.add_i64(fields.weight, term.weight);
     doc.add_i64(fields.char_length, term.char_length);
     doc.add_text(fields.match_raw, &term.match_term);
     doc.add_text(fields.literal_raw, &term.literal_term);
     doc.add_text(fields.lenient_raw, &term.normalized_term);
     doc.add_text(fields.grams, &term.match_term);
+    // The contains lane matches full names only, as the SQL it narrows does.
+    if !is_token_row {
+        let tokens = (1..=LENIENT_GRAM_MAX_CHARS)
+            .flat_map(|size| lenient_grams(&term.normalized_term, size))
+            .enumerate()
+            .map(|(position, text)| Token {
+                offset_from: 0,
+                offset_to: 0,
+                position,
+                text,
+                position_length: 1,
+            })
+            .collect::<Vec<_>>();
+        if !tokens.is_empty() {
+            doc.add_pre_tokenized_text(
+                fields.grams,
+                PreTokenizedString {
+                    text: String::new(),
+                    tokens,
+                },
+            );
+        }
+    }
     doc
+}
+
+/// The distinct `size`-character grams of a lenient form, each marked.
+fn lenient_grams(lenient: &str, size: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    character_ngrams(lenient, size)
+        .into_iter()
+        .filter(|gram| seen.insert(gram.clone()))
+        .map(|gram| format!("{LENIENT_GRAM_MARK}{gram}"))
+        .collect()
+}
+
+/// The grams every lenient form containing `query` must hold.
+fn lenient_query_grams(query: &str) -> Vec<String> {
+    let size = query.chars().count().min(LENIENT_GRAM_MAX_CHARS);
+    if size == 0 {
+        return Vec::new();
+    }
+    lenient_grams(query, size)
 }
 
 /// Terms grouped by title, for callers that rebuild a title's documents.
@@ -1070,6 +1279,19 @@ mod remove_meta_tests {
         }
         async fn projection_stamp(&self) -> AppResult<ProjectionStamp> {
             Ok(stamp())
+        }
+
+        fn dialect(&self) -> TermSourceDialect {
+            TermSourceDialect::Sqlite
+        }
+        async fn contains_ranks(
+            &self,
+            _term_ids: &[i64],
+            _lenient_query: &str,
+            _facets: &[&str],
+            _lanes: ContainsLaneRanks,
+        ) -> AppResult<Vec<(String, i64)>> {
+            Ok(Vec::new())
         }
     }
 
@@ -1163,18 +1385,24 @@ mod drain_cadence_tests {
         queue: Mutex<Vec<QueuedTitle>>,
         generation: Mutex<i64>,
         next_id: Mutex<i64>,
+        /// Every batch of candidate ids the contains lane asked about.
+        verified: Mutex<Vec<Vec<i64>>>,
     }
 
     impl QueueSource {
         /// What a projection write does: rows plus a queue claim.
         fn write_title(&self, title_id: &str, name: &str) {
+            self.write_term(title_id, name, "name", "series");
+        }
+
+        fn write_term(&self, title_id: &str, name: &str, term_kind: &str, facet: &str) {
             let mut next = self.next_id.lock().unwrap();
             *next += 1;
             self.terms.lock().unwrap().push(IndexedTerm {
                 term_id: *next,
                 title_id: title_id.to_string(),
-                facet: "series".into(),
-                term_kind: "name".into(),
+                facet: facet.into(),
+                term_kind: term_kind.into(),
                 weight: 0,
                 literal_term: name.to_string(),
                 match_term: name.to_string(),
@@ -1242,6 +1470,228 @@ mod drain_cadence_tests {
                 projection_generation: *self.generation.lock().unwrap(),
             })
         }
+
+        fn dialect(&self) -> TermSourceDialect {
+            TermSourceDialect::Sqlite
+        }
+        async fn contains_ranks(
+            &self,
+            term_ids: &[i64],
+            lenient_query: &str,
+            facets: &[&str],
+            lanes: ContainsLaneRanks,
+        ) -> AppResult<Vec<(String, i64)>> {
+            assert!(term_ids.is_sorted(), "candidate ids arrive ascending");
+            self.verified.lock().unwrap().push(term_ids.to_vec());
+            let mut best: HashMap<String, i64> = HashMap::new();
+            for term in self.terms.lock().unwrap().iter().filter(|term| {
+                term_ids.contains(&term.term_id)
+                    && !term.term_kind.ends_with("_token")
+                    && facets.contains(&term.facet.as_str())
+                    && term.normalized_term.contains(lenient_query)
+            }) {
+                let lane = if term.normalized_term == lenient_query {
+                    lanes.exact
+                } else if term.normalized_term.starts_with(lenient_query) {
+                    lanes.prefix
+                } else {
+                    lanes.contains
+                };
+                let rank = lane + term.weight;
+                best.entry(term.title_id.clone())
+                    .and_modify(|current| *current = (*current).min(rank))
+                    .or_insert(rank);
+            }
+            Ok(best.into_iter().collect())
+        }
+    }
+
+    const LANES: ContainsLaneRanks = ContainsLaneRanks {
+        exact: 0,
+        prefix: 1_000,
+        contains: 2_000,
+    };
+    const ALL_FACETS: [&str; 3] = ["movie", "series", "anime"];
+
+    #[tokio::test]
+    async fn the_contains_lane_ranks_names_by_how_they_hold_the_query() {
+        let data = tempfile::tempdir().unwrap();
+        let source = Arc::new(QueueSource::default());
+        source.write_title("fixture-exact", "amber road");
+        source.write_title("fixture-prefix", "amber road north");
+        source.write_title("fixture-inside", "the amber road north");
+        // Holds every gram of the query, in another order.
+        source.write_title("fixture-shuffled", "road amber roa mber r");
+        source.write_title("fixture-other", "copper lane");
+        source.write_term("fixture-token", "amber road", "name_token", "series");
+        source.write_term("fixture-movie", "amber road", "name", "movie");
+        let (index, _opened) = open_fixture(data.path(), source.clone()).await;
+
+        let ranks = index
+            .ui_contains_ranks("amber road", &ALL_FACETS, LANES)
+            .await
+            .unwrap();
+        assert_eq!(
+            ranks,
+            vec![
+                ("fixture-exact".to_string(), 0),
+                ("fixture-inside".to_string(), 2_000),
+                ("fixture-movie".to_string(), 0),
+                ("fixture-prefix".to_string(), 1_000),
+            ]
+        );
+        let verified = source.verified.lock().unwrap().concat();
+        assert!(
+            !verified.contains(&5) && !verified.contains(&6),
+            "an unrelated name and a token row are never candidates: {verified:?}"
+        );
+
+        let series_only = index
+            .ui_contains_ranks("amber road", &["series"], LANES)
+            .await
+            .unwrap();
+        assert!(
+            series_only
+                .iter()
+                .all(|(title_id, _)| title_id != "fixture-movie"),
+            "{series_only:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_contains_lane_answers_queries_shorter_than_a_trigram() {
+        let data = tempfile::tempdir().unwrap();
+        let source = Arc::new(QueueSource::default());
+        source.write_title("fixture-short", "up");
+        source.write_title("fixture-long", "pull up north");
+        source.write_title("fixture-single", "x");
+        source.write_title("fixture-none", "level");
+        let (index, _opened) = open_fixture(data.path(), source).await;
+
+        let titles = |ranks: Vec<(String, i64)>| {
+            ranks
+                .into_iter()
+                .map(|(title_id, _)| title_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles(
+                index
+                    .ui_contains_ranks("up", &ALL_FACETS, LANES)
+                    .await
+                    .unwrap()
+            ),
+            ["fixture-long", "fixture-short"]
+        );
+        assert_eq!(
+            titles(
+                index
+                    .ui_contains_ranks("u", &ALL_FACETS, LANES)
+                    .await
+                    .unwrap()
+            ),
+            ["fixture-long", "fixture-short"]
+        );
+        assert_eq!(
+            titles(
+                index
+                    .ui_contains_ranks("x", &ALL_FACETS, LANES)
+                    .await
+                    .unwrap()
+            ),
+            ["fixture-single"]
+        );
+        assert_eq!(
+            titles(
+                index
+                    .ui_contains_ranks("p n", &ALL_FACETS, LANES)
+                    .await
+                    .unwrap()
+            ),
+            ["fixture-long"]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_contains_lane_sees_a_title_written_inside_the_drain_interval() {
+        let data = tempfile::tempdir().unwrap();
+        let source = Arc::new(QueueSource::default());
+        let (index, _opened) = open_fixture(data.path(), source.clone()).await;
+
+        source.write_title("fixture-late", "late harbor");
+        let ranks = index
+            .ui_contains_ranks("harbor", &ALL_FACETS, LANES)
+            .await
+            .unwrap();
+        assert_eq!(ranks, vec![("fixture-late".to_string(), 2_000)]);
+        assert_eq!(source.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_contains_lane_drains_a_bounded_part_of_a_long_queue() {
+        let data = tempfile::tempdir().unwrap();
+        let source = Arc::new(QueueSource::default());
+        let (index, _opened) = open_fixture(data.path(), source.clone()).await;
+
+        let batch = QUEUE_DRAIN_BATCH as usize;
+        let queued = batch * (SEARCH_DRAIN_MAX_BATCHES + 2);
+        for number in 0..queued {
+            source.write_title(&format!("fixture-{number}"), &format!("harbor {number}"));
+        }
+        let first = index
+            .ui_contains_ranks("harbor", &ALL_FACETS, LANES)
+            .await
+            .unwrap();
+        assert_eq!(first.len(), batch * SEARCH_DRAIN_MAX_BATCHES);
+        assert_eq!(source.queued(), batch * 2);
+
+        // The next search carries on from there, and an explicit sync ends it.
+        let second = index
+            .ui_contains_ranks("harbor", &ALL_FACETS, LANES)
+            .await
+            .unwrap();
+        assert_eq!(second.len(), queued);
+        assert_eq!(source.queued(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_contains_lane_tests_candidates_in_bounded_ascending_batches() {
+        let data = tempfile::tempdir().unwrap();
+        let source = Arc::new(QueueSource::default());
+        let total = CONTAINS_VERIFY_BATCH * 2 + 7;
+        for number in 0..total {
+            source.write_term(
+                &format!("fixture-{number}"),
+                &format!("harbor {number}"),
+                "name",
+                "series",
+            );
+        }
+        let (index, _opened) = open_fixture(data.path(), source.clone()).await;
+
+        let ranks = index
+            .ui_contains_ranks("harbor", &ALL_FACETS, LANES)
+            .await
+            .unwrap();
+        assert_eq!(ranks.len(), total);
+        let verified = source.verified.lock().unwrap();
+        assert_eq!(
+            verified.iter().map(Vec::len).collect::<Vec<_>>(),
+            [CONTAINS_VERIFY_BATCH, CONTAINS_VERIFY_BATCH, 7]
+        );
+        assert!(verified.concat().is_sorted());
+    }
+
+    #[test]
+    fn lenient_grams_never_meet_the_match_form_grams() {
+        for gram in lenient_grams("amber road", 3)
+            .into_iter()
+            .chain(lenient_query_grams("am"))
+            .chain(lenient_query_grams("a"))
+        {
+            assert!(gram.starts_with(LENIENT_GRAM_MARK), "{gram:?}");
+        }
+        assert!(lenient_query_grams("").is_empty());
     }
 
     async fn open_fixture(

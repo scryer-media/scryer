@@ -3881,6 +3881,7 @@ const zh_HK: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} 集",
   "history.unknownEvent": "未知事件",
   "history.noMore": "沒有更多事件",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "載入更多",
   "indexerErrors.title": "索引器錯誤記錄",
   "indexerErrors.scopedTitle": "{{indexer}} — 錯誤記錄",

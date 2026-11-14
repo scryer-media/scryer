@@ -1348,10 +1348,12 @@ pub struct TitleHistoryFilter {
     pub offset: usize,
 }
 
+/// One page of title history. It carries no count of the matching records:
+/// `has_more` says whether any follow this page.
 #[derive(Clone, Debug)]
 pub struct TitleHistoryPage {
     pub records: Vec<TitleHistoryRecord>,
-    pub total_count: i64,
+    pub has_more: bool,
 }
 
 /// Title-history event counts for one trailing time window, aggregated in SQL.

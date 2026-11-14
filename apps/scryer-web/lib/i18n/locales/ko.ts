@@ -2331,6 +2331,7 @@ const ko: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}}화",
   "history.unknownEvent": "알 수 없음",
   "history.noMore": "더 이상 이벤트가 없습니다",
+  "history.pageRange": "{{start}}~{{end}}",
   "history.loadMore": "더 보기",
   "settings.recycleBin": "휴지통",
   "settings.recycleBinEnabled": "휴지통 활성화",

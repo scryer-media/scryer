@@ -25523,7 +25523,15 @@ type QueryRoot {
 		"""
 		Restrict requests to those this user is a requester on; omitted includes every requester.
 		"""
-		requesterUserId: ID
+		requesterUserId: ID,
+		"""
+		Maximum requests to return, newest first; omitted returns 200, values below 1 become 1, and values above 1000 become 1000.
+		"""
+		limit: Int,
+		"""
+		Requests to skip, newest first; omitted or negative starts at the first.
+		"""
+		offset: Int
 	): [MediaRequestPayload!]!
 	"""
 	List only the caller's media requests, optionally filtered by facet, libraries, and status.
@@ -25540,7 +25548,15 @@ type QueryRoot {
 		"""
 		Restrict requests to one status; omitted includes all statuses.
 		"""
-		status: MediaRequestStatusValue
+		status: MediaRequestStatusValue,
+		"""
+		Maximum requests to return, newest first; omitted returns 200, values below 1 become 1, and values above 1000 become 1000.
+		"""
+		limit: Int,
+		"""
+		Requests to skip, newest first; omitted or negative starts at the first.
+		"""
+		offset: Int
 	): [MediaRequestPayload!]!
 	"""
 	Read settings for a library by ID, subject to the caller's library-settings permission.
@@ -32819,10 +32835,6 @@ type TitleHistoryPagePayload {
 	Events in the requested page.
 	"""
 	items: [TitleHistoryEventPayload!]!
-	"""
-	Total matching events across all pages.
-	"""
-	totalCount: Int!
 	"""
 	Whether more matching events exist after this page.
 	"""

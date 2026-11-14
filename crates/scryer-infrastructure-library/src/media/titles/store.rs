@@ -46,7 +46,7 @@ use crate::queries::{
     title::TITLE_COLUMNS,
     title_search::{
         build_title_search_plan, delete_title_search_projection_tx, normalize_title_search_text,
-        push_ranked_title_matches_cte, replace_title_search_projection_pg_tx,
+        push_title_match_ranks_cte, replace_title_search_projection_pg_tx,
         replace_title_search_projection_tx,
     },
 };
@@ -418,11 +418,10 @@ impl TitleStore {
                         return Ok(titles);
                     }
                     _ => {
-                        // Same lane, same index, same ranks: the typo
-                        // tolerance is not a SQLite-only feature any more.
-                        let typo_ranks = match build_title_search_plan(facet.clone(), query) {
+                        // Same lanes, same index, same ranks as SQLite.
+                        let match_ranks = match build_title_search_plan(facet.clone(), query) {
                             Some(plan) => {
-                                scryer_infrastructure_library_search::resolve_typo_title_ranks(
+                                scryer_infrastructure_library_search::resolve_title_match_ranks(
                                     self.fuzzy.as_deref(),
                                     &plan,
                                 )
@@ -430,8 +429,11 @@ impl TitleStore {
                             }
                             None => Vec::new(),
                         };
-                        let (sql, args) =
-                            build_ranked_title_list_sql(facet, library_ids, query, &typo_ranks);
+                        let (sql, args) = build_ranked_title_list_sql(
+                            library_ids,
+                            &match_ranks,
+                            matches!(self.datastore, StoreDatastore::Postgres { .. }),
+                        );
                         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?
                     }
                 }
@@ -4047,10 +4049,11 @@ async fn list_titles_via_sqlite_title_search_query(
         return Ok(Vec::new());
     };
 
-    let typo_ranks =
-        scryer_infrastructure_library_search::resolve_typo_title_ranks(fuzzy, &search_plan).await?;
+    let match_ranks =
+        scryer_infrastructure_library_search::resolve_title_match_ranks(fuzzy, &search_plan)
+            .await?;
     let mut builder = QueryBuilder::<Sqlite>::new("");
-    push_ranked_title_matches_cte(&mut builder, &search_plan, &typo_ranks);
+    push_title_match_ranks_cte(&mut builder, &match_ranks);
     builder.push(format!(
         "SELECT {TITLE_COLUMNS} FROM ranked_title_matches
          JOIN titles ON titles.id = ranked_title_matches.title_id
@@ -5929,17 +5932,25 @@ fn title_catalog_content_status_values(statuses: &[TitleCatalogContentStatus]) -
     normalized
 }
 
-/// Sorts whose join aggregates per-title rows. Their join reads `scoped_titles`,
-/// which [`build_title_catalog_page_sql`] defines from the page's own scope, so
-/// the aggregate covers only the titles the page can show instead of the whole
-/// database. Each aggregate is per title, so a title in scope gets the same value
-/// either way.
+/// Sorts whose join aggregates or ranks per-title rows. Their join reads
+/// `scoped_titles`, which [`build_title_catalog_page_sql`] defines from the page's
+/// own scope, so the join covers only the titles the page can show instead of the
+/// whole database. Each value is per title, so a title in scope gets the same
+/// value either way.
 fn title_catalog_sort_join_is_scoped(key: TitleCatalogSortKey) -> bool {
     matches!(
         key,
-        TitleCatalogSortKey::Size | TitleCatalogSortKey::Episodes | TitleCatalogSortKey::Quality
-    )
+        TitleCatalogSortKey::Size
+            | TitleCatalogSortKey::Episodes
+            | TitleCatalogSortKey::Quality
+            | TitleCatalogSortKey::MediaResolution
+            | TitleCatalogSortKey::MediaHdr
+            | TitleCatalogSortKey::MediaAudioCodec
+    ) || title_catalog_rating_sources_for_sort_key(key).is_some()
 }
+
+const TITLE_CATALOG_SCOPED_EXTERNAL_RATING_JOIN: &str =
+    "JOIN scoped_titles ON scoped_titles.id = ter.title_id";
 
 const TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN: &str =
     "JOIN scoped_titles ON scoped_titles.id = mf.title_id";
@@ -5980,7 +5991,10 @@ fn build_title_catalog_sort_join_sql(
         | TitleCatalogSortKey::MediaHdr
         | TitleCatalogSortKey::MediaAudioCodec => format!(
             " LEFT JOIN ({}) catalog_movie_media ON catalog_movie_media.title_id = titles.id",
-            title_catalog_movie_media_subquery(dialect)
+            title_catalog_movie_media_subquery_scoped(
+                dialect,
+                TITLE_CATALOG_SCOPED_MEDIA_FILE_JOIN
+            )
         ),
         // A title has at most one summary (unique on `title_id`), so this is a plain
         // join. The two columns are projected rather than the table joined bare
@@ -6006,7 +6020,10 @@ fn build_title_catalog_sort_join_sql(
             let sources = title_catalog_rating_sources_for_sort_key(key).unwrap_or(&[]);
             format!(
                 " LEFT JOIN ({}) catalog_external_rating ON catalog_external_rating.title_id = titles.id",
-                title_catalog_external_rating_subquery(sources)
+                title_catalog_external_rating_subquery_scoped(
+                    sources,
+                    TITLE_CATALOG_SCOPED_EXTERNAL_RATING_JOIN
+                )
             )
         }
         TitleCatalogSortKey::Title
@@ -6088,9 +6105,12 @@ fn build_title_catalog_order_sql(
             "ORDER BY created_at {direction}, {}",
             title_catalog_ascending_tie_order_sql(dialect)
         ),
+        // Rows that tie on the two leading terms hold the same year, so the title
+        // order's own year terms could never break a tie here and are left out:
+        // the terms are then exactly the keys of `idx_titles_library_year_order_*`.
         TitleCatalogSortKey::Year => format!(
             "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, year {direction}, {}",
-            title_catalog_ascending_tie_order_sql(dialect)
+            title_catalog_ascending_name_tie_order_sql(dialect)
         ),
         TitleCatalogSortKey::Runtime => format!(
             "ORDER BY CASE WHEN runtime_minutes IS NULL THEN 1 ELSE 0 END ASC, runtime_minutes {direction}, {}",
@@ -6173,6 +6193,20 @@ fn title_catalog_title_order_sql(dialect: TitleCatalogSqlDialect, direction: &st
 
 fn title_catalog_ascending_tie_order_sql(dialect: TitleCatalogSqlDialect) -> String {
     title_catalog_title_order_sql(dialect, "ASC")
+}
+
+/// [`title_catalog_ascending_tie_order_sql`] without its year terms, for an
+/// order whose leading terms already fix the year.
+fn title_catalog_ascending_name_tie_order_sql(dialect: TitleCatalogSqlDialect) -> String {
+    let collation = match dialect {
+        TitleCatalogSqlDialect::Sqlite => "BINARY",
+        TitleCatalogSqlDialect::Postgres => "\"C\"",
+    };
+    format!(
+        "catalog_sort_key COLLATE {collation} ASC, \
+         catalog_name_tie_key COLLATE {collation} ASC, \
+         titles.id COLLATE {collation} ASC"
+    )
 }
 
 fn nullable_text_missing_direction(direction: SortDirection) -> &'static str {
@@ -6317,7 +6351,13 @@ fn title_catalog_normalized_rating_source_expression(alias: &str) -> String {
     format!("LOWER(REPLACE(REPLACE(REPLACE(TRIM({alias}.source), ' ', ''), '_', ''), '-', ''))")
 }
 
-fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
+/// A title's best rating from the given sources, on the 0-10 scale.
+///
+/// The source test is the expression `idx_title_metadata_external_ratings_title_source_key`
+/// is built on, so it must stay spelled exactly as that index spells it.
+/// `scope_join` narrows the ratings read to whole titles; the value is per title,
+/// so a title it keeps gets the same one it would unscoped.
+fn title_catalog_external_rating_subquery_scoped(sources: &[&str], scope_join: &str) -> String {
     let source_list = sources
         .iter()
         .map(|source| sql_string_literal(source))
@@ -6331,6 +6371,7 @@ fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
                     ELSE ter.normalized
                 END) AS normalized
            FROM title_metadata_external_ratings ter
+           {scope_join}
           WHERE {source_expression} IN ({source_list})
           GROUP BY ter.title_id"
     )
@@ -6462,7 +6503,14 @@ fn title_catalog_media_quality_subquery_scoped(
     )
 }
 
-fn title_catalog_movie_media_subquery(dialect: TitleCatalogSqlDialect) -> String {
+/// The file a movie's media columns describe: its largest live primary file.
+///
+/// `scope_join` narrows the files read to whole titles; every window partition is
+/// one title, so a title it keeps picks the same file it would unscoped.
+fn title_catalog_movie_media_subquery_scoped(
+    dialect: TitleCatalogSqlDialect,
+    scope_join: &str,
+) -> String {
     let resolution = title_catalog_movie_media_resolution_expression("mf");
     let resolution_rank = title_catalog_movie_media_resolution_rank_expression("mf");
     let hdr_rank = title_catalog_movie_media_hdr_rank_expression("mf");
@@ -6482,6 +6530,7 @@ fn title_catalog_movie_media_subquery(dialect: TitleCatalogSqlDialect) -> String
                                    mf.id DESC
                        ) AS media_row
                   FROM media_files mf
+                  {scope_join}
                   JOIN titles t ON t.id = mf.title_id
                  WHERE t.facet = 'movie'
                    AND {}
@@ -6603,57 +6652,22 @@ fn build_title_page_after_id_sql(
     (sql, args)
 }
 
+/// The ranked search page. The facet is already in `match_ranks`: the lanes
+/// that produced them were asked for it.
 fn build_ranked_title_list_sql(
-    facet: Option<MediaFacet>,
     library_ids: Option<&[String]>,
-    query: &str,
-    typo_ranks: &[(String, i64)],
+    match_ranks: &[(String, i64)],
+    postgres: bool,
 ) -> (String, Vec<SqlArg>) {
-    let normalized = normalize_title_search_text(query);
     let mut sql = format!(
         "SELECT {TITLE_COLUMNS}
            FROM titles
-           JOIN (
-                SELECT title_id, MIN(rank) AS rank FROM (
-                SELECT title_id,
-                       MIN(
-                           CASE
-                               WHEN normalized_term = {{}} THEN 0
-                               WHEN normalized_term LIKE {{}} THEN 1000
-                               WHEN normalized_term LIKE {{}} THEN 2000
-                               ELSE 3000
-                           END + weight
-                       ) AS rank
-                  FROM title_search_terms"
+           JOIN ({ranks}) ranked_titles ON ranked_titles.title_id = titles.id",
+        ranks = scryer_infrastructure_library_search::title_match_ranks_rows_sql(postgres),
     );
-    let mut where_clauses = Vec::new();
-    let mut args = vec![
-        SqlArg::Text(normalized.clone()),
-        SqlArg::Text(format!("{normalized}%")),
-        SqlArg::Text(format!("%{normalized}%")),
-    ];
-
-    if let Some(facet) = facet {
-        where_clauses.push("facet = {}");
-        args.push(SqlArg::Text(facet.as_str().to_string()));
-    }
-    where_clauses.push("term_kind NOT LIKE '%_token'");
-    where_clauses.push("normalized_term LIKE {}");
-    args.push(SqlArg::Text(format!("%{normalized}%")));
-
-    sql.push_str(" WHERE ");
-    sql.push_str(&where_clauses.join(" AND "));
-    sql.push_str(" GROUP BY title_id");
-    for (title_id, rank) in typo_ranks {
-        sql.push_str(" UNION ALL SELECT {} AS title_id, {} AS rank");
-        args.push(SqlArg::Text(title_id.clone()));
-        args.push(SqlArg::I64(*rank));
-    }
-    sql.push_str(
-        " ) combined_title_matches
-           GROUP BY title_id
-           ) ranked_titles ON ranked_titles.title_id = titles.id",
-    );
+    let mut args = vec![SqlArg::Text(
+        scryer_infrastructure_library_search::title_match_ranks_json(match_ranks),
+    )];
 
     if let Some(library_ids) = library_ids {
         if library_ids.is_empty() {
@@ -7734,7 +7748,11 @@ mod external_id_presence_tests;
 #[cfg(test)]
 mod catalog_order_tests;
 #[cfg(test)]
+mod catalog_sort_scope_tests;
+#[cfg(test)]
 mod release_day_tests;
+#[cfg(test)]
+mod search_lane_tests;
 
 #[cfg(test)]
 mod affinity_revision_tests;
@@ -9910,7 +9928,7 @@ mod tests {
 
     #[test]
     fn title_catalog_rating_sort_scales_fractional_normalized_scores() {
-        let sql = title_catalog_external_rating_subquery(&["imdb"]);
+        let sql = title_catalog_external_rating_subquery_scoped(&["imdb"], "");
 
         assert!(
             sql.contains("WHEN ter.normalized <= 1.0 THEN ter.normalized * 10.0"),
@@ -9968,10 +9986,11 @@ mod tests {
             2
         );
         assert!(sql.contains("FROM title_metadata_rating_summaries catalog_rating"));
-        assert!(sql.contains("FROM title_search_terms search_term"));
+        // The store holds no title, so the search matched none and binds nothing.
+        assert!(sql.contains("1 = 0"));
         assert!(sql.contains("monitored = {}"));
         assert!(sql.contains("LOWER(TRIM(COALESCE(content_status, ''))) IN"));
-        assert_eq!(args.len(), 15);
+        assert_eq!(args.len(), 14);
     }
 
     /// Presence is a fact about `media_files`, so it is a predicate in the same

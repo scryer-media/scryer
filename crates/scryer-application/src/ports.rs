@@ -3596,6 +3596,11 @@ pub struct MediaRequestQuery {
     pub library_ids: Option<Vec<String>>,
     pub status: Option<scryer_domain::MediaRequestStatus>,
     pub requester_user_id: Option<String>,
+    /// The most rows to return, taken after `offset` in the list order. `None`
+    /// reads every matching row, for the internal passes that need them all.
+    pub limit: Option<usize>,
+    /// Rows to skip in the list order. Read only with `limit`.
+    pub offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -5485,13 +5490,6 @@ pub trait DomainEventRepository: Send + Sync {
     /// never be named by a title id, and a page scoped only by the caller's
     /// library authorization would otherwise drop it. It is ignored when
     /// `title_scope` is `None`, where nothing is excluded anyway.
-    async fn count_title_history_page_events(
-        &self,
-        event_types: Option<&[TitleHistoryEventType]>,
-        title_scope: Option<TitleHistoryTitleScope<'_>>,
-        include_titleless: bool,
-        download_id: Option<&str>,
-    ) -> AppResult<i64>;
     async fn list_title_history_page_events(
         &self,
         event_types: Option<&[TitleHistoryEventType]>,
@@ -11366,6 +11364,22 @@ pub trait RequestRuleDecisionRepository: Send + Sync {
         &self,
         request_id: &str,
     ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>>;
+
+    /// [`Self::latest_for_request`] for a page of requests, keyed by request
+    /// id. A request with no recorded decision is absent.
+    async fn latest_for_requests(
+        &self,
+        request_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, scryer_domain::RequestRuleDecisionRecord>>
+    {
+        let mut latest = std::collections::HashMap::with_capacity(request_ids.len());
+        for request_id in request_ids {
+            if let Some(record) = self.latest_for_request(request_id).await? {
+                latest.insert(request_id.clone(), record);
+            }
+        }
+        Ok(latest)
+    }
 
     /// Newest first, optionally narrowed to one effective outcome.
     async fn list_recent(

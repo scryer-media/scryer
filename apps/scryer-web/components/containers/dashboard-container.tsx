@@ -41,6 +41,7 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 import { isBreakingVersionChange } from "@/lib/utils/dashboard";
+import { MEDIA_REQUEST_MAX_PAGE_SIZE } from "@/lib/utils/media-request-pages";
 import {
   createDashboardRefresh,
   initialDashboardPanelStates,
@@ -221,7 +222,11 @@ export function DashboardContainer() {
         "requests",
         async () => {
           const { data, error } = await client
-            .query(dashboardPendingRequestsQuery, {})
+            // The preview leads with the oldest request, so it reads the
+            // largest page the server serves rather than the newest few.
+            .query(dashboardPendingRequestsQuery, {
+              limit: MEDIA_REQUEST_MAX_PAGE_SIZE,
+            })
             .toPromise();
           if (error) throw error;
 

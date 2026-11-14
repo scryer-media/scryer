@@ -489,8 +489,8 @@ pub use media_requests::snapshot::{
 };
 pub use media_requests::{
     ApproveMediaRequestOutcome, ApprovedAudioLanguages, CLAIM_RELEASE_REQUEST_CANCELED,
-    CLAIM_RELEASE_REQUEST_REJECTED, ListMediaRequestsInput, MediaRequestAdmission,
-    SubmitMediaRequestInput, SubmitMediaRequestOutcome, UpdateMediaRequestInput,
+    CLAIM_RELEASE_REQUEST_REJECTED, ListMediaRequestsInput, MEDIA_REQUEST_LIST_DEFAULT_LIMIT,
+    MEDIA_REQUEST_LIST_MAX_LIMIT, MediaRequestAdmission, SubmitMediaRequestInput, SubmitMediaRequestOutcome, UpdateMediaRequestInput,
 };
 pub use media_servers::{
     EmbyConnectionMode, EmbyLocalSetupMethod, MediaServerConnectionAccount,

@@ -1065,6 +1065,15 @@ pub(crate) struct CachedWantedProjection {
     pub rows: Arc<[crate::acquisition::wanted_views::WantedScopeView]>,
 }
 
+/// Every cutoff-unmet item of the instance, unfiltered, as of one projection
+/// generation. The Upgrades page and the Wanted badge filter and slice this
+/// instead of recomputing it per request.
+#[derive(Clone, Debug)]
+pub(crate) struct CachedCutoffUnmetItems {
+    pub generation: u64,
+    pub items: Arc<[crate::types::CutoffUnmetItem]>,
+}
+
 #[derive(Clone)]
 pub struct AppRuntimeAcquisitionState {
     pub(crate) titles_in_deletion: Arc<std::sync::RwLock<HashSet<String>>>,
@@ -1146,6 +1155,9 @@ pub struct AppRuntimeAcquisitionState {
     pub(crate) wanted_projection_cache:
         Arc<tokio::sync::RwLock<HashMap<crate::types::WantedKind, CachedWantedProjection>>>,
     pub(crate) wanted_projection_build_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Retired by the same generation as `wanted_projection_cache` and built
+    /// under `wanted_projection_build_lock`.
+    pub(crate) cutoff_unmet_items_cache: Arc<tokio::sync::RwLock<Option<CachedCutoffUnmetItems>>>,
     pub(crate) download_client_category_admission: DownloadClientCategorySnapshotStore,
     /// Cancellation tokens for in-flight interactive acquisition-search jobs
     ///, keyed by job-run id — mirrors the library-scan cancel map.
@@ -2700,6 +2712,7 @@ impl AppRuntimeState {
                 )),
                 wanted_projection_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                 wanted_projection_build_lock: Arc::new(tokio::sync::Mutex::new(())),
+                cutoff_unmet_items_cache: Arc::new(tokio::sync::RwLock::new(None)),
                 download_client_category_admission: DownloadClientCategorySnapshotStore::default(),
                 acquisition_search_cancellation_tokens: Arc::new(Mutex::new(HashMap::new())),
                 interactive_release_searches: Arc::new(Mutex::new(HashMap::new())),
