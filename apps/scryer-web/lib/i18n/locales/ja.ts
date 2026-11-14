@@ -3866,6 +3866,21 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "ドラッグして {{value}} を並べ替え",
   "qualityProfile.decisionStepMoveUp": "{{value}} を上へ移動",
   "qualityProfile.decisionStepMoveDown": "{{value}} を下へ移動",
+  "settings.proxyReachThrough": "経由先",
+  "settings.proxyReachThroughHelp":
+    "Scryer はこのソルバーへのリクエストを、選択したトランスポートプロキシまたはトンネル経由で送信します。直接接続では Scryer 自身のネットワークからソルバーに接続します。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "チャレンジソルバーを別のチャレンジソルバー経由で接続することはできません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "チャレンジソルバーを自分自身経由で接続することはできません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "ソルバーへの経由先プロキシまたはトンネルが見つかりません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "ソルバーへの経由先プロキシまたはトンネルは無効です。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "別のプロキシ経由で接続できるのはチャレンジソルバーだけです。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "1 つ以上のチャレンジソルバーがこのプロキシ経由で接続されています。先にそれらを変更してください。",
 };
 
 export default ja;

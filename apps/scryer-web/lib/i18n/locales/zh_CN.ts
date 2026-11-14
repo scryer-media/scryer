@@ -3575,6 +3575,21 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖动以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "上移 {{value}}",
   "qualityProfile.decisionStepMoveDown": "下移 {{value}}",
+  "settings.proxyReachThrough": "经由",
+  "settings.proxyReachThroughHelp":
+    "Scryer 通过所选的传输代理或隧道向此求解器发送请求。直连表示从 Scryer 自身的网络访问求解器。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "挑战求解器不能经由另一个挑战求解器访问。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "挑战求解器不能经由自身访问。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "未找到用于访问求解器的代理或隧道。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "用于访问求解器的代理或隧道已禁用。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "只有挑战求解器可以经由其他代理访问。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "有一个或多个挑战求解器经由此代理访问。请先修改它们。",
 };
 
 export default zh_CN;

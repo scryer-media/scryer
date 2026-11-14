@@ -793,6 +793,14 @@ mod tests {
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             unreachable!()
         }
+
+        async fn count_solvers_reaching_through(
+            &self,
+            _id: &str,
+            _enabled_only: bool,
+        ) -> AppResult<u64> {
+            unreachable!()
+        }
     }
 
     #[tokio::test]

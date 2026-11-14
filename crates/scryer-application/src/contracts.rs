@@ -597,6 +597,9 @@ pub struct NewProxyConfig {
     /// WireGuard only: `PersistentKeepalive`. `None` takes the engine's
     /// default; `Some(0)` switches it off.
     pub tunnel_keepalive_seconds: Option<u16>,
+    /// Challenge solvers only: the id of an enabled transport proxy or tunnel
+    /// to reach the solver through. `None` reaches it directly.
+    pub reach_through_proxy_config_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -634,6 +637,10 @@ pub struct ProxyConfigUpdate {
     /// value, `Some(None)` restores the engine's default.
     pub tunnel_mtu: Option<Option<u16>>,
     pub tunnel_keepalive_seconds: Option<Option<u16>>,
+    /// Challenge solvers only, tri-state: omission keeps the stored route,
+    /// `Some(None)` reaches the solver directly again, `Some(Some(id))` names
+    /// the transport proxy or tunnel to reach it through.
+    pub reach_through_proxy_config_id: Option<Option<String>>,
 }
 
 impl ProxyConfigUpdate {
@@ -653,6 +660,7 @@ impl ProxyConfigUpdate {
             || self.tunnel_dns_servers.is_some()
             || self.tunnel_mtu.is_some()
             || self.tunnel_keepalive_seconds.is_some()
+            || self.reach_through_proxy_config_id.is_some()
     }
 }
 

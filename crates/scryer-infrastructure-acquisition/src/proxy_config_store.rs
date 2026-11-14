@@ -15,7 +15,7 @@ const PROXY_COLUMNS: &str = "id, name, provider_type, protocol, base_url,
     private_key_encrypted, private_key_passphrase_encrypted,
     peer_public_key, preshared_key_encrypted, tunnel_public_key,
     tunnel_addresses, tunnel_dns_servers, tunnel_mtu, tunnel_keepalive_seconds,
-    host_key_fingerprint, host_key_pinned_at,
+    reach_through_proxy_config_id, host_key_fingerprint, host_key_pinned_at,
     last_health_status, last_error_message, last_error_at, created_at, updated_at";
 
 const PROXY_INSERT_SQL: &str = "INSERT INTO proxy_configs (
@@ -24,11 +24,11 @@ const PROXY_INSERT_SQL: &str = "INSERT INTO proxy_configs (
     private_key_encrypted, private_key_passphrase_encrypted,
     peer_public_key, preshared_key_encrypted, tunnel_public_key,
     tunnel_addresses, tunnel_dns_servers, tunnel_mtu, tunnel_keepalive_seconds,
-    host_key_fingerprint, host_key_pinned_at,
+    reach_through_proxy_config_id, host_key_fingerprint, host_key_pinned_at,
     last_health_status, last_error_message, last_error_at, created_at, updated_at
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}
+    {}, {}, {}, {}
 )";
 
 /// Label used by the shared at-rest encryption helpers for proxy credentials.
@@ -90,11 +90,21 @@ impl ProxyConfigRepository for ProxyConfigStore {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ProxyConfig>> {
-        let config = self.get_for_edit(id).await?;
-        if let Some(config) = &config {
-            scryer_application::validate_persisted_proxy_config(config)?;
+        let Some(mut config) = self.get_for_edit(id).await? else {
+            return Ok(None);
+        };
+        scryer_application::validate_persisted_proxy_config(&config)?;
+        // A solver reached through a proxy or tunnel carries that config for
+        // the runtime paths that dial it. One more keyed read, only when the
+        // reference is set. A target that has since gone stays unresolved,
+        // and the runtime refuses to fall back to the direct route.
+        if let Some(reach_through_id) = config.reach_through_proxy_config_id.clone() {
+            if let Some(reach_through) = self.get_for_edit(&reach_through_id).await? {
+                scryer_application::validate_persisted_proxy_config(&reach_through)?;
+                config.reach_through = Some(Box::new(reach_through));
+            }
         }
-        Ok(config)
+        Ok(Some(config))
     }
 
     async fn get_for_edit(&self, id: &str) -> AppResult<Option<ProxyConfig>> {
@@ -162,6 +172,7 @@ impl ProxyConfigRepository for ProxyConfigStore {
             SqlArg::OptText(join_tunnel_list(&config.tunnel_dns_servers)),
             SqlArg::OptI64(config.tunnel_mtu.map(i64::from)),
             SqlArg::OptI64(config.tunnel_keepalive_seconds.map(i64::from)),
+            SqlArg::OptText(config.reach_through_proxy_config_id.clone()),
             SqlArg::OptText(
                 config
                     .last_health_status
@@ -189,6 +200,7 @@ impl ProxyConfigRepository for ProxyConfigStore {
                             tunnel_public_key = {}, tunnel_addresses = {},
                             tunnel_dns_servers = {}, tunnel_mtu = {},
                             tunnel_keepalive_seconds = {},
+                            reach_through_proxy_config_id = {},
                             last_health_status = {}, last_error_message = {},
                             last_error_at = {}, updated_at = {}
                          WHERE id = {}",
@@ -345,6 +357,28 @@ impl ProxyConfigRepository for ProxyConfigStore {
         }
         Ok(())
     }
+
+    async fn count_solvers_reaching_through(&self, id: &str, enabled_only: bool) -> AppResult<u64> {
+        let (sql, args) = if enabled_only {
+            (
+                "SELECT COUNT(*) AS solvers FROM proxy_configs
+                  WHERE reach_through_proxy_config_id = {} AND is_enabled = {}",
+                vec![SqlArg::Text(id.to_string()), SqlArg::Bool(true)],
+            )
+        } else {
+            (
+                "SELECT COUNT(*) AS solvers FROM proxy_configs
+                  WHERE reach_through_proxy_config_id = {}",
+                vec![SqlArg::Text(id.to_string())],
+            )
+        };
+        let solvers = SqlRuntime::fetch_optional(self.datastore.read_exec(), sql, &args)
+            .await?
+            .map(|row| row.i64("solvers"))
+            .transpose()?
+            .unwrap_or(0);
+        Ok(u64::try_from(solvers).unwrap_or(0))
+    }
 }
 
 /// Encrypt a proxy credential for storage. Mirrors the indexer API key: the
@@ -474,6 +508,7 @@ fn proxy_insert_args(
         SqlArg::OptText(join_tunnel_list(&config.tunnel_dns_servers)),
         SqlArg::OptI64(config.tunnel_mtu.map(i64::from)),
         SqlArg::OptI64(config.tunnel_keepalive_seconds.map(i64::from)),
+        SqlArg::OptText(config.reach_through_proxy_config_id.clone()),
         SqlArg::OptText(config.host_key_fingerprint.clone()),
         SqlArg::OptTimestamp(config.host_key_pinned_at),
         SqlArg::OptText(
@@ -590,6 +625,8 @@ fn row_to_proxy_config(
         tunnel_dns_servers: split_tunnel_list(row.opt_text("tunnel_dns_servers")?),
         tunnel_mtu: opt_u16_from_stored(row.opt_i64("tunnel_mtu")?),
         tunnel_keepalive_seconds: opt_u16_from_stored(row.opt_i64("tunnel_keepalive_seconds")?),
+        reach_through_proxy_config_id: row.opt_text("reach_through_proxy_config_id")?,
+        reach_through: None,
         host_key_fingerprint: row.opt_text("host_key_fingerprint")?,
         host_key_pinned_at: row.opt_timestamp("host_key_pinned_at")?,
         last_health_status,
@@ -671,6 +708,7 @@ mod tests {
                  tunnel_dns_servers TEXT,
                  tunnel_mtu INTEGER,
                  tunnel_keepalive_seconds INTEGER,
+                 reach_through_proxy_config_id TEXT,
                  host_key_fingerprint TEXT,
                  host_key_pinned_at TEXT,
                  last_health_status TEXT,
@@ -696,6 +734,8 @@ mod tests {
     fn tunnel_config() -> ProxyConfig {
         let now = chrono::Utc::now();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "tunnel-1".to_string(),
             name: "Seedbox".to_string(),
             provider_type: ProxyProviderType::SshTunnel,
@@ -1123,6 +1163,8 @@ mod tests {
     fn wireguard_config() -> ProxyConfig {
         let now = chrono::Utc::now();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "wireguard-1".to_string(),
             name: "VPN".to_string(),
             provider_type: ProxyProviderType::WireGuard,
@@ -1219,6 +1261,183 @@ mod tests {
         assert_eq!(reloaded.tunnel_keepalive_seconds, None);
         assert_eq!(reloaded.preshared_key_encrypted, None);
         assert_eq!(reloaded.tunnel_addresses, config.tunnel_addresses);
+    }
+
+    fn solver_config(id: &str, reach_through: Option<&str>) -> ProxyConfig {
+        let now = chrono::Utc::now();
+        ProxyConfig {
+            reach_through_proxy_config_id: reach_through.map(str::to_string),
+            reach_through: None,
+            id: id.to_string(),
+            name: format!("Solver {id}"),
+            provider_type: ProxyProviderType::Byparr,
+            protocol: Some(ChallengeSolverProtocol::RequestSolutionV1),
+            base_url: "http://127.0.0.1:8191".to_string(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            last_health_status: Some(ProxyHealthStatus::Unknown),
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn solver_reach_through_round_trips_resolves_on_load_and_is_counted() {
+        let (store, pool) = proxy_store().await;
+        let mut route = tunnel_config();
+        route.provider_type = ProxyProviderType::Http;
+        route.base_url = "http://proxy.test:8080".into();
+        route.username_encrypted = None;
+        route.private_key_encrypted = None;
+        route.private_key_passphrase_encrypted = None;
+        store.create(route).await.expect("route row should insert");
+        store
+            .create(solver_config("solver-routed", Some("tunnel-1")))
+            .await
+            .expect("routed solver should insert");
+        store
+            .create(solver_config("solver-direct", None))
+            .await
+            .expect("direct solver should insert");
+
+        let routed = store
+            .get_by_id("solver-routed")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert_eq!(
+            routed.reach_through_proxy_config_id.as_deref(),
+            Some("tunnel-1")
+        );
+        let resolved = routed
+            .reach_through
+            .as_deref()
+            .expect("get_by_id resolves the route target");
+        assert_eq!(resolved.id, "tunnel-1");
+        assert_eq!(resolved.provider_type, ProxyProviderType::Http);
+        assert_eq!(resolved.base_url, "http://proxy.test:8080");
+
+        // An edit read and a list do not resolve: only the runtime load does.
+        let for_edit = store
+            .get_for_edit("solver-routed")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert!(for_edit.reach_through.is_none());
+        assert!(
+            store
+                .list(None)
+                .await
+                .expect("list should load")
+                .iter()
+                .all(|config| config.reach_through.is_none())
+        );
+
+        let direct = store
+            .get_by_id("solver-direct")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert_eq!(direct.reach_through_proxy_config_id, None);
+        assert!(direct.reach_through.is_none());
+
+        assert_eq!(
+            store
+                .count_solvers_reaching_through("tunnel-1", false)
+                .await
+                .expect("count should run"),
+            1
+        );
+        assert_eq!(
+            store
+                .count_solvers_reaching_through("solver-direct", false)
+                .await
+                .expect("count should run"),
+            0
+        );
+
+        // A disabled solver still counts for delete, but not for disable.
+        let mut disabled = for_edit.clone();
+        disabled.is_enabled = false;
+        disabled.updated_at = chrono::Utc::now();
+        store.update(disabled).await.expect("update should succeed");
+        assert_eq!(
+            store
+                .count_solvers_reaching_through("tunnel-1", true)
+                .await
+                .expect("count should run"),
+            0
+        );
+        assert_eq!(
+            store
+                .count_solvers_reaching_through("tunnel-1", false)
+                .await
+                .expect("count should run"),
+            1
+        );
+
+        // Clearing the route writes NULL, and the solver loads direct again.
+        let mut cleared = store
+            .get_for_edit("solver-routed")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        cleared.reach_through_proxy_config_id = None;
+        cleared.updated_at = chrono::Utc::now();
+        store.update(cleared).await.expect("update should succeed");
+        let stored: (Option<String>,) = sqlx::query_as(
+            "SELECT reach_through_proxy_config_id FROM proxy_configs WHERE id = 'solver-routed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the raw row");
+        assert_eq!(stored, (None,));
+        let reloaded = store
+            .get_by_id("solver-routed")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert!(reloaded.reach_through.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_solver_whose_route_target_is_gone_loads_unresolved() {
+        let (store, _pool) = proxy_store().await;
+        store
+            .create(solver_config("solver-orphan", Some("tunnel-gone")))
+            .await
+            .expect("solver should insert");
+        let loaded = store
+            .get_by_id("solver-orphan")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert_eq!(
+            loaded.reach_through_proxy_config_id.as_deref(),
+            Some("tunnel-gone")
+        );
+        // Left unresolved so the runtime refuses rather than going direct.
+        assert!(loaded.reach_through.is_none());
+        assert!(
+            scryer_application::transport_proxy::solver_reach_through(&loaded).is_err(),
+            "an unresolved route must not read as a direct solver"
+        );
     }
 
     #[test]

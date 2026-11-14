@@ -12646,6 +12646,21 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
   "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
   "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
+  "settings.proxyReachThrough": "Reach through",
+  "settings.proxyReachThroughHelp":
+    "Scryer sends its requests to this solver through the chosen transport proxy or tunnel. Direct reaches the solver from Scryer's own network.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "A challenge solver cannot be reached through another challenge solver.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "A challenge solver cannot be reached through itself.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "The proxy or tunnel to reach the solver through was not found.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "The proxy or tunnel to reach the solver through is disabled.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Only a challenge solver can be reached through another proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "One or more challenge solvers are reached through this proxy. Change them first.",
 };
 
 export default en;

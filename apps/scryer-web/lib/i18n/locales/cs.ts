@@ -7312,6 +7312,21 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
   "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
   "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
+  "settings.proxyReachThrough": "Připojit přes",
+  "settings.proxyReachThroughHelp":
+    "Scryer posílá požadavky na tento řešitel přes zvolenou transportní proxy nebo tunel. Přímo znamená připojení z vlastní sítě Scryeru.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Řešitel výzev nelze připojit přes jiný řešitel výzev.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Řešitel výzev nelze připojit přes sebe sama.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Proxy nebo tunel pro připojení k řešiteli nebyl nalezen.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Proxy nebo tunel pro připojení k řešiteli je zakázán.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Přes jinou proxy lze připojit pouze řešitel výzev.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Přes tuto proxy se připojuje jeden nebo více řešitelů výzev. Nejprve je změňte.",
 };
 
 export default cs;

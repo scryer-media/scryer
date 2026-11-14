@@ -2297,6 +2297,8 @@ mod tests {
     fn solver_proxy_config(id: &str) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: id.to_string(),
             name: "Solver".into(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -2372,6 +2374,14 @@ mod tests {
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())
+        }
+
+        async fn count_solvers_reaching_through(
+            &self,
+            _id: &str,
+            _enabled_only: bool,
+        ) -> AppResult<u64> {
+            Ok(0)
         }
     }
 

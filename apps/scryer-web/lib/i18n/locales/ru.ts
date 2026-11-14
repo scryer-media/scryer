@@ -13567,6 +13567,21 @@ const ru: LocaleDictionary = {
     "Перетащите, чтобы изменить порядок {{value}}",
   "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
   "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
+  "settings.proxyReachThrough": "Подключаться через",
+  "settings.proxyReachThroughHelp":
+    "Scryer отправляет запросы к этому решателю через выбранный транспортный прокси или туннель. «Напрямую» — подключение из собственной сети Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "К решателю проверок нельзя подключаться через другой решатель проверок.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "К решателю проверок нельзя подключаться через него самого.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Прокси или туннель для подключения к решателю не найден.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Прокси или туннель для подключения к решателю отключён.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Через другой прокси можно подключаться только к решателю проверок.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Через этот прокси подключаются один или несколько решателей проверок. Сначала измените их.",
 };
 
 export default ru;

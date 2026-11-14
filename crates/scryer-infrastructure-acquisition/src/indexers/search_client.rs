@@ -5320,7 +5320,8 @@ impl MultiIndexerSearchClient {
                 // Transport and tunnel proxies only carry bytes, so they stay.
                 (None, None)
             } else {
-                let proxy_cache_key = format!("{}:{}", proxy_config.id, proxy_config.updated_at);
+                let proxy_cache_key =
+                    scryer_application::transport_proxy::transport_proxy_revision(&proxy_config);
                 (Some(proxy_config), Some(proxy_cache_key))
             }
         } else {
@@ -11322,6 +11323,14 @@ mod tests {
             unreachable!()
         }
         async fn clear_host_key(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+
+        async fn count_solvers_reaching_through(
+            &self,
+            _id: &str,
+            _enabled_only: bool,
+        ) -> AppResult<u64> {
             unreachable!()
         }
     }

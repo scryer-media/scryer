@@ -68,8 +68,51 @@ pub fn transport_proxy_request_timeout(config: &ProxyConfig) -> Duration {
 /// flap does not churn clients while an endpoint, credential or `remote_dns`
 /// edit does. Pairing it with the id also covers reassignment to a different
 /// proxy row.
+///
+/// A solver reached through another config also carries that config's
+/// revision, so editing the tunnel a solver is reached through rebuilds every
+/// client and plugin built for the solver, exactly as editing the solver does.
 pub fn transport_proxy_revision(config: &ProxyConfig) -> String {
-    format!("{}@{}", config.id, config.updated_at.to_rfc3339())
+    let own = format!("{}@{}", config.id, config.updated_at.to_rfc3339());
+    match (
+        config.reach_through_proxy_config_id.as_deref(),
+        config.reach_through.as_deref(),
+    ) {
+        (Some(_), Some(route)) => format!("{own}+{}", transport_proxy_revision(route)),
+        (Some(route_id), None) => format!("{own}+{route_id}@unresolved"),
+        (None, _) => own,
+    }
+}
+
+/// The transport proxy or tunnel Scryer reaches a challenge solver through.
+///
+/// `Ok(None)` means the solver is reached directly, as it always was: no
+/// reference is set, or `config` is not a solver at all. When a reference is
+/// set this never falls back to the direct route: a reference the store could
+/// not resolve, or one that names a disabled config or another solver, is an
+/// error the caller must surface instead of dialling.
+///
+/// The returned config is the route for the solve request and for every
+/// request Scryer sends itself on the solver's behalf (the first attempt, the
+/// replay with the solver's clearance, artifact fetches), so the origin sees
+/// one source address for the whole session.
+pub fn solver_reach_through(config: &ProxyConfig) -> Result<Option<&ProxyConfig>, String> {
+    if !config.is_challenge_solver() {
+        return Ok(None);
+    }
+    let Some(route_id) = config.reach_through_proxy_config_id.as_deref() else {
+        return Ok(None);
+    };
+    let detail = match config.reach_through.as_deref() {
+        None => "the proxy it is reached through no longer exists",
+        Some(route) if route.id != route_id => "the proxy it is reached through no longer exists",
+        Some(route) if route.is_challenge_solver() => {
+            "it is set to be reached through another challenge solver"
+        }
+        Some(route) if !route.is_enabled => "the proxy it is reached through is disabled",
+        Some(route) => return Ok(Some(route)),
+    };
+    Err(transport_proxy_unreachable_message(config, detail))
 }
 
 /// The proxy URL a non-solver proxy egresses through, or the reason it cannot.
@@ -293,6 +336,8 @@ mod tests {
     fn transport_config(provider_type: ProxyProviderType, base_url: &str) -> ProxyConfig {
         let created_at = Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "proxy-1".to_string(),
             name: "House VPN".to_string(),
             provider_type,

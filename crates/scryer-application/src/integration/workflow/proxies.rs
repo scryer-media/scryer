@@ -33,10 +33,114 @@ pub fn validate_persisted_proxy_config(config: &scryer_domain::ProxyConfig) -> A
             tunnel_keepalive_seconds: config.tunnel_keepalive_seconds,
         },
     )?;
+    if let Some(reach_through_id) = config.reach_through_proxy_config_id.as_deref() {
+        if !config.is_challenge_solver() {
+            return Err(reach_through_requires_solver());
+        }
+        if reach_through_id == config.id {
+            return Err(reach_through_self());
+        }
+    }
     Ok(())
 }
 
+fn reach_through_requires_solver() -> AppError {
+    AppError::validation_refused(
+        crate::error_reasons::integration::PROXY_REACH_THROUGH_REQUIRES_SOLVER,
+        "only a challenge solver can be reached through another proxy",
+    )
+}
+
+fn reach_through_self() -> AppError {
+    AppError::validation_refused(
+        crate::error_reasons::integration::PROXY_REACH_THROUGH_SELF,
+        "a challenge solver cannot be reached through itself",
+    )
+}
+
+/// Trim an operator-supplied reach-through id; blank means "directly".
+fn normalize_reach_through_id(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 impl AppUseCase {
+    /// Refuse a reach-through a solver could not use: one on a config that is
+    /// not a solver, one naming the solver itself, and one naming a config
+    /// that is missing, disabled, or another solver. Callers hold the proxy
+    /// assignment lock, so the target cannot change before the write lands.
+    async fn validate_solver_reach_through(
+        &self,
+        solver_id: Option<&str>,
+        provider_type: scryer_domain::ProxyProviderType,
+        reach_through_id: Option<&str>,
+    ) -> AppResult<()> {
+        let Some(reach_through_id) = reach_through_id else {
+            return Ok(());
+        };
+        if !provider_type.is_challenge_solver() {
+            return Err(reach_through_requires_solver());
+        }
+        if solver_id == Some(reach_through_id) {
+            return Err(reach_through_self());
+        }
+        let target = self
+            .services
+            .integrations
+            .proxy_configs
+            .get_for_edit(reach_through_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::validation_refused(
+                    crate::error_reasons::integration::PROXY_REACH_THROUGH_NOT_FOUND,
+                    format!("proxy config '{reach_through_id}' to reach the solver through was not found"),
+                )
+            })?;
+        if target.is_challenge_solver() {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_REACH_THROUGH_IS_SOLVER,
+                "a challenge solver can only be reached through a transport proxy or tunnel",
+            ));
+        }
+        if !target.is_enabled {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::integration::PROXY_REACH_THROUGH_DISABLED,
+                "the proxy to reach the solver through is disabled",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuse to delete, or to disable, a config that solvers are reached
+    /// through. Refusing rather than clearing the reference follows the
+    /// indexer and download client guards: a solver silently falling back to
+    /// the direct route is the worse outcome.
+    async fn refuse_if_solvers_reach_through(&self, id: &str, enabled_only: bool) -> AppResult<()> {
+        let solvers = self
+            .services
+            .integrations
+            .proxy_configs
+            .count_solvers_reaching_through(id, enabled_only)
+            .await?;
+        if solvers == 0 {
+            return Ok(());
+        }
+        let message = if enabled_only {
+            format!("proxy config is how {solvers} enabled challenge solver(s) are reached")
+        } else {
+            format!("proxy config is how {solvers} challenge solver(s) are reached")
+        };
+        Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::integration::PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS,
+            message,
+            vec![crate::RefusalFact::new(
+                crate::error_reasons::integration::PROXY_REACHED_THROUGH_SOLVER_COUNT_FACT,
+                solvers.to_string(),
+            )],
+        ))
+    }
+
     pub async fn list_proxy_configs(
         &self,
         actor: &User,
@@ -89,6 +193,26 @@ impl AppUseCase {
         let tunnel_public_key = derive_tunnel_public_key(provider_type, private_key.as_deref())?;
         let remote_dns =
             resolve_remote_dns(provider_type, input.remote_dns, endpoint.scheme_remote_dns)?;
+        let reach_through_proxy_config_id =
+            normalize_reach_through_id(input.reach_through_proxy_config_id);
+        // Held only when a reference is set, so the target cannot be disabled
+        // or deleted between this check and the insert.
+        let proxy_assignment = match reach_through_proxy_config_id.as_deref() {
+            Some(_) => Some(
+                self.services
+                    .integrations
+                    .proxy_assignment_lock
+                    .lock()
+                    .await,
+            ),
+            None => None,
+        };
+        self.validate_solver_reach_through(
+            None,
+            provider_type,
+            reach_through_proxy_config_id.as_deref(),
+        )
+        .await?;
         let now = Utc::now();
         let config = scryer_domain::ProxyConfig {
             id: Id::new().0,
@@ -119,12 +243,17 @@ impl AppUseCase {
             tunnel_dns_servers,
             tunnel_mtu: input.tunnel_mtu,
             tunnel_keepalive_seconds: input.tunnel_keepalive_seconds,
+            reach_through_proxy_config_id,
+            reach_through: None,
         };
-        self.services
+        let config = self
+            .services
             .integrations
             .proxy_configs
             .create(config)
-            .await
+            .await?;
+        drop(proxy_assignment);
+        Ok(config)
     }
 
     pub async fn update_proxy_config(
@@ -240,7 +369,23 @@ impl AppUseCase {
             config.remote_dns =
                 resolve_remote_dns(config.provider_type, update.remote_dns, scheme_remote_dns)?;
         }
+        // The route is checked when this patch sets it, and again when it
+        // enables a solver that kept one, so an enabled solver never names a
+        // route that has since gone or been disabled.
+        let reach_through_changed = update.reach_through_proxy_config_id.is_some();
+        if let Some(reach_through) = update.reach_through_proxy_config_id {
+            config.reach_through_proxy_config_id = normalize_reach_through_id(reach_through);
+        }
+        if reach_through_changed || (update.is_enabled == Some(true) && !config.is_enabled) {
+            self.validate_solver_reach_through(
+                Some(&config.id),
+                config.provider_type,
+                config.reach_through_proxy_config_id.as_deref(),
+            )
+            .await?;
+        }
         if update.is_enabled == Some(false) && config.is_enabled {
+            self.refuse_if_solvers_reach_through(id, true).await?;
             let assigned_count = self
                 .services
                 .integrations
@@ -335,6 +480,7 @@ impl AppUseCase {
         if assigned_clients {
             return Err(AppError::validation_refused(crate::error_reasons::integration::PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS, "proxy config is assigned to one or more download clients"));
         }
+        self.refuse_if_solvers_reach_through(id, false).await?;
         self.services.integrations.proxy_configs.delete(id).await?;
         drop(proxy_assignment);
         // Reject retained snapshots as well as closing the current front.
@@ -728,8 +874,7 @@ async fn fetch_proxy_test_url(
 ) -> AppResult<(u16, String)> {
     if config.kind() == scryer_domain::ProxyKind::ChallengeSolver {
         let timeout = crate::transport_proxy::transport_proxy_request_timeout(config);
-        let client = scryer_outbound_http::proxy_health_reqwest_client(timeout)
-            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let client = solver_probe_client(config, timeout)?;
         let response = send_solver_probe_request(
             client
                 .post(crate::challenge_solver::solver_solve_endpoint(
@@ -1475,14 +1620,18 @@ async fn send_solver_probe_request(
     })
 }
 
-async fn probe_solver_health(config: &scryer_domain::ProxyConfig) -> AppResult<String> {
-    let provider_name = crate::challenge_solver::solver_provider_name(config.provider_type);
-    let base_url = config.base_url.trim_end_matches('/');
-    let health_url = format!("{base_url}/health");
-    let request_timeout =
-        scryer_outbound_http::effective_proxy_request_timeout(config.request_timeout_seconds);
-    let client =
-        scryer_outbound_http::proxy_health_reqwest_client(request_timeout).map_err(|_| {
+/// The client a solver's health probe and URL test post with: direct, as
+/// always, or dialling through the proxy or tunnel the solver is reached
+/// through. A route that cannot be used is an error, never a direct probe that
+/// would report a health the solver's real traffic does not have.
+fn solver_probe_client(
+    config: &scryer_domain::ProxyConfig,
+    request_timeout: std::time::Duration,
+) -> AppResult<reqwest::Client> {
+    match crate::transport_proxy::solver_reach_through(config).map_err(AppError::Repository)? {
+        Some(route) => crate::transport_proxy::transport_proxied_reqwest_client(route, "")
+            .map_err(AppError::Repository),
+        None => scryer_outbound_http::proxy_health_reqwest_client(request_timeout).map_err(|_| {
             AppError::Repository(
                 crate::challenge_solver::solver_error_message(
                     config.provider_type,
@@ -1490,7 +1639,17 @@ async fn probe_solver_health(config: &scryer_domain::ProxyConfig) -> AppResult<S
                 )
                 .into(),
             )
-        })?;
+        }),
+    }
+}
+
+async fn probe_solver_health(config: &scryer_domain::ProxyConfig) -> AppResult<String> {
+    let provider_name = crate::challenge_solver::solver_provider_name(config.provider_type);
+    let base_url = config.base_url.trim_end_matches('/');
+    let health_url = format!("{base_url}/health");
+    let request_timeout =
+        scryer_outbound_http::effective_proxy_request_timeout(config.request_timeout_seconds);
+    let client = solver_probe_client(config, request_timeout)?;
     let health_deadline = tokio::time::Instant::now() + request_timeout;
     let response = send_solver_probe_request(
         client.get(&health_url),
@@ -2659,6 +2818,8 @@ mod proxy_tests {
     fn transport_config(provider_type: Provider, base_url: &str) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "transport-1".into(),
             name: "Transport".into(),
             provider_type,
@@ -2898,6 +3059,8 @@ mod proxy_tests {
     ) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "proxy-1".into(),
             name: "Solver".into(),
             provider_type,
@@ -2934,6 +3097,79 @@ mod proxy_tests {
                 .get("user-agent")
                 .and_then(|value| value.to_str().ok()),
             Some(scryer_outbound_http::PROXY_USER_AGENT)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_routed_solver_is_probed_and_tested_through_its_route() {
+        // wiremock answers absolute-form requests, so it stands in for the
+        // route; the solver's own name does not resolve and is reached only
+        // through it.
+        let route = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&route)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {"status": 200, "response": "<html><pre>2001:db8::42</pre></html>"}
+            })))
+            .expect(1)
+            .mount(&route)
+            .await;
+        let route_config = transport_config(Provider::Http, &route.uri());
+        let mut solver = test_config(&route, Provider::Byparr);
+        solver.base_url = "http://solver.invalid:8191".into();
+        solver.reach_through_proxy_config_id = Some(route_config.id.clone());
+        solver.reach_through = Some(Box::new(route_config));
+
+        let health = probe_solver_health(&solver)
+            .await
+            .expect("the health probe should reach the solver through the route");
+        assert_eq!(health, "Byparr health probe returned HTTP 200");
+        let (status, body) = fetch_proxy_test_url(&solver, "https://example.com/ip")
+            .await
+            .expect("the Test button should solve through the route");
+        assert_eq!(status, 200);
+        assert_eq!(observed_proxy_ip(&body).as_deref(), Some("2001:db8::42"));
+        let requests = route.received_requests().await.expect("recorded requests");
+        assert_eq!(requests.len(), 2, "both probes must cross the route");
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.host_str() == Some("solver.invalid")),
+            "each request names the solver as its destination"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_solver_with_an_unresolved_route_is_never_probed_directly() {
+        let solver_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&solver_server)
+            .await;
+        let mut solver = test_config(&solver_server, Provider::Byparr);
+        solver.reach_through_proxy_config_id = Some("route-gone".into());
+
+        assert!(probe_solver_health(&solver).await.is_err());
+        assert!(
+            fetch_proxy_test_url(&solver, "https://example.com/ip")
+                .await
+                .is_err()
+        );
+        assert!(
+            solver_server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .is_empty(),
+            "an unresolved route must not fall back to the direct solver"
         );
     }
 
@@ -3020,6 +3256,8 @@ mod proxy_tests {
         });
         let now = Utc::now();
         let config = scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "trawl-transport-failure".into(),
             name: "Trawl".into(),
             provider_type: scryer_domain::ProxyProviderType::Trawl,

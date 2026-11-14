@@ -212,6 +212,10 @@ struct PluginHttpWorkerRuntime {
     request_clients: HashMap<PluginHttpRequestClientKey, CachedPluginHttpClient>,
     proxy_client: Option<Client>,
     transport_proxy_client: Option<CachedTransportProxyClient>,
+    /// The client a solver reached through a proxy or tunnel is posted to
+    /// with, built for that route. Same invalidation rule as
+    /// `transport_proxy_client`.
+    solver_route_client: Option<CachedTransportProxyClient>,
 }
 
 struct CachedPluginHttpClient {
@@ -314,6 +318,7 @@ impl PluginHttpWorkerRuntime {
             self.request_clients.clear();
             self.proxy_client = None;
             self.transport_proxy_client = None;
+            self.solver_route_client = None;
         }
         Ok(extra_ca_bundle_pem)
     }
@@ -388,6 +393,38 @@ impl PluginHttpWorkerRuntime {
                 transport_proxy::record_transport_proxy_failure(config, message);
             })?;
         self.transport_proxy_client = Some(CachedTransportProxyClient {
+            revision,
+            client: client.clone(),
+        });
+        Ok(client)
+    }
+
+    /// The client the solve request is posted with when the solver is reached
+    /// through `route`: it dials the solver endpoint through that proxy or
+    /// tunnel instead of directly.
+    fn solver_route_client(
+        &mut self,
+        runtime: &PluginHttpRuntime,
+        route: &scryer_domain::ProxyConfig,
+    ) -> HostResult<Client> {
+        let extra_ca_bundle_pem = self.sync_trust_bundle(runtime)?;
+        let revision = transport_proxy::transport_proxy_revision(route);
+        if let Some(cached) = &self.solver_route_client
+            && cached.revision == revision
+        {
+            return Ok(cached.client.clone());
+        }
+        // Redirects stay off, as on the direct solver client.
+        let client =
+            transport_proxy::blocking_transport_proxied_reqwest_client_with_redirect_policy(
+                route,
+                &extra_ca_bundle_pem,
+                reqwest::redirect::Policy::none(),
+            )
+            .inspect_err(|message| {
+                transport_proxy::record_transport_proxy_failure(route, message);
+            })?;
+        self.solver_route_client = Some(CachedTransportProxyClient {
             revision,
             client: client.clone(),
         });
@@ -696,12 +733,34 @@ impl PluginHttpHost {
         let transport_policy = proxy_policy
             .as_ref()
             .filter(|policy| !policy.config.is_challenge_solver());
+        // A solver reached through a proxy or tunnel sends every request it
+        // owns through that route too: the first attempt, a request reusing
+        // the solver's clearance, and the replay after a solve. Otherwise the
+        // origin would see the clearance used from a different address than
+        // the one that earned it. Without a route this stays `None` and the
+        // solver path below is unchanged.
+        let solver_route = match proxy_policy
+            .as_ref()
+            .filter(|policy| policy.config.is_challenge_solver())
+        {
+            Some(policy) => {
+                transport_proxy::solver_reach_through(&policy.config).map_err(|message| {
+                    solver::SolverHealthLedger::shared()
+                        .record_failure(&policy.config.id, &message);
+                    HostHttpError::new(HostHttpErrorKind::Transport, message)
+                })?
+            }
+            None => None,
+        };
+        let egress_config = transport_policy
+            .map(|policy| &policy.config)
+            .or(solver_route);
 
-        let request_client = if let Some(policy) = transport_policy {
-            if !policy.config.is_enabled {
+        let request_client = if let Some(egress_config) = egress_config {
+            if !egress_config.is_enabled {
                 return Err(HostHttpError::new(
                     HostHttpErrorKind::InvalidRequest,
-                    format!("Proxy {} is disabled.", policy.config.name.trim()),
+                    format!("Proxy {} is disabled.", egress_config.name.trim()),
                 ));
             }
             // The DNS-pinning guard cannot apply here: the socket is opened to
@@ -714,7 +773,7 @@ impl PluginHttpHost {
             worker_runtime
                 .lock()
                 .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-                .transport_proxy_client(&runtime, &policy.config, allowed_hosts.clone())?
+                .transport_proxy_client(&runtime, egress_config, allowed_hosts.clone())?
         } else {
             // The allowlist is the primary boundary; the guarded, DNS-pinned
             // client is the second layer that keeps a declared host from
@@ -756,7 +815,7 @@ impl PluginHttpHost {
             allowed_hosts: allowed_hosts.as_deref(),
             egress_policy: &egress_policy,
         };
-        let redirects = transport_policy.is_none().then_some(&redirect_context);
+        let redirects = egress_config.is_none().then_some(&redirect_context);
         let response = execute_request_with_extra_headers(
             &request_client,
             &request,
@@ -764,12 +823,12 @@ impl PluginHttpHost {
             Some(timeout),
             &session_headers,
             destination_cooldown_key.as_ref(),
-            transport_policy.map(|policy| &policy.config),
+            egress_config,
             tally.as_ref(),
             redirects,
         )?;
-        if let Some(policy) = transport_policy {
-            transport_proxy::record_transport_proxy_success(&policy.config);
+        if let Some(egress_config) = egress_config {
+            transport_proxy::record_transport_proxy_success(egress_config);
         }
         let status = response.status();
         let status_code = status.as_u16();
@@ -831,12 +890,18 @@ impl PluginHttpHost {
             );
 
             // The proxy endpoint itself is operator-configured, so it uses the
-            // trusted client; the plugin URL retry inside stays on the guarded
-            // pinned client.
-            let proxy_client = worker_runtime
-                .lock()
-                .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-                .proxy_client(&runtime)?;
+            // trusted client, or one dialling through the route the solver is
+            // reached through. The plugin URL retry inside stays on the request
+            // client chosen above.
+            let proxy_client = {
+                let mut worker_runtime = worker_runtime.lock().map_err(|error| {
+                    format!("plugin HTTP worker runtime lock poisoned: {error}")
+                })?;
+                match solver_route {
+                    Some(route) => worker_runtime.solver_route_client(&runtime, route)?,
+                    None => worker_runtime.proxy_client(&runtime)?,
+                }
+            };
             let solved = match execute_challenge_solver_request(
                 &proxy_client,
                 &request_client,
@@ -849,6 +914,7 @@ impl PluginHttpHost {
                     destination_cooldown_key: destination_cooldown_key.as_ref(),
                     tally: tally.as_ref(),
                     redirects,
+                    replay_route: solver_route,
                 },
             ) {
                 Ok(solved) => {
@@ -1619,6 +1685,9 @@ struct ChallengeSolverRequestOptions<'a> {
     /// itself, API key and all, and then we replay the request ourselves.
     tally: Option<&'a IndexerRequestTally>,
     redirects: Option<&'a DirectPluginRedirects<'a>>,
+    /// The route the solver is reached through, when it has one. The replay
+    /// then goes through it as well; `request_client` already dials it.
+    replay_route: Option<&'a scryer_domain::ProxyConfig>,
 }
 
 fn execute_challenge_solver_request(
@@ -1635,6 +1704,7 @@ fn execute_challenge_solver_request(
         destination_cooldown_key,
         tally,
         redirects,
+        replay_route,
     } = options;
     if !policy.config.is_enabled {
         return Err(HostHttpError::new(
@@ -1828,8 +1898,9 @@ fn execute_challenge_solver_request(
             original_timeout,
             &retry_headers,
             destination_cooldown_key,
-            // The solver replay is a direct hop, by construction.
-            None,
+            // The replay goes the way the first attempt went: directly, or
+            // through the route the solver is reached through.
+            replay_route,
             tally,
             redirects,
         )?;
@@ -1968,6 +2039,8 @@ mod tests {
             consumer_id: "indexer-1".into(),
             consumer_name: "Indexer".into(),
             config: scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: "transport-1".into(),
                 name: "House VPN".into(),
                 provider_type,
@@ -2513,6 +2586,255 @@ mod tests {
         assert!(
             proxy.request_lines().is_empty(),
             "nothing may be sent to {proxy_url}: a transport proxy has no solve endpoint"
+        );
+    }
+
+    /// An in-process HTTP proxy that plays both the origin and the solver, so
+    /// every hop a routed solver makes must arrive here. It answers by shape:
+    /// a solve POST gets a solution carrying a clearance cookie, a GET that
+    /// presents that cookie gets the feed, and any other GET gets a challenge.
+    struct ScriptedSolverRouteProxy {
+        url: String,
+        seen: Arc<Mutex<Vec<(String, bool)>>>,
+    }
+
+    impl ScriptedSolverRouteProxy {
+        async fn start(target_url: &'static str) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("route double should bind");
+            let address = listener.local_addr().expect("route double should be bound");
+            let seen: Arc<Mutex<Vec<(String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&seen);
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let recorder = Arc::clone(&recorder);
+                    tokio::spawn(async move {
+                        let mut buffer = vec![0u8; 8192];
+                        let mut received = Vec::new();
+                        let header_end = loop {
+                            let Ok(read) = stream.read(&mut buffer).await else {
+                                return;
+                            };
+                            if read == 0 {
+                                return;
+                            }
+                            received.extend_from_slice(&buffer[..read]);
+                            if let Some(at) =
+                                received.windows(4).position(|window| window == b"\r\n\r\n")
+                            {
+                                break at + 4;
+                            }
+                        };
+                        let head = String::from_utf8_lossy(&received[..header_end]).to_string();
+                        let content_length = head
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        // Drain the body so closing the socket never resets it.
+                        while received.len() < header_end + content_length {
+                            let Ok(read) = stream.read(&mut buffer).await else {
+                                return;
+                            };
+                            if read == 0 {
+                                break;
+                            }
+                            received.extend_from_slice(&buffer[..read]);
+                        }
+                        let line = head.lines().next().unwrap_or_default().to_string();
+                        let has_clearance = head.lines().any(|header| {
+                            header.to_ascii_lowercase().starts_with("cookie:")
+                                && header.contains("cf_clearance=synthetic")
+                        });
+                        recorder
+                            .lock()
+                            .expect("route recorder lock")
+                            .push((line.clone(), has_clearance));
+                        let (status, content_type, body) = if line.starts_with("POST ") {
+                            (
+                                "200 OK",
+                                "application/json",
+                                serde_json::json!({
+                                    "status": "ok",
+                                    "solution": {
+                                        "url": target_url,
+                                        "status": 503,
+                                        "headers": { "content-type": "text/html" },
+                                        "cookies": [{ "name": "cf_clearance", "value": "synthetic" }],
+                                        "userAgent": "Synthetic UA",
+                                        "response": "<html>Just a moment</html>"
+                                    }
+                                })
+                                .to_string(),
+                            )
+                        } else if has_clearance {
+                            ("200 OK", "application/xml", "<rss>routed</rss>".to_string())
+                        } else {
+                            (
+                                "403 Forbidden",
+                                "text/html",
+                                "<html><title>Just a moment...</title></html>".to_string(),
+                            )
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.flush().await;
+                    });
+                }
+            });
+            Self {
+                url: format!("http://{address}"),
+                seen,
+            }
+        }
+
+        fn requests(&self) -> Vec<(String, bool)> {
+            self.seen.lock().expect("route recorder lock").clone()
+        }
+    }
+
+    fn routed_solver_policy(
+        solver_id: &str,
+        solver_base_url: String,
+        route: Option<scryer_domain::ProxyConfig>,
+    ) -> ProxyPolicy {
+        let now = chrono::Utc::now();
+        let route_id = route.as_ref().map(|route| route.id.clone());
+        ProxyPolicy {
+            consumer_id: "indexer-1".into(),
+            consumer_name: "Indexer".into(),
+            config: scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: route_id.or_else(|| Some("route-gone".into())),
+                reach_through: route.map(Box::new),
+                id: solver_id.into(),
+                name: "Routed solver".into(),
+                provider_type: scryer_domain::ProxyProviderType::Byparr,
+                protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
+                base_url: solver_base_url,
+                request_timeout_seconds: 30,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
+            },
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_routed_solver_sends_the_attempt_solve_replay_and_cookie_reuse_through_its_route() {
+        const TARGET: &str = "http://indexer.example/api?t=search";
+        let route_proxy = ScriptedSolverRouteProxy::start(TARGET).await;
+        let route = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::Http,
+            route_proxy.url.clone(),
+        )
+        .config;
+        // Neither name resolves: reaching either at all proves the route
+        // carried the hop.
+        let policy = routed_solver_policy(
+            "routed-solver-blocking",
+            "http://solver.invalid:8191".into(),
+            Some(route),
+        );
+
+        let bodies = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["indexer.example".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            let request = || PluginHttpRequest {
+                url: TARGET.to_string(),
+                method: Some("GET".to_string()),
+                headers: BTreeMap::new(),
+            };
+            let solved = host
+                .request("newznab", request(), None, Duration::from_secs(30))
+                .expect("the routed solve should succeed");
+            let reused = host
+                .request("newznab", request(), None, Duration::from_secs(30))
+                .expect("the cached clearance should be reused through the route");
+            (solved, reused)
+        })
+        .await
+        .expect("blocking task should join");
+
+        assert_eq!(bodies.0, b"<rss>routed</rss>");
+        assert_eq!(bodies.1, b"<rss>routed</rss>");
+        let seen = route_proxy.requests();
+        let lines: Vec<&str> = seen.iter().map(|(line, _)| line.as_str()).collect();
+        assert_eq!(seen.len(), 4, "every hop must cross the route: {seen:?}");
+        assert!(lines[0].starts_with(&format!("GET {TARGET}")), "{lines:?}");
+        assert!(!seen[0].1, "the first attempt carries no clearance");
+        assert!(
+            lines[1].starts_with("POST http://solver.invalid:8191/v1"),
+            "the solve POST must dial the solver through the route: {lines:?}"
+        );
+        assert!(lines[2].starts_with(&format!("GET {TARGET}")), "{lines:?}");
+        assert!(seen[2].1, "the replay presents the solved clearance");
+        assert!(lines[3].starts_with(&format!("GET {TARGET}")), "{lines:?}");
+        assert!(seen[3].1, "the next request reuses the clearance");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_solver_whose_route_is_unresolved_fails_closed_instead_of_going_direct() {
+        // The solver's own endpoint is a live double: a direct fallback would
+        // reach it, so silence proves the request never left.
+        let solver = ScriptedSolverRouteProxy::start("http://127.0.0.1:9/api").await;
+        let policy = routed_solver_policy("unresolved-route-solver", solver.url.clone(), None);
+        let target = format!("{}/api", solver.url);
+
+        tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["127.0.0.1".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url: target,
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(30),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect_err("an unresolved route must refuse the request");
+
+        assert!(
+            solver.requests().is_empty(),
+            "nothing may leave when the route cannot be resolved"
         );
     }
 
@@ -3426,6 +3748,8 @@ mod tests {
             consumer_id: "indexer-1".into(),
             consumer_name: "Indexer".into(),
             config: scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: "trawl-1".into(),
                 name: "Trawl".into(),
                 provider_type: scryer_domain::ProxyProviderType::Trawl,
@@ -3556,6 +3880,8 @@ mod tests {
             consumer_id: "indexer-1".into(),
             consumer_name: "Indexer".into(),
             config: scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: "byparr-1".into(),
                 name: "Byparr".into(),
                 provider_type: scryer_domain::ProxyProviderType::Byparr,
@@ -3664,6 +3990,8 @@ mod tests {
             consumer_id: "indexer-1".into(),
             consumer_name: "Indexer".into(),
             config: scryer_domain::ProxyConfig {
+                reach_through_proxy_config_id: None,
+                reach_through: None,
                 id: "trawl-unavailable".into(),
                 name: "Trawl".into(),
                 provider_type: scryer_domain::ProxyProviderType::Trawl,
