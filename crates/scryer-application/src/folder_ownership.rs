@@ -97,19 +97,13 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
                 return Ok(resolved);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let component = ancestor.file_name().ok_or_else(|| {
-                    AppError::validation_refused(
-                        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
-                        "title folder has no existing ancestor",
-                    )
-                })?;
+                let component = ancestor
+                    .file_name()
+                    .ok_or_else(|| missing_drive_refusal(path))?;
                 missing.push(component.to_os_string());
-                ancestor = ancestor.parent().ok_or_else(|| {
-                    AppError::validation_refused(
-                        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
-                        "title folder has no existing ancestor",
-                    )
-                })?;
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| missing_drive_refusal(path))?;
             }
             Err(error) => {
                 return Err(AppError::validation_refused(
@@ -122,6 +116,20 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
             }
         }
     }
+}
+
+/// Nothing on the way to `path` exists, down to its drive or volume. The
+/// refusal names both, so the reader knows which drive to bring back.
+fn missing_drive_refusal(path: &Path) -> AppError {
+    let drive = path.ancestors().last().unwrap_or(path);
+    AppError::validation_refused(
+        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
+        format!(
+            "title folder {} cannot be reached: drive or volume {} is missing",
+            path.display(),
+            drive.display(),
+        ),
+    )
 }
 
 /// Whether two stored folders are the same folder or one holds the other, as
@@ -2131,6 +2139,27 @@ mod tests {
             }
         }
         assert_eq!(std::fs::read(sentinel).unwrap(), b"preserved");
+    }
+
+    /// On Windows a drive that is unplugged leaves no folder at all on the way
+    /// to a title folder. The refusal says which folder and which drive.
+    #[test]
+    fn missing_drive_refusal_names_the_folder_and_its_drive() {
+        #[cfg(windows)]
+        let (folder, drive) = (r"O:\Videos\Movies\Fixture (1992)", r"O:\");
+        #[cfg(not(windows))]
+        let (folder, drive) = ("/Videos/Movies/Fixture (1992)", "/");
+        let error = missing_drive_refusal(Path::new(folder));
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR)
+        );
+        assert!(
+            error.to_string().ends_with(&format!(
+                "title folder {folder} cannot be reached: drive or volume {drive} is missing"
+            )),
+            "{error}"
+        );
     }
 
     fn title(folder_path: Option<&str>) -> Title {
