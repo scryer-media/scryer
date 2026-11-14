@@ -2471,7 +2471,6 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "대상 품질 프로필",
   "settings.maintenanceRuleTargetProfileHelp":
     "이 작업이 일치하는 타이틀을 옮길 프로필입니다.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "품질 프로필 ID입니다.",
   "settings.maintenanceRuleLibraries": "라이브러리 범위",
   "settings.maintenanceRuleLibrariesHelp":
     "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
@@ -2524,8 +2523,6 @@ const ko: LocaleDictionary = {
     "실행당 최대 {{max}}개의 타이틀입니다.",
   "settings.maintenancePreviewRun": "미리 보기 실행",
   "settings.maintenancePreviewRunning": "미리 보기 실행 중...",
-  "settings.maintenancePreviewEmpty":
-    "라이브러리를 선택하고 미리 보기를 실행하세요.",
   "settings.maintenancePreviewNoTitles": "평가된 타이틀이 없습니다.",
   "settings.maintenancePreviewColOutcome": "결과",
   "settings.maintenancePreviewColReasons": "사유 코드",
@@ -2594,8 +2591,6 @@ const ko: LocaleDictionary = {
 
   // ── 유지 관리 규칙 — 실행과 기록 ──
   "settings.maintenanceRunsTitle": "실행과 기록",
-  "settings.maintenanceRunsSubtitle":
-    "최근 평가 실행과 작업 시도를 최신순으로 보여줍니다.",
   "settings.maintenanceRunScope": "범위",
   "settings.maintenanceRunScopeAll": "모든 규칙",
   "settings.maintenanceRunEvaluationNow": "지금 평가",
@@ -3176,8 +3171,6 @@ const ko: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "{{title}}을(를) 사용합니다.",
   "settings.requestPreviewRun": "미리보기 실행",
   "settings.requestPreviewRunning": "실행 중…",
-  "settings.requestPreviewEmpty":
-    "요청을 설명하고 미리보기를 실행하면 이 규칙이 어떻게 판단하는지 알 수 있습니다.",
   "settings.requestPreviewMetadataPartial": "메타데이터 불완전",
   "settings.requestPreviewShowInput": "매처가 본 입력 보기",
   "settings.requestPreviewHideInput": "입력 숨기기",
@@ -3792,6 +3785,21 @@ const ko: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "드래그하여 {{value}} 순서 변경",
   "qualityProfile.decisionStepMoveUp": "{{value}} 위로 이동",
   "qualityProfile.decisionStepMoveDown": "{{value}} 아래로 이동",
+  "settings.proxyReachThrough": "경유",
+  "settings.proxyReachThroughHelp":
+    "Scryer는 선택한 전송 프록시 또는 터널을 통해 이 솔버로 요청을 보냅니다. 직접 연결은 Scryer 자체 네트워크에서 솔버에 연결합니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "챌린지 솔버는 다른 챌린지 솔버를 경유할 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "챌린지 솔버는 자기 자신을 경유할 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "솔버에 연결할 경유 프록시 또는 터널을 찾을 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "솔버에 연결할 경유 프록시 또는 터널이 비활성화되어 있습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "다른 프록시를 경유할 수 있는 것은 챌린지 솔버뿐입니다.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "하나 이상의 챌린지 솔버가 이 프록시를 경유합니다. 먼저 변경하세요.",
 };
 
 export default ko;

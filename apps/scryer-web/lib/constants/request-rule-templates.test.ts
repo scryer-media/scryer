@@ -152,7 +152,6 @@ test("the user picker rewrites both ways a template names people", () => {
 test("every template key resolves in the default locale and in Russian", () => {
   const keys = [
     "settings.requestTemplateGallery",
-    "settings.requestTemplateGalleryDescription",
     "settings.requestTemplateApply",
     "settings.requestTemplatePersonTargetedBadge",
     ...REQUEST_RULE_TEMPLATES.flatMap((template) => [

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -382,256 +382,11 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         run: &IndexerSearchRunWrite,
         candidates: &[IndexerSearchCandidateWrite],
     ) -> AppResult<()> {
-        let run = run.clone();
-        let candidates = candidates.to_vec();
         let encryption_key = current_encryption_key(&self.encryption_key)?;
         // Hashing and encryption happen before the write transaction opens.
-        let mut sealed_sources = Vec::with_capacity(candidates.len());
-        for candidate in &candidates {
-            let normalized = &candidate.normalized;
-            let source_reference = normalized
-                .provider_ref
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .or(normalized.download_url.as_deref())
-                .or(normalized.link_url.as_deref())
-                .unwrap_or(normalized.source.as_str())
-                .to_string();
-            let source_identity = blake3_identity_hex(
-                HashDomain::CandidateSessionIdentity,
-                format!("candidate-source-reference\0{source_reference}"),
-            );
-            let source_id = blake3_identity_hex(
-                HashDomain::CandidateSessionIdentity,
-                format!(
-                    "source\0{}\0{}\0{source_identity}",
-                    candidate.session_identity_hash, candidate.indexer_id
-                ),
-            );
-            let encrypted_download_url = encrypt_optional_value(
-                encryption_key.as_ref(),
-                normalized.download_url.as_ref(),
-                "indexer candidate grab URL",
-                true,
-            )?;
-            let encrypted_link_url = encrypt_optional_value(
-                encryption_key.as_ref(),
-                normalized.link_url.as_ref(),
-                "indexer candidate link URL",
-                true,
-            )?;
-            sealed_sources.push((
-                source_identity,
-                source_id,
-                encrypted_download_url,
-                encrypted_link_url,
-            ));
-        }
-        SqlRuntime::run_in_transaction(
-            &self.datastore,
-            "record_indexer_search_diagnostics",
-            move |tx| {
-                let run = run.clone();
-                let candidates = candidates.clone();
-                let sealed_sources = sealed_sources.clone();
-                Box::pin(async move {
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "INSERT INTO indexer_search_runs (
-                            id, indexer_id, provider_type, search_session_id, scope_key, query_signature,
-                            branch, page, range_min_size, range_max_size, result_count,
-                            completion_state, retry_at, error_summary, indexer_fingerprint,
-                            created_at, strategy_state, page_cursor, cursor_chain_id
-                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        &[
-                            SqlArg::Text(run.id.clone()),
-                            SqlArg::Text(run.indexer_id.clone()),
-                            SqlArg::Text(run.provider_type.clone()),
-                            SqlArg::Text(run.search_session_id.clone()),
-                            SqlArg::Text(run.scope_key.clone()),
-                            SqlArg::Text(run.query_signature.clone()),
-                            SqlArg::Text(run.branch.clone()),
-                            SqlArg::OptI64(run.page.map(i64::from)),
-                            SqlArg::OptI64(run.range_min_size),
-                            SqlArg::OptI64(run.range_max_size),
-                            SqlArg::I64(i64::from(run.result_count)),
-                            SqlArg::Text(run.completion_state.clone()),
-                            SqlArg::OptTimestamp(run.retry_at),
-                            SqlArg::OptText(run.error_summary.clone()),
-                            SqlArg::Text(run.indexer_fingerprint.clone()),
-                            SqlArg::Timestamp(run.created_at),
-                            SqlArg::OptText(run.strategy_state.clone()),
-                            SqlArg::OptText(run.page_cursor.clone()),
-                            SqlArg::OptText(run.cursor_chain_id.clone()),
-                        ],
-                    )
-                    .await?;
-
-                    for (
-                        candidate,
-                        (source_identity, source_id, encrypted_download_url, encrypted_link_url),
-                    ) in candidates.into_iter().zip(sealed_sources)
-                    {
-                        let IndexerSearchCandidateWrite {
-                            id: _,
-                            run_id,
-                            search_session_id,
-                            indexer_id,
-                            scope_key: _,
-                            query_signature: _,
-                            session_identity_hash,
-                            normalized,
-                            created_at,
-                            reusable_until,
-                            expires_at,
-                        } = candidate;
-                        let candidate_id = session_identity_hash.clone();
-                        SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            "INSERT INTO indexer_search_candidates (
-                                id, fingerprint, title, normalized_title, size_bytes, source_kind,
-                                info_hash, created_at, updated_at, reusable_until, expires_at
-                             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-                             ON CONFLICT(fingerprint) DO UPDATE SET
-                                title = excluded.title,
-                                normalized_title = excluded.normalized_title,
-                                size_bytes = excluded.size_bytes,
-                                source_kind = excluded.source_kind,
-                                info_hash = excluded.info_hash,
-                                updated_at = excluded.updated_at,
-                                reusable_until = excluded.reusable_until,
-                                expires_at = excluded.expires_at",
-                            &[
-                                SqlArg::Text(candidate_id.clone()),
-                                SqlArg::Text(candidate_id.clone()),
-                                SqlArg::Text(normalized.title.clone()),
-                                SqlArg::Text(normalized.title.to_lowercase()),
-                                SqlArg::OptI64(normalized.size_bytes),
-                                SqlArg::OptText(normalized.source_kind.clone()),
-                                SqlArg::OptText(normalized.info_hash.clone()),
-                                SqlArg::Timestamp(created_at),
-                                SqlArg::Timestamp(created_at),
-                                SqlArg::Timestamp(reusable_until),
-                                SqlArg::Timestamp(expires_at),
-                            ],
-                        )
-                        .await?;
-
-                        SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            "INSERT INTO indexer_search_candidate_sources (
-                                id, candidate_id, indexer_id, source_identity, provider_ref, source,
-                                encrypted_download_url, encrypted_link_url, published_at, thumbs_up,
-                                thumbs_down, grabs, grab_current, grab_max, response_tvdb_id,
-                                response_tmdb_id, response_imdb_id, season, episode, absolute_episode,
-                                release_group, provider_source, seeders, peers, download_volume_factor,
-                                upload_volume_factor, protected, first_seen_at, last_seen_at,
-                                reusable_until, expires_at
-                             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                                       {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-                             ON CONFLICT(candidate_id, indexer_id, source_identity) DO UPDATE SET
-                                provider_ref = excluded.provider_ref,
-                                source = excluded.source,
-                                encrypted_download_url = excluded.encrypted_download_url,
-                                encrypted_link_url = excluded.encrypted_link_url,
-                                published_at = excluded.published_at,
-                                thumbs_up = excluded.thumbs_up,
-                                thumbs_down = excluded.thumbs_down,
-                                grabs = excluded.grabs,
-                                grab_current = excluded.grab_current,
-                                grab_max = excluded.grab_max,
-                                response_tvdb_id = excluded.response_tvdb_id,
-                                response_tmdb_id = excluded.response_tmdb_id,
-                                response_imdb_id = excluded.response_imdb_id,
-                                season = excluded.season,
-                                episode = excluded.episode,
-                                absolute_episode = excluded.absolute_episode,
-                                release_group = excluded.release_group,
-                                provider_source = excluded.provider_source,
-                                seeders = excluded.seeders,
-                                peers = excluded.peers,
-                                download_volume_factor = excluded.download_volume_factor,
-                                upload_volume_factor = excluded.upload_volume_factor,
-                                protected = excluded.protected,
-                                last_seen_at = excluded.last_seen_at,
-                                reusable_until = excluded.reusable_until,
-                                expires_at = excluded.expires_at",
-                            &[
-                                SqlArg::Text(source_id.clone()), SqlArg::Text(candidate_id),
-                                SqlArg::Text(indexer_id), SqlArg::Text(source_identity),
-                                SqlArg::OptText(normalized.provider_ref.clone()), SqlArg::Text(normalized.source.clone()),
-                                SqlArg::OptText(encrypted_download_url), SqlArg::OptText(encrypted_link_url),
-                                SqlArg::OptText(normalized.published_at.clone()), SqlArg::OptI32(normalized.thumbs_up),
-                                SqlArg::OptI32(normalized.thumbs_down), SqlArg::OptI64(normalized.grabs),
-                                SqlArg::OptI64(normalized.grab_current), SqlArg::OptI64(normalized.grab_max),
-                                SqlArg::OptText(normalized.response_tvdb_id.clone()), SqlArg::OptText(normalized.response_tmdb_id.clone()),
-                                SqlArg::OptText(normalized.response_imdb_id.clone()), SqlArg::OptI64(normalized.season),
-                                SqlArg::OptI64(normalized.episode), SqlArg::OptI64(normalized.absolute_episode),
-                                SqlArg::OptText(normalized.release_group.clone()), SqlArg::OptText(normalized.provider_source.clone()),
-                                SqlArg::OptI64(normalized.seeders), SqlArg::OptI64(normalized.peers),
-                                SqlArg::OptF64(normalized.download_volume_factor), SqlArg::OptF64(normalized.upload_volume_factor),
-                                SqlArg::OptBool(normalized.protected), SqlArg::Timestamp(created_at),
-                                SqlArg::Timestamp(created_at), SqlArg::Timestamp(reusable_until), SqlArg::Timestamp(expires_at),
-                            ],
-                        ).await?;
-                        SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            "INSERT INTO indexer_search_run_candidate_sources (run_id, source_id, search_session_id)
-                             VALUES ({}, {}, {}) ON CONFLICT DO NOTHING",
-                            &[SqlArg::Text(run_id), SqlArg::Text(source_id.clone()), SqlArg::Text(search_session_id)],
-                        ).await?;
-                        SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            "DELETE FROM indexer_search_candidate_source_values WHERE source_id = {}",
-                            &[SqlArg::Text(source_id.clone())],
-                        ).await?;
-
-                        for (value_kind, values) in [
-                            ("language", &normalized.languages),
-                            ("subtitle", &normalized.subtitles),
-                            ("response_category", &normalized.response_categories),
-                            ("extra_category", &normalized.extra_categories),
-                            ("series_name", &normalized.series_names),
-                            ("tag", &normalized.tags),
-                            ("provider_category", &normalized.provider_categories),
-                        ] {
-                            for (ordinal, value) in values.iter().enumerate() {
-                                SqlRuntime::execute(
-                                    SqlExec::Tx(tx),
-                                    "INSERT INTO indexer_search_candidate_source_values (
-                                        source_id, value_kind, ordinal, value
-                                     ) VALUES ({}, {}, {}, {})",
-                                    &[
-                                        SqlArg::Text(source_id.clone()),
-                                        SqlArg::Text(value_kind.to_string()),
-                                        SqlArg::I64(ordinal as i64),
-                                        SqlArg::Text(value.clone()),
-                                    ],
-                                )
-                                .await?;
-                            }
-                        }
-                        if let Some(listing) = normalized.release_listing_json.as_ref() {
-                            SqlRuntime::execute(
-                                SqlExec::Tx(tx),
-                                "INSERT INTO indexer_search_candidate_source_values (
-                                    source_id, value_kind, ordinal, value
-                                 ) VALUES ({}, {}, {}, {})",
-                                &[
-                                    SqlArg::Text(source_id.clone()),
-                                    SqlArg::Text("release_listing".to_string()),
-                                    SqlArg::I64(0),
-                                    SqlArg::Text(listing.clone()),
-                                ],
-                            )
-                            .await?;
-                        }
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await
+        let sealed_sources = seal_candidate_sources(encryption_key.as_ref(), candidates)?;
+        self.write_search_diagnostics(run, candidates, &sealed_sources)
+            .await
     }
 
     async fn finalize_search_session(
@@ -640,41 +395,45 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         admissible_fingerprints: &[String],
     ) -> AppResult<()> {
         let search_session_id = search_session_id.to_string();
-        let admissible_fingerprints = admissible_fingerprints.to_vec();
+        // The admitted set is consulted in memory, so its size never reaches a
+        // statement's bind limit.
+        let admissible_fingerprints = std::sync::Arc::new(
+            admissible_fingerprints
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>(),
+        );
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "finalize_indexer_search_session",
             move |tx| {
                 let search_session_id = search_session_id.clone();
-                let admissible_fingerprints = admissible_fingerprints.clone();
+                let admissible_fingerprints = std::sync::Arc::clone(&admissible_fingerprints);
                 Box::pin(async move {
-                    let mut args = vec![SqlArg::Text(search_session_id.clone())];
-                    let rejected_clause = if admissible_fingerprints.is_empty() {
-                        String::new()
-                    } else {
-                        args.extend(admissible_fingerprints.into_iter().map(SqlArg::Text));
-                        format!(
-                            " AND c.fingerprint NOT IN ({})",
-                            std::iter::repeat_n("{}", args.len() - 1)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
                     // Only what this session linked can be orphaned by it;
                     // older orphans are the daily cleanup's.
                     let linked = SqlRuntime::fetch_all(
                         SqlExec::Tx(tx),
-                        "SELECT DISTINCT rc.source_id, s.candidate_id
+                        "SELECT DISTINCT rc.source_id, s.candidate_id, c.fingerprint
                            FROM indexer_search_run_candidate_sources rc
                            JOIN indexer_search_candidate_sources s ON s.id = rc.source_id
+                           LEFT JOIN indexer_search_candidates c ON c.id = s.candidate_id
                           WHERE rc.search_session_id = {}",
                         &[SqlArg::Text(search_session_id.clone())],
                     )
                     .await?;
                     let mut linked_sources = Vec::with_capacity(linked.len());
                     let mut linked_candidates = Vec::with_capacity(linked.len());
+                    let mut rejected_sources = Vec::new();
                     for row in &linked {
-                        linked_sources.push(row.text("source_id")?);
+                        let source_id = row.text("source_id")?;
+                        if row
+                            .opt_text("fingerprint")?
+                            .is_some_and(|fingerprint| !admissible_fingerprints.contains(&fingerprint))
+                        {
+                            rejected_sources.push(source_id.clone());
+                        }
+                        linked_sources.push(source_id);
                         linked_candidates.push(row.text("candidate_id")?);
                     }
                     linked_candidates.sort_unstable();
@@ -682,25 +441,28 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     // A run that reads a shared listing keeps every result:
                     // other scopes of the title are scored from it, and what
                     // this scope rejected may be theirs.
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        &format!(
-                            "DELETE FROM indexer_search_run_candidate_sources
-                              WHERE search_session_id = {{}}
-                                AND source_id IN (
-                                    SELECT s.id
-                                      FROM indexer_search_candidate_sources s
-                                      JOIN indexer_search_candidates c ON c.id = s.candidate_id
-                                     WHERE 1 = 1{rejected_clause}
-                                )
-                                AND NOT EXISTS (
-                                    SELECT 1 FROM indexer_search_listing_runs lr
-                                     WHERE lr.run_id = indexer_search_run_candidate_sources.run_id
-                                )"
-                        ),
-                        &args,
-                    )
-                    .await?;
+                    for chunk in rejected_sources.chunks(DIAGNOSTICS_ID_CHUNK) {
+                        let placeholders = std::iter::repeat_n("{}", chunk.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let mut args = Vec::with_capacity(chunk.len() + 1);
+                        args.push(SqlArg::Text(search_session_id.clone()));
+                        args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            &format!(
+                                "DELETE FROM indexer_search_run_candidate_sources
+                                  WHERE search_session_id = {{}}
+                                    AND source_id IN ({placeholders})
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM indexer_search_listing_runs lr
+                                         WHERE lr.run_id = indexer_search_run_candidate_sources.run_id
+                                    )"
+                            ),
+                            &args,
+                        )
+                        .await?;
+                    }
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE indexer_search_runs
@@ -713,7 +475,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                         &[SqlArg::Text(search_session_id)],
                     )
                     .await?;
-                    for chunk in linked_sources.chunks(FINALIZE_ORPHAN_CHUNK) {
+                    for chunk in linked_sources.chunks(DIAGNOSTICS_ID_CHUNK) {
                         let placeholders = std::iter::repeat_n("{}", chunk.len())
                             .collect::<Vec<_>>()
                             .join(", ");
@@ -731,7 +493,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                         )
                         .await?;
                     }
-                    for chunk in linked_candidates.chunks(FINALIZE_ORPHAN_CHUNK) {
+                    for chunk in linked_candidates.chunks(DIAGNOSTICS_ID_CHUNK) {
                         let placeholders = std::iter::repeat_n("{}", chunk.len())
                             .collect::<Vec<_>>()
                             .join(", ");
@@ -1902,11 +1664,400 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
 /// rare and a second round almost always lands.
 const FACET_LEARNING_WRITE_ATTEMPTS: usize = 5;
 
-/// Ids per statement when a finalized session removes what it orphaned,
-/// well inside both engines' bound-parameter limits.
-const FINALIZE_ORPHAN_CHUNK: usize = 500;
+/// Ids per statement when search diagnostics name rows by id: the values a
+/// recorded response replaces, and what a finalized session unlinks and
+/// orphans. Well inside both engines' bound-parameter limits.
+const DIAGNOSTICS_ID_CHUNK: usize = 500;
+
+/// One result's source row as prepared before the write transaction: its
+/// identity within the candidate, its id and its sealed URLs.
+#[derive(Clone)]
+struct SealedCandidateSource {
+    source_identity: String,
+    /// Derived from the candidate, the indexer and the source identity, which
+    /// together are the source table's conflict key, so a re-recorded source
+    /// always carries the id its stored row already has.
+    source_id: String,
+    encrypted_download_url: Option<String>,
+    encrypted_link_url: Option<String>,
+}
+
+fn seal_candidate_sources(
+    encryption_key: Option<&EncryptionKey>,
+    candidates: &[IndexerSearchCandidateWrite],
+) -> AppResult<Vec<SealedCandidateSource>> {
+    let mut sealed_sources = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let normalized = &candidate.normalized;
+        let source_reference = normalized
+            .provider_ref
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .or(normalized.download_url.as_deref())
+            .or(normalized.link_url.as_deref())
+            .unwrap_or(normalized.source.as_str())
+            .to_string();
+        let source_identity = blake3_identity_hex(
+            HashDomain::CandidateSessionIdentity,
+            format!("candidate-source-reference\0{source_reference}"),
+        );
+        let source_id = blake3_identity_hex(
+            HashDomain::CandidateSessionIdentity,
+            format!(
+                "source\0{}\0{}\0{source_identity}",
+                candidate.session_identity_hash, candidate.indexer_id
+            ),
+        );
+        let encrypted_download_url = encrypt_optional_value(
+            encryption_key,
+            normalized.download_url.as_ref(),
+            "indexer candidate grab URL",
+            true,
+        )?;
+        let encrypted_link_url = encrypt_optional_value(
+            encryption_key,
+            normalized.link_url.as_ref(),
+            "indexer candidate link URL",
+            true,
+        )?;
+        sealed_sources.push(SealedCandidateSource {
+            source_identity,
+            source_id,
+            encrypted_download_url,
+            encrypted_link_url,
+        });
+    }
+    Ok(sealed_sources)
+}
+
+const SEARCH_CANDIDATE_INSERT_PREFIX: &str = "INSERT INTO indexer_search_candidates (
+        id, fingerprint, title, normalized_title, size_bytes, source_kind,
+        info_hash, created_at, updated_at, reusable_until, expires_at
+     )";
+const SEARCH_CANDIDATE_COLUMNS: usize = 11;
+/// Position of `created_at` in a candidate row.
+const SEARCH_CANDIDATE_CREATED_AT: usize = 7;
+const SEARCH_CANDIDATE_UPSERT_SUFFIX: &str = "ON CONFLICT(fingerprint) DO UPDATE SET
+        title = excluded.title,
+        normalized_title = excluded.normalized_title,
+        size_bytes = excluded.size_bytes,
+        source_kind = excluded.source_kind,
+        info_hash = excluded.info_hash,
+        updated_at = excluded.updated_at,
+        reusable_until = excluded.reusable_until,
+        expires_at = excluded.expires_at";
+
+const SEARCH_CANDIDATE_SOURCE_INSERT_PREFIX: &str = "INSERT INTO indexer_search_candidate_sources (
+        id, candidate_id, indexer_id, source_identity, provider_ref, source,
+        encrypted_download_url, encrypted_link_url, published_at, thumbs_up,
+        thumbs_down, grabs, grab_current, grab_max, response_tvdb_id,
+        response_tmdb_id, response_imdb_id, season, episode, absolute_episode,
+        release_group, provider_source, seeders, peers, download_volume_factor,
+        upload_volume_factor, protected, first_seen_at, last_seen_at,
+        reusable_until, expires_at
+     )";
+const SEARCH_CANDIDATE_SOURCE_COLUMNS: usize = 31;
+/// Position of `first_seen_at` in a candidate source row.
+const SEARCH_CANDIDATE_SOURCE_FIRST_SEEN_AT: usize = 27;
+const SEARCH_CANDIDATE_SOURCE_UPSERT_SUFFIX: &str =
+    "ON CONFLICT(candidate_id, indexer_id, source_identity) DO UPDATE SET
+        provider_ref = excluded.provider_ref,
+        source = excluded.source,
+        encrypted_download_url = excluded.encrypted_download_url,
+        encrypted_link_url = excluded.encrypted_link_url,
+        published_at = excluded.published_at,
+        thumbs_up = excluded.thumbs_up,
+        thumbs_down = excluded.thumbs_down,
+        grabs = excluded.grabs,
+        grab_current = excluded.grab_current,
+        grab_max = excluded.grab_max,
+        response_tvdb_id = excluded.response_tvdb_id,
+        response_tmdb_id = excluded.response_tmdb_id,
+        response_imdb_id = excluded.response_imdb_id,
+        season = excluded.season,
+        episode = excluded.episode,
+        absolute_episode = excluded.absolute_episode,
+        release_group = excluded.release_group,
+        provider_source = excluded.provider_source,
+        seeders = excluded.seeders,
+        peers = excluded.peers,
+        download_volume_factor = excluded.download_volume_factor,
+        upload_volume_factor = excluded.upload_volume_factor,
+        protected = excluded.protected,
+        last_seen_at = excluded.last_seen_at,
+        reusable_until = excluded.reusable_until,
+        expires_at = excluded.expires_at";
+
+/// The rows one indexer response writes, built before the write transaction
+/// opens so it only binds them.
+///
+/// A response can name one candidate, or one source of it, more than once. A
+/// multi-row upsert cannot touch a row twice, so each appears once here with
+/// what writing the results one after another would leave: the later result's
+/// columns, the first result's creation time, and the later result's values.
+#[derive(Clone)]
+struct SearchDiagnosticsRows {
+    candidates: Vec<Vec<SqlArg>>,
+    sources: Vec<Vec<SqlArg>>,
+    run_links: Vec<Vec<SqlArg>>,
+    /// Every source of the response, once; its stored values are replaced.
+    source_ids: Vec<String>,
+    values: Vec<Vec<SqlArg>>,
+}
+
+fn search_diagnostics_rows(
+    candidates: &[IndexerSearchCandidateWrite],
+    sealed_sources: &[SealedCandidateSource],
+) -> SearchDiagnosticsRows {
+    let mut candidate_rows: Vec<Vec<SqlArg>> = Vec::with_capacity(candidates.len());
+    let mut candidate_positions: HashMap<&str, usize> = HashMap::with_capacity(candidates.len());
+    let mut source_rows: Vec<Vec<SqlArg>> = Vec::with_capacity(candidates.len());
+    let mut source_values: Vec<Vec<Vec<SqlArg>>> = Vec::with_capacity(candidates.len());
+    let mut source_ids: Vec<String> = Vec::with_capacity(candidates.len());
+    let mut source_positions: HashMap<&str, usize> = HashMap::with_capacity(candidates.len());
+    let mut run_links = Vec::with_capacity(candidates.len());
+
+    for (candidate, sealed) in candidates.iter().zip(sealed_sources) {
+        let normalized = &candidate.normalized;
+        let candidate_id = candidate.session_identity_hash.as_str();
+        let source_id = sealed.source_id.as_str();
+        let created_at = candidate.created_at;
+
+        let mut candidate_row = vec![
+            SqlArg::Text(candidate_id.to_string()),
+            SqlArg::Text(candidate_id.to_string()),
+            SqlArg::Text(normalized.title.clone()),
+            SqlArg::Text(normalized.title.to_lowercase()),
+            SqlArg::OptI64(normalized.size_bytes),
+            SqlArg::OptText(normalized.source_kind.clone()),
+            SqlArg::OptText(normalized.info_hash.clone()),
+            SqlArg::Timestamp(created_at),
+            SqlArg::Timestamp(created_at),
+            SqlArg::Timestamp(candidate.reusable_until),
+            SqlArg::Timestamp(candidate.expires_at),
+        ];
+        match candidate_positions.get(candidate_id) {
+            Some(&position) => {
+                candidate_row[SEARCH_CANDIDATE_CREATED_AT] =
+                    candidate_rows[position][SEARCH_CANDIDATE_CREATED_AT].clone();
+                candidate_rows[position] = candidate_row;
+            }
+            None => {
+                candidate_positions.insert(candidate_id, candidate_rows.len());
+                candidate_rows.push(candidate_row);
+            }
+        }
+
+        let mut source_row = vec![
+            SqlArg::Text(source_id.to_string()),
+            SqlArg::Text(candidate_id.to_string()),
+            SqlArg::Text(candidate.indexer_id.clone()),
+            SqlArg::Text(sealed.source_identity.clone()),
+            SqlArg::OptText(normalized.provider_ref.clone()),
+            SqlArg::Text(normalized.source.clone()),
+            SqlArg::OptText(sealed.encrypted_download_url.clone()),
+            SqlArg::OptText(sealed.encrypted_link_url.clone()),
+            SqlArg::OptText(normalized.published_at.clone()),
+            SqlArg::OptI32(normalized.thumbs_up),
+            SqlArg::OptI32(normalized.thumbs_down),
+            SqlArg::OptI64(normalized.grabs),
+            SqlArg::OptI64(normalized.grab_current),
+            SqlArg::OptI64(normalized.grab_max),
+            SqlArg::OptText(normalized.response_tvdb_id.clone()),
+            SqlArg::OptText(normalized.response_tmdb_id.clone()),
+            SqlArg::OptText(normalized.response_imdb_id.clone()),
+            SqlArg::OptI64(normalized.season),
+            SqlArg::OptI64(normalized.episode),
+            SqlArg::OptI64(normalized.absolute_episode),
+            SqlArg::OptText(normalized.release_group.clone()),
+            SqlArg::OptText(normalized.provider_source.clone()),
+            SqlArg::OptI64(normalized.seeders),
+            SqlArg::OptI64(normalized.peers),
+            SqlArg::OptF64(normalized.download_volume_factor),
+            SqlArg::OptF64(normalized.upload_volume_factor),
+            SqlArg::OptBool(normalized.protected),
+            SqlArg::Timestamp(created_at),
+            SqlArg::Timestamp(created_at),
+            SqlArg::Timestamp(candidate.reusable_until),
+            SqlArg::Timestamp(candidate.expires_at),
+        ];
+
+        let mut values = Vec::new();
+        for (value_kind, kind_values) in [
+            ("language", &normalized.languages),
+            ("subtitle", &normalized.subtitles),
+            ("response_category", &normalized.response_categories),
+            ("extra_category", &normalized.extra_categories),
+            ("series_name", &normalized.series_names),
+            ("tag", &normalized.tags),
+            ("provider_category", &normalized.provider_categories),
+        ] {
+            for (ordinal, value) in kind_values.iter().enumerate() {
+                values.push(vec![
+                    SqlArg::Text(source_id.to_string()),
+                    SqlArg::Text(value_kind.to_string()),
+                    SqlArg::I64(ordinal as i64),
+                    SqlArg::Text(value.clone()),
+                ]);
+            }
+        }
+        if let Some(listing) = normalized.release_listing_json.as_ref() {
+            values.push(vec![
+                SqlArg::Text(source_id.to_string()),
+                SqlArg::Text("release_listing".to_string()),
+                SqlArg::I64(0),
+                SqlArg::Text(listing.clone()),
+            ]);
+        }
+
+        match source_positions.get(source_id) {
+            Some(&position) => {
+                source_row[SEARCH_CANDIDATE_SOURCE_FIRST_SEEN_AT] =
+                    source_rows[position][SEARCH_CANDIDATE_SOURCE_FIRST_SEEN_AT].clone();
+                source_rows[position] = source_row;
+                source_values[position] = values;
+            }
+            None => {
+                source_positions.insert(source_id, source_rows.len());
+                source_rows.push(source_row);
+                source_values.push(values);
+                source_ids.push(source_id.to_string());
+            }
+        }
+
+        // A repeated link is ignored by the insert, as it was row by row.
+        run_links.push(vec![
+            SqlArg::Text(candidate.run_id.clone()),
+            SqlArg::Text(source_id.to_string()),
+            SqlArg::Text(candidate.search_session_id.clone()),
+        ]);
+    }
+
+    SearchDiagnosticsRows {
+        candidates: candidate_rows,
+        sources: source_rows,
+        run_links,
+        source_ids,
+        values: source_values.into_iter().flatten().collect(),
+    }
+}
+
+async fn insert_search_run_tx(tx: &mut SqlTx<'_>, run: &IndexerSearchRunWrite) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO indexer_search_runs (
+            id, indexer_id, provider_type, search_session_id, scope_key, query_signature,
+            branch, page, range_min_size, range_max_size, result_count,
+            completion_state, retry_at, error_summary, indexer_fingerprint,
+            created_at, strategy_state, page_cursor, cursor_chain_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        &[
+            SqlArg::Text(run.id.clone()),
+            SqlArg::Text(run.indexer_id.clone()),
+            SqlArg::Text(run.provider_type.clone()),
+            SqlArg::Text(run.search_session_id.clone()),
+            SqlArg::Text(run.scope_key.clone()),
+            SqlArg::Text(run.query_signature.clone()),
+            SqlArg::Text(run.branch.clone()),
+            SqlArg::OptI64(run.page.map(i64::from)),
+            SqlArg::OptI64(run.range_min_size),
+            SqlArg::OptI64(run.range_max_size),
+            SqlArg::I64(i64::from(run.result_count)),
+            SqlArg::Text(run.completion_state.clone()),
+            SqlArg::OptTimestamp(run.retry_at),
+            SqlArg::OptText(run.error_summary.clone()),
+            SqlArg::Text(run.indexer_fingerprint.clone()),
+            SqlArg::Timestamp(run.created_at),
+            SqlArg::OptText(run.strategy_state.clone()),
+            SqlArg::OptText(run.page_cursor.clone()),
+            SqlArg::OptText(run.cursor_chain_id.clone()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Writes one response's results. Candidates go before their sources, and
+/// sources before the links and values that reference them.
+async fn write_search_diagnostics_rows_tx(
+    tx: &mut SqlTx<'_>,
+    rows: SearchDiagnosticsRows,
+) -> AppResult<()> {
+    SqlRuntime::execute_batch_insert(
+        tx,
+        SEARCH_CANDIDATE_INSERT_PREFIX,
+        SEARCH_CANDIDATE_COLUMNS,
+        rows.candidates,
+        SEARCH_CANDIDATE_UPSERT_SUFFIX,
+    )
+    .await?;
+    SqlRuntime::execute_batch_insert(
+        tx,
+        SEARCH_CANDIDATE_SOURCE_INSERT_PREFIX,
+        SEARCH_CANDIDATE_SOURCE_COLUMNS,
+        rows.sources,
+        SEARCH_CANDIDATE_SOURCE_UPSERT_SUFFIX,
+    )
+    .await?;
+    SqlRuntime::execute_batch_insert(
+        tx,
+        "INSERT INTO indexer_search_run_candidate_sources (run_id, source_id, search_session_id)",
+        3,
+        rows.run_links,
+        "ON CONFLICT DO NOTHING",
+    )
+    .await?;
+    for chunk in rows.source_ids.chunks(DIAGNOSTICS_ID_CHUNK) {
+        let placeholders = std::iter::repeat_n("{}", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            &format!(
+                "DELETE FROM indexer_search_candidate_source_values
+                  WHERE source_id IN ({placeholders})"
+            ),
+            &chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>(),
+        )
+        .await?;
+    }
+    SqlRuntime::execute_batch_insert(
+        tx,
+        "INSERT INTO indexer_search_candidate_source_values (source_id, value_kind, ordinal, value)",
+        4,
+        rows.values,
+        "",
+    )
+    .await?;
+    Ok(())
+}
 
 impl IndexerSearchLearningStore {
+    /// Stores one indexer response in a single short transaction: its run,
+    /// then its results as a handful of multi-row statements.
+    async fn write_search_diagnostics(
+        &self,
+        run: &IndexerSearchRunWrite,
+        candidates: &[IndexerSearchCandidateWrite],
+        sealed_sources: &[SealedCandidateSource],
+    ) -> AppResult<()> {
+        let run = std::sync::Arc::new(run.clone());
+        let rows = std::sync::Arc::new(search_diagnostics_rows(candidates, sealed_sources));
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "record_indexer_search_diagnostics",
+            move |tx| {
+                let run = std::sync::Arc::clone(&run);
+                let rows = std::sync::Arc::clone(&rows);
+                Box::pin(async move {
+                    insert_search_run_tx(tx, &run).await?;
+                    write_search_diagnostics_rows_tx(tx, SearchDiagnosticsRows::clone(&rows)).await
+                })
+            },
+        )
+        .await
+    }
+
     async fn facet_learning_state(
         &self,
         indexer_id: &str,
@@ -2263,7 +2414,6 @@ fn i64_to_u32(value: i64, column: &str) -> AppResult<u32> {
 pub(crate) mod tests {
     use super::*;
     use scryer_application::SEARCH_STRATEGY_OPEN;
-    use std::collections::HashSet;
 
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -4230,12 +4380,7 @@ pub(crate) mod tests {
             "EXPLAIN QUERY PLAN
              DELETE FROM indexer_search_run_candidate_sources
               WHERE search_session_id = ?
-                AND source_id IN (
-                    SELECT s.id
-                      FROM indexer_search_candidate_sources s
-                      JOIN indexer_search_candidates c ON c.id = s.candidate_id
-                     WHERE 1 = 1 AND c.fingerprint NOT IN (?)
-                )
+                AND source_id IN (?)
                 AND NOT EXISTS (
                     SELECT 1 FROM indexer_search_listing_runs lr
                      WHERE lr.run_id = indexer_search_run_candidate_sources.run_id
@@ -4334,5 +4479,627 @@ pub(crate) mod tests {
             "the daily cleanup sweeps orphans"
         );
         assert_eq!(present("E01").await, (1, 1), "linked results survive it");
+    }
+
+    impl IndexerSearchLearningStore {
+        /// Writes a response one result at a time, with one statement per
+        /// row and per value. This is the reference the batched write is
+        /// compared with.
+        async fn write_search_diagnostics_row_by_row(
+            &self,
+            run: &IndexerSearchRunWrite,
+            candidates: &[IndexerSearchCandidateWrite],
+            sealed_sources: &[SealedCandidateSource],
+        ) -> AppResult<()> {
+            let run = run.clone();
+            let candidates = candidates.to_vec();
+            let sealed_sources = sealed_sources.to_vec();
+            SqlRuntime::run_in_transaction(
+                &self.datastore,
+                "record_indexer_search_diagnostics_row_by_row",
+                move |tx| {
+                    let run = run.clone();
+                    let candidates = candidates.clone();
+                    let sealed_sources = sealed_sources.clone();
+                    Box::pin(async move {
+                        insert_search_run_tx(tx, &run).await?;
+                        for (candidate, sealed) in candidates.into_iter().zip(sealed_sources) {
+                            let normalized = candidate.normalized;
+                            let created_at = candidate.created_at;
+                            let candidate_id = candidate.session_identity_hash;
+                            let source_id = sealed.source_id;
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                "INSERT INTO indexer_search_candidates (
+                                    id, fingerprint, title, normalized_title, size_bytes, source_kind,
+                                    info_hash, created_at, updated_at, reusable_until, expires_at
+                                 ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                                 ON CONFLICT(fingerprint) DO UPDATE SET
+                                    title = excluded.title,
+                                    normalized_title = excluded.normalized_title,
+                                    size_bytes = excluded.size_bytes,
+                                    source_kind = excluded.source_kind,
+                                    info_hash = excluded.info_hash,
+                                    updated_at = excluded.updated_at,
+                                    reusable_until = excluded.reusable_until,
+                                    expires_at = excluded.expires_at",
+                                &[
+                                    SqlArg::Text(candidate_id.clone()),
+                                    SqlArg::Text(candidate_id.clone()),
+                                    SqlArg::Text(normalized.title.clone()),
+                                    SqlArg::Text(normalized.title.to_lowercase()),
+                                    SqlArg::OptI64(normalized.size_bytes),
+                                    SqlArg::OptText(normalized.source_kind.clone()),
+                                    SqlArg::OptText(normalized.info_hash.clone()),
+                                    SqlArg::Timestamp(created_at),
+                                    SqlArg::Timestamp(created_at),
+                                    SqlArg::Timestamp(candidate.reusable_until),
+                                    SqlArg::Timestamp(candidate.expires_at),
+                                ],
+                            )
+                            .await?;
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                "INSERT INTO indexer_search_candidate_sources (
+                                    id, candidate_id, indexer_id, source_identity, provider_ref, source,
+                                    encrypted_download_url, encrypted_link_url, published_at, thumbs_up,
+                                    thumbs_down, grabs, grab_current, grab_max, response_tvdb_id,
+                                    response_tmdb_id, response_imdb_id, season, episode, absolute_episode,
+                                    release_group, provider_source, seeders, peers, download_volume_factor,
+                                    upload_volume_factor, protected, first_seen_at, last_seen_at,
+                                    reusable_until, expires_at
+                                 ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+                                           {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                                 ON CONFLICT(candidate_id, indexer_id, source_identity) DO UPDATE SET
+                                    provider_ref = excluded.provider_ref,
+                                    source = excluded.source,
+                                    encrypted_download_url = excluded.encrypted_download_url,
+                                    encrypted_link_url = excluded.encrypted_link_url,
+                                    published_at = excluded.published_at,
+                                    thumbs_up = excluded.thumbs_up,
+                                    thumbs_down = excluded.thumbs_down,
+                                    grabs = excluded.grabs,
+                                    grab_current = excluded.grab_current,
+                                    grab_max = excluded.grab_max,
+                                    response_tvdb_id = excluded.response_tvdb_id,
+                                    response_tmdb_id = excluded.response_tmdb_id,
+                                    response_imdb_id = excluded.response_imdb_id,
+                                    season = excluded.season,
+                                    episode = excluded.episode,
+                                    absolute_episode = excluded.absolute_episode,
+                                    release_group = excluded.release_group,
+                                    provider_source = excluded.provider_source,
+                                    seeders = excluded.seeders,
+                                    peers = excluded.peers,
+                                    download_volume_factor = excluded.download_volume_factor,
+                                    upload_volume_factor = excluded.upload_volume_factor,
+                                    protected = excluded.protected,
+                                    last_seen_at = excluded.last_seen_at,
+                                    reusable_until = excluded.reusable_until,
+                                    expires_at = excluded.expires_at",
+                                &[
+                                    SqlArg::Text(source_id.clone()),
+                                    SqlArg::Text(candidate_id),
+                                    SqlArg::Text(candidate.indexer_id),
+                                    SqlArg::Text(sealed.source_identity),
+                                    SqlArg::OptText(normalized.provider_ref.clone()),
+                                    SqlArg::Text(normalized.source.clone()),
+                                    SqlArg::OptText(sealed.encrypted_download_url),
+                                    SqlArg::OptText(sealed.encrypted_link_url),
+                                    SqlArg::OptText(normalized.published_at.clone()),
+                                    SqlArg::OptI32(normalized.thumbs_up),
+                                    SqlArg::OptI32(normalized.thumbs_down),
+                                    SqlArg::OptI64(normalized.grabs),
+                                    SqlArg::OptI64(normalized.grab_current),
+                                    SqlArg::OptI64(normalized.grab_max),
+                                    SqlArg::OptText(normalized.response_tvdb_id.clone()),
+                                    SqlArg::OptText(normalized.response_tmdb_id.clone()),
+                                    SqlArg::OptText(normalized.response_imdb_id.clone()),
+                                    SqlArg::OptI64(normalized.season),
+                                    SqlArg::OptI64(normalized.episode),
+                                    SqlArg::OptI64(normalized.absolute_episode),
+                                    SqlArg::OptText(normalized.release_group.clone()),
+                                    SqlArg::OptText(normalized.provider_source.clone()),
+                                    SqlArg::OptI64(normalized.seeders),
+                                    SqlArg::OptI64(normalized.peers),
+                                    SqlArg::OptF64(normalized.download_volume_factor),
+                                    SqlArg::OptF64(normalized.upload_volume_factor),
+                                    SqlArg::OptBool(normalized.protected),
+                                    SqlArg::Timestamp(created_at),
+                                    SqlArg::Timestamp(created_at),
+                                    SqlArg::Timestamp(candidate.reusable_until),
+                                    SqlArg::Timestamp(candidate.expires_at),
+                                ],
+                            )
+                            .await?;
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                "INSERT INTO indexer_search_run_candidate_sources (run_id, source_id, search_session_id)
+                                 VALUES ({}, {}, {}) ON CONFLICT DO NOTHING",
+                                &[
+                                    SqlArg::Text(candidate.run_id),
+                                    SqlArg::Text(source_id.clone()),
+                                    SqlArg::Text(candidate.search_session_id),
+                                ],
+                            )
+                            .await?;
+                            SqlRuntime::execute(
+                                SqlExec::Tx(tx),
+                                "DELETE FROM indexer_search_candidate_source_values WHERE source_id = {}",
+                                &[SqlArg::Text(source_id.clone())],
+                            )
+                            .await?;
+                            for (value_kind, values) in [
+                                ("language", &normalized.languages),
+                                ("subtitle", &normalized.subtitles),
+                                ("response_category", &normalized.response_categories),
+                                ("extra_category", &normalized.extra_categories),
+                                ("series_name", &normalized.series_names),
+                                ("tag", &normalized.tags),
+                                ("provider_category", &normalized.provider_categories),
+                            ] {
+                                for (ordinal, value) in values.iter().enumerate() {
+                                    SqlRuntime::execute(
+                                        SqlExec::Tx(tx),
+                                        "INSERT INTO indexer_search_candidate_source_values (
+                                            source_id, value_kind, ordinal, value
+                                         ) VALUES ({}, {}, {}, {})",
+                                        &[
+                                            SqlArg::Text(source_id.clone()),
+                                            SqlArg::Text(value_kind.to_string()),
+                                            SqlArg::I64(ordinal as i64),
+                                            SqlArg::Text(value.clone()),
+                                        ],
+                                    )
+                                    .await?;
+                                }
+                            }
+                            if let Some(listing) = normalized.release_listing_json.as_ref() {
+                                SqlRuntime::execute(
+                                    SqlExec::Tx(tx),
+                                    "INSERT INTO indexer_search_candidate_source_values (
+                                        source_id, value_kind, ordinal, value
+                                     ) VALUES ({}, {}, {}, {})",
+                                    &[
+                                        SqlArg::Text(source_id.clone()),
+                                        SqlArg::Text("release_listing".to_string()),
+                                        SqlArg::I64(0),
+                                        SqlArg::Text(listing.clone()),
+                                    ],
+                                )
+                                .await?;
+                            }
+                        }
+                        Ok(())
+                    })
+                },
+            )
+            .await
+        }
+    }
+
+    /// The tables a recorded response writes, each with the order its rows
+    /// are compared in. Insertion order is compared where a response's
+    /// results land in it; values are read back by their key.
+    const DIAGNOSTICS_TABLES: [(&str, &str); 5] = [
+        ("indexer_search_runs", "rowid"),
+        ("indexer_search_candidates", "rowid"),
+        ("indexer_search_candidate_sources", "rowid"),
+        ("indexer_search_run_candidate_sources", "rowid"),
+        (
+            "indexer_search_candidate_source_values",
+            "source_id, value_kind, ordinal",
+        ),
+    ];
+
+    /// Every column of every row of `table`, one line per row.
+    async fn diagnostics_table_rows(
+        pool: &sqlx::SqlitePool,
+        table: &str,
+        order: &str,
+    ) -> Vec<String> {
+        let columns: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
+        )))
+        .fetch_all(pool)
+        .await
+        .expect("table columns should list");
+        assert!(!columns.is_empty(), "{table} has no columns");
+        let line = columns
+            .iter()
+            .map(|column| format!("quote({column})"))
+            .collect::<Vec<_>>()
+            .join(" || '|' || ");
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT {line} FROM {table} ORDER BY {order}"
+        )))
+        .fetch_all(pool)
+        .await
+        .expect("table rows should read")
+    }
+
+    fn diagnostics_candidate(
+        run: &IndexerSearchRunWrite,
+        fingerprint: &str,
+        reference: &str,
+        title: &str,
+        at: DateTime<Utc>,
+    ) -> IndexerSearchCandidateWrite {
+        let mut candidate = listing_candidate(run, reference, at);
+        candidate.session_identity_hash = format!("hash-{fingerprint}");
+        candidate.normalized.title = title.to_string();
+        candidate
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    /// Responses that repeat a candidate, repeat a source, record a source
+    /// again with other values, carry empty value lists and a listing, and
+    /// run past one statement's worth of rows.
+    fn diagnostics_responses(
+        start: DateTime<Utc>,
+    ) -> Vec<(IndexerSearchRunWrite, Vec<IndexerSearchCandidateWrite>)> {
+        let minute = chrono::Duration::minutes(1);
+
+        let first_run = background_run("run-ashgrove", "session-1", "sig-1", None, None, start);
+        let mut first =
+            diagnostics_candidate(&first_run, "A", "A1", "Synthetic.Show.A.First", start);
+        first.normalized.languages = strings(&["en", "fr"]);
+        first.normalized.tags = strings(&["tag-one"]);
+        first.normalized.size_bytes = Some(100);
+        let mut second = diagnostics_candidate(
+            &first_run,
+            "A",
+            "A1",
+            "Synthetic.Show.A.Second",
+            start + minute,
+        );
+        second.normalized.languages = strings(&["de"]);
+        second.normalized.release_listing_json = Some("{\"files\":1}".to_string());
+        second.normalized.grabs = Some(5);
+        let third = diagnostics_candidate(
+            &first_run,
+            "A",
+            "A2",
+            "Synthetic.Show.A.Third",
+            start + minute * 2,
+        );
+        let mut full = diagnostics_candidate(
+            &first_run,
+            "B",
+            "B1",
+            "Synthetic.Show.B.Full",
+            start + minute * 3,
+        );
+        full.normalized.link_url = Some("https://example.invalid/details?id=B1".to_string());
+        full.normalized.languages = strings(&["en"]);
+        full.normalized.subtitles = strings(&["en", "es"]);
+        full.normalized.response_categories = strings(&["5000", "5040"]);
+        full.normalized.extra_categories = strings(&["100001"]);
+        full.normalized.series_names = strings(&["Synthetic Show", "Synthetic Show Alt"]);
+        full.normalized.tags = strings(&["internal", "freeleech"]);
+        full.normalized.provider_categories = strings(&["TV/HD"]);
+        full.normalized.release_listing_json = Some("{\"files\":3}".to_string());
+        full.normalized.thumbs_up = Some(4);
+        full.normalized.thumbs_down = Some(1);
+        full.normalized.season = Some(1);
+        full.normalized.episode = Some(2);
+        full.normalized.seeders = Some(12);
+        full.normalized.download_volume_factor = Some(0.5);
+        full.normalized.protected = Some(true);
+        let bare = diagnostics_candidate(
+            &first_run,
+            "C",
+            "C1",
+            "Synthetic.Show.C.Bare",
+            start + minute * 4,
+        );
+
+        let later = start + chrono::Duration::hours(1);
+        let second_run = background_run("run-briarholt", "session-1", "sig-2", None, None, later);
+        let mut changed =
+            diagnostics_candidate(&second_run, "B", "B1", "Synthetic.Show.B.Changed", later);
+        changed.normalized.languages = strings(&["ja"]);
+        changed.normalized.subtitles = strings(&["ja"]);
+        let emptied =
+            diagnostics_candidate(&second_run, "A", "A1", "Synthetic.Show.A.Emptied", later);
+        let mut fresh =
+            diagnostics_candidate(&second_run, "D", "D1", "Synthetic.Show.D.Fresh", later);
+        fresh.normalized.series_names = strings(&["Synthetic Show"]);
+
+        let latest = start + chrono::Duration::hours(2);
+        let wide_run = background_run("run-cinderwake", "session-2", "sig-3", None, None, latest);
+        // The last ten results name the first ten again, so a repeat sits in
+        // a different statement from the row it repeats.
+        let mut wide = (0..130)
+            .map(|index| {
+                let slot = index % 120;
+                let mut candidate = diagnostics_candidate(
+                    &wide_run,
+                    &format!("W{slot:03}"),
+                    &format!("W{slot:03}"),
+                    &format!("Synthetic.Show.W{slot:03}.Take{index}"),
+                    latest + chrono::Duration::seconds(index),
+                );
+                candidate.normalized.languages = vec![format!("lang-{index}")];
+                candidate.normalized.tags = vec![format!("tag-{index}"), format!("tag-{slot}")];
+                candidate
+            })
+            .collect::<Vec<_>>();
+        wide.push(diagnostics_candidate(
+            &wide_run,
+            "A",
+            "A1",
+            "Synthetic.Show.A.Elsewhere",
+            latest,
+        ));
+
+        let empty_run = background_run("run-dunmere", "session-2", "sig-4", None, None, latest);
+
+        vec![
+            (first_run, vec![first, second, third, full, bare]),
+            (second_run, vec![changed, emptied, fresh]),
+            (wide_run, wide),
+            (empty_run, Vec::new()),
+        ]
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_batched_search_diagnostics_match_writing_each_result_in_turn() {
+        let (batched, batched_pool) = sqlite_store().await;
+        let (reference, reference_pool) = sqlite_store().await;
+        let key = current_encryption_key(&batched.encryption_key).unwrap();
+        let start = DateTime::parse_from_rfc3339("2026-10-20T12:00:00Z")
+            .expect("fixed instant")
+            .with_timezone(&Utc);
+
+        for (step, (run, candidates)) in diagnostics_responses(start).iter().enumerate() {
+            // Sealed once, so both stores hold the same ciphertext.
+            let sealed = seal_candidate_sources(key.as_ref(), candidates).unwrap();
+            batched
+                .write_search_diagnostics(run, candidates, &sealed)
+                .await
+                .unwrap();
+            reference
+                .write_search_diagnostics_row_by_row(run, candidates, &sealed)
+                .await
+                .unwrap();
+            for (table, order) in DIAGNOSTICS_TABLES {
+                assert_eq!(
+                    diagnostics_table_rows(&batched_pool, table, order).await,
+                    diagnostics_table_rows(&reference_pool, table, order).await,
+                    "response {step}: {table}"
+                );
+            }
+
+            if step == 0 {
+                let counts: (i64, i64, i64) = sqlx::query_as(
+                    "SELECT (SELECT COUNT(*) FROM indexer_search_candidates),
+                            (SELECT COUNT(*) FROM indexer_search_candidate_sources),
+                            (SELECT COUNT(*) FROM indexer_search_run_candidate_sources)",
+                )
+                .fetch_one(&batched_pool)
+                .await
+                .unwrap();
+                assert_eq!(counts, (3, 4, 4), "each repeated row is stored once");
+                let repeated_candidate: (String, i64) = sqlx::query_as(
+                    "SELECT title, created_at < updated_at
+                       FROM indexer_search_candidates WHERE fingerprint = 'hash-A'",
+                )
+                .fetch_one(&batched_pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    repeated_candidate,
+                    ("Synthetic.Show.A.Third".to_string(), 1),
+                    "the last result wins and the first one's creation time stays"
+                );
+                let repeated_source: (Option<i64>, i64) = sqlx::query_as(
+                    "SELECT grabs, first_seen_at < last_seen_at
+                       FROM indexer_search_candidate_sources WHERE provider_ref = 'A1'",
+                )
+                .fetch_one(&batched_pool)
+                .await
+                .unwrap();
+                assert_eq!(repeated_source, (Some(5), 1));
+                let repeated_values: Vec<String> = sqlx::query_scalar(
+                    "SELECT v.value_kind || ':' || v.ordinal || ':' || v.value
+                       FROM indexer_search_candidate_source_values v
+                       JOIN indexer_search_candidate_sources s ON s.id = v.source_id
+                      WHERE s.provider_ref = 'A1'
+                      ORDER BY 1",
+                )
+                .fetch_all(&batched_pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    repeated_values,
+                    vec![
+                        "language:0:de".to_string(),
+                        "release_listing:0:{\"files\":1}".to_string(),
+                    ],
+                    "a repeated source keeps only its last result's values"
+                );
+            }
+        }
+
+        let stored: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM indexer_search_candidate_sources),
+                    (SELECT COUNT(*) FROM indexer_search_run_candidate_sources),
+                    (SELECT COUNT(*) FROM indexer_search_candidate_source_values)",
+        )
+        .fetch_one(&batched_pool)
+        .await
+        .unwrap();
+        // Five sources before the wide response, which adds 120 and links
+        // the one it shares; every wide source keeps one language and two
+        // tags beside the three values left from the earlier responses.
+        assert_eq!(stored, (125, 4 + 3 + 121, 120 * 3 + 3));
+    }
+
+    const FINALIZE_SESSION: &str = "session-1";
+
+    /// Two sessions that share a source, one of them holding a listing run.
+    async fn seed_finalize_sessions(
+        store: &IndexerSearchLearningStore,
+        pool: &sqlx::SqlitePool,
+        now: DateTime<Utc>,
+    ) {
+        let plain = background_run("run-emberfall", FINALIZE_SESSION, "sig-1", None, None, now);
+        let listing = background_run("run-fernmoor", FINALIZE_SESSION, "sig-2", None, None, now);
+        let elsewhere = background_run("run-glasswater", "session-2", "sig-3", None, None, now);
+        for (run, references) in [
+            (&plain, vec!["E01", "E02", "E03"]),
+            (&listing, vec!["E04", "E05"]),
+            (&elsewhere, vec!["E02", "E06"]),
+        ] {
+            let candidates = references
+                .into_iter()
+                .map(|reference| listing_candidate(run, reference, now))
+                .collect::<Vec<_>>();
+            store
+                .record_search_diagnostics(run, &candidates)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO indexer_search_listing_runs (
+                run_id, indexer_id, indexer_fingerprint, title_id, facet,
+                first_page_fingerprint, created_at
+             ) VALUES ('run-fernmoor', 'idx-1', 'fingerprint-1', 'title-1', 'series', 'page-a', ?)",
+        )
+        .bind(sqlite_timestamp(now))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The unlink statement finalize used to run: its subquery names every
+    /// stored source rather than the session's.
+    async fn unlink_rejected_across_all_sources(
+        pool: &sqlx::SqlitePool,
+        search_session_id: &str,
+        admissible_fingerprints: &[String],
+    ) {
+        let rejected_clause = if admissible_fingerprints.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " AND c.fingerprint NOT IN ({})",
+                std::iter::repeat_n("?", admissible_fingerprints.len())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM indexer_search_run_candidate_sources
+              WHERE search_session_id = ?
+                AND source_id IN (
+                    SELECT s.id
+                      FROM indexer_search_candidate_sources s
+                      JOIN indexer_search_candidates c ON c.id = s.candidate_id
+                     WHERE 1 = 1{rejected_clause}
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM indexer_search_listing_runs lr
+                     WHERE lr.run_id = indexer_search_run_candidate_sources.run_id
+                )"
+        )))
+        .bind(search_session_id.to_string());
+        for fingerprint in admissible_fingerprints {
+            query = query.bind(fingerprint.clone());
+        }
+        query.execute(pool).await.unwrap();
+    }
+
+    /// Every link left, as `run:result`.
+    async fn remaining_links(pool: &sqlx::SqlitePool) -> Vec<String> {
+        sqlx::query_scalar(
+            "SELECT rc.run_id || ':' || s.provider_ref
+               FROM indexer_search_run_candidate_sources rc
+               JOIN indexer_search_candidate_sources s ON s.id = rc.source_id
+              ORDER BY 1",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_finalize_unlinks_what_the_statement_over_all_sources_did() {
+        let now = DateTime::parse_from_rfc3339("2026-10-20T12:00:00Z")
+            .expect("fixed instant")
+            .with_timezone(&Utc);
+        let listing_and_elsewhere = [
+            "run-fernmoor:E04",
+            "run-fernmoor:E05",
+            "run-glasswater:E02",
+            "run-glasswater:E06",
+        ];
+        let cases: [(&[&str], &[&str]); 5] = [
+            // Nothing admitted: every link outside the listing run goes.
+            (&[], &[]),
+            (&["hash-E01"], &["run-emberfall:E01"]),
+            (
+                &["hash-E01", "hash-E02", "hash-E03", "hash-E04", "hash-E05"],
+                &[
+                    "run-emberfall:E01",
+                    "run-emberfall:E02",
+                    "run-emberfall:E03",
+                ],
+            ),
+            (&["hash-never-stored"], &[]),
+            // Admitting only another session's result keeps none of this one's.
+            (&["hash-E06"], &[]),
+        ];
+        for (admissible, kept_of_plain_run) in cases {
+            let admissible = strings(admissible);
+            let (store, pool) = sqlite_store().await;
+            let (reference, reference_pool) = sqlite_store().await;
+            seed_finalize_sessions(&store, &pool, now).await;
+            seed_finalize_sessions(&reference, &reference_pool, now).await;
+
+            store
+                .finalize_search_session(FINALIZE_SESSION, &admissible)
+                .await
+                .unwrap();
+            unlink_rejected_across_all_sources(&reference_pool, FINALIZE_SESSION, &admissible)
+                .await;
+
+            let links = remaining_links(&pool).await;
+            assert_eq!(
+                links,
+                remaining_links(&reference_pool).await,
+                "admissible: {admissible:?}"
+            );
+            let mut expected = kept_of_plain_run
+                .iter()
+                .chain(&listing_and_elsewhere)
+                .map(|link| link.to_string())
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert_eq!(links, expected, "admissible: {admissible:?}");
+        }
+
+        // More admitted fingerprints than one statement can bind.
+        let (store, pool) = sqlite_store().await;
+        seed_finalize_sessions(&store, &pool, now).await;
+        let mut admissible = (0..40_000)
+            .map(|index| format!("hash-unseen-{index}"))
+            .collect::<Vec<_>>();
+        admissible.push("hash-E03".to_string());
+        store
+            .finalize_search_session(FINALIZE_SESSION, &admissible)
+            .await
+            .unwrap();
+        let mut expected = listing_and_elsewhere
+            .iter()
+            .map(|link| link.to_string())
+            .collect::<Vec<_>>();
+        expected.push("run-emberfall:E03".to_string());
+        expected.sort_unstable();
+        assert_eq!(remaining_links(&pool).await, expected);
     }
 }

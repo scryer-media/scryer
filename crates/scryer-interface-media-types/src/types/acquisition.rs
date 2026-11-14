@@ -624,6 +624,10 @@ pub struct ProxyConfigPayload {
     /// WireGuard persistent keepalive in seconds, or null to use the engine's
     /// default. Zero means keepalive is switched off.
     pub tunnel_keepalive_seconds: Option<i32>,
+    /// Challenge solvers only: the transport proxy or tunnel Scryer reaches
+    /// this solver through, and through which it sends its own requests that
+    /// reuse the solver's clearance. Null reaches the solver directly.
+    pub reach_through_proxy_config_id: Option<ID>,
     /// Host key pinned on the first successful tunnel connect, formatted as
     /// OpenSSH prints it, or null before the first connect. A host key is
     /// public, so this value is shown rather than masked.
@@ -1190,6 +1194,9 @@ pub struct CreateProxyConfigInput {
     /// WireGuard persistent keepalive in seconds. Omit to use the engine's
     /// default; zero switches keepalive off. Only WireGuard accepts it.
     pub tunnel_keepalive_seconds: Option<i32>,
+    /// Challenge solvers only: an enabled transport proxy or tunnel to reach
+    /// the solver through. Omit to reach the solver directly.
+    pub reach_through_proxy_config_id: Option<ID>,
     /// Whether the proxy is enabled.
     pub is_enabled: Option<bool>,
 }
@@ -1238,6 +1245,10 @@ pub struct UpdateProxyConfigInput {
     /// Replacement WireGuard keepalive in seconds; omission preserves it, null
     /// restores the engine's default, and zero switches keepalive off.
     pub tunnel_keepalive_seconds: MaybeUndefined<i32>,
+    /// Challenge solvers only: the transport proxy or tunnel to reach the
+    /// solver through. Omission preserves it and null reaches the solver
+    /// directly again.
+    pub reach_through_proxy_config_id: MaybeUndefined<ID>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
 }

@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn indexer_monthly_quota_migration_is_registered_for_both_engines() {
         let bundle = compile_source_bundle(&source_db_root()).expect("compile migration catalog");
-        for (version, name) in [(345, "0345_indexer_monthly_quotas.sql")] {
+        for (version, name) in [(346, "0346_indexer_monthly_quotas.sql")] {
             let migration = bundle
                 .catalog
                 .find_migration(version)

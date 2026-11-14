@@ -2620,7 +2620,6 @@ const es: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Perfil de calidad de destino",
   "settings.maintenanceRuleTargetProfileHelp":
     "El perfil al que esta acción movería los títulos coincidentes.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID del perfil de calidad.",
   "settings.maintenanceRuleLibraries": "Alcance de bibliotecas",
   "settings.maintenanceRuleLibrariesHelp":
     "Deja todas las bibliotecas sin marcar para aplicar la regla a toda la colección.",
@@ -2674,8 +2673,6 @@ const es: LocaleDictionary = {
     "Hasta {{max}} títulos por ejecución.",
   "settings.maintenancePreviewRun": "Ejecutar vista previa",
   "settings.maintenancePreviewRunning": "Ejecutando la vista previa...",
-  "settings.maintenancePreviewEmpty":
-    "Elige una biblioteca y ejecuta la vista previa.",
   "settings.maintenancePreviewNoTitles": "No se evaluó ningún título.",
   "settings.maintenancePreviewColOutcome": "Resultado",
   "settings.maintenancePreviewColReasons": "Códigos de motivo",
@@ -2746,8 +2743,6 @@ const es: LocaleDictionary = {
 
   // ── Reglas de mantenimiento — ejecuciones e historial ──
   "settings.maintenanceRunsTitle": "Ejecuciones e historial",
-  "settings.maintenanceRunsSubtitle":
-    "Pasadas de evaluación e intentos de acción recientes, del más nuevo al más antiguo.",
   "settings.maintenanceRunScope": "Alcance",
   "settings.maintenanceRunScopeAll": "Todas las reglas",
   "settings.maintenanceRunEvaluationNow": "Evaluar ahora",
@@ -3342,8 +3337,6 @@ const es: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Usando {{title}}.",
   "settings.requestPreviewRun": "Ejecutar vista previa",
   "settings.requestPreviewRunning": "Ejecutando…",
-  "settings.requestPreviewEmpty":
-    "Describa una solicitud y ejecute la vista previa para ver qué diría esta regla.",
   "settings.requestPreviewMetadataPartial": "Metadatos incompletos",
   "settings.requestPreviewShowInput":
     "Mostrar la entrada que vio el comparador",
@@ -3977,6 +3970,21 @@ const es: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Arrastra para reordenar {{value}}",
   "qualityProfile.decisionStepMoveUp": "Subir {{value}}",
   "qualityProfile.decisionStepMoveDown": "Bajar {{value}}",
+  "settings.proxyReachThrough": "Acceder a través de",
+  "settings.proxyReachThroughHelp":
+    "Scryer envía sus solicitudes a este solucionador a través del proxy de transporte o túnel elegido. Directo accede al solucionador desde la propia red de Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "No se puede acceder a un solucionador de desafíos a través de otro solucionador de desafíos.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "No se puede acceder a un solucionador de desafíos a través de sí mismo.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "No se encontró el proxy o túnel para acceder al solucionador.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "El proxy o túnel para acceder al solucionador está desactivado.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Solo se puede acceder a un solucionador de desafíos a través de otro proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Se accede a uno o más solucionadores de desafíos a través de este proxy. Cámbialos primero.",
 };
 
 export default es;

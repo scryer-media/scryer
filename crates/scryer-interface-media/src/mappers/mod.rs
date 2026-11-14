@@ -704,6 +704,8 @@ mod tests {
         password: Option<&str>,
     ) -> ProxyConfig {
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "proxy-1".to_string(),
             name: "Gateway".to_string(),
             provider_type,

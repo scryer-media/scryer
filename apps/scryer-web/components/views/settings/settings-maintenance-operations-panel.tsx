@@ -48,6 +48,7 @@ import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { parseMaintenanceFileResults } from "@/lib/utils/maintenance-file-results";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { HelpLabel } from "@/components/common/info-help";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
 
@@ -282,9 +283,8 @@ export function MaintenanceInstanceSwitches({
         >
           <div className="space-y-1">
             <Label htmlFor={selectorId("settings-maintenance-switch", key)}>
-              {t(label)}
+              <HelpLabel label={t(label)} help={t(help)} />
             </Label>
-            <p className="text-xs text-muted-foreground">{t(help)}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {savingSwitch === key ? (
@@ -395,11 +395,11 @@ export function MaintenanceCandidatesPanel({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          {t("settings.maintenanceCandidatesTitle")}
+          <HelpLabel
+            label={t("settings.maintenanceCandidatesTitle")}
+            help={t("settings.maintenanceCandidatesSubtitle")}
+          />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.maintenanceCandidatesSubtitle")}
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 md:grid-cols-4">
@@ -694,9 +694,6 @@ export function MaintenanceRunsPanel({
         <CardTitle className="text-base">
           {t("settings.maintenanceRunsTitle")}
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.maintenanceRunsSubtitle")}
-        </p>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 md:grid-cols-4">
@@ -958,11 +955,11 @@ export function MaintenanceExclusionsPanel({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          {t("settings.maintenanceExclusionsTitle")}
+          <HelpLabel
+            label={t("settings.maintenanceExclusionsTitle")}
+            help={t("settings.maintenanceExclusionsSubtitle")}
+          />
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.maintenanceExclusionsSubtitle")}
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         {exclusionsError ? (

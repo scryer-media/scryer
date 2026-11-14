@@ -4662,6 +4662,21 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Sleep om {{value}} te verplaatsen",
   "qualityProfile.decisionStepMoveUp": "{{value}} omhoog verplaatsen",
   "qualityProfile.decisionStepMoveDown": "{{value}} omlaag verplaatsen",
+  "settings.proxyReachThrough": "Bereiken via",
+  "settings.proxyReachThroughHelp":
+    "Scryer stuurt zijn verzoeken naar deze solver via de gekozen transportproxy of tunnel. Direct bereikt de solver vanuit het eigen netwerk van Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Een challenge-solver kan niet via een andere challenge-solver worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Een challenge-solver kan niet via zichzelf worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "De proxy of tunnel om de solver via te bereiken is niet gevonden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "De proxy of tunnel om de solver via te bereiken is uitgeschakeld.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Alleen een challenge-solver kan via een andere proxy worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Een of meer challenge-solvers worden via deze proxy bereikt. Wijzig die eerst.",
 };
 
 export default nl;

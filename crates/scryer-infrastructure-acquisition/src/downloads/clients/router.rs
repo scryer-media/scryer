@@ -4689,6 +4689,14 @@ mod tests {
         async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
             Ok(())
         }
+
+        async fn count_solvers_reaching_through(
+            &self,
+            _id: &str,
+            _enabled_only: bool,
+        ) -> AppResult<u64> {
+            Ok(0)
+        }
     }
 
     #[derive(Default)]

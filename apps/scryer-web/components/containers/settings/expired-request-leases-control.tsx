@@ -2,6 +2,7 @@ import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-messag
 import { useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
 import { useMaintenanceRuleState } from "@/components/containers/settings/use-maintenance-rule-state";
+import { HelpLabel } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import {
   Input,
@@ -105,9 +106,11 @@ export function ExpiredRequestLeasesControl() {
       id="settings-expired-request-leases"
       className="space-y-2 rounded border border-border bg-card px-3 py-2"
     >
-      <p className="font-medium text-foreground">{record.name}</p>
-      <p className="text-xs text-muted-foreground">
-        {t("settings.expiredRequestLeasesHelp")}
+      <p className="font-medium text-foreground">
+        <HelpLabel
+          label={record.name}
+          help={t("settings.expiredRequestLeasesHelp")}
+        />
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-48">

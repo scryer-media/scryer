@@ -125,6 +125,17 @@ debug = 0
 strip = false
 incremental = true
 
+# Pull-request builds on macOS and Windows: they only prove the tree compiles
+# and links, and the binaries are never shipped.
+[profile.ci-throwaway]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 256
+debug = 0
+strip = false
+incremental = false
+
 [profile.release-launcher]
 inherits = "release"
 opt-level = "z"

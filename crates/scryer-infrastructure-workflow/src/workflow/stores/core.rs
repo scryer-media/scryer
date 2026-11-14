@@ -16,7 +16,8 @@ use scryer_domain::{
     NewDomainEvent, TitleHistoryEventType,
 };
 use scryer_infrastructure_sql::domain_event_payload::{
-    decode_domain_event_payload, derive_domain_event_projections, encode_domain_event_payload,
+    decode_domain_event_payload, derive_domain_event_projections,
+    encode_domain_event_payload_with_stored_json,
 };
 use serde_json::Value as JsonValue;
 use sqlx::{Row, types::Json};
@@ -29,9 +30,12 @@ use crate::types::WorkflowOperationRecord;
 use super::download_submission_store::{BindingClaim, claim_or_create_binding_download_id_tx};
 
 pub const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, event_type, payload_json, import_status, media_file_delete_reason, download_id";
+/// Every column of a stored event except its payload.
+const DOMAIN_EVENT_ENVELOPE_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id";
 /// The insert half of an append. Both append paths bolt `RETURNING
-/// {DOMAIN_EVENT_COLUMNS}` onto it so the stored row — above all the generated
-/// `sequence` — comes back from the insert instead of a follow-up `SELECT`.
+/// {DOMAIN_EVENT_ENVELOPE_COLUMNS}` onto it so the stored row — above all the
+/// generated `sequence` — comes back from the insert instead of a follow-up
+/// `SELECT`.
 const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
             event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
             title_id, facet, correlation_id, causation_id, schema_version,
@@ -77,62 +81,23 @@ async fn append_domain_events_with_replay(
     events: Vec<NewDomainEvent>,
     allow_replay: bool,
 ) -> AppResult<Vec<DomainEvent>> {
+    // Serializing and compressing payloads is the expensive part of an
+    // append, so it happens before the writer gate is taken. The transaction
+    // only binds the prepared values, and a busy retry reuses them.
+    let prepared: std::sync::Arc<[PreparedDomainEvent]> = events
+        .iter()
+        .map(prepare_domain_event)
+        .collect::<AppResult<Vec<_>>>()?
+        .into();
     SqlRuntime::run_in_transaction(datastore, "append_domain_events", move |tx| {
-        let events = events.clone();
+        let prepared = std::sync::Arc::clone(&prepared);
         Box::pin(async move {
-            let mut out = Vec::with_capacity(events.len());
-            for event in events {
-                let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
-                let event_type = event.payload.event_type().as_str();
-                let encoded_payload = encode_domain_event_payload(&payload).map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to encode domain event {} ({event_type}): {error}",
-                        event.event_id
-                    ))
-                })?;
-                let projections = derive_domain_event_projections(event_type, &payload);
-                let inserted = SqlRuntime::fetch_optional(
-                    SqlExec::Tx(tx),
-                    &[
-                        APPEND_DOMAIN_EVENT_INSERT_SQL,
-                        if allow_replay {
-                            " ON CONFLICT(event_id) DO NOTHING"
-                        } else {
-                            ""
-                        },
-                        " RETURNING ",
-                        DOMAIN_EVENT_COLUMNS,
-                    ]
-                    .concat(),
-                    &[
-                        SqlArg::Text(event.event_id.clone()),
-                        SqlArg::Timestamp(event.occurred_at),
-                        SqlArg::Text(event.actor_kind.as_str().to_string()),
-                        SqlArg::OptText(event.actor_user_id.clone()),
-                        SqlArg::Text(event.actor_display_name.clone()),
-                        SqlArg::OptText(event.title_id.clone()),
-                        SqlArg::OptText(
-                            event.facet.as_ref().map(|facet| facet.as_str().to_string()),
-                        ),
-                        SqlArg::OptText(event.correlation_id.clone()),
-                        SqlArg::OptText(event.causation_id.clone()),
-                        SqlArg::I32(event.schema_version),
-                        SqlArg::Text(event.stream.kind().to_string()),
-                        SqlArg::OptText(event.stream.identifier().map(str::to_string)),
-                        SqlArg::Text(event.payload.event_type().as_str().to_string()),
-                        SqlArg::OptBytes(Some(encoded_payload)),
-                        SqlArg::OptText(projections.import_status),
-                        SqlArg::OptText(projections.media_file_delete_reason),
-                        SqlArg::OptText(projections.download_id),
-                        SqlArg::OptText(projections.import_skip_reason),
-                        SqlArg::OptText(projections.media_request_id),
-                    ],
-                )
-                .await?;
+            let mut out = Vec::with_capacity(prepared.len());
+            for event in prepared.iter() {
                 // `ON CONFLICT DO NOTHING` returns no row for an event that is
                 // already stored, so the replay path still reads that one back.
-                let stored = match inserted {
-                    Some(row) => domain_event_from_row(&row)?,
+                let stored = match insert_prepared_domain_event_tx(tx, event, allow_replay).await? {
+                    Some(stored) => stored,
                     None => fetch_domain_event_by_event_id(SqlExec::Tx(tx), &event.event_id)
                         .await?
                         .ok_or_else(|| {
@@ -151,24 +116,53 @@ pub async fn append_domain_event_tx(
     tx: &mut SqlTx<'_>,
     event: NewDomainEvent,
 ) -> AppResult<DomainEvent> {
+    let prepared = prepare_domain_event(&event)?;
+    append_prepared_domain_event_tx(tx, &prepared).await
+}
+
+/// Appends an event prepared with [`prepare_domain_event`]. A caller that
+/// holds the event before it opens its transaction prepares it there, so the
+/// transaction only binds and inserts.
+pub async fn append_prepared_domain_event_tx(
+    tx: &mut SqlTx<'_>,
+    event: &PreparedDomainEvent,
+) -> AppResult<DomainEvent> {
+    insert_prepared_domain_event_tx(tx, event, false)
+        .await?
+        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))
+}
+
+/// One domain event ready to store: the values its insert binds, and the
+/// payload as a read of the stored row returns it.
+pub struct PreparedDomainEvent {
+    event_id: String,
+    insert_args: Vec<SqlArg>,
+    /// Deserialized from the JSON the stored bytes decode to, not copied from
+    /// the input: JSON text does not promise to round-trip every value, and an
+    /// append must return what a later read returns.
+    stored_payload: scryer_domain::DomainEventPayload,
+}
+
+pub fn prepare_domain_event(event: &NewDomainEvent) -> AppResult<PreparedDomainEvent> {
     let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
     let event_type = event.payload.event_type().as_str();
-    let encoded_payload = encode_domain_event_payload(&payload).map_err(|error| {
+    let (encoded_payload, stored_json) = encode_domain_event_payload_with_stored_json(&payload)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to encode domain event {} ({event_type}): {error}",
+                event.event_id
+            ))
+        })?;
+    let stored_payload = serde_json::from_value(stored_json).map_err(|error| {
         AppError::Repository(format!(
-            "failed to encode domain event {} ({event_type}): {error}",
+            "failed to deserialize domain event {} ({event_type}): {error}",
             event.event_id
         ))
     })?;
     let projections = derive_domain_event_projections(event_type, &payload);
-    let inserted = SqlRuntime::fetch_optional(
-        SqlExec::Tx(tx),
-        &[
-            APPEND_DOMAIN_EVENT_INSERT_SQL,
-            " RETURNING ",
-            DOMAIN_EVENT_COLUMNS,
-        ]
-        .concat(),
-        &[
+    Ok(PreparedDomainEvent {
+        event_id: event.event_id.clone(),
+        insert_args: vec![
             SqlArg::Text(event.event_id.clone()),
             SqlArg::Timestamp(event.occurred_at),
             SqlArg::Text(event.actor_kind.as_str().to_string()),
@@ -181,7 +175,7 @@ pub async fn append_domain_event_tx(
             SqlArg::I32(event.schema_version),
             SqlArg::Text(event.stream.kind().to_string()),
             SqlArg::OptText(event.stream.identifier().map(str::to_string)),
-            SqlArg::Text(event.payload.event_type().as_str().to_string()),
+            SqlArg::Text(event_type.to_string()),
             SqlArg::OptBytes(Some(encoded_payload)),
             SqlArg::OptText(projections.import_status),
             SqlArg::OptText(projections.media_file_delete_reason),
@@ -189,12 +183,38 @@ pub async fn append_domain_event_tx(
             SqlArg::OptText(projections.import_skip_reason),
             SqlArg::OptText(projections.media_request_id),
         ],
-    )
-    .await?;
+        stored_payload,
+    })
+}
 
-    let row = inserted
-        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))?;
-    domain_event_from_row(&row)
+/// Inserts a prepared event and returns it as stored, or `None` when
+/// `allow_replay` met an event that is already stored. The envelope comes
+/// back from the insert, above all the generated `sequence`; the payload is
+/// the prepared one, so the bytes just written are not decoded again inside
+/// the transaction.
+async fn insert_prepared_domain_event_tx(
+    tx: &mut SqlTx<'_>,
+    event: &PreparedDomainEvent,
+    allow_replay: bool,
+) -> AppResult<Option<DomainEvent>> {
+    SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        &[
+            APPEND_DOMAIN_EVENT_INSERT_SQL,
+            if allow_replay {
+                " ON CONFLICT(event_id) DO NOTHING"
+            } else {
+                ""
+            },
+            " RETURNING ",
+            DOMAIN_EVENT_ENVELOPE_COLUMNS,
+        ]
+        .concat(),
+        &event.insert_args,
+    )
+    .await?
+    .map(|row| domain_event_from_envelope_row(&row, event.stored_payload.clone()))
+    .transpose()
 }
 
 pub async fn commit_successful_grab_tx(
@@ -1791,7 +1811,6 @@ pub async fn fetch_optional_workflow_operation(
 pub fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
     let event_id = row.text("event_id")?;
     let event_type = row.text("event_type")?;
-    let stream_kind = row.text("stream_kind")?;
     let encoded_payload = row.opt_bytes("payload_json")?.ok_or_else(|| {
         AppError::Repository(format!(
             "domain event {event_id} ({event_type}) payload is null"
@@ -1807,9 +1826,19 @@ pub fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
             "failed to deserialize domain event {event_id} ({event_type}): {error}"
         ))
     })?;
+    domain_event_from_envelope_row(row, payload)
+}
+
+/// Builds an event from a row's envelope columns and an already decoded
+/// payload.
+fn domain_event_from_envelope_row(
+    row: &SqlRow,
+    payload: scryer_domain::DomainEventPayload,
+) -> AppResult<DomainEvent> {
+    let stream_kind = row.text("stream_kind")?;
     Ok(DomainEvent {
         sequence: row.i64("sequence")?,
-        event_id,
+        event_id: row.text("event_id")?,
         occurred_at: row.timestamp("occurred_at")?,
         actor_kind: DomainEventActorKind::parse(row.text("actor_kind")?.as_str())
             .unwrap_or(DomainEventActorKind::System),

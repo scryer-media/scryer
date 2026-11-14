@@ -2907,6 +2907,11 @@ input CreateProxyConfigInput {
 	"""
 	tunnelKeepaliveSeconds: Int
 	"""
+	Challenge solvers only: an enabled transport proxy or tunnel to reach
+	the solver through. Omit to reach the solver directly.
+	"""
+	reachThroughProxyConfigId: ID
+	"""
 	Whether the proxy is enabled.
 	"""
 	isEnabled: Boolean
@@ -24953,6 +24958,12 @@ type ProxyConfigPayload {
 	"""
 	tunnelKeepaliveSeconds: Int
 	"""
+	Challenge solvers only: the transport proxy or tunnel Scryer reaches
+	this solver through, and through which it sends its own requests that
+	reuse the solver's clearance. Null reaches the solver directly.
+	"""
+	reachThroughProxyConfigId: ID
+	"""
 	Host key pinned on the first successful tunnel connect, formatted as
 	OpenSSH prints it, or null before the first connect. A host key is
 	public, so this value is shown rather than masked.
@@ -35587,6 +35598,12 @@ input UpdateProxyConfigInput {
 	restores the engine's default, and zero switches keepalive off.
 	"""
 	tunnelKeepaliveSeconds: Int
+	"""
+	Challenge solvers only: the transport proxy or tunnel to reach the
+	solver through. Omission preserves it and null reaches the solver
+	directly again.
+	"""
+	reachThroughProxyConfigId: ID
 	"""
 	Replacement enabled state; omission preserves it.
 	"""

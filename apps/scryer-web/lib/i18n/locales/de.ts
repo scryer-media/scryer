@@ -2581,7 +2581,6 @@ const de: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "Ziel-Qualitätsprofil",
   "settings.maintenanceRuleTargetProfileHelp":
     "Das Profil, auf das diese Aktion übereinstimmende Titel umstellen würde.",
-  "settings.maintenanceRuleTargetProfileIdHelp": "ID des Qualitätsprofils.",
   "settings.maintenanceRuleLibraries": "Bibliotheksbereich",
   "settings.maintenanceRuleLibrariesHelp":
     "Lassen Sie alle Bibliotheken unmarkiert, damit die Regel für die gesamte Sammlung gilt.",
@@ -2633,8 +2632,6 @@ const de: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "Bis zu {{max}} Titel pro Durchlauf.",
   "settings.maintenancePreviewRun": "Vorschau ausführen",
   "settings.maintenancePreviewRunning": "Vorschau läuft...",
-  "settings.maintenancePreviewEmpty":
-    "Wählen Sie eine Bibliothek und führen Sie die Vorschau aus.",
   "settings.maintenancePreviewNoTitles": "Es wurden keine Titel ausgewertet.",
   "settings.maintenancePreviewColOutcome": "Ergebnis",
   "settings.maintenancePreviewColReasons": "Begründungscodes",
@@ -2705,8 +2702,6 @@ const de: LocaleDictionary = {
 
   // ── Wartungsregeln — Läufe und Verlauf ──
   "settings.maintenanceRunsTitle": "Läufe und Verlauf",
-  "settings.maintenanceRunsSubtitle":
-    "Aktuelle Auswertungsdurchläufe und Aktionsversuche, neueste zuerst.",
   "settings.maintenanceRunScope": "Umfang",
   "settings.maintenanceRunScopeAll": "Alle Regeln",
   "settings.maintenanceRunEvaluationNow": "Jetzt auswerten",
@@ -3305,8 +3300,6 @@ const de: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "Verwendet {{title}}.",
   "settings.requestPreviewRun": "Vorschau ausführen",
   "settings.requestPreviewRunning": "Wird ausgeführt…",
-  "settings.requestPreviewEmpty":
-    "Beschreiben Sie eine Anfrage und führen Sie die Vorschau aus, um zu sehen, was diese Regel sagen würde.",
   "settings.requestPreviewMetadataPartial": "Metadaten unvollständig",
   "settings.requestPreviewShowInput": "Eingabe des Matchers anzeigen",
   "settings.requestPreviewHideInput": "Eingabe ausblenden",
@@ -3941,6 +3934,21 @@ const de: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Ziehen, um {{value}} neu anzuordnen",
   "qualityProfile.decisionStepMoveUp": "{{value}} nach oben verschieben",
   "qualityProfile.decisionStepMoveDown": "{{value}} nach unten verschieben",
+  "settings.proxyReachThrough": "Erreichen über",
+  "settings.proxyReachThroughHelp":
+    "Scryer sendet seine Anfragen an diesen Solver über den gewählten Transport-Proxy oder Tunnel. Direkt erreicht den Solver aus Scryers eigenem Netzwerk.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Ein Challenge-Solver kann nicht über einen anderen Challenge-Solver erreicht werden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Ein Challenge-Solver kann nicht über sich selbst erreicht werden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Der Proxy oder Tunnel, über den der Solver erreicht werden soll, wurde nicht gefunden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Der Proxy oder Tunnel, über den der Solver erreicht werden soll, ist deaktiviert.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Nur ein Challenge-Solver kann über einen anderen Proxy erreicht werden.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Ein oder mehrere Challenge-Solver werden über diesen Proxy erreicht. Ändere sie zuerst.",
 };
 
 export default de;

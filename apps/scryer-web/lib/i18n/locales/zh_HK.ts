@@ -4162,14 +4162,10 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceSequenceSearchUnconditional": "一律請求搜尋",
   "settings.maintenanceSequenceSearchPreviousProfileChanged":
     "僅在設定檔發生變更後",
-  "settings.maintenanceSequenceSearchRequested":
-    "此步驟會請求搜尋，且僅在請求被接受後才記錄為已接受。後續的抓取與下載效果仍可被暫緩。",
   "settings.maintenanceSequenceHistoryWaiting": "正在等待較早的步驟",
   "settings.maintenanceSequenceHistorySearchRequested": "已請求搜尋",
   "settings.maintenanceSequenceHistorySearchAccepted": "已接受",
   "settings.maintenanceSequenceHistoryJob": "任務 {{id}}",
-  "settings.maintenanceSequenceCompletionAccepted": "接受時即完成",
-  "settings.maintenanceSequenceCompletionCompleted": "結束時才完成",
   "settings.maintenanceSequenceStepUnavailable":
     "目前的目錄中無法使用此已儲存的步驟。在儲存或預覽前請先將其移除或還原相容的目錄。",
   "settings.maintenanceSequenceCatalogUnavailable":
@@ -4187,7 +4183,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "目標質素配置",
   "settings.maintenanceRuleTargetProfileHelp":
     "此操作會將匹配的標題切換到的配置。",
-  "settings.maintenanceRuleTargetProfileIdHelp": "質素配置 ID。",
   "settings.maintenanceRuleLibraries": "媒體庫範圍",
   "settings.maintenanceRuleLibrariesHelp":
     "不勾選任何媒體庫時，規則將作用於整個收藏。",
@@ -4241,7 +4236,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "每次運行最多 {{max}} 個標題。",
   "settings.maintenancePreviewRun": "運行預覽",
   "settings.maintenancePreviewRunning": "正在運行預覽...",
-  "settings.maintenancePreviewEmpty": "選擇一個媒體庫並運行預覽。",
   "settings.maintenancePreviewNoTitles": "沒有評估任何標題。",
   "settings.maintenancePreviewColOutcome": "結果",
   "settings.maintenancePreviewColReasons": "原因代碼",
@@ -4297,7 +4291,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceCountdownOverdueHours": "已逾期 {{count}} 小時",
   "settings.maintenanceCountdownOverdueDays": "已逾期 {{count}} 天",
   "settings.maintenanceRunsTitle": "運行與歷史",
-  "settings.maintenanceRunsSubtitle": "最近的評估輪次與動作嘗試，最新的在前。",
   "settings.maintenanceRunScope": "範圍",
   "settings.maintenanceRunScopeAll": "全部規則",
   "settings.maintenanceRunEvaluationNow": "立即評估",
@@ -4348,7 +4341,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceExcludeConfirm": "排除",
   "settings.maintenanceExcluded": "已將 {{title}} 從維護中排除。",
   "settings.refMaintTitle": "維護輸入參考",
-  "settings.refMaintSubtitle": "點擊以展開維護匹配器可讀取的所有事實。",
   "settings.refMaintIntro":
     "每條維護規則每個主體會收到一個 input 對象：input.subject 標識正在評估的項目，input.library 指出其所屬媒體庫，input.facts 帶有事實快照，而評估外層環境則位於 input 本身。事實是普通的值，若沒有可回報的內容，該鍵就會直接缺失 — 因此請寫 input.facts.monitored，而非狀態檢查。若規則讀取了 Scryer 無法為該主體觀察到的事實，Scryer 會為您暫緩該主體；您永遠不需要自行編寫該保護機制。",
   "settings.refMaintOutputTitle": "規則輸出",
@@ -4537,8 +4529,6 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintTagOscillationNote":
     "對相同作品上的相同標籤寫入相反修補程式的兩條規則，會以 tag_patch_conflict 暫緩這兩個候選項目，而不是讓最後執行的規則勝出。新增標籤的規則與在稍後執行中移除標籤的另一條規則無法以這種方式被捕獲：這是一種撰寫錯誤，會使標籤永遠來回翻轉，因此請調整兩者的範圍使其無法同時符合條件。",
   "settings.maintenanceTemplateGallery": "初學者範本",
-  "settings.maintenanceTemplateGalleryDescription":
-    "將完整撰寫好的匹配器載入編輯器。在您審查並按下建立之前不會儲存任何內容。",
   "settings.maintenanceTemplateApply": "使用範本",
   "settings.maintenanceTemplateFacetMovie": "電影",
   "settings.maintenanceTemplateFacetShow": "電視劇",
@@ -4635,8 +4625,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "正在使用 {{title}}。",
   "settings.requestPreviewRun": "運行預覽",
   "settings.requestPreviewRunning": "正在運行…",
-  "settings.requestPreviewEmpty":
-    "描述一個請求並運行預覽，即可看到此規則會怎麼判斷。",
   "settings.requestPreviewMetadataPartial": "元數據不完整",
   "settings.requestPreviewShowInput": "顯示匹配器看到的輸入",
   "settings.requestPreviewHideInput": "隱藏輸入",
@@ -4655,8 +4643,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestDecisionNoVotes": "沒有規則投票。",
   "settings.requestDecisionHeld": "已暫緩",
   "settings.requestTemplateGallery": "初學者規則",
-  "settings.requestTemplateGalleryDescription":
-    "可載入編輯器的實用範例。套用範例會自動填入表單；您仍可閱讀、命名、設定範圍並儲存它。",
   "settings.requestTemplateGalleryTagNote":
     "發出標籤的範本需要在「設定 › 標籤」中定義該標籤；決策請求時會捨棄未定義的標籤。",
   "settings.requestTemplateApply": "載入至編輯器",
@@ -4678,7 +4664,6 @@ const zh_HK: LocaleDictionary = {
   "settings.requestTemplateMonthlyQuotaDescription":
     "一旦請求者在過去三十天內已有五次獲准，即將請求送交人員審核。此規則從不直接拒絕；它要求人員介入檢視。",
   "settings.refReqTitle": "請求輸入參考",
-  "settings.refReqSubtitle": "請求匹配器可讀取的所有值及其含義。",
   "settings.refReqIntro":
     "請求規則讀取一份說明該請求、發起請求者、目標媒體庫以及 Scryer 對該媒體了解程度的文檔。事實是純值。Scryer 無法觀察到的事實會直接缺失，而讀取缺失事實的規則會將請求暫緩交由人員處理而非隨意猜測 — 您永遠不必自行撰寫該防護代碼。",
   "settings.refReqOutputTitle": "請求規則所定義的內容",
@@ -5748,6 +5733,21 @@ const zh_HK: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
   "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
+  "settings.proxyReachThrough": "經由",
+  "settings.proxyReachThroughHelp":
+    "Scryer 透過所選的傳輸代理或隧道向此求解器發送請求。直連表示從 Scryer 自身的網絡存取求解器。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "挑戰求解器不能經由另一個挑戰求解器存取。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "挑戰求解器不能經由自身存取。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "找不到用於存取求解器的代理或隧道。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "用於存取求解器的代理或隧道已停用。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "只有挑戰求解器可以經由其他代理存取。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "有一個或多個挑戰求解器經由此代理存取。請先修改它們。",
 };
 
 export default zh_HK;

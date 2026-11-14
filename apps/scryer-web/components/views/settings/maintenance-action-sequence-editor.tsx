@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
 import { TitleTagsPicker } from "@/components/common/title-tags-picker";
+import { HelpLabel } from "@/components/common/info-help";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
@@ -225,11 +226,6 @@ function ActionSequenceStep({
                 {t("settings.maintenanceSequenceTerminal")}
               </Badge>
             ) : null}
-            <Badge tone="neutral">
-              {descriptor.completionPolicy === "accepted"
-                ? t("settings.maintenanceSequenceCompletionAccepted")
-                : t("settings.maintenanceSequenceCompletionCompleted")}
-            </Badge>
           </div>
           {descriptor.requires.length > 0 ? (
             <p className="mt-1 text-xs text-muted-foreground">
@@ -314,9 +310,6 @@ function ActionSequenceStep({
                   })
                 }
               />
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t("settings.maintenanceRuleTargetProfileIdHelp")}
-              </p>
             </label>
           )}
         </div>
@@ -367,9 +360,6 @@ function ActionSequenceStep({
               },
             ]}
           />
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("settings.maintenanceSequenceSearchRequested")}
-          </p>
         </div>
       ) : null}
     </li>
@@ -499,11 +489,11 @@ export function MaintenanceActionSequenceEditor({
     <section id="settings-maintenance-action-sequence" className="space-y-3">
       <div>
         <Label className="mb-1 block">
-          {t("settings.maintenanceSequenceTitle")}
+          <HelpLabel
+            label={t("settings.maintenanceSequenceTitle")}
+            help={t("settings.maintenanceSequenceHelp")}
+          />
         </Label>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.maintenanceSequenceHelp")}
-        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">

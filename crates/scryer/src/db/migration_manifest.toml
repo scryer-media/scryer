@@ -4094,18 +4094,35 @@ scope = "all"
 
 [[migration]]
 version = 345
-description = "monthly indexer request and grab limits"
+description = "proxy reach through"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0345_indexer_monthly_quotas.sql"
+file = "migrations/0345_proxy_reach_through.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0345_indexer_monthly_quotas.sql"
+file = "postgres/migrations/0345_proxy_reach_through.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 346
+description = "monthly indexer request and grab limits"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0346_indexer_monthly_quotas.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0346_indexer_monthly_quotas.sql"
 engine = "postgres"
 scope = "all"
 

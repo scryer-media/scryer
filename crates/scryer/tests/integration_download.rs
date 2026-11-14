@@ -118,6 +118,8 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
             let now = chrono::Utc::now();
             let proxy = proxies
                 .create(scryer_domain::ProxyConfig {
+                    reach_through_proxy_config_id: None,
+                    reach_through: None,
                     id: scryer_domain::Id::new().0,
                     name: "fixture solver".into(),
                     provider_type: scryer_domain::ProxyProviderType::Byparr,

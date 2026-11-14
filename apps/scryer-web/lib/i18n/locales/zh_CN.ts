@@ -2329,7 +2329,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceRuleTargetProfile": "目标质量配置",
   "settings.maintenanceRuleTargetProfileHelp":
     "此操作会将匹配的标题切换到的配置。",
-  "settings.maintenanceRuleTargetProfileIdHelp": "质量配置 ID。",
   "settings.maintenanceRuleLibraries": "媒体库范围",
   "settings.maintenanceRuleLibrariesHelp":
     "不勾选任何媒体库时，规则将作用于整个收藏。",
@@ -2379,7 +2378,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenancePreviewLimitHelp": "每次运行最多 {{max}} 个标题。",
   "settings.maintenancePreviewRun": "运行预览",
   "settings.maintenancePreviewRunning": "正在运行预览...",
-  "settings.maintenancePreviewEmpty": "选择一个媒体库并运行预览。",
   "settings.maintenancePreviewNoTitles": "没有评估任何标题。",
   "settings.maintenancePreviewColOutcome": "结果",
   "settings.maintenancePreviewColReasons": "原因代码",
@@ -2445,7 +2443,6 @@ const zh_CN: LocaleDictionary = {
 
   // ── 维护规则 — 运行与历史 ──
   "settings.maintenanceRunsTitle": "运行与历史",
-  "settings.maintenanceRunsSubtitle": "最近的评估轮次与动作尝试，最新的在前。",
   "settings.maintenanceRunScope": "范围",
   "settings.maintenanceRunScopeAll": "全部规则",
   "settings.maintenanceRunEvaluationNow": "立即评估",
@@ -2988,8 +2985,6 @@ const zh_CN: LocaleDictionary = {
   "settings.requestPreviewMediaSelected": "正在使用 {{title}}。",
   "settings.requestPreviewRun": "运行预览",
   "settings.requestPreviewRunning": "正在运行…",
-  "settings.requestPreviewEmpty":
-    "描述一个请求并运行预览，即可看到此规则会怎么判断。",
   "settings.requestPreviewMetadataPartial": "元数据不完整",
   "settings.requestPreviewShowInput": "显示匹配器看到的输入",
   "settings.requestPreviewHideInput": "隐藏输入",
@@ -3575,6 +3570,21 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖动以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "上移 {{value}}",
   "qualityProfile.decisionStepMoveDown": "下移 {{value}}",
+  "settings.proxyReachThrough": "经由",
+  "settings.proxyReachThroughHelp":
+    "Scryer 通过所选的传输代理或隧道向此求解器发送请求。直连表示从 Scryer 自身的网络访问求解器。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "挑战求解器不能经由另一个挑战求解器访问。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "挑战求解器不能经由自身访问。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "未找到用于访问求解器的代理或隧道。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "用于访问求解器的代理或隧道已禁用。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "只有挑战求解器可以经由其他代理访问。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "有一个或多个挑战求解器经由此代理访问。请先修改它们。",
 };
 
 export default zh_CN;

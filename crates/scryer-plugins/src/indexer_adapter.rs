@@ -4707,6 +4707,8 @@ mod tests {
 
     fn sample_solver_config() -> scryer_domain::ProxyConfig {
         scryer_domain::ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "solver".to_string(),
             name: "Solver".to_string(),
             provider_type: scryer_domain::ProxyProviderType::Byparr,

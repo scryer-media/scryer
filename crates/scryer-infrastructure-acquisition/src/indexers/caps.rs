@@ -1394,6 +1394,8 @@ mod tests {
     ) -> ProxyConfig {
         let now = chrono::Utc::now();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: id.to_string(),
             name: "House Proxy".to_string(),
             provider_type,

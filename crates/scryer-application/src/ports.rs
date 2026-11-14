@@ -955,6 +955,16 @@ pub struct EpisodeImageUrlUpdate {
     pub image_url: Option<String>,
 }
 
+/// One write of a batch handed to [`ShowRepository::apply_episode_writes`].
+#[derive(Clone, Debug)]
+pub enum EpisodeWrite {
+    Create(Episode),
+    Update {
+        episode_id: String,
+        update: EpisodeUpdate,
+    },
+}
+
 #[async_trait]
 pub trait DiscoveryRepository: Send + Sync {
     async fn get_discovery_sync_state(
@@ -4325,6 +4335,23 @@ pub trait ShowRepository: Send + Sync {
     }
     async fn create_episode(&self, episode: Episode) -> AppResult<Episode>;
     async fn update_episode(&self, episode_id: &str, update: EpisodeUpdate) -> AppResult<Episode>;
+    /// Applies `writes` in order and returns one result per write: what
+    /// `create_episode` or `update_episode` would have returned for that
+    /// write, issued on its own after the ones before it. A write that fails
+    /// neither stops nor undoes the others. This default issues them one at a
+    /// time; a store groups them into a few transactions.
+    async fn apply_episode_writes(&self, writes: Vec<EpisodeWrite>) -> Vec<AppResult<Episode>> {
+        let mut results = Vec::with_capacity(writes.len());
+        for write in writes {
+            results.push(match write {
+                EpisodeWrite::Create(episode) => self.create_episode(episode).await,
+                EpisodeWrite::Update { episode_id, update } => {
+                    self.update_episode(&episode_id, update).await
+                }
+            });
+        }
+        results
+    }
     async fn set_episodes_monitored(
         &self,
         episode_ids: &[String],
@@ -5831,6 +5858,10 @@ pub trait ProxyConfigRepository: Send + Sync {
     /// purpose is that the next connection be a new one, so any cached client
     /// or session built on the old pin has to go.
     async fn clear_host_key(&self, id: &str) -> AppResult<()>;
+    /// How many challenge solvers name `id` as the proxy or tunnel they are
+    /// reached through, counting only enabled solvers when `enabled_only`.
+    /// One counting statement; the stored reference is the only input.
+    async fn count_solvers_reaching_through(&self, id: &str, enabled_only: bool) -> AppResult<u64>;
 }
 
 /// Fetches an indexer's caps document with a request Scryer issues itself,
