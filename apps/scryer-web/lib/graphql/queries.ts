@@ -6205,6 +6205,7 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     name
     slug
     isDefault
+    defaultMonitorType
     qualityProfileId
     inheritedRequiredAudioLanguages
     inheritedPreferredAudioLanguages

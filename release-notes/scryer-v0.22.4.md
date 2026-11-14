@@ -29,6 +29,7 @@ These changes are relative to v0.22.3.
 - A title folder on a missing drive or volume is refused with a message that names the folder and the drive.
 - A folder that shares a library root's name in another letter case is checked for links like any other folder.
 - The Add dialog starts Monitor type on the library's default monitoring for new titles. It started on the built-in default whatever the library had saved.
+- A new list route starts on its library's default monitoring for new titles.
 
 ## Indexers and downloads
 
