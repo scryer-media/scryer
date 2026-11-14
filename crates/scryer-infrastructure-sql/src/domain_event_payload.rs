@@ -1,11 +1,23 @@
 use std::fmt;
+use std::sync::LazyLock;
 
 use serde_json::Value;
+use zstd::dict::{DecoderDictionary, EncoderDictionary};
 
 pub const DOMAIN_EVENT_PAYLOAD_FORMAT_V1: u8 = 1;
 pub const DOMAIN_EVENT_PAYLOAD_MAX_BYTES: usize = 256 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
 const DICTIONARY_V1: &[u8] = include_bytes!("domain_event_payload_v1.dict");
+
+// The dictionary is digested once per process. Loading the raw bytes into a
+// fresh context on every call rebuilt the same tables for each event.
+static ENCODER_DICTIONARY_V1: LazyLock<Result<EncoderDictionary<'static>, String>> =
+    LazyLock::new(|| {
+        EncoderDictionary::try_copy(DICTIONARY_V1, COMPRESSION_LEVEL)
+            .map_err(|error| error.to_string())
+    });
+static DECODER_DICTIONARY_V1: LazyLock<Result<DecoderDictionary<'static>, String>> =
+    LazyLock::new(|| DecoderDictionary::try_copy(DICTIONARY_V1).map_err(|error| error.to_string()));
 
 #[derive(Debug)]
 pub struct DomainEventPayloadCodecError(String);
@@ -68,6 +80,23 @@ pub fn derive_domain_event_projections(
 pub fn encode_domain_event_payload(
     payload: &Value,
 ) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
+    compress_compact_payload(&compact_payload(payload)?)
+}
+
+/// Encodes a payload and also returns the JSON its stored bytes decode to, so
+/// a writer can describe the event it just stored without decompressing what
+/// it compressed. The second value is exactly what
+/// [`decode_domain_event_payload`] returns for the first: compression is
+/// lossless, so both parse the same compact bytes.
+pub fn encode_domain_event_payload_with_stored_json(
+    payload: &Value,
+) -> Result<(Vec<u8>, Value), DomainEventPayloadCodecError> {
+    let compact = compact_payload(payload)?;
+    let encoded = compress_compact_payload(&compact)?;
+    Ok((encoded, parse_decoded_payload(&compact)?))
+}
+
+fn compact_payload(payload: &Value) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
     let compact = serde_json::to_vec(payload)
         .map_err(|error| codec_error(format!("failed to compact domain event JSON: {error}")))?;
     if compact.len() > DOMAIN_EVENT_PAYLOAD_MAX_BYTES {
@@ -77,15 +106,30 @@ pub fn encode_domain_event_payload(
             DOMAIN_EVENT_PAYLOAD_MAX_BYTES
         )));
     }
-    let mut compressor = zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
+    Ok(compact)
+}
+
+fn compress_compact_payload(compact: &[u8]) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
+    let dictionary = (*ENCODER_DICTIONARY_V1)
+        .as_ref()
+        .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
+    let mut compressor = zstd::bulk::Compressor::with_prepared_dictionary(dictionary)
         .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
     let compressed = compressor
-        .compress(&compact)
+        .compress(compact)
         .map_err(|error| codec_error(format!("failed to compress domain event JSON: {error}")))?;
     let mut encoded = Vec::with_capacity(compressed.len() + 1);
     encoded.push(DOMAIN_EVENT_PAYLOAD_FORMAT_V1);
     encoded.extend_from_slice(&compressed);
     Ok(encoded)
+}
+
+fn parse_decoded_payload(decoded: &[u8]) -> Result<Value, DomainEventPayloadCodecError> {
+    serde_json::from_slice(decoded).map_err(|error| {
+        codec_error(format!(
+            "decoded domain event payload is invalid JSON: {error}"
+        ))
+    })
 }
 
 pub fn decode_domain_event_payload(encoded: &[u8]) -> Result<Value, DomainEventPayloadCodecError> {
@@ -97,7 +141,10 @@ pub fn decode_domain_event_payload(encoded: &[u8]) -> Result<Value, DomainEventP
             "unsupported domain event payload format {format}"
         )));
     }
-    let mut decompressor = zstd::bulk::Decompressor::with_dictionary(DICTIONARY_V1)
+    let dictionary = (*DECODER_DICTIONARY_V1)
+        .as_ref()
+        .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
+    let mut decompressor = zstd::bulk::Decompressor::with_prepared_dictionary(dictionary)
         .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
     let decoded = decompressor
         .decompress(compressed, DOMAIN_EVENT_PAYLOAD_MAX_BYTES + 1)
@@ -108,11 +155,7 @@ pub fn decode_domain_event_payload(encoded: &[u8]) -> Result<Value, DomainEventP
             DOMAIN_EVENT_PAYLOAD_MAX_BYTES
         )));
     }
-    serde_json::from_slice(&decoded).map_err(|error| {
-        codec_error(format!(
-            "decoded domain event payload is invalid JSON: {error}"
-        ))
-    })
+    parse_decoded_payload(&decoded)
 }
 
 pub fn compact_legacy_domain_event_json(
@@ -248,6 +291,78 @@ mod tests {
         assert!(
             encoded.len() - 1 < without_dictionary.len(),
             "dictionary compression should beat plain level-3 zstd"
+        );
+    }
+
+    /// The codec as it was before the dictionary was prepared once: the raw
+    /// dictionary loaded into a fresh context for every payload.
+    fn encode_with_per_call_dictionary(payload: &Value) -> Vec<u8> {
+        let compact = serde_json::to_vec(payload).unwrap();
+        let mut compressor =
+            zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1).unwrap();
+        let mut encoded = vec![DOMAIN_EVENT_PAYLOAD_FORMAT_V1];
+        encoded.extend_from_slice(&compressor.compress(&compact).unwrap());
+        encoded
+    }
+
+    /// Payloads from a few bytes up to the size limit, compressible and not.
+    fn codec_sample_payloads() -> Vec<Value> {
+        let mut noise = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut incompressible = |len: usize| -> String {
+            (0..len)
+                .map(|_| {
+                    noise ^= noise << 13;
+                    noise ^= noise >> 7;
+                    noise ^= noise << 17;
+                    char::from(b'a' + (noise % 26) as u8)
+                })
+                .collect()
+        };
+        let mut payloads = vec![
+            json!(null),
+            json!({}),
+            json!({"type": "import_completed", "data": {"title_id": "title-emberfall"}}),
+            json!({
+                "type": "download_queue_item_updated",
+                "data": {"ratio": 0.5, "seed_ratio": 2.25, "count": u64::MAX,
+                         "negative": i64::MIN, "paths": ["/library/a", "/library/b"]}
+            }),
+        ];
+        for len in [1usize, 100, 4_000, 20_000, 130_000, 250_000] {
+            payloads.push(json!({"type": "import_rejected", "data": {"detail": "x".repeat(len)}}));
+            payloads
+                .push(json!({"type": "import_rejected", "data": {"detail": incompressible(len)}}));
+        }
+        payloads
+    }
+
+    #[test]
+    fn prepared_dictionary_leaves_encoded_bytes_unchanged() {
+        for payload in codec_sample_payloads() {
+            let encoded = encode_domain_event_payload(&payload).expect("payload should encode");
+            assert_eq!(
+                blake3::hash(&encoded),
+                blake3::hash(&encode_with_per_call_dictionary(&payload)),
+                "encoded bytes changed for a {}-byte payload",
+                serde_json::to_vec(&payload).unwrap().len()
+            );
+            assert_eq!(decode_domain_event_payload(&encoded).unwrap(), payload);
+        }
+    }
+
+    #[test]
+    fn stored_json_is_what_decoding_the_encoded_bytes_returns() {
+        for payload in codec_sample_payloads() {
+            let (encoded, stored) = encode_domain_event_payload_with_stored_json(&payload)
+                .expect("payload should encode");
+            assert_eq!(encoded, encode_domain_event_payload(&payload).unwrap());
+            assert_eq!(stored, decode_domain_event_payload(&encoded).unwrap());
+        }
+        assert!(
+            encode_domain_event_payload_with_stored_json(&Value::String(
+                "x".repeat(DOMAIN_EVENT_PAYLOAD_MAX_BYTES + 1)
+            ))
+            .is_err()
         );
     }
 

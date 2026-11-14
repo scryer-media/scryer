@@ -174,9 +174,73 @@ fn verification_upsert_args(record: &FileVerificationRecord) -> Vec<SqlArg> {
 #[path = "location_operation_store/tests.rs"]
 mod resolution_tests;
 
+/// How many times a recovery commit reads the stored plan before it gives up
+/// on one that keeps being replaced underneath it.
+const RECOVERY_PLAN_EVIDENCE_READS: usize = 3;
+
+/// What a stored recovery plan proves about the plan a caller wants to
+/// commit, worked out before the writer gate is taken.
+struct StoredRecoveryPlanEvidence {
+    /// The stored bytes the verdict was reached from. It holds for these
+    /// bytes and no others.
+    stored: Vec<u8>,
+    /// Whether the stored plan decodes to the caller's plan, or why it could
+    /// not be decoded.
+    matches: AppResult<bool>,
+}
+
+enum RecoveryCommitStep {
+    /// The commit ran to its end: the stored event, or `None` for a recovery
+    /// that was already committed.
+    Settled(Option<scryer_domain::DomainEvent>),
+    /// The stored plan is not the one the evidence was read from, so nothing
+    /// was decided.
+    StoredPlanChanged,
+}
+
 impl LocationOperationStore {
     pub fn new(datastore: StoreDatastore) -> Self {
         Self { datastore }
+    }
+
+    /// Reads the stored plan and compares it with `plan` off the writer gate
+    /// and off the async runtime. `None` when no plan is stored.
+    async fn stored_recovery_plan_evidence(
+        &self,
+        operation_id: &str,
+        plan: &std::sync::Arc<scryer_application::location::title_folder_recovery::RecoveryPlan>,
+    ) -> AppResult<Option<StoredRecoveryPlanEvidence>> {
+        let Some(stored) = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT plan FROM location_operation_plans WHERE operation_id = {}",
+            &[SqlArg::Text(operation_id.to_owned())],
+        )
+        .await?
+        .and_then(|row| row.opt_bytes("plan").transpose())
+        .transpose()?
+        else {
+            return Ok(None);
+        };
+        let plan = std::sync::Arc::clone(plan);
+        let (stored, matches) = tokio::task::spawn_blocking(move || {
+            let matches = scryer_infrastructure_sql::compressed_blob::decompress_text(
+                &stored,
+                PLAN_MAX_BYTES,
+            )
+            .and_then(|json| {
+                serde_json::from_str::<
+                    scryer_application::location::title_folder_recovery::RecoveryPlan,
+                >(&json)
+                .map_err(|e| AppError::Validation(e.to_string()))
+            })
+            .map(|persisted| persisted == *plan);
+            (stored, matches)
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("plan decompression task failed: {error}"))
+        })?;
+        Ok(Some(StoredRecoveryPlanEvidence { stored, matches }))
     }
 }
 
@@ -276,15 +340,30 @@ impl LocationOperationRepository for LocationOperationStore {
         event: &scryer_domain::NewDomainEvent,
     ) -> AppResult<Option<scryer_domain::DomainEvent>> {
         let operation_id = operation_id.to_owned();
-        let plan = plan.clone();
-        let event = event.clone();
+        let plan = std::sync::Arc::new(plan.clone());
+        // Serialized and compressed here so the transaction only binds it.
+        let event = std::sync::Arc::new(crate::workflow::stores::prepare_domain_event(event)?);
         let scope = crate::media::titles::store::TitleFolderWriteScope::open();
         let proof = scope.proof();
-        let result = SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", move |tx| {
+        let mut evidence_reads_left = RECOVERY_PLAN_EVIDENCE_READS;
+        let result = loop {
+            // Decoding and comparing the stored plan is megabytes of work, so
+            // it happens before the writer gate is taken. The transaction
+            // then only has to find the same stored bytes.
+            let evidence = match self
+                .stored_recovery_plan_evidence(&operation_id, &plan)
+                .await
+            {
+                Ok(evidence) => std::sync::Arc::new(evidence),
+                Err(error) => break Err(error),
+            };
+            evidence_reads_left -= 1;
+            let step = SqlRuntime::run_in_transaction(&self.datastore, "commit_title_folder_recovery", |tx| {
             let operation_id = operation_id.clone();
-            let plan = plan.clone();
-            let event = event.clone();
+            let plan = std::sync::Arc::clone(&plan);
+            let event = std::sync::Arc::clone(&event);
             let proof = proof.clone();
+            let evidence = std::sync::Arc::clone(&evidence);
             Box::pin(async move {
                 // Acquire the write lock before taking the validation snapshot.
                 SqlRuntime::execute(SqlExec::Tx(tx),
@@ -297,7 +376,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 if row.text("operation_type")? != "title_folder_recovery" || row.text("execution_mode")? != "copy_preserve_sources" {
                     return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_OPERATION_INVALID, "Invalid recovery operation"));
                 }
-                if row.opt_timestamp("recovery_committed_at")?.is_some() { return Ok(None); }
+                if row.opt_timestamp("recovery_committed_at")?.is_some() { return Ok(RecoveryCommitStep::Settled(None)); }
                 if row.bool("cancel_requested")? { return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_CANCELED_BEFORE_COMMIT, "Recovery canceled before catalog commit; original mappings preserved")); }
                 let stored_plan = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT plan FROM location_operation_plans WHERE operation_id = {}",
@@ -305,9 +384,13 @@ impl LocationOperationRepository for LocationOperationStore {
                     .and_then(|row| row.opt_bytes("plan").transpose())
                     .transpose()?
                     .ok_or_else(|| AppError::Repository(format!("location operation {operation_id} has no stored plan")))?;
-                let persisted: scryer_application::location::title_folder_recovery::RecoveryPlan = serde_json::from_str(&decode_plan(stored_plan).await?)
-                    .map_err(|e| AppError::Validation(e.to_string()))?;
-                if persisted != plan || plan.unresolved.is_some() {
+                // The evidence speaks only for the bytes it was read from. A
+                // plan stored since then is judged again outside the gate.
+                let evidence = match &*evidence {
+                    Some(evidence) if evidence.stored == stored_plan => evidence,
+                    _ => return Ok(RecoveryCommitStep::StoredPlanChanged),
+                };
+                if !evidence.matches.clone()? || plan.unresolved.is_some() {
                     return Err(AppError::validation_refused(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED, "Recovery plan changed or remains unresolved"));
                 }
                 if matches!(tx, crate::queries::sql_runtime::SqlTx::Postgres(_)) {
@@ -357,13 +440,25 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "DELETE FROM library_scan_unmatched_items WHERE library_id = {} AND title_id = {} AND item_path = {} AND status = 'pending' AND reason_code = 'title_already_owns_another_folder'",
                     &[SqlArg::Text(plan.title.library_id.clone()), SqlArg::Text(plan.title.id.clone()), SqlArg::OptText(plan.destination.clone())]).await?;
-                let stored = crate::media::images::title_image_store::append_domain_event_tx(tx, &event).await?;
+                let stored = crate::workflow::stores::append_prepared_domain_event_tx(tx, &event).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE location_operations SET recovery_committed_at = {} WHERE id = {}",
                     &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id)]).await?;
-                Ok(Some(stored))
+                Ok(RecoveryCommitStep::Settled(Some(stored)))
             })
-        }).await;
+            }).await;
+            match step {
+                Ok(RecoveryCommitStep::Settled(stored)) => break Ok(stored),
+                Ok(RecoveryCommitStep::StoredPlanChanged) if evidence_reads_left > 0 => {}
+                Ok(RecoveryCommitStep::StoredPlanChanged) => {
+                    break Err(AppError::validation_refused(
+                        crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED,
+                        "Recovery plan changed or remains unresolved",
+                    ));
+                }
+                Err(error) => break Err(error),
+            }
+        };
         drop(scope);
         result
     }
@@ -1764,6 +1859,262 @@ mod tests {
             &[SqlArg::Text(op.id)]).await.unwrap().unwrap();
         assert_eq!(row.text("source_path").unwrap(), file.media.file_path);
         assert_eq!(row.text("destination_path").unwrap(), file.destination);
+    }
+
+    const RECOVERY_TITLE: &str = "title-fixture";
+    const RECOVERY_OPERATION: &str = "title-folder-recovery-v1:title-fixture";
+    const RECOVERY_SOURCE: &str = "/srv/misplaced/fixture.mkv";
+    const RECOVERY_DESTINATION: &str = "/srv/fixture-root/Synthetic Title/fixture.mkv";
+
+    /// A title with one tracked file outside any title folder, and the plan
+    /// that moves it under `/srv/fixture-root/Synthetic Title`, built from
+    /// the catalog the commit validates against.
+    async fn recovery_fixture(
+        store: &LocationOperationStore,
+    ) -> scryer_application::location::title_folder_recovery::RecoveryPlan {
+        use scryer_application::TitleRepository;
+        use scryer_application::location::title_folder_recovery::{
+            RECOVERY_VERSION, RecoveryFile, RecoveryPlan,
+        };
+        for (sql, args) in [
+            (
+                "INSERT INTO library_roots
+                     (id, library_id, path, normalized_path, is_default, created_at, updated_at)
+                 VALUES ('root-fixture', 'movie_default_library', '/srv/fixture-root',
+                         '/srv/fixture-root', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                vec![],
+            ),
+            (
+                "INSERT INTO titles
+                     (id, library_id, name, facet, monitored, root_folder_id, created_at,
+                      updated_at)
+                 VALUES ({}, 'movie_default_library', 'Synthetic Title', 'movie', 1,
+                         'root-fixture', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                vec![SqlArg::Text(RECOVERY_TITLE.into())],
+            ),
+            (
+                "INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, role,
+                                          created_at)
+                 VALUES ('media-fixture', {}, {}, 100, 'complete', 'primary',
+                         '2026-01-01T00:00:00Z')",
+                vec![
+                    SqlArg::Text(RECOVERY_TITLE.into()),
+                    SqlArg::Text(RECOVERY_SOURCE.into()),
+                ],
+            ),
+        ] {
+            SqlRuntime::execute_write(&store.datastore, "recovery_fixture", sql, args)
+                .await
+                .expect("fixture row should insert");
+        }
+        let mut title = crate::media::titles::store::TitleStore::new(store.datastore.clone())
+            .get_by_id(RECOVERY_TITLE)
+            .await
+            .expect("fixture title should load")
+            .expect("fixture title should exist");
+        let catalog = store.recovery_catalog().await.expect("catalog should load");
+        let owner = catalog
+            .owners
+            .iter()
+            .find(|owner| owner.id == RECOVERY_TITLE)
+            .expect("fixture title should be in the catalog");
+        // The plan states ownership exactly as the catalog records it.
+        title.library_id = owner.library_id.clone();
+        title.folder_path = owner.folder_path.clone();
+        title.root_folder_id = "root-fixture".into();
+        let media: Vec<_> = catalog
+            .media
+            .iter()
+            .filter(|media| media.title_id == RECOVERY_TITLE)
+            .cloned()
+            .collect();
+        let plan = RecoveryPlan {
+            version: RECOVERY_VERSION.into(),
+            title,
+            owner_revision: owner.revision,
+            roots: catalog.roots.clone(),
+            expected_media: media.clone(),
+            destination_root: catalog
+                .roots
+                .iter()
+                .find(|root| root.id == "root-fixture")
+                .cloned(),
+            destination: Some("/srv/fixture-root/Synthetic Title".into()),
+            generated_destination: false,
+            files: media
+                .into_iter()
+                .map(|media| RecoveryFile {
+                    media,
+                    destination: RECOVERY_DESTINATION.into(),
+                    source_version: None,
+                    expected_hash: None,
+                })
+                .collect(),
+            unresolved: None,
+        };
+        // The commit compares against the plan as it reads back from storage.
+        serde_json::from_str(&serde_json::to_string(&plan).expect("plan should serialize"))
+            .expect("plan should deserialize")
+    }
+
+    async fn record_recovery_receipt(store: &LocationOperationStore) {
+        store
+            .record_location_file_verification(&FileVerificationRecord {
+                operation_id: RECOVERY_OPERATION.into(),
+                title_id: RECOVERY_TITLE.into(),
+                media_file_id: Some("media-fixture".into()),
+                source_path: RECOVERY_SOURCE.into(),
+                destination_path: RECOVERY_DESTINATION.into(),
+                hashes: Some(StreamedContentHashes {
+                    size_bytes: 100,
+                    crc_algorithm: MoveCrcAlgorithm::Crc64Nvme,
+                    move_crc: 7,
+                    full_blake3: "a".repeat(64),
+                }),
+                depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+                outcome: FileVerificationOutcome::Verified,
+                detail: None,
+                verified_at: timestamp(),
+            })
+            .await
+            .expect("receipt should record");
+    }
+
+    fn recovery_event() -> scryer_domain::NewDomainEvent {
+        scryer_domain::NewDomainEvent {
+            event_id: "event-recovery-fixture".into(),
+            occurred_at: timestamp(),
+            actor_kind: scryer_domain::DomainEventActorKind::System,
+            actor_user_id: None,
+            actor_display_name: "System".into(),
+            title_id: Some(RECOVERY_TITLE.into()),
+            facet: Some(scryer_domain::MediaFacet::Movie),
+            correlation_id: None,
+            causation_id: None,
+            schema_version: 1,
+            stream: scryer_domain::DomainEventStream::Title {
+                title_id: RECOVERY_TITLE.into(),
+            },
+            payload: scryer_domain::DomainEventPayload::DownloadIgnored(
+                scryer_domain::DownloadIgnoredEventData {
+                    title: None,
+                    download_client_item_id: "job-fixture".into(),
+                    client_id: None,
+                    client_type: None,
+                    source_provider: None,
+                    source_title: None,
+                },
+            ),
+        }
+    }
+
+    async fn recovery_media_path(store: &LocationOperationStore) -> String {
+        SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT file_path FROM media_files WHERE id = 'media-fixture'",
+            &[],
+        )
+        .await
+        .expect("media read should succeed")
+        .expect("fixture media should exist")
+        .text("file_path")
+        .expect("column")
+    }
+
+    /// The commit judges the caller's plan against the plan stored at commit
+    /// time: a different one is refused with nothing changed, the stored one
+    /// commits, and a replan moves which of the two that is.
+    #[tokio::test]
+    async fn recovery_commit_requires_the_plan_stored_at_commit_time() {
+        let store = test_store().await;
+        let stored = recovery_fixture(&store).await;
+        let mut replanned = stored.clone();
+        replanned.generated_destination = true;
+        assert_ne!(stored, replanned);
+
+        let mut op = operation(RECOVERY_OPERATION, LocationOperationState::Failed);
+        op.operation_type = LocationOperationType::TitleFolderRecovery;
+        op.mode = LocationExecutionMode::CopyPreserveSources;
+        store
+            .create_location_operation(&op, Some(&serde_json::to_string(&stored).unwrap()))
+            .await
+            .expect("operation should persist");
+        record_recovery_receipt(&store).await;
+        let event = recovery_event();
+
+        let refused = store
+            .commit_title_folder_recovery(RECOVERY_OPERATION, &replanned, &event)
+            .await
+            .expect_err("a plan other than the stored one must be refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED)
+        );
+        assert!(!store.recovery_committed(RECOVERY_OPERATION).await.unwrap());
+        assert_eq!(recovery_media_path(&store).await, RECOVERY_SOURCE);
+
+        // After a replan the roles swap: the old plan is the stale one.
+        store
+            .replace_recovery_plan(
+                RECOVERY_OPERATION,
+                &serde_json::to_string(&replanned).unwrap(),
+            )
+            .await
+            .expect("a failed recovery can be replanned");
+        record_recovery_receipt(&store).await;
+        let refused = store
+            .commit_title_folder_recovery(RECOVERY_OPERATION, &stored, &event)
+            .await
+            .expect_err("the replaced plan must be refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED)
+        );
+        assert_eq!(recovery_media_path(&store).await, RECOVERY_SOURCE);
+
+        let committed = store
+            .commit_title_folder_recovery(RECOVERY_OPERATION, &replanned, &event)
+            .await
+            .expect("the stored plan should commit")
+            .expect("a first commit returns its event");
+        assert_eq!(committed.event_id, event.event_id);
+        assert!(store.recovery_committed(RECOVERY_OPERATION).await.unwrap());
+        assert_eq!(recovery_media_path(&store).await, RECOVERY_DESTINATION);
+
+        // A committed recovery answers before its plan is looked at.
+        assert_eq!(
+            store
+                .commit_title_folder_recovery(RECOVERY_OPERATION, &stored, &event)
+                .await
+                .expect("a committed recovery is not an error"),
+            None
+        );
+    }
+
+    /// An unresolved plan is refused even when it is the stored one.
+    #[tokio::test]
+    async fn recovery_commit_refuses_a_stored_plan_that_is_unresolved() {
+        let store = test_store().await;
+        let mut plan = recovery_fixture(&store).await;
+        plan.unresolved = Some("destination could not be proven".into());
+        let mut op = operation(RECOVERY_OPERATION, LocationOperationState::Queued);
+        op.operation_type = LocationOperationType::TitleFolderRecovery;
+        op.mode = LocationExecutionMode::CopyPreserveSources;
+        store
+            .create_location_operation(&op, Some(&serde_json::to_string(&plan).unwrap()))
+            .await
+            .expect("operation should persist");
+        record_recovery_receipt(&store).await;
+
+        let refused = store
+            .commit_title_folder_recovery(RECOVERY_OPERATION, &plan, &recovery_event())
+            .await
+            .expect_err("an unresolved plan must be refused");
+        assert_eq!(
+            refused.validation_reason(),
+            Some(crate::error_reasons::MEDIA_RECOVERY_PLAN_UNRESOLVED)
+        );
+        assert_eq!(recovery_media_path(&store).await, RECOVERY_SOURCE);
     }
 
     /// Second-resolution instants, so a sqlite text round-trip compares equal.
