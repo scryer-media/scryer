@@ -1014,6 +1014,8 @@ const en: LocaleDictionary = {
     "Title folder must be an absolute path without parent traversal.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":
     "The drive or volume of the title folder is missing.",
+  "error.missingDriveNamed":
+    "Title folder {{titleFolder}} cannot be reached: drive or volume {{missingDrive}} is missing.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Title folder path is required.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":

@@ -119,16 +119,25 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
 }
 
 /// Nothing on the way to `path` exists, down to its drive or volume. The
-/// refusal names both, so the reader knows which drive to bring back.
+/// refusal names both, so the reader knows which drive to bring back. They
+/// travel as facts too, because a client shows its own sentence for the reason.
 fn missing_drive_refusal(path: &Path) -> AppError {
+    use crate::error_reasons::folder_ownership as reasons;
     let drive = path.ancestors().last().unwrap_or(path);
-    AppError::validation_refused(
-        crate::error_reasons::folder_ownership::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
+    AppError::validation_refused_with_facts(
+        reasons::TITLE_FOLDER_NO_EXISTING_ANCESTOR,
         format!(
             "title folder {} cannot be reached: drive or volume {} is missing",
             path.display(),
             drive.display(),
         ),
+        vec![
+            crate::RefusalFact::new(
+                reasons::MISSING_DRIVE_TITLE_FOLDER_FACT,
+                path.display().to_string(),
+            ),
+            crate::RefusalFact::new(reasons::MISSING_DRIVE_FACT, drive.display().to_string()),
+        ],
     )
 }
 
@@ -2204,6 +2213,19 @@ mod tests {
                 "title folder {folder} cannot be reached: drive or volume {drive} is missing"
             )),
             "{error}"
+        );
+        assert_eq!(
+            error.refusal_facts(),
+            [
+                crate::RefusalFact::new(
+                    crate::error_reasons::folder_ownership::MISSING_DRIVE_TITLE_FOLDER_FACT,
+                    folder,
+                ),
+                crate::RefusalFact::new(
+                    crate::error_reasons::folder_ownership::MISSING_DRIVE_FACT,
+                    drive,
+                ),
+            ]
         );
     }
 

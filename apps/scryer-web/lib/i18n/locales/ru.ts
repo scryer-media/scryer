@@ -7361,6 +7361,8 @@ const ru: LocaleDictionary = {
     "Путь к папке тайтла должен быть абсолютным и не содержать переходов к родительским каталогам.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR":
     "Диск или том, на котором находится папка тайтла, отсутствует.",
+  "error.missingDriveNamed":
+    "Папка тайтла {{titleFolder}} недоступна: диск или том {{missingDrive}} отсутствует.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Требуется путь к папке тайтла.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":

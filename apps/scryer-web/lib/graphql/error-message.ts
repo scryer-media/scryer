@@ -557,6 +557,24 @@ export function userFacingGraphQlErrorMessage(
         }
         return translate("error.passwordLengthRequirement");
       }
+      if (
+        key &&
+        reason === "FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR"
+      ) {
+        const { titleFolder, missingDrive } = entry.extensions;
+        if (
+          typeof titleFolder === "string" &&
+          titleFolder !== "" &&
+          typeof missingDrive === "string" &&
+          missingDrive !== ""
+        ) {
+          return translate("error.missingDriveNamed", {
+            titleFolder,
+            missingDrive,
+          });
+        }
+        return translate(key);
+      }
       if (key || codeKey) return translate(key ?? codeKey!);
     }
   }

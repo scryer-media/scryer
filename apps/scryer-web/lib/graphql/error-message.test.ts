@@ -89,6 +89,41 @@ test("initial authentication refusals use localized codes rather than server wor
   );
 });
 
+test("a missing-drive refusal names the folder and the drive from its facts", () => {
+  const refusal = (facts: Record<string, unknown>) => ({
+    graphQLErrors: [
+      {
+        message: "server sentence",
+        extensions: {
+          code: "VALIDATION_ERROR",
+          reason: "FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR",
+          ...facts,
+        },
+      },
+    ],
+  });
+  assert.equal(
+    userFacingGraphQlErrorMessage(
+      refusal({
+        titleFolder: "O:\\Videos\\Movies\\Fixture (1992)",
+        missingDrive: "O:\\",
+      }),
+      "Failed",
+    ),
+    "Title folder O:\\Videos\\Movies\\Fixture (1992) cannot be reached: drive or volume O:\\ is missing.",
+  );
+  for (const facts of [
+    {},
+    { titleFolder: "/Videos/Fixture" },
+    { missingDrive: 7 },
+  ]) {
+    assert.equal(
+      userFacingGraphQlErrorMessage(refusal(facts), "Failed"),
+      "The drive or volume of the title folder is missing.",
+    );
+  }
+});
+
 test("password refusals interpolate validated minima and localize missing or malformed facts", async () => {
   await loadLocaleDictionary("fr");
   for (const minLength of [8, 24, "16"]) {

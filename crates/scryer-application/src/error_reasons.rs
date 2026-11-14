@@ -3151,6 +3151,12 @@ pub mod folder_ownership {
     /// The drive or volume of the title folder is missing.
     pub const TITLE_FOLDER_NO_EXISTING_ANCESTOR: &str =
         "FOLDER_OWNERSHIP_TITLE_FOLDER_NO_EXISTING_ANCESTOR";
+    /// The extension naming the title folder on a
+    /// [`TITLE_FOLDER_NO_EXISTING_ANCESTOR`] refusal.
+    pub const MISSING_DRIVE_TITLE_FOLDER_FACT: &str = "titleFolder";
+    /// The extension naming the missing drive or volume on a
+    /// [`TITLE_FOLDER_NO_EXISTING_ANCESTOR`] refusal.
+    pub const MISSING_DRIVE_FACT: &str = "missingDrive";
     /// Cannot inspect title folder the selected value.
     pub const CANNOT_INSPECT_TITLE_FOLDER: &str = "FOLDER_OWNERSHIP_CANNOT_INSPECT_TITLE_FOLDER";
     /// Cannot claim a title folder outside its library roots.
