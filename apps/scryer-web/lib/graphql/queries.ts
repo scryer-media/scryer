@@ -3108,6 +3108,7 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     slug
     isDefault
     qualityProfileId
+    defaultMonitorType
     inheritedRequiredAudioLanguages
     inheritedPreferredAudioLanguages
     roots {

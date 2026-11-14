@@ -28,6 +28,7 @@ These changes are relative to v0.22.3.
 - Another title's folder, or a library root, that cannot be read no longer refuses an import, rename, scan or delete. Only the folder the action itself uses must resolve. An unreadable folder is compared by its spelling, without regard to case, and a folder that holds it or lies inside it is still refused as an overlap.
 - A title folder on a missing drive or volume is refused with a message that names the folder and the drive.
 - A folder that shares a library root's name in another letter case is checked for links like any other folder.
+- The Add dialog starts Monitor type on the library's default monitoring for new titles. It started on the built-in default whatever the library had saved.
 
 ## Indexers and downloads
 
