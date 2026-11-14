@@ -805,6 +805,23 @@ impl IndexerArtifactTransport {
             )
             .await;
             match result {
+                // TLS answered only to send the request back to plain HTTP on
+                // the same host. Following it would probe HTTPS again and end
+                // as a redirect loop, so the advertised HTTP link is used.
+                Ok(Ok(response))
+                    if probing_https
+                        && https_redirects_back_to_http(
+                            response.status(),
+                            response
+                                .headers()
+                                .get(reqwest::header::LOCATION)
+                                .and_then(|value| value.to_str().ok()),
+                            response.url(),
+                            current,
+                        ) =>
+                {
+                    tally.note_result(IndexerRequestResult::HttpStatus(response.status().as_u16()));
+                }
                 Ok(Ok(response)) => return Ok(response),
                 Ok(Err(OutboundHttpError::Transport { source, .. }))
                     if probing_https && (source.is_connect() || source.is_timeout()) =>
@@ -1215,6 +1232,24 @@ fn artifact_domain_matches(base: &str, raw: &str) -> bool {
         .is_some_and(|(a, b)| a == b)
 }
 
+/// Whether an HTTPS probe of the HTTP link `advertised` was answered with a
+/// redirect to plain HTTP on the advertised host and port.
+fn https_redirects_back_to_http(
+    status: reqwest::StatusCode,
+    location: Option<&str>,
+    probed: &url::Url,
+    advertised: &url::Url,
+) -> bool {
+    status.is_redirection()
+        && location
+            .and_then(|location| probed.join(location).ok())
+            .is_some_and(|next| {
+                next.scheme() == "http"
+                    && next.host() == advertised.host()
+                    && next.port_or_known_default() == advertised.port_or_known_default()
+            })
+}
+
 fn artifact_session_origin_matches(original: &url::Url, actual: &url::Url) -> bool {
     if original.origin() == actual.origin() {
         return true;
@@ -1589,6 +1624,35 @@ mod tests {
                 artifact_domain_matches(base, target),
                 allowed,
                 "{base} -> {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn https_probe_falls_back_only_when_sent_back_to_the_advertised_http_host() {
+        let advertised = url::Url::parse("http://api.fixture.test/grab?id=1").unwrap();
+        let probed = url::Url::parse("https://api.fixture.test/grab?id=1").unwrap();
+        let found = reqwest::StatusCode::FOUND;
+        for (status, location, back) in [
+            (found, Some("http://api.fixture.test/grab?id=1"), true),
+            (found, Some("http://api.fixture.test/other"), true),
+            (found, Some("http://API.fixture.test:80/other"), true),
+            (found, Some("/final"), false),
+            (found, Some("https://api.fixture.test/final"), false),
+            (found, Some("http://downloads.fixture.test/grab"), false),
+            (found, Some("http://api.fixture.test:8080/grab"), false),
+            (found, Some("magnet:?xt=urn:btih:0"), false),
+            (found, None, false),
+            (
+                reqwest::StatusCode::OK,
+                Some("http://api.fixture.test/grab"),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                https_redirects_back_to_http(status, location, &probed, &advertised),
+                back,
+                "{status} {location:?}"
             );
         }
     }
