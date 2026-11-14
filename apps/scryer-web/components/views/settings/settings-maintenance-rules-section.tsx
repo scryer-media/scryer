@@ -36,7 +36,11 @@ import {
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
-import { MaintenanceActionSequenceEditor } from "@/components/views/settings/maintenance-action-sequence-editor";
+import {
+  MaintenanceDecidedActionsSummary,
+  MaintenanceDeclaredActionsSummary,
+  MaintenanceRuleSourceFindings,
+} from "@/components/views/settings/maintenance-action-summary";
 import { SingleSelectField } from "@/components/ui/select";
 import {
   Table,
@@ -57,8 +61,7 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
-  MaintenanceActionSequence,
-  MaintenanceActionStepDescriptor,
+  MaintenanceDeclaredActions,
   MaintenancePreviewResult,
   MaintenancePreviewSource,
   MaintenancePreviewTitle,
@@ -70,19 +73,21 @@ import type {
   MaintenanceValidationResult,
 } from "@/lib/types/maintenance-rule-sets";
 import {
+  MAINTENANCE_ACTION_HEAD_ORDER,
+  MAINTENANCE_ACTION_HEAD_RULE_NAMES,
   MAINTENANCE_PREVIEW_LIMIT_MAX,
-  actionKindLabelKey,
-  actionStepKindLabelKey,
+  actionHeadLabelKey,
+  isDestructiveActionHead,
   previewOutcomeBadgeTone,
   previewOutcomeLabelKey,
   ruleStateLabelKey,
   ruleStateOptionsFor,
+  templateActionHeads,
 } from "@/lib/utils/maintenance-rule-sets";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
-export type MaintenanceQualityProfileOption = { id: string; name: string };
 export type MaintenanceStorageRootOption = {
   id: string;
   path: string;
@@ -106,11 +111,8 @@ type SettingsMaintenanceRulesSectionProps = {
   /// here: the container prefills the draft and the operator still saves it.
   applyTemplate: (template: MaintenanceRuleTemplate) => void;
   ruleSetRecords: MaintenanceRuleSetRecord[];
-  actionStepDescriptors: MaintenanceActionStepDescriptor[];
-  actionStepDescriptorsLoaded: boolean;
   libraries: MaintenanceLibraryOption[];
   storageRoots: MaintenanceStorageRootOption[];
-  qualityProfiles: MaintenanceQualityProfileOption[];
   copyRuleSet: (record: MaintenanceRuleSetRecord) => void;
   editRuleSet: (record: MaintenanceRuleSetRecord) => void;
   deleteRuleSet: (record: MaintenanceRuleSetRecord) => Promise<void> | void;
@@ -146,90 +148,27 @@ type SettingsMaintenanceRulesSectionProps = {
 };
 
 type RefField = { field: string; type: string; descKey: string };
+
+/// How each action head is written in source, shown in the reference table.
+const MAINTENANCE_ACTION_HEAD_SYNTAX: Record<
+  (typeof MAINTENANCE_ACTION_HEAD_ORDER)[number],
+  string
+> = {
+  ADD_TAGS: 'add_tags := ["tag"] if { ... }',
+  REMOVE_TAGS: 'remove_tags := ["tag"] if { ... }',
+  SET_QUALITY_PROFILE: 'set_quality_profile := "Profile name" if { ... }',
+  MONITOR: "monitor if { ... }",
+  SEARCH: "search if { ... }",
+  FETCH_SUBTITLES: "fetch_subtitles if { ... }",
+  MOVE_TO_LIBRARY: 'move_to_library := "Library name" if { ... }',
+  MOVE_TO_ROOT: 'move_to_root := "/path/of/root" if { ... }',
+  UNMONITOR: "unmonitor if { ... }",
+  DELETE_FILES: "delete_files if { ... }",
+  DELETE_TITLE: "delete_title if { ... }",
+  NOTIFY: 'notify := "message text" if { ... }',
+};
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = maintenanceInputContract.sections as RefSectionDef[];
-
-function ActionLabel({ kind }: { kind: string }) {
-  const t = useTranslate();
-  const labelKey = actionKindLabelKey(kind);
-  return <>{labelKey ? t(labelKey) : kind}</>;
-}
-
-function ActionSummary({ record }: { record: MaintenanceRuleSetRecord }) {
-  const t = useTranslate();
-  if (!record.actionSequence) {
-    return <ActionLabel kind={record.actionSpec.kind} />;
-  }
-  if (record.actionSequence.steps.length === 0) {
-    return <>{t("settings.maintenanceSequenceObserveOnly")}</>;
-  }
-  const labels = record.actionSequence.steps
-    .map((step) => {
-      const key = actionStepKindLabelKey(step.kind);
-      return key ? t(key) : step.kind;
-    })
-    .join(" → ");
-  return (
-    <span className="block max-w-[260px] truncate" title={labels}>
-      {labels}
-    </span>
-  );
-}
-
-function ActionSequencePreview({
-  sequence,
-}: {
-  sequence: MaintenanceActionSequence;
-}) {
-  const t = useTranslate();
-  return (
-    <div
-      id="settings-maintenance-preview-action-sequence"
-      className="rounded border border-border bg-muted/30 px-3 py-2"
-    >
-      <p className="text-xs font-medium">
-        {t("settings.maintenanceSequencePreviewPlan")}
-      </p>
-      {sequence.steps.length === 0 ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("settings.maintenanceSequenceObserveOnly")}
-        </p>
-      ) : (
-        <ol className="mt-1 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
-          {sequence.steps.map((step) => {
-            const key = actionStepKindLabelKey(step.kind);
-            let parameters: string | null = null;
-            if (step.kind === "UNMONITOR") {
-              parameters = step.parameters.includeDescendants
-                ? t("settings.maintenanceSequencePreviewDescendants")
-                : t("settings.maintenanceSequencePreviewMatchedScope");
-            } else if (step.kind === "CHANGE_QUALITY_PROFILE") {
-              parameters = step.parameters.targetQualityProfileId ?? "—";
-            } else if (step.kind === "SEARCH") {
-              parameters =
-                step.parameters.searchCondition === "PREVIOUS_PROFILE_CHANGED"
-                  ? t(
-                      "settings.maintenanceSequenceSearchPreviousProfileChanged",
-                    )
-                  : t("settings.maintenanceSequenceSearchUnconditional");
-            } else if (
-              step.kind === "ADD_TAGS" ||
-              step.kind === "REMOVE_TAGS"
-            ) {
-              parameters = step.parameters.tags.join(", ") || "—";
-            }
-            return (
-              <li key={step.id}>
-                {key ? t(key) : step.kind}
-                {parameters ? ` · ${parameters}` : ""}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
-  );
-}
 
 function RefFieldTable({ section }: { section: RefSectionDef }) {
   const t = useTranslate();
@@ -317,10 +256,62 @@ function MaintenanceContextReference() {
               {t("settings.refMaintOutputIntro")}
             </p>
             <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refMaintOutputMatch")}</li>
+              <li>{t("settings.refMaintOutputFlagHeads")}</li>
+              <li>{t("settings.refMaintOutputValueHeads")}</li>
+              <li>{t("settings.refMaintOutputHelpers")}</li>
               <li>{t("settings.refMaintOutputUnknown")}</li>
               <li>{t("settings.refMaintOutputReasons")}</li>
               <li>{t("settings.refMaintOutputNoPackage")}</li>
+            </ul>
+          </div>
+
+          <div>
+            <h4 className="mb-1 font-semibold">
+              <HelpLabel
+                label={t("settings.refMaintActionsTitle")}
+                help={t("settings.refMaintActionsOrder", {
+                  order: MAINTENANCE_ACTION_HEAD_ORDER.map(
+                    (head) => MAINTENANCE_ACTION_HEAD_RULE_NAMES[head],
+                  ).join(", "),
+                })}
+              />
+            </h4>
+            <Table id="settings-maintenance-rules-reference-actions">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[260px]">
+                    {t("settings.refColField")}
+                  </TableHead>
+                  <TableHead>{t("settings.refColDescription")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {MAINTENANCE_ACTION_HEAD_ORDER.map((head) => {
+                  const key = actionHeadLabelKey(head);
+                  return (
+                    <TableRow key={head} data-ui="settings-table-row">
+                      <TableCell>
+                        <code data-code-font className="text-xs">
+                          {MAINTENANCE_ACTION_HEAD_SYNTAX[head]}
+                        </code>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {key ? t(key) : head}
+                        {isDestructiveActionHead(head) ? (
+                          <Badge tone="negative" className="ml-2 text-[10px]">
+                            {t("settings.maintenanceTemplateDestructiveBadge")}
+                          </Badge>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-muted-foreground">
+              <li>{t("settings.refMaintActionsDaysSince")}</li>
+              <li>{t("settings.refMaintActionsNotify")}</li>
+              <li>{t("settings.refMaintActionsConflicts")}</li>
             </ul>
           </div>
 
@@ -354,6 +345,7 @@ function MaintenanceTemplateCard({
   onApply: (template: MaintenanceRuleTemplate) => void;
 }) {
   const t = useTranslate();
+  const heads = templateActionHeads(template.regoSource);
   return (
     <button
       id={selectorId("settings-maintenance-template", template.id)}
@@ -372,9 +364,14 @@ function MaintenanceTemplateCard({
         {t(template.descriptionKey)}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <Badge tone="neutral" className="text-[10px]">
-          <ActionLabel kind={template.actionKind} />
-        </Badge>
+        {heads.map((head) => {
+          const key = actionHeadLabelKey(head);
+          return (
+            <Badge key={head} tone="neutral" className="text-[10px]">
+              {key ? t(key) : head}
+            </Badge>
+          );
+        })}
         {template.subjectKind ? (
           <Badge tone="info" className="text-[10px]">
             {t(
@@ -477,7 +474,7 @@ function MaintenancePreviewPanel({
   isEditorOpen,
   draftName,
   draftScope,
-  draftActionSequence,
+  draftDeclaredActions,
   ruleSetRecords,
   libraries,
   previewSource,
@@ -495,7 +492,8 @@ function MaintenancePreviewPanel({
 }: {
   draftName: string;
   draftScope: MaintenanceRuleScope;
-  draftActionSequence: MaintenanceActionSequence;
+  /// What the draft declares, from its latest validation.
+  draftDeclaredActions: MaintenanceDeclaredActions | null | undefined;
 } & Pick<
   SettingsMaintenanceRulesSectionProps,
   | "isEditorOpen"
@@ -523,10 +521,10 @@ function MaintenancePreviewPanel({
     previewSource === "draft"
       ? draftScope
       : (storedRule?.subjectKind ?? "TITLE");
-  const sequence =
+  const declared =
     previewSource === "draft"
-      ? draftActionSequence
-      : storedRule?.actionSequence;
+      ? draftDeclaredActions
+      : storedRule?.declaredActions;
   const [selectedSubject, setSelectedSubject] = React.useState<
     MaintenanceTestSubject | undefined
   >();
@@ -633,7 +631,20 @@ function MaintenancePreviewPanel({
           </label>
         </div>
 
-        {sequence ? <ActionSequencePreview sequence={sequence} /> : null}
+        {declared ? (
+          <div
+            id="settings-maintenance-preview-declared-actions"
+            className="rounded border border-border bg-muted/30 px-3 py-2"
+          >
+            <p className="mb-1 text-xs font-medium">
+              {t("settings.maintenanceDeclaredActionsTitle")}
+            </p>
+            <MaintenanceDeclaredActionsSummary
+              declared={declared}
+              idPrefix="settings-maintenance-preview-declared-action"
+            />
+          </div>
+        ) : null}
 
         <MaintenanceSubjectPicker
           key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
@@ -706,6 +717,9 @@ function MaintenancePreviewPanel({
                       {t("settings.maintenancePreviewColOutcome")}
                     </TableHead>
                     <TableHead>
+                      {t("settings.maintenanceRuleAction")}
+                    </TableHead>
+                    <TableHead>
                       {t("settings.maintenancePreviewColReasons")}
                     </TableHead>
                   </TableRow>
@@ -770,6 +784,19 @@ function MaintenancePreviewPanel({
                           </div>
                         )}
                       </TableCell>
+                      <TableCell>
+                        {title.actions ? (
+                          <MaintenanceDecidedActionsSummary
+                            actions={title.actions}
+                            idPrefix={selectorId(
+                              "settings-maintenance-preview-action",
+                              title.subjectId,
+                            )}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {title.error ? (
                           <span className="text-[var(--scry-danger-text)]">
@@ -798,7 +825,7 @@ function MaintenancePreviewPanel({
                   ))}
                   {previewResult.titles.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={3} className="text-muted-foreground">
+                      <TableCell colSpan={4} className="text-muted-foreground">
                         {t("settings.maintenancePreviewNoTitles")}
                       </TableCell>
                     </TableRow>
@@ -884,11 +911,8 @@ export function SettingsMaintenanceRulesSection({
   startCreateRuleSet,
   applyTemplate,
   ruleSetRecords,
-  actionStepDescriptors,
-  actionStepDescriptorsLoaded,
   libraries,
   storageRoots,
-  qualityProfiles,
   copyRuleSet,
   editRuleSet,
   deleteRuleSet,
@@ -940,7 +964,7 @@ export function SettingsMaintenanceRulesSection({
                   ruleKind="maintenance"
                   inputContract={maintenanceInputContract}
                   outputContract={
-                    'Define match if { ... }. You may also add reasons contains "stable_reason" if { match }.'
+                    'Declare actions by defining rules with these names: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title as "name if { ... }"; set_quality_profile := "Profile name", move_to_library := "Library name", move_to_root := "/path/of/root" and notify := "message text" as plain string literals; add_tags := ["tag"] and remove_tags := ["tag"] as plain lists of string literals. delete_title, move_to_library and move_to_root act on whole titles. Any other rule name is a helper of your own. days_since(ts) returns whole days since an RFC3339 timestamp; do not define a rule with that name. You may add reasons contains "stable_reason" if { ... } and unknown if { ... } to hold a subject.'
                   }
                 />
               </div>
@@ -1011,8 +1035,14 @@ export function SettingsMaintenanceRulesSection({
                           <TableCell className="max-w-[200px] truncate text-muted-foreground">
                             {record.description || "—"}
                           </TableCell>
-                          <TableCell>
-                            <ActionSummary record={record} />
+                          <TableCell className="max-w-[320px]">
+                            <MaintenanceDeclaredActionsSummary
+                              declared={record.declaredActions}
+                              idPrefix={selectorId(
+                                "settings-maintenance-rule-declared-action",
+                                record.id,
+                              )}
+                            />
                           </TableCell>
                           <TableCell className="text-center">
                             {record.graceDays}
@@ -1228,29 +1258,16 @@ export function SettingsMaintenanceRulesSection({
                       />
                     </div>
 
-                    {!actionStepDescriptorsLoaded ? (
-                      <p
-                        id="settings-maintenance-sequence-catalog-unavailable"
-                        className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-xs text-[var(--scry-warning-text)]"
-                      >
-                        {t("settings.maintenanceSequenceCatalogUnavailable")}
-                      </p>
-                    ) : null}
-                    <fieldset disabled={editingSystemOwned}>
-                      <MaintenanceActionSequenceEditor
-                        sequence={ruleSetDraft.actionSequence}
-                        descriptors={actionStepDescriptors}
-                        subjectKind={ruleSetDraft.subjectKind}
-                        storageRootId={ruleSetDraft.storageRootId}
-                        qualityProfiles={qualityProfiles}
-                        onChange={(actionSequence) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            actionSequence,
-                          }))
-                        }
-                      />
-                    </fieldset>
+                    <MaintenanceRuleSourceFindings
+                      source={ruleSetDraft.regoSource}
+                      checked={
+                        !validating &&
+                        validationResult !== null &&
+                        !validationResult.unavailable
+                      }
+                      declared={validationResult?.declaredActions}
+                      warnings={validationResult?.warnings ?? []}
+                    />
 
                     <label className="block md:max-w-[50%]">
                       <Label className="mb-2 block">
@@ -1435,7 +1452,7 @@ export function SettingsMaintenanceRulesSection({
               isEditorOpen={isEditorOpen}
               draftName={ruleSetDraft.name}
               draftScope={ruleSetDraft.subjectKind}
-              draftActionSequence={ruleSetDraft.actionSequence}
+              draftDeclaredActions={validationResult?.declaredActions}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               {...previewProps}

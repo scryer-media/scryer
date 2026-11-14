@@ -3967,6 +3967,14 @@ const en: LocaleDictionary = {
   "error.rulePackageRequired": "The rule must declare its assigned package.",
   "error.ruleInputImportUnsupported":
     "Reference rule input directly instead of importing it under another name.",
+  "error.ruleActionValueNotLiteral":
+    "Assign this action a plain literal: a quoted string for set_quality_profile, move_to_library, move_to_root and notify, or a list of quoted strings for add_tags and remove_tags.",
+  "error.ruleActionValueInvalid":
+    "This action's value is not valid: a profile name cannot be empty, and each tag has to be a valid tag label.",
+  "error.ruleHostHelperRedefined":
+    "days_since is provided by Scryer and cannot be redefined. Give your own helper another name.",
+  "error.ruleUnreferencedRule":
+    "This rule is not an action and nothing else in the source uses it. Check the spelling if it was meant to be an action.",
   "error.ruleMatchRequired":
     "Define a boolean match rule for this maintenance matcher.",
   "error.ruleVoteRequired":
@@ -4506,8 +4514,14 @@ const en: LocaleDictionary = {
     "Deny a request when its adult-content fact is true.",
   "settings.regoSnippet.manualRequest":
     "Require manual review when the recent approval count reaches a threshold.",
-  "settings.regoSnippet.matchTag":
-    "Match a maintenance subject by tag. This matcher does not define an action.",
+  "settings.regoHelper.daysSince":
+    "Whole days between an RFC3339 timestamp and the evaluation time. Maintenance rules only.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Unmonitor a subject that carries a tag.",
+  "settings.regoSnippet.tagAfterDays":
+    "Tag a subject added more than a number of days ago.",
+  "settings.regoSnippet.setProfile":
+    "Move large titles onto a named quality profile.",
 
   "settings.trustedProxiesTitle": "Trusted proxies for rate limiting",
   "settings.trustedProxiesHelp":
@@ -9502,55 +9516,17 @@ const en: LocaleDictionary = {
   "settings.rulesScoring": "Scoring Rules",
   "settings.maintenanceNavRules": "Rules",
   "settings.maintenanceNavHistory": "History",
-  "settings.maintenanceRuleAction": "Action",
+  "settings.maintenanceRuleAction": "Actions",
   "settings.maintenanceRuleActionHelp":
     "What this rule would do once maintenance actions are switched on.",
   "settings.maintenanceRuleActionPlaceholder": "Choose an action",
   "settings.maintenanceRuleNoActions": "No title-scoped actions are available.",
   "settings.maintenanceActionSequence": "Action sequence",
-  "settings.maintenanceSequenceTitle": "Action sequence",
-  "settings.maintenanceSequenceHelp":
-    "Run these steps in order after a subject has completed its grace period. An empty sequence records matches without acting on them.",
-  "settings.maintenanceSequenceEmpty":
-    "Dry run only — no action steps are configured.",
   "settings.maintenanceSequenceObserveOnly": "Dry run only",
-  "settings.maintenanceSequenceSummary": "Sequence summary",
-  "settings.maintenanceSequenceSummaryTarget": "Targets: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "When enabled: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Effects: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "matching title",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "matching title, seasons, and episodes",
-  "settings.maintenanceSequenceTargetSeason": "matching season",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "matching season and episodes",
-  "settings.maintenanceSequenceTargetEpisode": "matching episode",
-  "settings.maintenanceSequencePreviewPlan": "Ordered effects for this preview",
-  "settings.maintenanceSequencePreviewDescendants": "include descendants",
-  "settings.maintenanceSequencePreviewMatchedScope": "matched scope only",
-  "settings.maintenanceSequenceAdd": "Add step",
-  "settings.maintenanceSequencePreset": "Sequence preset",
-  "settings.maintenanceSequencePresetApply": "Replace with preset",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Change profile, then search if it changed",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Unmonitor descendants, then delete files",
-  "settings.maintenanceSequenceTerminal": "Terminal",
-  "settings.maintenanceSequenceDependencies": "Requires: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants":
-    "Include seasons and episodes",
-  "settings.maintenanceSequenceSearchCondition": "Search condition",
-  "settings.maintenanceSequenceSearchUnconditional": "Always request search",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Only after the profile changed",
   "settings.maintenanceSequenceHistoryWaiting": "waiting for an earlier step",
   "settings.maintenanceSequenceHistorySearchRequested": "search requested",
   "settings.maintenanceSequenceHistorySearchAccepted": "accepted",
   "settings.maintenanceSequenceHistoryJob": "job {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "This saved step is unavailable from the current catalog. Remove it or restore a compatible catalog before saving or previewing.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "The action-step catalog is unavailable. Saved steps remain visible, but saving and unsaved previews are paused until it loads.",
   "settings.maintenanceSequenceStepUnmonitor": "Unmonitor",
   "settings.maintenanceSequenceStepDeleteFiles": "Delete files",
   "settings.maintenanceSequenceStepChangeQualityProfile":
@@ -9563,9 +9539,6 @@ const en: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Grace days",
   "settings.maintenanceRuleGraceDaysHelp":
     "Days after each subject first matches before its action becomes due.",
-  "settings.maintenanceRuleTargetProfile": "Target quality profile",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "The profile this action would move matching titles to.",
   "settings.maintenanceRuleLibraries": "Library scope",
   "settings.maintenanceRuleLibrariesHelp":
     "Leave every library unchecked to scope the rule to the whole collection.",
@@ -9640,9 +9613,6 @@ const en: LocaleDictionary = {
   // ── Maintenance rules — instance gates ──
 
   // ── Maintenance rules — mode and arming ──
-  "settings.maintenanceArmingNone": "No effects",
-  "settings.maintenanceArmingReversible": "Library updates",
-  "settings.maintenanceArmingDestructive": "File deletion",
   "settings.maintenanceRuleState": "State",
   "settings.maintenanceRuleStateHelp":
     "Disabled rules are never evaluated. Dry run records candidates without acting on them. Enabled rules act on their candidates once each grace period elapses.",
@@ -9789,9 +9759,7 @@ const en: LocaleDictionary = {
     "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
   "settings.refMaintOutputTitle": "Rule output",
   "settings.refMaintOutputIntro":
-    "A matcher defines up to three names. Anything else in the package is ignored, and a decision that is not exactly this shape is rejected rather than coerced.",
-  "settings.refMaintOutputMatch":
-    "match — boolean. Leaving it undefined means the subject did not match.",
+    "A rule says what to do by defining actions, plus the optional unknown and reasons. A subject matches when at least one action holds for it. A decision that is not exactly this shape is rejected rather than coerced.",
   "settings.refMaintOutputUnknown":
     "unknown — boolean. Set it when the rule itself cannot see enough to decide; unknown always beats a match. Facts Scryer could not observe are already handled for you, so this is only for judgements of your own.",
   "settings.refMaintOutputReasons":
@@ -10079,6 +10047,35 @@ const en: LocaleDictionary = {
     "Whether this linked movie has a file on disk",
   "settings.refMaintSeriesMovieTags":
     "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
+  "settings.maintenanceActionHeadMoveToLibrary": "Move to library",
+  "settings.maintenanceActionHeadMoveToRoot": "Move to root folder",
+  "settings.maintenanceActionHeadNotify": "Notify",
+  "settings.maintenanceActionHeadFetchSubtitles": "Fetch subtitles",
+  "settings.maintenanceDeclaredActionsTitle": "Declared actions",
+  "settings.maintenanceDeclaredActionsHelp":
+    "The actions this rule's source defines. A matched subject gets only the ones whose conditions hold for it, applied in this order: {{order}}.",
+  "settings.maintenanceDeclaredActionsNone": "No actions",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "Fix the errors to see what this rule does.",
+  "settings.maintenanceDecidedActionsNone": "No actions",
+  "settings.maintenanceRuleWarningsTitle": "Warnings",
+  "settings.maintenanceRuleWarningLocation":
+    "Line {{line}}, column {{column}}:",
+  "settings.refMaintOutputFlagHeads":
+    "Actions without a value (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) are booleans: define them with if, and the action applies when the body holds.",
+  "settings.refMaintOutputValueHeads":
+    "Actions with a value (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) assign a plain literal with :=. An else chain may choose between literals; a computed value is rejected.",
+  "settings.refMaintOutputHelpers":
+    "Any other rule name is a helper of your own. It only has an effect when an action, unknown or reasons uses it.",
+  "settings.refMaintActionsTitle": "Actions",
+  "settings.refMaintActionsOrder":
+    "Scryer applies a subject's actions in this order, whatever order the source lists them in: {{order}}.",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) returns the whole days between an RFC3339 timestamp and the evaluation time, so days_since(input.facts.added_at) > 180 means added more than 180 days ago.",
+  "settings.refMaintActionsNotify":
+    "notify sends its message once, when the actions are applied. Previews and dry runs never send it.",
+  "settings.refMaintActionsConflicts":
+    "Conflicting actions for one subject, such as monitor with unmonitor, or the same tag both added and removed, hold that subject with a reason instead of applying either.",
   "settings.refMaintTagActionsTitle": "Tag actions",
   "settings.refMaintTagActionsNote":
     "add_tags and remove_tags write user tags on the matched title. Every label has to exist in the tag registry an administrator maintains in Settings, and labels are stored lowercase — a rule naming a tag that was deleted afterwards holds with tag_not_defined instead of writing it.",
@@ -10092,7 +10089,7 @@ const en: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "{{count}}-day grace",
   "settings.maintenanceTemplateNoGraceBadge": "No grace period",
   "settings.maintenanceTemplateDestructiveBadge": "Deletes files",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Pick a target profile",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Name a target profile",
   "settings.maintenanceTemplateDeadWantedTitle": "Dead wanted entries",
   "settings.maintenanceTemplateDeadWantedDescription":
     "Titles you still monitor that no file ever arrived for. Facts are plain values, so a title whose monitoring or file state Scryer cannot see holds instead of matching. After a 30-day grace period the scope is unmonitored and anything already on disk is left alone.",
@@ -10101,13 +10098,13 @@ const en: LocaleDictionary = {
     'Caution: this template deletes the title and its files. Anything holding a file ages out unless it carries the "keep" tag. A 180-day grace period runs first, and the instance gates plus this rule\'s own arming still have to agree before anything is removed.',
   "settings.maintenanceTemplateAddedLongAgoTitle": "Added over 180 days ago",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Real date math: the matcher subtracts the title's added_at from the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
+    "Real date math: days_since compares the title's added_at with the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
   "settings.maintenanceTemplateOversizedTitle": "Oversized releases",
   "settings.maintenanceTemplateOversizedDescription":
-    "Titles whose files total more than 40 GB. Moves the title onto a quality profile you choose and searches again only if the profile actually changed — pick that target profile in the editor before saving.",
+    'Titles whose files total more than 40 GB. Moves the title onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
   "settings.maintenanceTemplateFourKPurgeTitle": "4K purge",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "Any title holding a 2160p file. After a 7-day grace period it moves onto a quality profile you choose and searches again if the profile changed. Pick that target profile in the editor before saving.",
+    'Any title holding a 2160p file. After a 7-day grace period it moves onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
   "settings.maintenanceTemplateRequestedExpiryTitle": "Requested media expiry",
   "settings.maintenanceTemplateRequestedExpiryDescription":
     'Caution: this template deletes the title and its files. Titles that came in from a request age out after 120 days unless they carry the "keep" tag.',
@@ -10126,7 +10123,7 @@ const en: LocaleDictionary = {
     "Caution: this template deletes the title and its files. It matches titles whose request leases have all run out, after a 7-day grace period. A lease that has not started yet — the title has not been imported — is left alone, and so is a title that never had a lease.",
   "settings.maintenanceTemplateNoProfileTitle": "No quality profile",
   "settings.maintenanceTemplateNoProfileDescription":
-    "Titles with no quality profile assigned. Takes no action at all: this one is for collecting a list to look at before deciding what should happen to it.",
+    "Titles with no quality profile assigned. Adds the needs-review tag so a person can pick a profile; nothing else changes.",
   "settings.maintenanceTemplateNewestEpisodesTitle":
     "Keep newest 3 downloaded episodes",
   "settings.maintenanceTemplateNewestEpisodesDescription":
@@ -11269,12 +11266,8 @@ const en: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Series movies",
   "settings.maintenanceActionAddTags": "Add tags",
   "settings.maintenanceActionRemoveTags": "Remove tags",
-  "settings.maintenanceRuleTags": "Tags",
-  "settings.maintenanceRuleTagsNone": "No tags picked yet",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "adds {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "removes {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Tagged for removal",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

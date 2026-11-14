@@ -94,9 +94,21 @@
     },
     {
       "family": "maintenance",
-      "label": "match-tag",
-      "descKey": "settings.regoSnippet.matchTag",
-      "source": "match if {\n    \"${1:keep}\" in input.facts.tags\n}"
+      "label": "unmonitor-tagged",
+      "descKey": "settings.regoSnippet.unmonitorTagged",
+      "source": "unmonitor if {\n    \"${1:retire}\" in input.facts.tags\n}"
+    },
+    {
+      "family": "maintenance",
+      "label": "tag-after-days",
+      "descKey": "settings.regoSnippet.tagAfterDays",
+      "source": "add_tags := [\"${1:needs-review}\"] if {\n    days_since(input.facts.added_at) > ${2:365}\n}"
+    },
+    {
+      "family": "maintenance",
+      "label": "set-profile",
+      "descKey": "settings.regoSnippet.setProfile",
+      "source": "set_quality_profile := \"${1:Profile name}\" if {\n    input.facts.total_file_size_bytes > ${2:40000000000}\n}"
     }
   ]
 }

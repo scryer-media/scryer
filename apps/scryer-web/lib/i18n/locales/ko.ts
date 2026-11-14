@@ -2468,9 +2468,6 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "유예 일수",
   "settings.maintenanceRuleGraceDaysHelp":
     "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",
-  "settings.maintenanceRuleTargetProfile": "대상 품질 프로필",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "이 작업이 일치하는 타이틀을 옮길 프로필입니다.",
   "settings.maintenanceRuleLibraries": "라이브러리 범위",
   "settings.maintenanceRuleLibrariesHelp":
     "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
@@ -2544,9 +2541,6 @@ const ko: LocaleDictionary = {
   // ── 유지 관리 규칙 — 인스턴스 게이트 ──
 
   // ── 유지 관리 규칙 — 모드와 무장 ──
-  "settings.maintenanceArmingNone": "효과 없음",
-  "settings.maintenanceArmingReversible": "되돌릴 수 있음",
-  "settings.maintenanceArmingDestructive": "파괴적",
   "settings.maintenanceArmDestructiveLoading":
     "이 규칙이 이미 보유한 후보를 세는 중…",
   "settings.maintenanceArmDestructiveCount":
@@ -3254,12 +3248,8 @@ const ko: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "시리즈 영화",
   "settings.maintenanceActionAddTags": "태그 추가",
   "settings.maintenanceActionRemoveTags": "태그 제거",
-  "settings.maintenanceRuleTags": "태그",
-  "settings.maintenanceRuleTagsNone": "선택된 태그가 없습니다",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} 추가",
-  "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} 제거",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "삭제 대상 태그",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

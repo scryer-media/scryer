@@ -2682,9 +2682,6 @@ const fr: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Jours de grâce",
   "settings.maintenanceRuleGraceDaysHelp":
     "Jours après la première correspondance de la règle avant que l'action ne s'exécute (aucune action ne s'exécute pour l'instant).",
-  "settings.maintenanceRuleTargetProfile": "Profil de qualité cible",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Le profil vers lequel cette action déplacerait les titres correspondants.",
   "settings.maintenanceRuleLibraries": "Portée des bibliothèques",
   "settings.maintenanceRuleLibrariesHelp":
     "Ne cochez aucune bibliothèque pour appliquer la règle à toute la collection.",
@@ -2762,9 +2759,6 @@ const fr: LocaleDictionary = {
   // ── Règles de maintenance — verrous de l'instance ──
 
   // ── Règles de maintenance — mode et armement ──
-  "settings.maintenanceArmingNone": "Aucun effet",
-  "settings.maintenanceArmingReversible": "Réversible",
-  "settings.maintenanceArmingDestructive": "Destructif",
   "settings.maintenanceArmDestructiveLoading":
     "Comptage des candidats déjà retenus par cette règle…",
   "settings.maintenanceArmDestructiveCount":
@@ -3497,12 +3491,8 @@ const fr: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Films de série",
   "settings.maintenanceActionAddTags": "Ajouter des tags",
   "settings.maintenanceActionRemoveTags": "Retirer des tags",
-  "settings.maintenanceRuleTags": "Tags",
-  "settings.maintenanceRuleTagsNone": "Aucun tag sélectionné",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "ajoute {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "retire {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle":
     "Marqué pour suppression",
   "settings.maintenanceTemplateTaggedForRemovalDescription":

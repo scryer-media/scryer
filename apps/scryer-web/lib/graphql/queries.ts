@@ -4122,6 +4122,28 @@ export const ruleSetQuery = `query RuleSet($id: ID!) {
 
 // ── Maintenance Rules ─────────────────────────────────────────────────
 
+/// Everything a rule's source declares it can do. Shared by the rule list, the
+/// rule detail and validation, which all render the same summary.
+export const MAINTENANCE_DECLARED_ACTIONS_FIELDS = `
+      heads
+      destructive
+      qualityProfiles
+      addTags
+      removeTags
+      libraries
+      roots
+      notifications`;
+
+/// What a rule decided for one subject, on preview rows and candidates.
+export const MAINTENANCE_DECIDED_ACTIONS_FIELDS = `
+      heads
+      qualityProfile
+      addTags
+      removeTags
+      library
+      root
+      notification`;
+
 export const MAINTENANCE_RULE_SET_FIELDS = `
     id
     name
@@ -4134,24 +4156,7 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
     subjectKind
     currentRevisionNumber
     graceDays
-    actionSpec {
-      kind
-      schemaVersion
-      targetQualityProfileId
-      tags
-    }
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
+    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
     }
     createdAt
     updatedAt`;
@@ -4173,30 +4178,13 @@ export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
 }`;
 
 /// Detail payload shared by the rule-set query and every mutation that returns
-/// a rule set with its current revision and action.
+/// a rule set with its current revision and declared actions.
 export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
     ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
     }
     revision {${maintenanceRuleRevisionFieldSelection}
     }
-    actionSpec {
-      kind
-      schemaVersion
-      targetQualityProfileId
-      tags
-    }
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
+    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
     }`;
 
 export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
@@ -4206,37 +4194,6 @@ export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
 
 export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
   maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
-  }
-}`;
-
-export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
-  maintenanceActionDescriptors {
-    kind
-    supportedRuleScopes
-    supportedSubjects
-    riskClass
-    effectClasses
-    timingMode
-    allowedRepeatModes
-    requiresTargetQualityProfile
-    requiresTags
-    supportsStorageScope
-  }
-}`;
-
-export const maintenanceActionStepDescriptorsQuery = `query MaintenanceActionStepDescriptors {
-  maintenanceActionStepDescriptors {
-    id
-    kind
-    label
-    supportedSubjects
-    parameterSchema
-    effectClasses
-    riskClass
-    requires
-    terminal
-    completionPolicy
-    storageRootAllowed
   }
 }`;
 
@@ -4262,6 +4219,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     state
     stateReason
     reasonCodes
+    actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
+    }
     actionKind
     actionSequence {
       schemaVersion
@@ -4314,6 +4273,18 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     dueAt
     heldSince
     updatedAt
+  }
+}`;
+
+/// What enabling a destructive rule asks the operator to acknowledge: the same
+/// candidates as the table, reduced to the fields the confirmation lists.
+export const maintenanceArmingCandidatesQuery = `query MaintenanceArmingCandidates($ruleSetId: ID, $limit: Int) {
+  maintenanceCandidates(ruleSetId: $ruleSetId, limit: $limit) {
+    id
+    state
+    subjectKind
+    subjectLabel
+    titleName
   }
 }`;
 

@@ -148,7 +148,7 @@ test("scripts is grouped with Settings for system-settings managers only", () =>
   assert.equal(find([APP_PERMISSIONS.manageCatalogSettings]), undefined);
 });
 
-test("maintenance-rules command appears only when experimental features are on", () => {
+test("maintenance-rules command is offered to catalog managers without the experimental switch", () => {
   const catalogManager = user({
     appPermissions: [APP_PERMISSIONS.manageCatalogSettings],
   });
@@ -157,48 +157,18 @@ test("maintenance-rules command appears only when experimental features are on",
     buildRouteCommands({
       t,
       user: catalogManager,
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     }).some((command) => command.id === "settings-maintenance-rules"),
   );
+  // The catalog-settings permission still gates it.
   assert.equal(
     buildRouteCommands({
       t,
-      user: catalogManager,
-      experimentalFeaturesEnabled: false,
+      user: user(),
       onNavigate: () => {},
     }).some((command) => command.id === "settings-maintenance-rules"),
     false,
   );
-  // A caller that has not read the switch yet must not surface the page.
-  assert.equal(
-    buildRouteCommands({
-      t,
-      user: catalogManager,
-      onNavigate: () => {},
-    }).some((command) => command.id === "settings-maintenance-rules"),
-    false,
-  );
-});
-
-test("hiding maintenance rules leaves the rest of the catalog settings commands", () => {
-  const commands = buildRouteCommands({
-    t,
-    user: user({ appPermissions: [APP_PERMISSIONS.manageCatalogSettings] }),
-    experimentalFeaturesEnabled: false,
-    onNavigate: () => {},
-  });
-
-  for (const id of [
-    "settings-quality-profiles",
-    "settings-rules",
-    "settings-post-processing",
-  ]) {
-    assert.ok(
-      commands.some((command) => command.id === id),
-      `expected ${id} to survive the maintenance-rules gate`,
-    );
-  }
 });
 
 test("lists command reaches catalog viewers and list managers", () => {
@@ -216,7 +186,6 @@ test("lists command reaches catalog viewers and list managers", () => {
     const commands = buildRouteCommands({
       t,
       user: authorizedUser,
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     });
     const command = commands.find((candidate) => candidate.id === "lists");
@@ -227,12 +196,10 @@ test("lists command reaches catalog viewers and list managers", () => {
     buildRouteCommands({
       t,
       user: user(),
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     }).some((command) => command.id === "lists"),
     false,
   );
-  // Lists remain available without the experimental switch.
   assert.equal(
     buildRouteCommands({ t, user: listManager, onNavigate: () => {} }).some(
       (command) => command.id === "lists" || command.id === "lists-exclusions",
@@ -254,7 +221,6 @@ test("list exclusions command is limited to list managers and opens its pane", (
     buildRouteCommands({
       t,
       user: viewer,
-      experimentalFeaturesEnabled: true,
       onNavigate: () => {},
     }).some((command) => command.id === "lists-exclusions"),
     false,
@@ -264,7 +230,6 @@ test("list exclusions command is limited to list managers and opens its pane", (
   const command = buildRouteCommands({
     t,
     user: user({ appPermissions: [APP_PERMISSIONS.manageLists] }),
-    experimentalFeaturesEnabled: true,
     onNavigate: () => {},
     onNavigatePath: (path) => paths.push(path),
   }).find((candidate) => candidate.id === "lists-exclusions");

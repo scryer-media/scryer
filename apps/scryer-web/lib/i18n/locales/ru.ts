@@ -4617,7 +4617,7 @@ const ru: LocaleDictionary = {
   "settings.rulesScoring": "Правила оценки",
   "settings.maintenanceNavRules": "Правила",
   "settings.maintenanceNavHistory": "История",
-  "settings.maintenanceRuleAction": "Действие",
+  "settings.maintenanceRuleAction": "Действия",
   "settings.maintenanceRuleActionHelp":
     "Что сделало бы это правило, когда действия обслуживания будут включены.",
   "settings.maintenanceRuleActionPlaceholder": "Выберите действие",
@@ -4625,9 +4625,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Дни отсрочки",
   "settings.maintenanceRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
-  "settings.maintenanceRuleTargetProfile": "Целевой профиль качества",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Профиль, на который это действие перевело бы совпавшие тайтлы.",
   "settings.maintenanceRuleLibraries": "Область библиотек",
   "settings.maintenanceRuleLibrariesHelp":
     "Не отмечайте ни одной библиотеки, чтобы правило действовало на всю коллекцию.",
@@ -4693,9 +4690,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRuleCreated":
     "Правило обслуживания создано и сохранено отключённым.",
   "settings.maintenanceRuleDeleted": "Правило обслуживания {{name}} удалено.",
-  "settings.maintenanceArmingNone": "Без эффектов",
-  "settings.maintenanceArmingReversible": "Обратимое",
-  "settings.maintenanceArmingDestructive": "Разрушительное",
   "settings.maintenanceArmDestructiveLoading":
     "Подсчёт кандидатов, которые уже удерживает это правило…",
   "settings.maintenanceArmDestructiveCount":
@@ -4793,9 +4787,7 @@ const ru: LocaleDictionary = {
     "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
   "settings.refMaintOutputTitle": "Результат правила",
   "settings.refMaintOutputIntro":
-    "Правило определяет не более трёх имён. Всё остальное в пакете игнорируется, а решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
-  "settings.refMaintOutputMatch":
-    "match — логическое значение. Если оно не определено, субъект не совпал.",
+    "Правило указывает, что делать, определяя действия и необязательные unknown и reasons. Объект подходит, когда для него выполняется хотя бы одно действие. Решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
   "settings.refMaintOutputUnknown":
     "unknown — логическое значение. Устанавливайте его, когда само правило не может принять решение; unknown всегда имеет приоритет над совпадением. Факты, которые Scryer не смог наблюдать, уже обрабатываются автоматически.",
   "settings.refMaintOutputReasons":
@@ -4962,6 +4954,35 @@ const ru: LocaleDictionary = {
     "Есть ли у этого привязанного фильма файл на диске",
   "settings.refMaintSeriesMovieTags":
     "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
+  "settings.maintenanceActionHeadMoveToLibrary": "Переместить в библиотеку",
+  "settings.maintenanceActionHeadMoveToRoot": "Переместить в корневую папку",
+  "settings.maintenanceActionHeadNotify": "Уведомить",
+  "settings.maintenanceActionHeadFetchSubtitles": "Загрузить субтитры",
+  "settings.maintenanceDeclaredActionsTitle": "Объявленные действия",
+  "settings.maintenanceDeclaredActionsHelp":
+    "Действия, которые определяет исходный код правила. Подходящий объект получает только те, чьи условия для него выполняются, в таком порядке: {{order}}.",
+  "settings.maintenanceDeclaredActionsNone": "Нет действий",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "Исправьте ошибки, чтобы увидеть, что делает это правило.",
+  "settings.maintenanceDecidedActionsNone": "Нет действий",
+  "settings.maintenanceRuleWarningsTitle": "Предупреждения",
+  "settings.maintenanceRuleWarningLocation":
+    "Строка {{line}}, столбец {{column}}:",
+  "settings.refMaintOutputFlagHeads":
+    "Действия без значения (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) логические: определите их через if, и действие применяется, когда тело выполняется.",
+  "settings.refMaintOutputValueHeads":
+    "Действия со значением (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) присваивают простой литерал через :=. Цепочка else может выбирать между литералами; вычисляемое значение отклоняется.",
+  "settings.refMaintOutputHelpers":
+    "Любое другое имя правила — ваш собственный помощник. Он влияет на результат, только если его использует действие, unknown или reasons.",
+  "settings.refMaintActionsTitle": "Действия",
+  "settings.refMaintActionsOrder":
+    "Scryer применяет действия объекта в таком порядке, независимо от порядка в исходном коде: {{order}}.",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) возвращает число полных дней между меткой времени RFC3339 и временем вычисления, поэтому days_since(input.facts.added_at) > 180 означает «добавлено более 180 дней назад».",
+  "settings.refMaintActionsNotify":
+    "notify отправляет сообщение один раз, когда действия применяются. Предпросмотр и пробные запуски его не отправляют.",
+  "settings.refMaintActionsConflicts":
+    "Противоречащие действия для одного объекта, например monitor вместе с unmonitor или один и тот же тег, который и добавляется, и удаляется, удерживают объект с указанием причины вместо применения любого из них.",
   "settings.refMaintTagActionsTitle": "Действия с тегами",
   "settings.refMaintTagActionsNote":
     "add_tags и remove_tags записывают пользовательские теги на совпавший тайтл. Каждая метка должна существовать в реестре тегов, который администратор ведёт в настройках, и хранится в нижнем регистре: правило, называющее удалённый тег, удерживается с причиной tag_not_defined вместо записи.",
@@ -4974,7 +4995,7 @@ const ru: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "Отсрочка {{count}} дн.",
   "settings.maintenanceTemplateNoGraceBadge": "Без отсрочки",
   "settings.maintenanceTemplateDestructiveBadge": "Удаляет файлы",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Выберите целевой профиль",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Укажите целевой профиль",
   "settings.maintenanceTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
   "settings.maintenanceTemplateDeadWantedDescription":
     "Отслеживаемые тайтлы, для которых так и не появился ни один файл. Факты — это обычные значения, поэтому тайтл, у которого Scryer не видит состояние отслеживания или наличия файла, удерживается, а не совпадает. После отсрочки в 30 дней область снимается с отслеживания, а всё, что уже есть на диске, остаётся нетронутым.",
@@ -4984,13 +5005,13 @@ const ru: LocaleDictionary = {
   "settings.maintenanceTemplateAddedLongAgoTitle":
     "Добавлено более 180 дней назад",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Настоящая арифметика дат: матчер вычитает added_at тайтла из времени вычисления и совпадает после 180 дней. Область снимается с отслеживания, файлы остаются. Тайтл без значения added_at удерживается, а не совпадает.",
+    "Настоящая работа с датами: days_since сравнивает added_at тайтла со временем вычисления и срабатывает после 180 дней. Отслеживание отключается, файлы остаются. Тайтл без значения added_at удерживается, а не подходит.",
   "settings.maintenanceTemplateOversizedTitle": "Слишком большие релизы",
   "settings.maintenanceTemplateOversizedDescription":
-    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на выбранный вами профиль качества и запускает поиск заново, только если профиль действительно изменился — выберите целевой профиль в редакторе до сохранения.",
+    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на указанный профиль качества и снова запускает поиск. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
   "settings.maintenanceTemplateFourKPurgeTitle": "Очистка 4K",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "Любой тайтл, у которого есть файл 2160p. После отсрочки в 7 дней он переводится на выбранный вами профиль качества, и поиск запускается заново, если профиль изменился. Выберите целевой профиль в редакторе до сохранения.",
+    "Любой тайтл с файлом 2160p. После 7-дневной отсрочки он переводится на указанный профиль качества, и поиск запускается снова. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
   "settings.maintenanceTemplateRequestedExpiryTitle":
     "Истечение срока запрошенного",
   "settings.maintenanceTemplateRequestedExpiryDescription":
@@ -5012,7 +5033,7 @@ const ru: LocaleDictionary = {
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, у которых истекли все сроки хранения по запросам, после отсрочки в 7 дней. Хранение, которое ещё не началось — тайтл не импортирован, — остаётся нетронутым, как и тайтл, у которого срока хранения никогда не было.",
   "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
   "settings.maintenanceTemplateNoProfileDescription":
-    "Тайтлы, которым не назначен профиль качества. Не выполняет никаких действий: этот шаблон нужен, чтобы собрать список и посмотреть на него, прежде чем решать, что с ним делать.",
+    "Тайтлы без назначенного профиля качества. Добавляет тег needs-review, чтобы человек выбрал профиль; больше ничего не меняется.",
   "settings.maintenanceTemplateNewestEpisodesTitle":
     "Оставить 3 новейших загруженных эпизода",
   "settings.maintenanceTemplateNewestEpisodesDescription":
@@ -5972,12 +5993,8 @@ const ru: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Фильмы сериала",
   "settings.maintenanceActionAddTags": "Добавить теги",
   "settings.maintenanceActionRemoveTags": "Удалить теги",
-  "settings.maintenanceRuleTags": "Теги",
-  "settings.maintenanceRuleTagsNone": "Теги ещё не выбраны",
   "settings.maintenanceRuleTagsHelp":
     "Правило назначает эти теги каждому подходящему тайтлу. Можно выбрать только теги, заданные администратором в разделе «Настройки → Теги».",
-  "settings.maintenanceCandidatesTagPatchAdd": "добавляет {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "удаляет {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Помечено к удалению",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     "Внимание: этот шаблон удаляет тайтл и его файлы. Он применяется ко всем тайтлам с тегом «remove» после недели ожидания. Достаточно назначить тег вручную, чтобы запустить отсчёт; снятие тега в течение недели отменяет удаление. Сначала создайте тег «remove» в разделе «Настройки → Теги».",
@@ -10322,6 +10339,14 @@ const ru: LocaleDictionary = {
     "Правило должно объявлять назначенный ему пакет.",
   "error.ruleInputImportUnsupported":
     "Обращайтесь к входным данным правила напрямую, а не импортируйте их под другим именем.",
+  "error.ruleActionValueNotLiteral":
+    "Присвойте этому действию простой литерал: строку в кавычках для set_quality_profile, move_to_library, move_to_root и notify или список строк в кавычках для add_tags и remove_tags.",
+  "error.ruleActionValueInvalid":
+    "Значение этого действия недопустимо: имя профиля не может быть пустым, а каждый тег должен быть допустимой меткой тега.",
+  "error.ruleHostHelperRedefined":
+    "days_since предоставляется Scryer и не может быть переопределён. Дайте своему помощнику другое имя.",
+  "error.ruleUnreferencedRule":
+    "Это правило не является действием, и ничто в исходном коде его не использует. Проверьте написание, если оно задумывалось как действие.",
   "error.ruleMatchRequired":
     "Определите логическое правило match для этого условия обслуживания.",
   "error.ruleVoteRequired":
@@ -10684,8 +10709,14 @@ const ru: LocaleDictionary = {
     "Отклонить запрос, если его признак контента для взрослых имеет значение true.",
   "settings.regoSnippet.manualRequest":
     "Потребовать ручной проверки, когда число недавних одобрений достигает порога.",
-  "settings.regoSnippet.matchTag":
-    "Выбрать объект обслуживания по тегу. Это условие не определяет действие.",
+  "settings.regoHelper.daysSince":
+    "Полные дни между меткой времени RFC3339 и временем вычисления. Только для правил обслуживания.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Отключить отслеживание объекта с тегом.",
+  "settings.regoSnippet.tagAfterDays":
+    "Пометить тегом объект, добавленный больше заданного числа дней назад.",
+  "settings.regoSnippet.setProfile":
+    "Перевести крупные тайтлы на указанный профиль качества.",
   "settings.trustedProxiesTitle":
     "Доверенные прокси для ограничения частоты запросов",
   "settings.trustedProxiesHelp":
@@ -11819,50 +11850,11 @@ const ru: LocaleDictionary = {
     "Автоматическая очистка приостановлена до устранения проблемы: {{error}}",
   "settings.recycleBinScheduledDeletion": "Удаление по расписанию",
   "settings.maintenanceActionSequence": "Последовательность действий",
-  "settings.maintenanceSequenceTitle": "Последовательность действий",
-  "settings.maintenanceSequenceHelp":
-    "Выполнять эти шаги по порядку после окончания периода отсрочки для объекта. Пустая последовательность только фиксирует совпадения, не выполняя никаких действий.",
-  "settings.maintenanceSequenceEmpty":
-    "Только пробный запуск — шаги действий не настроены.",
   "settings.maintenanceSequenceObserveOnly": "Только пробный запуск",
-  "settings.maintenanceSequenceSummary": "Сводка последовательности",
-  "settings.maintenanceSequenceSummaryTarget": "Объекты: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "При включении: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Последствия: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "соответствующий условию тайтл",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "соответствующий условию тайтл, его сезоны и эпизоды",
-  "settings.maintenanceSequenceTargetSeason": "соответствующий условию сезон",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "соответствующий условию сезон и его эпизоды",
-  "settings.maintenanceSequenceTargetEpisode": "соответствующий условию эпизод",
-  "settings.maintenanceSequencePreviewPlan":
-    "Последствия по порядку для этого предпросмотра",
-  "settings.maintenanceSequencePreviewDescendants": "включая дочерние объекты",
-  "settings.maintenanceSequencePreviewMatchedScope":
-    "только объекты выбранной области, соответствующие условию",
-  "settings.maintenanceSequenceAdd": "Добавить шаг",
-  "settings.maintenanceSequencePreset": "Шаблон последовательности",
-  "settings.maintenanceSequencePresetApply": "Заменить шаблоном",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Изменить профиль, затем выполнить поиск, если он изменился",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Отключить отслеживание дочерних объектов, затем удалить файлы",
-  "settings.maintenanceSequenceTerminal": "Завершающий",
-  "settings.maintenanceSequenceDependencies": "Требуется: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "Включить сезоны и эпизоды",
-  "settings.maintenanceSequenceSearchCondition": "Условие поиска",
-  "settings.maintenanceSequenceSearchUnconditional": "Всегда запрашивать поиск",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Только после изменения профиля",
   "settings.maintenanceSequenceHistoryWaiting": "ожидание предыдущего шага",
   "settings.maintenanceSequenceHistorySearchRequested": "поиск запрошен",
   "settings.maintenanceSequenceHistorySearchAccepted": "принято",
   "settings.maintenanceSequenceHistoryJob": "задание {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "Этот сохранённый шаг недоступен в текущем каталоге. Удалите его или восстановите совместимый каталог перед сохранением или предпросмотром.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "Каталог шагов действий недоступен. Сохранённые шаги по-прежнему видны, но сохранение и предпросмотр несохранённых изменений приостановлены до его загрузки.",
   "settings.maintenanceSequenceStepUnmonitor": "Отключить отслеживание",
   "settings.maintenanceSequenceStepDeleteFiles": "Удалить файлы",
   "settings.maintenanceSequenceStepChangeQualityProfile":

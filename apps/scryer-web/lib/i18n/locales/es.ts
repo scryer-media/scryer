@@ -2617,9 +2617,6 @@ const es: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Días de gracia",
   "settings.maintenanceRuleGraceDaysHelp":
     "Días desde la primera coincidencia de la regla hasta que se ejecutaría la acción (todavía no se ejecuta ninguna acción).",
-  "settings.maintenanceRuleTargetProfile": "Perfil de calidad de destino",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "El perfil al que esta acción movería los títulos coincidentes.",
   "settings.maintenanceRuleLibraries": "Alcance de bibliotecas",
   "settings.maintenanceRuleLibrariesHelp":
     "Deja todas las bibliotecas sin marcar para aplicar la regla a toda la colección.",
@@ -2695,9 +2692,6 @@ const es: LocaleDictionary = {
   // ── Reglas de mantenimiento — compuertas de la instancia ──
 
   // ── Reglas de mantenimiento — modo y armado ──
-  "settings.maintenanceArmingNone": "Sin efectos",
-  "settings.maintenanceArmingReversible": "Reversible",
-  "settings.maintenanceArmingDestructive": "Destructivo",
   "settings.maintenanceArmDestructiveLoading":
     "Contando los candidatos que esta regla ya mantiene…",
   "settings.maintenanceArmDestructiveCount":
@@ -3426,12 +3420,8 @@ const es: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Películas de serie",
   "settings.maintenanceActionAddTags": "Añadir etiquetas",
   "settings.maintenanceActionRemoveTags": "Quitar etiquetas",
-  "settings.maintenanceRuleTags": "Etiquetas",
-  "settings.maintenanceRuleTagsNone": "Aún no hay etiquetas seleccionadas",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "añade {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "quita {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Marcado para eliminar",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

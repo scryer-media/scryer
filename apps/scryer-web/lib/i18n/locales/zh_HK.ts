@@ -4135,41 +4135,10 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRuleActionPlaceholder": "選擇操作",
   "settings.maintenanceRuleNoActions": "沒有可用的標題級操作。",
   "settings.maintenanceActionSequence": "行動順序",
-  "settings.maintenanceSequenceTitle": "行動順序",
-  "settings.maintenanceSequenceSummary": "順序摘要",
-  "settings.maintenanceSequenceSummaryTarget": "目標：{{target}}",
-  "settings.maintenanceSequenceSummaryEffects": "效果：{{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "匹配條件的作品",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "匹配條件的作品、季與分集",
-  "settings.maintenanceSequenceTargetSeason": "匹配條件的季",
-  "settings.maintenanceSequenceTargetSeasonDescendants": "匹配條件的季與分集",
-  "settings.maintenanceSequenceTargetEpisode": "匹配條件的分集",
-  "settings.maintenanceSequencePreviewPlan": "此預覽的已排序效果",
-  "settings.maintenanceSequencePreviewDescendants": "包含子項目",
-  "settings.maintenanceSequencePreviewMatchedScope": "僅匹配的範圍",
-  "settings.maintenanceSequenceAdd": "新增步驟",
-  "settings.maintenanceSequencePreset": "順序預設集",
-  "settings.maintenanceSequencePresetApply": "替換為預設集",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "變更設定檔，若有變更則搜尋",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "取消監控子項目，然後刪除文件",
-  "settings.maintenanceSequenceTerminal": "終止步驟",
-  "settings.maintenanceSequenceDependencies": "依賴：{{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "包含季與分集",
-  "settings.maintenanceSequenceSearchCondition": "搜尋條件",
-  "settings.maintenanceSequenceSearchUnconditional": "一律請求搜尋",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "僅在設定檔發生變更後",
   "settings.maintenanceSequenceHistoryWaiting": "正在等待較早的步驟",
   "settings.maintenanceSequenceHistorySearchRequested": "已請求搜尋",
   "settings.maintenanceSequenceHistorySearchAccepted": "已接受",
   "settings.maintenanceSequenceHistoryJob": "任務 {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "目前的目錄中無法使用此已儲存的步驟。在儲存或預覽前請先將其移除或還原相容的目錄。",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "動作步驟目錄不可用。已儲存的步驟仍可見，但儲存與未儲存的預覽將暫停直至其載入完成。",
   "settings.maintenanceSequenceStepUnmonitor": "取消監控",
   "settings.maintenanceSequenceStepDeleteFiles": "刪除文件",
   "settings.maintenanceSequenceStepChangeQualityProfile": "變更質素設定檔",
@@ -4180,9 +4149,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "寬限天數",
   "settings.maintenanceRuleGraceDaysHelp":
     "規則首次匹配後、操作執行前的天數（目前不會執行任何操作）。",
-  "settings.maintenanceRuleTargetProfile": "目標質素配置",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "此操作會將匹配的標題切換到的配置。",
   "settings.maintenanceRuleLibraries": "媒體庫範圍",
   "settings.maintenanceRuleLibrariesHelp":
     "不勾選任何媒體庫時，規則將作用於整個收藏。",
@@ -4249,9 +4215,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRuleUpdated": "維護規則已更新。",
   "settings.maintenanceRuleCreated": "維護規則已創建，並以禁用狀態儲存。",
   "settings.maintenanceRuleDeleted": "維護規則 {{name}} 已刪除。",
-  "settings.maintenanceArmingNone": "無效果",
-  "settings.maintenanceArmingReversible": "可逆",
-  "settings.maintenanceArmingDestructive": "破壞性",
   "settings.maintenanceArmDestructiveLoading": "正在統計該規則已持有的候選項…",
   "settings.maintenanceArmDestructiveCount":
     "有 {{count}} 個候選項可能被處理。",
@@ -4345,9 +4308,7 @@ const zh_HK: LocaleDictionary = {
     "每條維護規則每個主體會收到一個 input 對象：input.subject 標識正在評估的項目，input.library 指出其所屬媒體庫，input.facts 帶有事實快照，而評估外層環境則位於 input 本身。事實是普通的值，若沒有可回報的內容，該鍵就會直接缺失 — 因此請寫 input.facts.monitored，而非狀態檢查。若規則讀取了 Scryer 無法為該主體觀察到的事實，Scryer 會為您暫緩該主體；您永遠不需要自行編寫該保護機制。",
   "settings.refMaintOutputTitle": "規則輸出",
   "settings.refMaintOutputIntro":
-    "匹配器最多定義三個名稱。包中的其他任何內容都會被忽略，若決策不完全符合此結構，將直接拒絕而非強制轉換型別。",
-  "settings.refMaintOutputMatch":
-    "match — 布爾值。保持未定義表示該主體不符合條件。",
+    "規則透過定義操作，以及選用的 unknown 與 reasons，說明要做甚麼。只要至少一項操作對某對象成立，該對象即為匹配。若決策不完全符合此結構，將直接拒絕而非強制轉換型別。",
   "settings.refMaintOutputUnknown":
     "unknown — 布爾值。當規則本身資訊不足無法決策時進行設定；unknown 永遠優先於 match。Scryer 無法觀察到的事實已為您自動處理，因此這僅用於您自己的判斷。",
   "settings.refMaintOutputReasons":
@@ -4523,6 +4484,35 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintSeriesMovieHasFile": "此連結電影在硬碟上是否有文件",
   "settings.refMaintSeriesMovieTags":
     "此連結電影上的用戶自訂標籤，來自與作品標籤相同的註冊表。系列電影自帶標籤；它不會繼承節目的標籤。",
+  "settings.maintenanceActionHeadMoveToLibrary": "移至媒體庫",
+  "settings.maintenanceActionHeadMoveToRoot": "移至根目錄",
+  "settings.maintenanceActionHeadNotify": "通知",
+  "settings.maintenanceActionHeadFetchSubtitles": "取得字幕",
+  "settings.maintenanceDeclaredActionsTitle": "宣告的操作",
+  "settings.maintenanceDeclaredActionsHelp":
+    "此規則原始碼定義的操作。匹配的對象只會套用條件成立的操作，並依此順序執行：{{order}}。",
+  "settings.maintenanceDeclaredActionsNone": "沒有操作",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "修正錯誤後即可看到此規則的作用。",
+  "settings.maintenanceDecidedActionsNone": "沒有操作",
+  "settings.maintenanceRuleWarningsTitle": "警告",
+  "settings.maintenanceRuleWarningLocation":
+    "第 {{line}} 行，第 {{column}} 欄：",
+  "settings.refMaintOutputFlagHeads":
+    "不帶值的操作（unmonitor、monitor、search、fetch_subtitles、delete_files、delete_title）是布爾值：以 if 定義，主體成立時即套用。",
+  "settings.refMaintOutputValueHeads":
+    "帶值的操作（set_quality_profile、add_tags、remove_tags、move_to_library、move_to_root、notify）以 := 指派純字面值。else 鏈可在字面值之間選擇；計算出的值會被拒絕。",
+  "settings.refMaintOutputHelpers":
+    "其他任何規則名稱都是您自己的輔助規則，只有在操作、unknown 或 reasons 使用它時才有作用。",
+  "settings.refMaintActionsTitle": "操作",
+  "settings.refMaintActionsOrder":
+    "無論原始碼中的順序為何，Scryer 都依此順序套用對象的操作：{{order}}。",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) 回傳 RFC3339 時間戳記與評估時間之間的完整天數，因此 days_since(input.facts.added_at) > 180 表示加入已超過 180 天。",
+  "settings.refMaintActionsNotify":
+    "notify 會在套用操作時傳送一次訊息。預覽與試執行絕不會傳送。",
+  "settings.refMaintActionsConflicts":
+    "同一對象的衝突操作（例如同時 monitor 與 unmonitor，或同一標籤既加入又移除）會附上原因暫緩該對象，而不套用其中任何一項。",
   "settings.refMaintTagActionsTitle": "標籤操作",
   "settings.refMaintTagActionsNote":
     "add_tags 與 remove_tags 在符合條件的作品上寫入用戶標籤。每個標籤都必須存在於管理員在「設定」中維護的標籤註冊表中，且標籤以小寫形式儲存 — 引用了後續已刪除標籤的規則將暫緩並顯示 tag_not_defined，而不是寫入它。",
@@ -4535,7 +4525,7 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "{{count}} 天寬限期",
   "settings.maintenanceTemplateNoGraceBadge": "無寬限期",
   "settings.maintenanceTemplateDestructiveBadge": "刪除文件",
-  "settings.maintenanceTemplateNeedsProfileBadge": "挑選目標設定檔",
+  "settings.maintenanceTemplateNeedsProfileBadge": "指定目標設定檔",
   "settings.maintenanceTemplateDeadWantedTitle": "失效的徵求中項目",
   "settings.maintenanceTemplateDeadWantedDescription":
     "您仍在監控但從未取得任何文件的作品。事實是純值，因此 Scryer 無法獲知其監控或文件狀態的作品將會暫緩而非匹配條件。在 30 天寬限期過後，該範圍會被取消監控，而硬碟上既有的任何內容將不受影響。",
@@ -4544,13 +4534,13 @@ const zh_HK: LocaleDictionary = {
     '注意：此範本會刪除作品及其文件。任何包含文件的項目都會老化淘汰，除非其帶有 "keep" 標籤。首先會執行 180 天的寬限期，且實例門檻以及此規則本身的授權必須一致同意，然後才會移除任何內容。',
   "settings.maintenanceTemplateAddedLongAgoTitle": "加入已超過 180 天",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "真實日期計算：匹配器將評估時間減去作品的 added_at，並匹配超過 180 天的項目。該範圍會被取消監控，文件則保留。沒有 added_at 值的作品將被暫緩而非匹配條件。",
+    "真正的日期運算：days_since 將作品的 added_at 與評估時間比較，超過 180 天即匹配。範圍會取消監控，文件保留。沒有 added_at 值的作品會暫緩而非匹配。",
   "settings.maintenanceTemplateOversizedTitle": "超大體積發行版本",
   "settings.maintenanceTemplateOversizedDescription":
-    "文件總計超過 40 GB 的作品。將作品移至您選擇的質素設定檔，且僅在設定檔實際變更時才重新搜尋 — 在儲存前請在編輯器中挑選該目標設定檔。",
+    "文件總計超過 40 GB 的作品。將作品移至指定的質素設定檔並重新搜尋。儲存前，請將原始碼中的「Compact 1080p」預留名稱換成您的設定檔之一。",
   "settings.maintenanceTemplateFourKPurgeTitle": "4K 清理",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "任何包含 2160p 文件的作品。在 7 天寬限期過後，將其移至您選擇的質素設定檔，並在設定檔變更時重新搜尋。儲存前請在編輯器中選取該目標設定檔。",
+    "任何含有 2160p 文件的作品。7 天寬限期後移至指定的質素設定檔並重新搜尋。儲存前，請將原始碼中的「Compact 1080p」預留名稱換成您的設定檔之一。",
   "settings.maintenanceTemplateRequestedExpiryTitle": "請求的媒體到期",
   "settings.maintenanceTemplateRequestedExpiryDescription":
     '注意：此範本會刪除作品及其文件。來自請求的作品會在 120 天後淘汰，除非帶有 "keep" 標籤。',
@@ -4568,7 +4558,7 @@ const zh_HK: LocaleDictionary = {
     "注意：此範本會刪除作品及其文件。在 7 天寬限期過後，它會匹配請求租約皆已到期的作品。尚未開始的租約（作品尚未導入）以及從未有租約的作品都將不受影響。",
   "settings.maintenanceTemplateNoProfileTitle": "無質素設定檔",
   "settings.maintenanceTemplateNoProfileDescription":
-    "未指派質素設定檔的作品。不採取任何行動：此項用於收集清單以便在決定處理方式前進行檢視。",
+    "未指派質素設定檔的作品。加上 needs-review 標籤，讓人員選擇設定檔；其他不做任何變更。",
   "settings.maintenanceTemplateNewestEpisodesTitle": "保留最新下載的 3 集分集",
   "settings.maintenanceTemplateNewestEpisodesDescription":
     "注意：此分集範圍範本會取消監控並刪除依播出日期排名在最新三集之外的已下載分集。特別篇、未來分集、遺失的文件與未確定的日期不會獲得排名，因此不會匹配條件。受保護的分集仍會佔據前三名的名額。",
@@ -5518,12 +5508,8 @@ const zh_HK: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "分集電影",
   "settings.maintenanceActionAddTags": "添加標籤",
   "settings.maintenanceActionRemoveTags": "移除標籤",
-  "settings.maintenanceRuleTags": "標籤",
-  "settings.maintenanceRuleTagsNone": "尚未選擇標籤",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "添加 {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "移除 {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "標記為待刪除",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

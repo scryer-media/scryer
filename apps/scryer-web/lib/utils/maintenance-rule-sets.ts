@@ -1,177 +1,188 @@
 import { graphQlErrorNumberExtension } from "../graphql/error-message.ts";
 import type {
-  MaintenanceActionDescriptor,
+  MaintenanceActionHead,
   MaintenanceActionKind,
-  MaintenanceActionSequence,
-  MaintenanceActionSpec,
-  MaintenanceActionStep,
   MaintenanceActionStepKind,
   MaintenanceActionStepProgress,
   MaintenanceCandidate,
   MaintenanceCandidateState,
-  MaintenanceEffectArming,
+  MaintenanceDecidedActions,
+  MaintenanceDeclaredActions,
   MaintenancePreviewOutcome,
-  MaintenanceRiskClass,
   MaintenanceRuleSetDetail,
   MaintenanceRuleSetDraft,
   MaintenanceRuleSetRecord,
-  MaintenanceRuleScope,
   MaintenanceRuleState,
 } from "@/lib/types/maintenance-rule-sets";
-// Relative rather than aliased on purpose: `node --test` runs these modules
-// without the bundler's path aliases, so a value import through `@/` would
-// resolve in the app and fail in the test runner.
-import { isReservedTitleTag, normalizeTitleTagLabel } from "./title-tags.ts";
 
 /// The API caps a preview run at 50 titles and defaults to 20.
 export const MAINTENANCE_PREVIEW_LIMIT_MAX = 50;
 export const MAINTENANCE_PREVIEW_LIMIT_DEFAULT = 20;
 
-/// Starter matcher for a new rule. No `package` or `import` line: the API
+/// Starter source for a new rule. No `package` or `import` line: the API
 /// generates both and strips them back off when it hands the source to the
 /// editor, so a template carrying them would vanish on the first round trip.
-export const MAINTENANCE_STARTER_SOURCE = `# Maintenance matcher. Define \`match\` to select a subject and \`reasons\` to
-# explain why.
+export const MAINTENANCE_STARTER_SOURCE = `# Maintenance rule. Defining a rule named after an action declares that
+# action: unmonitor, monitor, search, fetch_subtitles, delete_files and
+# delete_title take \`if { ... }\`; set_quality_profile, move_to_library,
+# move_to_root and notify take a string, add_tags and remove_tags a list.
+# Any other rule name is your own helper. \`reasons\` explains the choice.
 #
 # Facts are plain values: \`input.facts.monitored\` is the boolean itself. A
 # fact with nothing to report is simply missing, so \`not input.facts.has_file\`
 # is how you ask for "no files". If a fact Scryer could not observe is one this
 # rule reads, Scryer holds the subject for you — you never write that guard.
+# \`days_since(ts)\` turns a timestamp fact into whole days.
 
-match if {
+unmonitored_with_files if {
 	not input.facts.monitored
 	input.facts.has_file
 }
 
-reasons contains "unmonitored_with_files" if {
-	match
-}
+add_tags := ["needs-review"] if unmonitored_with_files
+
+reasons contains "unmonitored_with_files" if unmonitored_with_files
 `;
 
-const DEFAULT_ACTION_KIND: MaintenanceActionKind = "DO_NOTHING";
-const MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION = 2;
+/// The order the server applies a subject's decided actions in. Declared
+/// actions are listed in the same order so a rule reads the way it runs.
+export const MAINTENANCE_ACTION_HEAD_ORDER: readonly MaintenanceActionHead[] = [
+  "ADD_TAGS",
+  "REMOVE_TAGS",
+  "SET_QUALITY_PROFILE",
+  "MONITOR",
+  "SEARCH",
+  "FETCH_SUBTITLES",
+  "MOVE_TO_LIBRARY",
+  "MOVE_TO_ROOT",
+  "UNMONITOR",
+  "DELETE_FILES",
+  "DELETE_TITLE",
+  "NOTIFY",
+];
 
-export function maintenanceActionSequenceStepId(
-  randomUuid:
-    (() => string) | null | undefined = globalThis.crypto?.randomUUID?.bind(
-    globalThis.crypto,
-  ),
-  now: () => number = Date.now,
-  random: () => number = Math.random,
-): string {
-  const uuid = randomUuid?.();
-  if (uuid) return uuid;
-  return `step-${now()}-${random().toString(36).slice(2) || "0"}`;
+/// The rule name an author writes in source to declare each action.
+export const MAINTENANCE_ACTION_HEAD_RULE_NAMES: Record<
+  MaintenanceActionHead,
+  string
+> = {
+  UNMONITOR: "unmonitor",
+  DELETE_FILES: "delete_files",
+  DELETE_TITLE: "delete_title",
+  SEARCH: "search",
+  SET_QUALITY_PROFILE: "set_quality_profile",
+  ADD_TAGS: "add_tags",
+  REMOVE_TAGS: "remove_tags",
+  MONITOR: "monitor",
+  MOVE_TO_LIBRARY: "move_to_library",
+  MOVE_TO_ROOT: "move_to_root",
+  NOTIFY: "notify",
+  FETCH_SUBTITLES: "fetch_subtitles",
+};
+
+const ACTION_HEAD_LABEL_KEYS: Record<MaintenanceActionHead, string> = {
+  UNMONITOR: "settings.maintenanceSequenceStepUnmonitor",
+  DELETE_FILES: "settings.maintenanceSequenceStepDeleteFiles",
+  DELETE_TITLE: "settings.maintenanceSequenceStepDeleteTitleAndFiles",
+  SEARCH: "settings.maintenanceSequenceStepSearch",
+  SET_QUALITY_PROFILE: "settings.maintenanceSequenceStepChangeQualityProfile",
+  ADD_TAGS: "settings.maintenanceSequenceStepAddTags",
+  REMOVE_TAGS: "settings.maintenanceSequenceStepRemoveTags",
+  MONITOR: "title.monitorAction",
+  MOVE_TO_LIBRARY: "settings.maintenanceActionHeadMoveToLibrary",
+  MOVE_TO_ROOT: "settings.maintenanceActionHeadMoveToRoot",
+  NOTIFY: "settings.maintenanceActionHeadNotify",
+  FETCH_SUBTITLES: "settings.maintenanceActionHeadFetchSubtitles",
+};
+
+/// Translation key for an action head, or null for a head this build does not
+/// know. Callers render the raw head rather than an empty cell.
+export function actionHeadLabelKey(head: string): string | null {
+  return ACTION_HEAD_LABEL_KEYS[head as MaintenanceActionHead] ?? null;
 }
 
-function sequenceStep(
-  id: string,
-  kind: MaintenanceActionStepKind,
-  parameters: MaintenanceActionStep["parameters"],
-): MaintenanceActionStep {
-  return { id, kind, parameters };
+const DESTRUCTIVE_ACTION_HEADS: ReadonlySet<string> = new Set([
+  "DELETE_FILES",
+  "DELETE_TITLE",
+]);
+
+export function isDestructiveActionHead(head: string): boolean {
+  return DESTRUCTIVE_ACTION_HEADS.has(head);
 }
 
-function noStepParameters(): MaintenanceActionStep["parameters"] {
-  return {
-    includeDescendants: null,
-    targetQualityProfileId: null,
-    searchCondition: null,
-    tags: [],
+/// One action as a row shows it: the head plus the values it carries. Heads
+/// without a value (unmonitor, search, ...) carry an empty list.
+export type MaintenanceActionEntry = {
+  head: MaintenanceActionHead;
+  values: string[];
+};
+
+function headOrderIndex(head: string): number {
+  const index = MAINTENANCE_ACTION_HEAD_ORDER.indexOf(
+    head as MaintenanceActionHead,
+  );
+  return index === -1 ? MAINTENANCE_ACTION_HEAD_ORDER.length : index;
+}
+
+/// Everything a rule's source can do, in execution order, with every literal
+/// each valued head can produce.
+export function declaredActionEntries(
+  declared: MaintenanceDeclaredActions | null | undefined,
+): MaintenanceActionEntry[] {
+  if (!declared) return [];
+  const values: Partial<Record<MaintenanceActionHead, string[]>> = {
+    SET_QUALITY_PROFILE: declared.qualityProfiles,
+    ADD_TAGS: declared.addTags,
+    REMOVE_TAGS: declared.removeTags,
+    MOVE_TO_LIBRARY: declared.libraries,
+    MOVE_TO_ROOT: declared.roots,
+    NOTIFY: declared.notifications,
   };
+  return [...new Set(declared.heads)]
+    .sort((left, right) => headOrderIndex(left) - headOrderIndex(right))
+    .map((head) => ({ head, values: [...(values[head] ?? [])] }));
 }
 
-/// The editor never writes this projection by merely reading a legacy rule.
-/// It only becomes persisted when a later save submits the schema-2 sequence.
-export function maintenanceActionSequenceFromLegacySpec(
-  spec: MaintenanceActionSpec,
-  subjectKind: MaintenanceRuleScope,
-): MaintenanceActionSequence {
-  const empty = noStepParameters();
-  const unmonitor = (id: string, includeDescendants: boolean) =>
-    sequenceStep(id, "UNMONITOR", { ...empty, includeDescendants });
-  const deleteFiles = (id: string) => sequenceStep(id, "DELETE_FILES", empty);
-  switch (spec.kind) {
-    case "DO_NOTHING":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [],
-      };
-    case "UNMONITOR_SCOPE_KEEP_FILES":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [unmonitor("legacy-unmonitor", subjectKind !== "TITLE")],
-      };
-    case "DELETE_TITLE_AND_FILES":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [
-          sequenceStep("legacy-delete-title", "DELETE_TITLE_AND_FILES", empty),
-        ],
-      };
-    case "UNMONITOR_TITLE_DELETE_ALL_FILES":
-    case "UNMONITOR_SHOW_DELETE_EXISTING_FILES":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [
-          unmonitor("legacy-unmonitor", true),
-          deleteFiles("legacy-delete-files"),
-        ],
-      };
-    case "UNMONITOR_SCOPE_DELETE_FILES":
-    case "UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [
-          unmonitor("legacy-unmonitor", subjectKind !== "TITLE"),
-          deleteFiles("legacy-delete-files"),
-        ],
-      };
-    case "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [unmonitor("legacy-unmonitor", true)],
-      };
-    case "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [
-          sequenceStep("legacy-change-profile", "CHANGE_QUALITY_PROFILE", {
-            ...empty,
-            targetQualityProfileId: spec.targetQualityProfileId,
-          }),
-          sequenceStep("legacy-search", "SEARCH", {
-            ...empty,
-            searchCondition: "PREVIOUS_PROFILE_CHANGED",
-          }),
-        ],
-      };
-    case "ADD_TAGS":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [
-          sequenceStep("legacy-add-tags", "ADD_TAGS", {
-            ...empty,
-            tags: spec.tags,
-          }),
-        ],
-      };
-    case "REMOVE_TAGS":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [
-          sequenceStep("legacy-remove-tags", "REMOVE_TAGS", {
-            ...empty,
-            tags: spec.tags,
-          }),
-        ],
-      };
-    case "ACTION_SEQUENCE":
-      return {
-        schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-        steps: [],
-      };
+/// What a rule decided for one subject. The server already lists heads in the
+/// order it applies them, so that order is kept as sent.
+export function decidedActionEntries(
+  decided: MaintenanceDecidedActions | null | undefined,
+): MaintenanceActionEntry[] {
+  if (!decided) return [];
+  const single = (value: string | null) => (value ? [value] : []);
+  const values: Partial<Record<MaintenanceActionHead, string[]>> = {
+    SET_QUALITY_PROFILE: single(decided.qualityProfile),
+    ADD_TAGS: decided.addTags,
+    REMOVE_TAGS: decided.removeTags,
+    MOVE_TO_LIBRARY: single(decided.library),
+    MOVE_TO_ROOT: single(decided.root),
+    NOTIFY: single(decided.notification),
+  };
+  return decided.heads.map((head) => ({
+    head,
+    values: [...(values[head] ?? [])],
+  }));
+}
+
+const RULE_NAME_TO_HEAD = new Map(
+  Object.entries(MAINTENANCE_ACTION_HEAD_RULE_NAMES).map(([head, name]) => [
+    name,
+    head as MaintenanceActionHead,
+  ]),
+);
+
+/// The action heads a shipped template's source defines, in execution order.
+/// Only for the templates this build ships, whose rule heads start a line; a
+/// rule the operator wrote is read by the server's validation instead.
+export function templateActionHeads(source: string): MaintenanceActionHead[] {
+  const heads = new Set<MaintenanceActionHead>();
+  for (const match of source.matchAll(/^([a-z_]+)\b/gm)) {
+    const head = RULE_NAME_TO_HEAD.get(match[1]);
+    if (head) heads.add(head);
   }
+  return [...heads].sort(
+    (left, right) => headOrderIndex(left) - headOrderIndex(right),
+  );
 }
 
 export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
@@ -180,13 +191,6 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     name: "",
     description: "",
     regoSource: MAINTENANCE_STARTER_SOURCE,
-    actionKind: DEFAULT_ACTION_KIND,
-    targetQualityProfileId: "",
-    tags: [],
-    actionSequence: {
-      schemaVersion: MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION,
-      steps: [],
-    },
     graceDays: 0,
     storageRootId: "",
     libraryIds: [],
@@ -201,15 +205,6 @@ export function maintenanceRuleDraftFromDetail(
     name: detail.ruleSet.name,
     description: detail.ruleSet.description ?? "",
     regoSource: detail.revision.regoSource,
-    actionKind: detail.actionSpec.kind,
-    targetQualityProfileId: detail.actionSpec.targetQualityProfileId ?? "",
-    tags: [...(detail.actionSpec.tags ?? [])],
-    actionSequence:
-      detail.actionSequence ??
-      maintenanceActionSequenceFromLegacySpec(
-        detail.actionSpec,
-        detail.ruleSet.subjectKind,
-      ),
     graceDays: detail.revision.graceDays,
     storageRootId: detail.revision.storageRootId ?? "",
     libraryIds: [...detail.ruleSet.libraryIds],
@@ -225,87 +220,13 @@ export function copyMaintenanceRuleDraft(
   };
 }
 
-/// Action payload shared by create and matcher-update. Each parameter is only
-/// sent for actions that declare they need it, so switching away from a
-/// profile-changing or tagging action does not leave a stale parameter on the
-/// rule.
-export function maintenanceActionInput(
-  draft: MaintenanceRuleSetDraft,
-  descriptors: MaintenanceActionDescriptor[],
-) {
-  const needsProfile = actionRequiresTargetQualityProfile(
-    descriptors,
-    draft.actionKind,
-  );
-  const profileId = draft.targetQualityProfileId.trim();
-  const needsTags = actionRequiresTags(descriptors, draft.actionKind);
-  const tags = normalizedActionTags(draft.tags);
-  return {
-    kind: draft.actionKind,
-    targetQualityProfileId: needsProfile && profileId ? profileId : undefined,
-    tags: needsTags ? tags : undefined,
-  };
-}
-
-/// The labels a tag action would send: normalized the way the registry stores
-/// them, de-duplicated, and in a stable order so two drafts that mean the same
-/// thing produce the same revision.
-export function normalizedActionTags(tags: readonly string[]): string[] {
-  const normalized = tags
-    .map((tag) => normalizeTitleTagLabel(tag))
-    .filter((tag) => tag.length > 0 && !isReservedTitleTag(tag));
-  return [...new Set(normalized)].sort((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-/// Maps the editor's full parameter object onto the closed GraphQL input shape.
-/// Omitted fields are meaningful: the server rejects a parameter for the wrong
-/// primitive instead of quietly carrying stale data to another step.
-export function maintenanceActionSequenceInput(
-  sequence: MaintenanceActionSequence,
-) {
-  return {
-    schemaVersion: sequence.schemaVersion,
-    steps: sequence.steps.map((step) => {
-      const parameters = (() => {
-        switch (step.kind) {
-          case "UNMONITOR":
-            return {
-              includeDescendants: Boolean(step.parameters.includeDescendants),
-            };
-          case "CHANGE_QUALITY_PROFILE":
-            return {
-              targetQualityProfileId:
-                step.parameters.targetQualityProfileId || undefined,
-            };
-          case "SEARCH":
-            return {
-              searchCondition: step.parameters.searchCondition || undefined,
-            };
-          case "ADD_TAGS":
-          case "REMOVE_TAGS":
-            return { tags: normalizedActionTags(step.parameters.tags) };
-          case "DELETE_FILES":
-          case "DELETE_TITLE_AND_FILES":
-            return {};
-        }
-      })();
-      return { id: step.id, kind: step.kind, parameters };
-    }),
-  };
-}
-
-export function createMaintenanceRuleSetInput(
-  draft: MaintenanceRuleSetDraft,
-  _descriptors?: MaintenanceActionDescriptor[],
-) {
+/// The source declares the actions, so create carries no separate action.
+export function createMaintenanceRuleSetInput(draft: MaintenanceRuleSetDraft) {
   return {
     subjectKind: draft.subjectKind,
     name: draft.name.trim(),
     description: draft.description.trim() || undefined,
     regoSource: draft.regoSource,
-    actionSequence: maintenanceActionSequenceInput(draft.actionSequence),
     graceDays: draft.graceDays,
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
@@ -315,12 +236,10 @@ export function createMaintenanceRuleSetInput(
 export function updateMaintenanceRuleMatcherInput(
   id: string,
   draft: MaintenanceRuleSetDraft,
-  _descriptors?: MaintenanceActionDescriptor[],
 ) {
   return {
     id,
     regoSource: draft.regoSource,
-    actionSequence: maintenanceActionSequenceInput(draft.actionSequence),
     graceDays: draft.graceDays,
     // Always send the explicit editor value. Old clients omit this field and
     // preserve a root they cannot render; this client may intentionally clear it.
@@ -340,62 +259,6 @@ export function updateMaintenanceRuleMetadataInput(
   };
 }
 
-/// The API owns the supported scope/action matrix.
-export function scopedActionDescriptors(
-  descriptors: MaintenanceActionDescriptor[],
-  scope: MaintenanceRuleScope,
-): MaintenanceActionDescriptor[] {
-  return descriptors.filter((descriptor) =>
-    descriptor.supportedRuleScopes?.includes(scope),
-  );
-}
-
-/// The server advertises which actions retain their safety guarantees when a
-/// selected root filters file coverage. Keep this filter data-driven so a new
-/// server action appears correctly without a second client-side allowlist.
-export function storageScopedActionDescriptors(
-  descriptors: MaintenanceActionDescriptor[],
-  scope: MaintenanceRuleScope,
-  storageRootId: string,
-): MaintenanceActionDescriptor[] {
-  const scoped = scopedActionDescriptors(descriptors, scope);
-  return storageRootId
-    ? scoped.filter((descriptor) => descriptor.supportsStorageScope)
-    : scoped;
-}
-
-export function titleScopedActionDescriptors(
-  descriptors: MaintenanceActionDescriptor[],
-) {
-  return scopedActionDescriptors(descriptors, "TITLE");
-}
-
-export function descriptorForActionKind(
-  descriptors: MaintenanceActionDescriptor[],
-  kind: MaintenanceActionKind,
-): MaintenanceActionDescriptor | null {
-  return descriptors.find((descriptor) => descriptor.kind === kind) ?? null;
-}
-
-export function actionRequiresTargetQualityProfile(
-  descriptors: MaintenanceActionDescriptor[],
-  kind: MaintenanceActionKind,
-): boolean {
-  return (
-    descriptorForActionKind(descriptors, kind)?.requiresTargetQualityProfile ??
-    false
-  );
-}
-
-/// Whether the selected action needs tags. Read from the descriptor rather than
-/// from a hardcoded pair of kinds, the same way the profile field is.
-export function actionRequiresTags(
-  descriptors: MaintenanceActionDescriptor[],
-  kind: MaintenanceActionKind,
-): boolean {
-  return descriptorForActionKind(descriptors, kind)?.requiresTags ?? false;
-}
-
 export function clampMaintenancePreviewLimit(limit: number): number {
   if (!Number.isFinite(limit)) {
     return MAINTENANCE_PREVIEW_LIMIT_DEFAULT;
@@ -409,7 +272,6 @@ export function clampMaintenancePreviewLimit(limit: number): number {
 type MaintenancePreviewInputOptions = {
   ruleSetId?: string | null;
   draft?: MaintenanceRuleSetDraft;
-  descriptors?: MaintenanceActionDescriptor[];
   libraryId?: string | null;
   limit?: number;
   titleIds?: string[];
@@ -423,7 +285,6 @@ type MaintenancePreviewInputOptions = {
 export function maintenancePreviewInput({
   ruleSetId,
   draft,
-  descriptors: _descriptors = [],
   libraryId,
   limit,
   titleIds,
@@ -436,7 +297,6 @@ export function maintenancePreviewInput({
           subjectKind: draft.subjectKind,
           libraryIds: [...draft.libraryIds],
           regoSource: draft.regoSource,
-          actionSequence: maintenanceActionSequenceInput(draft.actionSequence),
           graceDays: draft.graceDays,
           storageRootId: draft.storageRootId || undefined,
         }
@@ -456,23 +316,6 @@ export function maintenancePreviewInput({
   return { ...matcher, ...subjects };
 }
 
-/// Badge tone for a descriptor's risk class. HIGH reads as destructive because
-/// those actions delete files.
-export function riskClassBadgeTone(
-  risk: MaintenanceRiskClass | string,
-): "neutral" | "info" | "warning" | "negative" {
-  switch (risk) {
-    case "HIGH":
-      return "negative";
-    case "MEDIUM":
-      return "warning";
-    case "LOW":
-      return "info";
-    default:
-      return "neutral";
-  }
-}
-
 export function previewOutcomeBadgeTone(
   outcome: MaintenancePreviewOutcome | null,
 ): "neutral" | "positive" | "warning" | "negative" {
@@ -488,6 +331,8 @@ export function previewOutcomeBadgeTone(
   }
 }
 
+/// Action kinds and step kinds only label candidates and action runs recorded
+/// before rules declared their actions in source.
 const ACTION_KIND_LABEL_KEYS: Record<MaintenanceActionKind, string> = {
   DO_NOTHING: "settings.maintenanceActionDoNothing",
   UNMONITOR_SCOPE_KEEP_FILES:
@@ -531,17 +376,6 @@ export function actionStepKindLabelKey(kind: string): string | null {
   return ACTION_STEP_KIND_LABEL_KEYS[kind as MaintenanceActionStepKind] ?? null;
 }
 
-const RISK_CLASS_LABEL_KEYS: Record<MaintenanceRiskClass, string> = {
-  NONE: "settings.maintenanceRiskNone",
-  LOW: "settings.maintenanceRiskLow",
-  MEDIUM: "settings.maintenanceRiskMedium",
-  HIGH: "settings.maintenanceRiskHigh",
-};
-
-export function riskClassLabelKey(risk: string): string | null {
-  return RISK_CLASS_LABEL_KEYS[risk as MaintenanceRiskClass] ?? null;
-}
-
 const PREVIEW_OUTCOME_LABEL_KEYS: Record<MaintenancePreviewOutcome, string> = {
   MATCH: "settings.maintenancePreviewOutcomeMatch",
   NO_MATCH: "settings.maintenancePreviewOutcomeNoMatch",
@@ -555,16 +389,6 @@ export function previewOutcomeLabelKey(outcome: string): string | null {
 }
 
 // ── Operating a rule: state and switches ──────────────────────────────
-
-const EFFECT_ARMING_LABEL_KEYS: Record<MaintenanceEffectArming, string> = {
-  NONE: "settings.maintenanceArmingNone",
-  REVERSIBLE: "settings.maintenanceArmingReversible",
-  DESTRUCTIVE: "settings.maintenanceArmingDestructive",
-};
-
-export function effectArmingLabelKey(arming: string): string | null {
-  return EFFECT_ARMING_LABEL_KEYS[arming as MaintenanceEffectArming] ?? null;
-}
 
 const RULE_STATE_KEYS: Record<
   MaintenanceRuleState,
@@ -602,13 +426,14 @@ export function ruleStateOptionsFor(
     : ["DISABLED", "DRY_RUN", "ENABLED"];
 }
 
-/// Enabling a rule that deletes files is the one state change that confirms
-/// first, against the candidates it would act on.
+/// Enabling a rule whose source declares `delete_files` or `delete_title` is
+/// the one state change that confirms first, against the candidates it would
+/// act on.
 export function ruleStateNeedsConfirmation(
-  record: Pick<MaintenanceRuleSetRecord, "enabledArming">,
+  record: Pick<MaintenanceRuleSetRecord, "declaredActions">,
   state: MaintenanceRuleState,
 ): boolean {
-  return state === "ENABLED" && record.enabledArming === "DESTRUCTIVE";
+  return state === "ENABLED" && record.declaredActions.destructive;
 }
 
 /// Sentinel for "no filter". The select primitive refuses an empty-string
@@ -806,7 +631,7 @@ export function parseAcknowledgedCandidateCountMismatch(
 export function setMaintenanceRuleStateVariables(
   record: Pick<
     MaintenanceRuleSetRecord,
-    "id" | "enabledArming" | "currentRevisionNumber" | "libraryIds"
+    "id" | "declaredActions" | "currentRevisionNumber" | "libraryIds"
   >,
   state: MaintenanceRuleState,
   candidateCount?: number,

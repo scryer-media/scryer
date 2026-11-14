@@ -4,6 +4,8 @@ import {
   JOB_RUN_FIELDS,
   LOCATION_OPERATION_FIELDS,
   MAINTENANCE_EXCLUSION_FIELDS,
+  MAINTENANCE_DECIDED_ACTIONS_FIELDS,
+  MAINTENANCE_DECLARED_ACTIONS_FIELDS,
   MAINTENANCE_RULE_SET_DETAIL_FIELDS,
   MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
@@ -2885,7 +2887,10 @@ export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule
   validateMaintenanceRule(input: $input) {
     valid
     diagnostics { code message line column path }
+    warnings { code message line column path }
     errors
+    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
+    }
   }
 }`;
 
@@ -2910,6 +2915,8 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       outcome
       reasonCodes
       error
+      actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
+      }
       facts
     }
   }

@@ -216,8 +216,14 @@ const cs: LocaleDictionary = {
     "Zamítne žádost, pokud je její fakt o obsahu pro dospělé true.",
   "settings.regoSnippet.manualRequest":
     "Vyžádá ruční kontrolu, jakmile počet nedávných schválení dosáhne prahu.",
-  "settings.regoSnippet.matchTag":
-    "Shoduje subjekt údržby podle štítku. Tento matcher nedefinuje žádnou akci.",
+  "settings.regoHelper.daysSince":
+    "Celé dny mezi časovým razítkem RFC3339 a časem vyhodnocení. Jen pro pravidla údržby.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Zruší sledování subjektu se štítkem.",
+  "settings.regoSnippet.tagAfterDays":
+    "Označí štítkem subjekt přidaný před více než zadaným počtem dní.",
+  "settings.regoSnippet.setProfile":
+    "Přesune velké tituly na pojmenovaný profil kvality.",
   "settings.trustedProxiesTitle":
     "Důvěryhodné proxy servery pro omezení četnosti požadavků",
   "settings.trustedProxiesHelp":
@@ -4806,49 +4812,11 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleNoActions":
     "Nejsou k dispozici žádné akce vázané na titul.",
   "settings.maintenanceActionSequence": "Posloupnost akcí",
-  "settings.maintenanceSequenceTitle": "Posloupnost akcí",
-  "settings.maintenanceSequenceHelp":
-    "Tyto kroky se spustí v daném pořadí poté, co subjektu uplyne ochranná doba. Prázdná posloupnost zaznamenává shody, aniž by na nich cokoli provedla.",
-  "settings.maintenanceSequenceEmpty":
-    "Pouze zkušební běh — nejsou nastaveny žádné kroky akce.",
   "settings.maintenanceSequenceObserveOnly": "Pouze zkušební běh",
-  "settings.maintenanceSequenceSummary": "Souhrn posloupnosti",
-  "settings.maintenanceSequenceSummaryTarget": "Cíle: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "Po zapnutí: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Účinky: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "odpovídající titul",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "odpovídající titul, řady a epizody",
-  "settings.maintenanceSequenceTargetSeason": "odpovídající řada",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "odpovídající řada a epizody",
-  "settings.maintenanceSequenceTargetEpisode": "odpovídající epizoda",
-  "settings.maintenanceSequencePreviewPlan": "Seřazené účinky tohoto náhledu",
-  "settings.maintenanceSequencePreviewDescendants": "včetně potomků",
-  "settings.maintenanceSequencePreviewMatchedScope":
-    "pouze odpovídající rozsah",
-  "settings.maintenanceSequenceAdd": "Přidat krok",
-  "settings.maintenanceSequencePreset": "Přednastavená posloupnost",
-  "settings.maintenanceSequencePresetApply": "Nahradit přednastavením",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Změnit profil a poté vyhledat, pokud se změnil",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Zrušit sledování potomků a poté smazat soubory",
-  "settings.maintenanceSequenceTerminal": "Koncový",
-  "settings.maintenanceSequenceDependencies": "Vyžaduje: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "Zahrnout řady a epizody",
-  "settings.maintenanceSequenceSearchCondition": "Podmínka vyhledávání",
-  "settings.maintenanceSequenceSearchUnconditional": "Vždy vyžádat vyhledávání",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Pouze po změně profilu",
   "settings.maintenanceSequenceHistoryWaiting": "čeká na dřívější krok",
   "settings.maintenanceSequenceHistorySearchRequested": "vyhledávání vyžádáno",
   "settings.maintenanceSequenceHistorySearchAccepted": "přijato",
   "settings.maintenanceSequenceHistoryJob": "úloha {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "Tento uložený krok není v aktuálním katalogu k dispozici. Před uložením nebo náhledem jej odeberte, nebo obnovte kompatibilní katalog.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "Katalog kroků akcí není k dispozici. Uložené kroky zůstávají viditelné, ale ukládání i náhledy neuložených kroků jsou pozastaveny, dokud se nenačte.",
   "settings.maintenanceSequenceStepUnmonitor": "Zrušit sledování",
   "settings.maintenanceSequenceStepDeleteFiles": "Smazat soubory",
   "settings.maintenanceSequenceStepChangeQualityProfile":
@@ -4861,9 +4829,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Dny ochranné doby",
   "settings.maintenanceRuleGraceDaysHelp":
     "Počet dní od první shody každého subjektu, než se jeho akce stane splatnou.",
-  "settings.maintenanceRuleTargetProfile": "Cílový profil kvality",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Profil, do kterého by tato akce přesunula odpovídající tituly.",
   "settings.maintenanceRuleLibraries": "Rozsah knihoven",
   "settings.maintenanceRuleLibrariesHelp":
     "Ponecháním všech knihoven nezaškrtnutých rozšíříte rozsah pravidla na celou kolekci.",
@@ -4934,9 +4899,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleCreated":
     "Pravidlo údržby vytvořeno a uloženo jako vypnuté.",
   "settings.maintenanceRuleDeleted": "Pravidlo údržby {{name}} smazáno.",
-  "settings.maintenanceArmingNone": "Žádné účinky",
-  "settings.maintenanceArmingReversible": "Aktualizace knihovny",
-  "settings.maintenanceArmingDestructive": "Mazání souborů",
   "settings.maintenanceRuleState": "Stav",
   "settings.maintenanceRuleStateHelp":
     "Vypnutá pravidla se nikdy nevyhodnocují. Zkušební běh zaznamenává kandidáty, aniž by na nich cokoli prováděl. Zapnutá pravidla jednají na svých kandidátech po uplynutí každé ochranné doby.",
@@ -5077,9 +5039,7 @@ const cs: LocaleDictionary = {
     "Každé pravidlo údržby dostane jeden vstupní objekt na subjekt: input.subject určuje, co se vyhodnocuje, input.library udává, kde to žije, input.facts nese snímek faktů a obálka vyhodnocení sedí přímo na input. Fakt je obyčejná hodnota a klíč jednoduše chybí, když není co hlásit — pište tedy input.facts.monitored, ne kontrolu stavu. Pokud pravidlo čte fakt, který Scryer pro daný subjekt nedokázal zjistit, Scryer za vás subjekt pozdrží; tuto pojistku nikdy nemusíte psát sami.",
   "settings.refMaintOutputTitle": "Výstup pravidla",
   "settings.refMaintOutputIntro":
-    "Porovnávání definuje až tři názvy. Cokoli dalšího v balíčku je ignorováno a rozhodnutí, které nemá přesně tento tvar, je odmítnuto, ne převedeno.",
-  "settings.refMaintOutputMatch":
-    "match — boolean. Pokud jej ponecháte nedefinovaný, znamená to, že subjekt neodpovídal.",
+    "Pravidlo určuje, co udělat, definováním akcí a volitelných unknown a reasons. Subjekt odpovídá, když pro něj platí alespoň jedna akce. Rozhodnutí, které nemá přesně tento tvar, je odmítnuto, ne převedeno.",
   "settings.refMaintOutputUnknown":
     "unknown — boolean. Nastavte jej, když samotné pravidlo nevidí dost na rozhodnutí; unknown má vždy přednost před shodou. Fakty, které Scryer nedokázal zjistit, jsou za vás už vyřešeny, takže tohle slouží jen pro vaše vlastní úsudky.",
   "settings.refMaintOutputReasons":
@@ -5366,6 +5326,35 @@ const cs: LocaleDictionary = {
     "Zda má tento propojený film soubor na disku",
   "settings.refMaintSeriesMovieTags":
     "Uživatelsky definované štítky tohoto propojeného filmu ze stejného registru jako štítky titulů. Propojený film nese vlastní štítky; nededí je od seriálu.",
+  "settings.maintenanceActionHeadMoveToLibrary": "Přesunout do knihovny",
+  "settings.maintenanceActionHeadMoveToRoot": "Přesunout do kořenové složky",
+  "settings.maintenanceActionHeadNotify": "Upozornit",
+  "settings.maintenanceActionHeadFetchSubtitles": "Stáhnout titulky",
+  "settings.maintenanceDeclaredActionsTitle": "Deklarované akce",
+  "settings.maintenanceDeclaredActionsHelp":
+    "Akce, které definuje zdroj pravidla. Odpovídající subjekt dostane jen ty, jejichž podmínky pro něj platí, a to v tomto pořadí: {{order}}.",
+  "settings.maintenanceDeclaredActionsNone": "Žádné akce",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "Opravte chyby, abyste viděli, co toto pravidlo dělá.",
+  "settings.maintenanceDecidedActionsNone": "Žádné akce",
+  "settings.maintenanceRuleWarningsTitle": "Upozornění",
+  "settings.maintenanceRuleWarningLocation":
+    "Řádek {{line}}, sloupec {{column}}:",
+  "settings.refMaintOutputFlagHeads":
+    "Akce bez hodnoty (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) jsou logické hodnoty: definujte je pomocí if a akce se použije, když tělo platí.",
+  "settings.refMaintOutputValueHeads":
+    "Akce s hodnotou (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) přiřazují pomocí := prostý literál. Řetězec else může vybírat mezi literály; vypočtená hodnota je odmítnuta.",
+  "settings.refMaintOutputHelpers":
+    "Jakýkoli jiný název pravidla je váš vlastní pomocník. Projeví se jen tehdy, když ho použije akce, unknown nebo reasons.",
+  "settings.refMaintActionsTitle": "Akce",
+  "settings.refMaintActionsOrder":
+    "Scryer použije akce subjektu v tomto pořadí bez ohledu na pořadí ve zdroji: {{order}}.",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) vrací počet celých dní mezi časovým razítkem RFC3339 a časem vyhodnocení, takže days_since(input.facts.added_at) > 180 znamená přidáno před více než 180 dny.",
+  "settings.refMaintActionsNotify":
+    "notify odešle zprávu jednou, když se akce použijí. Náhledy a zkušební běhy ji nikdy neodešlou.",
+  "settings.refMaintActionsConflicts":
+    "Protichůdné akce pro jeden subjekt, například monitor spolu s unmonitor nebo tentýž štítek přidaný i odebraný, subjekt podrží s důvodem, místo aby se použila kterákoli z nich.",
   "settings.refMaintTagActionsTitle": "Akce se štítky",
   "settings.refMaintTagActionsNote":
     "add_tags a remove_tags zapisují uživatelské štítky na odpovídající titul. Každý název musí existovat v registru štítků, který spravuje administrátor v Nastavení, a štítky se ukládají malými písmeny — pravidlo odkazující na štítek, který byl mezitím smazán, se pozdrží s tag_not_defined místo zápisu.",
@@ -5378,7 +5367,7 @@ const cs: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "{{count}}denní ochranná doba",
   "settings.maintenanceTemplateNoGraceBadge": "Bez ochranné doby",
   "settings.maintenanceTemplateDestructiveBadge": "Maže soubory",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Vyberte cílový profil",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Pojmenujte cílový profil",
   "settings.maintenanceTemplateDeadWantedTitle": "Mrtvé požadované položky",
   "settings.maintenanceTemplateDeadWantedDescription":
     "Tituly, které stále sledujete, ale žádný soubor pro ně nikdy nedorazil. Fakty jsou obyčejné hodnoty, takže titul, jehož stav sledování nebo souboru Scryer nevidí, se pozdrží místo shody. Po 30denní ochranné době se rozsah přestane sledovat a cokoli už je na disku, zůstane beze změny.",
@@ -5388,13 +5377,13 @@ const cs: LocaleDictionary = {
   "settings.maintenanceTemplateAddedLongAgoTitle":
     "Přidáno před více než 180 dny",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Skutečný výpočet s daty: porovnávání odečte added_at titulu od času vyhodnocení a shoduje se po 180 dnech. Rozsah se přestane sledovat a soubory zůstanou. Titul bez hodnoty added_at se pozdrží místo shody.",
+    "Skutečná práce s daty: days_since porovná added_at titulu s časem vyhodnocení a odpovídá po 180 dnech. Sledování se zruší a soubory zůstanou. Titul bez hodnoty added_at se podrží, místo aby odpovídal.",
   "settings.maintenanceTemplateOversizedTitle": "Předimenzovaná vydání",
   "settings.maintenanceTemplateOversizedDescription":
-    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na vámi zvolený profil kvality a znovu vyhledá, jen pokud se profil skutečně změnil — vyberte tento cílový profil v editoru před uložením.",
+    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na pojmenovaný profil kvality a znovu vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
   "settings.maintenanceTemplateFourKPurgeTitle": "Čištění 4K",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "Jakýkoli titul obsahující soubor 2160p. Po 7denní ochranné době se přesune na vámi zvolený profil kvality a znovu vyhledá, pokud se profil změnil. Vyberte tento cílový profil v editoru před uložením.",
+    "Jakýkoli titul se souborem 2160p. Po 7denní lhůtě se přesune na pojmenovaný profil kvality a znovu se vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
   "settings.maintenanceTemplateRequestedExpiryTitle":
     "Vypršení požadovaných médií",
   "settings.maintenanceTemplateRequestedExpiryDescription":
@@ -5414,7 +5403,7 @@ const cs: LocaleDictionary = {
     "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům, jejichž všechny nároky žádostí vypršely, po 7denní ochranné době. Nárok, který ještě nezačal — titul nebyl importován — se ponechá beze změny, stejně jako titul, který nikdy nárok neměl.",
   "settings.maintenanceTemplateNoProfileTitle": "Bez profilu kvality",
   "settings.maintenanceTemplateNoProfileDescription":
-    "Tituly bez přiřazeného profilu kvality. Neprovádí vůbec žádnou akci: slouží jen k sestavení seznamu k prohlédnutí, než se rozhodne, co s ním udělat.",
+    "Tituly bez přiřazeného profilu kvality. Přidá štítek needs-review, aby profil mohl vybrat člověk; nic jiného se nemění.",
   "settings.maintenanceTemplateNewestEpisodesTitle":
     "Ponechat 3 nejnovější stažené epizody",
   "settings.maintenanceTemplateNewestEpisodesDescription":
@@ -6509,12 +6498,8 @@ const cs: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Seriálové filmy",
   "settings.maintenanceActionAddTags": "Přidat štítky",
   "settings.maintenanceActionRemoveTags": "Odebrat štítky",
-  "settings.maintenanceRuleTags": "Štítky",
-  "settings.maintenanceRuleTagsNone": "Zatím nevybrány žádné štítky",
   "settings.maintenanceRuleTagsHelp":
     "Pravidlo zapíše tyto štítky na každý titul, kterému odpovídá. Vybrat lze jen štítky, které administrátor definoval v Nastavení > Štítky.",
-  "settings.maintenanceCandidatesTagPatchAdd": "přidá {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "odebere {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Označeno k odstranění",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     "Pozor: tato šablona smaže titul i jeho soubory. Odpovídá všemu, co nese štítek „remove“, po týdenní odkladné lhůtě, takže ruční označení titulu je celým spouštěčem a odebrání štítku v rámci týdne odstranění zruší. Nejprve definujte štítek „remove“ v Nastavení > Štítky.",

@@ -24,10 +24,8 @@ import {
 import {
   SettingsMaintenanceRulesSection,
   type MaintenanceLibraryOption,
-  type MaintenanceQualityProfileOption,
   type MaintenanceStorageRootOption,
 } from "@/components/views/settings/settings-maintenance-rules-section";
-import { sequenceHasUnresolvedSteps } from "@/components/views/settings/maintenance-action-sequence-editor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
@@ -35,8 +33,6 @@ import type { MaintenanceRuleTemplate } from "@/lib/constants/maintenance-rule-t
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
-  MaintenanceActionDescriptor,
-  MaintenanceActionStepDescriptor,
   MaintenanceActionRun,
   MaintenanceCandidate,
   MaintenanceEvaluationRun,
@@ -60,7 +56,6 @@ import {
   excludeMaintenanceSubjectInput,
   initialMaintenanceRuleDraft,
   maintenanceFilterArgument,
-  maintenanceActionSequenceFromLegacySpec,
   maintenancePreviewInput,
   maintenanceRuleDraftFromDetail,
   updateMaintenanceRuleMatcherInput,
@@ -68,8 +63,6 @@ import {
 } from "@/lib/utils/maintenance-rule-sets";
 import {
   librariesQuery,
-  maintenanceActionDescriptorsQuery,
-  maintenanceActionStepDescriptorsQuery,
   maintenanceActionRunsQuery,
   maintenanceCandidatesQuery,
   maintenanceEvaluationRunsQuery,
@@ -77,7 +70,6 @@ import {
   maintenanceInstanceGatesQuery,
   maintenanceRuleSetQuery,
   maintenanceRuleSetsQuery,
-  qualityProfileOptionsQuery,
 } from "@/lib/graphql/queries";
 import {
   createMaintenanceRuleSetMutation,
@@ -124,20 +116,9 @@ export function SettingsMaintenanceRulesContainer({
   const [ruleSetRecords, setRuleSetRecords] = useState<
     MaintenanceRuleSetRecord[]
   >([]);
-  const [actionDescriptors, setActionDescriptors] = useState<
-    MaintenanceActionDescriptor[]
-  >([]);
-  const [actionStepDescriptors, setActionStepDescriptors] = useState<
-    MaintenanceActionStepDescriptor[]
-  >([]);
-  const [actionStepDescriptorsLoaded, setActionStepDescriptorsLoaded] =
-    useState(false);
   const [libraries, setLibraries] = useState<MaintenanceLibraryOption[]>([]);
   const [storageRoots, setStorageRoots] = useState<
     MaintenanceStorageRootOption[]
-  >([]);
-  const [qualityProfiles, setQualityProfiles] = useState<
-    MaintenanceQualityProfileOption[]
   >([]);
 
   const [mutatingRuleSetId, setMutatingRuleSetId] = useState<string | null>(
@@ -223,12 +204,6 @@ export function SettingsMaintenanceRulesContainer({
 
   const isDraftDirty =
     JSON.stringify(ruleSetDraft) !== JSON.stringify(ruleSetDraftBaseline);
-  const sequenceCatalogResolved =
-    actionStepDescriptorsLoaded &&
-    !sequenceHasUnresolvedSteps(
-      ruleSetDraft.actionSequence,
-      actionStepDescriptors,
-    );
 
   const closeEditor = useCallback(() => {
     const next = initialMaintenanceRuleDraft();
@@ -248,7 +223,7 @@ export function SettingsMaintenanceRulesContainer({
     setIsEditorOpen(true);
   }, [setValidationResult]);
 
-  /// Load the matcher source and action for one rule set, surfacing failure
+  /// Load the source and declared actions for one rule set, surfacing failure
   /// instead of silently refusing to open the editor.
   const fetchRuleSetDetail = useCallback(
     async (id: string): Promise<MaintenanceRuleSetDetail | null> => {
@@ -303,8 +278,8 @@ export function SettingsMaintenanceRulesContainer({
   );
 
   /// Load a starter template into the create-rule editor. A template prefills
-  /// every field the editor owns — name, description, matcher, action, target
-  /// profile, grace period — and then stops: it never creates a rule, and the
+  /// every field the editor owns — name, description, source, scope, grace
+  /// period — and then stops: it never creates a rule, and the
   /// draft it leaves behind is dirty, so the operator has to read it and press
   /// create themselves. `libraryIds` stays empty because which libraries a rule
   /// covers is an instance-specific decision no template can make.
@@ -315,19 +290,7 @@ export function SettingsMaintenanceRulesContainer({
         name: template.name,
         description: t(template.descriptionKey),
         regoSource: template.regoSource,
-        actionKind: template.actionKind,
         subjectKind: template.subjectKind ?? "TITLE",
-        targetQualityProfileId: template.targetQualityProfileId ?? "",
-        tags: [...(template.tags ?? [])],
-        actionSequence: maintenanceActionSequenceFromLegacySpec(
-          {
-            kind: template.actionKind,
-            schemaVersion: 1,
-            targetQualityProfileId: template.targetQualityProfileId ?? null,
-            tags: [...(template.tags ?? [])],
-          },
-          template.subjectKind ?? "TITLE",
-        ),
         graceDays: template.graceDays,
       };
       setEditingRuleSetId(null);
@@ -391,7 +354,7 @@ export function SettingsMaintenanceRulesContainer({
     setPendingEditorAction({ type: "close" });
   }, [closeEditor, isDraftDirty, isEditorOpen]);
 
-  /// The list payload carries the action and grace period of each rule's
+  /// The list payload carries the declared actions and grace period of each rule's
   /// current revision, so the table renders from one query; the full detail
   /// (matcher source) is fetched only when an editor opens.
   const refreshRuleSets = useCallback(async () => {
@@ -411,26 +374,7 @@ export function SettingsMaintenanceRulesContainer({
 
   const refreshCatalogs = useCallback(async () => {
     try {
-      const [descriptors, stepDescriptors, libraryList, profiles] =
-        await Promise.all([
-          client.query(maintenanceActionDescriptorsQuery, {}).toPromise(),
-          client.query(maintenanceActionStepDescriptorsQuery, {}).toPromise(),
-          client.query(librariesQuery, {}).toPromise(),
-          client.query(qualityProfileOptionsQuery, {}).toPromise(),
-        ]);
-      if (!descriptors.error) {
-        setActionDescriptors(
-          descriptors.data?.maintenanceActionDescriptors ?? [],
-        );
-      }
-      if (!stepDescriptors.error) {
-        setActionStepDescriptors(
-          stepDescriptors.data?.maintenanceActionStepDescriptors ?? [],
-        );
-        setActionStepDescriptorsLoaded(true);
-      } else {
-        setActionStepDescriptorsLoaded(false);
-      }
+      const libraryList = await client.query(librariesQuery, {}).toPromise();
       if (!libraryList.error) {
         const catalogLibraries = libraryList.data?.libraries ?? [];
         setLibraries(
@@ -452,11 +396,6 @@ export function SettingsMaintenanceRulesContainer({
                 libraryName: library.name,
               })),
           ),
-        );
-      }
-      if (!profiles.error) {
-        setQualityProfiles(
-          profiles.data?.qualityProfileSettings?.profiles ?? [],
         );
       }
     } catch (error) {
@@ -695,14 +634,6 @@ export function SettingsMaintenanceRulesContainer({
       });
       return;
     }
-    if (!sequenceCatalogResolved) {
-      setValidationResult({
-        valid: false,
-        errors: [t("settings.maintenanceSequenceCatalogUnavailable")],
-      });
-      return;
-    }
-
     const validation = await validateDraft();
     if (!validation?.valid) {
       return;
@@ -716,7 +647,6 @@ export function SettingsMaintenanceRulesContainer({
             input: updateMaintenanceRuleMatcherInput(
               editingRuleSetId,
               ruleSetDraft,
-              actionDescriptors,
             ),
           })
           .toPromise();
@@ -736,10 +666,7 @@ export function SettingsMaintenanceRulesContainer({
       } else {
         const { error } = await client
           .mutation(createMaintenanceRuleSetMutation, {
-            input: createMaintenanceRuleSetInput(
-              ruleSetDraft,
-              actionDescriptors,
-            ),
+            input: createMaintenanceRuleSetInput(ruleSetDraft),
           })
           .toPromise();
         if (error) throw error;
@@ -763,11 +690,6 @@ export function SettingsMaintenanceRulesContainer({
 
   const runPreview = useCallback(
     async (subject?: MaintenanceTestSubject) => {
-      if (previewSource === "draft" && !sequenceCatalogResolved) {
-        setPreviewResult(null);
-        setPreviewError(t("settings.maintenanceSequenceCatalogUnavailable"));
-        return;
-      }
       const request = ++previewRequest.current;
       setPreviewing(true);
       setPreviewError(null);
@@ -777,7 +699,6 @@ export function SettingsMaintenanceRulesContainer({
             input: maintenancePreviewInput({
               ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
               draft: previewSource === "draft" ? ruleSetDraft : undefined,
-              descriptors: actionDescriptors,
               titleIds: subject ? [subject.titleId] : undefined,
               subjectIds: subject ? [subject.subjectId] : undefined,
               libraryId: previewLibraryId,
@@ -801,8 +722,6 @@ export function SettingsMaintenanceRulesContainer({
       }
     },
     [
-      actionDescriptors,
-      sequenceCatalogResolved,
       client,
       previewLibraryId,
       previewLimit,
@@ -1065,11 +984,8 @@ export function SettingsMaintenanceRulesContainer({
         startCreateRuleSet={requestCreateEditor}
         applyTemplate={requestApplyTemplate}
         ruleSetRecords={ruleSetRecords}
-        actionStepDescriptors={actionStepDescriptors}
-        actionStepDescriptorsLoaded={actionStepDescriptorsLoaded}
         libraries={libraries}
         storageRoots={storageRoots}
-        qualityProfiles={qualityProfiles}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={deleteRuleSet}

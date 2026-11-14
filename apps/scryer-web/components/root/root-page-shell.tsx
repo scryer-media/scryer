@@ -46,7 +46,6 @@ import { TranslateContext } from "@/lib/context/translate-context";
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import {
-  useExperimentalFeaturesEnabled,
   useInstanceFeatures,
   useInstanceFeaturesLoaded,
 } from "@/lib/context/instance-features-context";
@@ -801,9 +800,6 @@ function AuthenticatedHomePage({
   serviceRestarting: boolean;
 }) {
   const isOnline = useOnlineStatus();
-  // The palette must not offer a page the sidebar is hiding, so the same
-  // instance-wide switch decides both.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { canPrompt, isInstalled, isIosSafari, promptInstall } =
     useInstallPrompt();
 
@@ -1448,13 +1444,11 @@ function AuthenticatedHomePage({
         t,
         user: authenticatedUser,
         activityImportCount: manualImportRequiredCount,
-        experimentalFeaturesEnabled,
         onNavigate: navigateTo,
         onNavigatePath: (path: string) => navigate(path),
       }),
     [
       authenticatedUser,
-      experimentalFeaturesEnabled,
       manualImportRequiredCount,
       navigate,
       navigateTo,

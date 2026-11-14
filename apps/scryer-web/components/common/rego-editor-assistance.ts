@@ -11,6 +11,7 @@ import {
   regoCompletionContext,
   regoFieldCompletions,
   regoFields,
+  regoHelpers,
   normalizeRegoPath,
   REGO_INDEX_SOURCE,
   type RegoFamily,
@@ -28,12 +29,12 @@ export function regoAssistance(
     [t(field.descKey), field.availabilityKey ? t(field.availabilityKey) : ""]
       .filter(Boolean)
       .join("\n\n");
-  const helpers = regoCatalog.helpers;
+  const helpers = regoHelpers(family);
   const hover = hoverTooltip((view, position) => {
     const source = view.state.doc.toString();
     if (!regoCodeAt(source, position)) return null;
     const pattern = new RegExp(
-      String.raw`\b(?:input|scryer|object|lower|upper|count|startswith)\b(?:\.[A-Za-z_]\w*|${REGO_INDEX_SOURCE})*`,
+      String.raw`\b(?:input|scryer|object|lower|upper|count|startswith|days_since)\b(?:\.[A-Za-z_]\w*|${REGO_INDEX_SOURCE})*`,
       "g",
     );
     for (const match of source.matchAll(pattern)) {

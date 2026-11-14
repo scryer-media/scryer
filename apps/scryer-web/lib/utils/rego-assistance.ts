@@ -13,6 +13,33 @@ export type RegoField = {
   availabilityKey?: string;
 };
 export const regoCatalog = catalog;
+
+export type RegoHelper = {
+  name: string;
+  args: string[];
+  returns: string;
+  descKey: string;
+};
+
+/// Helpers the host writes into one kind of rule's package rather than
+/// registering with the engine, so they exist only for that family.
+const FAMILY_HELPERS: Record<RegoFamily, RegoHelper[]> = {
+  release: [],
+  request: [],
+  maintenance: [
+    {
+      name: "days_since",
+      args: ["ts"],
+      returns: "number",
+      descKey: "settings.regoHelper.daysSince",
+    },
+  ],
+};
+
+/// Every helper an author can call in a rule of this family.
+export function regoHelpers(family: RegoFamily): RegoHelper[] {
+  return [...catalog.helpers, ...FAMILY_HELPERS[family]];
+}
 export const regoContracts = {
   release: releaseContract,
   request: requestContract,

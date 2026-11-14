@@ -2524,9 +2524,6 @@ const ja: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "猶予日数",
   "settings.maintenanceRuleGraceDaysHelp":
     "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",
-  "settings.maintenanceRuleTargetProfile": "対象の品質プロファイル",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "このアクションが一致したタイトルを切り替える先のプロファイルです。",
   "settings.maintenanceRuleLibraries": "ライブラリの適用範囲",
   "settings.maintenanceRuleLibrariesHelp":
     "すべてのライブラリのチェックを外すと、ルールはコレクション全体に適用されます。",
@@ -2601,9 +2598,6 @@ const ja: LocaleDictionary = {
   // ── メンテナンスルール — インスタンスゲート ──
 
   // ── メンテナンスルール — モードと有効化 ──
-  "settings.maintenanceArmingNone": "効果なし",
-  "settings.maintenanceArmingReversible": "可逆",
-  "settings.maintenanceArmingDestructive": "破壊的",
   "settings.maintenanceArmDestructiveLoading":
     "このルールが保持している候補を数えています…",
   "settings.maintenanceArmDestructiveCount":
@@ -3319,12 +3313,8 @@ const ja: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "シリーズ映画",
   "settings.maintenanceActionAddTags": "タグを追加",
   "settings.maintenanceActionRemoveTags": "タグを削除",
-  "settings.maintenanceRuleTags": "タグ",
-  "settings.maintenanceRuleTagsNone": "タグが選択されていません",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} を追加",
-  "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} を削除",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "削除対象としてタグ付け",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

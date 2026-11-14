@@ -23,6 +23,8 @@ export type RegoValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: RuleValidationDiagnostic[];
+  /// Findings that never block saving. Only maintenance validation sends them.
+  warnings?: RuleValidationDiagnostic[];
   unavailable?: boolean;
 };
 export type RegoDiagnostic = { line: number; column: number; message: string };
@@ -35,6 +37,10 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_MATCH_REQUIRED: "error.ruleMatchRequired",
   RULE_VOTE_REQUIRED: "error.ruleVoteRequired",
   RULE_TARGETS_PERSON: "error.ruleTargetsPerson",
+  RULE_ACTION_VALUE_NOT_LITERAL: "error.ruleActionValueNotLiteral",
+  RULE_ACTION_VALUE_INVALID: "error.ruleActionValueInvalid",
+  RULE_HOST_HELPER_REDEFINED: "error.ruleHostHelperRedefined",
+  RULE_UNREFERENCED_RULE: "error.ruleUnreferencedRule",
 };
 
 /** Compiler-owned diagnostics keep their detail; owned conditions use i18n. */

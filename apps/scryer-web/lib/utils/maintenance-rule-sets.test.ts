@@ -4,40 +4,40 @@ import test from "node:test";
 import maintenanceInputContract from "../contracts/maintenance-input-contract.json" with { type: "json" };
 import en from "../i18n/locales/en.ts";
 import type {
-  MaintenanceActionDescriptor,
+  MaintenanceActionHead,
   MaintenanceActionStepProgress,
   MaintenanceCandidateState,
-  MaintenanceEffectArming,
+  MaintenanceDeclaredActions,
   MaintenanceRuleSetDetail,
   MaintenanceRuleState,
 } from "../types/maintenance-rule-sets.ts";
 import {
+  MAINTENANCE_ACTION_HEAD_ORDER,
+  MAINTENANCE_ACTION_HEAD_RULE_NAMES,
   MAINTENANCE_FILTER_ALL,
   MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
   MAINTENANCE_PREVIEW_LIMIT_MAX,
   MAINTENANCE_STARTER_SOURCE,
+  actionHeadLabelKey,
   actionKindLabelKey,
-  actionRequiresTags,
-  actionRequiresTargetQualityProfile,
   candidateStateBadgeTone,
   candidateStateLabelKey,
   clampMaintenancePreviewLimit,
   copyMaintenanceRuleDraft,
   createMaintenanceRuleSetInput,
-  effectArmingLabelKey,
+  decidedActionEntries,
+  declaredActionEntries,
   excludeMaintenanceSubjectInput,
   initialMaintenanceRuleDraft,
+  isDestructiveActionHead,
   isNonTerminalCandidateState,
   maintenanceCountdown,
-  maintenanceActionSequenceInput,
-  maintenanceActionSequenceStepId,
   maintenanceFilterArgument,
   maintenancePreviewInput,
   maintenanceSearchHistoryState,
   maintenanceRuleDraftFromDetail,
   nonTerminalCandidateCount,
   parseAcknowledgedCandidateCountMismatch,
-  riskClassBadgeTone,
   runStatusBadgeTone,
   ruleStateHelpKey,
   ruleStateLabelKey,
@@ -45,63 +45,31 @@ import {
   ruleStateOptionsFor,
   runStatusLabelKey,
   setMaintenanceRuleStateVariables,
-  titleScopedActionDescriptors,
-  scopedActionDescriptors,
-  storageScopedActionDescriptors,
+  templateActionHeads,
   updateMaintenanceRuleMatcherInput,
   updateMaintenanceRuleMetadataInput,
 } from "./maintenance-rule-sets.ts";
 
-const descriptors: MaintenanceActionDescriptor[] = [
-  {
-    kind: "DO_NOTHING",
-    supportedRuleScopes: ["TITLE", "SEASON", "EPISODE"],
-    supportedSubjects: ["MOVIE", "SHOW", "SEASON", "EPISODE"],
-    riskClass: "NONE",
-    effectClasses: [],
-    timingMode: "IMMEDIATE",
-    allowedRepeatModes: ["ONCE"],
-    requiresTargetQualityProfile: false,
-    requiresTags: false,
-    supportsStorageScope: true,
-  },
-  {
-    kind: "DELETE_TITLE_AND_FILES",
-    supportedRuleScopes: ["TITLE"],
-    supportedSubjects: ["MOVIE", "SHOW"],
-    riskClass: "HIGH",
-    effectClasses: ["DELETE_FILES"],
-    timingMode: "GRACE",
-    allowedRepeatModes: ["ONCE"],
-    requiresTargetQualityProfile: false,
-    requiresTags: false,
-    supportsStorageScope: false,
-  },
-  {
-    kind: "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY",
-    supportedRuleScopes: [],
-    supportedSubjects: ["SEASON"],
-    riskClass: "LOW",
-    effectClasses: ["UNMONITOR"],
-    timingMode: "GRACE",
-    allowedRepeatModes: ["ONCE"],
-    requiresTargetQualityProfile: false,
-    requiresTags: false,
-    supportsStorageScope: false,
-  },
-  {
-    kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-    supportedRuleScopes: ["TITLE"],
-    supportedSubjects: ["MOVIE", "SHOW"],
-    riskClass: "MEDIUM",
-    effectClasses: ["SEARCH"],
-    timingMode: "GRACE",
-    allowedRepeatModes: ["EVERY_RUN"],
-    requiresTargetQualityProfile: true,
-    requiresTags: false,
-    supportsStorageScope: false,
-  },
-];
+function declared(
+  overrides: Partial<MaintenanceDeclaredActions> = {},
+): MaintenanceDeclaredActions {
+  return {
+    heads: [],
+    destructive: false,
+    qualityProfiles: [],
+    addTags: [],
+    removeTags: [],
+    libraries: [],
+    roots: [],
+    notifications: [],
+    ...overrides,
+  };
+}
+
+const profileThenSearch = declared({
+  heads: ["SEARCH", "SET_QUALITY_PROFILE"],
+  qualityProfiles: ["Compact 1080p"],
+});
 
 const detail: MaintenanceRuleSetDetail = {
   ruleSet: {
@@ -116,12 +84,7 @@ const detail: MaintenanceRuleSetDetail = {
     subjectKind: "TITLE",
     currentRevisionNumber: 3,
     graceDays: 30,
-    actionSpec: {
-      kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-      schemaVersion: 1,
-      targetQualityProfileId: "profile-uhd",
-      tags: [],
-    },
+    declaredActions: profileThenSearch,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-02T00:00:00Z",
   },
@@ -129,244 +92,80 @@ const detail: MaintenanceRuleSetDetail = {
     id: "rev-3",
     ruleSetId: "rule-1",
     revisionNumber: 3,
-    regoSource: "match if {\n\tinput.facts.has_file\n}\n",
+    regoSource:
+      'set_quality_profile := "Compact 1080p" if input.facts.has_file\n\nsearch if input.facts.has_file\n',
     graceDays: 14,
     storageRootId: null,
     matcherContentHash: "blake3:abcdef",
     createdBy: "operator",
     createdAt: "2026-01-02T00:00:00Z",
   },
-  actionSpec: {
-    kind: "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-    schemaVersion: 1,
-    targetQualityProfileId: "profile-7",
-    tags: [],
-  },
-  actionSequence: null,
+  declaredActions: profileThenSearch,
 };
 
-test("a new draft starts from the starter matcher with no package or import line", () => {
+const ACTION_FIELDS = ["action", "actionSequence", "actionSpec"];
+
+function assertNoActionFields(input: object) {
+  for (const field of ACTION_FIELDS)
+    assert.equal(Object.hasOwn(input, field), false, field);
+}
+
+test("a new draft starts from a starter source that declares an action", () => {
   const draft = initialMaintenanceRuleDraft();
 
   assert.equal(draft.regoSource, MAINTENANCE_STARTER_SOURCE);
   assert.equal(draft.regoSource.includes("package "), false);
   assert.equal(draft.regoSource.includes("import rego.v1"), false);
-  assert.equal(draft.actionKind, "DO_NOTHING");
-  assert.deepEqual(draft.actionSequence.steps, []);
+  assert.equal(/^match\b/m.test(draft.regoSource), false);
+  assert.ok(templateActionHeads(draft.regoSource).length > 0);
+  assertNoActionFields(draft);
   assert.equal(draft.graceDays, 0);
   assert.deepEqual(draft.libraryIds, []);
 });
 
-test("sequence step IDs remain valid when randomUUID is unavailable", () => {
-  const id = maintenanceActionSequenceStepId(
-    null,
-    () => 1234,
-    () => 0.5,
-  );
-
-  assert.equal(id, "step-1234-i");
-  assert.match(id, /^[A-Za-z0-9_-]+$/);
-});
-
-test("a draft loaded from a rule set round-trips its revision and action", () => {
+test("a draft loaded from a rule set round-trips its revision", () => {
   const draft = maintenanceRuleDraftFromDetail(detail);
 
   assert.equal(draft.name, detail.ruleSet.name);
   assert.equal(draft.regoSource, detail.revision.regoSource);
   assert.equal(draft.graceDays, 14);
-  assert.equal(
-    draft.actionKind,
-    "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-  );
-  assert.equal(draft.targetQualityProfileId, "profile-7");
   assert.deepEqual(draft.libraryIds, ["lib-movies", "lib-series"]);
   assert.notEqual(draft.libraryIds, detail.ruleSet.libraryIds);
-  assert.equal(detail.actionSequence, null);
-  assert.deepEqual(
-    draft.actionSequence.steps.map((step) => step.kind),
-    ["CHANGE_QUALITY_PROFILE", "SEARCH"],
-  );
+  assertNoActionFields(draft);
 });
 
 test("copying a rule set renames the draft and keeps nothing that identifies the original", () => {
   const draft = copyMaintenanceRuleDraft(detail);
 
   assert.equal(draft.name, "Copy of Stale unmonitored titles");
+  assert.equal(draft.regoSource, detail.revision.regoSource);
   assert.equal(Object.hasOwn(draft, "id"), false);
   assert.equal(Object.hasOwn(draft, "enabled"), false);
   assert.equal(Object.hasOwn(draft, "evaluationMode"), false);
 });
 
-test("create input saves a full sequence and never sends a legacy action", () => {
-  const input = createMaintenanceRuleSetInput(
-    {
-      ...maintenanceRuleDraftFromDetail(detail),
-      description: "  ",
-      libraryIds: [],
-    },
-    descriptors,
-  );
+test("create input sends the source as the whole rule and no separate action", () => {
+  const input = createMaintenanceRuleSetInput({
+    ...maintenanceRuleDraftFromDetail(detail),
+    description: "  ",
+    libraryIds: [],
+  });
 
   assert.equal(input.name, "Stale unmonitored titles");
   assert.equal(input.description, undefined);
   assert.equal(input.libraryIds, undefined);
-  assert.deepEqual(input.actionSequence, {
-    schemaVersion: 2,
-    steps: [
-      {
-        id: "legacy-change-profile",
-        kind: "CHANGE_QUALITY_PROFILE",
-        parameters: { targetQualityProfileId: "profile-7" },
-      },
-      {
-        id: "legacy-search",
-        kind: "SEARCH",
-        parameters: { searchCondition: "PREVIOUS_PROFILE_CHANGED" },
-      },
-    ],
-  });
-  assert.equal(Object.hasOwn(input, "action"), false);
+  assert.equal(input.regoSource, detail.revision.regoSource);
   assert.equal(input.graceDays, 14);
+  assertNoActionFields(input);
   assert.equal(Object.hasOwn(input, "enabled"), false);
-});
-
-test("a parameterless step never sends a stale profile id", () => {
-  const draft = {
-    ...maintenanceRuleDraftFromDetail(detail),
-    actionSequence: {
-      schemaVersion: 2,
-      steps: [
-        {
-          id: "delete",
-          kind: "DELETE_TITLE_AND_FILES" as const,
-          parameters: {
-            includeDescendants: null,
-            targetQualityProfileId: "profile-uhd",
-            searchCondition: null,
-            tags: [],
-          },
-        },
-      ],
-    },
-  };
-  const input = createMaintenanceRuleSetInput(draft, descriptors);
-
-  assert.deepEqual(input.actionSequence.steps[0], {
-    id: "delete",
-    kind: "DELETE_TITLE_AND_FILES",
-    parameters: {},
-  });
-});
-
-test("a tag step sends normalized, deduplicated labels and nothing else", () => {
-  const tagDescriptors: MaintenanceActionDescriptor[] = [
-    ...descriptors,
-    {
-      kind: "ADD_TAGS",
-      supportedRuleScopes: ["TITLE"],
-      supportedSubjects: ["MOVIE", "SHOW"],
-      riskClass: "LOW",
-      effectClasses: ["catalog_intent"],
-      timingMode: "after_grace",
-      allowedRepeatModes: ["ensure_state"],
-      requiresTargetQualityProfile: false,
-      requiresTags: true,
-      supportsStorageScope: false,
-    },
-  ];
-  const draft = {
-    ...maintenanceRuleDraftFromDetail(detail),
-    actionSequence: {
-      schemaVersion: 2,
-      steps: [
-        {
-          id: "add-tags",
-          kind: "ADD_TAGS" as const,
-          parameters: {
-            includeDescendants: null,
-            targetQualityProfileId: "profile-uhd",
-            searchCondition: null,
-            tags: [
-              "  Needs   Review ",
-              "keep",
-              "needs review",
-              "scryer:monitor-type:all",
-            ],
-          },
-        },
-      ],
-    },
-  };
-
-  assert.deepEqual(
-    createMaintenanceRuleSetInput(draft, tagDescriptors).actionSequence,
-    {
-      schemaVersion: 2,
-      steps: [
-        {
-          id: "add-tags",
-          kind: "ADD_TAGS",
-          parameters: { tags: ["keep", "needs review"] },
-        },
-      ],
-    },
-  );
-
-  // Replacing the step drops every old parameter with it.
-  assert.deepEqual(
-    maintenanceActionSequenceInput({
-      schemaVersion: 2,
-      steps: [
-        {
-          ...draft.actionSequence.steps[0],
-          kind: "DELETE_TITLE_AND_FILES",
-        },
-      ],
-    }).steps[0].parameters,
-    {},
-  );
-  assert.equal(actionRequiresTags(tagDescriptors, "ADD_TAGS"), true);
-  assert.equal(
-    actionRequiresTags(tagDescriptors, "DELETE_TITLE_AND_FILES"),
-    false,
-  );
-});
-
-test("the tag actions are offerable for a title rule", () => {
-  const tagDescriptors: MaintenanceActionDescriptor[] = [
-    ...descriptors,
-    {
-      kind: "REMOVE_TAGS",
-      supportedRuleScopes: ["TITLE"],
-      supportedSubjects: ["MOVIE", "SHOW"],
-      riskClass: "LOW",
-      effectClasses: ["catalog_intent"],
-      timingMode: "after_grace",
-      allowedRepeatModes: ["ensure_state"],
-      requiresTargetQualityProfile: false,
-      requiresTags: true,
-      supportsStorageScope: false,
-    },
-  ];
-  assert.equal(
-    titleScopedActionDescriptors(tagDescriptors)
-      .map((descriptor) => descriptor.kind)
-      .includes("REMOVE_TAGS"),
-    true,
-  );
 });
 
 test("matcher and metadata updates split along the API's versioned and unversioned halves", () => {
   const draft = maintenanceRuleDraftFromDetail(detail);
-  const matcher = updateMaintenanceRuleMatcherInput(
-    "rule-1",
-    draft,
-    descriptors,
-  );
+  const matcher = updateMaintenanceRuleMatcherInput("rule-1", draft);
   const metadata = updateMaintenanceRuleMetadataInput("rule-1", draft);
 
   assert.deepEqual(Object.keys(matcher).sort(), [
-    "actionSequence",
     "graceDays",
     "id",
     "regoSource",
@@ -386,144 +185,19 @@ test("a selected root follows create, update, and inline preview inputs", () => 
     storageRootId: "root-a",
   };
 
+  assert.equal(createMaintenanceRuleSetInput(draft).storageRootId, "root-a");
   assert.equal(
-    createMaintenanceRuleSetInput(draft, descriptors).storageRootId,
+    updateMaintenanceRuleMatcherInput("rule-1", draft).storageRootId,
     "root-a",
   );
-  assert.equal(
-    updateMaintenanceRuleMatcherInput("rule-1", draft, descriptors)
-      .storageRootId,
-    "root-a",
-  );
-  assert.equal(
-    maintenancePreviewInput({ draft, descriptors }).storageRootId,
-    "root-a",
-  );
+  assert.equal(maintenancePreviewInput({ draft }).storageRootId, "root-a");
   assert.equal(
     updateMaintenanceRuleMatcherInput(
       "rule-1",
       maintenanceRuleDraftFromDetail(detail),
-      descriptors,
     ).storageRootId,
     null,
   );
-});
-
-test("only descriptors that support a movie or a show are offerable for a title rule", () => {
-  const offerable = titleScopedActionDescriptors(descriptors).map(
-    (d) => d.kind,
-  );
-
-  assert.deepEqual(offerable, [
-    "DO_NOTHING",
-    "DELETE_TITLE_AND_FILES",
-    "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-  ]);
-  assert.equal(
-    offerable.includes("UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY"),
-    false,
-  );
-});
-
-test("a selected storage root follows the server's action capability", () => {
-  const withRootFileOnly: MaintenanceActionDescriptor[] = [
-    ...descriptors,
-    {
-      kind: "UNMONITOR_TITLE_DELETE_ALL_FILES",
-      supportedRuleScopes: ["TITLE"],
-      supportedSubjects: ["MOVIE", "SHOW"],
-      riskClass: "HIGH",
-      effectClasses: ["DELETE_FILES"],
-      timingMode: "GRACE",
-      allowedRepeatModes: ["ONCE"],
-      requiresTargetQualityProfile: false,
-      requiresTags: false,
-      supportsStorageScope: true,
-    },
-  ];
-  assert.deepEqual(
-    storageScopedActionDescriptors(withRootFileOnly, "TITLE", "root-a").map(
-      (descriptor) => descriptor.kind,
-    ),
-    ["DO_NOTHING", "UNMONITOR_TITLE_DELETE_ALL_FILES"],
-  );
-  assert.deepEqual(
-    storageScopedActionDescriptors(descriptors, "TITLE", "").map(
-      (descriptor) => descriptor.kind,
-    ),
-    [
-      "DO_NOTHING",
-      "DELETE_TITLE_AND_FILES",
-      "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-    ],
-  );
-});
-
-test("title file-only deletion is offered while show-only legacy deletion remains hidden", () => {
-  // Mirrors EXECUTABLE_TITLE_RULE_ACTIONS in
-  // crates/scryer-application/src/maintenance_rules/action_execution.rs.
-  const withShowDelete: MaintenanceActionDescriptor[] = [
-    ...descriptors,
-    {
-      kind: "UNMONITOR_TITLE_DELETE_ALL_FILES",
-      supportedRuleScopes: ["TITLE"],
-      supportedSubjects: ["MOVIE", "SHOW"],
-      riskClass: "HIGH",
-      effectClasses: ["DELETE_FILES"],
-      timingMode: "GRACE",
-      allowedRepeatModes: ["ONCE"],
-      requiresTargetQualityProfile: false,
-      requiresTags: false,
-      supportsStorageScope: true,
-    },
-    {
-      kind: "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
-      supportedRuleScopes: [],
-      supportedSubjects: ["SHOW"],
-      riskClass: "HIGH",
-      effectClasses: ["DELETE_FILES"],
-      timingMode: "GRACE",
-      allowedRepeatModes: ["ONCE"],
-      requiresTargetQualityProfile: false,
-      requiresTags: false,
-      supportsStorageScope: false,
-    },
-  ];
-
-  const offerable = titleScopedActionDescriptors(withShowDelete).map(
-    (d) => d.kind,
-  );
-  assert.equal(
-    offerable.includes("UNMONITOR_SHOW_DELETE_EXISTING_FILES"),
-    false,
-  );
-  assert.deepEqual(offerable, [
-    "DO_NOTHING",
-    "DELETE_TITLE_AND_FILES",
-    "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-    "UNMONITOR_TITLE_DELETE_ALL_FILES",
-  ]);
-});
-
-test("the quality-profile field follows the descriptor rather than a hardcoded kind", () => {
-  assert.equal(
-    actionRequiresTargetQualityProfile(
-      descriptors,
-      "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-    ),
-    true,
-  );
-  assert.equal(
-    actionRequiresTargetQualityProfile(descriptors, "DELETE_TITLE_AND_FILES"),
-    false,
-  );
-  assert.equal(actionRequiresTargetQualityProfile([], "DO_NOTHING"), false);
-});
-
-test("a destructive action reads as destructive", () => {
-  assert.equal(riskClassBadgeTone("HIGH"), "negative");
-  assert.equal(riskClassBadgeTone("MEDIUM"), "warning");
-  assert.equal(riskClassBadgeTone("NONE"), "neutral");
 });
 
 test("the preview limit stays inside the API's cap", () => {
@@ -543,7 +217,6 @@ test("preview sends either a stored rule or an inline draft, never both", () => 
   const stored = maintenancePreviewInput({
     ruleSetId: "rule-1",
     draft: maintenanceRuleDraftFromDetail(detail),
-    descriptors,
     libraryId: "lib-movies",
     limit: 10,
   });
@@ -555,13 +228,13 @@ test("preview sends either a stored rule or an inline draft, never both", () => 
 
   const inline = maintenancePreviewInput({
     draft: maintenanceRuleDraftFromDetail(detail),
-    descriptors,
     libraryId: "lib-movies",
     limit: 999,
   });
   assert.equal(Object.hasOwn(inline, "ruleSetId"), false);
   assert.equal(inline.regoSource, detail.revision.regoSource);
   assert.equal(inline.limit, MAINTENANCE_PREVIEW_LIMIT_MAX);
+  assertNoActionFields(inline);
 });
 
 test("explicit title ids replace the library-and-limit subject selection", () => {
@@ -576,6 +249,124 @@ test("explicit title ids replace the library-and-limit subject selection", () =>
     ruleSetId: "rule-1",
     titleIds: ["title-1", "title-2"],
   });
+});
+
+// ── Declared and decided actions ──────────────────────────────────────
+
+test("declared actions read in execution order with the values each head carries", () => {
+  const entries = declaredActionEntries(
+    declared({
+      heads: [
+        "NOTIFY",
+        "DELETE_TITLE",
+        "UNMONITOR",
+        "ADD_TAGS",
+        "MOVE_TO_ROOT",
+        "SET_QUALITY_PROFILE",
+        "ADD_TAGS",
+      ],
+      destructive: true,
+      qualityProfiles: ["Compact 1080p", "HD-720p"],
+      addTags: ["needs-review"],
+      roots: ["/media/archive"],
+      notifications: ["Retiring this title"],
+    }),
+  );
+
+  assert.deepEqual(entries, [
+    { head: "ADD_TAGS", values: ["needs-review"] },
+    { head: "SET_QUALITY_PROFILE", values: ["Compact 1080p", "HD-720p"] },
+    { head: "MOVE_TO_ROOT", values: ["/media/archive"] },
+    { head: "UNMONITOR", values: [] },
+    { head: "DELETE_TITLE", values: [] },
+    { head: "NOTIFY", values: ["Retiring this title"] },
+  ]);
+  assert.deepEqual(declaredActionEntries(null), []);
+  assert.deepEqual(declaredActionEntries(declared()), []);
+});
+
+test("a subject's decided actions keep the server's order and single values", () => {
+  const entries = decidedActionEntries({
+    heads: ["SET_QUALITY_PROFILE", "SEARCH", "MOVE_TO_LIBRARY", "NOTIFY"],
+    qualityProfile: "Compact 1080p",
+    addTags: [],
+    removeTags: [],
+    library: "Archive",
+    root: null,
+    notification: "Moved to the archive",
+  });
+
+  assert.deepEqual(entries, [
+    { head: "SET_QUALITY_PROFILE", values: ["Compact 1080p"] },
+    { head: "SEARCH", values: [] },
+    { head: "MOVE_TO_LIBRARY", values: ["Archive"] },
+    { head: "NOTIFY", values: ["Moved to the archive"] },
+  ]);
+  // Historical candidates carry no decided actions at all.
+  assert.deepEqual(decidedActionEntries(null), []);
+});
+
+test("every action head has a label, a rule name and a place in the order", () => {
+  const heads: MaintenanceActionHead[] = [
+    "UNMONITOR",
+    "DELETE_FILES",
+    "DELETE_TITLE",
+    "SEARCH",
+    "SET_QUALITY_PROFILE",
+    "ADD_TAGS",
+    "REMOVE_TAGS",
+    "MONITOR",
+    "MOVE_TO_LIBRARY",
+    "MOVE_TO_ROOT",
+    "NOTIFY",
+    "FETCH_SUBTITLES",
+  ];
+  assert.deepEqual(
+    [...MAINTENANCE_ACTION_HEAD_ORDER].sort(),
+    [...heads].sort(),
+  );
+  for (const head of heads) {
+    const key = actionHeadLabelKey(head);
+    assert.ok(key, `${head} has no label key`);
+    assert.equal(
+      typeof en[key],
+      "string",
+      `${key} is not in the default locale`,
+    );
+    assert.equal(MAINTENANCE_ACTION_HEAD_RULE_NAMES[head], head.toLowerCase());
+    assert.equal(
+      isDestructiveActionHead(head),
+      head === "DELETE_FILES" || head === "DELETE_TITLE",
+      head,
+    );
+  }
+  assert.equal(actionHeadLabelKey("SOME_FUTURE_HEAD"), null);
+});
+
+test("template heads come from top-level rule names, not helpers or references", () => {
+  const source = [
+    "package rules",
+    "import rego.v1",
+    "",
+    "# delete_title if nothing",
+    "stale if {",
+    "\tnot input.facts.monitored",
+    "\tsearch_count := 0",
+    "}",
+    "",
+    'notify := "Going away" if stale',
+    "unmonitor if stale",
+    "delete_files if stale",
+    "matched_before if unmonitor",
+    "",
+  ].join("\n");
+
+  assert.deepEqual(templateActionHeads(source), [
+    "UNMONITOR",
+    "DELETE_FILES",
+    "NOTIFY",
+  ]);
+  assert.deepEqual(templateActionHeads("match if { true }\n"), []);
 });
 
 test("every action kind in the pinned enum has a label", () => {
@@ -626,7 +417,7 @@ test("the maintenance reference table documents bare facts and full envelopes", 
 
 const reviewedDeleteRule = {
   id: "rule-1",
-  enabledArming: "DESTRUCTIVE" as MaintenanceEffectArming,
+  declaredActions: declared({ heads: ["DELETE_TITLE"], destructive: true }),
   currentRevisionNumber: 3,
   libraryIds: ["library-a"],
 };
@@ -645,25 +436,37 @@ test("enabled is offered only for a rule whose action changes something", () => 
   }
 });
 
-test("only enabling a rule that deletes files asks for confirmation", () => {
+test("only enabling a rule whose source declares a delete asks for confirmation", () => {
   const states: MaintenanceRuleState[] = ["DISABLED", "DRY_RUN", "ENABLED"];
+  // The newer heads change things but never delete, so they never confirm.
+  const reversible = declared({
+    heads: ["MOVE_TO_LIBRARY", "MOVE_TO_ROOT", "NOTIFY", "FETCH_SUBTITLES"],
+    libraries: ["Archive"],
+    roots: ["/media/archive"],
+    notifications: ["Moved"],
+  });
   for (const state of states) {
     assert.equal(
-      ruleStateNeedsConfirmation({ enabledArming: "REVERSIBLE" }, state),
+      ruleStateNeedsConfirmation({ declaredActions: reversible }, state),
       false,
     );
-    assert.equal(
-      ruleStateNeedsConfirmation({ enabledArming: "DESTRUCTIVE" }, state),
-      state === "ENABLED",
-      state,
-    );
+    for (const head of ["DELETE_FILES", "DELETE_TITLE"] as const) {
+      assert.equal(
+        ruleStateNeedsConfirmation(
+          { declaredActions: declared({ heads: [head], destructive: true }) },
+          state,
+        ),
+        state === "ENABLED",
+        `${head} ${state}`,
+      );
+    }
   }
 });
 
 test("a state change carries the reviewed revision, scope and count only when it confirms", () => {
   assert.deepEqual(
     setMaintenanceRuleStateVariables(
-      { ...reviewedDeleteRule, enabledArming: "REVERSIBLE" },
+      { ...reviewedDeleteRule, declaredActions: profileThenSearch },
       "ENABLED",
       7,
     ),
@@ -705,7 +508,7 @@ test("a global delete rule confirms an explicit empty scope", () => {
   });
 });
 
-test("every rule state and effect has real copy in the default locale", () => {
+test("every rule state has real copy in the default locale", () => {
   for (const state of ["DISABLED", "DRY_RUN", "ENABLED"]) {
     for (const key of [ruleStateLabelKey(state), ruleStateHelpKey(state)]) {
       assert.ok(key, `${state} has no key`);
@@ -716,21 +519,6 @@ test("every rule state and effect has real copy in the default locale", () => {
   assert.equal(en["settings.maintenanceRuleStateDryRun"], "Dry run");
   assert.equal(en["settings.maintenanceRuleStateEnabled"], "Enabled");
   assert.equal(ruleStateLabelKey("SOME_FUTURE_STATE"), null);
-  const armings: MaintenanceEffectArming[] = [
-    "NONE",
-    "REVERSIBLE",
-    "DESTRUCTIVE",
-  ];
-  for (const arming of armings) {
-    const key = effectArmingLabelKey(arming);
-    assert.ok(key, `${arming} has no label key`);
-    assert.equal(
-      typeof en[key],
-      "string",
-      `${key} is not in the default locale`,
-    );
-  }
-  assert.equal(effectArmingLabelKey("SOME_FUTURE_ARMING"), null);
 });
 
 test("count acknowledgement reads a numeric fact and ignores prose", () => {
@@ -1003,38 +791,17 @@ test("scope is copied, sent on create and preview, and immutable on matcher upda
   };
   const draft = copyMaintenanceRuleDraft(scoped);
   assert.equal(draft.subjectKind, "EPISODE");
+  assert.equal(createMaintenanceRuleSetInput(draft).subjectKind, "EPISODE");
   assert.equal(
-    createMaintenanceRuleSetInput(draft, descriptors).subjectKind,
-    "EPISODE",
-  );
-  assert.equal(
-    maintenancePreviewInput({ draft, descriptors, libraryId: "series" })
-      .subjectKind,
+    maintenancePreviewInput({ draft, libraryId: "series" }).subjectKind,
     "EPISODE",
   );
   assert.equal(
     Object.hasOwn(
-      updateMaintenanceRuleMatcherInput("rule", draft, descriptors),
+      updateMaintenanceRuleMatcherInput("rule", draft),
       "subjectKind",
     ),
     false,
-  );
-});
-
-test("the API's scope matrix controls child actions", () => {
-  const scoped: MaintenanceActionDescriptor = {
-    ...descriptors[0],
-    kind: "UNMONITOR_SCOPE_DELETE_FILES",
-    supportedRuleScopes: ["SEASON", "EPISODE"],
-  };
-  assert.equal(scopedActionDescriptors([scoped], "TITLE").length, 0);
-  assert.equal(
-    scopedActionDescriptors([scoped], "EPISODE")[0].kind,
-    "UNMONITOR_SCOPE_DELETE_FILES",
-  );
-  assert.equal(
-    scopedActionDescriptors([scoped], "SEASON")[0].kind,
-    "UNMONITOR_SCOPE_DELETE_FILES",
   );
 });
 
@@ -1046,7 +813,6 @@ test("exact subject preview retains its owning title and the draft library scope
   };
   const input = maintenancePreviewInput({
     draft,
-    descriptors,
     titleIds: ["show"],
     subjectIds: ["episode"],
     libraryId: "ignored",
