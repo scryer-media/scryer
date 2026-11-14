@@ -123,7 +123,8 @@ impl Fixture {
         let spec = http3_spec(config).unwrap();
         let provider =
             scryer_tunnel::Http3TunnelProvider::with_root_certificates(spec.clone(), roots)
-                .unwrap();
+                .unwrap()
+                .with_endpoint_resolver(Arc::new(SystemEndpointResolver));
         TunnelRegistry::shared()
             .unwrap()
             .ensure_tunnel_with(
