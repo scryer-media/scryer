@@ -2304,21 +2304,16 @@ fn write_package_version(path: &Path, version: &Version) -> Result<()> {
     Ok(())
 }
 
+/// Re-locks the workspace packages whose version the release just bumped, in
+/// every tracked lockfile. A release never moves a registry or git
+/// dependency: those change only through a deliberate dependency update.
 fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
-    step("Refreshing Cargo.lock after version bump");
-    let mut generate_lockfile = ctx.release_command_in("cargo", &ctx.repo_root);
-    generate_lockfile.arg("generate-lockfile");
-    run_checked(&mut generate_lockfile)?;
-
-    let mut metadata = ctx.release_command_in("cargo", &ctx.repo_root);
-    metadata.args(["metadata", "--locked", "--format-version", "1"]);
-    metadata.stdout(Stdio::null());
-    run_checked(&mut metadata)?;
-    ok("Cargo.lock refreshed and locked metadata passed");
-
-    // Independently rooted projects pin the bumped crates by path, so their
-    // lockfiles go stale with the manifests and `--locked` then fails there.
-    for cargo_lock in independent_cargo_lockfiles(ctx)? {
+    // The workspace lockfile first, then the independently rooted projects:
+    // they pin the bumped crates by path, so their lockfiles go stale with the
+    // manifests and `--locked` then fails there.
+    let mut cargo_lockfiles = vec![ctx.path("Cargo.lock")];
+    cargo_lockfiles.extend(independent_cargo_lockfiles(ctx)?);
+    for cargo_lock in cargo_lockfiles {
         let cargo_dir = cargo_lock
             .parent()
             .context("tracked Cargo.lock did not have a parent directory")?;
@@ -2326,11 +2321,11 @@ fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
             .strip_prefix(&ctx.repo_root)
             .unwrap_or(&cargo_lock)
             .display();
-        step(format!("Refreshing {display_path} after version bump"));
-        // `--workspace` re-locks only the path packages whose version moved
-        // and leaves every registry dependency where it was.
+        step(format!(
+            "Re-locking bumped workspace packages in {display_path}"
+        ));
         let mut update = ctx.release_command_in("cargo", cargo_dir);
-        update.args(["update", "--workspace"]);
+        update.args(RELEASE_LOCKFILE_REFRESH_ARGS);
         run_checked(&mut update)?;
 
         let mut metadata = ctx.release_command_in("cargo", cargo_dir);
@@ -2338,11 +2333,16 @@ fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
         metadata.stdout(Stdio::null());
         run_checked(&mut metadata)?;
         ok(format!(
-            "{display_path} refreshed and locked metadata passed"
+            "{display_path} re-locked and locked metadata passed"
         ));
     }
     Ok(())
 }
+
+/// The `cargo` arguments that refresh a lockfile after a version bump.
+/// `--workspace` re-locks only the path packages whose version moved and
+/// leaves every registry and git dependency where it was.
+const RELEASE_LOCKFILE_REFRESH_ARGS: [&str; 2] = ["update", "--workspace"];
 
 /// Tracked lockfiles other than the release workspace's own.
 fn independent_cargo_lockfiles(ctx: &TaskContext) -> Result<Vec<PathBuf>> {
@@ -4360,6 +4360,8 @@ fn run_scryer_rust_fmt(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     Ok(())
 }
 
+/// Audits every tracked lockfile exactly as committed; nothing is updated
+/// first, so the audit covers the versions the release ships.
 fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> {
     let cargo_lockfiles = git_tracked_cargo_lockfiles(ctx)?;
     for cargo_lock in &cargo_lockfiles {
@@ -4372,15 +4374,6 @@ fn run_scryer_rust_audit(ctx: &TaskContext, prefix: &'static str) -> Result<()> 
                 cargo_lock.display()
             );
         }
-        let display_path = cargo_lock
-            .strip_prefix(&ctx.repo_root)
-            .unwrap_or(cargo_lock)
-            .display();
-        prefixed_step(prefix, format!("Updating {display_path} (cargo update)"));
-        let mut update = ctx.release_command_in("cargo", cargo_dir);
-        update.arg("update");
-        run_streaming(&mut update, prefix)?;
-        prefixed_ok(prefix, format!("{display_path} updated"));
     }
 
     if !command_available("cargo-audit")? {
