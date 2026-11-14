@@ -22,6 +22,7 @@
 //! have to be literal and why `input` cannot be imported.
 
 use crate::RulesError;
+use crate::maintenance_actions::{self, MaintenanceActionHead, MaintenanceActions, decode_actions};
 use crate::policy::decode::decode_reasons;
 use crate::policy::engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
 use crate::policy::observation::serialize_fact_namespaces;
@@ -350,6 +351,10 @@ pub enum MaintenanceOutcome {
 pub struct MaintenanceDecision {
     pub outcome: MaintenanceOutcome,
     pub reason_codes: Vec<String>,
+    /// The actions the rule declared for this subject. Always empty when the
+    /// outcome is [`MaintenanceOutcome::Unknown`]: a rule that was held, by the
+    /// host or by its own `unknown`, asks for nothing.
+    pub actions: MaintenanceActions,
 }
 
 /// One rule's decision, attributed to the exact policy revision that produced
@@ -396,7 +401,12 @@ pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
             WrapperField::new("matched", "match", "false"),
             WrapperField::new("unknown", HOLD_RULE_NAME, "false"),
             WrapperField::new("reasons", "reasons", "[]"),
-        ],
+        ]
+        .into_iter()
+        .chain(MaintenanceActionHead::ALL.into_iter().map(|head| {
+            WrapperField::new(head.rule_name(), head.rule_name(), head.wrapper_default())
+        }))
+        .collect::<Vec<_>>(),
     )
 }
 
@@ -478,6 +488,15 @@ impl PolicyFamily for MaintenanceFamily {
 
     fn rule_extra(_policy: &Self::Policy) -> Self::RuleExtra {}
 
+    /// The host helpers (`days_since`) live in the rule's own package so an
+    /// author calls them unqualified.
+    fn support_modules(
+        policy: &Self::Policy,
+        module: &regorus::unstable::Module,
+    ) -> Vec<(String, String)> {
+        maintenance_actions::helper_modules(&policy.id, module)
+    }
+
     /// A matcher whose fact dependencies cannot be read off its source must not
     /// load at all: the host could not then tell whether it is deciding on
     /// evidence Scryer actually has.
@@ -504,6 +523,7 @@ impl PolicyFamily for MaintenanceFamily {
         MaintenanceDecision {
             outcome: MaintenanceOutcome::Unknown,
             reason_codes,
+            actions: MaintenanceActions::default(),
         }
     }
 
@@ -584,6 +604,9 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
         .as_bool()
         .map_err(|_| "'unknown' must be a boolean".to_string())?;
     let reason_codes = decode_reasons(&value["reasons"])?;
+    // Decoded before the outcome is known, so a head of the wrong type is an
+    // error for the rule even on a subject the rule holds.
+    let actions = decode_actions(value)?;
 
     // Unknown wins over match: a rule that cannot see enough to decide must
     // hold the candidate rather than advance it.
@@ -595,9 +618,17 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
         MaintenanceOutcome::NoMatch
     };
 
+    // A held subject gets no actions, whatever the heads evaluated to.
+    let actions = if outcome == MaintenanceOutcome::Unknown {
+        MaintenanceActions::default()
+    } else {
+        actions
+    };
+
     Ok(MaintenanceDecision {
         outcome,
         reason_codes,
+        actions,
     })
 }
 
@@ -1290,6 +1321,13 @@ mod tests {
              \t\"matched\": object.get(data.scryer.maintenance.user.rule_1, \"match\", false),\n\
              \t\"unknown\": object.get(data.scryer.maintenance.user.rule_1, \"unknown\", false),\n\
              \t\"reasons\": object.get(data.scryer.maintenance.user.rule_1, \"reasons\", []),\n\
+             \t\"unmonitor\": object.get(data.scryer.maintenance.user.rule_1, \"unmonitor\", false),\n\
+             \t\"delete_files\": object.get(data.scryer.maintenance.user.rule_1, \"delete_files\", false),\n\
+             \t\"delete_title\": object.get(data.scryer.maintenance.user.rule_1, \"delete_title\", false),\n\
+             \t\"search\": object.get(data.scryer.maintenance.user.rule_1, \"search\", false),\n\
+             \t\"set_quality_profile\": object.get(data.scryer.maintenance.user.rule_1, \"set_quality_profile\", null),\n\
+             \t\"add_tags\": object.get(data.scryer.maintenance.user.rule_1, \"add_tags\", []),\n\
+             \t\"remove_tags\": object.get(data.scryer.maintenance.user.rule_1, \"remove_tags\", []),\n\
              }\n"
         );
         assert_eq!(

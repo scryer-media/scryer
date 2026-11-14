@@ -32,7 +32,7 @@ use crate::RulesError;
 use crate::runtime::RuntimeLimits;
 
 pub use decode::{
-    MAX_REASON_CODE_LEN, MAX_REASON_CODES, MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX,
+    MAX_REASON_CODE_LEN, MAX_REASON_CODES, MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX, check_tag,
     decode_reasons, decode_tags,
 };
 pub use engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
@@ -114,6 +114,14 @@ pub trait PolicyFamily: Sized + 'static {
     /// all — a managed pack's origin contract, for instance.
     fn prepare_policy(_policy: &Self::Policy) -> Result<(), RulesError> {
         Ok(())
+    }
+
+    /// Host-authored modules loaded beside this policy, as `(path, source)`
+    /// pairs. They are added after the policy's own module and before the
+    /// wrapper, and get the policy's parsed module so a family can decline to
+    /// add a helper the author already defines.
+    fn support_modules(_policy: &Self::Policy, _module: &Module) -> Vec<(String, String)> {
+        Vec::new()
     }
 
     /// The `input.facts.*` names this policy reads, resolved statically.

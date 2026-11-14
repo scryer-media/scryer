@@ -131,6 +131,12 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 .add_policy(policy_path.clone(), policy.rego_source().to_string())
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
             let policy_module_index = engine.get_modules().len() - 1;
+            let policy_module = engine.get_modules()[policy_module_index].clone();
+            for (path, source) in F::support_modules(policy, &policy_module) {
+                engine
+                    .add_policy(path, source)
+                    .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            }
             engine
                 .add_policy(
                     F::wrapper_policy_path(policy.id()),

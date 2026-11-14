@@ -22,6 +22,7 @@
 pub(crate) mod builtins;
 pub mod diagnostic_codes;
 pub mod maintenance;
+pub mod maintenance_actions;
 pub mod policy;
 mod release;
 pub mod request;
@@ -39,3 +40,6 @@ mod trash_pack_validation;
 
 #[cfg(test)]
 mod rego_editor_tests;
+
+#[cfg(test)]
+mod maintenance_action_tests;

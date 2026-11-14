@@ -174,6 +174,9 @@ pub struct ValidationResult {
     pub valid: bool,
     pub errors: Vec<String>,
     pub diagnostics: Vec<ValidationDiagnostic>,
+    /// Conditions worth telling the author about that do not make the source
+    /// invalid. Never counted in `valid`, `errors`, or `diagnostics`.
+    pub warnings: Vec<ValidationDiagnostic>,
 }
 
 impl ValidationResult {
@@ -182,6 +185,7 @@ impl ValidationResult {
             valid: true,
             errors: Vec::new(),
             diagnostics: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -198,7 +202,13 @@ impl ValidationResult {
             valid: diagnostics.is_empty(),
             errors: diagnostics.iter().map(|d| d.message.clone()).collect(),
             diagnostics,
+            warnings: Vec::new(),
         }
+    }
+
+    fn with_warnings(mut self, warnings: Vec<ValidationDiagnostic>) -> Self {
+        self.warnings = warnings;
+        self
     }
 
     /// Regorus exposes compiler locations only in its diagnostic text. Decode
@@ -449,7 +459,7 @@ fn unsupported_dynamic_input_path_message(path: &str) -> String {
 /// narrower than every family Scryer runs, so a source the engine already holds
 /// — a large community pack, say — would fail to parse here and turn a static
 /// question into an error the caller cannot answer.
-fn parse_module(
+pub(crate) fn parse_module(
     rego_source: &str,
     policy_path: &str,
     limits: &RuntimeLimits,
@@ -473,7 +483,7 @@ enum StaticReferenceComponent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StaticReference {
+pub(crate) struct StaticReference {
     components: Vec<StaticReferenceComponent>,
 }
 
@@ -485,6 +495,17 @@ impl StaticReference {
         }
     }
 
+    /// The leading literal fields, up to the first computed component.
+    pub(crate) fn fields(&self) -> Vec<String> {
+        self.components
+            .iter()
+            .map_while(|component| match component {
+                StaticReferenceComponent::Field(field) => Some(field.clone()),
+                StaticReferenceComponent::Dynamic => None,
+            })
+            .collect()
+    }
+
     fn starts_with(&self, fields: &[&str]) -> bool {
         fields
             .iter()
@@ -493,7 +514,7 @@ impl StaticReference {
     }
 }
 
-fn static_reference(expr: &Expr) -> Option<StaticReference> {
+pub(crate) fn static_reference(expr: &Expr) -> Option<StaticReference> {
     match expr {
         Expr::Var { span, .. } => Some(StaticReference {
             components: vec![StaticReferenceComponent::Field(span.text().to_string())],
@@ -687,7 +708,7 @@ fn visit_query_expr_nodes(query: &Query, sink: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn visit_rule_expr_nodes(rule: &Rule, mut sink: impl FnMut(&Expr)) {
+pub(crate) fn visit_rule_expr_nodes(rule: &Rule, mut sink: impl FnMut(&Expr)) {
     match rule {
         Rule::Spec { head, bodies, .. } => {
             match head {
@@ -1137,7 +1158,7 @@ fn input_import_error(module: &Module, family: &str) -> Option<String> {
 }
 
 /// Leading name of a rule head reference, e.g. `match` for `match["x"]`.
-fn rule_head_name(expr: &Expr) -> Option<&str> {
+pub(crate) fn rule_head_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Var { span, .. } => Some(span.text()),
         Expr::RefDot { refr, .. } | Expr::RefBrack { refr, .. } => rule_head_name(refr),
@@ -1620,7 +1641,13 @@ pub fn validate_managed_rule(
 ///    quietly evaluate to no-match forever — this is the only place that catches
 ///    it.
 /// 5. Every `input.*` reference resolves in the maintenance catalog.
-/// 6. A dry run against synthetic input yields a well-formed decision.
+/// 6. Every value written for `set_quality_profile`, `add_tags` or
+///    `remove_tags` is a plain literal the action accepts, and the source does
+///    not redefine a host helper such as `days_since`.
+/// 7. A dry run against synthetic input yields a well-formed decision.
+///
+/// A rule name that is neither part of the contract nor used anywhere else in
+/// the source is reported in `warnings` and does not make the source invalid.
 pub fn validate_maintenance_rule(
     rego_source: &str,
     rule_set_id: &str,
@@ -1640,14 +1667,21 @@ pub fn validate_maintenance_rule(
         return Ok(ValidationResult::compilation_error(e));
     }
     let policy_module_index = engine.get_modules().len() - 1;
+    let module = engine.get_modules()[policy_module_index].clone();
+    let module = module.as_ref();
+    // The same host modules the engine loads, so a rule that calls a host
+    // helper dry-runs here exactly as it will run.
+    for (path, source) in crate::maintenance_actions::helper_modules(rule_set_id, module) {
+        if let Err(e) = engine.add_policy(path, source) {
+            return Ok(ValidationResult::compilation_error(e));
+        }
+    }
     if let Err(e) = engine.add_policy(
         maintenance::decision_wrapper_policy_path(rule_set_id),
         maintenance::decision_wrapper_source(rule_set_id),
     ) {
         return Ok(ValidationResult::compilation_error(e));
     }
-
-    let module = &engine.get_modules()[policy_module_index];
 
     if let Some(error) = input_import_error(module, "maintenance") {
         return Ok(ValidationResult::invalid_code(
@@ -1668,23 +1702,40 @@ pub fn validate_maintenance_rule(
         ));
     }
 
+    let scan = crate::maintenance_actions::scan_module(module);
+    let warnings = scan.warnings.iter().map(action_scan_diagnostic).collect();
+    if !scan.errors.is_empty() {
+        let errors = scan.errors.iter().map(action_scan_diagnostic).collect();
+        return Ok(ValidationResult::from_diagnostics(errors).with_warnings(warnings));
+    }
+
     let input_value = serde_json::to_value(maintenance::synthetic_maintenance_input())
         .map_err(RulesError::Serialization)?;
     engine.set_input(input_value.into());
 
-    match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
+    let result = match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match maintenance::decode_decision(&value) {
-            Ok(_) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid_code(
+            Ok(_) => ValidationResult::valid(),
+            Err(e) => ValidationResult::invalid_code(
                 crate::diagnostic_codes::RULE_OUTPUT_INVALID,
                 format!("output error: {e}"),
-            )),
+            ),
         },
-        Err(e) => Ok(ValidationResult::invalid_code(
+        Err(e) => ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_RUNTIME_ERROR,
             format!("runtime error: {e}"),
-        )),
-    }
+        ),
+    };
+    Ok(result.with_warnings(warnings))
+}
+
+fn action_scan_diagnostic(
+    issue: &crate::maintenance_actions::MaintenanceActionScanIssue,
+) -> ValidationDiagnostic {
+    let mut diagnostic = ValidationDiagnostic::new(issue.code, issue.message.clone());
+    diagnostic.line = Some(issue.line);
+    diagnostic.column = Some(issue.column);
+    diagnostic
 }
 
 /// The heads a request rule may write. At least one of the first four has to be
