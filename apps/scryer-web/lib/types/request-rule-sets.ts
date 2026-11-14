@@ -57,6 +57,9 @@ export type RequestRuleRevision = {
 export type RequestRuleSetDetail = {
   ruleSet: RequestRuleSetRecord;
   revision: RequestRuleRevision;
+  /// The stored builder document, read only by the single-rule query. Opaque
+  /// until `parseRuleBuilderModel` reads it.
+  builderModel?: unknown;
 };
 
 export type RequestRuleValidationResult = {
@@ -183,6 +186,8 @@ export type RequestRuleSetDraft = {
   description: string;
   regoSource: string;
   libraryIds: string[];
+  /// Set while the draft is still exactly what the builder writes.
+  builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
 
 /// One account the user picker can write into a matcher. Only the id and the

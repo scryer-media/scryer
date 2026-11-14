@@ -25,11 +25,14 @@ import {
 import {
   SettingsMaintenanceRulesSection,
   type MaintenanceLibraryOption,
-  type MaintenanceRuleEditorMode,
   type MaintenanceStorageRootOption,
 } from "@/components/views/settings/settings-maintenance-rules-section";
-import type { MaintenanceBuilderOptions } from "@/components/views/settings/maintenance-rule-builder";
-import { generateMaintenanceRuleSource } from "@/lib/utils/maintenance-rule-builder";
+import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
+import {
+  loadQualityProfileNames,
+  loadTitleTagLabels,
+} from "@/lib/utils/rule-builder-catalogs";
+import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
@@ -54,6 +57,7 @@ import type {
 import {
   MAINTENANCE_FILTER_ALL,
   MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
+  MAINTENANCE_RULE_BUILDER,
   clampMaintenancePreviewLimit,
   copyMaintenanceRuleDraft,
   createMaintenanceRuleSetInput,
@@ -64,13 +68,9 @@ import {
   maintenanceRuleDraftFromDetail,
   maintenanceRuleUpdatePlan,
   newMaintenanceRuleBuilderDraft,
-  withMaintenanceAdvancedEditor,
-  withMaintenanceRuleSourceEdit,
 } from "@/lib/utils/maintenance-rule-sets";
 import {
   librariesQuery,
-  maintenanceBuilderTagLabelsQuery,
-  qualityProfileOptionsQuery,
   maintenanceActionRunsQuery,
   maintenanceCandidatesQuery,
   maintenanceEvaluationRunsQuery,
@@ -213,18 +213,43 @@ export function SettingsMaintenanceRulesContainer({
     useState<PendingExclusion | null>(null);
   const [excluding, setExcluding] = useState(false);
 
-  const [editorMode, setEditorModeState] =
-    useState<MaintenanceRuleEditorMode>("advanced");
-  const [builderDetached, setBuilderDetached] = useState(false);
-  /// Picker catalogs for the builder, loaded the first time a chosen action
-  /// needs one and kept for the page's lifetime. Null until loaded.
-  const [qualityProfileNames, setQualityProfileNames] = useState<
-    string[] | null
-  >(null);
-  const [tagLabels, setTagLabels] = useState<string[] | null>(null);
-
   const isDraftDirty =
     JSON.stringify(ruleSetDraft) !== JSON.stringify(ruleSetDraftBaseline);
+
+  const reportLoadError = useCallback(
+    (error: unknown) =>
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      ),
+    [setGlobalStatus, t],
+  );
+  /// The builder's pickers: libraries and roots are already on the page, the
+  /// other catalogs load the first time a chosen action needs them.
+  const staticBuilderOptions = useMemo(
+    () => ({
+      libraries: libraries.map((library) => library.name),
+      storageRoots: [...new Set(storageRoots.map((root) => root.path))],
+    }),
+    [libraries, storageRoots],
+  );
+  const builderOptionLoaders = useMemo(
+    () => ({
+      qualityProfiles: () => loadQualityProfileNames(client),
+      titleTags: () => loadTitleTagLabels(client),
+    }),
+    [client],
+  );
+  const builderEditor = useRuleBuilderEditor({
+    binding: MAINTENANCE_RULE_BUILDER,
+    draft: ruleSetDraft,
+    setDraft: setRuleSetDraft,
+    isEditorOpen,
+    staticOptions: staticBuilderOptions,
+    optionLoaders: builderOptionLoaders,
+    onLoadError: reportLoadError,
+  });
+  const beginBuilderSession = builderEditor.beginSession;
 
   /// Every editor opening goes through here: a rule still made by the builder
   /// opens in it, anything else opens as Rego.
@@ -233,11 +258,10 @@ export function SettingsMaintenanceRulesContainer({
       setRuleSetDraft(next);
       setRuleSetDraftBaseline(baseline);
       setEditorSessionKey((key) => key + 1);
-      setEditorModeState(next.builderModel ? "simple" : "advanced");
-      setBuilderDetached(false);
+      beginBuilderSession(next);
       setValidationResult(null);
     },
-    [setValidationResult],
+    [beginBuilderSession, setValidationResult],
   );
 
   const closeEditor = useCallback(() => {
@@ -253,95 +277,6 @@ export function SettingsMaintenanceRulesContainer({
     startEditorSession(next, next);
     setIsEditorOpen(true);
   }, [startEditorSession]);
-
-  const editRegoSource = useCallback((source: string) => {
-    setRuleSetDraft((prev) => {
-      const edit = withMaintenanceRuleSourceEdit(prev, source);
-      // Idempotent, so a replayed updater sets the same notice.
-      if (edit.detached) setBuilderDetached(true);
-      return edit.draft;
-    });
-  }, []);
-
-  const setEditorMode = useCallback((mode: MaintenanceRuleEditorMode) => {
-    if (mode === "advanced") {
-      setRuleSetDraft((prev) => withMaintenanceAdvancedEditor(prev));
-    }
-    setEditorModeState(mode);
-  }, []);
-
-  const builderShown =
-    isEditorOpen &&
-    editorMode === "simple" &&
-    ruleSetDraft.builderModel !== null;
-  const builderActions = ruleSetDraft.builderModel?.actions;
-  const needsQualityProfiles =
-    builderShown && builderActions?.SET_QUALITY_PROFILE !== undefined;
-  const needsTags =
-    builderShown &&
-    (builderActions?.ADD_TAGS !== undefined ||
-      builderActions?.REMOVE_TAGS !== undefined);
-
-  useEffect(() => {
-    if (!needsQualityProfiles || qualityProfileNames !== null) return;
-    let cancelled = false;
-    void client
-      .query(qualityProfileOptionsQuery, {})
-      .toPromise()
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) throw error;
-        const profiles: { name: string }[] =
-          data?.qualityProfileSettings?.profiles ?? [];
-        setQualityProfileNames(profiles.map((profile) => profile.name));
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setQualityProfileNames([]);
-        setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
-          { level: "ERROR" },
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, needsQualityProfiles, qualityProfileNames, setGlobalStatus, t]);
-
-  useEffect(() => {
-    if (!needsTags || tagLabels !== null) return;
-    let cancelled = false;
-    void client
-      .query(maintenanceBuilderTagLabelsQuery, {})
-      .toPromise()
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) throw error;
-        const tags: { label: string }[] = data?.titleTagDefinitions ?? [];
-        setTagLabels(tags.map((tag) => tag.label));
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setTagLabels([]);
-        setGlobalStatus(
-          userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
-          { level: "ERROR" },
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, needsTags, setGlobalStatus, t, tagLabels]);
-
-  const builderOptions = useMemo<MaintenanceBuilderOptions>(
-    () => ({
-      qualityProfileNames,
-      tagLabels,
-      libraryNames: libraries.map((library) => library.name),
-      rootPaths: [...new Set(storageRoots.map((root) => root.path))],
-    }),
-    [libraries, qualityProfileNames, storageRoots, tagLabels],
-  );
 
   /// Load the source and declared actions for one rule set, surfacing failure
   /// instead of silently refusing to open the editor.
@@ -743,16 +678,12 @@ export function SettingsMaintenanceRulesContainer({
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (
-      builderShown &&
-      ruleSetDraft.builderModel &&
-      !generateMaintenanceRuleSource(
-        ruleSetDraft.builderModel,
-        ruleSetDraft.subjectKind,
-      ).ok
+      builderEditor.builderShown &&
+      isIncompleteRuleBuilderDraft(MAINTENANCE_RULE_BUILDER, ruleSetDraft)
     ) {
       setValidationResult({
         valid: false,
-        errors: [t("settings.maintenanceBuilderIncomplete")],
+        errors: [t("settings.ruleBuilderIncomplete")],
       });
       return;
     }
@@ -1119,11 +1050,12 @@ export function SettingsMaintenanceRulesContainer({
         ruleSetRecords={ruleSetRecords}
         libraries={libraries}
         storageRoots={storageRoots}
-        editorMode={editorMode}
-        setEditorMode={setEditorMode}
-        editRegoSource={editRegoSource}
-        builderDetached={builderDetached}
-        builderOptions={builderOptions}
+        editorMode={builderEditor.mode}
+        setEditorMode={builderEditor.setMode}
+        editRegoSource={builderEditor.editSource}
+        setBuilderModel={builderEditor.setModel}
+        builderDetached={builderEditor.detached}
+        builderOptions={builderEditor.options}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={deleteRuleSet}

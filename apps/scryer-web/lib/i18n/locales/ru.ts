@@ -4962,83 +4962,120 @@ const ru: LocaleDictionary = {
   "settings.maintenanceActionHeadMoveToRoot": "Переместить в корневую папку",
   "settings.maintenanceActionHeadNotify": "Уведомить",
   "settings.maintenanceActionHeadFetchSubtitles": "Загрузить субтитры",
-  "settings.maintenanceBuilderTitle": "Правило",
-  "settings.maintenanceBuilderModeLabel": "Редактор",
-  "settings.maintenanceBuilderModeSimple": "Простой",
-  "settings.maintenanceBuilderModeHelp":
-    "Простой режим собирает правило из условий и действий и сам пишет Rego. Расширенный режим позволяет редактировать Rego напрямую. При переходе в расширенный режим сгенерированный код сохраняется, но после ручной правки правило остаётся в расширенном режиме.",
-  "settings.maintenanceBuilderUnavailable":
+  "settings.ruleBuilderTitle": "Правило",
+  "settings.ruleBuilderModeLabel": "Редактор",
+  "settings.ruleBuilderModeSimple": "Простой",
+  "settings.ruleBuilderModeHelp":
+    "Простой режим собирает правило из условий и результатов и сам пишет Rego. Расширенный режим позволяет редактировать Rego напрямую. При переходе в расширенный режим сгенерированный код сохраняется, но после ручной правки правило остаётся в расширенном режиме.",
+  "settings.ruleBuilderUnavailable":
     "Код этого правила был изменён вручную или создан не простым конструктором, поэтому его можно редактировать только как Rego.",
-  "settings.maintenanceBuilderDetached":
+  "settings.ruleBuilderDetached":
     "Вы изменили код вручную, поэтому правило больше не связано с простым конструктором. Теперь оно будет открываться в расширенном режиме.",
-  "settings.maintenanceBuilderIncomplete":
-    "Перед сохранением заполните условия и действия.",
-  "settings.maintenanceBuilderConditions": "Условия",
+  "settings.ruleBuilderIncomplete":
+    "Перед сохранением заполните условия и результаты.",
+  "settings.ruleBuilderConditions": "Условия",
   "settings.maintenanceBuilderConditionsHelp":
     "Каждое условие проверяет один факт об объекте. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применились действия.",
-  "settings.maintenanceBuilderJoinAll": "Выполняются все условия",
-  "settings.maintenanceBuilderJoinAny": "Выполняется любое условие",
-  "settings.maintenanceBuilderAddCondition": "Добавить условие",
-  "settings.maintenanceBuilderFact": "Факт",
-  "settings.maintenanceBuilderFactPlaceholder": "Выберите факт",
-  "settings.maintenanceBuilderOperator": "Сравнение",
-  "settings.maintenanceBuilderValue": "Значение",
-  "settings.maintenanceBuilderDays": "Дней",
+  "settings.ruleBuilderJoinAll": "Выполняются все условия",
+  "settings.ruleBuilderJoinAny": "Выполняется любое условие",
+  "settings.ruleBuilderAddCondition": "Добавить условие",
+  "settings.ruleBuilderFact": "Факт",
+  "settings.ruleBuilderFactPlaceholder": "Выберите факт",
+  "settings.ruleBuilderOperator": "Сравнение",
+  "settings.ruleBuilderValue": "Значение",
+  "settings.ruleBuilderDays": "Дней",
   "settings.maintenanceBuilderActionsHelp":
     "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
   "settings.maintenanceBuilderActionTitleOnly":
     "Доступно только для правил тайтлов.",
-  "settings.maintenanceBuilderActionConflict":
-    "Нельзя сочетать с: {{actions}}.",
-  "settings.maintenanceBuilderQualityProfilePlaceholder":
-    "Выберите профиль качества",
+  "settings.ruleBuilderOutputConflict": "Нельзя сочетать с: {{outputs}}.",
+  "settings.ruleBuilderQualityProfilePlaceholder": "Выберите профиль качества",
   "settings.maintenanceBuilderLibraryPlaceholder": "Выберите библиотеку",
   "settings.maintenanceBuilderRootPlaceholder": "Выберите корневую папку",
-  "settings.maintenanceBuilderTagsPlaceholder": "Выберите теги",
-  "settings.maintenanceBuilderNoTags": "Теги ещё не созданы.",
+  "settings.ruleBuilderTagsPlaceholder": "Выберите теги",
+  "settings.ruleBuilderNoTags": "Теги ещё не созданы.",
   "settings.maintenanceBuilderNotifyPlaceholder": "Текст уведомления",
-  "settings.maintenanceBuilderGeneratedSource": "Сгенерированный Rego",
-  "settings.maintenanceBuilderGeneratedSourceHelp":
+  "settings.ruleBuilderGeneratedSource": "Сгенерированный Rego",
+  "settings.ruleBuilderGeneratedSourceHelp":
     "Код, который конструктор пишет по вашему выбору. Именно он проверяется, используется в предпросмотре и сохраняется.",
-  "settings.maintenanceBuilderGeneratedSourceEmpty":
-    "Код не создаётся, пока условия и действия не заполнены.",
-  "settings.maintenanceBuilderOpIsTrue": "истинно",
-  "settings.maintenanceBuilderOpIsFalse": "ложно",
-  "settings.maintenanceBuilderOpEquals": "равно",
-  "settings.maintenanceBuilderOpNotEquals": "не равно",
-  "settings.maintenanceBuilderOpGreaterThan": "больше",
-  "settings.maintenanceBuilderOpGreaterOrEqual": "не меньше",
-  "settings.maintenanceBuilderOpLessThan": "меньше",
-  "settings.maintenanceBuilderOpLessOrEqual": "не больше",
-  "settings.maintenanceBuilderOpContains": "содержит",
-  "settings.maintenanceBuilderOpNotContains": "не содержит",
-  "settings.maintenanceBuilderOpIsEmpty": "пусто",
-  "settings.maintenanceBuilderOpIsNotEmpty": "не пусто",
-  "settings.maintenanceBuilderOpMoreThanDaysAgo": "более N дней назад",
-  "settings.maintenanceBuilderOpLessThanDaysAgo": "менее N дней назад",
-  "settings.maintenanceBuilderOpHasValue": "задано",
-  "settings.maintenanceBuilderOpHasNoValue": "не задано",
-  "settings.maintenanceBuilderProblemNoConditions":
-    "Добавьте хотя бы одно условие.",
-  "settings.maintenanceBuilderProblemNoActions":
-    "Выберите хотя бы одно действие.",
-  "settings.maintenanceBuilderProblemFactRequired": "Выберите факт.",
-  "settings.maintenanceBuilderProblemFactUnknown":
-    "Этот факт недоступен для этой области.",
-  "settings.maintenanceBuilderProblemOperatorInvalid":
+  "settings.ruleBuilderGeneratedSourceEmpty":
+    "Код не создаётся, пока условия и результаты не заполнены.",
+  "settings.ruleBuilderOpIsTrue": "истинно",
+  "settings.ruleBuilderOpIsFalse": "ложно",
+  "settings.ruleBuilderOpEquals": "равно",
+  "settings.ruleBuilderOpNotEquals": "не равно",
+  "settings.ruleBuilderOpGreaterThan": "больше",
+  "settings.ruleBuilderOpGreaterOrEqual": "не меньше",
+  "settings.ruleBuilderOpLessThan": "меньше",
+  "settings.ruleBuilderOpLessOrEqual": "не больше",
+  "settings.ruleBuilderOpContains": "содержит",
+  "settings.ruleBuilderOpNotContains": "не содержит",
+  "settings.ruleBuilderOpIsEmpty": "пусто",
+  "settings.ruleBuilderOpIsNotEmpty": "не пусто",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "более N дней назад",
+  "settings.ruleBuilderOpLessThanDaysAgo": "менее N дней назад",
+  "settings.ruleBuilderOpHasValue": "задано",
+  "settings.ruleBuilderOpHasNoValue": "не задано",
+  "settings.ruleBuilderProblemNoConditions": "Добавьте хотя бы одно условие.",
+  "settings.ruleBuilderProblemNoOutputs": "Выберите хотя бы один результат.",
+  "settings.ruleBuilderProblemFactRequired": "Выберите факт.",
+  "settings.ruleBuilderProblemFactUnknown":
+    "Этот факт недоступен для этого правила.",
+  "settings.ruleBuilderProblemOperatorInvalid":
     "Выберите сравнение для этого факта.",
-  "settings.maintenanceBuilderProblemValueRequired": "Введите значение.",
-  "settings.maintenanceBuilderProblemValueNotNumber": "Введите число.",
-  "settings.maintenanceBuilderProblemValueNotDays":
+  "settings.ruleBuilderProblemValueRequired": "Введите значение.",
+  "settings.ruleBuilderProblemValueNotNumber": "Введите число.",
+  "settings.ruleBuilderProblemValueNotDays":
     "Введите целое число дней, не больше 100000.",
-  "settings.maintenanceBuilderProblemValueUnrepresentable":
+  "settings.ruleBuilderProblemValueUnrepresentable":
     "Это значение содержит символы, которые нельзя записать в правило.",
-  "settings.maintenanceBuilderProblemValueDuplicate":
-    "Каждый тег можно указать только один раз.",
-  "settings.maintenanceBuilderProblemActionNotInScope":
-    "Это действие недоступно для этой области.",
-  "settings.maintenanceBuilderProblemActionsConflict":
-    "Это действие нельзя сочетать с другим выбранным действием.",
+  "settings.ruleBuilderProblemValueDuplicate":
+    "Каждый элемент можно указать только один раз.",
+  "settings.ruleBuilderProblemOutputNotInScope":
+    "Этот вариант недоступен для этого правила.",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "Этот вариант нельзя сочетать с другим выбранным вариантом.",
+  "settings.ruleBuilderProblemOutputRequired":
+    "Выберите один из вариантов: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotWhole": "Введите целое число.",
+  "settings.ruleBuilderProblemValueOutOfRange":
+    "Это число вне допустимого диапазона.",
+  "settings.ruleBuilderProblemValueNotOffered":
+    "Выберите одно из предложенных значений.",
+  "settings.ruleBuilderProblemValueInvalid":
+    "Это значение содержит недопустимые здесь символы.",
+  "settings.ruleBuilderProblemValueTooLong": "Это значение слишком длинное.",
+  "settings.ruleBuilderProblemValueTooMany":
+    "В этом списке слишком много элементов.",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "Правило содержит вариант, неизвестный этой версии.",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "Для этого варианта также нужно: {{outputs}}.",
+  "settings.scoringBuilderOutputs": "Оценка",
+  "settings.scoringBuilderOutputsHelp":
+    "Выберите одно: добавить баллы к оценке релиза или заблокировать релиз. Код называет запись оценки в трассировке решений.",
+  "settings.scoringBuilderConditionsHelp":
+    "Каждое условие проверяет один факт о релизе, профиле или файле. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилась оценка.",
+  "settings.scoringBuilderAdjustScore": "Изменить оценку",
+  "settings.scoringBuilderBlock": "Заблокировать релиз",
+  "settings.scoringBuilderCode": "Код",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "Баллы",
+  "settings.requestBuilderOutputs": "Решение",
+  "settings.requestBuilderOutputsHelp":
+    "Выберите не более одного голоса: одобрить, отклонить или оставить на рассмотрение. Теги и причины можно добавить к голосу, а теги могут стоять и отдельно.",
+  "settings.requestBuilderConditionsHelp":
+    "Каждое условие проверяет один факт о запросе, тайтле, библиотеке или времени. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилось решение.",
+  "settings.requestBuilderApprove": "Одобрить",
+  "settings.requestBuilderDeny": "Отклонить",
+  "settings.requestBuilderManual": "Оставить на рассмотрение",
+  "settings.requestBuilderTags": "Теги",
+  "settings.requestBuilderReasons": "Коды причин",
+  "settings.requestBuilderReasonsPlaceholder":
+    "По одному коду причины в строке",
+  "settings.requestBuilderOriginManual": "Запрошено вручную",
+  "settings.requestBuilderOriginPublicList": "Из публичного списка",
+  "settings.requestBuilderOriginPersonalList": "Из личного списка",
   "settings.maintenanceDeclaredActionsTitle": "Объявленные действия",
   "settings.maintenanceDeclaredActionsHelp":
     "Действия, которые определяет исходный код правила. Подходящий объект получает только те, чьи условия для него выполняются, в таком порядке: {{order}}.",

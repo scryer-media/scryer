@@ -1,12 +1,11 @@
 import { graphQlErrorNumberExtension } from "../graphql/error-message.ts";
+import { MAINTENANCE_RULE_BUILDER_SCHEMA } from "./maintenance-rule-builder-schema.ts";
 import {
-  emptyMaintenanceBuilderModel,
-  generateMaintenanceRuleSource,
-  isBlankMaintenanceBuilderModel,
-  isMaintenanceBuilderSource,
-  parseMaintenanceBuilderModel,
-  type MaintenanceBuilderModel,
-} from "./maintenance-rule-builder.ts";
+  attachedRuleBuilderModel,
+  ruleBuilderModelToSave,
+  withNewRuleBuilderModel,
+  type RuleBuilderBinding,
+} from "./rule-builder-mode.ts";
 import {
   normalizeScriptSchedule,
   scheduleForKind,
@@ -226,101 +225,29 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
   };
 }
 
+/// How maintenance drafts meet the simple builder: a rule is written for its
+/// scope.
+export const MAINTENANCE_RULE_BUILDER: RuleBuilderBinding<MaintenanceRuleSetDraft> =
+  {
+    schema: MAINTENANCE_RULE_BUILDER_SCHEMA,
+    variant: (draft) => draft.subjectKind,
+    starterSource: MAINTENANCE_STARTER_SOURCE,
+  };
+
 /// A new rule starts in the simple builder with nothing chosen, so it has no
 /// source until the builder can write one.
 export function newMaintenanceRuleBuilderDraft(): MaintenanceRuleSetDraft {
-  return withMaintenanceBuilderModel(
+  return withNewRuleBuilderModel(
+    MAINTENANCE_RULE_BUILDER,
     initialMaintenanceRuleDraft(),
-    emptyMaintenanceBuilderModel(),
   );
 }
 
-/// Apply a builder change: the source becomes exactly what the builder writes
-/// for the model, or nothing while the model cannot be written yet.
-export function withMaintenanceBuilderModel(
-  draft: MaintenanceRuleSetDraft,
-  model: MaintenanceBuilderModel,
-): MaintenanceRuleSetDraft {
-  const result = generateMaintenanceRuleSource(model, draft.subjectKind);
-  return {
-    ...draft,
-    builderModel: model,
-    regoSource: result.ok ? result.source : "",
-  };
-}
-
-/// Apply a hand edit of the source. An edit that leaves anything other than
-/// the builder's own source detaches the rule from the builder for good.
-export function withMaintenanceRuleSourceEdit(
-  draft: MaintenanceRuleSetDraft,
-  regoSource: string,
-): { draft: MaintenanceRuleSetDraft; detached: boolean } {
-  const detached =
-    draft.builderModel !== null &&
-    !isMaintenanceBuilderSource(
-      draft.builderModel,
-      draft.subjectKind,
-      regoSource,
-    );
-  return {
-    draft: {
-      ...draft,
-      regoSource,
-      builderModel: detached ? null : draft.builderModel,
-    },
-    detached,
-  };
-}
-
-/// Leaving the builder for the Rego editor keeps the generated source. A
-/// builder nobody has touched yet has nothing to keep, so the editor starts
-/// from the starter source instead and the rule is Rego from then on.
-export function withMaintenanceAdvancedEditor(
-  draft: MaintenanceRuleSetDraft,
-): MaintenanceRuleSetDraft {
-  if (
-    draft.builderModel &&
-    draft.regoSource === "" &&
-    isBlankMaintenanceBuilderModel(draft.builderModel)
-  ) {
-    return {
-      ...draft,
-      regoSource: MAINTENANCE_STARTER_SOURCE,
-      builderModel: null,
-    };
-  }
-  return draft;
-}
-
-/// The model to store with a save: only when the saved source is exactly
-/// what the builder writes from it.
-export function maintenanceBuilderModelToSave(
-  draft: MaintenanceRuleSetDraft,
-): MaintenanceBuilderModel | null {
-  return draft.builderModel &&
-    isMaintenanceBuilderSource(
-      draft.builderModel,
-      draft.subjectKind,
-      draft.regoSource,
-    )
-    ? draft.builderModel
-    : null;
-}
-
-/// A stored model counts only while regenerating it reproduces the stored
-/// source; otherwise the rule opens as Rego and the stored model is left
-/// alone until the next save.
+/// A stored model opens in the builder only while it still regenerates the
+/// stored source.
 export function maintenanceRuleDraftFromDetail(
   detail: MaintenanceRuleSetDetail,
 ): MaintenanceRuleSetDraft {
-  const model = parseMaintenanceBuilderModel(detail.builderModel);
-  const attached =
-    model !== null &&
-    isMaintenanceBuilderSource(
-      model,
-      detail.ruleSet.subjectKind,
-      detail.revision.regoSource,
-    );
   return {
     subjectKind: detail.ruleSet.subjectKind,
     name: detail.ruleSet.name,
@@ -332,7 +259,12 @@ export function maintenanceRuleDraftFromDetail(
     schedule:
       normalizeScriptSchedule(detail.ruleSet.schedule) ??
       defaultMaintenanceRuleSchedule(),
-    builderModel: attached ? model : null,
+    builderModel: attachedRuleBuilderModel(
+      MAINTENANCE_RULE_BUILDER_SCHEMA,
+      detail.builderModel,
+      detail.ruleSet.subjectKind,
+      detail.revision.regoSource,
+    ),
   };
 }
 
@@ -356,7 +288,7 @@ export function createMaintenanceRuleSetInput(draft: MaintenanceRuleSetDraft) {
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
     schedule: toScriptScheduleInput(draft.schedule),
-    builderModel: maintenanceBuilderModelToSave(draft),
+    builderModel: ruleBuilderModelToSave(MAINTENANCE_RULE_BUILDER, draft),
   };
 }
 
@@ -372,7 +304,7 @@ export function updateMaintenanceRuleMatcherInput(
     // preserve a root they cannot render; this client may intentionally clear it.
     storageRootId: draft.storageRootId || null,
     // Null clears a stored model, so a hand-edited rule stops claiming one.
-    builderModel: maintenanceBuilderModelToSave(draft),
+    builderModel: ruleBuilderModelToSave(MAINTENANCE_RULE_BUILDER, draft),
   };
 }
 

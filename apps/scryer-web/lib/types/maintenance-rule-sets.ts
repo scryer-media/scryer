@@ -158,7 +158,7 @@ export type MaintenanceRuleSetDetail = {
   declaredActions: MaintenanceDeclaredActions;
   /// The simple builder's model, stored opaquely next to the rule. Null when
   /// the rule was never built with it or was detached from it. Read through
-  /// `parseMaintenanceBuilderModel`; only the detail query selects it.
+  /// `parseRuleBuilderModel`; only the detail query selects it.
   builderModel?: unknown;
 };
 
@@ -176,8 +176,7 @@ export type MaintenanceRuleSetDraft = {
   /// Set while the rule is still the simple builder's: `regoSource` is then
   /// what the builder generated from this model. Null once the source is
   /// edited by hand, and for every rule the builder did not make.
-  builderModel:
-    import("../utils/maintenance-rule-builder").MaintenanceBuilderModel | null;
+  builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
 
 export type MaintenanceValidationResult = {

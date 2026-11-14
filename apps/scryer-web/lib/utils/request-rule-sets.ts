@@ -6,6 +6,13 @@ import type {
   RequestRuleSetDraft,
   RequestVote,
 } from "@/lib/types/request-rule-sets";
+import { REQUEST_RULE_BUILDER_SCHEMA } from "./request-rule-builder-schema.ts";
+import {
+  attachedRuleBuilderModel,
+  ruleBuilderModelToSave,
+  withNewRuleBuilderModel,
+  type RuleBuilderBinding,
+} from "./rule-builder-mode.ts";
 
 /// How many stored decisions the recent-decisions table asks for. The API
 /// clamps its own maximum at 500 and defaults to 50; this is only how much of
@@ -38,15 +45,31 @@ manual if {
 }
 `;
 
+/// How request drafts meet the builder. A request rule has no variant.
+export const REQUEST_RULE_BUILDER: RuleBuilderBinding<RequestRuleSetDraft> = {
+  schema: REQUEST_RULE_BUILDER_SCHEMA,
+  variant: () => null,
+  starterSource: REQUEST_STARTER_SOURCE,
+};
+
+/// A draft written by hand: the starter source and no builder model.
 export function initialRequestRuleDraft(): RequestRuleSetDraft {
   return {
     name: "",
     description: "",
     regoSource: REQUEST_STARTER_SOURCE,
     libraryIds: [],
+    builderModel: null,
   };
 }
 
+/// A new rule opens in the builder with nothing chosen yet.
+export function newRequestRuleBuilderDraft(): RequestRuleSetDraft {
+  return withNewRuleBuilderModel(REQUEST_RULE_BUILDER, initialRequestRuleDraft());
+}
+
+/// The editor draft for a saved rule. Its stored builder model counts only
+/// while it still regenerates the stored source.
 export function requestRuleDraftFromDetail(
   detail: RequestRuleSetDetail,
 ): RequestRuleSetDraft {
@@ -55,12 +78,18 @@ export function requestRuleDraftFromDetail(
     description: detail.ruleSet.description ?? "",
     regoSource: detail.revision.regoSource,
     libraryIds: [...detail.ruleSet.libraryIds],
+    builderModel: attachedRuleBuilderModel(
+      REQUEST_RULE_BUILDER_SCHEMA,
+      detail.builderModel,
+      null,
+      detail.revision.regoSource,
+    ),
   };
 }
 
 /// A copy is a new rule, so it opens with a distinct name and no id. The
 /// matcher and the library scope come across verbatim, which is the whole point
-/// of copying one.
+/// of copying one, and a rule still made by the builder stays in it.
 export function copyRequestRuleDraft(
   detail: RequestRuleSetDetail,
 ): RequestRuleSetDraft {
@@ -74,6 +103,7 @@ export function createRequestRuleSetInput(draft: RequestRuleSetDraft) {
     description: draft.description.trim() || null,
     regoSource: draft.regoSource,
     libraryIds: draft.libraryIds,
+    builderModel: ruleBuilderModelToSave(REQUEST_RULE_BUILDER, draft),
   };
 }
 
@@ -81,7 +111,11 @@ export function updateRequestRuleMatcherInput(
   ruleSetId: string,
   draft: RequestRuleSetDraft,
 ) {
-  return { ruleSetId, regoSource: draft.regoSource };
+  return {
+    ruleSetId,
+    regoSource: draft.regoSource,
+    builderModel: ruleBuilderModelToSave(REQUEST_RULE_BUILDER, draft),
+  };
 }
 
 export function updateRequestRuleMetadataInput(

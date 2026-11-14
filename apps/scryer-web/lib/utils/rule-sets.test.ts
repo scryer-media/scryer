@@ -34,6 +34,7 @@ test("copying a managed rule creates a user-owned draft without managed metadata
     enabled: false,
     priority: managedRule.priority,
     appliedFacets: ["movies", "series"],
+    builderModel: null,
   });
   assert.equal(Object.hasOwn(draft, "id"), false);
   assert.equal(Object.hasOwn(draft, "managedKey"), false);

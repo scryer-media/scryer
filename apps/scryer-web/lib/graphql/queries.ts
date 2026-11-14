@@ -4117,6 +4117,7 @@ export const ruleSetQuery = `query RuleSet($id: ID!) {
     managedTagFilter
     createdAt
     updatedAt
+    builderModel
   }
 }`;
 
@@ -4203,8 +4204,9 @@ export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
   }
 }`;
 
-/// Tag names for the builder's tag pickers; nothing else about a tag shows there.
-export const maintenanceBuilderTagLabelsQuery = `query MaintenanceBuilderTagLabels {
+/// Tag names for the rule builder's tag pickers; nothing else about a tag
+/// shows there.
+export const ruleBuilderTagLabelsQuery = `query RuleBuilderTagLabels {
   titleTagDefinitions {
     label
   }
@@ -4487,6 +4489,7 @@ export const requestRuleSetsQuery = `query RequestRuleSets {
 
 export const requestRuleSetQuery = `query RequestRuleSet($id: ID!) {
   requestRuleSet(id: $id) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+    builderModel
   }
 }`;
 

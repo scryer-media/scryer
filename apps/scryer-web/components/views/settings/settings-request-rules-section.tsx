@@ -60,6 +60,7 @@ import type {
 import {
   REQUEST_FILTER_ALL,
   REQUEST_LEASE_DAYS_MAX,
+  REQUEST_RULE_BUILDER,
   requestDecisionOutcomeBadgeTone,
   requestDecisionOutcomeLabelKey,
   requestFallbackReasonLabelKey,
@@ -69,6 +70,10 @@ import {
   requestVoteBadgeTone,
   requestVoteLabelKey,
 } from "@/lib/utils/request-rule-sets";
+import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
+import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
+import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import {
   settingsRequestPreviewTitleResultId,
   settingsRequestDecisionRowId,
@@ -110,6 +115,17 @@ type SettingsRequestRulesSectionProps = {
   editingRuleSetId: string | null;
   ruleSetDraft: RequestRuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RequestRuleSetDraft>>;
+  /// Which source editor the form shows. Simple is only offered while the
+  /// draft is still the builder's.
+  builderMode: RuleEditorMode;
+  setBuilderMode: (mode: RuleEditorMode) => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  setBuilderModel: (model: RuleBuilderModel) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  builderDetached: boolean;
+  builderOptions: RuleBuilderOptions;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -1056,6 +1072,12 @@ export function SettingsRequestRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  builderMode,
+  setBuilderMode,
+  editRegoSource,
+  setBuilderModel,
+  builderDetached,
+  builderOptions,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -1083,6 +1105,24 @@ export function SettingsRequestRulesSection({
   ...previewProps
 }: SettingsRequestRulesSectionProps) {
   const t = useTranslate();
+  const validationStatus = (
+    <EditorValidationStatus
+      id="settings-request-rule-validation"
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+      data-request-rule-valid={
+        validationResult ? String(validationResult.valid) : undefined
+      }
+      data-request-rule-person-targeting-refusal={
+        validationResult?.diagnostics?.some(isPersonTargetingRefusal)
+          ? "true"
+          : undefined
+      }
+    />
+  );
 
   return (
     <div id="settings-request-rules-section" className="space-y-4 text-sm">
@@ -1277,54 +1317,36 @@ export function SettingsRequestRulesSection({
                       </label>
                     </div>
 
-                    <div>
-                      <Label className="mb-2 block">
-                        {t("settings.ruleRegoSource")}
-                      </Label>
-                      <LazyRegoEditor
-                        ruleFamily="request"
-                        id="settings-request-rule-rego-source"
-                        value={ruleSetDraft.regoSource}
-                        onChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            regoSource: value,
-                          }))
-                        }
-                        diagnostics={regoDiagnostics(
-                          ruleSetDraft.regoSource,
-                          validationResult,
-                          t,
-                        )}
-                        feedback={
-                          <EditorValidationStatus
-                            id="settings-request-rule-validation"
-                            checking={validating}
-                            result={validationResult}
-                            formatError={(error) =>
-                              formatRegoValidationError(
-                                error,
-                                ruleSetDraft.regoSource,
-                              )
-                            }
-                            data-request-rule-valid={
-                              validationResult
-                                ? String(validationResult.valid)
-                                : undefined
-                            }
-                            data-request-rule-person-targeting-refusal={
-                              validationResult?.diagnostics?.some(
-                                isPersonTargetingRefusal,
-                              )
-                                ? "true"
-                                : undefined
-                            }
-                          />
-                        }
-                        minLines={12}
-                        maxLines={35}
-                      />
-                    </div>
+                    <RuleEditorSurface
+                      idPrefix="settings-request-rule"
+                      schema={REQUEST_RULE_BUILDER.schema}
+                      variant={null}
+                      mode={builderMode}
+                      onModeChange={setBuilderMode}
+                      available
+                      detached={builderDetached}
+                      model={ruleSetDraft.builderModel}
+                      onModelChange={setBuilderModel}
+                      options={builderOptions}
+                      generatedSource={ruleSetDraft.regoSource}
+                      feedback={validationStatus}
+                      editor={
+                        <LazyRegoEditor
+                          ruleFamily="request"
+                          id="settings-request-rule-rego-source"
+                          value={ruleSetDraft.regoSource}
+                          onChange={editRegoSource}
+                          diagnostics={regoDiagnostics(
+                            ruleSetDraft.regoSource,
+                            validationResult,
+                            t,
+                          )}
+                          feedback={validationStatus}
+                          minLines={12}
+                          maxLines={35}
+                        />
+                      }
+                    />
 
                     <RequestUserPicker
                       users={users}

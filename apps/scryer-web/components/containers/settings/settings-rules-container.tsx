@@ -10,6 +10,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -27,7 +28,18 @@ import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { RuleSetRecord, RuleSetDraft } from "@/lib/types/rule-sets";
-import { copyRuleSetDraft, createRuleSetInput } from "@/lib/utils/rule-sets";
+import {
+  RULE_SET_INITIAL_DRAFT,
+  SCORING_RULE_BUILDER,
+  copyRuleSetDraft,
+  createRuleSetInput,
+  newScoringRuleBuilderDraft,
+  ruleSetDraftFromRecord,
+  updateRuleSetInput,
+} from "@/lib/utils/rule-sets";
+import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
+import { loadQualityProfileNames } from "@/lib/utils/rule-builder-catalogs";
+import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
 import { conflictingFrenchPack } from "@/lib/utils/trash-packs";
 import { resolveRuleDetailRequest } from "@/lib/utils/rule-detail-request";
 import {
@@ -47,16 +59,6 @@ import {
   updateTrackedRulePackMutation,
   updateRuleSetMutation,
 } from "@/lib/graphql/mutations";
-
-const RULE_SET_INITIAL_DRAFT: RuleSetDraft = {
-  name: "",
-  description: "",
-  regoSource:
-    'import rego.v1\n\nscore_entry["size_guard"] := scryer.block_score() if {\n    scryer.size_gib(input.release.size_bytes) > 100\n}\n',
-  enabled: true,
-  priority: 0,
-  appliedFacets: [],
-};
 
 type PendingRuleEditorAction =
   | { type: "create" }
@@ -127,6 +129,27 @@ export function SettingsRulesContainer({
   >([]);
   const [focusImportedEditor, setFocusImportedEditor] = useState(false);
   const detailRequestRef = useRef(0);
+  const reportLoadError = useCallback(
+    (error: unknown) =>
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      ),
+    [setGlobalStatus, t],
+  );
+  const builderOptionLoaders = useMemo(
+    () => ({ qualityProfiles: () => loadQualityProfileNames(client) }),
+    [client],
+  );
+  const builderEditor = useRuleBuilderEditor({
+    binding: SCORING_RULE_BUILDER,
+    draft: ruleSetDraft,
+    setDraft: setRuleSetDraft,
+    isEditorOpen,
+    optionLoaders: builderOptionLoaders,
+    onLoadError: reportLoadError,
+  });
+  const beginBuilderSession = builderEditor.beginSession;
 
   const closeRuleSetEditor = useCallback(() => {
     detailRequestRef.current += 1;
@@ -156,39 +179,34 @@ export function SettingsRulesContainer({
 
   const openCreateRuleEditor = useCallback(() => {
     detailRequestRef.current += 1;
-    const nextDraft = { ...RULE_SET_INITIAL_DRAFT };
+    const nextDraft = newScoringRuleBuilderDraft();
     setEditingRuleSetId(null);
     setCopyingTrackedRuleSetId(null);
     setRuleSetDraft(nextDraft);
     setRuleSetDraftBaseline(nextDraft);
+    beginBuilderSession(nextDraft);
     setValidationResult(null);
     setTranslationDiagnostics([]);
     setFocusImportedEditor(false);
     setIsEditorOpen(true);
-  }, [setValidationResult]);
+  }, [beginBuilderSession, setValidationResult]);
 
   const openEditRuleEditor = useCallback(
     (record: RuleSetRecord) => {
       detailRequestRef.current += 1;
-      const nextDraft = {
-        name: record.name,
-        description: record.description,
-        regoSource: record.regoSource,
-        enabled: record.enabled,
-        priority: record.priority,
-        appliedFacets: [...record.appliedFacets],
-      };
+      const nextDraft = ruleSetDraftFromRecord(record);
       setEditingRuleSetId(record.id);
       setCopyingTrackedRuleSetId(null);
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
+      beginBuilderSession(nextDraft);
       setValidationResult(null);
       setTranslationDiagnostics([]);
       setFocusImportedEditor(false);
       setIsEditorOpen(true);
       setGlobalStatus(t("status.editingRule", { name: record.name }));
     },
-    [setValidationResult, setGlobalStatus, t],
+    [beginBuilderSession, setValidationResult, setGlobalStatus, t],
   );
 
   const openCopyRuleEditor = useCallback(
@@ -199,12 +217,13 @@ export function SettingsRulesContainer({
       setCopyingTrackedRuleSetId(null);
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
+      beginBuilderSession(nextDraft);
       setValidationResult(null);
       setTranslationDiagnostics([]);
       setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
-    [setValidationResult],
+    [beginBuilderSession, setValidationResult],
   );
 
   const openTrackedRuleCopyEditor = useCallback(
@@ -215,12 +234,13 @@ export function SettingsRulesContainer({
       setCopyingTrackedRuleSetId(record.id);
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
+      beginBuilderSession(nextDraft);
       setValidationResult(null);
       setTranslationDiagnostics([]);
       setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
-    [setValidationResult],
+    [beginBuilderSession, setValidationResult],
   );
 
   const openTemplateRuleEditor = useCallback(
@@ -242,12 +262,13 @@ export function SettingsRulesContainer({
       setCopyingTrackedRuleSetId(null);
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
+      beginBuilderSession(nextDraft);
       setValidationResult(null);
       setTranslationDiagnostics([]);
       setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
-    [setValidationResult],
+    [beginBuilderSession, setValidationResult],
   );
 
   const openImportedRuleEditor = useCallback(
@@ -264,12 +285,13 @@ export function SettingsRulesContainer({
       setCopyingTrackedRuleSetId(null);
       setRuleSetDraft(nextDraft);
       setRuleSetDraftBaseline(nextDraft);
+      beginBuilderSession(nextDraft);
       setValidationResult(null);
       setTranslationDiagnostics(imported.translationDiagnostics);
       setFocusImportedEditor(true);
       setIsEditorOpen(true);
     },
-    [setValidationResult, t],
+    [beginBuilderSession, setValidationResult, t],
   );
 
   const loadRuleSetDetail = useCallback(
@@ -700,6 +722,16 @@ export function SettingsRulesContainer({
 
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (
+      builderEditor.builderShown &&
+      isIncompleteRuleBuilderDraft(SCORING_RULE_BUILDER, ruleSetDraft)
+    ) {
+      setValidationResult({
+        valid: false,
+        errors: [t("settings.ruleBuilderIncomplete")],
+      });
+      return;
+    }
     const payload = {
       name: ruleSetDraft.name.trim(),
       description: ruleSetDraft.description.trim(),
@@ -707,6 +739,7 @@ export function SettingsRulesContainer({
       enabled: ruleSetDraft.enabled,
       priority: ruleSetDraft.priority,
       appliedFacets: ruleSetDraft.appliedFacets,
+      builderModel: ruleSetDraft.builderModel,
     };
 
     if (!payload.name || !payload.regoSource.trim()) {
@@ -727,14 +760,7 @@ export function SettingsRulesContainer({
       if (editingRuleSetId) {
         const { error } = await client
           .mutation(updateRuleSetMutation, {
-            input: {
-              id: editingRuleSetId,
-              name: payload.name,
-              description: payload.description,
-              regoSource: payload.regoSource,
-              priority: payload.priority,
-              appliedFacets: payload.appliedFacets,
-            },
+            input: updateRuleSetInput(editingRuleSetId, payload),
           })
           .toPromise();
         if (error) throw error;
@@ -815,6 +841,12 @@ export function SettingsRulesContainer({
         editingRuleSetId={editingRuleSetId}
         ruleSetDraft={ruleSetDraft}
         setRuleSetDraft={setRuleSetDraft}
+        builderMode={builderEditor.mode}
+        setBuilderMode={builderEditor.setMode}
+        editRegoSource={builderEditor.editSource}
+        setBuilderModel={builderEditor.setModel}
+        builderDetached={builderEditor.detached}
+        builderOptions={builderEditor.options}
         submitRuleSet={submitRuleSet}
         mutatingRuleSetId={mutatingRuleSetId}
         resetRuleSetDraft={requestCloseRuleEditor}

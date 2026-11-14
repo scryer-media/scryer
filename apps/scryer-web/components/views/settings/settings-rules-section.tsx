@@ -63,7 +63,14 @@ import type {
 } from "@/lib/types/rule-sets";
 import ruleInputContract from "@/lib/contracts/rule-input-contract.json";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
+import {
+  SCORING_RULE_BUILDER,
+  isUserOwnedRuleSet,
+} from "@/lib/utils/rule-sets";
+import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
+import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
+import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import { trashLocalePacks } from "@/lib/utils/trash-packs";
 
 type SettingsRulesSectionProps = {
@@ -73,6 +80,17 @@ type SettingsRulesSectionProps = {
   editingRuleSetId: string | null;
   ruleSetDraft: RuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RuleSetDraft>>;
+  /// Which source editor the form shows. Simple is only offered while the
+  /// draft is still the builder's.
+  builderMode: RuleEditorMode;
+  setBuilderMode: (mode: RuleEditorMode) => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  setBuilderModel: (model: RuleBuilderModel) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  builderDetached: boolean;
+  builderOptions: RuleBuilderOptions;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -918,6 +936,12 @@ export function SettingsRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  builderMode,
+  setBuilderMode,
+  editRegoSource,
+  setBuilderModel,
+  builderDetached,
+  builderOptions,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -945,6 +969,15 @@ export function SettingsRulesSection({
   const validationDiagnostics = React.useMemo(
     () => regoDiagnostics(ruleSetDraft.regoSource, validationResult, t),
     [ruleSetDraft.regoSource, validationResult, t],
+  );
+  const validationStatus = (
+    <EditorValidationStatus
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+    />
   );
 
   return (
@@ -1192,9 +1225,6 @@ export function SettingsRulesSection({
                       </div>
 
                       <div>
-                        <Label className="mb-2 block">
-                          {t("settings.ruleRegoSource")}
-                        </Label>
                         {translationDiagnostics.length ? (
                           <div className="mb-2 rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-sm text-[var(--scry-warning-text)]">
                             <p className="font-medium">
@@ -1209,33 +1239,33 @@ export function SettingsRulesSection({
                             </ul>
                           </div>
                         ) : null}
-                        <LazyRegoEditor
-                          ruleFamily="release"
-                          id="settings-rule-rego-source"
-                          autoFocus={focusEditor}
-                          onAutoFocus={onEditorFocused}
-                          value={ruleSetDraft.regoSource}
-                          onChange={(value) =>
-                            setRuleSetDraft((prev) => ({
-                              ...prev,
-                              regoSource: value,
-                            }))
-                          }
-                          diagnostics={validationDiagnostics}
-                          feedback={
-                            <EditorValidationStatus
-                              checking={validating}
-                              result={validationResult}
-                              formatError={(error) =>
-                                formatRegoValidationError(
-                                  error,
-                                  ruleSetDraft.regoSource,
-                                )
-                              }
+                        <RuleEditorSurface
+                          idPrefix="settings-rule"
+                          schema={SCORING_RULE_BUILDER.schema}
+                          variant={null}
+                          mode={builderMode}
+                          onModeChange={setBuilderMode}
+                          available
+                          detached={builderDetached}
+                          model={ruleSetDraft.builderModel}
+                          onModelChange={setBuilderModel}
+                          options={builderOptions}
+                          generatedSource={ruleSetDraft.regoSource}
+                          feedback={validationStatus}
+                          editor={
+                            <LazyRegoEditor
+                              ruleFamily="release"
+                              id="settings-rule-rego-source"
+                              autoFocus={focusEditor}
+                              onAutoFocus={onEditorFocused}
+                              value={ruleSetDraft.regoSource}
+                              onChange={editRegoSource}
+                              diagnostics={validationDiagnostics}
+                              feedback={validationStatus}
+                              minLines={10}
+                              maxLines={35}
                             />
                           }
-                          minLines={10}
-                          maxLines={35}
                         />
                       </div>
 
