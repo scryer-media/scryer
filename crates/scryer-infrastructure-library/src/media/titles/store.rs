@@ -688,11 +688,35 @@ fn title_name_equality_lanes(
                     .join(", ")
             ),
         };
+        // A rule set may read a catalog name in another script than the
+        // observed name's, so this lane alone can span scripts. The script
+        // stays an expression filter on the rows the key index returns.
+        let (lane_bucket, lane_args) = match query.romanization_scripts {
+            [] => (bucket.clone(), bucket_args.clone()),
+            [script] if *script == query.script => (bucket.clone(), bucket_args.clone()),
+            scripts => {
+                let mut lane_bucket = format!(
+                    "t.term_kind IN ('name', 'alias', 'tagged_alias') \
+                     AND (t.script || '') IN ({}) AND (t.numbers_key || '') = {{}}",
+                    sql_placeholders(scripts.len())
+                );
+                let mut lane_args = scripts
+                    .iter()
+                    .map(|script| SqlArg::Text((*script).to_string()))
+                    .collect::<Vec<_>>();
+                lane_args.push(SqlArg::Text(query.numbers_key.to_string()));
+                if let Some(facet) = query.facet {
+                    lane_bucket.push_str(" AND t.facet = {}");
+                    lane_args.push(SqlArg::Text(facet.to_string()));
+                }
+                (lane_bucket, lane_args)
+            }
+        };
         lanes.push(format!(
             "SELECT {lane_columns} FROM title_search_terms t \
-             WHERE {bucket} AND t.romanization_key {keys}"
+             WHERE {lane_bucket} AND t.romanization_key {keys}"
         ));
-        args.extend(bucket_args.iter().cloned());
+        args.extend(lane_args);
         args.extend(
             query
                 .romanization_keys
