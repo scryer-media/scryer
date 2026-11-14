@@ -723,7 +723,9 @@ impl IndexerArtifactTransport {
     }
 
     /// HTTP links advertise a permitted fallback, but HTTPS always gets the first
-    /// attempt. Both attempts retain the same egress and accounting policy.
+    /// attempt. Both attempts retain the same egress policy. The HTTPS attempt
+    /// is on an address the indexer did not advertise, so it counts as a
+    /// request only when a connection was made.
     #[expect(clippy::too_many_arguments, reason = "retain the artifact hop policy")]
     async fn fetch_hop(
         &self,
@@ -777,6 +779,9 @@ impl IndexerArtifactTransport {
                 Some(destination) => request_policy.with_destination_cooldown_key(destination),
                 None => request_policy,
             };
+            // The probe's dispatch, held until its outcome says whether a
+            // connection was made.
+            let probe_dispatch = std::sync::Mutex::new(None::<(bool, String)>);
             let result = timeout(
                 remaining,
                 self.outbound_http
@@ -792,7 +797,13 @@ impl IndexerArtifactTransport {
                             let indexer_request = indexer_base_url
                                 .map(|base| artifact_domain_matches(base, actual_url.as_str()))
                                 .unwrap_or(true);
-                            let admitted = if indexer_request {
+                            let admitted = if probing_https {
+                                let admitted = tally.try_admit_probe();
+                                if admitted && let Ok(mut dispatch) = probe_dispatch.lock() {
+                                    *dispatch = Some((indexer_request, actual_url.to_string()));
+                                }
+                                admitted
+                            } else if indexer_request {
                                 tally.try_note_sent(actual_url.as_str())
                             } else {
                                 tally.try_note_auxiliary_sent_call("external_redirect")
@@ -804,6 +815,22 @@ impl IndexerArtifactTransport {
                     ),
             )
             .await;
+            let never_connected = matches!(
+                &result,
+                Ok(Err(OutboundHttpError::Transport { source, .. })) if source.is_connect()
+            );
+            if let Some((indexer_request, url)) = probe_dispatch
+                .into_inner()
+                .ok()
+                .flatten()
+                .filter(|_| !never_connected)
+            {
+                if indexer_request {
+                    tally.note_probe_reached(&url);
+                } else {
+                    tally.note_auxiliary_probe_reached("external_redirect");
+                }
+            }
             match result {
                 // TLS answered only to send the request back to plain HTTP on
                 // the same host. Following it would probe HTTPS again and end
@@ -1802,7 +1829,7 @@ mod tests {
                         format!("GET http://{host}/grab?id=fixture HTTP/1.1"),
                     ]
                 );
-                assert_eq!(stats.sent.load(Ordering::SeqCst), 2);
+                assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
             }
         }
     }
@@ -2324,7 +2351,7 @@ mod tests {
             let super::ArtifactFetchResponse::Http(response) = response else {
                 panic!("HTTP response");
             };
-            assert_request_outcomes(&recorder, &["no_response"]);
+            assert_request_outcomes(&recorder, &[]);
             let temp = tempfile::tempdir().unwrap();
             let store: Arc<dyn scryer_application::StagedNzbStore> = Arc::new(
                 crate::downloads::staged_nzb_store::FileSystemStagedNzbStore::new(temp.path())
@@ -2356,10 +2383,7 @@ mod tests {
                     )
                 })
                 .collect();
-            assert_eq!(
-                recorded,
-                vec![("no_response".to_string(), 1), (outcome.to_string(), 1)]
-            );
+            assert_eq!(recorded, vec![(outcome.to_string(), 1)]);
         }
     }
 
@@ -2671,7 +2695,7 @@ mod tests {
         drop(response);
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(external.received_requests().await.unwrap().len(), 1);
-        assert_eq!(stats.sent.load(Ordering::SeqCst), 2);
+        assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -2833,10 +2857,7 @@ mod tests {
         let target_request = target.received_requests().await.unwrap().pop().unwrap();
         assert!(target_request.headers.get("cookie").is_none());
         drop(tally);
-        assert_request_outcomes(
-            &recorder,
-            &["no_response", "http_302", "no_response", "success"],
-        );
+        assert_request_outcomes(&recorder, &["http_302", "success"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2915,9 +2936,9 @@ mod tests {
             AppError::NewznabQuotaExceeded { code: 500, .. }
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        assert_eq!(stats.sent.load(Ordering::SeqCst), 2);
+        assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
         drop(tally);
-        assert_request_outcomes(&recorder, &["no_response", "newznab_request_limit_reached"]);
+        assert_request_outcomes(&recorder, &["newznab_request_limit_reached"]);
     }
 
     #[tokio::test]
@@ -3019,7 +3040,7 @@ mod tests {
                 1,
                 "{label}"
             );
-            assert_eq!(stats.sent.load(Ordering::SeqCst), 2, "{label}");
+            assert_eq!(stats.sent.load(Ordering::SeqCst), 1, "{label}");
         }
     }
 
@@ -3094,9 +3115,9 @@ mod tests {
             .expect("direct artifact");
         assert!(matches!(artifact, ResolvedDownloadArtifact::Nzb { .. }));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        assert_eq!(stats.sent.load(Ordering::SeqCst), 2);
+        assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
         drop(tally);
-        assert_request_outcomes(&recorder, &["no_response", "success"]);
+        assert_request_outcomes(&recorder, &["success"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3188,19 +3209,13 @@ mod tests {
         );
         assert_eq!(
             stats.sent.load(Ordering::SeqCst),
-            5,
-            "two HTTPS probes, two HTTP grabs and one solver-relayed grab each count as dispatches"
+            3,
+            "two HTTP grabs and one solver-relayed grab each count as dispatches; the HTTPS probes never connect"
         );
         drop(tally);
         assert_request_outcomes(
             &recorder,
-            &[
-                "no_response",
-                "http_server_error",
-                "http_server_error",
-                "no_response",
-                "success",
-            ],
+            &["http_server_error", "http_server_error", "success"],
         );
     }
 
