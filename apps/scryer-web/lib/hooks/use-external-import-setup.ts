@@ -1897,8 +1897,7 @@ export function useExternalImportSetup({
             )
             .toPromise();
           const savedSettings = saved.data?.librarySettings as
-            | LibrarySettingsRecord
-            | undefined;
+            LibrarySettingsRecord | undefined;
           if (saved.error || !savedSettings) {
             return fail(
               `${gqlError(saved.error, t) || t("settings.librarySaveFailed")}: ${draft.name}`,

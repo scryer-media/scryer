@@ -53,14 +53,12 @@ export function librarySettingsInput(
 // The server keeps these three when a save leaves them out, so a save that
 // only carries the stored overrides back does not name them.
 type KeptWhenOmitted =
-  | "searchLanguages"
-  | "indexerRouting"
-  | "downloadClientRouting";
+  "searchLanguages" | "indexerRouting" | "downloadClientRouting";
 
 type CompleteStoredOverrides = {
-  [K in keyof Required<
-    Omit<LibrarySettingsDraft, KeptWhenOmitted>
-  >]: LibrarySettingsDraft[K];
+  [
+    K in keyof Required<Omit<LibrarySettingsDraft, KeptWhenOmitted>>
+  ]: LibrarySettingsDraft[K];
 };
 
 /**
@@ -99,7 +97,8 @@ export function storedLibraryOverridesInput(
     chownGroup: saved.chownGroupOverride,
     defaultMovieAvailability: saved.defaultMovieAvailabilityOverride ?? null,
     movieReleaseMarket: saved.movieReleaseMarketOverride ?? null,
-    movieAvailabilityDelayDays: saved.movieAvailabilityDelayDaysOverride ?? null,
+    movieAvailabilityDelayDays:
+      saved.movieAvailabilityDelayDaysOverride ?? null,
   };
   return input;
 }
