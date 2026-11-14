@@ -38,9 +38,12 @@ import {
   externalImportSetupSecretDraftQuery,
   externalImportSetupSecretDraftStatusQuery,
   externalImportLibraryRootsQuery,
+  librarySettingsQuery,
   wizardQualityProfilesQuery,
 } from "@/lib/graphql/queries";
 import { mergeImportRootsIntoStoredRoots } from "@/lib/utils/library-root-validation";
+import { storedLibraryOverridesInput } from "@/lib/utils/library-settings-input";
+import type { LibrarySettingsRecord } from "@/lib/types/titles";
 import {
   localPathStyleFromRuntimeValue,
   type LocalPathStyle,
@@ -1824,6 +1827,23 @@ export function useExternalImportSetup({
           ? storedRootsByLibrary.get(draft.existingLibraryId)
           : undefined;
         if (draft.existingLibraryId && storedRoots) {
+          // A save that names settings replaces every stored override, so the
+          // library's own overrides go back with the two the wizard chose.
+          const saved = await client
+            .query(
+              librarySettingsQuery,
+              { libraryId: draft.existingLibraryId },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          const savedSettings = saved.data?.librarySettings as
+            | LibrarySettingsRecord
+            | undefined;
+          if (saved.error || !savedSettings) {
+            return fail(
+              `${gqlError(saved.error, t) || t("settings.librarySaveFailed")}: ${draft.name}`,
+            );
+          }
           const { data, error } = await client
             .mutation(updateLibraryMutation, {
               input: {
@@ -1833,7 +1853,10 @@ export function useExternalImportSetup({
                   rootPaths,
                   pathStyle,
                 ),
-                settings,
+                settings: {
+                  ...storedLibraryOverridesInput(savedSettings),
+                  ...settings,
+                },
               },
             })
             .toPromise();

@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { LibrarySettingsDraft } from "../types/titles.ts";
-import { librarySettingsInput } from "./library-settings-input.ts";
+import type {
+  LibrarySettingsDraft,
+  LibrarySettingsRecord,
+} from "../types/titles.ts";
+import {
+  librarySettingsInput,
+  storedLibraryOverridesInput,
+} from "./library-settings-input.ts";
 
 const settings: LibrarySettingsDraft = {
   requiredAudioLanguages: ["eng"],
@@ -67,4 +73,100 @@ test("optional movie availability fields retain their existing null defaults", (
   assert.equal(input?.defaultMovieAvailability, null);
   assert.equal(input?.movieReleaseMarket, null);
   assert.equal(input?.movieAvailabilityDelayDays, null);
+});
+
+test("stored overrides go back as they are, without the effective values", () => {
+  const saved: LibrarySettingsRecord = {
+    searchLanguages: ["eng"],
+    requiredAudioLanguagesOverride: ["jpn"],
+    requiredAudioLanguages: ["jpn"],
+    preferredAudioLanguagesOverride: null,
+    preferredAudioLanguages: ["eng"],
+    optionalAudioLanguagesOverride: null,
+    optionalAudioLanguages: [],
+    optionalAudioLanguagesKeepSearchingOverride: false,
+    optionalAudioLanguagesKeepSearching: false,
+    metadataLanguageOverride: null,
+    metadataLanguage: "eng",
+    useSeasonFoldersOverride: false,
+    useSeasonFolders: false,
+    defaultMonitorTypeOverride: "ALL_EPISODES",
+    qualityProfileIdOverride: "saved-profile",
+    qualityProfileId: "saved-profile",
+    requestQualityProfileIdsOverride: ["request-profile"],
+    requestQualityProfileIds: ["request-profile"],
+    requestQualityProfileDefaultId: "request-profile",
+    scoringPersonaOverride: null,
+    scoringPersona: "BALANCED",
+    fillerPolicyOverride: "SKIP_FILLER",
+    fillerPolicy: "SKIP_FILLER",
+    recapPolicyOverride: null,
+    recapPolicy: "DOWNLOAD_ALL",
+    monitorSpecialsOverride: true,
+    monitorSpecials: true,
+    interSeasonMoviesOverride: null,
+    interSeasonMovies: false,
+    monitorFillerMoviesOverride: null,
+    monitorFillerMovies: false,
+    nfoWriteOnImportOverride: true,
+    nfoWriteOnImport: true,
+    plexmatchWriteOnImportOverride: null,
+    plexmatchWriteOnImport: false,
+    importModeOverride: "HARDLINK_OR_COPY",
+    importMode: "HARDLINK_OR_COPY",
+    setPermissionsLinuxOverride: null,
+    setPermissionsLinux: false,
+    fileChmodOverride: "664",
+    fileChmod: "664",
+    folderChmodOverride: null,
+    folderChmod: "775",
+    chownGroupOverride: null,
+    chownGroup: null,
+    defaultMovieAvailabilityOverride: null,
+    defaultMovieAvailability: "released",
+    movieReleaseMarketOverride: "US",
+    movieReleaseMarket: "US",
+    movieAvailabilityDelayDaysOverride: 3,
+    movieAvailabilityDelayDays: 3,
+    indexerRoutingOverride: [{ indexerId: "indexer" }],
+    downloadClientRoutingOverride: [],
+  };
+
+  const input = storedLibraryOverridesInput(saved);
+
+  assert.deepEqual(input, {
+    requiredAudioLanguages: ["jpn"],
+    preferredAudioLanguages: null,
+    optionalAudioLanguages: null,
+    optionalAudioLanguagesKeepSearching: false,
+    metadataLanguage: null,
+    useSeasonFolders: false,
+    defaultMonitorType: "ALL_EPISODES",
+    qualityProfileId: "saved-profile",
+    requestQualityProfileIds: ["request-profile"],
+    scoringPersona: null,
+    fillerPolicy: "SKIP_FILLER",
+    recapPolicy: null,
+    monitorSpecials: true,
+    interSeasonMovies: null,
+    monitorFillerMovies: null,
+    nfoWriteOnImport: true,
+    plexmatchWriteOnImport: null,
+    importMode: "HARDLINK_OR_COPY",
+    setPermissionsLinux: null,
+    fileChmod: "664",
+    folderChmod: null,
+    chownGroup: null,
+    defaultMovieAvailability: null,
+    movieReleaseMarket: "US",
+    movieAvailabilityDelayDays: 3,
+  });
+  // The server keeps these when a save leaves them out.
+  for (const kept of [
+    "searchLanguages",
+    "indexerRouting",
+    "downloadClientRouting",
+  ]) {
+    assert.equal(kept in input, false);
+  }
 });

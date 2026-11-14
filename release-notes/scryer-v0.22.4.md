@@ -30,6 +30,7 @@ These changes are relative to v0.22.3.
 - A folder that shares a library root's name in another letter case is checked for links like any other folder.
 - The Add dialog starts Monitor type on the library's default monitoring for new titles. It started on the built-in default whatever the library had saved.
 - A new list route starts on its library's default monitoring for new titles.
+- A Sonarr or Radarr import into an existing library keeps that library's saved settings. It reset every setting except the quality profile and scoring persona chosen in the import.
 
 ## Indexers and downloads
 
