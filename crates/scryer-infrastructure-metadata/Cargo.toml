@@ -32,4 +32,4 @@ wiremock = { workspace = true }
 [build-dependencies]
 # Build-time validation of the GraphQL documents, with the parser the server
 # already ships.
-async-graphql-parser = "=7.2.1"
+async-graphql-parser = "7.2.1"
