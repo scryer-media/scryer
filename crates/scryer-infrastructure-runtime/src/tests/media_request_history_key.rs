@@ -12,7 +12,9 @@ use scryer_application::{
     MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaRequestOrder, MediaRequestQuery,
     MediaRequestRepository,
 };
-use scryer_domain::{DomainEventFilter, DomainEventType, ExternalId, MediaRequestStatus};
+use scryer_domain::{
+    DomainEventFilter, DomainEventType, ExternalId, MediaRequestKeys, MediaRequestStatus,
+};
 
 fn external_ids(pairs: &[(&str, &str)]) -> Vec<ExternalId> {
     pairs
@@ -192,23 +194,41 @@ async fn keyed_submission_read_returns_what_the_instance_wide_read_matches() {
             .await
             .expect("identity lookup")
             .expect("a small identity is always answered");
-        if title_ids.is_empty() {
-            // A title with no ids matches no request, stored or removed.
-            assert!(named.is_empty());
-        } else {
-            // The stored requests that match, and every removed request.
-            let mut stored_and_removed = expected
-                .iter()
-                .filter(|id| !removed.contains(id))
-                .cloned()
-                .chain(removed.iter().cloned())
-                .collect::<Vec<_>>();
-            stored_and_removed.sort();
-            let mut sorted = named.clone();
-            sorted.sort();
-            assert_eq!(sorted, stored_and_removed, "{library_id} {title_ids:?}");
-        }
+        // The stored requests that match; a removed one cannot be named.
+        let mut stored = expected.clone();
+        stored.retain(|id| !removed.contains(id));
+        let mut sorted = named.clone();
+        sorted.sort();
+        assert_eq!(sorted, stored, "{library_id} {title_ids:?}");
         matched_any += usize::from(!expected.is_empty());
+        // The read is keyed the way the history read keys it.
+        let keys = MediaRequestKeys {
+            request_ids: named,
+            and_removed: !title_ids.is_empty(),
+        };
+        let read = domain_events
+            .list(&DomainEventFilter {
+                media_request_ids: Some(keys.clone()),
+                ..submissions.clone()
+            })
+            .await
+            .expect("keyed read");
+        // It returns the named requests' submissions and the removed ones',
+        // and nothing else.
+        let mut read_ids = read
+            .iter()
+            .map(|event| match &event.payload {
+                DomainEventPayload::MediaRequestSubmitted(data) => data.request_id.clone(),
+                other => panic!("unexpected {:?}", other.event_type()),
+            })
+            .collect::<Vec<_>>();
+        read_ids.sort();
+        let mut named_and_removed = keys.request_ids.clone();
+        if keys.and_removed {
+            named_and_removed.extend(removed.iter().cloned());
+        }
+        named_and_removed.sort();
+        assert_eq!(read_ids, named_and_removed, "{library_id} {title_ids:?}");
 
         // The caller applies the instance-wide read's check to what the keyed
         // read returns. What is left is what that read keeps, in its order.
@@ -216,13 +236,7 @@ async fn keyed_submission_read_returns_what_the_instance_wide_read_matches() {
             DomainEventPayload::MediaRequestSubmitted(data) => expected.contains(&data.request_id),
             _ => false,
         };
-        let keyed = domain_events
-            .list(&DomainEventFilter {
-                media_request_ids: Some(named.clone()),
-                ..submissions.clone()
-            })
-            .await
-            .expect("keyed read")
+        let keyed = read
             .into_iter()
             .filter(|event| passes(event))
             .collect::<Vec<_>>();
@@ -248,7 +262,7 @@ async fn keyed_submission_read_returns_what_the_instance_wide_read_matches() {
         loop {
             let page = domain_events
                 .list(&DomainEventFilter {
-                    media_request_ids: Some(named.clone()),
+                    media_request_ids: Some(keys.clone()),
                     before_sequence,
                     limit: 4,
                     ..submissions.clone()

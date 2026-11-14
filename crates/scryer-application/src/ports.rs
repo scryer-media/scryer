@@ -3793,13 +3793,11 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>>;
 
-    /// Every request whose submission can belong to a title of `library_id`
-    /// carrying `external_ids`: the stored requests that share one of those
-    /// ids, matched the way a title is matched to a request (source without
-    /// regard to ASCII case, value exactly), and every request that was
-    /// submitted but is no longer stored, since its ids can no longer be
-    /// looked up. The caller still checks each submission itself. `None` when
-    /// the store cannot name them, or when there are more than
+    /// The stored requests of `library_id` that carry any of `external_ids`,
+    /// matched the way a title is matched to a request: source without regard
+    /// to ASCII case, value exactly. A request removed with the account that
+    /// submitted it is not among them, since its ids went with it. `None`
+    /// when the store cannot name them, or when there are more than
     /// [`MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS`]; the caller then considers
     /// every request.
     async fn request_ids_for_title_identity(

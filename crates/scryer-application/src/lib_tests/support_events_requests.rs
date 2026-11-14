@@ -395,11 +395,12 @@ impl DomainEventRepository for MockDomainEventRepo {
                             .iter()
                             .any(|event_type| &event.payload.event_type() == event_type)
                     })
-                    && filter.media_request_ids.as_ref().is_none_or(|request_ids| {
+                    // Every request this fake knows is still stored.
+                    && filter.media_request_ids.as_ref().is_none_or(|keys| {
                         matches!(
                             &event.payload,
                             DomainEventPayload::MediaRequestSubmitted(data)
-                                if request_ids.contains(&data.request_id)
+                                if keys.request_ids.contains(&data.request_id)
                         )
                     })
             })

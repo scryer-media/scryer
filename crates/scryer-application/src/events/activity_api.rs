@@ -655,17 +655,22 @@ async fn project_title_history_page(
     } else {
         None
     };
-    // The submissions that can match that one title are those of the requests
-    // sharing an id with it, read by request key. A store that cannot name
-    // them leaves the read to every submission.
+    // The submissions that can match that one title are those of the stored
+    // requests sharing an id with it, and those of requests since removed,
+    // whose ids can no longer be looked up; both are read by request key and
+    // checked against the title below. A title with no ids matches none. A
+    // store that cannot name the requests leaves the read to every submission.
     let single_title_request_ids = match (&single_request_title, &media_request_match_titles[..]) {
-        (Some(_), [title]) => {
-            app.services
-                .catalog
-                .media_requests
-                .request_ids_for_title_identity(&title.library_id, &title.external_ids)
-                .await?
-        }
+        (Some(_), [title]) => app
+            .services
+            .catalog
+            .media_requests
+            .request_ids_for_title_identity(&title.library_id, &title.external_ids)
+            .await?
+            .map(|request_ids| MediaRequestKeys {
+                request_ids,
+                and_removed: !title.external_ids.is_empty(),
+            }),
         _ => None,
     };
     let mut cursors = match single_request_title {

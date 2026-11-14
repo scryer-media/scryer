@@ -328,11 +328,12 @@ use scryer_domain::{
     CompletedDownload, DomainEvent, DomainEventFilter, DomainEventType, DownloadClientConfig,
     DownloadQueueItem, DownloadQueueState, Episode, ExternalId, HistoryEvent, Id, ImportFileResult,
     ImportMode, ImportRecord, ImportResult, ImportStatus, IndexerConfig, Library, LibraryGrant,
-    MediaFacet, MediaRequest, MediaServerConnection, MediaServerDefaultLibraryGrant,
-    MediaServerPathMapping, MediaServerProvider, NewDomainEvent, NewDownloadClientConfig,
-    NewIndexerConfig, NewTitle, PluginCatalogSource, PluginCatalogStatusRecord, PluginInstallation,
-    PolicyInput, PolicyOutput, RulePackInstallation, RuleSet, SubtitleProviderConfig, TaggedAlias,
-    Title, TitleHistoryEventType, TitleHistoryRecord, User,
+    MediaFacet, MediaRequest, MediaRequestKeys, MediaServerConnection,
+    MediaServerDefaultLibraryGrant, MediaServerPathMapping, MediaServerProvider, NewDomainEvent,
+    NewDownloadClientConfig, NewIndexerConfig, NewTitle, PluginCatalogSource,
+    PluginCatalogStatusRecord, PluginInstallation, PolicyInput, PolicyOutput, RulePackInstallation,
+    RuleSet, SubtitleProviderConfig, TaggedAlias, Title, TitleHistoryEventType, TitleHistoryRecord,
+    User,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

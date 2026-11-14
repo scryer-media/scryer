@@ -235,8 +235,10 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
                 .all(|filter| filter.title_id.is_some()
                     || (filter.event_types.as_deref()
                         == Some(&[DomainEventType::MediaRequestSubmitted][..])
-                        && filter.media_request_ids.as_ref().is_some_and(|ids| {
-                            ids.len() == 205 && ids.contains(&"request-0".to_string())
+                        && filter.media_request_ids.as_ref().is_some_and(|keys| {
+                            keys.and_removed
+                                && keys.request_ids.len() == 205
+                                && keys.request_ids.contains(&"request-0".to_string())
                         })))
         );
     }

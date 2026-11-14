@@ -1118,7 +1118,7 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     let keyed_by_request = filter
         .media_request_ids
         .as_ref()
-        .is_some_and(|request_ids| !request_ids.is_empty());
+        .is_some_and(|keys| !keys.request_ids.is_empty() || keys.and_removed);
     if let Some(event_types) = filter.event_types.as_ref()
         && !event_types.is_empty()
     {
@@ -1149,16 +1149,27 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
         where_clauses.push("stream_id = {}".to_string());
         args.push(SqlArg::Text(stream_id.clone()));
     }
-    if let Some(request_ids) = filter.media_request_ids.as_ref() {
-        if request_ids.is_empty() {
-            where_clauses.push("1 = 0".to_string());
-        } else {
-            where_clauses.push(format!(
+    if let Some(keys) = filter.media_request_ids.as_ref() {
+        let named = (!keys.request_ids.is_empty()).then(|| {
+            format!(
                 "media_request_id IN ({})",
-                placeholders(request_ids.len())
-            ));
-            args.extend(request_ids.iter().cloned().map(SqlArg::Text));
-        }
+                placeholders(keys.request_ids.len())
+            )
+        });
+        // A removed request is one whose key no stored request has. The
+        // leading test keeps the whole read on the index of request keys,
+        // which holds submissions only.
+        const REMOVED: &str = "NOT EXISTS (SELECT 1 FROM media_requests \
+             WHERE media_requests.id = domain_events.media_request_id)";
+        where_clauses.push(match (named, keys.and_removed) {
+            (None, false) => "1 = 0".to_string(),
+            (Some(named), false) => named,
+            (None, true) => format!("media_request_id IS NOT NULL AND {REMOVED}"),
+            (Some(named), true) => {
+                format!("media_request_id IS NOT NULL AND ({named} OR {REMOVED})")
+            }
+        });
+        args.extend(keys.request_ids.iter().cloned().map(SqlArg::Text));
     }
     if let Some(after_sequence) = filter.after_sequence {
         where_clauses.push("sequence > {}".to_string());
@@ -1178,10 +1189,23 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     } else {
         "DESC"
     };
+    // Removed requests are found by passing over the request keys, and the
+    // rows kept are then sorted. Ordering by the bare column would instead
+    // invite a walk of every event in sequence order; the unary plus leaves
+    // the order the same and takes that choice away.
+    let order_by = if filter
+        .media_request_ids
+        .as_ref()
+        .is_some_and(|keys| keys.and_removed)
+    {
+        "+sequence"
+    } else {
+        "sequence"
+    };
     args.push(SqlArg::I64(limit as i64));
     (
         format!(
-            "SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events{where_sql} ORDER BY sequence {order} LIMIT {{}}"
+            "SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events{where_sql} ORDER BY {order_by} {order} LIMIT {{}}"
         ),
         args,
     )

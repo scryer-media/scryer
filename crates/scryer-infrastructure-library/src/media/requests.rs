@@ -589,36 +589,11 @@ impl MediaRequestRepository for MediaRequestStore {
               LIMIT {{}}",
             clauses.join(" OR ")
         );
-        let mut ids = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+        let ids = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
             .map(|row| row.text("request_id"))
             .collect::<AppResult<Vec<_>>>()?;
-        if ids.len() > MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS {
-            return Ok(None);
-        }
-        // A request is removed with the account that submitted it, and its
-        // ids go with it, while its submission stays in history. Those
-        // submissions are named too, so the caller judges them by what they
-        // recorded. This reads the request keys from their index, not the
-        // events.
-        let removed = SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            "SELECT DISTINCT e.media_request_id AS request_id
-               FROM domain_events e
-              WHERE e.media_request_id IS NOT NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM media_requests r WHERE r.id = e.media_request_id
-                )
-              LIMIT {}",
-            &[SqlArg::I64(
-                (MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS - ids.len()) as i64 + 1,
-            )],
-        )
-        .await?;
-        for row in &removed {
-            ids.push(row.text("request_id")?);
-        }
         Ok((ids.len() <= MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS).then_some(ids))
     }
 

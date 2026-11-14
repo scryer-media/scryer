@@ -121,6 +121,16 @@ const SUBMISSIONS_OF_REQUESTS: &str = "SELECT sequence FROM domain_events \
        AND media_request_id IN ('request-8', 'request-80', 'request-800') \
      ORDER BY sequence DESC LIMIT 500";
 
+/// The same read when requests removed since they were submitted are wanted
+/// too.
+const SUBMISSIONS_OF_REQUESTS_AND_REMOVED: &str = "SELECT sequence FROM domain_events \
+     WHERE event_type || '' IN ('media_request_submitted') \
+       AND media_request_id IS NOT NULL \
+       AND (media_request_id IN ('request-8', 'request-80', 'request-800') \
+            OR NOT EXISTS (SELECT 1 FROM media_requests \
+                            WHERE media_requests.id = domain_events.media_request_id)) \
+     ORDER BY +sequence DESC LIMIT 500";
+
 async fn query_plan(pool: &sqlx::SqlitePool, sql: &str) -> Vec<String> {
     let rows: Vec<(i64, i64, i64, String)> =
         sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
@@ -218,6 +228,13 @@ async fn assert_sqlite_plans(pool: &sqlx::SqlitePool, state: &str) {
         pool,
         state,
         SUBMISSIONS_OF_REQUESTS,
+        "idx_domain_events_media_request_sequence",
+    )
+    .await;
+    assert_plan_uses(
+        pool,
+        state,
+        SUBMISSIONS_OF_REQUESTS_AND_REMOVED,
         "idx_domain_events_media_request_sequence",
     )
     .await;
@@ -596,6 +613,42 @@ async fn catalog_sort_indexes_postgres_match_the_catalog_queries_and_apply_idemp
             .iter()
             .any(|line| line.contains("idx_domain_events_media_request_sequence")),
         "{keyed_plan:?}"
+    );
+
+    // Most requests are still stored; one submission in a hundred is of a
+    // request since removed.
+    sqlx::raw_sql(
+        "INSERT INTO media_requests (id, library_id, status, created_at, updated_at)
+         SELECT 'request-' || i, 'library-emberfall', 'approved', now(), now()
+           FROM generate_series(4, 20000, 4) AS i
+          WHERE i % 400 <> 0;
+         ANALYZE media_requests;",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let with_removed: Vec<i64> =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(SUBMISSIONS_OF_REQUESTS_AND_REMOVED))
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+    let mut expected = (1..=50)
+        .map(|n| n * 400)
+        .chain([8, 80])
+        .collect::<Vec<i64>>();
+    expected.sort_by(|a, b| b.cmp(a));
+    assert_eq!(with_removed, expected);
+    let with_removed_plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN {SUBMISSIONS_OF_REQUESTS_AND_REMOVED}"
+    )))
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    assert!(
+        with_removed_plan
+            .iter()
+            .any(|line| line.contains("idx_domain_events_media_request_sequence")),
+        "{with_removed_plan:?}"
     );
 
     // With sequential scans and sorts priced out, each statement shows the
