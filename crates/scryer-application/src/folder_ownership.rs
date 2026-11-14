@@ -480,6 +480,52 @@ pub(crate) async fn title_folder_is_stale(title: &Title) -> bool {
     )
 }
 
+/// Whether `folder_path` is the title's recorded folder spelled with different
+/// letter case, on a volume that resolves both spellings to one directory.
+///
+/// APFS shared into a Linux container (Docker Desktop's virtiofs), SMB and
+/// Windows volumes ignore case, so a root configured as `/data/Anime` lists a
+/// folder the catalog recorded under `/data/anime`. That is the title's own
+/// folder, not a second copy: the title keeps its recorded spelling, which its
+/// media rows are stored under. On a case-sensitive volume the two spellings
+/// are different directories and this returns `false`.
+///
+/// Only paths that already match ignoring case are probed, one metadata read
+/// per spelling; directory identity is required as well as the spelling, so
+/// two distinct folders on a case-sensitive volume are never taken for one.
+pub(crate) async fn title_folder_is_case_variant_of(title: &Title, folder_path: &Path) -> bool {
+    let Some(owned_path) = non_empty_folder_path(title.folder_path.as_deref()) else {
+        return false;
+    };
+    if !crate::stored_paths::paths_match_ignoring_case(
+        owned_path,
+        &path_to_stored_string(folder_path),
+    ) {
+        return false;
+    }
+    let (owned, scanned) = tokio::join!(
+        tokio::fs::metadata(stored_path_to_path_buf(owned_path)),
+        tokio::fs::metadata(folder_path),
+    );
+    let (Ok(owned), Ok(scanned)) = (owned, scanned) else {
+        return false;
+    };
+    if !owned.is_dir() || !scanned.is_dir() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        owned.ino() != 0 && owned.dev() == scanned.dev() && owned.ino() == scanned.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows volumes ignore case unless a directory opts in, and both
+        // spellings resolved to a directory.
+        true
+    }
+}
+
 /// Whether `folder_path` is a library root or holds one.
 ///
 /// No title owns such a folder. Recording one turns everything scoped to "the
@@ -2570,6 +2616,40 @@ mod tests {
         } else {
             assert!(title_owns_another_folder(&title, candidate));
         }
+    }
+
+    /// A scan that lists the recorded folder under another letter case is
+    /// looking at the title's own folder when the volume ignores case, and at
+    /// a different folder when it does not. Either way the answer comes from
+    /// the directory's identity, never from the spelling alone.
+    #[tokio::test]
+    async fn case_variant_of_the_recorded_folder_is_decided_by_directory_identity() {
+        let root = tempfile::tempdir().expect("root");
+        let scanned = root.path().join("Case Variant Fixture");
+        std::fs::create_dir(&scanned).expect("create scanned folder");
+        let recorded = root.path().join("case variant fixture");
+        let recorded_title = title(Some(&path_to_stored_string(&recorded)));
+
+        let volume_ignores_case = std::fs::metadata(&recorded).is_ok();
+        assert_eq!(
+            title_folder_is_case_variant_of(&recorded_title, &scanned).await,
+            volume_ignores_case
+        );
+
+        // Two folders that differ only by case are both on disk only on a
+        // case-sensitive volume, where they are different folders.
+        let distinct = root.path().join("Distinct Fixture");
+        let distinct_lower = root.path().join("distinct fixture");
+        std::fs::create_dir(&distinct).expect("create distinct folder");
+        if std::fs::create_dir(&distinct_lower).is_ok() {
+            let distinct_title = title(Some(&path_to_stored_string(&distinct_lower)));
+            assert!(!title_folder_is_case_variant_of(&distinct_title, &distinct).await);
+        }
+
+        // A folder that only shares a prefix is never a case variant.
+        let other = root.path().join("Other Fixture");
+        std::fs::create_dir(&other).expect("create other folder");
+        assert!(!title_folder_is_case_variant_of(&recorded_title, &other).await);
     }
 
     /// The guards before their comparison loops moved off the runtime and

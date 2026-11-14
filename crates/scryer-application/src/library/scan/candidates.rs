@@ -126,6 +126,8 @@ async fn prepare_series_title_for_candidate(
     candidate: &PreparedSeriesLibraryScanCandidate,
 ) -> AppResult<Option<LibraryScanUnmatchedItem>> {
     if crate::folder_ownership::title_owns_another_folder(title, &candidate.folder_path)
+        && !crate::folder_ownership::title_folder_is_case_variant_of(title, &candidate.folder_path)
+            .await
         && !reclaim_stale_title_folder_for_scan(app, title, &candidate.folder_path).await?
     {
         crate::folder_ownership::unlink_title_media_in_folder(app, title, &candidate.folder_path)

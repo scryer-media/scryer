@@ -4386,8 +4386,9 @@ async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
     std::fs::create_dir(&candidate_folder).expect("create case-distinct series folder");
     // The owned folder has to be on disk for this to be a conflict rather
     // than stale ownership. On a case-insensitive filesystem it aliases the
-    // candidate folder, which still reads as present.
-    let _ = std::fs::create_dir(&owned_folder);
+    // candidate folder: the same directory, so the title's own folder and no
+    // conflict at all.
+    let volume_is_case_sensitive = std::fs::create_dir(&owned_folder).is_ok();
     let episode_path = candidate_folder.join("Case Split Fixture - S01E01.mkv");
     std::fs::write(&episode_path, vec![0_u8; 128]).expect("write episode file");
 
@@ -4444,6 +4445,35 @@ async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
         .scan_library(&user, MediaFacet::Series)
         .await
         .expect("scan series library");
+
+    if !volume_is_case_sensitive {
+        // The walk still counts the episode it cannot place (the stub gateway
+        // has no episodes), but nothing is recorded against the folder.
+        assert!(unmatched_items.items().await.is_empty());
+        let kept = app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("load title")
+            .expect("title exists");
+        assert_eq!(
+            kept.folder_path.as_deref(),
+            Some(owned_folder.to_string_lossy().as_ref())
+        );
+        assert!(episode_path.exists());
+        assert!(
+            !app.services
+                .library
+                .media_files
+                .list_media_files_for_title(&title.id)
+                .await
+                .expect("list media files")
+                .is_empty()
+        );
+        return;
+    }
 
     assert_eq!(summary.unmatched, 1);
     let unmatched = unmatched_items.items().await;
