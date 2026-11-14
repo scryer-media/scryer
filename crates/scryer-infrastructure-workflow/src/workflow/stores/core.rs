@@ -36,8 +36,9 @@ const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
             event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
             title_id, facet, correlation_id, causation_id, schema_version,
             stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id, import_skip_reason
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+            media_file_delete_reason, download_id, import_skip_reason,
+            media_request_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 pub const DOWNLOAD_SUBMISSION_COLUMNS: &str = "id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, release_listing_json, request_signature, purpose, episode_id, collection_id, series_movie_link_id";
 pub const IMPORT_COLUMNS: &str = "id, source_client_id, source_system, source_ref, import_type, status, payload_json, result_json, download_id, import_transfer_phase, import_transfer_bytes, import_transfer_total_bytes, import_transfer_started_at, import_transfer_updated_at, started_at, finished_at, created_at, updated_at";
 pub const DOWNLOAD_QUEUE_COMMAND_COLUMNS: &str = "id, action, canonical_download_id, client_id, client_type, download_client_item_id, is_history, status, error_text, requested_by_user_id, started_at, finished_at, created_at, updated_at";
@@ -124,6 +125,7 @@ async fn append_domain_events_with_replay(
                         SqlArg::OptText(projections.media_file_delete_reason),
                         SqlArg::OptText(projections.download_id),
                         SqlArg::OptText(projections.import_skip_reason),
+                        SqlArg::OptText(projections.media_request_id),
                     ],
                 )
                 .await?;
@@ -185,6 +187,7 @@ pub async fn append_domain_event_tx(
             SqlArg::OptText(projections.media_file_delete_reason),
             SqlArg::OptText(projections.download_id),
             SqlArg::OptText(projections.import_skip_reason),
+            SqlArg::OptText(projections.media_request_id),
         ],
     )
     .await?;
@@ -1108,11 +1111,24 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     };
     let mut where_clauses = Vec::new();
     let mut args = Vec::new();
+    // A read by request key names its event type too, and the planner would
+    // otherwise walk every event of that type in sequence order instead of
+    // seeking the few with these keys. The concatenation leaves the type test
+    // exact while keeping it from choosing the index.
+    let keyed_by_request = filter
+        .media_request_ids
+        .as_ref()
+        .is_some_and(|request_ids| !request_ids.is_empty());
     if let Some(event_types) = filter.event_types.as_ref()
         && !event_types.is_empty()
     {
         where_clauses.push(format!(
-            "event_type IN ({})",
+            "{} IN ({})",
+            if keyed_by_request {
+                "event_type || ''"
+            } else {
+                "event_type"
+            },
             placeholders(event_types.len())
         ));
         args.extend(
@@ -1132,6 +1148,17 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     if let Some(stream_id) = filter.stream_id.as_ref() {
         where_clauses.push("stream_id = {}".to_string());
         args.push(SqlArg::Text(stream_id.clone()));
+    }
+    if let Some(request_ids) = filter.media_request_ids.as_ref() {
+        if request_ids.is_empty() {
+            where_clauses.push("1 = 0".to_string());
+        } else {
+            where_clauses.push(format!(
+                "media_request_id IN ({})",
+                placeholders(request_ids.len())
+            ));
+            args.extend(request_ids.iter().cloned().map(SqlArg::Text));
+        }
     }
     if let Some(after_sequence) = filter.after_sequence {
         where_clauses.push("sequence > {}".to_string());

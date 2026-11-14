@@ -5,9 +5,12 @@ const SQLITE: &str =
 const POSTGRES: &str =
     include_str!("../../../scryer/src/db/postgres/migrations/0344_catalog_sort_indexes.sql");
 
-const ADDED: [&str; 12] = [
+const ADDED: [&str; 15] = [
     "idx_blocklist_created_at",
+    "idx_domain_events_media_request_sequence",
     "idx_download_import_artifacts_canonical_download",
+    "idx_media_requests_status_created",
+    "idx_media_requests_updated_order",
     "idx_title_metadata_external_ratings_title_source_key",
     "idx_titles_library_popularity_order_asc",
     "idx_titles_library_popularity_order_desc",
@@ -99,6 +102,25 @@ const WANTED_PAGE: &str = "SELECT w.id FROM wanted_items w \
      LEFT JOIN titles t ON t.id = w.title_id \
      WHERE 1=1 ORDER BY w.updated_at DESC LIMIT 50 OFFSET 0";
 
+/// The requests list in its default order, as the store builds it.
+const REQUESTS_PAGE: &str = "SELECT id FROM media_requests WHERE 1 = 1 \
+     ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 50 OFFSET 100";
+
+/// The dashboard's pending requests, longest waiting first.
+const PENDING_REQUESTS: &str = "SELECT id FROM media_requests WHERE 1 = 1 AND status = 'pending' \
+     ORDER BY created_at ASC, id ASC LIMIT 15 OFFSET 0";
+
+/// The same page for an account that sees only some libraries.
+const PENDING_REQUESTS_OF_LIBRARIES: &str = "SELECT id FROM media_requests WHERE 1 = 1 \
+     AND status = 'pending' AND library_id IN ('library-emberfall', 'library-cinderwake') \
+     ORDER BY created_at ASC, id ASC LIMIT 15 OFFSET 0";
+
+/// One title's request submissions, read by request key.
+const SUBMISSIONS_OF_REQUESTS: &str = "SELECT sequence FROM domain_events \
+     WHERE event_type || '' IN ('media_request_submitted') \
+       AND media_request_id IN ('request-8', 'request-80', 'request-800') \
+     ORDER BY sequence DESC LIMIT 500";
+
 async fn query_plan(pool: &sqlx::SqlitePool, sql: &str) -> Vec<String> {
     let rows: Vec<(i64, i64, i64, String)> =
         sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
@@ -171,6 +193,53 @@ async fn assert_sqlite_plans(pool: &sqlx::SqlitePool, state: &str) {
     .await;
     assert_plan_uses_without_sort(pool, state, BLOCKLIST_PAGE, "idx_blocklist_created_at").await;
     assert_plan_uses_without_sort(pool, state, WANTED_PAGE, "idx_wanted_items_updated_at").await;
+    assert_plan_uses_without_sort(
+        pool,
+        state,
+        REQUESTS_PAGE,
+        "idx_media_requests_updated_order",
+    )
+    .await;
+    assert_plan_uses_without_sort(
+        pool,
+        state,
+        PENDING_REQUESTS,
+        "idx_media_requests_status_created",
+    )
+    .await;
+    assert_plan_uses_without_sort(
+        pool,
+        state,
+        PENDING_REQUESTS_OF_LIBRARIES,
+        "idx_media_requests_status_created",
+    )
+    .await;
+    assert_plan_uses(
+        pool,
+        state,
+        SUBMISSIONS_OF_REQUESTS,
+        "idx_domain_events_media_request_sequence",
+    )
+    .await;
+    // The store binds the request keys; the partial index must still apply.
+    let bound: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN SELECT sequence FROM domain_events \
+          WHERE event_type || '' IN (?1) AND media_request_id IN (?2, ?3) \
+          ORDER BY sequence DESC LIMIT ?4",
+    )
+    .bind("media_request_submitted")
+    .bind("request-8")
+    .bind("request-80")
+    .bind(500_i64)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(
+        bound
+            .iter()
+            .any(|row| row.3.contains("idx_domain_events_media_request_sequence")),
+        "{state}: bound request keys should read the request index: {bound:?}"
+    );
 }
 
 /// Synthetic rows with the skew a real library has: most titles in one
@@ -214,6 +283,15 @@ const SEED: &str = "PRAGMA foreign_keys = OFF;
             printf('2026-%02d-%02dT00:00:00Z', 1 + i % 12, 1 + i % 28),
             'cinderwake.' || i, 'indexer-' || (i % 4)
        FROM n;
+     WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+     INSERT INTO media_requests (id, library_id, facet, status, identity_fingerprint, title,
+                                 policy_tags_json, created_by_user_id, created_at, updated_at)
+     SELECT 'request-' || i, 'library-emberfall', 'movie',
+            CASE i % 5 WHEN 0 THEN 'pending' WHEN 1 THEN 'rejected' ELSE 'approved' END,
+            'fingerprint-' || i, 'Ashgrove ' || i, '[]', 'user-quillmere',
+            printf('2026-%02d-%02dT00:00:00Z', 1 + i % 12, 1 + i % 28),
+            printf('2026-%02d-%02dT00:00:00Z', 1 + i % 11, 1 + i % 27)
+       FROM n;
      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000)
      INSERT INTO wanted_items (id, title_id, media_type, created_at, updated_at, status)
      SELECT 'wanted-' || i, 'title-' || i, 'movie', '2026-01-01T00:00:00Z',
@@ -240,9 +318,59 @@ async fn stored_rows(pool: &sqlx::SqlitePool) -> Vec<(String, i64, String)> {
          UNION ALL
          SELECT 'blocklist', COUNT(*), MAX(created_at) FROM blocklist
          UNION ALL
-         SELECT 'wanted', COUNT(*), MAX(updated_at) FROM wanted_items",
+         SELECT 'wanted', COUNT(*), MAX(updated_at) FROM wanted_items
+         UNION ALL
+         SELECT 'requests', COUNT(*), MAX(updated_at) FROM media_requests
+         UNION ALL
+         SELECT 'events', COUNT(*), MAX(event_id) FROM domain_events",
     )
     .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Request submissions stored the way a release before the request key
+/// stored them: the request is named only inside the encoded payload.
+async fn seed_submissions(pool: &sqlx::SqlitePool) {
+    for n in 0..SUBMISSIONS {
+        let payload = serde_json::json!({"type": "media_request_submitted", "data": {
+            "request_id": format!("request-{n}"), "library_id": "library-emberfall"
+        }});
+        sqlx::query(
+            "INSERT INTO domain_events (event_id, occurred_at, schema_version, stream_kind,
+                                        event_type, payload_json)
+             VALUES (?1, '2026-01-01T00:00:00Z', 1, 'global', ?2, ?3)",
+        )
+        .bind(format!("event-{n:05}"))
+        // Every seventh event is another type that also names a request.
+        .bind(if n % 7 == 0 {
+            "media_request_approved"
+        } else {
+            "media_request_submitted"
+        })
+        .bind(
+            scryer_infrastructure_sql::domain_event_payload::encode_domain_event_payload(&payload)
+                .unwrap(),
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// More than two backfill batches.
+const SUBMISSIONS: i64 = 2100;
+
+/// Events carrying a request key, and how many of them carry the key their
+/// payload names.
+async fn request_keys(pool: &sqlx::SqlitePool) -> (i64, i64) {
+    sqlx::query_as(
+        "SELECT COUNT(media_request_id),
+                COALESCE(SUM(event_type = 'media_request_submitted'
+                             AND media_request_id = 'request-' || CAST(SUBSTR(event_id, 7) AS INTEGER)), 0)
+           FROM domain_events",
+    )
+    .fetch_one(pool)
     .await
     .unwrap()
 }
@@ -258,9 +386,13 @@ async fn memory_pool() -> sqlx::SqlitePool {
 #[tokio::test]
 async fn catalog_sort_indexes_apply_on_fresh_install_with_and_without_statistics() {
     assert_eq!(
-        SQLITE.replace("COLLATE BINARY", "COLLATE \"C\""),
+        SQLITE.replace("COLLATE BINARY", "COLLATE \"C\"").replace(
+            "ADD COLUMN media_request_id",
+            "ADD COLUMN IF NOT EXISTS media_request_id"
+        ),
         POSTGRES,
-        "both engines create the same indexes, differing only in collation spelling"
+        "both engines make the same changes, differing only in collation spelling and in \
+         how an existing column is tolerated"
     );
     let pool = memory_pool().await;
     super::run_migrations(&pool, crate::MigrationMode::Apply)
@@ -295,8 +427,9 @@ async fn catalog_sort_indexes_upgrade_from_the_previous_catalog() {
         "every index must be introduced after 343"
     );
     seed(&pool).await;
+    seed_submissions(&pool).await;
     let before = stored_rows(&pool).await;
-    assert_eq!(before.len(), 5);
+    assert_eq!(before.len(), 7);
     assert!(
         before.iter().all(|(_, count, _)| *count >= 2000),
         "{before:?}"
@@ -311,6 +444,9 @@ async fn catalog_sort_indexes_upgrade_from_the_previous_catalog() {
         before,
         "adding indexes keeps every row"
     );
+    // Every stored submission now carries its request, and nothing else does.
+    let submissions = SUBMISSIONS - (SUBMISSIONS + 6) / 7;
+    assert_eq!(request_keys(&pool).await, (submissions, submissions));
     assert_sqlite_plans(&pool, "upgraded").await;
 
     super::run_migrations(&pool, crate::MigrationMode::Apply)
@@ -318,9 +454,19 @@ async fn catalog_sort_indexes_upgrade_from_the_previous_catalog() {
         .expect("later startup must be idempotent");
     assert_eq!(sqlite_indexes_present(&pool).await, ADDED);
     assert_eq!(stored_rows(&pool).await, before);
+    assert_eq!(request_keys(&pool).await, (submissions, submissions));
 
-    // The migration's own statements are safe to run again over its result.
-    sqlx::raw_sql(SQLITE).execute(&pool).await.unwrap();
+    // The migration's index statements are safe to run again over its result.
+    // SQLite cannot add a column twice; the migration ledger runs it once.
+    let indexes_only = SQLITE.replace(
+        "ALTER TABLE domain_events ADD COLUMN media_request_id TEXT;",
+        "",
+    );
+    assert_ne!(indexes_only, SQLITE);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(indexes_only))
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_eq!(sqlite_indexes_present(&pool).await, ADDED);
     assert_sqlite_plans(&pool, "reapplied").await;
 }
@@ -354,6 +500,11 @@ async fn catalog_sort_indexes_postgres_match_the_catalog_queries_and_apply_idemp
          CREATE TEMP TABLE wanted_items (
             id TEXT PRIMARY KEY, title_id TEXT NOT NULL, status TEXT NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL);
+         CREATE TEMP TABLE media_requests (
+            id TEXT PRIMARY KEY, library_id TEXT NOT NULL, status TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
+         CREATE TEMP TABLE domain_events (
+            sequence BIGINT PRIMARY KEY, event_type TEXT NOT NULL);
          INSERT INTO titles VALUES
             ('title-1', 'library-emberfall', 'movie', 'cinderwake', 'cinderwake', NULL, 95, NULL,
              ' Finished '),
@@ -415,6 +566,38 @@ async fn catalog_sort_indexes_postgres_match_the_catalog_queries_and_apply_idemp
         assert_eq!(ids, expected, "{name} {suffix}");
     }
 
+    // A keyed submission read must sort a handful of rows rather than walk
+    // every event backwards, so it is planned over stored rows with real
+    // statistics and with sorts still allowed.
+    sqlx::raw_sql(
+        "INSERT INTO domain_events (sequence, event_type, media_request_id)
+         SELECT i,
+                CASE WHEN i % 4 = 0 THEN 'media_request_submitted' ELSE 'media_file_analyzed' END,
+                CASE WHEN i % 4 = 0 THEN 'request-' || i END
+           FROM generate_series(1, 20000) AS i;
+         ANALYZE domain_events;",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let keyed: Vec<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(SUBMISSIONS_OF_REQUESTS))
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(keyed, [800, 80, 8]);
+    let keyed_plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN {SUBMISSIONS_OF_REQUESTS}"
+    )))
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    assert!(
+        keyed_plan
+            .iter()
+            .any(|line| line.contains("idx_domain_events_media_request_sequence")),
+        "{keyed_plan:?}"
+    );
+
     // With sequential scans and sorts priced out, each statement shows the
     // index it can use: column order, collation, expression and direction match.
     sqlx::raw_sql("SET LOCAL enable_seqscan = off; SET LOCAL enable_sort = off;")
@@ -438,6 +621,18 @@ async fn catalog_sort_indexes_postgres_match_the_catalog_queries_and_apply_idemp
         (
             WANTED_PAGE.to_string(),
             "idx_wanted_items_updated_at".to_string(),
+        ),
+        (
+            REQUESTS_PAGE.to_string(),
+            "idx_media_requests_updated_order".to_string(),
+        ),
+        (
+            PENDING_REQUESTS.to_string(),
+            "idx_media_requests_status_created".to_string(),
+        ),
+        (
+            PENDING_REQUESTS_OF_LIBRARIES.to_string(),
+            "idx_media_requests_status_created".to_string(),
         ),
     ]);
     for (sql, index) in statements {

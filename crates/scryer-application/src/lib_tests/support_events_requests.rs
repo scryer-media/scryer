@@ -395,6 +395,13 @@ impl DomainEventRepository for MockDomainEventRepo {
                             .iter()
                             .any(|event_type| &event.payload.event_type() == event_type)
                     })
+                    && filter.media_request_ids.as_ref().is_none_or(|request_ids| {
+                        matches!(
+                            &event.payload,
+                            DomainEventPayload::MediaRequestSubmitted(data)
+                                if request_ids.contains(&data.request_id)
+                        )
+                    })
             })
             .take(limit)
             .cloned()
@@ -545,6 +552,36 @@ pub(super) async fn append_mock_media_request_event(
 
 #[async_trait]
 impl MediaRequestRepository for MockMediaRequestRepo {
+    /// Every request is stored with the ids its submission carries, so the
+    /// requests sharing an id with a title are those of the submissions that
+    /// share one.
+    async fn request_ids_for_title_identity(
+        &self,
+        library_id: &str,
+        external_ids: &[ExternalId],
+    ) -> AppResult<Option<Vec<String>>> {
+        let Some(domain_events) = &self.domain_events else {
+            return Ok(None);
+        };
+        let mut ids = std::collections::BTreeSet::new();
+        for event in domain_events.events.lock().await.iter() {
+            let DomainEventPayload::MediaRequestSubmitted(data) = &event.payload else {
+                continue;
+            };
+            let shares_an_id = data.external_ids.iter().any(|request_id| {
+                external_ids.iter().any(|title_id| {
+                    title_id.source.eq_ignore_ascii_case(&request_id.source)
+                        && title_id.value == request_id.value
+                })
+            });
+            if data.library_id == library_id && shares_an_id {
+                ids.insert(data.request_id.clone());
+            }
+        }
+        Ok((ids.len() <= crate::MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS)
+            .then(|| ids.into_iter().collect()))
+    }
+
     async fn approve_with_title(
         &self,
         request: &MediaRequest,
@@ -896,8 +933,14 @@ impl MediaRequestRepository for MockMediaRequestRepo {
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
         let requests = self.requests.lock().await;
-        Ok(requests
-            .iter()
+        let mut ordered = requests.iter().collect::<Vec<_>>();
+        if query.order == crate::MediaRequestOrder::OldestCreated {
+            ordered.sort_by(|left, right| {
+                (left.created_at, &left.id).cmp(&(right.created_at, &right.id))
+            });
+        }
+        Ok(ordered
+            .into_iter()
             .filter(|request| {
                 query
                     .facet

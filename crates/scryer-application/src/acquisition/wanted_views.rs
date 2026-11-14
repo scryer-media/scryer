@@ -417,30 +417,22 @@ impl AppUseCase {
     /// uses.
     pub(crate) async fn non_wanted_state_scope_keys(&self) -> AppResult<HashSet<String>> {
         let mut excluded = HashSet::new();
-        let items = self
+        // Only the coordinates are read: the key is derived from them alone.
+        let scopes = self
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                statuses: vec![
-                    AcquisitionScopeStatus::Paused.as_str().to_string(),
-                    AcquisitionScopeStatus::Grabbed.as_str().to_string(),
-                ],
-                limit: i64::MAX,
-                ..AcquisitionScopeStatesQuery::default()
-            })
+            .list_acquisition_scope_coordinates_for_statuses(&[
+                AcquisitionScopeStatus::Paused,
+                AcquisitionScopeStatus::Grabbed,
+            ])
             .await?;
-        for item in items.into_iter().filter(|item| {
-            matches!(
-                item.status,
-                AcquisitionScopeStatus::Paused | AcquisitionScopeStatus::Grabbed
-            )
-        }) {
+        for item in scopes {
             let scope = SubmissionScope::from_persisted(
                 &item.title_id,
-                item.episode_id.clone(),
-                item.collection_id.clone(),
-                item.series_movie_link_id.clone(),
+                item.episode_id,
+                item.collection_id,
+                item.series_movie_link_id,
                 None,
             );
             if let Some(scope_key) = convergence_scope_key(&scope, &item.title_id) {
@@ -624,9 +616,12 @@ impl AppUseCase {
             .await
             .unwrap_or_default();
         let mut title_context: HashMap<String, Option<TitleConvergenceContext>> = HashMap::new();
+        // Titles of one page mostly share their routing inputs, so the routed
+        // indexer set is resolved once per distinct input, not once per title.
+        let memo = crate::acquisition::convergence::ConvergenceInputMemo::default();
         for title in titles {
             let context = self
-                .resolve_title_convergence_context_for_title(&title)
+                .resolve_title_convergence_context_for_title(&title, &memo)
                 .await;
             title_context.insert(title.id.clone(), context);
         }
@@ -717,12 +712,15 @@ impl AppUseCase {
     async fn resolve_title_convergence_context_for_title(
         &self,
         title: &scryer_domain::Title,
+        memo: &crate::acquisition::convergence::ConvergenceInputMemo,
     ) -> Option<TitleConvergenceContext> {
         let subject = self
             .resolve_release_search_subject_for_title(title)
             .await
             .ok()?;
-        let convergence = self.resolve_scope_convergence(title, &subject).await?;
+        let convergence = self
+            .resolve_scope_convergence_memoized(title, &subject, memo)
+            .await?;
         Some(TitleConvergenceContext {
             fingerprint: convergence.fingerprint,
             routed_indexer_ids: convergence.routed_indexer_ids,

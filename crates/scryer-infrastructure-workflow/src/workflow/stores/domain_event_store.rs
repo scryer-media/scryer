@@ -419,7 +419,8 @@ mod title_history_filter_tests {
                  import_status TEXT,
                  media_file_delete_reason TEXT,
                  download_id TEXT,
-                 import_skip_reason TEXT
+                 import_skip_reason TEXT,
+                 media_request_id TEXT
              )",
         )
         .execute(&pool)

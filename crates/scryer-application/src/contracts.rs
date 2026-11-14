@@ -1059,6 +1059,15 @@ pub struct AcquisitionScopeStatesQuery {
     pub offset: i64,
 }
 
+/// Which scope an acquisition state row is about, without the rest of the row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcquisitionScopeCoordinates {
+    pub title_id: String,
+    pub episode_id: Option<String>,
+    pub collection_id: Option<String>,
+    pub series_movie_link_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseDecisionsQuery {
     pub wanted_item_id: Option<String>,

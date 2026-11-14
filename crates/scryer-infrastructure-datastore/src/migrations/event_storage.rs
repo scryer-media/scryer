@@ -355,6 +355,112 @@ fn import_rejection_skip_reason(event_id: &str, payload: &[u8]) -> Option<String
     }
 }
 
+/// Fill `media_request_id` on request submissions stored before the column
+/// existed. A row that already has one is never selected, so a rerun changes
+/// nothing.
+pub async fn backfill_media_request_id_projection_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> AppResult<()> {
+    let mut last_sequence = i64::MIN;
+    loop {
+        let rows = sqlx::query(
+            "SELECT sequence, event_id, payload_json
+               FROM domain_events
+              WHERE event_type = 'media_request_submitted'
+                AND media_request_id IS NULL
+                AND sequence > ?1
+              ORDER BY sequence
+              LIMIT ?2",
+        )
+        .bind(last_sequence)
+        .bind(BATCH_SIZE)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(repo_error)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let sequence: i64 = row.try_get("sequence").map_err(repo_error)?;
+            let event_id: String = row.try_get("event_id").map_err(repo_error)?;
+            let payload: Vec<u8> = row.try_get("payload_json").map_err(repo_error)?;
+            last_sequence = sequence;
+            let Some(request_id) = submission_media_request_id(&event_id, &payload) else {
+                continue;
+            };
+            sqlx::query("UPDATE domain_events SET media_request_id = ?1 WHERE sequence = ?2")
+                .bind(request_id)
+                .bind(sequence)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fill `media_request_id` on request submissions stored before the column
+/// existed. A row that already has one is never selected, so a rerun changes
+/// nothing.
+pub async fn backfill_media_request_id_projection_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> AppResult<()> {
+    let mut last_sequence = i64::MIN;
+    loop {
+        let rows = sqlx::query(
+            "SELECT sequence, event_id, payload_json
+               FROM domain_events
+              WHERE event_type = 'media_request_submitted'
+                AND media_request_id IS NULL
+                AND sequence > $1
+              ORDER BY sequence
+              LIMIT $2",
+        )
+        .bind(last_sequence)
+        .bind(BATCH_SIZE)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(repo_error)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let sequence: i64 = row.try_get("sequence").map_err(repo_error)?;
+            let event_id: String = row.try_get("event_id").map_err(repo_error)?;
+            let payload: Vec<u8> = row.try_get("payload_json").map_err(repo_error)?;
+            last_sequence = sequence;
+            let Some(request_id) = submission_media_request_id(&event_id, &payload) else {
+                continue;
+            };
+            sqlx::query("UPDATE domain_events SET media_request_id = $1 WHERE sequence = $2")
+                .bind(request_id)
+                .bind(sequence)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// The stored submission's request id, the same value the append path
+/// projects. A payload that cannot be decoded is left unprojected.
+fn submission_media_request_id(event_id: &str, payload: &[u8]) -> Option<String> {
+    match decode_domain_event_payload(payload) {
+        Ok(value) => {
+            derive_domain_event_projections("media_request_submitted", &value).media_request_id
+        }
+        Err(error) => {
+            tracing::warn!(
+                event_id,
+                error = %error,
+                "leaving an undecodable request submission without a request key"
+            );
+            None
+        }
+    }
+}
+
 fn encode_release_explanation(legacy: &[u8]) -> Result<Vec<u8>, String> {
     let value: Value = serde_json::from_slice(legacy)
         .map_err(|error| format!("invalid legacy explanation JSON: {error}"))?;
@@ -593,5 +699,217 @@ mod tests {
             tx.commit().await.unwrap();
             assert_eq!(projected(pool.clone()).await, expected);
         }
+    }
+
+    #[tokio::test]
+    async fn sqlite_request_key_backfill_projects_only_submissions_and_is_idempotent() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE domain_events (
+                sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL, event_type TEXT NOT NULL,
+                payload_json BLOB NOT NULL, media_request_id TEXT
+             );",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let submission = |request_id: &str| {
+            serde_json::json!({"type": "media_request_submitted", "data": {
+                "request_id": request_id, "library_id": "library-emberfall"
+            }})
+        };
+        let mut sequence = 0_i64;
+        // More submissions than one batch, so the walk crosses a batch boundary.
+        for n in 0..(BATCH_SIZE + 7) {
+            sequence += 1;
+            sqlx::query(
+                "INSERT INTO domain_events (sequence, event_id, event_type, payload_json)
+                 VALUES (?1, ?2, 'media_request_submitted', ?3)",
+            )
+            .bind(sequence)
+            .bind(format!("submission-{n}"))
+            .bind(encode_domain_event_payload(&submission(&format!("request-{n}"))).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (event_id, event_type, payload, projected) in [
+            (
+                "already-projected",
+                "media_request_submitted",
+                encode_domain_event_payload(&submission("request-in-payload")).unwrap(),
+                Some("request-in-column"),
+            ),
+            (
+                "other-event",
+                "media_request_approved",
+                encode_domain_event_payload(&serde_json::json!({
+                    "type": "media_request_approved",
+                    "data": {"request_id": "request-approved"}
+                }))
+                .unwrap(),
+                None,
+            ),
+            (
+                "without-request",
+                "media_request_submitted",
+                encode_domain_event_payload(&serde_json::json!({
+                    "type": "media_request_submitted", "data": {}
+                }))
+                .unwrap(),
+                None,
+            ),
+            (
+                "undecodable",
+                "media_request_submitted",
+                vec![0xFF, 0x00],
+                None,
+            ),
+        ] {
+            sequence += 1;
+            sqlx::query(
+                "INSERT INTO domain_events
+                    (sequence, event_id, event_type, payload_json, media_request_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(sequence)
+            .bind(event_id)
+            .bind(event_type)
+            .bind(payload)
+            .bind(projected)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let mut expected = (0..(BATCH_SIZE + 7))
+            .map(|n| (format!("submission-{n}"), Some(format!("request-{n}"))))
+            .collect::<Vec<_>>();
+        expected.extend([
+            (
+                "already-projected".to_string(),
+                Some("request-in-column".to_string()),
+            ),
+            ("other-event".to_string(), None),
+            ("without-request".to_string(), None),
+            ("undecodable".to_string(), None),
+        ]);
+        for _ in 0..2 {
+            let mut tx = pool.begin().await.unwrap();
+            backfill_media_request_id_projection_sqlite(&mut tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            let projected = sqlx::query(
+                "SELECT event_id, media_request_id FROM domain_events ORDER BY sequence",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("event_id"),
+                    row.get::<Option<String>, _>("media_request_id"),
+                )
+            })
+            .collect::<Vec<_>>();
+            assert_eq!(projected, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_request_key_backfill_projects_only_submissions_and_is_idempotent() {
+        let Ok(url) = std::env::var("SCRYER_TEST_POSTGRES_URL") else {
+            eprintln!("skipped: SCRYER_TEST_POSTGRES_URL must name an isolated test database");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        // A temporary table plus a rolled-back transaction keep this isolated.
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(
+            "CREATE TEMP TABLE domain_events (
+                sequence BIGINT PRIMARY KEY, event_id TEXT NOT NULL, event_type TEXT NOT NULL,
+                payload_json BYTEA NOT NULL, media_request_id TEXT
+             );",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let submission = |request_id: String| {
+            encode_domain_event_payload(&serde_json::json!({
+                "type": "media_request_submitted",
+                "data": {"request_id": request_id, "library_id": "library-emberfall"}
+            }))
+            .unwrap()
+        };
+        let total = BATCH_SIZE + 7;
+        for n in 0..total {
+            // Every ninth event is another type that also names a request.
+            sqlx::query(
+                "INSERT INTO domain_events (sequence, event_id, event_type, payload_json)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(n + 1)
+            .bind(format!("event-{n}"))
+            .bind(if n % 9 == 0 {
+                "media_request_updated"
+            } else {
+                "media_request_submitted"
+            })
+            .bind(submission(format!("request-{n}")))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO domain_events (sequence, event_id, event_type, payload_json, media_request_id)
+             VALUES ($1, 'already-projected', 'media_request_submitted', $2, 'request-in-column'),
+                    ($3, 'undecodable', 'media_request_submitted', $4, NULL)",
+        )
+        .bind(total + 1)
+        .bind(submission("request-in-payload".to_string()))
+        .bind(total + 2)
+        .bind(vec![0xFF_u8, 0x00])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+
+        let mut expected = (0..total)
+            .map(|n| {
+                (
+                    format!("event-{n}"),
+                    (n % 9 != 0).then(|| format!("request-{n}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        expected.extend([
+            (
+                "already-projected".to_string(),
+                Some("request-in-column".to_string()),
+            ),
+            ("undecodable".to_string(), None),
+        ]);
+        for _ in 0..2 {
+            backfill_media_request_id_projection_postgres(&mut tx)
+                .await
+                .unwrap();
+            let projected: Vec<(String, Option<String>)> = sqlx::query_as(
+                "SELECT event_id, media_request_id FROM domain_events ORDER BY sequence",
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+            assert_eq!(projected, expected);
+        }
+        tx.rollback().await.unwrap();
     }
 }

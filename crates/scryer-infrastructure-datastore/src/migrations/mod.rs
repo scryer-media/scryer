@@ -985,6 +985,9 @@ async fn run_rust_hook(
         "backfill_import_skip_reason_projection" => {
             event_storage::backfill_import_skip_reason_projection_sqlite(tx).await
         }
+        "backfill_media_request_id_projection" => {
+            event_storage::backfill_media_request_id_projection_sqlite(tx).await
+        }
         "scrub_stored_release_url_credentials" => {
             release_url_scrub::scrub_stored_release_url_credentials_sqlite(tx).await
         }

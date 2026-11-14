@@ -5601,6 +5601,10 @@ pub struct DomainEventFilter {
     /// database narrows to that stream instead of handing every stored event
     /// of those types to the caller to filter in memory.
     pub stream_id: Option<String>,
+    /// Scope the read to the submission events of these media requests. Only
+    /// `MediaRequestSubmitted` events carry a request key, so a read with
+    /// this set returns no event of any other type.
+    pub media_request_ids: Option<Vec<String>>,
     pub after_sequence: Option<i64>,
     pub before_sequence: Option<i64>,
     pub limit: usize,

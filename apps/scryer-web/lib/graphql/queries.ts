@@ -5338,7 +5338,7 @@ export const dashboardStorageQuery = `query DashboardStorage {
 }`;
 
 export const dashboardPendingRequestsQuery = `query DashboardPendingRequests($limit: Int) {
-  mediaRequests(status: PENDING, limit: $limit) {
+  mediaRequests(status: PENDING, order: OLDEST_CREATED, limit: $limit) {
     id
     libraryId
     facet

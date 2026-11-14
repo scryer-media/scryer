@@ -100,3 +100,24 @@ CREATE INDEX IF NOT EXISTS idx_titles_library_status_order_desc ON titles (
     year ASC,
     id COLLATE BINARY ASC
 );
+
+-- The requests list is ordered by `updated_at`, then `created_at`, then `id`,
+-- newest first, and the dashboard reads pending requests oldest first. Neither
+-- order had an index, so every page sorted the matching requests.
+CREATE INDEX IF NOT EXISTS idx_media_requests_updated_order
+    ON media_requests(updated_at, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_media_requests_status_created
+    ON media_requests(status, created_at, id);
+
+-- A title's history shows the requests submitted for it. A submission event
+-- carries its request only inside the compressed payload, so finding one
+-- title's submissions meant decoding every submission on the instance.
+-- `media_request_id` is that request as a plain column, like `download_id`.
+-- Rows stored before the column existed are filled by the migration's Rust
+-- step, which decodes each submission's payload. The index is partial because
+-- no other event type carries the key.
+ALTER TABLE domain_events ADD COLUMN media_request_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_domain_events_media_request_sequence
+    ON domain_events(media_request_id, sequence)
+    WHERE media_request_id IS NOT NULL;

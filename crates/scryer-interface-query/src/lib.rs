@@ -1688,13 +1688,16 @@ impl CatalogQueries {
         )]
         requester_user_id: Option<ID>,
         #[graphql(
-            desc = "Maximum requests to return, newest first; omitted returns 200, values below 1 become 1, and values above 1000 become 1000."
+            desc = "Maximum requests to return in the list order; omitted returns 200, values below 1 become 1, and values above 1000 become 1000."
         )]
         limit: Option<i32>,
         #[graphql(
-            desc = "Requests to skip, newest first; omitted or negative starts at the first."
+            desc = "Requests to skip in the list order; omitted or negative starts at the first."
         )]
         offset: Option<i32>,
+        #[graphql(desc = "List order; omitted is most recently changed first.")] order: Option<
+            MediaRequestOrderValue,
+        >,
     ) -> GqlResult<Vec<MediaRequestPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1708,6 +1711,9 @@ impl CatalogQueries {
                     requester_user_id: requester_user_id.map(String::from),
                     limit: limit.map(|limit| limit.max(1) as usize),
                     offset: offset.unwrap_or(0).max(0) as usize,
+                    order: order
+                        .map(MediaRequestOrderValue::into_application)
+                        .unwrap_or_default(),
                 },
             )
             .await
@@ -1748,6 +1754,7 @@ impl CatalogQueries {
                     requester_user_id: None,
                     limit: limit.map(|limit| limit.max(1) as usize),
                     offset: offset.unwrap_or(0).max(0) as usize,
+                    order: scryer_application::MediaRequestOrder::RecentlyUpdated,
                 },
             )
             .await
@@ -2659,6 +2666,7 @@ impl ActivityQueries {
             title_id: title_id.map(String::from),
             facet: facet.map(MediaFacetValue::into_domain),
             stream_id: None,
+            media_request_ids: None,
             after_sequence: after_sequence.map(|value| value.0),
             before_sequence: before_sequence.map(|value| value.0),
             limit: limit.unwrap_or(100).clamp(1, 500) as usize,

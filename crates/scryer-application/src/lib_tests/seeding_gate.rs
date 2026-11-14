@@ -5819,6 +5819,7 @@ async fn seeding_history_events(app: &AppUseCase) -> Vec<scryer_domain::DomainEv
             title_id: None,
             facet: None,
             stream_id: None,
+            media_request_ids: None,
             after_sequence: None,
             before_sequence: None,
             limit: 0,

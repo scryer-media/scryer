@@ -655,6 +655,19 @@ async fn project_title_history_page(
     } else {
         None
     };
+    // The submissions that can match that one title are those of the requests
+    // sharing an id with it, read by request key. A store that cannot name
+    // them leaves the read to every submission.
+    let single_title_request_ids = match (&single_request_title, &media_request_match_titles[..]) {
+        (Some(_), [title]) => {
+            app.services
+                .catalog
+                .media_requests
+                .request_ids_for_title_identity(&title.library_id, &title.external_ids)
+                .await?
+        }
+        _ => None,
+    };
     let mut cursors = match single_request_title {
         Some(title_id) => vec![
             TitleHistoryEventCursor::new(DomainEventFilter {
@@ -670,6 +683,7 @@ async fn project_title_history_page(
             }),
             TitleHistoryEventCursor::new(DomainEventFilter {
                 event_types: Some(vec![DomainEventType::MediaRequestSubmitted]),
+                media_request_ids: single_title_request_ids,
                 ..DomainEventFilter::default()
             }),
         ],
@@ -878,13 +892,20 @@ async fn load_title_history_media_request_match_titles(
         return Ok(Vec::new());
     };
 
-    let mut titles = Vec::new();
-    for title_id in title_ids {
-        if let Some(title) = app.services.catalog.titles.get_by_id(title_id).await? {
-            titles.push(title);
-        }
-    }
-    Ok(titles)
+    // One read for the scope, kept in the order the scope lists its titles.
+    let by_id = app
+        .services
+        .catalog
+        .titles
+        .get_by_ids(title_ids)
+        .await?
+        .into_iter()
+        .map(|title| (title.id.clone(), title))
+        .collect::<HashMap<_, _>>();
+    Ok(title_ids
+        .iter()
+        .filter_map(|title_id| by_id.get(title_id).cloned())
+        .collect())
 }
 
 fn media_request_title_history_records(

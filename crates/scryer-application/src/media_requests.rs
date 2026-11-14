@@ -158,8 +158,11 @@ pub struct ListMediaRequestsInput {
     /// Page size; `None` is [`MEDIA_REQUEST_LIST_DEFAULT_LIMIT`], and a value
     /// is held to `1..=`[`MEDIA_REQUEST_LIST_MAX_LIMIT`].
     pub limit: Option<usize>,
-    /// Requests to skip, newest first.
+    /// Requests to skip in the list order.
     pub offset: usize,
+    /// The manager queue's order; the caller's own list is always most
+    /// recently changed first.
+    pub order: MediaRequestOrder,
 }
 
 /// Requests one list read returns when the caller names no page size.
@@ -608,6 +611,7 @@ impl AppUseCase {
                     .requester_user_id
                     .map(|user_id| user_id.trim().to_string())
                     .filter(|user_id| !user_id.is_empty()),
+                order: input.order,
                 limit: Some(media_request_page_limit(input.limit)),
                 offset: input.offset,
             })
@@ -648,6 +652,7 @@ impl AppUseCase {
                 library_ids: Some(library_ids),
                 status: input.status,
                 requester_user_id: Some(actor.id.clone()),
+                order: MediaRequestOrder::RecentlyUpdated,
                 limit: Some(media_request_page_limit(input.limit)),
                 offset: input.offset,
             })

@@ -18161,6 +18161,20 @@ type MediaRequestMetadataPayload {
 }
 
 """
+Order of a media request list.
+"""
+enum MediaRequestOrderValue {
+	"""
+	Most recently changed first.
+	"""
+	RECENTLY_UPDATED
+	"""
+	Longest waiting first, by when the request was created.
+	"""
+	OLDEST_CREATED
+}
+
+"""
 Where a media request came from.
 """
 enum MediaRequestOriginKind {
@@ -25525,13 +25539,17 @@ type QueryRoot {
 		"""
 		requesterUserId: ID,
 		"""
-		Maximum requests to return, newest first; omitted returns 200, values below 1 become 1, and values above 1000 become 1000.
+		Maximum requests to return in the list order; omitted returns 200, values below 1 become 1, and values above 1000 become 1000.
 		"""
 		limit: Int,
 		"""
-		Requests to skip, newest first; omitted or negative starts at the first.
+		Requests to skip in the list order; omitted or negative starts at the first.
 		"""
-		offset: Int
+		offset: Int,
+		"""
+		List order; omitted is most recently changed first.
+		"""
+		order: MediaRequestOrderValue
 	): [MediaRequestPayload!]!
 	"""
 	List only the caller's media requests, optionally filtered by facet, libraries, and status.

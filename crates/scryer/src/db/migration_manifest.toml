@@ -4086,6 +4086,12 @@ file = "postgres/migrations/0344_catalog_sort_indexes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_media_request_id_projection"
+engine = "all"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

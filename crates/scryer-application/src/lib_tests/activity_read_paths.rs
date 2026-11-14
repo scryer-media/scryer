@@ -223,7 +223,8 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
             .expect("merged page");
         assert_eq!(page_shape(&merged), page_shape(&oracle), "{limit}/{offset}");
         assert_eq!(merged.has_more, oracle.has_more, "{limit}/{offset}");
-        // The merged read never walks every title's history.
+        // The merged read never walks every title's history, and reads only
+        // the submissions of the requests that share an id with the title.
         assert!(
             fixture
                 .domain_events
@@ -232,8 +233,11 @@ async fn single_title_request_history_merge_matches_the_full_walk() {
                 .await
                 .iter()
                 .all(|filter| filter.title_id.is_some()
-                    || filter.event_types.as_deref()
-                        == Some(&[DomainEventType::MediaRequestSubmitted][..]))
+                    || (filter.event_types.as_deref()
+                        == Some(&[DomainEventType::MediaRequestSubmitted][..])
+                        && filter.media_request_ids.as_ref().is_some_and(|ids| {
+                            ids.len() == 205 && ids.contains(&"request-0".to_string())
+                        })))
         );
     }
 

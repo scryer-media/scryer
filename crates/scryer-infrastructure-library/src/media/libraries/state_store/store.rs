@@ -5,13 +5,13 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use scryer_application::url_redaction::redact_optional_url_credentials;
 use scryer_application::{
-    AcquisitionScopeState, AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery,
-    AcquisitionScopeStatus, AppResult, BlocklistRepository, DownloadSourceKind,
-    HousekeepingMediaFileRootRow, HousekeepingRepository, LibraryProbeRepository,
-    LibraryProbeSignature, NewBlocklistEntry, PendingRelease, PendingReleaseObservation,
-    PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
-    PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
-    normalize_release_name,
+    AcquisitionScopeCoordinates, AcquisitionScopeState, AcquisitionScopeStateRepository,
+    AcquisitionScopeStatesQuery, AcquisitionScopeStatus, AppResult, BlocklistRepository,
+    DownloadSourceKind, HousekeepingMediaFileRootRow, HousekeepingRepository,
+    LibraryProbeRepository, LibraryProbeSignature, NewBlocklistEntry, PendingRelease,
+    PendingReleaseObservation, PendingReleasePageSort, PendingReleaseRepository,
+    PendingReleaseRole, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
+    ReleaseSeedMinimums, SubtitleDownloadRepository, normalize_release_name,
     subtitles::{
         ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry, SubtitleSearchBackoff,
         SubtitleSearchBackoffKey,
@@ -1153,6 +1153,37 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .await?
             .iter()
             .map(wanted_row_to_item)
+            .collect()
+    }
+
+    async fn list_acquisition_scope_coordinates_for_statuses(
+        &self,
+        statuses: &[AcquisitionScopeStatus],
+    ) -> AppResult<Vec<AcquisitionScopeCoordinates>> {
+        if statuses.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT title_id, episode_id, collection_id, series_movie_link_id
+               FROM wanted_items
+              WHERE status IN ({})",
+            placeholders(statuses.len())
+        );
+        let args = statuses
+            .iter()
+            .map(|status| SqlArg::Text(status.as_str().to_string()))
+            .collect::<Vec<_>>();
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(AcquisitionScopeCoordinates {
+                    title_id: row.text("title_id")?,
+                    episode_id: row.opt_text("episode_id")?,
+                    collection_id: row.opt_text("collection_id")?,
+                    series_movie_link_id: row.opt_text("series_movie_link_id")?,
+                })
+            })
             .collect()
     }
 

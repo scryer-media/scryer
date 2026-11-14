@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, MediaRequestCounts, MediaRequestQualityProfileReferenceCounts,
-    MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
-    MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
-    NewMediaRequest,
+    AppError, AppResult, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaRequestCounts,
+    MediaRequestOrder, MediaRequestQualityProfileReferenceCounts, MediaRequestQuery,
+    MediaRequestRepository, MediaRequestResolution, MediaRequestResolutionResult,
+    MediaRequestSubmissionResult, MediaRequestUpdateResult, NewMediaRequest,
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
@@ -560,6 +560,66 @@ impl MediaRequestRepository for MediaRequestStore {
             }
         }
         Ok(by_library)
+    }
+
+    async fn request_ids_for_title_identity(
+        &self,
+        library_id: &str,
+        external_ids: &[ExternalId],
+    ) -> AppResult<Option<Vec<String>>> {
+        if external_ids.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        // A request's sources are stored trimmed and lowercase, so lowering
+        // the title's source compares them without regard to case and still
+        // reads only the matching entries of the lookup index.
+        let mut clauses = Vec::with_capacity(external_ids.len());
+        let mut args = vec![SqlArg::Text(library_id.to_string())];
+        for external_id in external_ids {
+            clauses.push("(source = {} AND external_id = {})");
+            args.push(SqlArg::Text(external_id.source.to_ascii_lowercase()));
+            args.push(SqlArg::Text(external_id.value.clone()));
+        }
+        args.push(SqlArg::I64(MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS as i64 + 1));
+        let sql = format!(
+            "SELECT DISTINCT request_id
+               FROM media_request_external_ids
+              WHERE library_id = {{}}
+                AND ({})
+              LIMIT {{}}",
+            clauses.join(" OR ")
+        );
+        let mut ids = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| row.text("request_id"))
+            .collect::<AppResult<Vec<_>>>()?;
+        if ids.len() > MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS {
+            return Ok(None);
+        }
+        // A request is removed with the account that submitted it, and its
+        // ids go with it, while its submission stays in history. Those
+        // submissions are named too, so the caller judges them by what they
+        // recorded. This reads the request keys from their index, not the
+        // events.
+        let removed = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT DISTINCT e.media_request_id AS request_id
+               FROM domain_events e
+              WHERE e.media_request_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM media_requests r WHERE r.id = e.media_request_id
+                )
+              LIMIT {}",
+            &[SqlArg::I64(
+                (MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS - ids.len()) as i64 + 1,
+            )],
+        )
+        .await?;
+        for row in &removed {
+            ids.push(row.text("request_id")?);
+        }
+        Ok((ids.len() <= MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS).then_some(ids))
     }
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
@@ -1417,7 +1477,10 @@ fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlAr
 
     // `id` settles ties, so a page boundary never splits or repeats requests
     // written in the same instant.
-    sql.push_str(" ORDER BY updated_at DESC, created_at DESC, id DESC");
+    sql.push_str(match query.order {
+        MediaRequestOrder::RecentlyUpdated => " ORDER BY updated_at DESC, created_at DESC, id DESC",
+        MediaRequestOrder::OldestCreated => " ORDER BY created_at ASC, id ASC",
+    });
     if let Some(limit) = query.limit {
         sql.push_str(" LIMIT {} OFFSET {}");
         args.push(SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)));
