@@ -328,12 +328,35 @@ async fn list_data_on_titles_and_requests_is_visible_without_experimental_featur
     assert_eq!(memberships["title-alpha"].len(), 1);
     let facts = harness
         .app
-        .media_request_policy_facts(&harness.manager, std::slice::from_ref(&request))
+        .media_request_policy_facts(
+            &harness.manager,
+            std::slice::from_ref(&request),
+            crate::request_rules::MediaRequestPolicySelection::ALL,
+        )
         .await
         .unwrap();
     assert_eq!(
         facts["request-one"].public_list_name.as_deref(),
         Some("Fixture list public-list-one")
+    );
+    // A query that selects neither policy field gets the same requests with
+    // neither read.
+    let unselected = harness
+        .app
+        .media_request_policy_facts(
+            &harness.manager,
+            std::slice::from_ref(&request),
+            crate::request_rules::MediaRequestPolicySelection {
+                decision: false,
+                public_list_name: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        unselected
+            .get("request-one")
+            .is_none_or(|facts| facts.public_list_name.is_none() && facts.decision.is_none())
     );
 }
 

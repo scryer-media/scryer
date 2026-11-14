@@ -282,6 +282,49 @@ async fn subscription_round_trips_with_routes_and_update_replaces_them() {
 }
 
 #[tokio::test]
+async fn batched_subscription_read_matches_the_single_reads() {
+    let store = test_store(None).await;
+    for (id, scope, owner) in [
+        ("batch-public", ListScope::Public, OWNER),
+        ("batch-personal", ListScope::Personal, OWNER),
+        ("batch-other", ListScope::Personal, OTHER_MEMBER),
+    ] {
+        ListSubscriptionRepository::create(&store, subscription(id, scope, owner))
+            .await
+            .expect("create");
+    }
+    for asked in [
+        Vec::new(),
+        vec!["batch-personal".to_string()],
+        vec![
+            "batch-other".to_string(),
+            "batch-unknown".to_string(),
+            "batch-public".to_string(),
+            "batch-personal".to_string(),
+        ],
+    ] {
+        let mut batched = ListSubscriptionRepository::get_by_ids(&store, &asked)
+            .await
+            .expect("batched read")
+            .into_iter()
+            .map(|subscription| format!("{subscription:?}"))
+            .collect::<Vec<_>>();
+        batched.sort();
+        let mut expected = Vec::new();
+        for id in &asked {
+            if let Some(subscription) = ListSubscriptionRepository::get_by_id(&store, id)
+                .await
+                .expect("single read")
+            {
+                expected.push(format!("{subscription:?}"));
+            }
+        }
+        expected.sort();
+        assert_eq!(batched, expected);
+    }
+}
+
+#[tokio::test]
 async fn list_filters_by_scope_and_owner_without_leaking_other_members() {
     let store = test_store(None).await;
     ListSubscriptionRepository::create(&store, subscription("public-1", ListScope::Public, OWNER))

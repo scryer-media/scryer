@@ -28,9 +28,10 @@ use builder::AppServicesBuildConfiguration;
 use runtime::normalize_supported_plugin_required_features;
 
 pub(crate) use runtime::{
-    CachedWantedProjection, CompletedDownloadAdmission, DownloadQueueReadModel,
-    ReleaseCandidateListingTicket, ReleaseCandidateListingTickets, ReleaseCandidatePasswordTicket,
-    download_observation_is_admitted, normalize_download_client_category,
+    CachedCutoffUnmetItems, CachedWantedProjection, CompletedDownloadAdmission,
+    DownloadQueueReadModel, ReleaseCandidateListingTicket, ReleaseCandidateListingTickets,
+    ReleaseCandidatePasswordTicket, download_observation_is_admitted,
+    normalize_download_client_category,
 };
 
 #[cfg(test)]

@@ -21,7 +21,6 @@ import { LoadingMark } from "@/components/common/loading-mark";
 
 export function TitleHistoryView({
   events,
-  totalCount,
   loading,
   error,
   activeFilters,
@@ -42,7 +41,6 @@ export function TitleHistoryView({
   hasNextPage,
 }: {
   events: TitleHistoryEvent[];
-  totalCount: number;
   loading: boolean;
   error: string | null;
   activeFilters: string[];
@@ -63,8 +61,10 @@ export function TitleHistoryView({
   hasNextPage: boolean;
 }) {
   const t = useTranslate();
-  const pageStart = totalCount === 0 ? 0 : currentPage * pageSize + 1;
-  const pageEnd = totalCount === 0 ? 0 : currentPage * pageSize + events.length;
+  // The page knows its own rows and whether more follow, not how many exist.
+  const pageStart = events.length === 0 ? 0 : currentPage * pageSize + 1;
+  const pageEnd =
+    events.length === 0 ? 0 : currentPage * pageSize + events.length;
   // The tab row toggles one type at a time; selecting every type is the same
   // as no filter, matching the multi-select used at narrower widths.
   const toggleFilter = (eventType: string) => {
@@ -145,10 +145,9 @@ export function TitleHistoryView({
         )}
         <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-[12.5px] text-[var(--scry-muted3)]">
-            {t("pendingImports.pageRange", {
+            {t("history.pageRange", {
               start: pageStart,
               end: pageEnd,
-              total: totalCount,
             })}
           </p>
           <div className="flex items-center gap-2">

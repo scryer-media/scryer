@@ -4054,18 +4054,58 @@ scope = "all"
 
 [[migration]]
 version = 343
-description = "monthly indexer request and grab limits"
+description = "title release days"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0343_indexer_monthly_quotas.sql"
+file = "migrations/0343_title_release_days.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0343_indexer_monthly_quotas.sql"
+file = "postgres/migrations/0343_title_release_days.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 344
+description = "catalog sort indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0344_catalog_sort_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0344_catalog_sort_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_media_request_id_projection"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 345
+description = "monthly indexer request and grab limits"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0345_indexer_monthly_quotas.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0345_indexer_monthly_quotas.sql"
 engine = "postgres"
 scope = "all"
 

@@ -8,6 +8,8 @@ mod blake3_identities_upgrade_tests;
 mod blocklist_release_identity_upgrade_tests;
 pub mod canonical_download_identity;
 #[cfg(test)]
+mod catalog_sort_indexes_upgrade_tests;
+#[cfg(test)]
 #[path = "cropped_resolution_relabel_upgrade_tests.rs"]
 mod cropped_resolution_relabel_upgrade_tests;
 pub mod delay_profile_tables;
@@ -65,6 +67,8 @@ pub mod title_folder_ownership_safe;
 pub mod title_image_blobs;
 #[cfg(test)]
 mod title_lookup_and_download_seed_indexes_upgrade_tests;
+#[cfg(test)]
+mod title_release_days_upgrade_tests;
 pub mod title_root_folder_ids;
 pub mod title_tag_definitions;
 
@@ -980,6 +984,9 @@ async fn run_rust_hook(
         }
         "backfill_import_skip_reason_projection" => {
             event_storage::backfill_import_skip_reason_projection_sqlite(tx).await
+        }
+        "backfill_media_request_id_projection" => {
+            event_storage::backfill_media_request_id_projection_sqlite(tx).await
         }
         "scrub_stored_release_url_credentials" => {
             release_url_scrub::scrub_stored_release_url_credentials_sqlite(tx).await

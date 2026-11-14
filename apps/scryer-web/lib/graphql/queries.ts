@@ -1724,6 +1724,14 @@ export const librariesQuery = `query Libraries($facet: MediaFacetValue, $permiss
   }
 }`;
 
+/** The quality profile and scoring persona a library uses now, which the import wizard starts on. */
+export const externalImportLibraryChoicesQuery = `query ExternalImportLibraryChoices($libraryId: ID!) {
+  librarySettings(libraryId: $libraryId) {
+    qualityProfileId
+    scoringPersona
+  }
+}`;
+
 /** Every library's stored roots plus the server path style, read before an import updates a library. */
 export const externalImportLibraryRootsQuery = `query ExternalImportLibraryRoots {
   libraries {
@@ -3112,6 +3120,7 @@ export const globalSearchInitQuery = `query GlobalSearchInit($includeMediaSettin
     slug
     isDefault
     qualityProfileId
+    defaultMonitorType
     inheritedRequiredAudioLanguages
     inheritedPreferredAudioLanguages
     roots {
@@ -5109,12 +5118,12 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
       occurredAt
       createdAt
     }
-    totalCount
+    hasMore
   }
 }`;
 
-export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $requesterUserId: ID) {
-  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, requesterUserId: $requesterUserId) {
+export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $requesterUserId: ID, $limit: Int, $offset: Int) {
+  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, requesterUserId: $requesterUserId, limit: $limit, offset: $offset) {
     id
     libraryId
     facet
@@ -5188,8 +5197,8 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
   }
 }`;
 
-export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue) {
-  myMediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status) {
+export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $limit: Int, $offset: Int) {
+  myMediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, limit: $limit, offset: $offset) {
     id
     libraryId
     facet
@@ -5341,8 +5350,8 @@ export const dashboardStorageQuery = `query DashboardStorage {
   }
 }`;
 
-export const dashboardPendingRequestsQuery = `query DashboardPendingRequests {
-  mediaRequests(status: PENDING) {
+export const dashboardPendingRequestsQuery = `query DashboardPendingRequests($limit: Int) {
+  mediaRequests(status: PENDING, order: OLDEST_CREATED, limit: $limit) {
     id
     libraryId
     facet
@@ -6208,6 +6217,7 @@ export const listRouteOptionsQuery = `query ListRouteOptions {
     name
     slug
     isDefault
+    defaultMonitorType
     qualityProfileId
     inheritedRequiredAudioLanguages
     inheritedPreferredAudioLanguages

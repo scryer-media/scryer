@@ -18,6 +18,10 @@ pub struct DomainEventProjections {
     pub import_skip_reason: Option<String>,
     pub media_file_delete_reason: Option<String>,
     pub download_id: Option<String>,
+    /// The request a submission event is about, so one title's history can
+    /// read the submissions of its own requests by key instead of decoding
+    /// every submission on the instance.
+    pub media_request_id: Option<String>,
 }
 
 impl fmt::Display for DomainEventPayloadCodecError {
@@ -55,6 +59,9 @@ pub fn derive_domain_event_projections(
         )
         .then(|| field("download_id"))
         .flatten(),
+        media_request_id: (event_type == "media_request_submitted")
+            .then(|| field("request_id"))
+            .flatten(),
     }
 }
 
@@ -184,6 +191,23 @@ mod tests {
                 &json!({"data": {"skip_reason": "post_download_rule_blocked"}}),
             )
             .import_skip_reason,
+            None
+        );
+
+        let submission = derive_domain_event_projections(
+            "media_request_submitted",
+            &json!({"data": {"request_id": "request-emberfall"}}),
+        );
+        assert_eq!(
+            submission.media_request_id.as_deref(),
+            Some("request-emberfall")
+        );
+        assert_eq!(
+            derive_domain_event_projections(
+                "media_request_approved",
+                &json!({"data": {"request_id": "request-emberfall"}}),
+            )
+            .media_request_id,
             None
         );
 

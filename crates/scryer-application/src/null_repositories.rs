@@ -2575,16 +2575,6 @@ impl DomainEventRepository for NullDomainEventRepository {
         Ok(vec![])
     }
 
-    async fn count_title_history_page_events(
-        &self,
-        _: Option<&[TitleHistoryEventType]>,
-        _: Option<crate::TitleHistoryTitleScope<'_>>,
-        _: bool,
-        _: Option<&str>,
-    ) -> AppResult<i64> {
-        Ok(0)
-    }
-
     async fn count_dashboard_activity_events(
         &self,
         _: &[String],

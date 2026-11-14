@@ -47,7 +47,7 @@ export function TitleHistoryModal({
   const client = useClient();
   const t = useTranslate();
   const [events, setEvents] = React.useState<TitleHistoryEvent[]>([]);
-  const [totalCount, setTotalCount] = React.useState(0);
+  const [hasMore, setHasMore] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [activeFilters, setActiveFilters] = React.useState<string[]>([]);
@@ -106,7 +106,7 @@ export function TitleHistoryModal({
         if (result.data?.titleHistory) {
           const page = result.data.titleHistory;
           setEvents((prev) => (append ? [...prev, ...page.items] : page.items));
-          setTotalCount(page.totalCount);
+          setHasMore(page.hasMore);
         } else {
           setError(t("history.loadError"));
         }
@@ -172,8 +172,6 @@ export function TitleHistoryModal({
     setEvents([]);
     setScopedEpisodeDismissed(true);
   }, []);
-
-  const hasMore = events.length < totalCount;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

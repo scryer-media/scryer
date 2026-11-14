@@ -603,6 +603,12 @@ async fn privileged_root_queries_refuse_viewers_with_library_access_denied() {
         "cutoff unmet titles",
     );
     assert_refused_with(
+        app.list_cutoff_unmet_titles_page(&viewer, None, None, 10, 0)
+            .await,
+        denied,
+        "cutoff unmet titles page",
+    );
+    assert_refused_with(
         app.storage_root_usage(&viewer).await,
         denied,
         "storage roots",

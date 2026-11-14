@@ -2383,6 +2383,7 @@ const ja: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}}エピソード",
   "history.unknownEvent": "不明",
   "history.noMore": "これ以上のイベントはありません",
+  "history.pageRange": "{{start}} – {{end}}",
   "history.loadMore": "もっと読み込む",
   "settings.recycleBin": "ごみ箱",
   "settings.recycleBinEnabled": "ごみ箱を有効にする",

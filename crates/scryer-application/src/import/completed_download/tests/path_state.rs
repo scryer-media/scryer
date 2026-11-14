@@ -135,6 +135,7 @@ async fn import_rejected_reasons(app: &AppUseCase) -> Vec<Option<String>> {
             title_id: None,
             facet: None,
             stream_id: None,
+            media_request_ids: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 100,

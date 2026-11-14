@@ -37,10 +37,14 @@ import {
   externalImportWarmupStatusQuery,
   externalImportSetupSecretDraftQuery,
   externalImportSetupSecretDraftStatusQuery,
+  externalImportLibraryChoicesQuery,
   externalImportLibraryRootsQuery,
+  librarySettingsQuery,
   wizardQualityProfilesQuery,
 } from "@/lib/graphql/queries";
 import { mergeImportRootsIntoStoredRoots } from "@/lib/utils/library-root-validation";
+import { libraryChoiceSettingsInput } from "@/lib/utils/library-settings-input";
+import type { LibrarySettingsRecord } from "@/lib/types/titles";
 import {
   localPathStyleFromRuntimeValue,
   type LocalPathStyle,
@@ -919,8 +923,63 @@ export function useExternalImportSetup({
     [libraries],
   );
 
+  // A default library that already exists starts on the quality profile and
+  // scoring persona it uses now. A draft restored from an earlier visit, or
+  // one the operator has already changed, keeps its own values. A default
+  // library that does not exist yet has nothing to read and keeps the defaults.
+  const libraryChoiceTouched = useRef(new Set<string>());
+  const [savedChoicesSettled, setSavedChoicesSettled] = useState(() =>
+    Boolean(initial?.libraries),
+  );
+  useEffect(() => {
+    if (initial?.libraries) return;
+    let cancelled = false;
+    const defaults = defaultLibraryDrafts();
+    void Promise.all(
+      defaults.map((draft) =>
+        client
+          .query(
+            externalImportLibraryChoicesQuery,
+            { libraryId: draft.id },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise(),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const saved = new Map<
+        string,
+        { qualityProfileId?: string | null; scoringPersona?: string | null }
+      >();
+      results.forEach(({ data }, index) => {
+        if (data?.librarySettings) {
+          saved.set(defaults[index].id, data.librarySettings);
+        }
+      });
+      setLibraries((prev) =>
+        prev.map((lib) => {
+          const current = saved.get(lib.id);
+          if (!current || libraryChoiceTouched.current.has(lib.id)) return lib;
+          const persona = SCORING_PERSONA_VALUES.find(
+            (value) => value === current.scoringPersona,
+          );
+          return {
+            ...lib,
+            qualityProfileId: current.qualityProfileId || lib.qualityProfileId,
+            scoringPersona: persona ?? lib.scoringPersona,
+          };
+        }),
+      );
+      setSavedChoicesSettled(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, initial]);
+
   const setLibraryQualityProfile = useCallback(
     (id: string, qualityProfileId: string | null) => {
+      libraryChoiceTouched.current.add(id);
       setLibraries((prev) =>
         prev.map((lib) => (lib.id === id ? { ...lib, qualityProfileId } : lib)),
       );
@@ -930,6 +989,7 @@ export function useExternalImportSetup({
 
   const setLibraryPersona = useCallback(
     (id: string, scoringPersona: ScoringPersonaValue) => {
+      libraryChoiceTouched.current.add(id);
       setLibraries((prev) =>
         prev.map((lib) => (lib.id === id ? { ...lib, scoringPersona } : lib)),
       );
@@ -969,7 +1029,10 @@ export function useExternalImportSetup({
   // Every library needs a quality profile — there is no "none" option. As soon
   // as profiles are available, default any library without a selection to the
   // first profile. Reacting to `libraries` too covers user-added libraries.
+  // It waits for the existing libraries' own profiles so it does not fill in
+  // one of those first.
   useEffect(() => {
+    if (!savedChoicesSettled) return;
     if (qualityProfiles.length === 0) return;
     if (!libraries.some((lib) => !lib.qualityProfileId)) return;
     const fallback = qualityProfiles[0].id;
@@ -978,7 +1041,7 @@ export function useExternalImportSetup({
         lib.qualityProfileId ? lib : { ...lib, qualityProfileId: fallback },
       ),
     );
-  }, [qualityProfiles, libraries]);
+  }, [qualityProfiles, libraries, savedChoicesSettled]);
 
   // The Quality step can't be left until every mapped library has a profile.
   const qualityReady = useMemo(
@@ -1824,6 +1887,22 @@ export function useExternalImportSetup({
           ? storedRootsByLibrary.get(draft.existingLibraryId)
           : undefined;
         if (draft.existingLibraryId && storedRoots) {
+          // A save that names settings replaces every stored override, so the
+          // library's own overrides go back with the two the wizard chose.
+          const saved = await client
+            .query(
+              librarySettingsQuery,
+              { libraryId: draft.existingLibraryId },
+              { requestPolicy: "network-only" },
+            )
+            .toPromise();
+          const savedSettings = saved.data?.librarySettings as
+            LibrarySettingsRecord | undefined;
+          if (saved.error || !savedSettings) {
+            return fail(
+              `${gqlError(saved.error, t) || t("settings.librarySaveFailed")}: ${draft.name}`,
+            );
+          }
           const { data, error } = await client
             .mutation(updateLibraryMutation, {
               input: {
@@ -1833,7 +1912,7 @@ export function useExternalImportSetup({
                   rootPaths,
                   pathStyle,
                 ),
-                settings,
+                settings: libraryChoiceSettingsInput(savedSettings, settings),
               },
             })
             .toPromise();

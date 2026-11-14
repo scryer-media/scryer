@@ -456,7 +456,7 @@ async fn manual_instructions_and_completion_trust_confirmation_without_discoveri
             )
             .await
             .unwrap();
-        assert_eq!(history.total_count, 1);
+        assert_eq!(history.records.len(), 1);
         let data: serde_json::Value =
             serde_json::from_str(history.records[0].data_json.as_ref().unwrap()).unwrap();
         assert_eq!(data["mode"], "user_moved_files");
@@ -678,7 +678,7 @@ async fn confirming_a_move_relocates_the_files_and_then_the_catalog() {
         )
         .await
         .unwrap();
-    assert_eq!(history.total_count, 1);
+    assert_eq!(history.records.len(), 1);
     let entry = &history.records[0];
     assert_eq!(entry.source_path, title.folder_path);
     assert_eq!(entry.dest_path, moved.folder_path);
@@ -793,7 +793,8 @@ async fn a_failed_placement_leaves_the_catalog_pointing_at_the_source() {
         .await
         .unwrap();
     assert_eq!(
-        history.total_count, 0,
+        history.records.len(),
+        0,
         "failed moves are not recorded as completed"
     );
 }
@@ -1262,7 +1263,8 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
             .await
             .unwrap();
         assert_eq!(
-            history.total_count, 1,
+            history.records.len(),
+            1,
             "resume records each completed title exactly once"
         );
     }

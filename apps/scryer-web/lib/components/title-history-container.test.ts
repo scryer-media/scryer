@@ -21,7 +21,7 @@ function historyPage(ids: string[]) {
     data: {
       titleHistory: {
         items: ids.map((id) => ({ id })),
-        totalCount: ids.length,
+        hasMore: false,
       },
     },
   };

@@ -18,7 +18,7 @@
 //!
 //! ```text
 //! ProxyConfig ─┬─ tunnel_spec ────▶ TunnelRegistry::ensure_ssh_tunnel
-//!              └─ wireguard_spec ─▶ TunnelRegistry::ensure_wireguard_tunnel
+//!              └─ wireguard_spec ─▶ TunnelRegistry::ensure_tunnel_with
 //!                                        │
 //!                              socks5h://127.0.0.1:<port>
 //!                                        │
@@ -208,6 +208,7 @@ pub fn wireguard_spec(config: &ProxyConfig) -> Result<WireGuardSpec, String> {
             Some(seconds) => Some(seconds),
         },
         request_timeout: crate::transport_proxy::transport_proxy_request_timeout(config),
+        max_sockets: scryer_tunnel::DEFAULT_MAX_SOCKETS,
     })
 }
 
@@ -315,11 +316,28 @@ fn start_tunnel(config: &ProxyConfig) -> Result<TunnelEndpoint, String> {
     let front = if config.provider_type == ProxyProviderType::WireGuard {
         let spec = wireguard_spec(config)?;
         let observer: Arc<dyn TunnelObserver> = Arc::new(LedgerObserver::new(config)?);
-        registry.ensure_wireguard_tunnel(spec, observer, credentials)
+        let id = spec.proxy_config_id.clone();
+        let revision = spec.revision.clone();
+        let timeout = spec.request_timeout;
+        let for_provider = Arc::clone(&observer);
+        registry.ensure_tunnel_with(&id, &revision, timeout, observer, credentials, move || {
+            Ok(Arc::new(
+                scryer_tunnel::WireGuardTunnelProvider::new(spec, for_provider)
+                    .with_endpoint_resolver(Arc::new(SystemEndpointResolver)),
+            ) as Arc<dyn scryer_tunnel::TunnelProvider>)
+        })
     } else if config.provider_type == ProxyProviderType::Http3 {
         let spec = http3_spec(config)?;
         let observer: Arc<dyn TunnelObserver> = Arc::new(LedgerObserver::new(config)?);
-        registry.ensure_http3_tunnel(spec, observer, credentials)
+        let id = spec.proxy_config_id.clone();
+        let revision = spec.revision.clone();
+        let timeout = spec.request_timeout;
+        registry.ensure_tunnel_with(&id, &revision, timeout, observer, credentials, move || {
+            Ok(Arc::new(
+                scryer_tunnel::Http3TunnelProvider::new(spec)?
+                    .with_endpoint_resolver(Arc::new(SystemEndpointResolver)),
+            ) as Arc<dyn scryer_tunnel::TunnelProvider>)
+        })
     } else {
         let spec = tunnel_spec(config)?;
         let observer: Arc<dyn TunnelObserver> = Arc::new(LedgerObserver::new(config)?);
@@ -330,6 +348,25 @@ fn start_tunnel(config: &ProxyConfig) -> Result<TunnelEndpoint, String> {
         egress_url: format!("socks5h://{}", front.addr),
         credentials: front.credentials,
     })
+}
+
+/// Resolves the name of a WireGuard or HTTP/3 endpoint with the operating
+/// system's resolver.
+///
+/// The tunnel engine resolves no endpoint name on its own: a provider given no
+/// resolver dials only an endpoint written as an address. An endpoint is the
+/// hop that carries the tunnel, so the host's own resolver is the one that can
+/// answer for it.
+struct SystemEndpointResolver;
+
+#[async_trait::async_trait]
+impl scryer_tunnel::endpoint::EndpointResolver for SystemEndpointResolver {
+    async fn resolve(&self, host: &str) -> std::io::Result<Vec<std::net::IpAddr>> {
+        Ok(tokio::net::lookup_host((host, 0))
+            .await?
+            .map(|address| address.ip())
+            .collect())
+    }
 }
 
 /// Connect, authenticate and report the host key without leaving a tunnel
@@ -349,7 +386,9 @@ pub async fn probe_tunnel_handshake(config: &ProxyConfig) -> Result<TunnelHandsh
 /// instead: which peer answered, how long it took, and our own public key.
 pub async fn probe_wireguard_handshake(config: &ProxyConfig) -> Result<WireGuardHandshake, String> {
     let spec = wireguard_spec(config)?;
-    scryer_tunnel::WireGuardTunnelProvider::handshake(spec, Arc::new(LedgerObserver::new(config)?))
+    scryer_tunnel::WireGuardTunnelProvider::new(spec, Arc::new(LedgerObserver::new(config)?))
+        .with_endpoint_resolver(Arc::new(SystemEndpointResolver))
+        .probe_handshake()
         .await
         .map_err(|error| error.to_string())
 }
@@ -1161,6 +1200,23 @@ pub(crate) mod tests {
         assert_eq!(
             handshake.our_public_key,
             scryer_tunnel::public_key_of(&scryer_tunnel::test_support::test_client_private_key())
+        );
+    }
+
+    /// The engine dials only addresses on its own, so the resolver handed to
+    /// it is what makes an endpoint written as a name reachable at all.
+    #[tokio::test]
+    async fn the_endpoint_resolver_answers_a_name_with_the_hosts_addresses() {
+        use scryer_tunnel::endpoint::EndpointResolver;
+
+        let addresses = SystemEndpointResolver
+            .resolve("localhost")
+            .await
+            .expect("the host resolves its own name");
+        assert!(!addresses.is_empty());
+        assert!(
+            addresses.iter().all(std::net::IpAddr::is_loopback),
+            "{addresses:?}"
         );
     }
 

@@ -3833,6 +3833,7 @@ const nl: LocaleDictionary = {
   "history.episodeCountMultiple": "{{count}} afleveringen",
   "history.unknownEvent": "Onbekend",
   "history.noMore": "Geen gebeurtenissen meer",
+  "history.pageRange": "{{start}}–{{end}}",
   "history.loadMore": "Meer laden",
 
   // Indexer error diagnostics

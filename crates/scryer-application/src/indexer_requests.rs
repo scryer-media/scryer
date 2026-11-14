@@ -196,11 +196,7 @@ impl IndexerRequestTally {
     /// asked. Local quota failures are retained for the transport boundary to return
     /// as typed application errors rather than provider failures.
     pub async fn try_note_sent_async(&self, url: &str) -> bool {
-        if self.indexer_origin.as_ref().is_some_and(|origin| {
-            url::Url::parse(url)
-                .map(|url| url.origin().ascii_serialization() != *origin)
-                .unwrap_or(false)
-        }) {
+        if self.is_off_indexer_origin(url) {
             return self.try_note_auxiliary_sent_call(CALL_EXTERNAL_REDIRECT);
         }
         self.try_note_sent_call_async(newznab_call_label(url)).await
@@ -208,11 +204,7 @@ impl IndexerRequestTally {
 
     /// Blocking counterpart for dedicated plugin HTTP worker threads only.
     pub fn try_note_sent_blocking(&self, url: &str) -> bool {
-        if self.indexer_origin.as_ref().is_some_and(|origin| {
-            url::Url::parse(url)
-                .map(|url| url.origin().ascii_serialization() != *origin)
-                .unwrap_or(false)
-        }) {
+        if self.is_off_indexer_origin(url) {
             return self.try_note_auxiliary_sent_call(CALL_EXTERNAL_REDIRECT);
         }
         self.try_note_sent_call_blocking(newznab_call_label(url))
@@ -243,6 +235,63 @@ impl IndexerRequestTally {
         }
         self.note_pending(call);
         true
+    }
+
+    /// Whether `url` is off this tally's indexer origin, so a hop to it is an
+    /// auxiliary sample rather than a request against the indexer.
+    fn is_off_indexer_origin(&self, url: &str) -> bool {
+        self.indexer_origin.as_ref().is_some_and(|origin| {
+            url::Url::parse(url)
+                .map(|url| url.origin().ascii_serialization() != *origin)
+                .unwrap_or(false)
+        })
+    }
+
+    /// Admit a probe: an attempt on an address the indexer did not advertise,
+    /// which may reach nothing at all. `indexer_url` is the probed address when
+    /// the probe is against the indexer itself. Such a probe takes its monthly
+    /// request slot here, before it leaves, so an indexer at its limit is never
+    /// probed; a refusal is available from [`Self::take_dispatch_error`]. The
+    /// dashboard does not count it here. The caller reports it with
+    /// [`Self::note_probe_reached`] or [`Self::note_auxiliary_probe_reached`]
+    /// unless no connection was made.
+    pub async fn try_admit_probe_async(&self, indexer_url: Option<&str>) -> bool {
+        let _admission = match self.try_admit_dispatch() {
+            Ok(admission) => admission,
+            Err(()) => return false,
+        };
+        if indexer_url.is_some_and(|url| !self.is_off_indexer_origin(url))
+            && crate::indexer_error_history_is_persistable(&self.indexer_id)
+            && let Err(error) = self
+                .stats
+                .admit_monthly_request(&self.indexer_id, Utc::now())
+                .await
+        {
+            self.store_dispatch_error(error);
+            return false;
+        }
+        true
+    }
+
+    /// An admitted probe of `url` got as far as a connection, so the indexer
+    /// was asked. Counts it on the dashboard the way
+    /// [`Self::try_note_sent_async`] counts a send; its monthly slot was taken
+    /// when it was admitted.
+    pub fn note_probe_reached(&self, url: &str) {
+        if self.is_off_indexer_origin(url) {
+            return self.note_pending(CALL_EXTERNAL_REDIRECT);
+        }
+        if crate::indexer_error_history_is_persistable(&self.indexer_id) {
+            self.stats
+                .record_api_request_sent_at(&self.indexer_id, &self.indexer_name, Utc::now());
+        }
+        self.note_pending(newznab_call_label(url));
+    }
+
+    /// As [`Self::note_probe_reached`], for a probe that is not against the
+    /// indexer's own quota.
+    pub fn note_auxiliary_probe_reached(&self, call: &'static str) {
+        self.note_pending(call);
     }
 
     /// Explicit blocking path for dedicated plugin HTTP worker threads.
@@ -450,6 +499,48 @@ mod tests {
             headers: Vec::new(),
             body: body.as_bytes().to_vec(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_probe_counts_only_once_it_is_reported_as_reached() {
+        const PROBED: &str = "https://indexer.test/api?t=get&id=1";
+        let stats = Arc::new(CountingTracker::default());
+        let tally = tally(Arc::clone(&stats));
+        assert!(tally.try_admit_probe_async(Some(PROBED)).await);
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(tally.pending_len(), 0);
+        // With nothing pending, an outcome has nothing to resolve.
+        tally.note_result(IndexerRequestResult::NoResponse);
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 0);
+
+        assert!(tally.try_admit_probe_async(Some(PROBED)).await);
+        tally.note_probe_reached(PROBED);
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 1);
+        assert_eq!(tally.pending_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_probe_of_an_indexer_at_its_monthly_limit_is_refused_before_it_leaves() {
+        let stats = Arc::new(CountingTracker {
+            monthly_limit_reached: true,
+            ..Default::default()
+        });
+        let tally = tally(Arc::clone(&stats));
+
+        assert!(
+            !tally
+                .try_admit_probe_async(Some("https://indexer.test/api?t=get&id=1"))
+                .await
+        );
+        let refusal = tally.take_dispatch_error().expect("refusal is retained");
+        assert_eq!(
+            refusal.validation_reason(),
+            Some(crate::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED)
+        );
+        // A probe that is not against the indexer takes no monthly slot.
+        assert!(tally.try_admit_probe_async(None).await);
+        assert_eq!(stats.sent.load(Ordering::Relaxed), 0);
+        assert_eq!(tally.pending_len(), 0);
     }
 
     #[test]

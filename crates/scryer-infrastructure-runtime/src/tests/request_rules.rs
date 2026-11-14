@@ -391,6 +391,43 @@ async fn assert_decision_round_trip(store: &dyn RequestRuleDecisionRepository) -
     );
     assert_eq!(store.list_recent(0, None).await?.len(), 0);
 
+    // The batched read gives each request the decision the single read gives
+    // it, and says nothing for a request with none.
+    for asked in [
+        Vec::new(),
+        vec!["request-1".to_string()],
+        vec![
+            "request-2".to_string(),
+            "request-unknown".to_string(),
+            "request-1".to_string(),
+            "request-1".to_string(),
+        ],
+    ] {
+        let batched = store.latest_for_requests(&asked).await?;
+        let mut expected = std::collections::HashMap::new();
+        for request_id in &asked {
+            if let Some(decision) = store.latest_for_request(request_id).await? {
+                expected.insert(request_id.clone(), decision);
+            }
+        }
+        let shape = |decisions: &std::collections::HashMap<String, RequestRuleDecisionRecord>| {
+            let mut rows = decisions
+                .iter()
+                .map(|(request_id, decision)| format!("{request_id}: {decision:?}"))
+                .collect::<Vec<_>>();
+            rows.sort();
+            rows
+        };
+        assert_eq!(shape(&batched), shape(&expected));
+    }
+    assert_eq!(
+        store
+            .latest_for_requests(&["request-1".to_string()])
+            .await?["request-1"]
+            .id,
+        "decision-2"
+    );
+
     // The rule ids live inside the serialized votes, so the count is a
     // substring match over that column.
     assert_eq!(store.count_for_rule_set("rule-a").await?, 3);

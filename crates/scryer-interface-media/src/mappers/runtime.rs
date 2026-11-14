@@ -682,18 +682,15 @@ pub fn from_title_history_record(
 
 pub fn from_title_history_page(
     page: TitleHistoryPage,
-    offset: usize,
 ) -> scryer_application::AppResult<TitleHistoryPagePayload> {
     let items = page
         .records
         .into_iter()
         .map(from_title_history_record)
         .collect::<scryer_application::AppResult<Vec<_>>>()?;
-    let has_more = (offset.saturating_add(items.len()) as i64) < page.total_count;
     Ok(TitleHistoryPagePayload {
         items,
-        total_count: page.total_count,
-        has_more,
+        has_more: page.has_more,
     })
 }
 

@@ -570,6 +570,7 @@ async fn validate_completed_import_source_and_mark_processing(
             decision: ImportDecision::Skipped,
             skip_reason: Some(ImportSkipReason::NoVideoFiles),
             release_burned: false,
+            title_id: completed_import_request_title_id(&request),
             ..base_completed_import_result(
                 &request.import_id,
                 &request.completed,
@@ -618,6 +619,17 @@ async fn execute_completed_import(
     }
 }
 
+/// The title an import request is for, as far as it is known before the
+/// import runs. A result that ends early records it, so import history, which
+/// lists only records of titles the reader may see, can show the record.
+fn completed_import_request_title_id(request: &CompletedImportRequest) -> Option<String> {
+    request
+        .release_evidence
+        .title_id()
+        .map(str::to_string)
+        .or_else(|| request.target_title_id.clone())
+}
+
 async fn finalize_completed_import_error(
     app: &AppUseCase,
     request: &CompletedImportRequest,
@@ -641,6 +653,7 @@ async fn finalize_completed_import_error(
             error.to_string()
         }),
         release_burned: false,
+        title_id: completed_import_request_title_id(request),
         ..base_completed_import_result(
             &request.import_id,
             &request.completed,

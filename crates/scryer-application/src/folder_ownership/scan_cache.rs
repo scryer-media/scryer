@@ -71,7 +71,7 @@ impl HeldOwner {
         }
     }
 
-    fn prepare(&mut self, roots: &[(String, Option<String>)]) {
+    fn prepare(&mut self, roots: &[RootOverlapKeys]) {
         self.prefilter = Some(OwnerOverlapPrefilter::prepare(&self.folder, roots));
     }
 }
@@ -106,7 +106,7 @@ struct HeldList {
 }
 
 /// The roots a held list was prepared for.
-type PreparedRoots = Vec<(String, Option<String>)>;
+type PreparedRoots = Vec<RootOverlapKeys>;
 
 impl HeldList {
     /// Whether the owners are still what a fresh read would return, given the
@@ -152,7 +152,7 @@ impl HeldList {
     }
 
     /// Prepare every owner and index them for `roots`, unless that is done.
-    fn prepare(&mut self, roots: &[(String, Option<String>)]) {
+    fn prepare(&mut self, roots: &[RootOverlapKeys]) {
         if self
             .prepared
             .as_ref()
@@ -328,6 +328,8 @@ struct OwnerVisit<'a> {
     roots: &'a [String],
     claimant: &'a str,
     keys: FolderOverlapKeys,
+    /// The candidate for the exact comparisons, resolved once for the claim.
+    exact: OverlapLeft,
     cache: &'a mut PathEvidence,
     parents: HashMap<PathBuf, Option<Stamp>>,
     visited: usize,
@@ -340,11 +342,13 @@ impl<'a> OwnerVisit<'a> {
         claimant: &'a str,
         cache: &'a mut PathEvidence,
     ) -> AppResult<Self> {
+        let keys = FolderOverlapKeys::from_roots(candidate, roots)?;
         Ok(Self {
             candidate,
             roots,
             claimant,
-            keys: FolderOverlapKeys::from_roots(candidate, roots)?,
+            exact: keys.exact_comparison(candidate),
+            keys,
             cache,
             parents: HashMap::new(),
             visited: 0,
@@ -361,20 +365,20 @@ impl<'a> OwnerVisit<'a> {
         let (candidate, roots) = (self.candidate, self.roots);
         let Self {
             keys,
+            exact,
             cache,
             parents,
             ..
         } = self;
-        let compare = keys.needs_exact_comparison_prepared(prefilter, path, &mut |path| {
-            cache.verify(path, parents)
-        });
+        let compare = keys
+            .needs_exact_comparison_prepared(prefilter, &mut |path| cache.verify(path, parents));
         cache.probes += keys.link_probes;
         keys.link_probes = 0;
-        if !compare? {
+        if !compare {
             return Ok(());
         }
         cache.fallbacks += 1;
-        let overlaps = title_folders_overlap(candidate, path).map_err(|error| {
+        let overlaps = exact.overlaps(path).map_err(|error| {
             AppError::validation_refused(
                 crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE,
                 format!(
@@ -942,7 +946,7 @@ struct PathEvidence {
     // Each proven non-link directory is bound to its containing directory's
     // identity/change stamp. Never store missing paths or linked entries.
     directories: HashMap<PathBuf, Stamp>,
-    roots: Vec<(String, Option<String>)>,
+    roots: Vec<RootOverlapKeys>,
     probes: u64,
     hits: u64,
     invalidations: u64,
@@ -961,7 +965,7 @@ impl PathEvidence {
                 .map(|path| path.as_os_str().len())
                 .sum::<usize>()
     }
-    fn set_roots(&mut self, roots: &[(String, Option<String>)]) {
+    fn set_roots(&mut self, roots: &[RootOverlapKeys]) {
         if self.roots != roots {
             self.invalidations += self.directories.len() as u64;
             self.directories.clear();
@@ -984,18 +988,23 @@ impl PathEvidence {
         })
     }
 
-    fn verify(&mut self, path: &Path, parents: &mut HashMap<PathBuf, Option<Stamp>>) -> bool {
+    /// What `path` is to a link walk: from the evidence when its containing
+    /// directory is unchanged, or else from one probe of `path`. `None` when
+    /// `path` was not probed.
+    fn verify(
+        &mut self,
+        path: &Path,
+        parents: &mut HashMap<PathBuf, Option<Stamp>>,
+    ) -> Option<LinkProbe> {
         if !cfg!(unix) {
-            return false;
+            return None;
         }
-        let Some(parent) = path.parent() else {
-            return false;
-        };
+        let parent = path.parent()?;
         let current = self.parent_stamp(parent, parents);
         if let Some(previous) = self.directories.get(path) {
             if Some(*previous) == current {
                 self.hits += 1;
-                return true;
+                return Some(LinkProbe::Plain);
             }
             // The ancestor walk also verifies every intermediate component.
             // Invalidate the containing group once, rather than rescanning the
@@ -1005,17 +1014,15 @@ impl PathEvidence {
                 .retain(|entry, _| !entry.starts_with(parent));
             self.invalidations += (before - self.directories.len()) as u64;
         }
-        let Some(current) = current else {
-            return false;
-        };
+        let current = current?;
         self.probes += 1;
-        let verified = std::fs::symlink_metadata(path)
-            .ok()
-            .is_some_and(|metadata| metadata.is_dir());
-        if verified && self.directories.len() < 1_000_000 {
+        let metadata = std::fs::symlink_metadata(path);
+        if metadata.as_ref().is_ok_and(|metadata| metadata.is_dir())
+            && self.directories.len() < 1_000_000
+        {
             self.directories.insert(path.to_path_buf(), current);
         }
-        verified
+        Some(LinkProbe::of(&metadata))
     }
 }
 
@@ -1036,17 +1043,8 @@ mod tests {
         });
         let mut original = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
         let expected = original.needs_exact_comparison(&owner);
-        match (actual, expected) {
-            (Ok(actual), Ok(expected)) => {
-                assert_eq!(actual, expected);
-                actual
-            }
-            (Err(actual), Err(expected)) => {
-                assert_eq!(actual.validation_reason(), expected.validation_reason());
-                true
-            }
-            _ => panic!("cached and original decisions differ"),
-        }
+        assert_eq!(actual, expected);
+        actual
     }
 
     #[test]
@@ -1327,7 +1325,7 @@ mod tests {
             for _ in 0..claims {
                 let mut keys = FolderOverlapKeys::from_roots(&candidate, &roots).unwrap();
                 for owner in &owners {
-                    assert!(!keys.needs_exact_comparison(owner).unwrap());
+                    assert!(!keys.needs_exact_comparison(owner));
                 }
                 original_probes += keys.link_probes;
             }
@@ -1341,10 +1339,8 @@ mod tests {
                 let mut parents = HashMap::new();
                 for owner in &owners {
                     assert!(
-                        !keys
-                            .needs_exact_comparison_with_evidence(owner, &mut |path| cache
-                                .verify(path, &mut parents))
-                            .unwrap()
+                        !keys.needs_exact_comparison_with_evidence(owner, &mut |path| cache
+                            .verify(path, &mut parents))
                     );
                 }
                 assert_eq!(keys.link_probes, if reusable { 0 } else { count });
@@ -1906,6 +1902,10 @@ mod tests {
         let real = base.join("real-library");
         let alias = base.join("alias-library");
         let missing = base.join("missing-library");
+        // Roots that cannot be read: one below a file, where nothing can be
+        // inspected, and one that is a link that cannot be followed.
+        let dead = base.join("blocker").join("dead-library");
+        let looped = base.join("looped-library");
         let outside = base.join("outside");
         for dir in [
             real.join("Emberfall").join("Extras"),
@@ -1930,9 +1930,11 @@ mod tests {
         let sentinel = real.join("Fresh").join("preserved.mkv");
         std::fs::write(&sentinel, b"preserved").unwrap();
         symlink(&real, &alias).unwrap();
+        std::fs::write(base.join("blocker"), b"").unwrap();
+        symlink(&looped, &looped).unwrap();
         symlink(outside.join("Ashgrove Real"), real.join("Ashgrove")).unwrap();
         let (app, actor, titles) = crate::lib_tests::bootstrap_with_title_repo();
-        let library_id = set_movie_roots(&app, &[&alias, &real, &missing]).await;
+        let library_id = set_movie_roots(&app, &[&alias, &real, &missing, &dead, &looped]).await;
         let template = synthetic_movie(&app, &actor, &library_id, "Hollowmere").await;
         let seed = |id: &str, folder: String| {
             let mut title = template.clone();
@@ -1957,10 +1959,20 @@ mod tests {
             seed("owner-07", stored(&real.join("G").join("Glimmer"))),
             // A link out of the library.
             seed("owner-08", stored(&real.join("Ashgrove"))),
-            // Compared whatever the candidate: relative, and under a root
-            // that does not resolve.
+            // Relative, so compared whatever the candidate; and under a root
+            // that is missing.
             seed("owner-zz-relative", "relative/Thornvale".into()),
             seed("owner-zz-unresolved", stored(&missing.join("Duskmere"))),
+            // Under the root where nothing can be inspected: compared by key
+            // alone. Under the link that cannot be followed: walked.
+            seed("owner-09", stored(&dead.join("Stonewick"))),
+            seed("owner-10", stored(&dead.join("S").join("Sablemoor"))),
+            seed("owner-11", stored(&looped.join("Marrowind"))),
+            // Under an organizing folder that is missing: the first finds it
+            // gone, and the second is not probed below it. Every later owner
+            // of the claim is then walked knowing a folder is gone.
+            seed("owner-00a", stored(&real.join("Absent").join("Wren"))),
+            seed("owner-00b", stored(&real.join("Absent").join("Other"))),
         ];
         for filler in 0..24 {
             seeded.push(seed(
@@ -1984,6 +1996,10 @@ mod tests {
             real.join("Pinecrest"),
             real.clone(),
             missing.join("Duskmere"),
+            dead.join("Stonewick"),
+            looped.join("Marrowind"),
+            real.join("Absent"),
+            base.clone(),
             real.join("Ashgrove"),
             outside.join("Ashgrove Real"),
             outside.join("G Real"),
@@ -2003,10 +2019,10 @@ mod tests {
         outcomes.extend(sweep(&app, &context, &claimants[1..], &candidates).await);
         drop(reserved);
 
-        // An owner's folder cannot be inspected: its refusal comes first.
+        // An owner's folder cannot be inspected: it is compared as spelled
+        // and refuses no claim.
         let locked = real.join("Locked");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let inspect_refused = std::fs::read_dir(&locked).is_err();
         outcomes.extend(sweep(&app, &context, &claimants, &candidates).await);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
 
@@ -2071,14 +2087,27 @@ mod tests {
 
         let held = context.owners.lock().unwrap();
         // Each compared claim, the reserving claim and the scan's own claim.
+        // A claim of a folder that cannot itself be read is refused before
+        // any owner is compared.
+        let unreadable_candidate = Err(Some(
+            crate::error_reasons::folder_ownership::CANNOT_INSPECT_TITLE_FOLDER,
+        ));
+        let refused_unread = outcomes
+            .iter()
+            .filter(|outcome| **outcome == unreadable_candidate)
+            .count();
+        assert!(refused_unread > 0);
         let compared = held.indexed_claims;
-        assert_eq!(compared, outcomes.len() as u64 + 2);
+        assert_eq!(compared, (outcomes.len() - refused_unread) as u64 + 2);
         assert!(outcomes.iter().any(Result::is_ok));
         let overlap = crate::error_reasons::folder_ownership::FOLDER_OVERLAPS_FOLDER_OWNED_TITLE;
         assert!(outcomes.contains(&Err(Some(overlap))));
-        let inspect =
-            crate::error_reasons::folder_ownership::CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE;
-        assert_eq!(outcomes.contains(&Err(Some(inspect))), inspect_refused);
+        for unreadable_owner in [
+            crate::error_reasons::folder_ownership::CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE,
+            crate::error_reasons::folder_ownership::CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE,
+        ] {
+            assert!(!outcomes.contains(&Err(Some(unreadable_owner))));
+        }
         assert!(
             held.indexed_visits < compared * seeded.len() as u64 / 2,
             "visits={} claims={compared}",

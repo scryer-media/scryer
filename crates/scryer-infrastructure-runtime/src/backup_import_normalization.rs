@@ -143,6 +143,12 @@ fn normalize_domain_event_import_object(object: &mut JsonMap<String, JsonValue>)
             .download_id
             .map_or(JsonValue::Null, JsonValue::String),
     );
+    object.insert(
+        "media_request_id".to_string(),
+        projections
+            .media_request_id
+            .map_or(JsonValue::Null, JsonValue::String),
+    );
     object.insert("payload_json".to_string(), blob_value(&encoded));
     Ok(())
 }

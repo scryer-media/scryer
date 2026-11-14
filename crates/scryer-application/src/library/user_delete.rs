@@ -1706,20 +1706,16 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     // Failure to prepare a prefilter must fall through to the original exact check.
     let mut overlap =
         crate::folder_ownership::FolderOverlapKeys::from_roots(&raw_folder_path, &roots).ok();
+    let mut exact = match &overlap {
+        Some(keys) => keys.exact_comparison(&raw_folder_path),
+        None => crate::folder_ownership::OverlapLeft::new(&raw_folder_path),
+    };
     for tracked in other_titles {
         let needs_exact = overlap
             .as_mut()
-            .map(|keys| {
-                keys.needs_exact_comparison(&tracked.folder_path)
-                    .unwrap_or(true)
-            })
+            .map(|keys| keys.needs_exact_comparison(&tracked.folder_path))
             .unwrap_or(true);
-        if needs_exact
-            && crate::folder_ownership::title_folders_overlap(
-                &raw_folder_path,
-                &tracked.folder_path,
-            )?
-        {
+        if needs_exact && exact.overlaps(&tracked.folder_path)? {
             return Err(AppError::validation_refused(
                 crate::title_delete::FOLDER_OVERLAPS_TITLE,
                 format!(
@@ -1769,10 +1765,15 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     }
 
     let resolved_folder = crate::folder_ownership::resolved_folder_identity(&normalized_folder)?;
+    // A root that cannot be read, such as one on a drive that is unplugged,
+    // is compared as spelled and does not refuse the delete. The folder being
+    // deleted resolved just above and must still lie strictly inside a root.
     let resolved_roots = normalized_roots
         .iter()
-        .map(|root| crate::folder_ownership::resolved_folder_identity(root))
-        .collect::<AppResult<Vec<_>>>()?;
+        .map(|root| {
+            crate::folder_ownership::resolved_folder_identity(root).unwrap_or_else(|_| root.clone())
+        })
+        .collect::<Vec<_>>();
     if !path_is_under_any_root(&resolved_folder, &resolved_roots)
         || resolved_roots.contains(&resolved_folder)
     {
@@ -2519,6 +2520,61 @@ mod tests {
         context.other_titles.clear();
         context.root_folders = vec![test_root_entry(&root.path().join("Movie"))];
         assert!(build_title_delete_manifest(context.clone()).is_err());
+        for path in context.recorded_paths {
+            assert!(stored_path_to_path_buf(&path).exists());
+        }
+    }
+
+    /// Another root of the library and another title's folder under it cannot
+    /// be read. The delete goes ahead, and takes only the selected title.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn owned_delete_is_not_refused_by_an_unreadable_root_or_other_title() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("library");
+        std::fs::create_dir(&root).unwrap();
+        // A link that cannot be followed: nothing at or below it can be read.
+        let dead = temp.path().join("dead");
+        std::os::unix::fs::symlink(&dead, &dead).unwrap();
+        let mut context = multi_disc_context(&root);
+        context.root_folders.push(RootFolderEntry {
+            path: path_to_stored_string(&dead),
+            is_default: false,
+        });
+        context.other_titles.push(TrackedTitleFolder {
+            title_id: "other".into(),
+            title_name: "Other".into(),
+            folder_path: path_to_stored_string(dead.join("Other")),
+        });
+        let sibling = root.join("Other/movie.mkv");
+        std::fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        std::fs::write(&sibling, b"unrelated").unwrap();
+        let folder = root.join("Movie");
+        let manifest = build_title_delete_manifest(context.clone()).unwrap();
+        ensure_owned_title_delete_boundary(&context, &folder, &[], &manifest)
+            .await
+            .unwrap();
+        assert_eq!(manifest.to_preview().media_count, 2);
+        apply_delete_manifest(&manifest).await.unwrap();
+        assert!(!folder.exists());
+        assert_eq!(std::fs::read(sibling).unwrap(), b"unrelated");
+        assert!(std::fs::symlink_metadata(&dead).is_ok());
+
+        // A title recorded inside the folder still refuses the delete, even
+        // where its own folder cannot be read.
+        let mut context = multi_disc_context(&root);
+        let inner = folder.join("Disc 1/Dead");
+        std::os::unix::fs::symlink(&inner, &inner).unwrap();
+        context.other_titles.push(TrackedTitleFolder {
+            title_id: "other".into(),
+            title_name: "Other".into(),
+            folder_path: path_to_stored_string(inner.join("Other")),
+        });
+        let error = build_title_delete_manifest(context.clone()).unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::title_delete::FOLDER_OVERLAPS_TITLE)
+        );
         for path in context.recorded_paths {
             assert!(stored_path_to_path_buf(&path).exists());
         }
