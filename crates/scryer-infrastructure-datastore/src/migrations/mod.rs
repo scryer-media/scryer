@@ -65,6 +65,8 @@ pub mod title_folder_ownership_safe;
 pub mod title_image_blobs;
 #[cfg(test)]
 mod title_lookup_and_download_seed_indexes_upgrade_tests;
+#[cfg(test)]
+mod title_release_days_upgrade_tests;
 pub mod title_root_folder_ids;
 pub mod title_tag_definitions;
 

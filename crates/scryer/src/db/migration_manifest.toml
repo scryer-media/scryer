@@ -4052,6 +4052,23 @@ file = "postgres/migrations/0342_requested_audio_languages.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 343
+description = "title release days"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0343_title_release_days.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0343_title_release_days.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

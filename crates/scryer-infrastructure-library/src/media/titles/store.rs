@@ -5809,7 +5809,7 @@ fn build_title_catalog_where_sql(
     }
 
     if let Some(window) = filter.release_date_window.as_ref()
-        && let Some(clause) = title_catalog_release_date_window_clause(dialect, window, &mut args)
+        && let Some(clause) = title_catalog_release_date_window_clause(window, &mut args)
     {
         clauses.push(clause);
     }
@@ -5817,82 +5817,38 @@ fn build_title_catalog_where_sql(
     (clauses.join(" AND "), args)
 }
 
-/// The movie release date lists a title's availability is read from.
-const TITLE_RELEASE_DATE_LISTS: &str = "'theatrical_dates', 'digital_dates', 'physical_dates', \
-     'any_market_theatrical_dates', 'any_market_digital_dates', 'any_market_physical_dates'";
-
 /// Titles holding a stored release date that may fall inside `window`. See
 /// [`scryer_application::TitleReleaseDateWindow`] for what "may" admits.
 ///
-/// Nothing here is indexed: the dates live in two text columns and a JSON
-/// document. What it saves is decoding every title row in the application to
-/// throw nearly all of them away.
+/// Reads `title_release_days`, which triggers on `titles` derive from the two
+/// date columns and the movie release date lists: one row per distinct day,
+/// and `release_day = ''` for a title holding a value the store cannot judge,
+/// which every window keeps. Both arms are range reads of the
+/// `(release_day, title_id)` index.
 fn title_catalog_release_date_window_clause(
-    dialect: TitleCatalogSqlDialect,
     window: &scryer_application::TitleReleaseDateWindow,
     args: &mut Vec<SqlArg>,
 ) -> Option<String> {
     if window.earliest.is_none() && window.latest.is_none() {
         return None;
     }
-    let mut date_may_fall_inside = |value: &str| -> String {
-        let leading_date = match dialect {
-            TitleCatalogSqlDialect::Sqlite => {
-                format!("{value} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'")
-            }
-            TitleCatalogSqlDialect::Postgres => {
-                format!("{value} ~ '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'")
-            }
-        };
-        let mut bounds = Vec::new();
-        if let Some(earliest) = window.earliest.as_ref() {
-            bounds.push(format!("SUBSTR({value}, 1, 10) >= {{}}"));
-            args.push(SqlArg::Text(earliest.clone()));
-        }
-        if let Some(latest) = window.latest.as_ref() {
-            bounds.push(format!("SUBSTR({value}, 1, 10) <= {{}}"));
-            args.push(SqlArg::Text(latest.clone()));
-        }
-        let bounds = bounds.join(" AND ");
-        // A NULL value takes the ELSE branch, where TRIM(NULL) keeps it out.
-        format!("(CASE WHEN {leading_date} THEN {bounds} ELSE TRIM({value}) <> '' END)")
-    };
-    let first_aired = date_may_fall_inside("titles.first_aired");
-    let digital = date_may_fall_inside("titles.digital_release_date");
-    let listed = date_may_fall_inside("release_date.value");
-    let listed = match dialect {
-        // Only an array is walked: `json_each` over anything else would read
-        // a scalar such as the market code as JSON. A document SQLite cannot
-        // parse is kept; decoding it in the application reports the error.
-        TitleCatalogSqlDialect::Sqlite => format!(
-            "(CASE WHEN json_valid(titles.movie_release_dates_json) THEN EXISTS (
-                SELECT 1
-                  FROM json_each(titles.movie_release_dates_json) AS release_list,
-                       json_each(CASE WHEN release_list.type = 'array'
-                                      THEN release_list.value ELSE '[]' END) AS release_date
-                 WHERE release_list.key IN ({TITLE_RELEASE_DATE_LISTS})
-                   AND {listed}
-            ) ELSE titles.movie_release_dates_json IS NOT NULL END)"
-        ),
-        TitleCatalogSqlDialect::Postgres => format!(
-            "EXISTS (
-                SELECT 1
-                  FROM jsonb_each(
-                           CASE WHEN jsonb_typeof(titles.movie_release_dates_json::jsonb) = 'object'
-                                THEN titles.movie_release_dates_json::jsonb
-                                ELSE jsonb_build_object() END
-                       ) AS release_list(key, value)
-                 CROSS JOIN LATERAL jsonb_array_elements_text(
-                           CASE WHEN jsonb_typeof(release_list.value) = 'array'
-                                THEN release_list.value
-                                ELSE jsonb_build_array() END
-                       ) AS release_date(value)
-                 WHERE release_list.key IN ({TITLE_RELEASE_DATE_LISTS})
-                   AND {listed}
-            )"
-        ),
-    };
-    Some(format!("({first_aired} OR {digital} OR {listed})"))
+    let mut bounds = Vec::new();
+    if let Some(earliest) = window.earliest.as_ref() {
+        bounds.push("release_day >= {}");
+        args.push(SqlArg::Text(earliest.clone()));
+    }
+    if let Some(latest) = window.latest.as_ref() {
+        bounds.push("release_day <= {}");
+        args.push(SqlArg::Text(latest.clone()));
+    }
+    let bounds = bounds.join(" AND ");
+    Some(format!(
+        "titles.id IN (
+            SELECT title_id FROM title_release_days WHERE {bounds}
+            UNION ALL
+            SELECT title_id FROM title_release_days WHERE release_day = ''
+        )"
+    ))
 }
 
 fn title_catalog_tag_filter_clause(
@@ -7777,6 +7733,8 @@ mod external_id_presence_tests;
 
 #[cfg(test)]
 mod catalog_order_tests;
+#[cfg(test)]
+mod release_day_tests;
 
 #[cfg(test)]
 mod affinity_revision_tests;
@@ -7855,139 +7813,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[tokio::test]
-    async fn release_date_window_keeps_every_title_that_may_fall_inside() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE titles (id TEXT PRIMARY KEY, library_id TEXT NOT NULL, facet TEXT NOT NULL, \
-             first_aired TEXT, digital_release_date TEXT, movie_release_dates_json TEXT)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        for (id, facet, first_aired, digital, listed) in [
-            (
-                "listed-theatrical-inside",
-                "movie",
-                None,
-                None,
-                Some(r#"{"market":"US","theatrical_dates":["2031-03-15"]}"#),
-            ),
-            (
-                "listed-any-market-digital-on-latest",
-                "movie",
-                None,
-                None,
-                Some(r#"{"any_market_digital_dates":["2031-04-30T22:00:00Z"]}"#),
-            ),
-            (
-                "first-aired-on-earliest",
-                "movie",
-                Some("2031-03-01"),
-                None,
-                None,
-            ),
-            ("digital-inside", "movie", None, Some("2031-04-02"), None),
-            (
-                "every-date-outside",
-                "movie",
-                Some("2030-12-31"),
-                Some("2031-05-01"),
-                Some(r#"{"physical_dates":["2031-02-28","2032-01-01"]}"#),
-            ),
-            (
-                "non-canonical-date",
-                "movie",
-                Some("Spring 2031"),
-                None,
-                None,
-            ),
-            ("blank-dates", "movie", Some("  "), Some(""), None),
-            (
-                "date-only-outside-the-lists",
-                "movie",
-                None,
-                None,
-                Some(r#"{"market":"2031-03-15","theatrical_dates":"2031-03-15"}"#),
-            ),
-            ("unparseable-json", "movie", None, None, Some("{not json")),
-            ("series-inside", "series", Some("2031-03-15"), None, None),
-        ] {
-            sqlx::query("INSERT INTO titles VALUES (?, 'library-movies', ?, ?, ?, ?)")
-                .bind(id)
-                .bind(facet)
-                .bind(first_aired)
-                .bind(digital)
-                .bind(listed)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-
-        let filter = TitleCatalogFilter {
-            release_date_window: Some(scryer_application::TitleReleaseDateWindow {
-                earliest: Some("2031-03-01".to_string()),
-                latest: Some("2031-04-30".to_string()),
-            }),
-            ..Default::default()
-        };
-        let (predicate, args) = build_title_catalog_where_sql(
-            Some(MediaFacet::Movie),
-            &["library-movies".to_string()],
-            None,
-            &filter,
-            TitleCatalogSqlDialect::Sqlite,
-        );
-        let datastore =
-            StoreDatastore::sqlite(pool, std::sync::Arc::new(tokio::sync::Mutex::new(())));
-        let rows = SqlRuntime::fetch_all(
-            datastore.read_exec(),
-            &format!("SELECT id FROM titles WHERE {predicate} ORDER BY id"),
-            &args,
-        )
-        .await
-        .unwrap();
-        let found = rows
-            .iter()
-            .map(|row| row.text("id").unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            found,
-            vec![
-                "digital-inside".to_string(),
-                "first-aired-on-earliest".to_string(),
-                "listed-any-market-digital-on-latest".to_string(),
-                "listed-theatrical-inside".to_string(),
-                "non-canonical-date".to_string(),
-                "unparseable-json".to_string(),
-            ]
-        );
-
-        let unbounded = TitleCatalogFilter {
-            release_date_window: Some(scryer_application::TitleReleaseDateWindow::default()),
-            ..Default::default()
-        };
-        let (unbounded_predicate, _) = build_title_catalog_where_sql(
-            Some(MediaFacet::Movie),
-            &["library-movies".to_string()],
-            None,
-            &unbounded,
-            TitleCatalogSqlDialect::Sqlite,
-        );
-        let (no_window_predicate, _) = build_title_catalog_where_sql(
-            Some(MediaFacet::Movie),
-            &["library-movies".to_string()],
-            None,
-            &TitleCatalogFilter::default(),
-            TitleCatalogSqlDialect::Sqlite,
-        );
-        assert_eq!(unbounded_predicate, no_window_predicate);
     }
 
     #[test]
