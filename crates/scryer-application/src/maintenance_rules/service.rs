@@ -1084,6 +1084,7 @@ impl AppUseCase {
             .maintenance_list_facts_loading(
                 &titles,
                 super::list_facts::MaintenanceFactLoads::for_rule(&policy.rego_source, &policy.id),
+                &watch_context,
                 Utc::now(),
             )
             .await;

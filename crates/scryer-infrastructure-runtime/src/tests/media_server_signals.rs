@@ -748,3 +748,200 @@ async fn clearing_an_audience_read_keeps_the_plays_but_drops_the_marker() {
 
     let _ = std::fs::remove_file(db);
 }
+
+fn favorite_signal(
+    item_id: &str,
+    kind: MediaServerSignalKind,
+    title_id: &str,
+    season_number: Option<i64>,
+) -> NewUserMediaSignal {
+    NewUserMediaSignal {
+        provider: MediaServerProvider::Jellyfin,
+        scryer_user_id: Some("scryer-user-alpha".to_string()),
+        provider_item_id: item_id.to_string(),
+        kind,
+        scryer_title_id: Some(title_id.to_string()),
+        scryer_episode_id: None,
+        season_number,
+        played: false,
+        play_count: 0,
+        last_played_at: None,
+        is_favorite: true,
+        observed_at: Utc::now(),
+    }
+}
+
+/// A favourite nobody played is stored, is read back by the favourite read
+/// with its kind and season, and stays out of the watch reads, which would
+/// otherwise count it as a watched (or missing) episode.
+#[tokio::test]
+async fn unplayed_favourites_are_stored_and_read_only_as_favourites() {
+    let (services, db) = temp_services("scryer_media_server_signals_favourites").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[
+                favorite_signal("jf-movie-fav", MediaServerSignalKind::Movie, "title-movie", None),
+                favorite_signal("jf-series-fav", MediaServerSignalKind::Series, "title-show", None),
+                favorite_signal(
+                    "jf-season-fav",
+                    MediaServerSignalKind::Season,
+                    "title-show",
+                    Some(2),
+                ),
+                // A played row that is not a favourite never reaches the
+                // favourite read.
+                NewUserMediaSignal {
+                    is_favorite: false,
+                    ..movie_signal("jf-movie-played", Some("title-other"), 1)
+                },
+            ],
+            None,
+        )
+        .await
+        .expect("sweep");
+
+    let titles = vec![
+        "title-movie".to_string(),
+        "title-show".to_string(),
+        "title-other".to_string(),
+    ];
+    let movies = store.movie_signals_for_titles(&titles).await.expect("movies");
+    assert!(
+        !movies.contains_key("title-movie"),
+        "an unplayed favourite is not a play"
+    );
+    assert_eq!(movies["title-other"].len(), 1);
+    let episodes = store
+        .episode_signals_for_titles(&titles)
+        .await
+        .expect("episodes");
+    assert!(episodes.is_empty());
+
+    let favourites = store
+        .favorite_signals_for_titles(&titles)
+        .await
+        .expect("favourites");
+    assert_eq!(favourites["title-movie"].len(), 1);
+    assert!(!favourites.contains_key("title-other"));
+    let mut show: Vec<_> = favourites["title-show"]
+        .iter()
+        .map(|row| (row.kind, row.season_number, row.played))
+        .collect();
+    show.sort_by_key(|(kind, season, _)| (kind.as_storage_str(), *season));
+    assert_eq!(
+        show,
+        vec![
+            (MediaServerSignalKind::Season, Some(2), false),
+            (MediaServerSignalKind::Series, None, false),
+        ]
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// A favourite the next sweep does not report is gone: unfavouriting clears
+/// through the same generation swap as unplaying.
+#[tokio::test]
+async fn a_favourite_the_next_sweep_does_not_report_is_cleared() {
+    let (services, db) = temp_services("scryer_media_server_signals_unfavourite").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_participant_signals(
+            CONNECTION_ID,
+            PARTICIPANT,
+            &[favorite_signal(
+                "jf-series-fav",
+                MediaServerSignalKind::Series,
+                "title-show",
+                None,
+            )],
+            None,
+        )
+        .await
+        .expect("first sweep");
+    store
+        .replace_participant_signals(CONNECTION_ID, PARTICIPANT, &[], None)
+        .await
+        .expect("second sweep");
+
+    let favourites = store
+        .favorite_signals_for_titles(&["title-show".to_string()])
+        .await
+        .expect("favourites");
+    assert!(favourites.is_empty());
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// A sweep that reads back exactly what is stored, through the same link,
+/// writes nothing: the rows keep their generation and update time, and the
+/// roster keeps its entry as it was.
+#[tokio::test]
+async fn an_unchanged_sweep_writes_nothing() {
+    let (services, db) = temp_services("scryer_media_server_signals_unchanged").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    let signals = vec![
+        movie_signal("jf-movie-1", Some("title-movie"), 2),
+        favorite_signal("jf-series-fav", MediaServerSignalKind::Series, "title-show", None),
+    ];
+    let link = roster_link("link-alpha");
+    store
+        .replace_participant_signals(CONNECTION_ID, PARTICIPANT, &signals, Some(&link))
+        .await
+        .expect("first sweep");
+    let before = store
+        .favorite_signals_for_titles(&["title-movie".to_string(), "title-show".to_string()])
+        .await
+        .expect("read");
+    let roster_before = store.signal_roster().await.expect("roster");
+
+    let mut later = link.clone();
+    later.sweep_started_at = Utc::now() + chrono::Duration::hours(6);
+    let written = store
+        .replace_participant_signals(CONNECTION_ID, PARTICIPANT, &signals, Some(&later))
+        .await
+        .expect("unchanged sweep");
+    assert_eq!(written, 2);
+
+    let after = store
+        .favorite_signals_for_titles(&["title-movie".to_string(), "title-show".to_string()])
+        .await
+        .expect("read");
+    for (title, rows) in &before {
+        let rows_after = &after[title];
+        assert_eq!(rows_after.len(), rows.len());
+        for (row, row_after) in rows.iter().zip(rows_after) {
+            assert_eq!(row_after.sync_generation, 1, "no swap ran");
+            assert_eq!(row_after.updated_at, row.updated_at, "no row was rewritten");
+        }
+    }
+    let roster_after = store.signal_roster().await.expect("roster");
+    assert_eq!(
+        roster_after[0].link.sweep_started_at, roster_before[0].link.sweep_started_at,
+        "the roster entry was not rewritten"
+    );
+
+    // A change is still written.
+    let mut changed = signals.clone();
+    changed[1].is_favorite = false;
+    store
+        .replace_participant_signals(CONNECTION_ID, PARTICIPANT, &changed, Some(&later))
+        .await
+        .expect("changed sweep");
+    let favourites = store
+        .favorite_signals_for_titles(&["title-show".to_string()])
+        .await
+        .expect("read");
+    assert!(favourites.is_empty());
+
+    let _ = std::fs::remove_file(db);
+}

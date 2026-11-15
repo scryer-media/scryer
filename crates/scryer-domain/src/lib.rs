@@ -7060,6 +7060,11 @@ impl MediaServerProvider {
         matches!(self, Self::Jellyfin | Self::Plex | Self::Emby)
     }
 
+    /// Whether the server keeps per-user favourites. Plex has none.
+    pub fn has_favorites(&self) -> bool {
+        matches!(self, Self::Jellyfin | Self::Emby)
+    }
+
     pub fn external_account_provider(&self) -> Option<ExternalAccountProvider> {
         match self {
             Self::Jellyfin => Some(ExternalAccountProvider::Jellyfin),

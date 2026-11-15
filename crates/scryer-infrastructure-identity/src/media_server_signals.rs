@@ -576,8 +576,9 @@ impl HttpMediaServerSignalSource {
             .await;
         // A played episode whose series cannot be looked up only goes
         // unmapped. A favourite season or episode that went unmapped would
-        // read as "nobody favourited this title", so that read fails instead
-        // and the stored favourites stay as they were.
+        // read as "nobody favourited this title", so a favourites read with a
+        // series the lookup did not resolve fails instead, and the stored
+        // favourites stay as they were.
         if !resolved && listing == UserItemListing::Favorites {
             return Err(SignalReadFailure::new(
                 reasons::RESPONSE_UNREADABLE,
@@ -591,8 +592,9 @@ impl HttpMediaServerSignalSource {
     /// to, in batches, and attach them.
     ///
     /// Failure here is not fatal to a played read: episodes simply stay
-    /// unmapped, which is the honest outcome. Returns whether every batch was
-    /// answered, so a favourites read can refuse to go on without them.
+    /// unmapped, which is the honest outcome. Returns whether every series
+    /// asked about was resolved, so a favourites read can refuse to go on
+    /// without them.
     async fn attach_series_ids(
         &self,
         base: &Url,
@@ -649,7 +651,7 @@ impl HttpMediaServerSignalSource {
         }
 
         apply_series_ids(items, &resolved);
-        true
+        series_ids.iter().all(|id| resolved.contains_key(id))
     }
 
     // ── Plex ────────────────────────────────────────────────────────────────
@@ -2930,6 +2932,164 @@ mod tests {
             items[0].series_external_ids.is_empty(),
             "an unresolved series must not be given invented ids"
         );
+    }
+
+    #[test]
+    fn the_favourites_url_asks_for_every_favourite_kind() {
+        let base = Url::parse("http://jellyfin.example/").expect("base");
+        let url = user_items_url(
+            &base,
+            "user-123",
+            0,
+            JELLYFIN_ITEM_FIELDS,
+            UserItemListing::Favorites,
+        )
+        .expect("url");
+        let query = url.query().expect("query");
+        assert_eq!(url.path(), "/Users/user-123/Items");
+        for pair in [
+            "Recursive=true",
+            "Filters=IsFavorite",
+            "IncludeItemTypes=Movie%2CSeries%2CSeason%2CEpisode",
+            "EnableUserData=true",
+            "StartIndex=0",
+            "Limit=500",
+        ] {
+            assert!(query.contains(pair), "{pair} in {query}");
+        }
+        assert!(!query.contains("IsPlayed"));
+    }
+
+    #[test]
+    fn favourites_normalize_series_seasons_and_unplayed_items() {
+        let page = vec![
+            json!({
+                "Id": "jf-series-fav",
+                "Type": "Series",
+                "ProviderIds": { "Tvdb": "81189" },
+                "UserData": { "IsFavorite": true, "Played": false }
+            }),
+            json!({
+                "Id": "jf-season-fav",
+                "Type": "Season",
+                "SeriesId": "jf-series-fav",
+                "IndexNumber": 2,
+                "UserData": { "IsFavorite": true }
+            }),
+            json!({
+                "Id": "jf-movie-fav",
+                "Type": "Movie",
+                "ProviderIds": { "Tmdb": "604" },
+                "UserData": { "IsFavorite": true, "Played": true, "PlayCount": 4 }
+            }),
+        ];
+        let (items, skipped) = normalize_jellyfin_favorites(&page).expect("readable");
+        assert_eq!(skipped, 0);
+        let series = &items[0];
+        assert_eq!(series.kind, MediaServerSignalKind::Series);
+        assert_eq!(
+            series.external_ids.get("tvdb").map(String::as_str),
+            Some("81189")
+        );
+        assert!(series.is_favorite && !series.played);
+        let season = &items[1];
+        assert_eq!(season.kind, MediaServerSignalKind::Season);
+        assert_eq!(season.season_number, Some(2));
+        assert_eq!(
+            season.series_provider_item_id.as_deref(),
+            Some("jf-series-fav")
+        );
+        // Play state is the played read's; the favourites listing never
+        // supplies it.
+        let movie = &items[2];
+        assert!(movie.is_favorite && !movie.played);
+
+        // A season with no number cannot be placed: unreadable, not guessed.
+        let (_, skipped) = normalize_jellyfin_favorites(&[json!({
+            "Id": "jf-season-x",
+            "Type": "Season",
+            "SeriesId": "jf-series-fav"
+        })])
+        .expect("readable");
+        assert_eq!(skipped, 1);
+
+        // A row that says it is not a favourite means the filter was ignored.
+        let failure = normalize_jellyfin_favorites(&[json!({
+            "Id": "jf-movie-2",
+            "Type": "Movie",
+            "UserData": { "IsFavorite": false }
+        })])
+        .expect_err("filter not honoured");
+        assert_eq!(failure.reason, reasons::FILTER_NOT_HONOURED);
+    }
+
+    /// The favourites read pages its own listing and resolves the series of
+    /// favourite seasons; a series the lookup does not resolve fails the read
+    /// instead of leaving the season unmapped.
+    #[tokio::test]
+    async fn the_favourites_read_resolves_season_series_or_fails() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .and(query_param("StartIndex", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{
+                    "Id": "jf-season-fav",
+                    "Type": "Season",
+                    "SeriesId": "jf-series-1",
+                    "IndexNumber": 1,
+                    "UserData": { "IsFavorite": true }
+                }],
+                "TotalRecordCount": 1
+            })))
+            .mount(&server)
+            .await;
+        let lookup = Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Ids", "jf-series-1"))
+            .and(query_param("Recursive", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{ "Id": "jf-series-1", "Type": "Series", "ProviderIds": { "Tvdb": "999" } }]
+            })))
+            .mount_as_scoped(&server)
+            .await;
+
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+        let source = HttpMediaServerSignalSource::new();
+        let items = source
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_favorite_items("user-123")
+            .await
+            .expect("favourites read")
+            .expect("Jellyfin has favourites");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].series_external_ids.get("tvdb").map(String::as_str),
+            Some("999")
+        );
+        drop(lookup);
+
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Ids", "jf-series-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "Items": [] })))
+            .mount(&server)
+            .await;
+        let failure = source
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_favorite_items("user-123")
+            .await
+            .expect_err("an unresolved series fails the favourites read");
+        assert_eq!(failure.reason, reasons::RESPONSE_UNREADABLE);
     }
 
     /// A page the server refuses fails the participant rather than reporting a

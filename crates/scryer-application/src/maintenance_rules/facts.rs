@@ -230,6 +230,17 @@ pub mod unknown_reason {
     /// day. An *absence* reason.
     pub const NO_SCHEDULED_EPISODE: &str = "no_scheduled_episode";
 
+    /// Every enabled media server is Plex, which has no favourites, so the
+    /// favourite facts do not apply. An *absence* reason.
+    pub const FAVORITES_UNSUPPORTED: &str = "favorites_unsupported";
+
+    /// A linked member can only be observed through Plex, which has no
+    /// favourites, so whether they favourited the subject is not known.
+    pub const FAVORITE_MEMBER_UNOBSERVABLE: &str = "favorite_member_unobservable";
+
+    /// The stored favourites could not be read for this pass.
+    pub const FAVORITES_UNREADABLE: &str = "favorites_unreadable";
+
     /// Every code above. A released code is part of the rule-authoring
     /// contract, so none may be renamed, reused or repurposed.
     pub const ALL: &[&str] = &[
@@ -273,6 +284,9 @@ pub mod unknown_reason {
         EPISODE_STORE_UNREADABLE,
         NO_AIRED_EPISODE,
         NO_SCHEDULED_EPISODE,
+        FAVORITES_UNSUPPORTED,
+        FAVORITE_MEMBER_UNOBSERVABLE,
+        FAVORITES_UNREADABLE,
     ];
 }
 
@@ -361,6 +375,13 @@ pub struct MaintenanceWatchContext {
     /// plays, linked or not) was read recently. Only the anonymous facts
     /// answer from it, and only once [`Self::freshness`] has passed too.
     pub audience: WatchSignalFreshness,
+    /// The enabled connections that have favourites (Jellyfin and Emby).
+    /// Plex has none, so a Plex connection is never in this set.
+    pub favorite_connection_ids: HashSet<String>,
+    /// The linked users with a link read on one of
+    /// [`Self::favorite_connection_ids`]. A linked user outside it can only be
+    /// observed through Plex, so whether they favourited anything is unknown.
+    pub favorite_user_ids: HashSet<String>,
 }
 
 impl MaintenanceWatchContext {
@@ -371,7 +392,7 @@ impl MaintenanceWatchContext {
     }
 
     /// The gate answer, or `None` when watch facts may be reported.
-    fn unavailable_reason(&self) -> Option<&'static str> {
+    pub(crate) fn unavailable_reason(&self) -> Option<&'static str> {
         match self.freshness {
             WatchSignalFreshness::Fresh => None,
             WatchSignalFreshness::Unavailable(reason) => Some(reason),
@@ -659,6 +680,10 @@ fn build_facts(
         watchlisted_by_any_requester: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         watchlist_added_at: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         watchlist_origins: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_user_ids: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_usernames: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_anyone: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_any_requester: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
     }
 }
 
@@ -1776,6 +1801,8 @@ pub(crate) mod tests {
             unswept_user_ids: HashSet::new(),
             enabled_connection_ids: [ENABLED_CONNECTION.to_string()].into_iter().collect(),
             audience: WatchSignalFreshness::Fresh,
+            favorite_connection_ids: HashSet::new(),
+            favorite_user_ids: HashSet::new(),
         }
     }
 

@@ -55,6 +55,66 @@ impl MediaServerSignalStore {
     pub fn new(datastore: StoreDatastore) -> Self {
         Self { datastore }
     }
+
+    /// Whether a participant's stored rows, and the roster entry for the link
+    /// read through, already say exactly what this sweep read. Two reads, no
+    /// write. The roster's sweep and read times are not compared: nothing
+    /// decides on them.
+    async fn participant_unchanged(
+        &self,
+        connection_id: &str,
+        external_user_id: &str,
+        signals: &[&NewUserMediaSignal],
+        read_through: Option<&SignalRosterLink>,
+    ) -> AppResult<bool> {
+        let participant_args = vec![
+            SqlArg::Text(connection_id.to_string()),
+            SqlArg::Text(external_user_id.to_string()),
+        ];
+        let stored = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT {SIGNAL_COMPARED_COLUMNS}
+                   FROM media_server_user_media_signals
+                  WHERE connection_id = {{}} AND external_user_id = {{}}"
+            ),
+            &participant_args,
+        )
+        .await?
+        .iter()
+        .map(compared_row)
+        .collect::<AppResult<HashSet<ComparedSignal>>>()?;
+        if stored.len() != signals.len()
+            || !signals
+                .iter()
+                .all(|signal| stored.contains(&compared_signal(signal)))
+        {
+            return Ok(false);
+        }
+        let Some(link) = read_through else {
+            return Ok(true);
+        };
+        let roster = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT external_user_id, scryer_user_id, link_verified_at
+               FROM media_server_signal_roster
+              WHERE connection_id = {} AND link_id = {}",
+            &[
+                SqlArg::Text(connection_id.to_string()),
+                SqlArg::Text(link.link_id.clone()),
+            ],
+        )
+        .await?;
+        let Some(row) = roster else {
+            return Ok(false);
+        };
+        Ok(row.text("external_user_id")? == external_user_id
+            && row.text("scryer_user_id")? == link.scryer_user_id
+            && row
+                .opt_timestamp("link_verified_at")?
+                .map(|at| at.timestamp_micros())
+                == link.link_verified_at.map(|at| at.timestamp_micros()))
+    }
 }
 
 const SIGNAL_COLUMNS: &str = "id, connection_id, provider, external_user_id, scryer_user_id,
@@ -153,6 +213,16 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
         }
         deduped.reverse();
 
+        // A sweep that read back exactly what is stored, through a link the
+        // roster already names, changes nothing: it opens no write at all.
+        // The swap would only rewrite every row to restamp it.
+        if self
+            .participant_unchanged(connection_id, external_user_id, &deduped, read_through.as_ref())
+            .await?
+        {
+            return Ok(deduped.len() as u64);
+        }
+
         let connection_id = connection_id.to_string();
         let external_user_id = external_user_id.to_string();
         let owned = deduped
@@ -173,36 +243,6 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                         SqlArg::Text(connection_id.clone()),
                         SqlArg::Text(external_user_id.clone()),
                     ];
-
-                    // A sweep that read back exactly what is stored changes
-                    // nothing, so it writes no signal row: the swap below
-                    // would rewrite every row only to restamp it. Only the
-                    // roster entry is still recorded.
-                    let stored = SqlRuntime::fetch_all(
-                        SqlExec::Tx(tx),
-                        &format!(
-                            "SELECT {SIGNAL_COMPARED_COLUMNS}
-                               FROM media_server_user_media_signals
-                              WHERE connection_id = {{}} AND external_user_id = {{}}"
-                        ),
-                        &participant_args,
-                    )
-                    .await?
-                    .iter()
-                    .map(compared_row)
-                    .collect::<AppResult<HashSet<ComparedSignal>>>()?;
-                    let unchanged = stored.len() == owned.len()
-                        && owned
-                            .iter()
-                            .all(|signal| stored.contains(&compared_signal(signal)));
-
-                    if unchanged {
-                        if let Some(link) = read_through.as_ref() {
-                            record_roster_entry(tx, &connection_id, &external_user_id, link)
-                                .await?;
-                        }
-                        return Ok(owned.len() as u64);
-                    }
 
                     // Read inside the transaction: two sweeps of the same
                     // participant must not pick the same generation and leave

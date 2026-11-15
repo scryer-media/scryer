@@ -1932,6 +1932,7 @@ impl AppUseCase {
                     &detail.revision.rego_source,
                     &detail.rule_set.id,
                 ),
+                &watch_context,
                 recheck_time,
             )
             .await;

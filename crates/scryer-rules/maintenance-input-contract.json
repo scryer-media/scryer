@@ -506,6 +506,26 @@
           "field": "watchlist_origins",
           "type": "string[]",
           "descKey": "settings.refMaintFactsWatchlistOrigins"
+        },
+        {
+          "field": "favorited_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsFavoritedByUserIds"
+        },
+        {
+          "field": "favorited_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsFavoritedByUsernames"
+        },
+        {
+          "field": "favorited_by_anyone",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsFavoritedByAnyone"
+        },
+        {
+          "field": "favorited_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsFavoritedByAnyRequester"
         }
       ]
     },
@@ -1075,6 +1095,26 @@
           "field": "watchlist_origins",
           "type": "object",
           "descKey": "settings.refMaintFactsWatchlistOrigins"
+        },
+        {
+          "field": "favorited_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFavoritedByUserIds"
+        },
+        {
+          "field": "favorited_by_usernames",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFavoritedByUsernames"
+        },
+        {
+          "field": "favorited_by_anyone",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFavoritedByAnyone"
+        },
+        {
+          "field": "favorited_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFavoritedByAnyRequester"
         }
       ]
     },
@@ -3249,6 +3289,110 @@
           "field": "value",
           "type": "string[]",
           "descKey": "settings.refMaintFactsWatchlistOriginsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFavoritedByUserIds",
+      "path": "input.observations.favorited_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsFavoritedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFavoritedByUsernames",
+      "path": "input.observations.favorited_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsFavoritedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFavoritedByAnyone",
+      "path": "input.observations.favorited_by_anyone",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsFavoritedByAnyoneValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFavoritedByAnyRequester",
+      "path": "input.observations.favorited_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsFavoritedByAnyRequesterValue"
         },
         {
           "field": "observed_at",

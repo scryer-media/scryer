@@ -11,9 +11,9 @@
 //! `watched_by_user_ids`, `last_watched_at`, the two requester rollups, and the
 //! anonymous `watched_by_anyone` pair are plain values that go missing when the
 //! host could not observe them. Watchlists come from members' own list
-//! subscriptions. Favorites are still absent: the signal sync reads played
-//! items only, so a favorite nobody played is never seen, and a fact rules
-//! cannot be told the truth about has no business in the contract.
+//! subscriptions. Favourites come from Jellyfin and Emby, read on their own so
+//! a favourite nobody played is seen; Plex has none, and its members are never
+//! read as "not a favourite".
 //!
 //! Two things make a rule safe to write. The rule reads facts as plain values,
 //! so it says what it means (`input.facts.monitored`, not a status dance), and
@@ -333,6 +333,17 @@ pub struct MaintenanceFactsDoc {
     /// providers whose watchlists hold it now.
     pub watchlist_added_at: Observation<String>,
     pub watchlist_origins: Observation<Vec<String>>,
+    /// Members who marked the subject a favourite on an enabled Jellyfin or
+    /// Emby server. For a series title a favourite of the series itself, or
+    /// of any of its seasons or episodes, counts; a season or episode
+    /// subject counts its own favourites and, for an episode, its season's
+    /// and its series'. Plex has no favourites: an instance whose only
+    /// enabled servers are Plex has these absent, and while any linked member
+    /// can only be observed through Plex they are unknown.
+    pub favorited_by_user_ids: Observation<Vec<String>>,
+    pub favorited_by_usernames: Observation<Vec<String>>,
+    pub favorited_by_anyone: Observation<bool>,
+    pub favorited_by_any_requester: Observation<bool>,
 }
 
 /// One external rating as a rule sees it: the source's own value, its value on
@@ -355,9 +366,10 @@ pub struct MaintenanceRatingDoc {
 ///
 /// `requested`, `last_watched_at`, `watched_by_anyone`,
 /// `last_watched_by_anyone_at`, `play_count_total`, `watchlisted_by_anyone`,
-/// `watchlist_added_at` and `watchlist_origins` are deliberately absent: they
-/// are anonymous aggregates that say something happened, never who did it.
-pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 10] = [
+/// `watchlist_added_at`, `watchlist_origins` and `favorited_by_anyone` are
+/// deliberately absent: they are anonymous aggregates that say something
+/// happened, never who did it.
+pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 13] = [
     "added_by_user_id",
     "added_by_username",
     "requested_by_user_ids",
@@ -368,6 +380,18 @@ pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 10] = [
     "watchlisted_by_user_ids",
     "watchlisted_by_usernames",
     "watchlisted_by_any_requester",
+    "favorited_by_user_ids",
+    "favorited_by_usernames",
+    "favorited_by_any_requester",
+];
+
+/// Facts read from members' Jellyfin and Emby favourites. The host reads the
+/// stored favourites only for a rule that reads one.
+pub const FAVORITE_MAINTENANCE_FACTS: [&str; 4] = [
+    "favorited_by_user_ids",
+    "favorited_by_usernames",
+    "favorited_by_anyone",
+    "favorited_by_any_requester",
 ];
 
 /// Facts read from members' watch-later lists. The host loads the list
@@ -402,8 +426,9 @@ pub const EPISODE_SHAPE_MAINTENANCE_FACTS: [&str; 8] = [
 ///
 /// A rule that reads one decided on plays stored by the last sweep, so the
 /// executor reads the server again before acting on it: a play since that
-/// sweep is evidence the stored facts do not have yet.
-pub const WATCH_MAINTENANCE_FACTS: [&str; 7] = [
+/// sweep is evidence the stored facts do not have yet. The favourites are in
+/// this group too: they come from the same sweep.
+pub const WATCH_MAINTENANCE_FACTS: [&str; 11] = [
     "watched_by_user_ids",
     "last_watched_at",
     "watched_by_any_requester",
@@ -411,6 +436,10 @@ pub const WATCH_MAINTENANCE_FACTS: [&str; 7] = [
     "watched_by_anyone",
     "last_watched_by_anyone_at",
     "play_count_total",
+    "favorited_by_user_ids",
+    "favorited_by_usernames",
+    "favorited_by_anyone",
+    "favorited_by_any_requester",
 ];
 
 /// One series movie as a rule sees it.
@@ -903,6 +932,10 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             watchlisted_by_any_requester: Observation::known(true),
             watchlist_added_at: Observation::known("2023-12-01T00:00:00Z".to_string()),
             watchlist_origins: Observation::known(vec!["trakt".to_string()]),
+            favorited_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            favorited_by_usernames: Observation::known(vec!["member".to_string()]),
+            favorited_by_anyone: Observation::known(true),
+            favorited_by_any_requester: Observation::absent(),
         },
     }
 }

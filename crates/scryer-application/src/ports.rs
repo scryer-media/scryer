@@ -14506,8 +14506,8 @@ pub trait MediaServerSignalRepository: Send + Sync {
     /// is a meaningful write, not a no-op: it means this person has nothing
     /// played any more, and every prior row for them is removed.
     ///
-    /// A set identical to the stored one writes no signal row at all; only
-    /// the roster entry below is recorded.
+    /// A set identical to the stored one, read through a link the roster
+    /// already names with the same identity, writes nothing at all.
     ///
     /// `read_through` is the link the sweep read these signals through. It is
     /// recorded in the signal roster in the same transaction as the swap, so

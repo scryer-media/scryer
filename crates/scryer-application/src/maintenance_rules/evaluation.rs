@@ -1293,7 +1293,7 @@ impl AppUseCase {
                 }
             };
             let lists_by_title = self
-                .maintenance_list_facts_loading(chunk, fact_loads, evaluation_time)
+                .maintenance_list_facts_loading(chunk, fact_loads, &watch_context, evaluation_time)
                 .await;
             // The chunk's shows the pass has not read yet are read together. A
             // show the batch could not build loads on its own below, as before.
@@ -2352,6 +2352,11 @@ impl AppUseCase {
             .iter()
             .map(|connection| connection.id.clone())
             .collect();
+        let favorite_connection_ids: HashSet<String> = connections
+            .iter()
+            .filter(|connection| connection.provider.has_favorites())
+            .map(|connection| connection.id.clone())
+            .collect();
         if connections.is_empty() {
             return Ok(MaintenanceWatchContext {
                 freshness: WatchSignalFreshness::Unavailable(
@@ -2361,6 +2366,8 @@ impl AppUseCase {
                 unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: HashSet::new(),
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+                favorite_connection_ids: HashSet::new(),
+                favorite_user_ids: HashSet::new(),
             });
         }
 
@@ -2384,6 +2391,8 @@ impl AppUseCase {
                 unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: enabled_connection_ids.clone(),
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+                favorite_connection_ids: favorite_connection_ids.clone(),
+                favorite_user_ids: HashSet::new(),
             });
         }
         // The stored `enabled` is the connection's state *as of that sweep*, so
@@ -2413,6 +2422,8 @@ impl AppUseCase {
                 unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: enabled_connection_ids.clone(),
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+                favorite_connection_ids: favorite_connection_ids.clone(),
+                favorite_user_ids: HashSet::new(),
             });
         }
         let now = Utc::now();
@@ -2427,6 +2438,8 @@ impl AppUseCase {
                 unswept_user_ids: HashSet::new(),
                 enabled_connection_ids: enabled_connection_ids.clone(),
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+                favorite_connection_ids: favorite_connection_ids.clone(),
+                favorite_user_ids: HashSet::new(),
             });
         }
 
@@ -2460,6 +2473,7 @@ impl AppUseCase {
             .collect();
         let mut linked_user_ids = HashSet::new();
         let mut unswept_user_ids = HashSet::new();
+        let mut favorite_user_ids = HashSet::new();
         for connection in &connections {
             let Some(provider) = connection.provider.external_account_provider() else {
                 continue;
@@ -2485,12 +2499,15 @@ impl AppUseCase {
                     });
                 if !read {
                     unswept_user_ids.insert(account.user_id.clone());
+                } else if favorite_connection_ids.contains(&connection.id) {
+                    favorite_user_ids.insert(account.user_id.clone());
                 }
                 linked_user_ids.insert(account.user_id);
             }
         }
         // A user is observed only when every one of their links was read.
         linked_user_ids.retain(|user_id| !unswept_user_ids.contains(user_id));
+        favorite_user_ids.retain(|user_id| linked_user_ids.contains(user_id));
 
         // The audience read is every account's, linked or not, so it is
         // judged on its own and stands whatever the links' state.
@@ -2518,6 +2535,8 @@ impl AppUseCase {
                 unswept_user_ids,
                 enabled_connection_ids,
                 audience,
+                favorite_connection_ids,
+                favorite_user_ids,
             });
         }
 
@@ -2527,6 +2546,8 @@ impl AppUseCase {
             unswept_user_ids,
             enabled_connection_ids,
             audience,
+            favorite_connection_ids,
+            favorite_user_ids,
         })
     }
 
