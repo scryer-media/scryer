@@ -14,12 +14,33 @@ fn grace_days(input: Option<i32>) -> i64 {
     i64::from(input.unwrap_or(0))
 }
 
-fn action_definition(
-    action: Option<MaintenanceActionInput>,
-    action_sequence: Option<MaintenanceActionSequenceInput>,
-) -> GqlResult<scryer_application::maintenance_rules::MaintenanceActionDefinition> {
-    crate::mappers::maintenance_action_definition_from_inputs(action, action_sequence)
-        .map_err(to_gql_error)
+/// A schedule input in domain form, refused with the same code a scheduled
+/// script uses when its kind is missing a field.
+fn rule_schedule(
+    input: Option<ScriptScheduleInput>,
+) -> GqlResult<Option<scryer_domain::ScriptSchedule>> {
+    input
+        .map(|input| {
+            input.into_domain().map_err(|field| {
+                to_gql_error(AppError::validation_refused(
+                    scryer_interface_core::refusal::INTERFACE_SCRIPT_SCHEDULE_INCOMPLETE,
+                    format!("schedule is missing {field} for its kind"),
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn diagnostic_payload(
+    diagnostic: scryer_application::RuleValidationDiagnostic,
+) -> RuleValidationDiagnosticPayload {
+    RuleValidationDiagnosticPayload {
+        code: diagnostic.code.into(),
+        message: diagnostic.message,
+        line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
+        column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
+        path: diagnostic.path,
+    }
 }
 
 /// Resolve the matcher a preview should run.
@@ -33,36 +54,25 @@ fn preview_matcher(
 ) -> GqlResult<MaintenancePreviewMatcher> {
     let rule_set_id = input.rule_set_id.take();
     let rego_source = input.rego_source.take();
-    let action = input.action.take();
-    let action_sequence = input.action_sequence.take();
 
-    match (rule_set_id, rego_source, action, action_sequence) {
-        (Some(rule_set_id), None, None, None) => Ok(MaintenancePreviewMatcher::Stored {
+    match (rule_set_id, rego_source) {
+        (Some(rule_set_id), None) => Ok(MaintenancePreviewMatcher::Stored {
             rule_set_id: String::from(rule_set_id),
         }),
-        (None, Some(rego_source), action, action_sequence) => {
-            Ok(MaintenancePreviewMatcher::Inline {
-                library_ids: input.library_ids.take().unwrap_or_default(),
-                subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
-                    input.subject_kind,
-                ),
-                rego_source,
-                action_definition: action_definition(action, action_sequence)?,
-                grace_days: grace_days(input.grace_days),
-                storage_root_id: input.storage_root_id.take(),
-            })
-        }
-        (None, None, Some(_), _) | (None, None, _, Some(_)) => {
-            Err(to_gql_error(AppError::validation_refused(
-                scryer_interface_core::refusal::INTERFACE_RULE_SOURCE_REQUIRED,
-                "previewing an unsaved matcher requires 'regoSource'",
-            )))
-        }
-        (None, None, None, None) => Err(to_gql_error(AppError::validation_refused(
+        (None, Some(rego_source)) => Ok(MaintenancePreviewMatcher::Inline {
+            library_ids: input.library_ids.take().unwrap_or_default(),
+            subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
+                input.subject_kind,
+            ),
+            rego_source,
+            grace_days: grace_days(input.grace_days),
+            storage_root_id: input.storage_root_id.take(),
+        }),
+        (None, None) => Err(to_gql_error(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_REQUIRED,
-            "preview requires either 'ruleSetId' or 'regoSource' with an action definition",
+            "preview requires either 'ruleSetId' or 'regoSource'",
         ))),
-        (Some(_), _, _, _) => Err(to_gql_error(AppError::validation_refused(
+        (Some(_), Some(_)) => Err(to_gql_error(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_CONFLICT,
             "preview accepts either 'ruleSetId' or an unsaved matcher, not both",
         ))),
@@ -113,6 +123,21 @@ fn preview_selection(
     }
 }
 
+/// A value below one reaches the service as zero, which refuses it with its
+/// own reason, so the API has a single refusal for an unusable maximum.
+fn max_titles_per_run(value: i32) -> u32 {
+    u32::try_from(value).unwrap_or(0)
+}
+
+/// Omitted keeps the stored maximum, null clears it, a value replaces it.
+fn max_titles_per_run_change(value: async_graphql::MaybeUndefined<i32>) -> Option<Option<u32>> {
+    match value {
+        async_graphql::MaybeUndefined::Undefined => None,
+        async_graphql::MaybeUndefined::Null => Some(None),
+        async_graphql::MaybeUndefined::Value(max) => Some(Some(max_titles_per_run(max))),
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct MaintenanceRuleMutations;
 
@@ -123,17 +148,16 @@ impl MaintenanceRuleMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Rule name, matcher source, action, and optional description, grace period, and library scope."
+            desc = "Rule name, source, and optional description, grace period, and library scope."
         )]
         input: CreateMaintenanceRuleSetInput,
     ) -> GqlResult<MaintenanceRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
-        let action_definition = action_definition(input.action, input.action_sequence)?;
-
+        let schedule = rule_schedule(input.schedule)?;
         let detail = app
-            .create_maintenance_rule_set(
+            .create_maintenance_rule_set_with_schedule(
                 &actor,
                 MaintenanceRuleDraft {
                     subject_kind: crate::mappers::maintenance_rule_subject_kind_into_application(
@@ -142,39 +166,39 @@ impl MaintenanceRuleMutations {
                     name: input.name,
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
-                    action_definition,
                     grace_days: grace_days(input.grace_days),
                     storage_root_id: input.storage_root_id,
                     library_ids: input.library_ids.unwrap_or_default(),
+                    max_titles_per_run: input.max_titles_per_run.map(max_titles_per_run),
                 },
+                super::rules::builder_model_change(input.builder_model),
+                schedule,
             )
             .await
             .map_err(to_gql_error)?;
 
-        Ok(crate::mappers::from_maintenance_rule_set_detail(detail))
+        // A new rule starts disabled, so it has no next run yet.
+        Ok(crate::mappers::from_maintenance_rule_set_detail(
+            detail, None,
+        ))
     }
 
-    /// Replace a rule set's matcher, action, and grace period by appending a revision.
+    /// Replace a rule set's source and grace period by appending a revision.
     async fn update_maintenance_rule_matcher(
         &self,
         ctx: &Context<'_>,
-        #[graphql(
-            desc = "Rule-set identity, replacement matcher source and action, and optional grace period."
-        )]
+        #[graphql(desc = "Rule-set identity, replacement source, and optional grace period.")]
         input: UpdateMaintenanceRuleMatcherInput,
     ) -> GqlResult<MaintenanceRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
-        let action_definition = action_definition(input.action, input.action_sequence)?;
-
         let detail = app
-            .update_maintenance_rule_matcher(
+            .update_maintenance_rule_matcher_with_builder_model(
                 &actor,
                 input.id.as_ref(),
                 MaintenanceMatcherDraft {
                     rego_source: input.rego_source,
-                    action_definition,
                     grace_days: grace_days(input.grace_days),
                     storage_root_id: match input.storage_root_id {
                         async_graphql::MaybeUndefined::Undefined => None,
@@ -183,20 +207,26 @@ impl MaintenanceRuleMutations {
                             Some(Some(root_id.to_string()))
                         }
                     },
+                    max_titles_per_run: max_titles_per_run_change(input.max_titles_per_run),
                 },
+                super::rules::builder_model_change(input.builder_model),
             )
             .await
             .map_err(to_gql_error)?;
 
-        Ok(crate::mappers::from_maintenance_rule_set_detail(detail))
+        let next_run_at = app.maintenance_rule_next_run_at(&detail.rule_set.id);
+        Ok(crate::mappers::from_maintenance_rule_set_detail(
+            detail,
+            next_run_at,
+        ))
     }
 
-    /// Rename and re-scope a rule set without touching its matcher, so no revision is created.
+    /// Rename, re-scope or reschedule a rule set without touching its matcher, so no revision is created.
     async fn update_maintenance_rule_metadata(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Rule-set identity, replacement name, and optional description and library scope."
+            desc = "Rule-set identity, replacement name, and optional description, library scope and schedule."
         )]
         input: UpdateMaintenanceRuleMetadataInput,
     ) -> GqlResult<MaintenanceRuleSet> {
@@ -204,12 +234,15 @@ impl MaintenanceRuleMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
-        app.update_maintenance_rule_metadata(
+        let schedule = rule_schedule(input.schedule)?;
+        app.update_maintenance_rule_metadata_with_schedule(
             &actor,
             input.id.as_ref(),
             input.name,
             input.description.unwrap_or_default(),
             input.library_ids.unwrap_or_default(),
+            schedule,
+            max_titles_per_run_change(input.max_titles_per_run),
         )
         .await
         .map_err(to_gql_error)?;
@@ -228,7 +261,10 @@ impl MaintenanceRuleMutations {
                 ))
             })?;
 
-        Ok(crate::mappers::from_maintenance_rule_set(&detail))
+        Ok(crate::mappers::from_maintenance_rule_set(
+            &detail,
+            app.maintenance_rule_next_run_at(&detail.rule_set.id),
+        ))
     }
 
     /// Delete a maintenance rule set and every revision it owns.
@@ -264,25 +300,29 @@ impl MaintenanceRuleMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
-        let result = app
+        let validation = app
             .validate_maintenance_rule_source(&actor, &input.rego_source)
             .await
             .map_err(to_gql_error)?;
+        let result = validation.result;
 
         Ok(MaintenanceRuleValidationPayload {
             diagnostics: result
                 .diagnostics
                 .into_iter()
-                .map(|diagnostic| RuleValidationDiagnosticPayload {
-                    code: diagnostic.code.into(),
-                    message: diagnostic.message,
-                    line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
-                    column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
-                    path: diagnostic.path,
-                })
+                .map(diagnostic_payload)
                 .collect(),
             valid: result.valid,
             errors: result.errors,
+            warnings: result
+                .warnings
+                .into_iter()
+                .map(diagnostic_payload)
+                .collect(),
+            declared_actions: validation
+                .declared_actions
+                .as_ref()
+                .map(crate::mappers::from_maintenance_declared_actions),
         })
     }
 
@@ -351,7 +391,10 @@ impl MaintenanceRuleMutations {
             .await
             .map_err(to_gql_error)?;
 
-        Ok(crate::mappers::from_maintenance_rule_set(&detail))
+        Ok(crate::mappers::from_maintenance_rule_set(
+            &detail,
+            app.maintenance_rule_next_run_at(&detail.rule_set.id),
+        ))
     }
 
     /// Run the maintenance action handler immediately instead of waiting for its schedule.

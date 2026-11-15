@@ -16,7 +16,8 @@ use scryer_application::{
     MaintenanceActionJobReceiptTransition, MaintenanceActionStepCandidateKey,
     MaintenanceActionStepClaim, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
     MaintenanceCandidateRepository, MaintenanceEvaluationRunRepository,
-    MaintenanceExclusionRepository, MaintenanceSequenceCompletionRepository,
+    MaintenanceExclusionRepository, MaintenanceRuleScheduleAnchor,
+    MaintenanceSequenceCompletionRepository,
 };
 use scryer_domain::{
     LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate,
@@ -46,14 +47,14 @@ impl MaintenanceEvaluationStore {
 const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash, title_id,
     library_id, facet, subject_kind, subject_id, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
-    held_since, action_attempts, created_at, updated_at";
+    held_since, action_attempts, created_at, updated_at, decided_actions_json";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
         (id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id, facet,
          subject_kind, subject_id, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
-         action_attempts, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         action_attempts, created_at, updated_at, decided_actions_json)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const ACTION_RUN_COLUMNS: &str =
     "id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id,
@@ -90,6 +91,15 @@ const EXCLUSION_COLUMNS: &str =
 const EVALUATION_RUN_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash,
     started_at, finished_at, status, evaluated_count, matched_count, no_match_count,
     unknown_count, error_count, canceled_candidates, superseded_candidates, duration_ms, error";
+
+/// Ids bound per statement by the id-list candidate reads. Far below both
+/// dialects' bind limits, so a caller-sized list always fits by chunking; a
+/// list that fits in one chunk stays one statement.
+const CANDIDATE_ID_LIST_CHUNK: usize = 500;
+
+fn id_placeholders(count: usize) -> String {
+    vec!["{}"; count].join(", ")
+}
 
 /// `state NOT IN (…)` over the terminal set, as a placeholder list plus its
 /// bound arguments. Built from the domain constant so the predicate here and
@@ -137,6 +147,50 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
             .as_ref()
             .map(row_to_candidate)
             .transpose()
+    }
+
+    async fn list_active_subject_candidates(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_ids: &[String],
+    ) -> AppResult<Vec<LifecycleCandidate>> {
+        let mut candidates = Vec::new();
+        for chunk in subject_ids.chunks(CANDIDATE_ID_LIST_CHUNK) {
+            let (predicate, mut state_args) = active_state_predicate();
+            let mut args = vec![
+                SqlArg::Text(rule_set_id.to_string()),
+                SqlArg::Text(subject_kind.to_string()),
+            ];
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
+            args.append(&mut state_args);
+            let sql = format!(
+                "SELECT {CANDIDATE_COLUMNS}
+                   FROM lifecycle_candidates
+                  WHERE rule_set_id = {{}} AND subject_kind = {{}} AND subject_id IN ({})
+                    AND {predicate}",
+                id_placeholders(chunk.len())
+            );
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                candidates.push(row_to_candidate(&row)?);
+            }
+        }
+        Ok(candidates)
+    }
+
+    async fn get_candidates_by_ids(&self, ids: &[String]) -> AppResult<Vec<LifecycleCandidate>> {
+        let mut candidates = Vec::new();
+        for chunk in ids.chunks(CANDIDATE_ID_LIST_CHUNK) {
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            let sql = format!(
+                "SELECT {CANDIDATE_COLUMNS} FROM lifecycle_candidates WHERE id IN ({})",
+                id_placeholders(chunk.len())
+            );
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                candidates.push(row_to_candidate(&row)?);
+            }
+        }
+        Ok(candidates)
     }
 
     async fn list_candidates(
@@ -519,6 +573,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        after: Option<&scryer_application::MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
         // `due_at <= due_before` still bounds both arms: a row that reached
@@ -526,18 +581,33 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         // always past its due time too. The second arm is what returns that
         // abandoned row — without it, the lease's own reclaim branch is
         // unreachable and the row is stranded for good.
+        //
+        // The walk is keyset paged on `(due_at, id)`, served by
+        // idx_lifecycle_candidates_rule_due.
+        let cursor_clause = if after.is_some() {
+            " AND (due_at > {} OR (due_at = {} AND id > {}))"
+        } else {
+            ""
+        };
         let sql = format!(
             "SELECT {CANDIDATE_COLUMNS}
                FROM lifecycle_candidates
-              WHERE rule_set_id = {{}} AND due_at <= {{}}
+              WHERE rule_set_id = {{}} AND due_at <= {{}}{cursor_clause}
                 AND (state IN ({{}}, {{}}, {{}}, {{}})
                      OR (state = {{}} AND updated_at < {{}}))
               ORDER BY due_at ASC, id ASC
               LIMIT {{}}"
         );
-        let args = vec![
+        let mut args = vec![
             SqlArg::Text(rule_set_id.to_string()),
             SqlArg::Timestamp(due_before),
+        ];
+        if let Some(after) = after {
+            args.push(SqlArg::Timestamp(after.due_at));
+            args.push(SqlArg::Timestamp(after.due_at));
+            args.push(SqlArg::Text(after.id.clone()));
+        }
+        args.extend([
             SqlArg::Text(
                 MaintenanceCandidateState::Observing
                     .as_storage_str()
@@ -561,7 +631,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
             ),
             SqlArg::Timestamp(stale_before),
             SqlArg::I64(limit as i64),
-        ];
+        ]);
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
@@ -1235,6 +1305,57 @@ impl MaintenanceActionStepRepository for MaintenanceEvaluationStore {
         .collect()
     }
 
+    async fn list_step_acts_since(
+        &self,
+        step_kinds: &[&str],
+        since: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_application::MaintenanceStepAct>> {
+        if step_kinds.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        // Served by idx_maintenance_action_step_attempts_started; each
+        // attempt reaches its step's kind through the step key.
+        let kinds = vec!["{}"; step_kinds.len()].join(", ");
+        let sql = format!(
+            "SELECT DISTINCT s.rule_set_id, s.title_id, s.step_kind
+               FROM maintenance_action_step_attempts a
+               JOIN maintenance_action_steps s
+                 ON s.candidate_id = a.candidate_id
+                AND s.match_generation = a.match_generation
+                AND s.revision_number = a.revision_number
+                AND s.step_id = a.step_id
+              WHERE a.started_at >= {{}}
+                AND a.state = {{}}
+                AND s.step_kind IN ({kinds})
+              LIMIT {{}}"
+        );
+        let mut args = vec![
+            SqlArg::Timestamp(since),
+            SqlArg::Text(
+                MaintenanceActionStepState::Succeeded
+                    .as_storage_str()
+                    .to_string(),
+            ),
+        ];
+        args.extend(
+            step_kinds
+                .iter()
+                .map(|kind| SqlArg::Text((*kind).to_string())),
+        );
+        args.push(SqlArg::I64(i64::try_from(limit).unwrap_or(i64::MAX)));
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(scryer_application::MaintenanceStepAct {
+                    rule_set_id: row.text("rule_set_id")?,
+                    title_id: row.text("title_id")?,
+                    step_kind: row.text("step_kind")?,
+                })
+            })
+            .collect()
+    }
+
     async fn get_action_job_receipt(
         &self,
         key: &MaintenanceActionStepKey,
@@ -1755,6 +1876,43 @@ impl MaintenanceEvaluationRunRepository for MaintenanceEvaluationStore {
             .map(row_to_evaluation_run)
             .collect()
     }
+
+    async fn rule_schedule_anchors(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, MaintenanceRuleScheduleAnchor>> {
+        let mut anchors = std::collections::HashMap::<String, MaintenanceRuleScheduleAnchor>::new();
+        for chunk in rule_set_ids.chunks(CANDIDATE_ID_LIST_CHUNK) {
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            let placeholders = id_placeholders(chunk.len());
+            let runs_sql = format!(
+                "SELECT rule_set_id, MAX(started_at) AS started_at
+                   FROM maintenance_evaluation_runs
+                  WHERE rule_set_id IN ({placeholders})
+                  GROUP BY rule_set_id"
+            );
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &runs_sql, &args).await? {
+                anchors
+                    .entry(row.text("rule_set_id")?)
+                    .or_default()
+                    .last_run_at = row.opt_timestamp("started_at")?;
+            }
+            let executing_sql = format!(
+                "SELECT DISTINCT rule_set_id
+                   FROM lifecycle_candidates
+                  WHERE rule_set_id IN ({placeholders}) AND state = 'executing'"
+            );
+            for row in
+                SqlRuntime::fetch_all(self.datastore.read_exec(), &executing_sql, &args).await?
+            {
+                anchors
+                    .entry(row.text("rule_set_id")?)
+                    .or_default()
+                    .in_flight = true;
+            }
+        }
+        Ok(anchors)
+    }
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -1800,6 +1958,7 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::I64(candidate.action_attempts),
         SqlArg::Timestamp(candidate.created_at),
         SqlArg::Timestamp(candidate.updated_at),
+        SqlArg::OptText(candidate.decided_actions_json.clone()),
     ])
 }
 
@@ -2493,6 +2652,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         state_reason: row.text("state_reason")?,
         reason_codes: reason_codes(row)?,
         action_kind: row.text("action_kind")?,
+        decided_actions_json: row.opt_text("decided_actions_json")?,
         grace_days: row.i64("grace_days")?,
         first_matched_at: row.timestamp("first_matched_at")?,
         last_matched_at: row.timestamp("last_matched_at")?,

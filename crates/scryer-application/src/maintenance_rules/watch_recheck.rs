@@ -398,6 +398,7 @@ mod tests {
             kind: MediaServerSignalKind::Movie,
             scryer_title_id: Some("title-1".to_string()),
             scryer_episode_id: None,
+            season_number: None,
             played: true,
             play_count: 1,
             last_played_at,

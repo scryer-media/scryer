@@ -1,5 +1,5 @@
 use super::{Long, MediaFacetValue};
-use async_graphql::{Enum, ID, InputObject, Json, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, Json, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 use scryer_application::arr_custom_format::{
     ArrCustomFormatTranslation, ArrDiagnostic, ArrDiagnosticSeverity, ArrFormatStatus,
@@ -42,6 +42,10 @@ pub struct RuleSetPayload {
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
     pub updated_at: DateTime<Utc>,
+    /// The simple builder's document for this rule, or null when the rule was
+    /// written by hand. Loaded only by `ruleSet(id)`, which is the editor's
+    /// one reader; lists and mutation payloads return null.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -356,6 +360,9 @@ pub struct CreateRuleSetInput {
     pub priority: Option<i32>,
     /// Optional enabled state.
     pub enabled: Option<bool>,
+    /// The simple builder's document for the source, or omitted for a rule
+    /// written by hand.
+    pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
 }
 
 #[derive(InputObject)]
@@ -377,6 +384,9 @@ pub struct UpdateRuleSetInput {
     /// empty list clears the filter so the pack applies wherever its facts
     /// match. Rejected for user-authored rule sets.
     pub managed_tag_filter: Option<Vec<String>>,
+    /// The simple builder's document. Omit to keep the stored one, pass null
+    /// to clear it, or pass a document to replace it.
+    pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
 }
 
 #[derive(InputObject)]
@@ -641,4 +651,162 @@ pub struct ServiceLogsPayload {
     pub lines: Vec<String>,
     /// Number of returned lines.
     pub count: i32,
+}
+
+// ── Rule builder schema ────────────────────────────────────────────────────
+
+/// How the rule builder enters one output's value.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RuleBuilderValueKind {
+    /// No value: the output is on or off.
+    Flag,
+    /// Free text.
+    Text,
+    /// One entry from a catalog the client loads.
+    Choice,
+    /// A whole number.
+    Number,
+    /// A list of short text entries.
+    TextList,
+}
+
+impl From<scryer_application::RuleBuilderValueKind> for RuleBuilderValueKind {
+    fn from(kind: scryer_application::RuleBuilderValueKind) -> Self {
+        use scryer_application::RuleBuilderValueKind as Kind;
+        match kind {
+            Kind::Flag => Self::Flag,
+            Kind::Text => Self::Text,
+            Kind::Choice => Self::Choice,
+            Kind::Number => Self::Number,
+            Kind::TextList => Self::TextList,
+        }
+    }
+}
+
+/// Which bound an output rule sets.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RuleBuilderOutputRuleKind {
+    /// At least one of the outputs is chosen.
+    AtLeastOne,
+    /// No more than one of the outputs is chosen.
+    AtMostOne,
+    /// Exactly one of the outputs is chosen.
+    ExactlyOne,
+}
+
+impl From<scryer_application::RuleBuilderOutputRuleKind> for RuleBuilderOutputRuleKind {
+    fn from(kind: scryer_application::RuleBuilderOutputRuleKind) -> Self {
+        use scryer_application::RuleBuilderOutputRuleKind as Kind;
+        match kind {
+            Kind::AtLeastOne => Self::AtLeastOne,
+            Kind::AtMostOne => Self::AtMostOne,
+            Kind::ExactlyOne => Self::ExactlyOne,
+        }
+    }
+}
+
+/// One output the rule builder offers.
+#[derive(SimpleObject, Clone)]
+pub struct RuleBuilderOutput {
+    /// Stable id of the output.
+    pub id: String,
+    /// The Rego rule name the output writes.
+    pub head: String,
+    /// Translation key of the output's label.
+    pub label_key: String,
+    /// Translation key of the output's help, or null when it has none.
+    pub help_key: Option<String>,
+    /// How the output's value is entered.
+    pub value_kind: RuleBuilderValueKind,
+    /// The catalog a choice or list draws from, or null.
+    pub options: Option<String>,
+    /// Smallest number a number output takes, or null.
+    pub min: Option<Long>,
+    /// Largest number a number output takes, or null.
+    pub max: Option<Long>,
+    /// Most entries a list output takes, or null.
+    pub max_items: Option<i32>,
+    /// Longest a text entry may be, in bytes, or null.
+    pub max_bytes: Option<i32>,
+    /// Characters every entry must match, as a regular expression, or null.
+    pub pattern: Option<String>,
+    /// How the output is written into the source.
+    pub template: String,
+    /// Whether the template is written once per list entry.
+    pub per_item: bool,
+    /// Whether the output removes media.
+    pub destructive: bool,
+    /// The rule variants that may use the output, or null for every one.
+    pub variants: Option<Vec<String>>,
+    /// Outputs that cannot be chosen with this one. Each pair is listed once.
+    pub conflicts_with: Vec<String>,
+}
+
+/// A rule about which outputs one rule chooses.
+#[derive(SimpleObject, Clone)]
+pub struct RuleBuilderOutputRule {
+    /// The bound the rule sets.
+    pub rule: RuleBuilderOutputRuleKind,
+    /// The output ids the rule is about, or null for every output.
+    pub of: Option<Vec<String>>,
+}
+
+/// What the rule builder needs to offer one family's outputs.
+#[derive(SimpleObject, Clone)]
+pub struct RuleBuilderSchema {
+    /// The rule family.
+    pub family: String,
+    /// The outputs, in the order the builder lists and writes them.
+    pub outputs: Vec<RuleBuilderOutput>,
+    /// Rules about which outputs one rule chooses.
+    pub output_rules: Vec<RuleBuilderOutputRule>,
+}
+
+impl From<scryer_application::RuleBuilderSchema> for RuleBuilderSchema {
+    fn from(schema: scryer_application::RuleBuilderSchema) -> Self {
+        let size = |value: usize| i32::try_from(value).unwrap_or(i32::MAX);
+        Self {
+            family: schema.family.to_string(),
+            outputs: schema
+                .outputs
+                .into_iter()
+                .map(|output| RuleBuilderOutput {
+                    id: output.id.to_string(),
+                    head: output.head.to_string(),
+                    label_key: output.label_key,
+                    help_key: output.help_key,
+                    value_kind: output.value_kind.into(),
+                    options: output.options.map(str::to_string),
+                    min: output.min.map(Long),
+                    max: output.max.map(Long),
+                    max_items: output.max_items.map(size),
+                    max_bytes: output.max_bytes.map(size),
+                    pattern: output.pattern.map(str::to_string),
+                    template: output.template.to_string(),
+                    per_item: output.per_item,
+                    destructive: output.destructive,
+                    variants: output
+                        .variants
+                        .map(|variants| variants.iter().map(|v| v.to_string()).collect()),
+                    conflicts_with: output
+                        .conflicts_with
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                })
+                .collect(),
+            output_rules: schema
+                .output_rules
+                .into_iter()
+                .map(|rule| RuleBuilderOutputRule {
+                    rule: rule.rule.into(),
+                    of: rule
+                        .of
+                        .map(|of| of.into_iter().map(str::to_string).collect()),
+                })
+                .collect(),
+        }
+    }
 }

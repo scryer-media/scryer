@@ -12,7 +12,8 @@ use crate::scripts::runner::{
     run_script_cancellable,
 };
 use crate::scripts::scheduler::{
-    CustomJobDispatcher, CustomJobSource, DueCustomJob, run_custom_job_scheduler,
+    CustomJobDispatcher, CustomJobSource, CustomJobTarget, DueCustomJob, ScheduledMaintenanceRule,
+    run_custom_job_scheduler,
 };
 use async_trait::async_trait;
 use scryer_domain::{
@@ -508,11 +509,111 @@ impl CustomJobSource for AppUseCase {
             .list_enabled_scheduled()
             .await
     }
+
+    /// Rules that can run on a schedule, each with what its schedule anchors
+    /// on. A rule whose current revision cannot be acted on (saved before
+    /// rules declared their actions, or unreadable) is not scheduled: every
+    /// fire would only refuse. Three reads in all, whatever the rule count.
+    async fn load_scheduled_maintenance_rules(&self) -> AppResult<Vec<ScheduledMaintenanceRule>> {
+        let repo = &self.services.customization.maintenance_rule_sets;
+        let rules: Vec<_> = repo
+            .list_rule_sets()
+            .await?
+            .into_iter()
+            .filter(|rule| {
+                rule.evaluation_mode != scryer_domain::MaintenanceEvaluationMode::Disabled
+            })
+            .collect();
+        if rules.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys: Vec<(String, i64)> = rules
+            .iter()
+            .map(|rule| (rule.id.clone(), rule.current_revision_number))
+            .collect();
+        let revisions = repo.get_revisions(&keys).await?;
+        let mut loadable = Vec::with_capacity(rules.len());
+        for (rule, revision) in rules.into_iter().zip(revisions) {
+            let declared = revision.as_ref().map(|revision| {
+                crate::maintenance_rules::MaintenanceDeclaredActions::from_persisted_json(
+                    &revision.action_spec_json,
+                )
+            });
+            match declared {
+                Some(Ok(Some(_))) => loadable.push(rule),
+                Some(Ok(None)) => info!(
+                    rule_set_id = %rule.id,
+                    reason = crate::error_reasons::maintenance::RULE_STORED_ACTIONS_NOT_DECLARED,
+                    "maintenance rule is not scheduled until its source is saved again"
+                ),
+                Some(Err(error)) => warn!(
+                    rule_set_id = %rule.id,
+                    error = %error,
+                    "maintenance rule is not scheduled: its stored actions are unreadable"
+                ),
+                None => warn!(
+                    rule_set_id = %rule.id,
+                    revision = rule.current_revision_number,
+                    "maintenance rule is not scheduled: its current revision is missing"
+                ),
+            }
+        }
+        let ids: Vec<String> = loadable.iter().map(|rule| rule.id.clone()).collect();
+        let mut anchors = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .rule_schedule_anchors(&ids)
+            .await?;
+        Ok(loadable
+            .into_iter()
+            .map(|rule| {
+                let anchor = anchors.remove(&rule.id).unwrap_or_default();
+                ScheduledMaintenanceRule {
+                    id: rule.id,
+                    name: rule.name,
+                    schedule: rule.schedule,
+                    last_run_at: anchor.last_run_at,
+                    in_flight: anchor.in_flight,
+                }
+            })
+            .collect())
+    }
 }
 
 #[async_trait]
 impl CustomJobDispatcher for AppUseCase {
     async fn dispatch(&self, due: DueCustomJob) {
+        if due.target == CustomJobTarget::MaintenanceRule {
+            // A restore or shutdown drain has begun: no new rule work starts,
+            // and work already running is tracked so the drain waits for it.
+            if self.restore_coordinator().shutdown_workers.is_cancelled()
+                || self.restore_coordinator().blocks_application()
+            {
+                info!(rule_set_id = %due.script_id, "background work is stopping; skipping this maintenance rule fire");
+                return;
+            }
+            let Some(guard) = self
+                .runtime
+                .jobs
+                .custom_job_scheduler
+                .begin_maintenance_rule_fire(&due.script_id)
+            else {
+                info!(rule_set_id = %due.script_id, "maintenance rule is still running; skipping this fire");
+                return;
+            };
+            let app = self.clone();
+            self.restore_coordinator().spawn_task(
+                async move {
+                    let _guard = guard;
+                    if let Err(error) = app.run_scheduled_maintenance_rule(&due.script_id).await {
+                        warn!(rule_set_id = %due.script_id, error = %error, "scheduled maintenance rule run failed");
+                    }
+                }
+                .in_current_span(),
+            );
+            return;
+        }
         if let Err(error) = self
             .start_custom_job_run(&due.script_id, due.execution_mode, due.trigger_source, None)
             .await

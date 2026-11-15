@@ -66,6 +66,25 @@ struct FileCheckpoint {
     retention_episode_ids: Vec<String>,
     completed: bool,
     error: Option<String>,
+    /// Stable reason code for `error` when the failure carried one, so the
+    /// journal can be read without matching its sentence. Older journals
+    /// lack the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_reason: Option<String>,
+}
+
+impl FileCheckpoint {
+    /// Record why this target was not deleted: a reason code alone, or a
+    /// failure's sentence beside the code it carried.
+    fn record_reason(&mut self, reason: &str) {
+        self.error = Some(reason.to_string());
+        self.error_reason = Some(reason.to_string());
+    }
+
+    fn record_failure(&mut self, error: &AppError) {
+        self.error = Some(error.to_string());
+        self.error_reason = error.validation_reason().map(str::to_string);
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct ScopedDeletionCheckpoint {
@@ -324,6 +343,7 @@ impl AppUseCase {
             {
                 saved.completed = true;
                 saved.error = None;
+                saved.error_reason = None;
                 changed = true;
             }
         }
@@ -925,6 +945,7 @@ impl AppUseCase {
                         retention_episode_ids,
                         completed: false,
                         error,
+                        error_reason: None,
                     });
                 }
                 ScopedDeletionCheckpoint {
@@ -1037,8 +1058,7 @@ impl AppUseCase {
                     .maintenance_unmonitoring_is_confirmed(candidate, title, include_descendants)
                     .await?
             {
-                checkpoint.files[index].error =
-                    Some(execution_reason::NO_MATCH_AT_EXECUTION.to_string());
+                checkpoint.files[index].record_reason(execution_reason::NO_MATCH_AT_EXECUTION);
                 self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                     .await?;
                 return Ok(ActionResult::Canceled {
@@ -1054,6 +1074,7 @@ impl AppUseCase {
                 match self
                     .maintenance_execution_safety_checks(
                         detail,
+                        context.sequence,
                         evaluator,
                         candidate,
                         libraries,
@@ -1063,7 +1084,7 @@ impl AppUseCase {
                 {
                     SafetyDecision::Proceed(_, _) => {}
                     SafetyDecision::Cancel(reason) => {
-                        checkpoint.files[index].error = Some(reason.to_string());
+                        checkpoint.files[index].record_reason(reason);
                         self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                             .await?;
                         return Ok(ActionResult::Canceled {
@@ -1073,9 +1094,8 @@ impl AppUseCase {
                         });
                     }
                     SafetyDecision::Excluded => {
-                        checkpoint.files[index].error = Some(
-                            crate::maintenance_rules::evaluation::candidate_reason::EXCLUDED
-                                .to_string(),
+                        checkpoint.files[index].record_reason(
+                            crate::maintenance_rules::evaluation::candidate_reason::EXCLUDED,
                         );
                         self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                             .await?;
@@ -1087,7 +1107,7 @@ impl AppUseCase {
                         });
                     }
                     SafetyDecision::Hold(reason) => {
-                        checkpoint.files[index].error = Some(reason.to_string());
+                        checkpoint.files[index].record_reason(reason);
                         self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                             .await?;
                         return Ok(ActionResult::Held {
@@ -1104,8 +1124,7 @@ impl AppUseCase {
                     .await?
                     != checkpoint.storage_root_identity
             {
-                checkpoint.files[index].error =
-                    Some(execution_reason::UNKNOWN_AT_EXECUTION.to_string());
+                checkpoint.files[index].record_reason(execution_reason::UNKNOWN_AT_EXECUTION);
                 self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                     .await?;
                 return Ok(ActionResult::Held {
@@ -1155,8 +1174,7 @@ impl AppUseCase {
                         .await?
                         != Some(true)
                 {
-                    checkpoint.files[index].error =
-                        Some(execution_reason::UNKNOWN_AT_EXECUTION.to_string());
+                    checkpoint.files[index].record_reason(execution_reason::UNKNOWN_AT_EXECUTION);
                     self.save_scoped_deletion_checkpoint(run, &mut checkpoint)
                         .await?;
                     return Ok(ActionResult::Held {
@@ -1199,10 +1217,11 @@ impl AppUseCase {
                 Ok(()) => {
                     checkpoint.files[index].completed = true;
                     checkpoint.files[index].error = None;
+                    checkpoint.files[index].error_reason = None;
                 }
                 Err(error) => {
                     failed = true;
-                    checkpoint.files[index].error = Some(error.to_string());
+                    checkpoint.files[index].record_failure(&error);
                 }
             }
             self.save_scoped_deletion_checkpoint(run, &mut checkpoint)

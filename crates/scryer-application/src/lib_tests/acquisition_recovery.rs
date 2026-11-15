@@ -17956,6 +17956,15 @@ async fn refused_scheduled_ticks_record_no_run_and_no_events() {
         .await
         .expect("an idle RSS tick is not a failure");
 
+    // Maintenance rules act on their own schedules, so the instance-wide
+    // action tick never has work of its own.
+    app.run_scheduled_job_now(
+        JobKey::LifecycleActionHandling,
+        JobTriggerSource::ScheduledInterval,
+    )
+    .await
+    .expect("an idle action-handling tick is not a failure");
+
     assert!(
         job_runs.runs.lock().await.is_empty(),
         "a refused tick must not create a job run row"
@@ -17965,7 +17974,11 @@ async fn refused_scheduled_ticks_record_no_run_and_no_events() {
         "a refused tick must not append a domain event"
     );
     let idle_checks = app.runtime.jobs.job_run_tracker.all_idle_checks().await;
-    for job_key in [JobKey::PendingReleaseProcessing, JobKey::RssSync] {
+    for job_key in [
+        JobKey::PendingReleaseProcessing,
+        JobKey::RssSync,
+        JobKey::LifecycleActionHandling,
+    ] {
         assert!(
             idle_checks.contains_key(&job_key),
             "{} remembers its idle visit",

@@ -67,11 +67,17 @@ pub fn decode_reasons(value: &Value) -> Result<Vec<String>, String> {
 /// produced (a Rego set is already sorted); duplicates are dropped so a tag a
 /// rule derives twice is applied once.
 pub fn decode_tags(value: &Value) -> Result<Vec<String>, String> {
-    let items = string_items(value, "tags")?;
+    decode_tag_list(value, "tags")
+}
+
+/// [`decode_tags`] for a head of another name, so the error names the head
+/// the author actually wrote.
+pub(crate) fn decode_tag_list(value: &Value, field: &str) -> Result<Vec<String>, String> {
+    let items = string_items(value, field)?;
 
     if items.len() > MAX_TAGS {
         return Err(format!(
-            "'tags' has {} entries, at most {MAX_TAGS} are allowed",
+            "'{field}' has {} entries, at most {MAX_TAGS} are allowed",
             items.len()
         ));
     }
@@ -80,37 +86,44 @@ pub fn decode_tags(value: &Value) -> Result<Vec<String>, String> {
     for item in items {
         let tag = item
             .as_string()
-            .map_err(|_| "'tags' must contain only strings".to_string())?
+            .map_err(|_| format!("'{field}' must contain only strings"))?
             .to_string();
-        if tag.is_empty() {
-            return Err("tag must not be empty".to_string());
-        }
-        if tag.len() > MAX_TAG_LEN {
-            return Err(format!(
-                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
-                tag.len()
-            ));
-        }
-        if tag.starts_with(RESERVED_TAG_PREFIX) {
-            return Err(format!(
-                "tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix"
-            ));
-        }
-        if let Some(bad) = tag
-            .chars()
-            .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-')))
-        {
-            return Err(format!(
-                "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, \
-                 '.', '_', '-', or spaces"
-            ));
-        }
+        check_tag(&tag)?;
         if !tags.contains(&tag) {
             tags.push(tag);
         }
     }
 
     Ok(tags)
+}
+
+/// Whether one tag has the shape a policy is allowed to emit. Shared by the
+/// runtime decoder and the static check of literal tags in a rule's source.
+pub fn check_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("tag must not be empty".to_string());
+    }
+    if tag.len() > MAX_TAG_LEN {
+        return Err(format!(
+            "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+            tag.len()
+        ));
+    }
+    if tag.starts_with(RESERVED_TAG_PREFIX) {
+        return Err(format!(
+            "tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix"
+        ));
+    }
+    if let Some(bad) = tag
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-')))
+    {
+        return Err(format!(
+            "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, \
+             '.', '_', '-', or spaces"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

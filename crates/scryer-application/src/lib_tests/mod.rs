@@ -307,3 +307,162 @@ impl ScopeIndexerCoverageRepository for RecordingScopeIndexerCoverageRepo {
             .collect())
     }
 }
+
+/// A `match`-form fixture source with the action heads an old action kind
+/// meant, each firing when `match` holds.
+pub(crate) fn legacy_source(
+    source: impl AsRef<str>,
+    kind: crate::maintenance_rules::MaintenanceActionKind,
+) -> String {
+    use crate::maintenance_rules::MaintenanceActionKind as Kind;
+    use scryer_rules::maintenance_actions::MaintenanceActionHead as Head;
+    let heads: &[Head] = match kind {
+        Kind::UnmonitorScopeKeepFiles | Kind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
+            &[Head::Unmonitor]
+        }
+        Kind::DeleteTitleAndFiles => &[Head::DeleteTitle],
+        Kind::UnmonitorTitleDeleteAllFiles
+        | Kind::UnmonitorShowDeleteExistingFiles
+        | Kind::UnmonitorScopeDeleteFiles
+        | Kind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty => &[Head::DeleteFiles],
+        other => panic!("fixture kind {other:?} has no head-only form"),
+    };
+    append_heads_to_match_source(source.as_ref(), heads)
+}
+
+/// A `match`-form fixture source with the heads a step list means. A profile id is used
+/// as its name, the way the shared bootstrap names its test profiles.
+pub(crate) fn steps_source(
+    source: impl AsRef<str>,
+    steps: &[crate::maintenance_rules::MaintenanceActionStep],
+) -> String {
+    use crate::maintenance_rules::{
+        MaintenanceActionStepKind as Kind, MaintenanceActionStepParameters,
+    };
+    let mut actions = scryer_rules::maintenance_actions::MaintenanceActions::default();
+    for step in steps {
+        match step.kind {
+            Kind::Unmonitor => actions.unmonitor = true,
+            Kind::DeleteFiles => actions.delete_files = true,
+            Kind::DeleteTitleAndFiles => actions.delete_title = true,
+            Kind::Search => actions.search = true,
+            Kind::AddTags => actions
+                .add_tags
+                .extend(step.parameters.tag_labels().iter().cloned()),
+            Kind::RemoveTags => actions
+                .remove_tags
+                .extend(step.parameters.tag_labels().iter().cloned()),
+            Kind::ChangeQualityProfile => {
+                let MaintenanceActionStepParameters::ChangeQualityProfile {
+                    target_quality_profile_id,
+                } = &step.parameters
+                else {
+                    panic!("profile step without a profile");
+                };
+                // The shared bootstrap names each test profile after its id.
+                actions.set_quality_profile = Some(target_quality_profile_id.clone());
+            }
+            Kind::Monitor => actions.monitor = true,
+            Kind::FetchSubtitles => actions.fetch_subtitles = true,
+            Kind::MoveToLibrary | Kind::MoveToRoot => match &step.parameters {
+                MaintenanceActionStepParameters::Library { library } => {
+                    actions.move_to_library = Some(library.clone());
+                }
+                MaintenanceActionStepParameters::Root { root } => {
+                    actions.move_to_root = Some(root.clone());
+                }
+                _ => panic!("move step without a target"),
+            },
+        }
+    }
+    append_actions_to_match_source(source.as_ref(), &actions)
+}
+
+/// Append one head per action to a `match` fixture source, each firing when
+/// `match` holds, in the fixed execution order.
+pub(crate) fn append_heads_to_match_source(
+    source: &str,
+    heads: &[scryer_rules::maintenance_actions::MaintenanceActionHead],
+) -> String {
+    use scryer_rules::maintenance_actions::MaintenanceActionHead as Head;
+    let actions = scryer_rules::maintenance_actions::MaintenanceActions {
+        unmonitor: heads.contains(&Head::Unmonitor),
+        delete_files: heads.contains(&Head::DeleteFiles),
+        delete_title: heads.contains(&Head::DeleteTitle),
+        search: heads.contains(&Head::Search),
+        ..Default::default()
+    };
+    append_actions_to_match_source(source, &actions)
+}
+
+fn append_actions_to_match_source(
+    source: &str,
+    actions: &scryer_rules::maintenance_actions::MaintenanceActions,
+) -> String {
+    fn rego_string(value: &str) -> String {
+        serde_json::to_string(value).expect("a string always serializes")
+    }
+    fn rego_strings(values: &[String]) -> String {
+        serde_json::to_string(values).expect("strings always serialize")
+    }
+    let mut heads = Vec::new();
+    if !actions.add_tags.is_empty() {
+        heads.push(format!("add_tags := {}", rego_strings(&actions.add_tags)));
+    }
+    if !actions.remove_tags.is_empty() {
+        heads.push(format!(
+            "remove_tags := {}",
+            rego_strings(&actions.remove_tags)
+        ));
+    }
+    if let Some(profile) = actions.set_quality_profile.as_deref() {
+        heads.push(format!("set_quality_profile := {}", rego_string(profile)));
+    }
+    if actions.monitor {
+        heads.push("monitor".to_string());
+    }
+    if actions.search {
+        heads.push("search".to_string());
+    }
+    if actions.fetch_subtitles {
+        heads.push("fetch_subtitles".to_string());
+    }
+    if let Some(library) = actions.move_to_library.as_deref() {
+        heads.push(format!("move_to_library := {}", rego_string(library)));
+    }
+    if let Some(root) = actions.move_to_root.as_deref() {
+        heads.push(format!("move_to_root := {}", rego_string(root)));
+    }
+    if let Some(message) = actions.notify.as_deref() {
+        heads.push(format!("notify := {}", rego_string(message)));
+    }
+    if actions.unmonitor && !actions.delete_files {
+        heads.push("unmonitor".to_string());
+    }
+    if actions.delete_files {
+        heads.push("delete_files".to_string());
+    }
+    if actions.delete_title {
+        heads.push("delete_title".to_string());
+    }
+    let mut converted = source.trim_end().to_string();
+    converted.push('\n');
+    for head in heads {
+        converted.push_str(&format!("\n{head} if {{\n\tmatch\n}}\n"));
+    }
+    converted
+}
+
+/// The deletion runs among a candidate history's action runs. A sequence
+/// also writes one history row per completed sequence; deletion assertions
+/// look only at the rows a file delete wrote.
+pub(crate) fn deletion_runs(
+    runs: Vec<scryer_domain::LifecycleActionRun>,
+) -> Vec<scryer_domain::LifecycleActionRun> {
+    runs.into_iter()
+        .filter(|run| {
+            serde_json::from_str::<serde_json::Value>(&run.detail)
+                .is_ok_and(|detail| detail.get("scoped_deletion").is_some())
+        })
+        .collect()
+}

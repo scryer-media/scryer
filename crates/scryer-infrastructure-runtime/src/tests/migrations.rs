@@ -7012,6 +7012,11 @@ async fn migration_0318_adds_favourites_without_marking_existing_signals() {
         .execute(&mut *conn)
         .await
         .expect("relax foreign keys for the seeded row");
+    // A later migration indexes the column, so the index goes with it.
+    sqlx::query("DROP INDEX IF EXISTS idx_media_server_signals_title_favorite")
+        .execute(&mut *conn)
+        .await
+        .expect("drop the later favourites index");
     sqlx::query("ALTER TABLE media_server_user_media_signals DROP COLUMN is_favorite")
         .execute(&mut *conn)
         .await

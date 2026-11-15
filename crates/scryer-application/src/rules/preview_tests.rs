@@ -903,3 +903,177 @@ async fn preview_seadex_pack_latency_keeps_active_rules_unchanged() {
         before
     );
 }
+
+#[tokio::test]
+async fn scoring_builder_model_is_set_kept_and_cleared() {
+    use crate::rules::builder_model::BuilderModelChange;
+
+    let (app, user, _) = preview_app_without_policies();
+    let model = serde_json::json!({
+        "version": 2,
+        "family": "scoring",
+        "join": "ALL",
+        "conditions": [],
+        "outputs": {}
+    });
+    let source = "import rego.v1\nscore_entry[\"builder_score\"] := 5 if { true }";
+    let created = app
+        .create_rule_set_with_builder_model(
+            &user,
+            "Builder rule".into(),
+            String::new(),
+            source.into(),
+            vec![MediaFacet::Movie],
+            0,
+            Some(true),
+            BuilderModelChange::Set(model.clone()),
+        )
+        .await
+        .expect("create with builder model");
+    assert_eq!(
+        app.get_rule_set_builder_model(&user, &created.id)
+            .await
+            .expect("read model"),
+        Some(model.clone())
+    );
+
+    // A rename leaves the stored document alone.
+    app.update_rule_set_with_builder_model(
+        &user,
+        created.id.clone(),
+        Some("Renamed".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        BuilderModelChange::Keep,
+    )
+    .await
+    .expect("rename keeps model");
+    assert_eq!(
+        app.get_rule_set_builder_model(&user, &created.id)
+            .await
+            .expect("read kept model"),
+        Some(model.clone())
+    );
+
+    // A document for another family is refused and nothing changes.
+    let wrong_family = serde_json::json!({"version": 2, "family": "maintenance"});
+    let refused = app
+        .update_rule_set_with_builder_model(
+            &user,
+            created.id.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BuilderModelChange::Set(wrong_family),
+        )
+        .await
+        .expect_err("wrong family is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::rules::BUILDER_MODEL_INVALID)
+    );
+    assert_eq!(
+        app.get_rule_set_builder_model(&user, &created.id)
+            .await
+            .expect("read model after refusal"),
+        Some(model.clone())
+    );
+
+    // Resending the same source keeps the document.
+    app.update_rule_set_with_builder_model(
+        &user,
+        created.id.clone(),
+        None,
+        None,
+        Some(source.into()),
+        None,
+        None,
+        None,
+        BuilderModelChange::Keep,
+    )
+    .await
+    .expect("same source keeps model");
+    assert_eq!(
+        app.get_rule_set_builder_model(&user, &created.id)
+            .await
+            .expect("read model after same source"),
+        Some(model.clone())
+    );
+
+    // Clearing alone is an edit, and leaves the rule hand-written.
+    app.update_rule_set_with_builder_model(
+        &user,
+        created.id.clone(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        BuilderModelChange::Clear,
+    )
+    .await
+    .expect("clear model");
+    assert_eq!(
+        app.get_rule_set_builder_model(&user, &created.id)
+            .await
+            .expect("read cleared model"),
+        None
+    );
+    let rule = app
+        .get_rule_set(&user, &created.id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(rule.name, "Renamed");
+    assert!(rule.rego_source.contains("builder_score"));
+
+    // A hand edit with the field omitted drops the document, so a later
+    // builder save cannot regenerate the old source over it.
+    app.update_rule_set_with_builder_model(
+        &user,
+        created.id.clone(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        BuilderModelChange::Set(model.clone()),
+    )
+    .await
+    .expect("set model again");
+    let edited = "import rego.v1\nscore_entry[\"builder_score\"] := 9 if { true }";
+    app.update_rule_set_with_builder_model(
+        &user,
+        created.id.clone(),
+        None,
+        None,
+        Some(edited.into()),
+        None,
+        None,
+        None,
+        BuilderModelChange::Keep,
+    )
+    .await
+    .expect("hand edit");
+    assert_eq!(
+        app.get_rule_set_builder_model(&user, &created.id)
+            .await
+            .expect("read model after hand edit"),
+        None
+    );
+    let rule = app
+        .get_rule_set(&user, &created.id)
+        .await
+        .expect("read edited rule")
+        .expect("rule exists");
+    assert!(rule.rego_source.contains(":= 9"));
+    assert_eq!(rule.name, "Renamed");
+}

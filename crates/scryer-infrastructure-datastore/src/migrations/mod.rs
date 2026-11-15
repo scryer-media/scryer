@@ -46,6 +46,8 @@ pub mod post_processing_output;
 #[cfg(test)]
 mod query_audit_indexes_upgrade_tests;
 pub mod release_url_scrub;
+#[cfg(test)]
+mod remove_user_maintenance_rules_upgrade_tests;
 pub mod repair_root_title_folders;
 #[cfg(test)]
 mod request_rules_enable_only_upgrade_tests;
@@ -269,6 +271,34 @@ async fn replay_catalog_into_fresh_db_with_context(
         start_version,
         target_version,
         hook_context,
+    )
+    .await
+}
+
+/// Apply an existing database's pending migrations through `through_version`
+/// only, the way an upgrade applies them. Tests use it to look at an upgrade
+/// part-way through; startup always runs [`run_migrations`].
+#[doc(hidden)]
+pub async fn run_upgrade_migrations_through(
+    pool: &SqlitePool,
+    through_version: i64,
+) -> AppResult<()> {
+    let catalog = embedded_catalog()?;
+    let payload_bytes = embedded_payload_bytes()?;
+    let mut conn = acquire_migration_connection(pool).await?;
+    let conn = &mut *conn;
+    ensure_migration_ledger_shape(conn).await?;
+    let applied = load_applied_migrations(conn).await?;
+    validate_known_migrations(&applied, &catalog, &payload_bytes)?;
+    crate::sql::spellfix_retirement::retire_spellfix_virtual_table_on(conn).await?;
+    apply_version_range(
+        conn,
+        &catalog,
+        &payload_bytes,
+        MigrationInstallKind::Upgrade,
+        1,
+        through_version.min(catalog.max_version()),
+        &MigrationHookContext::default(),
     )
     .await
 }

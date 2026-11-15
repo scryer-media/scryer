@@ -32,10 +32,13 @@ use crate::RulesError;
 use crate::runtime::RuntimeLimits;
 
 pub use decode::{
-    MAX_REASON_CODE_LEN, MAX_REASON_CODES, MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX,
+    MAX_REASON_CODE_LEN, MAX_REASON_CODES, MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX, check_tag,
     decode_reasons, decode_tags,
 };
-pub use engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
+pub use engine::{
+    EvalOutcome, EvalRecord, PolicyEngine, PolicyErrorKind, PolicyEvaluator, PolicyRefusal,
+    RuleHandle,
+};
 pub use observation::{
     Observation, SerializedFacts, held_reason_codes, serialize_fact_namespaces, unobservable_facts,
 };
@@ -116,6 +119,22 @@ pub trait PolicyFamily: Sized + 'static {
         Ok(())
     }
 
+    /// Host-authored modules loaded beside this policy, as `(path, source)`
+    /// pairs. They are added after the policy's own module and before the
+    /// wrapper, and get the policy's parsed module so a family can decline to
+    /// add a helper the author already defines.
+    fn support_modules(_policy: &Self::Policy, _module: &Module) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    /// Why this policy's source must not be evaluated, read off the module the
+    /// engine parsed. Checked at load, so a stored source that would no
+    /// longer pass validation is an error for every run rather than partly
+    /// applied. `None` for a family with no such contract.
+    fn load_refusal(_policy: &Self::Policy, _module: &Module) -> Option<PolicyRefusal> {
+        None
+    }
+
     /// The `input.facts.*` names this policy reads, resolved statically.
     /// Meaningful only when [`Self::TRACKS_REFERENCED_FACTS`] is set; a family
     /// that returns facts here must set it, or nothing will ever be held.
@@ -171,5 +190,9 @@ pub trait PolicyFamily: Sized + 'static {
     }
 
     /// Build the family's failure record for one rule.
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError;
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        kind: PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError;
 }

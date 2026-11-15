@@ -22,9 +22,11 @@
 pub(crate) mod builtins;
 pub mod diagnostic_codes;
 pub mod maintenance;
+pub mod maintenance_actions;
 pub mod policy;
 mod release;
 pub mod request;
+pub mod rule_builder_schema;
 pub mod runtime;
 pub mod validation;
 
@@ -38,4 +40,9 @@ pub(crate) use release::{
 mod trash_pack_validation;
 
 #[cfg(test)]
+mod builder_fixture_tests;
+#[cfg(test)]
 mod rego_editor_tests;
+
+#[cfg(test)]
+mod maintenance_action_tests;

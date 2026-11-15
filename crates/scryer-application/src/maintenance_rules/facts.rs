@@ -201,6 +201,46 @@ pub mod unknown_reason {
     /// freshness window.
     pub const AUDIENCE_NOT_READ: &str = "audience_not_read";
 
+    /// A member's watchlist subscription has not synced successfully: it has
+    /// never run, or its last run failed. The watchlist facts need every
+    /// watchlist read, so they are unknown for every title.
+    pub const WATCHLIST_NOT_SYNCED: &str = "watchlist_not_synced";
+
+    /// A member's watchlist subscription last synced longer ago than its
+    /// freshness window, so what it holds now is not known.
+    pub const WATCHLIST_STALE: &str = "watchlist_stale";
+
+    /// No member's watchlist holds the title, so there is no time it was
+    /// added. An *absence* reason.
+    pub const NOT_ON_A_WATCHLIST: &str = "not_on_a_watchlist";
+
+    /// The title's stored metadata could not be read for this pass, so its
+    /// genres and ratings are unknown.
+    pub const METADATA_UNREADABLE: &str = "metadata_unreadable";
+
+    /// The episode store could not be read for this pass, so the shape of
+    /// the show's episode list is unknown.
+    pub const EPISODE_STORE_UNREADABLE: &str = "episode_store_unreadable";
+
+    /// No regular episode of the show has aired, so there is no latest air
+    /// date and no share of aired episodes. An *absence* reason.
+    pub const NO_AIRED_EPISODE: &str = "no_aired_episode";
+
+    /// No regular episode of the show has an air date after the evaluation
+    /// day. An *absence* reason.
+    pub const NO_SCHEDULED_EPISODE: &str = "no_scheduled_episode";
+
+    /// Every enabled media server is Plex, which has no favourites, so the
+    /// favourite facts do not apply. An *absence* reason.
+    pub const FAVORITES_UNSUPPORTED: &str = "favorites_unsupported";
+
+    /// A linked member can only be observed through Plex, which has no
+    /// favourites, so whether they favourited the subject is not known.
+    pub const FAVORITE_MEMBER_UNOBSERVABLE: &str = "favorite_member_unobservable";
+
+    /// The stored favourites could not be read for this pass.
+    pub const FAVORITES_UNREADABLE: &str = "favorites_unreadable";
+
     /// Every code above. A released code is part of the rule-authoring
     /// contract, so none may be renamed, reused or repurposed.
     pub const ALL: &[&str] = &[
@@ -237,6 +277,16 @@ pub mod unknown_reason {
         REQUEST_STORE_UNREADABLE,
         NO_PUBLIC_REQUEST_LIST,
         AUDIENCE_NOT_READ,
+        WATCHLIST_NOT_SYNCED,
+        WATCHLIST_STALE,
+        NOT_ON_A_WATCHLIST,
+        METADATA_UNREADABLE,
+        EPISODE_STORE_UNREADABLE,
+        NO_AIRED_EPISODE,
+        NO_SCHEDULED_EPISODE,
+        FAVORITES_UNSUPPORTED,
+        FAVORITE_MEMBER_UNOBSERVABLE,
+        FAVORITES_UNREADABLE,
     ];
 }
 
@@ -325,6 +375,13 @@ pub struct MaintenanceWatchContext {
     /// plays, linked or not) was read recently. Only the anonymous facts
     /// answer from it, and only once [`Self::freshness`] has passed too.
     pub audience: WatchSignalFreshness,
+    /// The enabled connections that have favourites (Jellyfin and Emby).
+    /// Plex has none, so a Plex connection is never in this set.
+    pub favorite_connection_ids: HashSet<String>,
+    /// The linked users with a link read on one of
+    /// [`Self::favorite_connection_ids`]. A linked user outside it can only be
+    /// observed through Plex, so whether they favourited anything is unknown.
+    pub favorite_user_ids: HashSet<String>,
 }
 
 impl MaintenanceWatchContext {
@@ -335,7 +392,7 @@ impl MaintenanceWatchContext {
     }
 
     /// The gate answer, or `None` when watch facts may be reported.
-    fn unavailable_reason(&self) -> Option<&'static str> {
+    pub(crate) fn unavailable_reason(&self) -> Option<&'static str> {
         match self.freshness {
             WatchSignalFreshness::Fresh => None,
             WatchSignalFreshness::Unavailable(reason) => Some(reason),
@@ -575,7 +632,176 @@ fn build_facts(
         storage_available_bytes: Observation::absent(),
         storage_total_bytes: Observation::absent(),
         storage_available_percent: Observation::absent(),
+        runtime_minutes: optional_known(title.runtime_minutes.map(i64::from)),
+        original_language: optional_text(title.language.as_deref()),
+        series_status: if matches!(title.facet, MediaFacet::Movie) {
+            Observation::absent()
+        } else {
+            optional_text(title.content_status.as_deref())
+        },
+        first_aired: if matches!(title.facet, MediaFacet::Movie) {
+            Observation::absent()
+        } else {
+            optional_text(title.first_aired.as_deref())
+        },
+        network: optional_text(title.network.as_deref()),
+        studio: optional_text(title.studio.as_deref()),
+        country: optional_text(title.country.as_deref()),
+        popularity: optional_known(title.popularity.filter(|value| value.is_finite())),
+        theatrical_release_date: release_date_observation(title, ReleaseKind::Theatrical),
+        digital_release_date: release_date_observation(title, ReleaseKind::Digital),
+        physical_release_date: release_date_observation(title, ReleaseKind::Physical),
+        days_since_added: days_since(evaluation_time, title.created_at),
+        max_video_height: max_video_height_observation(files),
+        season_count: episode_shape_default(&title.facet),
+        aired_episode_count: episode_shape_default(&title.facet),
+        unaired_episode_count: episode_shape_default(&title.facet),
+        missing_episode_count: episode_shape_default(&title.facet),
+        aired_episode_file_percent: episode_shape_default(&title.facet),
+        latest_season_number: episode_shape_default(&title.facet),
+        latest_aired_episode_date: episode_shape_default(&title.facet),
+        next_episode_air_date: episode_shape_default(&title.facet),
+        // Tag, rating and watchlist facts are loaded per batch, only for a
+        // rule that reads them, and applied by the caller; a caller that did
+        // not load them leaves them unknown.
+        genres: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        rating: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        ratings: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        play_count_total: if matches!(title.facet, MediaFacet::Movie) {
+            play_count_total_observation(watch, |play| {
+                play.kind == scryer_domain::MediaServerSignalKind::Movie
+            })
+        } else {
+            Observation::unknown(unknown_reason::SHOW_WATCH_ROLLUP_UNAVAILABLE)
+        },
+        watchlisted_by_user_ids: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        watchlisted_by_usernames: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        watchlisted_by_anyone: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        watchlisted_by_any_requester: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        watchlist_added_at: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        watchlist_origins: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_user_ids: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_usernames: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_anyone: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        favorited_by_any_requester: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
     }
+}
+
+/// Absent for a movie, which has no episodes. A show's shape is read per
+/// batch, only for a rule that reads it, and laid over this by the caller.
+fn episode_shape_default<T: serde::Serialize>(facet: &MediaFacet) -> Observation<T> {
+    match facet {
+        MediaFacet::Movie => Observation::absent(),
+        MediaFacet::Series | MediaFacet::Anime => {
+            Observation::unknown(unknown_reason::NOT_YET_COLLECTED)
+        }
+    }
+}
+
+/// A stored value, or a confirmed absence when the provider gave none.
+fn optional_known<T: serde::Serialize>(value: Option<T>) -> Observation<T> {
+    value.map_or_else(Observation::absent, Observation::known)
+}
+
+/// Stored text, trimmed; blank is the same as none.
+fn optional_text(value: Option<&str>) -> Observation<String> {
+    optional_known(
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    )
+}
+
+/// Whole days from `since` to the evaluation clock, never negative.
+pub(crate) fn days_since(evaluation_time: DateTime<Utc>, since: DateTime<Utc>) -> Observation<i64> {
+    Observation::known((evaluation_time - since).num_days().max(0))
+}
+
+fn max_video_height_observation(files: &[TitleMediaFile]) -> Observation<i64> {
+    optional_known(
+        files
+            .iter()
+            .filter_map(|file| file.video_height)
+            .map(i64::from)
+            .max(),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ReleaseKind {
+    Theatrical,
+    Digital,
+    Physical,
+}
+
+/// A movie's earliest release of one kind: the release market's first date,
+/// else the first date from any market. Absent for a show and for a movie
+/// whose fetched dates hold none of that kind; unknown for a movie whose
+/// release dates were never fetched, except a digital date the title row
+/// already carries.
+fn release_date_observation(title: &Title, kind: ReleaseKind) -> Observation<String> {
+    if !matches!(title.facet, MediaFacet::Movie) {
+        return Observation::absent();
+    }
+    let title_digital = || {
+        title
+            .digital_release_date
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let Some(dates) = title
+        .movie_release_dates
+        .as_ref()
+        .filter(|dates| dates.fetched)
+    else {
+        return match (kind, title_digital()) {
+            (ReleaseKind::Digital, Some(date)) => Observation::known(date),
+            _ => Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        };
+    };
+    let (market, any_market) = match kind {
+        ReleaseKind::Theatrical => (&dates.theatrical_dates, &dates.any_market_theatrical_dates),
+        ReleaseKind::Digital => (&dates.digital_dates, &dates.any_market_digital_dates),
+        ReleaseKind::Physical => (&dates.physical_dates, &dates.any_market_physical_dates),
+    };
+    let earliest = |dates: &Vec<String>| {
+        dates
+            .iter()
+            .map(|date| date.trim())
+            .filter(|date| !date.is_empty())
+            .min()
+            .map(str::to_string)
+    };
+    let date = earliest(market).or_else(|| earliest(any_market));
+    let date = match kind {
+        ReleaseKind::Digital => date.or_else(title_digital),
+        _ => date,
+    };
+    optional_known(date)
+}
+
+/// Plays of the subject by every account, summed, behind the audience gate.
+/// No play is a known zero, not an absence.
+fn play_count_total_observation(
+    watch: MaintenanceTitleWatch<'_>,
+    in_scope: impl Fn(&AudiencePlay) -> bool,
+) -> Observation<i64> {
+    if let Some(reason) = watch.context.audience_unavailable_reason() {
+        return Observation::unknown(reason);
+    }
+    Observation::known(
+        watch
+            .audience
+            .unwrap_or_default()
+            .iter()
+            .filter(|play| watch.context.observes(&play.connection_id))
+            .filter(|play| in_scope(play))
+            .map(|play| play.play_count.max(0))
+            .sum(),
+    )
 }
 
 /// The three lifecycle-claim facts for one subject.
@@ -1113,6 +1339,12 @@ fn file_doc(file: &TitleMediaFile) -> MaintenanceFileDoc {
         video_height: file.video_height,
         audio_languages: file.audio_languages.clone(),
         subtitle_languages: file.subtitle_languages.clone(),
+        audio_codec: file.audio_codec.clone(),
+        audio_channels: file.audio_channels,
+        audio_bitrate_kbps: file.audio_bitrate_kbps,
+        video_bitrate_kbps: file.video_bitrate_kbps,
+        video_bit_depth: file.video_bit_depth,
+        video_hdr_format: file.video_hdr_format.clone(),
         added_at: parse_timestamp(&file.created_at).map(|added| added.to_rfc3339()),
     }
 }
@@ -1211,6 +1443,7 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
         })
     {
         input.facts.added_at = Observation::known(created_at.to_rfc3339());
+        input.facts.days_since_added = days_since(evaluation_time, created_at);
     }
     let has_episode_inventory = subject.kind != Scope::Title
         || matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
@@ -1236,6 +1469,16 @@ pub(crate) fn build_subject_input_with_completed_retention_episodes(
         input.facts.watched_by_all_requesters = watched.watched_by_all_requesters;
         input.facts.watched_by_anyone = watched.watched_by_anyone;
         input.facts.last_watched_by_anyone_at = watched.last_watched_by_anyone_at;
+        let episode_ids: HashSet<&str> = subject
+            .episodes
+            .iter()
+            .map(|episode| episode.id.as_str())
+            .collect();
+        input.facts.play_count_total = play_count_total_observation(watch, |play| {
+            play.scryer_episode_id
+                .as_deref()
+                .is_some_and(|id| episode_ids.contains(id))
+        });
     }
     let (episode_position_by_air_date, season_position_by_air_date) =
         retention_rank_observations(evaluation_time, subject, completed_retention_episode_ids);
@@ -1406,7 +1649,7 @@ pub(crate) mod tests {
         faceted_title(created_by, MediaFacet::Movie)
     }
 
-    fn faceted_title(created_by: Option<&str>, facet: MediaFacet) -> Title {
+    pub(crate) fn faceted_title(created_by: Option<&str>, facet: MediaFacet) -> Title {
         Title {
             id: "title-1".to_string(),
             library_id: scryer_domain::default_library_id_for_facet(&facet),
@@ -1558,6 +1801,8 @@ pub(crate) mod tests {
             unswept_user_ids: HashSet::new(),
             enabled_connection_ids: [ENABLED_CONNECTION.to_string()].into_iter().collect(),
             audience: WatchSignalFreshness::Fresh,
+            favorite_connection_ids: HashSet::new(),
+            favorite_user_ids: HashSet::new(),
         }
     }
 
@@ -1581,6 +1826,7 @@ pub(crate) mod tests {
             kind: scryer_domain::MediaServerSignalKind::Movie,
             scryer_title_id: Some("title-1".to_string()),
             scryer_episode_id: None,
+            season_number: None,
             played,
             play_count: i64::from(played),
             last_played_at: Some(
@@ -2940,5 +3186,100 @@ pub(crate) mod tests {
             only_unaired.watched_by_anyone,
             Observation::Known { value: false, .. }
         ));
+    }
+
+    #[test]
+    fn stored_title_metadata_becomes_facts() {
+        let mut movie = title(None);
+        movie.runtime_minutes = Some(118);
+        movie.language = Some(" en ".to_string());
+        movie.studio = Some("Fixture Studio".to_string());
+        movie.country = Some(String::new());
+        movie.popularity = Some(12.5);
+        movie.created_at = Utc::now() - chrono::Duration::days(40);
+        movie.movie_release_dates = Some(scryer_domain::MovieReleaseDates {
+            market: "US".to_string(),
+            fetched: true,
+            theatrical_dates: vec!["2024-03-08".to_string(), "2024-02-01".to_string()],
+            digital_dates: vec![],
+            physical_dates: vec![],
+            any_market_theatrical_dates: vec![],
+            any_market_digital_dates: vec!["2024-05-01".to_string()],
+            any_market_physical_dates: vec![],
+            any_market_home_dates_unusable: false,
+        });
+        let doc = document(&movie, None, &HashMap::new());
+        let facts = &doc["facts"];
+        assert_eq!(facts["runtime_minutes"], 118);
+        assert_eq!(facts["original_language"], "en");
+        assert_eq!(facts["studio"], "Fixture Studio");
+        assert_eq!(doc["observations"]["country"]["status"], "absent");
+        assert_eq!(facts["popularity"], 12.5);
+        assert_eq!(facts["days_since_added"], 40);
+        assert_eq!(facts["theatrical_release_date"], "2024-02-01");
+        assert_eq!(
+            facts["digital_release_date"], "2024-05-01",
+            "no market date falls back to the earliest from any market"
+        );
+        assert_eq!(
+            doc["observations"]["physical_release_date"]["status"],
+            "absent"
+        );
+        assert_eq!(
+            doc["observations"]["series_status"]["status"], "absent",
+            "a movie has no series status"
+        );
+
+        movie.movie_release_dates = None;
+        let doc = document(&movie, None, &HashMap::new());
+        assert_eq!(
+            doc["observations"]["theatrical_release_date"]["reason"],
+            unknown_reason::NOT_YET_COLLECTED,
+            "release dates never fetched are unknown, not absent"
+        );
+
+        let mut show = faceted_title(None, MediaFacet::Series);
+        show.content_status = Some("continuing".to_string());
+        show.network = Some("Fixture Network".to_string());
+        let doc = document(&show, None, &HashMap::new());
+        assert_eq!(doc["facts"]["series_status"], "continuing");
+        assert_eq!(doc["facts"]["network"], "Fixture Network");
+        assert_eq!(
+            doc["observations"]["theatrical_release_date"]["status"],
+            "absent"
+        );
+    }
+
+    #[test]
+    fn play_count_total_sums_every_accounts_plays_behind_the_audience_gate() {
+        let mut first = audience_row(ENABLED_CONNECTION, "account-one", None, None);
+        first.play_count = 3;
+        let second = audience_row(ENABLED_CONNECTION, "account-two", None, None);
+        let mut elsewhere = audience_row("connection-disabled", "account-three", None, None);
+        elsewhere.play_count = 50;
+        let audience = [first, second, elsewhere];
+        let context = fresh_context(&["alice"]);
+
+        let doc = audience_document(&context, None, Some(&audience));
+        assert_eq!(
+            doc["facts"]["play_count_total"], 4,
+            "plays on a connection that is not observed do not count"
+        );
+
+        let doc = audience_document(&context, None, None);
+        assert_eq!(
+            doc["facts"]["play_count_total"], 0,
+            "no plays is a known zero"
+        );
+
+        let unread = MaintenanceWatchContext {
+            audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
+            ..fresh_context(&["alice"])
+        };
+        let doc = audience_document(&unread, None, Some(&audience));
+        assert_eq!(
+            doc["observations"]["play_count_total"]["reason"],
+            unknown_reason::AUDIENCE_NOT_READ
+        );
     }
 }
