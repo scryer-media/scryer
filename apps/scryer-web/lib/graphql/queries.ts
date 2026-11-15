@@ -3304,6 +3304,10 @@ export const myUiSettingsQuery = `query MyUiSettings {
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns

@@ -69,9 +69,9 @@ use crate::{
     TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
     TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
     UiCatalogViewSetting, UiCatalogViewUpdate, UiDashboardBreakpoint, UiDashboardLayout,
-    UiSettings, UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository,
-    UserUiSettingsRepository, VerifiedExternalIdentity, WebauthnChallengeRecord,
-    WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
+    UiSettings, UiSettingsUpdate, UiTourOutcome, UiTourProgress, UpstreamScheduler,
+    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
+    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
     WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
     ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
     types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
@@ -4221,6 +4221,25 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         _breakpoint: Option<UiDashboardBreakpoint>,
     ) -> AppResult<Option<UiSettings>> {
         Ok(Some(UiSettings::defaults_for_user(user_id.to_string())))
+    }
+
+    async fn record_tours(
+        &self,
+        user_id: &str,
+        tour_ids: &[String],
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings> {
+        let mut current = UiSettings::defaults_for_user(user_id.to_string());
+        let recorded_at = chrono::Utc::now();
+        current.tours = tour_ids
+            .iter()
+            .map(|tour_id| UiTourProgress {
+                tour_id: tour_id.clone(),
+                outcome,
+                recorded_at,
+            })
+            .collect();
+        Ok(current)
     }
 }
 

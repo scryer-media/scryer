@@ -4507,6 +4507,14 @@ pub trait UserUiSettingsRepository: Send + Sync {
         user_id: &str,
         breakpoint: Option<UiDashboardBreakpoint>,
     ) -> AppResult<Option<UiSettings>>;
+    /// Records the outcome of each named tour in one write. A tour already
+    /// recorded keeps its first outcome.
+    async fn record_tours(
+        &self,
+        user_id: &str,
+        tour_ids: &[String],
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings>;
 }
 
 #[async_trait]

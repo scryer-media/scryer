@@ -159,6 +159,21 @@ export type UiSettings = {
    * shows the default layout.
    */
   dashboardLayouts: UiDashboardLayout[];
+  /** Guided tours already finished or skipped; a tour with no entry has not been shown. */
+  tours: UiTourProgress[];
+};
+
+/** How a guided tour was left. Either way it is not offered again. */
+export type UiTourOutcome = "COMPLETED" | "SKIPPED";
+
+export type UiTourProgress = {
+  tourId: string;
+  outcome: UiTourOutcome;
+};
+
+export type RecordMyUiToursInput = {
+  tourIds: string[];
+  outcome: UiTourOutcome;
 };
 
 /** Dashboard grid breakpoints, keyed on the viewport width as the old media queries were. */
@@ -200,6 +215,7 @@ export type SetMyUiSettingsInput = Omit<
   | "tableColumns"
   | "catalogViews"
   | "dashboardLayouts"
+  | "tours"
   | "discoveryGridHideOwned"
   | "discoveryGridHideRequested"
 > & {

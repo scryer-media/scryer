@@ -20405,6 +20405,15 @@ type MutationRoot {
 		input: SetMyDashboardLayoutInput!
 	): UiSettingsPayload!
 	"""
+	Records that the authenticated actor finished or skipped guided tours, so they are not offered again.
+	"""
+	recordMyUiTours(
+		"""
+		Tours to record; a tour recorded before takes the new outcome.
+		"""
+		input: RecordMyUiToursInput!
+	): UiSettingsPayload!
+	"""
 	Forgets the authenticated actor's saved dashboard layout so the default layout applies again.
 	"""
 	resetMyDashboardLayout(
@@ -27783,6 +27792,20 @@ enum RecencyLaneValue {
 }
 
 """
+Guided tours to record for the caller, all with one outcome.
+"""
+input RecordMyUiToursInput {
+	"""
+	Tour identifiers: 1 to 32 ids of 1 to 64 lowercase letters, digits, dots or hyphens. Repeated ids count once.
+	"""
+	tourIds: [String!]!
+	"""
+	How the caller left these tours.
+	"""
+	outcome: UiTourOutcomeValue!
+}
+
+"""
 One recycle-bin entry a location change could not move.
 """
 type RecycleBinRelocationFailurePayload {
@@ -34539,6 +34562,10 @@ type UiSettingsPayload {
 	Saved dashboard layouts, one per breakpoint that has one; a breakpoint without an entry uses the default layout.
 	"""
 	dashboardLayouts: [UiDashboardLayout!]!
+	"""
+	Guided tours (onboarding and release highlights) the caller has finished or skipped; a tour without an entry has not been shown.
+	"""
+	tours: [UiTourProgressPayload!]!
 }
 
 """
@@ -34649,6 +34676,38 @@ enum UiThemeValue {
 	Follow the system theme.
 	"""
 	SYSTEM
+}
+
+"""
+How the caller left a guided tour. Either way the tour is not offered again.
+"""
+enum UiTourOutcomeValue {
+	"""
+	The caller reached the last step.
+	"""
+	COMPLETED
+	"""
+	The caller dismissed the tour before the end.
+	"""
+	SKIPPED
+}
+
+"""
+A guided tour the caller has finished or skipped.
+"""
+type UiTourProgressPayload {
+	"""
+	Tour identifier from the web's tour registry, e.g. `onboarding`.
+	"""
+	tourId: String!
+	"""
+	How the caller left the tour.
+	"""
+	outcome: UiTourOutcomeValue!
+	"""
+	When the outcome was recorded.
+	"""
+	recordedAt: DateTime!
 }
 
 """

@@ -3559,6 +3559,10 @@ pub mod settings {
     pub const DASHBOARD_ITEM_EXCEEDS_COLUMNS: &str = "SETTINGS_DASHBOARD_ITEM_EXCEEDS_COLUMNS";
     /// Language must be a language code of at most the selected value letters, digits or hyphens.
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
+    /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
+    pub const UI_TOUR_ID_INVALID: &str = "SETTINGS_UI_TOUR_ID_INVALID";
+    /// A tour progress update names no tour, or more tours than one update may record.
+    pub const UI_TOUR_COUNT_OUT_OF_RANGE: &str = "SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE";
     /// The requested value must be a #RRGGBB hex color.
     pub const MUST_RRGGBB_HEX_COLOR: &str = "SETTINGS_MUST_RRGGBB_HEX_COLOR";
     /// Duplicate UI table column setting for the selected value the selected value the selected value column the selected value.
@@ -3811,6 +3815,8 @@ pub mod settings {
         DASHBOARD_ITEM_SIZE_OUT_OF_RANGE,
         DASHBOARD_ITEM_EXCEEDS_COLUMNS,
         LANGUAGE_OUT_OF_RANGE,
+        UI_TOUR_ID_INVALID,
+        UI_TOUR_COUNT_OUT_OF_RANGE,
         MUST_RRGGBB_HEX_COLOR,
         UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED,
         TABLE_COLUMN_ORDER_OUT_OF_RANGE,

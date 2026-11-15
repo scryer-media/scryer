@@ -1,0 +1,133 @@
+import * as React from "react";
+import type { TourRect } from "@/lib/tours/placement";
+import type { TourTarget } from "@/lib/tours/types";
+import { selectorId } from "@/lib/utils/dom-ids";
+
+/** How long a step waits for its target to render before showing without it. */
+const TARGET_WAIT_MS = 1200;
+
+export type TourTargetState = {
+  /** The target's viewport rectangle, or null when the step shows without one. */
+  rect: TourRect | null;
+  /** The search is over: the target was found, or the step goes on without it. */
+  settled: boolean;
+};
+
+function visibleRect(element: Element): TourRect | null {
+  const box = element.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0) return null;
+  return { top: box.top, left: box.left, width: box.width, height: box.height };
+}
+
+function sameRect(a: TourRect | null, b: TourRect | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.top - b.top) < 0.5 &&
+    Math.abs(a.left - b.left) < 0.5 &&
+    Math.abs(a.width - b.width) < 0.5 &&
+    Math.abs(a.height - b.height) < 0.5
+  );
+}
+
+/**
+ * Finds a step's target by its durable id and follows it: the spotlight moves
+ * with scrolling, resizing and layout shifts. A target that is not rendered
+ * yet (a route still loading) is waited for briefly; one that never appears,
+ * or is hidden, leaves the step to show centered without a spotlight.
+ *
+ * Mount once per step (key the caller by step) so each search starts fresh.
+ */
+export function useTourTarget(
+  target: TourTarget | undefined,
+  reduceMotion: boolean,
+): TourTargetState {
+  const id = target && target.length > 0 ? selectorId(...target) : null;
+  const [state, setState] = React.useState<TourTargetState>(() => ({
+    rect: null,
+    settled: id === null,
+  }));
+
+  React.useEffect(() => {
+    if (id === null) return;
+    let element: HTMLElement | null = null;
+    let frame = 0;
+    let scrolled = false;
+    let found = false;
+    let resizeObserver: ResizeObserver | null = null;
+
+    const publish = (next: TourTargetState) =>
+      setState((current) =>
+        current.settled === next.settled && sameRect(current.rect, next.rect)
+          ? current
+          : next,
+      );
+
+    const measure = () => {
+      frame = 0;
+      if (element && !element.isConnected) {
+        resizeObserver?.disconnect();
+        element = null;
+      }
+      if (!element) {
+        element = document.getElementById(id);
+        if (!element) {
+          // A target that went away takes its spotlight with it.
+          if (found) publish({ rect: null, settled: true });
+          return;
+        }
+        resizeObserver?.observe(element);
+      }
+      const rect = visibleRect(element);
+      if (rect && !scrolled) {
+        scrolled = true;
+        const offscreen =
+          rect.top < 0 ||
+          rect.left < 0 ||
+          rect.top + rect.height > window.innerHeight ||
+          rect.left + rect.width > window.innerWidth;
+        if (offscreen) {
+          element.scrollIntoView({
+            block: "center",
+            inline: "nearest",
+            behavior: reduceMotion ? "auto" : "smooth",
+          });
+          schedule();
+          return;
+        }
+      }
+      if (rect) {
+        found = true;
+        publish({ rect, settled: true });
+      } else if (found) {
+        publish({ rect: null, settled: true });
+      }
+    };
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(measure);
+    };
+
+    resizeObserver = new ResizeObserver(schedule);
+    const mutationObserver = new MutationObserver(schedule);
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    const giveUp = window.setTimeout(() => {
+      setState((current) =>
+        current.settled ? current : { rect: null, settled: true },
+      );
+    }, TARGET_WAIT_MS);
+    schedule();
+
+    return () => {
+      window.clearTimeout(giveUp);
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+    };
+  }, [id, reduceMotion]);
+
+  return state;
+}

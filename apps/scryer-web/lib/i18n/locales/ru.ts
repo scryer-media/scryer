@@ -13555,6 +13555,50 @@ const ru: LocaleDictionary = {
     "Через другой прокси можно подключаться только к решателю проверок.",
   "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
     "Через этот прокси подключаются один или несколько решателей проверок. Сначала измените их.",
+  "tours.onboarding.welcome.title": "Добро пожаловать в Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer находит, скачивает и упорядочивает ваши фильмы, сериалы и аниме. Вот короткая экскурсия; её можно пропустить в любой момент.",
+  "tours.onboarding.search.title": "Ищите что угодно",
+  "tours.onboarding.search.body":
+    "Находите тайтл, настройку или действие откуда угодно. Нажмите ⌘K или Ctrl+K, чтобы открыть поиск с клавиатуры.",
+  "tours.onboarding.libraries.title": "Ваши библиотеки",
+  "tours.onboarding.libraries.body":
+    "У фильмов, сериалов и аниме своя библиотека: что у вас есть, чего не хватает и что уже в пути.",
+  "tours.onboarding.discover.title": "Находите и запрашивайте",
+  "tours.onboarding.discover.body":
+    "Смотрите рекомендации на основе ваших библиотек, запрашивайте тайтлы и следите за каждым запросом в разделе «Запросы».",
+  "tours.onboarding.lists.title": "Списки",
+  "tours.onboarding.lists.body":
+    "Подписывайтесь на списки из таких источников, как Trakt или ваш список Plex Watchlist. Scryer синхронизирует их и добавляет или запрашивает их тайтлы за вас.",
+  "tours.onboarding.activity.title": "Активность",
+  "tours.onboarding.activity.body":
+    "Загрузки и импорт в реальном времени, а также всё, что ждёт вашего решения.",
+  "tours.onboarding.indexers.title": "Индексаторы и клиенты загрузки",
+  "tours.onboarding.indexers.body":
+    "Scryer нужен хотя бы один индексатор, чтобы находить релизы, и клиент загрузки, чтобы их скачивать. Клиенты загрузки находятся чуть ниже.",
+  "tours.onboarding.indexers.action": "Добавить индексатор",
+  "tours.onboarding.qualityProfiles.title": "Профили качества",
+  "tours.onboarding.qualityProfiles.body":
+    "Профиль качества задаёт, какое качество допустимо для тайтла и когда Scryer продолжает искать релиз лучше.",
+  "tours.onboarding.rules.title": "Правила",
+  "tours.onboarding.rules.body":
+    "Правила оценивают релизы, чтобы Scryer выбирал нужные вам и пропускал ненужные.",
+  "tours.onboarding.mediaServers.title": "Медиасерверы",
+  "tours.onboarding.mediaServers.body":
+    "Подключите Jellyfin, Plex или Emby, чтобы Scryer знал, что вы уже посмотрели. Чтобы сервер обновлялся после импорта в Scryer, установите также плагин этого сервера в разделе «Плагины».",
+  "tours.onboarding.notifications.title": "Уведомления",
+  "tours.onboarding.notifications.body":
+    "Узнавайте о захватах, импорте и всём, что требует внимания, там, где вам удобно.",
+  "tours.onboarding.plugins.title": "Плагины",
+  "tours.onboarding.plugins.body":
+    "Плагины добавляют индексаторы, клиенты загрузки и службы уведомлений. Устанавливайте и обновляйте их здесь.",
+  "tours.stepOf": "Шаг {{current}} из {{total}}",
+  "tours.skip": "Пропустить обзор",
+  "tours.back": "Назад",
+  "tours.next": "Далее",
+  "tours.done": "Готово",
+  "tours.saveFailed":
+    "Не удалось сохранить прогресс обзора, поэтому он может появиться снова.",
 };
 
 export default ru;

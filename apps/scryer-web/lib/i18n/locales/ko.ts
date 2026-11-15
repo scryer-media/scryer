@@ -3800,6 +3800,50 @@ const ko: LocaleDictionary = {
     "다른 프록시를 경유할 수 있는 것은 챌린지 솔버뿐입니다.",
   "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
     "하나 이상의 챌린지 솔버가 이 프록시를 경유합니다. 먼저 변경하세요.",
+  "tours.onboarding.welcome.title": "Scryer에 오신 것을 환영합니다",
+  "tours.onboarding.welcome.body":
+    "Scryer는 영화, 시리즈, 애니메이션을 찾아 다운로드하고 정리합니다. 간단히 둘러보겠습니다. 언제든지 건너뛸 수 있습니다.",
+  "tours.onboarding.search.title": "무엇이든 검색",
+  "tours.onboarding.search.body":
+    "어디서든 타이틀, 설정, 작업을 찾을 수 있습니다. ⌘K 또는 Ctrl+K를 눌러 키보드로 검색을 여세요.",
+  "tours.onboarding.libraries.title": "라이브러리",
+  "tours.onboarding.libraries.body":
+    "영화, 시리즈, 애니메이션마다 라이브러리가 있어 보유한 것, 없는 것, 받는 중인 것을 보여 줍니다.",
+  "tours.onboarding.discover.title": "탐색과 요청",
+  "tours.onboarding.discover.body":
+    "라이브러리를 바탕으로 한 추천을 둘러보고 타이틀을 요청한 뒤, 각 요청은 요청 메뉴에서 확인하세요.",
+  "tours.onboarding.lists.title": "목록",
+  "tours.onboarding.lists.body":
+    "Trakt나 Plex 관심 목록 같은 제공자의 목록을 팔로우하세요. Scryer가 동기화를 유지하고 해당 타이틀을 추가하거나 요청합니다.",
+  "tours.onboarding.activity.title": "활동",
+  "tours.onboarding.activity.body":
+    "진행 중인 다운로드와 가져오기, 그리고 결정이 필요한 항목을 보여 줍니다.",
+  "tours.onboarding.indexers.title": "인덱서와 다운로드 클라이언트",
+  "tours.onboarding.indexers.body":
+    "릴리스를 찾으려면 인덱서가 하나 이상, 받으려면 다운로드 클라이언트가 필요합니다. 다운로드 클라이언트는 바로 아래에 있습니다.",
+  "tours.onboarding.indexers.action": "인덱서 추가",
+  "tours.onboarding.qualityProfiles.title": "품질 프로필",
+  "tours.onboarding.qualityProfiles.body":
+    "품질 프로필은 타이틀에 허용할 품질과 Scryer가 더 나은 릴리스를 계속 찾을 조건을 정합니다.",
+  "tours.onboarding.rules.title": "규칙",
+  "tours.onboarding.rules.body":
+    "규칙은 릴리스에 점수를 매겨 Scryer가 원하는 것은 우선하고 원하지 않는 것은 건너뛰게 합니다.",
+  "tours.onboarding.mediaServers.title": "미디어 서버",
+  "tours.onboarding.mediaServers.body":
+    "Jellyfin, Plex 또는 Emby를 연결하면 Scryer가 시청한 항목을 알 수 있습니다. Scryer가 가져올 때 서버가 새로 고쳐지게 하려면 플러그인에서 해당 서버의 플러그인도 설치하세요.",
+  "tours.onboarding.notifications.title": "알림",
+  "tours.onboarding.notifications.body":
+    "가져오기, 다운로드 시작, 확인이 필요한 일을 원하는 곳에서 알려 드립니다.",
+  "tours.onboarding.plugins.title": "플러그인",
+  "tours.onboarding.plugins.body":
+    "플러그인은 인덱서, 다운로드 클라이언트, 알림 서비스를 추가합니다. 여기서 설치하고 업데이트하세요.",
+  "tours.stepOf": "{{total}}단계 중 {{current}}단계",
+  "tours.skip": "둘러보기 건너뛰기",
+  "tours.back": "뒤로",
+  "tours.next": "다음",
+  "tours.done": "완료",
+  "tours.saveFailed":
+    "둘러보기 진행 상황을 저장하지 못해 이 둘러보기가 다시 표시될 수 있습니다.",
 };
 
 export default ko;
