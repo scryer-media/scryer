@@ -1976,7 +1976,7 @@ fn enrichment_reads_ukrainian_release_language_tags() {
     }
 
     let (audio, subtitles) = projected_languages(
-        "[Groupa] Lantern Orchard - 04 (1280x720_x264_AAC) Ukrainian_Sub [556e3829]",
+        "[Groupa] Lantern Orchard Ep. 04 (1280x720_x264_AAC) Ukrainian_Sub [556e3829]",
         &context(ContextFacetHint::Anime, "Lantern Orchard"),
     );
     assert_eq!(subtitles, ukr);
@@ -5779,5 +5779,69 @@ fn a_width_by_height_token_gives_the_quality_of_its_height() {
     ] {
         let parsed = crate::best_parse_for_target(raw, &context(ContextFacetHint::Anime, "Show A"));
         assert_eq!(parsed.quality.as_deref(), Some(quality), "{raw}");
+    }
+}
+
+#[test]
+fn a_spaced_episode_label_without_a_season_is_one_episode() {
+    for raw in [
+        "Show A Ep. 04 (1080p WEB x265)",
+        "[Grp] Show A EP 04 [1080p]",
+        "[Grp] Show A - ep 04 (English Subbed)",
+        "[Grp]Show_A_-_Ep_04[1080p][x264]",
+    ] {
+        let parsed = crate::best_parse_for_target(raw, &context(ContextFacetHint::Series, ""));
+        assert_eq!(parsed.normalized_title, "SHOW A", "{raw}");
+        let episode = parsed.episode.expect("series episode");
+        assert_eq!(episode.season, Some(1), "{raw}");
+        assert_eq!(episode.episode_numbers, vec![4], "{raw}");
+        assert!(episode.absolute_episode_numbers.is_empty(), "{raw}");
+        assert_eq!(
+            episode.release_type,
+            ParsedEpisodeReleaseType::SingleEpisode,
+            "{raw}"
+        );
+
+        let parsed = crate::best_parse_for_target(raw, &context(ContextFacetHint::Anime, ""));
+        assert_eq!(parsed.normalized_title, "SHOW A", "{raw}");
+        let episode = parsed.episode.expect("anime episode");
+        assert_eq!(episode.absolute_episode_numbers, vec![4], "{raw}");
+        assert!(episode.episode_numbers.is_empty(), "{raw}");
+    }
+}
+
+#[test]
+fn a_spaced_episode_label_keeps_its_existing_limits() {
+    let series = context(ContextFacetHint::Series, "");
+    // A season before the label owns it.
+    let episode = crate::best_parse_for_target("Show A S03 Ep 06 1080p WEB", &series)
+        .episode
+        .expect("season episode");
+    assert_eq!(episode.season, Some(3));
+    assert_eq!(episode.episode_numbers, vec![6]);
+
+    // A hyphenated continuation stays a batch.
+    let episode = crate::best_parse_for_target("[Grp] Show A Ep 01-12 [1080p]", &series)
+        .episode
+        .expect("batch");
+    assert_eq!(episode.release_type, ParsedEpisodeReleaseType::RangePack);
+
+    // A single digit and a comma-joined list are not read as one episode.
+    for raw in ["Show A EP 4 1080p WEB", "Show A EP 04,05,06 1080p WEB"] {
+        assert!(
+            crate::best_parse_for_target(raw, &series).episode.is_none(),
+            "{raw}"
+        );
+    }
+
+    // Movie and unknown targets leave the label alone, like the fused `EP04`.
+    for facet in [ContextFacetHint::Movie, ContextFacetHint::Unknown] {
+        let raw = "Show A EP 04 1080p WEB";
+        assert!(
+            crate::best_parse_for_target(raw, &context(facet, ""))
+                .episode
+                .is_none(),
+            "{raw}"
+        );
     }
 }

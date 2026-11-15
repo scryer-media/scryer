@@ -3930,6 +3930,19 @@ fn parse_identity_at(
                     "family:standard_episode",
                 ));
             }
+            if context.facet_hint == ContextFacetHint::Series
+                && let Some((episode_numbers, last_token)) = spaced_episode_label_at(tokens, index)
+            {
+                return Some((
+                    ReleaseIdentity::StandardEpisodeIdentity {
+                        season: Some(1),
+                        episode_numbers,
+                    },
+                    last_token,
+                    28,
+                    "family:standard_episode_label",
+                ));
+            }
             if let Some((season, episode_numbers, consumed)) =
                 parse_split_standard_episode_at(tokens, index)
             {
@@ -3981,20 +3994,37 @@ fn parse_identity_at(
                 )
             })
         }
-        ParseFamily::AnimeAbsolute => parse_anime_absolute_at(tokens, index, context).map(
-            |(absolute_episode_numbers, version)| {
-                (
+        ParseFamily::AnimeAbsolute => {
+            if context.facet_hint == ContextFacetHint::Anime
+                && let Some((absolute_episode_numbers, last_token)) =
+                    spaced_episode_label_at(tokens, index)
+            {
+                return Some((
                     ReleaseIdentity::AbsoluteIdentity {
                         absolute_episode_numbers,
-                        version,
+                        version: None,
                         season_hint: None,
                     },
-                    index,
+                    last_token,
                     30,
-                    "family:anime_absolute",
-                )
-            },
-        ),
+                    "family:anime_absolute_label",
+                ));
+            }
+            parse_anime_absolute_at(tokens, index, context).map(
+                |(absolute_episode_numbers, version)| {
+                    (
+                        ReleaseIdentity::AbsoluteIdentity {
+                            absolute_episode_numbers,
+                            version,
+                            season_hint: None,
+                        },
+                        index,
+                        30,
+                        "family:anime_absolute",
+                    )
+                },
+            )
+        }
         ParseFamily::SeasonPack => {
             if let Some(RangePackParse {
                 season,
@@ -6905,6 +6935,33 @@ fn episode_marker_at(tokens: &[Token], index: usize) -> Option<(Vec<u32>, usize)
     }) || split_episode_range_end(tokens, last + 1, *episodes.last()?)
         .is_some();
     (!continues_as_range).then_some((episodes, last))
+}
+
+/// A spaced episode label with no season before it (`EP 04`, `Ep. 04`,
+/// `ep_04`), returning the episode number and the last token it consumes.
+///
+/// Series targets read it as season 1, like the fused `EP04`; anime targets
+/// read it as an absolute number, like `Episode 04` and `Ep 01-12` already
+/// are. Like the fused rewrite, the number needs at least two digits. A season
+/// earlier in the name makes the label that season's episode, which the split
+/// marker rules own; a hyphenated continuation is a batch, which the range
+/// rules own; and a comma-joined list (`EP 04,05`) is not one number.
+fn spaced_episode_label_at(tokens: &[Token], index: usize) -> Option<(Vec<u32>, usize)> {
+    if tokens.get(index)?.normalized != "EP" {
+        return None;
+    }
+    let number = tokens.get(index + 1)?;
+    if number.raw.len() < 2
+        || !number.raw.bytes().all(|byte| byte.is_ascii_digit())
+        || !matches!(
+            number.separator_before,
+            SeparatorKind::Space | SeparatorKind::Dot | SeparatorKind::Underscore
+        )
+        || preceding_season_hint(tokens, index).is_some()
+    {
+        return None;
+    }
+    episode_marker_at(tokens, index)
 }
 
 /// Hyphen continuation after a split episode (`S3.01-02`, `Season 1 - 001-020`):
