@@ -3046,11 +3046,28 @@ async fn handle_tracked_download_command(
                 )));
                 return;
             };
+            // A grab history that could not be read is not a missing one: the
+            // refusal below tells the operator the history does not exist.
             let has_grabbed_submission =
-                crate::failed_download_handler::tracked_download_has_grabbed_submission(
+                match crate::failed_download_handler::tracked_download_grabbed_submission_lookup(
                     app, &tracked,
                 )
-                .await;
+                .await
+                {
+                    Ok(found) => found,
+                    Err(error) => {
+                        tracing::warn!(
+                            download_id = %tracked.download_id,
+                            error = %error,
+                            "could not read grab history for a manual failure request"
+                        );
+                        let _ = reply.send(Err(AppError::Repository(
+                            "could not read this download's grab history; download preserved"
+                                .into(),
+                        )));
+                        return;
+                    }
+                };
             if !has_grabbed_submission {
                 let _ = reply.send(Err(AppError::validation_refused(
                     crate::error_reasons::integration::DOWNLOAD_NOT_GRABBED,

@@ -1438,6 +1438,16 @@ mod tests {
         assert!(actions.ignore);
         assert!(actions.mark_failed);
 
+        // A download Scryer did not grab keeps its other actions, but failure
+        // cleanup is not offered: the mutation would refuse it.
+        let mut not_grabbed = blocked.clone();
+        not_grabbed.is_scryer_origin = false;
+        let actions = derive_download_queue_import_actions(&not_grabbed);
+        assert!(!actions.mark_failed);
+        assert!(actions.manual_import_interactive);
+        assert!(actions.assign_title);
+        assert!(actions.ignore);
+
         // A movie imports without the dialog.
         let mut movie = blocked.clone();
         movie.facet = Some("MOVIE".to_string());
