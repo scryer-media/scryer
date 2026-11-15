@@ -935,3 +935,136 @@ async fn replace_early_refused_by_a_monthly_limit_keeps_the_existing_download() 
     assert_eq!(submissions.len(), 1, "{submissions:?}");
     assert_eq!(submissions[0].download_client_item_id, "existing-job");
 }
+
+#[tokio::test]
+async fn retry_refused_by_a_monthly_limit_keeps_the_failed_submission_it_would_replace() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let limit = Arc::new(PerIndexerGrabLimit::refusing(CAPPED_INDEXER));
+    let app = app.with_test_overrides(|services| services.with_indexer_stats(limit.clone()));
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Limit Retry Subject".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let source_hint = "https://example.invalid/limit-retry.nzb";
+    let source_title = "Limit.Retry.Subject.2026.1080p.WEB-DL";
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "failed-job".to_string(),
+            source_hint: Some(source_hint.to_string()),
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some(source_title.to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: crate::helpers::normalize_release_selection_signature(
+                Some(source_hint),
+                Some(source_title),
+                Some(DownloadSourceKind::NzbUrl),
+            ),
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("record submission");
+    *download_client.queue_items.lock().await = vec![queue_history_fixture_item(
+        "failed-job",
+        DownloadQueueState::Failed,
+        0,
+    )];
+    let selection = QueuedReleaseSelection {
+        indexer_id: Some(CAPPED_INDEXER.to_string()),
+        source_hint: Some(source_hint.to_string()),
+        source_kind: Some(DownloadSourceKind::NzbUrl),
+        source_title: Some(source_title.to_string()),
+        source_password: None,
+        info_hash_hint: None,
+        size_bytes: None,
+        seeders: None,
+    };
+
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            selection.clone(),
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::ReplaceEarly,
+        )
+        .await
+        .expect_err("the retry's indexer is at its monthly limit");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED)
+    );
+    assert_eq!(limit.admissions(CAPPED_INDEXER), 1);
+    let submissions = download_submissions.store.lock().await.clone();
+    assert_eq!(
+        submissions.len(),
+        1,
+        "a refused retry keeps the submission it would replace: {submissions:?}"
+    );
+    assert_eq!(submissions[0].download_client_item_id, "failed-job");
+
+    // Once the client shows the same job running, it is accepted as it is:
+    // nothing is submitted and no grab is admitted for it.
+    app.runtime
+        .acquisition
+        .download_submission_guards
+        .invalidate_client_snapshots();
+    *download_client.queue_items.lock().await = vec![queue_history_fixture_item(
+        "failed-job",
+        DownloadQueueState::Queued,
+        0,
+    )];
+    let outcome = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            selection,
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::ReplaceEarly,
+        )
+        .await
+        .expect("the running job is accepted as it is");
+    let QueueDownloadOutcome::Queued(queued) = outcome else {
+        panic!("the running job is not a conflict");
+    };
+    assert!(queued.reused_existing);
+    assert_eq!(
+        limit.admissions(CAPPED_INDEXER),
+        1,
+        "accepting the existing download admits no grab"
+    );
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty(),
+        "nothing reaches the download client"
+    );
+}

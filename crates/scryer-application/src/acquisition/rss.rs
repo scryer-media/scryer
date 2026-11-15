@@ -127,8 +127,6 @@ impl RssSeenGuids {
     }
 }
 
-/// The key a feed item's GUID is remembered under: the indexer that returned
-/// it, or its source name when the result carries no indexer id.
 /// The identity an RSS item is remembered by in [`RssSeenGuids`].
 fn rss_seen_guid(result: &IndexerSearchResult) -> &str {
     result
@@ -139,6 +137,8 @@ fn rss_seen_guid(result: &IndexerSearchResult) -> &str {
         .unwrap_or(&result.title)
 }
 
+/// The key a feed item's GUID is remembered under: the indexer that returned
+/// it, or its source name when the result carries no indexer id.
 fn rss_seen_guid_indexer(result: &IndexerSearchResult) -> &str {
     result
         .indexer_id
@@ -3226,6 +3226,17 @@ impl AppUseCase {
         .map(|batch| batch.results)
     }
 
+    /// Drops `result` from the RSS seen set, so a release passed over for its
+    /// indexer's monthly limit is seen as new by a later poll.
+    async fn forget_rss_seen_guid(&self, result: &IndexerSearchResult) {
+        self.runtime
+            .acquisition
+            .rss_seen_guids
+            .write()
+            .await
+            .forget(rss_seen_guid_indexer(result), rss_seen_guid(result));
+    }
+
     /// Try to grab the best candidate from scored RSS releases.
     /// Reuses the same logic as process_single_wanted_item for consistency.
     ///
@@ -3242,17 +3253,6 @@ impl AppUseCase {
         clippy::too_many_arguments,
         reason = "RSS grab attempts coordinate release state, client state, and reporting in one place"
     )]
-    /// Lets a release passed over for its indexer's monthly limit be seen as
-    /// new by a later poll.
-    async fn forget_rss_seen_guid(&self, result: &IndexerSearchResult) {
-        self.runtime
-            .acquisition
-            .rss_seen_guids
-            .write()
-            .await
-            .forget(rss_seen_guid_indexer(result), rss_seen_guid(result));
-    }
-
     async fn try_grab_rss_release(
         &self,
         reads: &crate::acquisition::title_reads::TitleCatalogReads,
