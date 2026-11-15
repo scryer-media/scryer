@@ -27,6 +27,7 @@ import {
   type TourRect,
   type TourSize,
 } from "@/lib/tours/placement";
+import { tourArrow, type TourArrow } from "@/lib/tours/arrow";
 import type { TourIcon, TourStep } from "@/lib/tours/types";
 import { useTourTarget } from "./use-tour-target";
 
@@ -116,6 +117,16 @@ function TourStepOverlay({
           spot={settled ? spot : null}
           reduceMotion={reduceMotion}
         />
+        {placement && cardSize && spot ? (
+          <TourArrowLayer
+            arrow={tourArrow(
+              { top: placement.top, left: placement.left, ...cardSize },
+              spot,
+              step.id,
+            )}
+            reduceMotion={reduceMotion}
+          />
+        ) : null}
         <DialogPrimitive.Content
           ref={setCard}
           data-slot="tour-card"
@@ -269,6 +280,70 @@ function TourBackdrop({
         fill="none"
         strokeWidth={2}
       />
+    </svg>
+  );
+}
+
+const ARROW_KEYFRAMES = `
+@keyframes tour-arrow-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="tour-arrow"] path { animation: none !important; stroke-dashoffset: 0 !important; }
+}`;
+
+/**
+ * A hand-drawn arrow from the card to the spotlight, sketched in stroke by
+ * stroke: the curve, a lighter second pass, then the head. It sits over the
+ * dimmed page and under the card, and never takes a click.
+ */
+function TourArrowLayer({
+  arrow,
+  reduceMotion,
+}: {
+  arrow: TourArrow | null;
+  reduceMotion: boolean;
+}) {
+  if (!arrow) return null;
+  const stroke = (delayMs: number, durationMs: number) =>
+    reduceMotion
+      ? undefined
+      : {
+          strokeDasharray: 1,
+          strokeDashoffset: 1,
+          animation: `tour-arrow-draw ${durationMs}ms ease-out ${delayMs}ms forwards`,
+        };
+  return (
+    <svg
+      data-slot="tour-arrow"
+      className="pointer-events-none fixed inset-0 z-[91] h-full w-full text-primary"
+      aria-hidden="true"
+    >
+      {reduceMotion ? null : <style>{ARROW_KEYFRAMES}</style>}
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path
+          d={arrow.body}
+          pathLength={1}
+          strokeWidth={3}
+          style={stroke(150, 450)}
+        />
+        <path
+          d={arrow.sketch}
+          pathLength={1}
+          strokeWidth={1.5}
+          opacity={0.5}
+          style={stroke(250, 450)}
+        />
+        <path
+          d={arrow.head}
+          pathLength={1}
+          strokeWidth={3}
+          style={stroke(560, 180)}
+        />
+      </g>
     </svg>
   );
 }

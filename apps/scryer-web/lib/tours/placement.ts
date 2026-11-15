@@ -15,8 +15,8 @@ export type TourCardPlacement = {
 
 /** Space kept between the card and the viewport edge. */
 export const TOUR_VIEWPORT_MARGIN = 16;
-/** Space kept between the card and the spotlight. */
-export const TOUR_TARGET_GAP = 16;
+/** Space kept between the card and the spotlight, room for the arrow. */
+export const TOUR_TARGET_GAP = 56;
 /** How far the spotlight extends past its target. */
 export const TOUR_SPOTLIGHT_PADDING = 6;
 
