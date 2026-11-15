@@ -13,8 +13,28 @@ const DEV_WATCH_POLL_INTERVAL = Number.parseInt(
   10,
 );
 
+/** The port this dev server was asked for, which no other server can share. */
+function devServerPort(): string {
+  const args = process.argv;
+  const at = args.findIndex(
+    (arg) => arg === "--port" || arg.startsWith("--port="),
+  );
+  if (at < 0) return "3000";
+  const value = args[at].includes("=")
+    ? args[at].slice("--port=".length)
+    : args[at + 1];
+  return /^\d+$/.test(value ?? "") ? value! : "3000";
+}
+
 export default defineConfig(({ command, mode }) => ({
   base: command === "serve" ? "/" : "./",
+  // Each dev server prebundles into its own folder. Servers sharing one
+  // replace each other's dependencies mid-session, and pages fail with
+  // "Failed to fetch dynamically imported module".
+  cacheDir:
+    command === "serve"
+      ? `node_modules/.vite/dev-${devServerPort()}`
+      : "node_modules/.vite",
   plugins: [
     react(),
     ...(mode === "production"
