@@ -3924,7 +3924,10 @@ mod tests {
             rule_notifications: Vec::new(),
         };
         let plain = build_media_request_submitted_notification(&data).payload;
-        assert_eq!(plain.summary_message, "Submitted media request for 'Fixture Film'.");
+        assert_eq!(
+            plain.summary_message,
+            "Submitted media request for 'Fixture Film'."
+        );
         assert!(
             serde_json::to_value(&data).expect("event serialises")["rule_notifications"].is_null(),
             "an event without notifications keeps its old shape"

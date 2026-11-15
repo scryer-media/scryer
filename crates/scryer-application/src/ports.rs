@@ -3636,6 +3636,57 @@ pub struct MediaRequestQualityProfileReferenceCounts {
     pub pending_requested: u64,
 }
 
+/// What has been asked for one identity before, aggregated in the store so
+/// the request facts never decode a request row to count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaRequestFingerprintSummary {
+    /// Requests for the identity, any requester, any status.
+    pub request_count: u64,
+    pub any_rejected: bool,
+    pub any_approved: bool,
+    /// Distinct members other than the requester who asked for the identity,
+    /// as a submitter or a joined co-requester.
+    pub other_requester_count: u64,
+    /// A request submitted by another member is still pending.
+    pub pending_by_other_requester: bool,
+}
+
+impl MediaRequestFingerprintSummary {
+    /// The summary of an already loaded history, for stores that only have
+    /// [`MediaRequestRepository::history_for_fingerprint`].
+    pub fn from_history(
+        history: &[MediaRequest],
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> Self {
+        use scryer_domain::MediaRequestStatus;
+        let mut summary = Self::default();
+        let mut others = std::collections::HashSet::new();
+        for request in history
+            .iter()
+            .filter(|request| excluding_request_id != Some(request.id.as_str()))
+        {
+            summary.request_count += 1;
+            summary.any_rejected |= request.status == MediaRequestStatus::Rejected;
+            summary.any_approved |= request.status == MediaRequestStatus::Approved;
+            summary.pending_by_other_requester |= request.status == MediaRequestStatus::Pending
+                && request.created_by_user_id != requester_user_id;
+            for user_id in std::iter::once(request.created_by_user_id.as_str()).chain(
+                request
+                    .requesters
+                    .iter()
+                    .map(|requester| requester.user_id.as_str()),
+            ) {
+                if user_id != requester_user_id {
+                    others.insert(user_id.to_string());
+                }
+            }
+        }
+        summary.other_requester_count = others.len() as u64;
+        summary
+    }
+}
+
 #[async_trait]
 pub trait MediaRequestRepository: Send + Sync {
     async fn submit(
@@ -3840,6 +3891,36 @@ pub trait MediaRequestRepository: Send + Sync {
         &self,
         identity_fingerprint: &str,
     ) -> AppResult<Vec<MediaRequest>>;
+
+    /// [`Self::history_for_fingerprint`] reduced to the counts the request
+    /// facts read, seen from `requester_user_id`, without the request being
+    /// edited. A store answers it in one aggregate statement.
+    async fn fingerprint_history_summary(
+        &self,
+        identity_fingerprint: &str,
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestFingerprintSummary> {
+        let history = self.history_for_fingerprint(identity_fingerprint).await?;
+        Ok(MediaRequestFingerprintSummary::from_history(
+            &history,
+            requester_user_id,
+            excluding_request_id,
+        ))
+    }
+
+    /// Titles in `library_id` that requests submitted by `user_id` created.
+    /// Only a store that holds both requests and titles can answer; the
+    /// default says so rather than reporting zero.
+    async fn count_created_titles_in_library_for_requester(
+        &self,
+        _user_id: &str,
+        _library_id: &str,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "this request store cannot count the titles a requester's requests created".into(),
+        ))
+    }
 
     /// When `user_id` last submitted anything, for `days_since_last_request`.
     /// Excludes the request currently being edited when its id is provided.
@@ -4401,6 +4482,15 @@ pub trait UserRepository: Send + Sync {
         Ok(None)
     }
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
+    /// The account's creation and last sign-in times, read by primary key.
+    /// `None` when no account has the id. A store that keeps neither column
+    /// reports both as unstored.
+    async fn account_timestamps(
+        &self,
+        _user_id: &str,
+    ) -> AppResult<Option<crate::types::UserAccountTimestamps>> {
+        Ok(Some(crate::types::UserAccountTimestamps::default()))
+    }
     async fn get_login_snapshot_by_username(
         &self,
         username: &str,

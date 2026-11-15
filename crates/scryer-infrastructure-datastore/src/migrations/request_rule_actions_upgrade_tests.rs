@@ -131,7 +131,10 @@ async fn seed(pool: &sqlx::SqlitePool) {
 async fn kept_rows(pool: &sqlx::SqlitePool) -> Vec<String> {
     let mut rows = Vec::new();
     for (table, columns) in [
-        ("request_rule_decisions", "id, request_id, votes_json, tags_json"),
+        (
+            "request_rule_decisions",
+            "id, request_id, votes_json, tags_json",
+        ),
         ("media_requests", "id, decision_id, decided_by_rule_set_ids"),
         ("libraries", "id, name"),
         ("rule_sets", "id, name, rego_source"),

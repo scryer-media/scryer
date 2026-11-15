@@ -902,7 +902,10 @@ impl AppUseCase {
 
     /// The facets of the libraries a rule applies to: the named ones, or
     /// every library for a rule with no scope. One read either way.
-    async fn request_rule_scope_facets(&self, library_ids: &[String]) -> AppResult<Vec<MediaFacet>> {
+    async fn request_rule_scope_facets(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<Vec<MediaFacet>> {
         let libraries = self.services.catalog.libraries.list(None).await?;
         let mut facets: Vec<MediaFacet> = Vec::new();
         for library in libraries {

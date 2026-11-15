@@ -42,7 +42,12 @@ pub struct RuleScanIssue {
     pub column: usize,
 }
 
-pub(crate) fn issue(code: &'static str, rule: &str, message: String, at: (usize, usize)) -> RuleScanIssue {
+pub(crate) fn issue(
+    code: &'static str,
+    rule: &str,
+    message: String,
+    at: (usize, usize),
+) -> RuleScanIssue {
     RuleScanIssue {
         code,
         rule: rule.to_string(),
@@ -102,9 +107,9 @@ fn char_column(contents: &str, start: usize, fallback: u32) -> usize {
 pub(crate) fn rule_refr(rule: &Rule) -> &Expr {
     match rule {
         Rule::Spec { head, .. } => match head {
-            RuleHead::Compr { refr, .. } | RuleHead::Set { refr, .. } | RuleHead::Func { refr, .. } => {
-                refr
-            }
+            RuleHead::Compr { refr, .. }
+            | RuleHead::Set { refr, .. }
+            | RuleHead::Func { refr, .. } => refr,
         },
         Rule::Default { refr, .. } => refr,
     }
@@ -150,7 +155,10 @@ pub(crate) fn string_literal(expr: &Expr) -> Option<String> {
 /// set rule, `name.key := …`, or a function builds the value out of pieces.
 /// `None` in the list stands for a branch that assigns nothing and so yields
 /// `true`.
-pub(crate) fn plain_value_exprs<'a>(rule: &'a Rule, refr: &Expr) -> Result<Vec<Option<&'a Expr>>, (usize, usize)> {
+pub(crate) fn plain_value_exprs<'a>(
+    rule: &'a Rule,
+    refr: &Expr,
+) -> Result<Vec<Option<&'a Expr>>, (usize, usize)> {
     let plain = matches!(refr, Expr::Var { .. })
         && matches!(
             rule,

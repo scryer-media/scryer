@@ -60,9 +60,7 @@ pub const BUILDER_HELPER_RULE: &str = "rule_applies";
 /// One head a request rule may define, other than `reasons`.
 ///
 /// The discriminant is the head's index in [`REQUEST_HEADS`].
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestActionHead {
     Approve,
@@ -177,7 +175,11 @@ const VOTE_TEMPLATE: &str = "{head} if {helper}";
 const VALUE_TEMPLATE: &str = "{head} := {value} if {helper}";
 const LIST_TEMPLATE: &str = "{head} := [{items}] if {helper}";
 
-const fn vote(id: &'static str, rule_name: &'static str, head: RequestActionHead) -> RequestHeadSpec {
+const fn vote(
+    id: &'static str,
+    rule_name: &'static str,
+    head: RequestActionHead,
+) -> RequestHeadSpec {
     RequestHeadSpec {
         id,
         rule_name,
@@ -351,7 +353,9 @@ pub const REQUEST_HEADS: [RequestHeadSpec; 11] = [
 
 /// The table entry for a rule name, if the name is a head.
 pub fn head_spec(rule_name: &str) -> Option<&'static RequestHeadSpec> {
-    REQUEST_HEADS.iter().find(|spec| spec.rule_name == rule_name)
+    REQUEST_HEADS
+        .iter()
+        .find(|spec| spec.rule_name == rule_name)
 }
 
 impl RequestHeadSpec {
@@ -384,7 +388,11 @@ impl RequestHeadSpec {
                 .replace("{item}", item)
         };
         if self.per_item {
-            literals.iter().map(|item| fill(item)).collect::<Vec<_>>().join("\n")
+            literals
+                .iter()
+                .map(|item| fill(item))
+                .collect::<Vec<_>>()
+                .join("\n")
         } else {
             fill("")
         }
@@ -478,12 +486,14 @@ impl RequestShaping {
             }
             RequestActionHead::SetLeaseDays => self.lease_days.map(RequestHeadValue::Number),
             RequestActionHead::SetMonitor => self.monitor.clone().map(RequestHeadValue::Text),
-            RequestActionHead::SetRequiredAudioLanguages => {
-                self.required_audio_languages.clone().map(RequestHeadValue::List)
-            }
-            RequestActionHead::SetPreferredAudioLanguages => {
-                self.preferred_audio_languages.clone().map(RequestHeadValue::List)
-            }
+            RequestActionHead::SetRequiredAudioLanguages => self
+                .required_audio_languages
+                .clone()
+                .map(RequestHeadValue::List),
+            RequestActionHead::SetPreferredAudioLanguages => self
+                .preferred_audio_languages
+                .clone()
+                .map(RequestHeadValue::List),
             RequestActionHead::Approve
             | RequestActionHead::Deny
             | RequestActionHead::Manual
@@ -833,7 +843,9 @@ impl RequestActionScan {
     /// `reasons` and `notify` alone explain or announce a decision nobody
     /// made.
     pub fn decides_something(&self) -> bool {
-        self.defined_heads.iter().any(|head| head.spec().role.decides())
+        self.defined_heads
+            .iter()
+            .any(|head| head.spec().role.decides())
     }
 
     /// The text literals written for one head, in source order.
@@ -950,7 +962,10 @@ fn not_literal(spec: &RequestHeadSpec, at: (usize, usize)) -> RuleScanIssue {
     issue(
         diagnostic_codes::RULE_ACTION_VALUE_NOT_LITERAL,
         name,
-        format!("'{name}' must be assigned {expected}, for example: {}", spec.example()),
+        format!(
+            "'{name}' must be assigned {expected}, for example: {}",
+            spec.example()
+        ),
         at,
     )
 }
@@ -1004,11 +1019,12 @@ pub(crate) fn scan_request_module(module: &Module) -> RequestActionScan {
             continue;
         };
         if is_function {
-            scan.errors.push(if spec.value_kind == RequestValueKind::Flag {
-                head_defined_as_function(name, at)
-            } else {
-                not_literal(spec, at)
-            });
+            scan.errors
+                .push(if spec.value_kind == RequestValueKind::Flag {
+                    head_defined_as_function(name, at)
+                } else {
+                    not_literal(spec, at)
+                });
             continue;
         }
         scan.defined_heads.insert(head);
@@ -1089,11 +1105,15 @@ fn scan_number_value(scan: &mut RequestActionScan, head: RequestActionHead, valu
         return;
     };
     match check_number(spec, number) {
-        Ok(()) => scan.number_literals.entry(head).or_default().push(RuleNumberLiteral {
-            value: number,
-            line: at.0,
-            column: at.1,
-        }),
+        Ok(()) => scan
+            .number_literals
+            .entry(head)
+            .or_default()
+            .push(RuleNumberLiteral {
+                value: number,
+                line: at.0,
+                column: at.1,
+            }),
         Err(message) => scan.errors.push(invalid(spec, message, at)),
     }
 }
@@ -1106,11 +1126,15 @@ fn scan_text_value(scan: &mut RequestActionScan, head: RequestActionHead, value:
         return;
     };
     match check_text(spec, &text) {
-        Ok(()) => scan.text_literals.entry(head).or_default().push(RuleLiteral {
-            value: text,
-            line: at.0,
-            column: at.1,
-        }),
+        Ok(()) => scan
+            .text_literals
+            .entry(head)
+            .or_default()
+            .push(RuleLiteral {
+                value: text,
+                line: at.0,
+                column: at.1,
+            }),
         Err(message) => scan.errors.push(invalid(spec, message, at)),
     }
 }
@@ -1126,7 +1150,8 @@ fn scan_list_value(scan: &mut RequestActionScan, head: RequestActionHead, value:
         return;
     }
     if let Err(message) = check_list_len(spec, items.len()) {
-        scan.errors.push(invalid(spec, message, source_position(value)));
+        scan.errors
+            .push(invalid(spec, message, source_position(value)));
         return;
     }
     for item in items {
@@ -1135,11 +1160,15 @@ fn scan_list_value(scan: &mut RequestActionScan, head: RequestActionHead, value:
         };
         let at = source_position(item);
         match check_item(spec, &text) {
-            Ok(()) => scan.text_literals.entry(head).or_default().push(RuleLiteral {
-                value: text,
-                line: at.0,
-                column: at.1,
-            }),
+            Ok(()) => scan
+                .text_literals
+                .entry(head)
+                .or_default()
+                .push(RuleLiteral {
+                    value: text,
+                    line: at.0,
+                    column: at.1,
+                }),
             Err(message) => scan.errors.push(invalid(spec, message, at)),
         }
     }

@@ -182,8 +182,15 @@ pub struct RequestRequesterDoc {
     pub library_permissions: Vec<String>,
     /// External accounts verified as linked to this one.
     pub linked_providers: Vec<String>,
-    /// RFC3339. Optional because accounts predating the column have none.
+    /// RFC3339. Null when the account row carries no creation time (accounts
+    /// created before the column was written).
     pub created_at: Option<String>,
+    /// RFC3339 of the account's last sign-in. Null when it has never signed in,
+    /// or the stored value is empty.
+    pub last_login_at: Option<String>,
+    /// Whole days from `created_at` to `evaluation_time`. Null exactly when
+    /// `created_at` is.
+    pub account_age_days: Option<i64>,
 }
 
 /// The library the request is targeting.
@@ -208,6 +215,9 @@ pub struct RequestDoc {
     pub quality_profile_name: Option<String>,
     pub monitor_type: Option<String>,
     pub monitor_selection_season_count: Option<i64>,
+    /// The season numbers the requester asked for, ascending and without
+    /// repeats. Null when the request names no season selection.
+    pub monitor_selection_seasons: Option<Vec<i64>>,
     /// True when the requester asked to keep the title indefinitely. `lease_days`
     /// is then meaningless and absent, which is why a rule about finite leases
     /// has to say `not input.request.lease_forever` first.
@@ -240,6 +250,12 @@ pub struct RequestListDoc {
     pub owner_list_policy: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rank: Option<i64>,
+    /// True when the list is a member's own "want to watch" list, judged the
+    /// way Discovery judges it: a personal list of a watchlist source.
+    pub is_watchlist: bool,
+    /// The provider's list type, as the list source names it (`watchlist`,
+    /// `plantowatch`, `list`, …), lowercased.
+    pub source_type: String,
 }
 
 /// One content-rating certification as the metadata source reported it.
@@ -322,6 +338,63 @@ pub struct RequestFactsDoc {
 
     // ── library ──
     pub library_title_count: Observation<i64>,
+
+    // ── series shape (series and anime only; absent for movies) ──
+    /// Seasons with at least one regular episode. Specials are not counted.
+    pub season_count: Observation<i64>,
+    /// Regular episodes the metadata source lists. Specials are not counted.
+    pub episode_count: Observation<i64>,
+    /// Regular episodes whose air date is on or before the evaluation day.
+    pub aired_episode_count: Observation<i64>,
+    /// Regular episodes not yet aired, including those with no air date.
+    pub unaired_episode_count: Observation<i64>,
+    /// `YYYY-MM-DD` of the next regular episode to air after the evaluation
+    /// day. Absent when none is scheduled.
+    pub next_episode_air_date: Observation<String>,
+
+    // ── release dates (movies only; absent for series) ──
+    /// `YYYY-MM-DD`, the earliest in the release market, else in any market.
+    pub theatrical_release_date: Observation<String>,
+    pub digital_release_date: Observation<String>,
+    pub physical_release_date: Observation<String>,
+    /// True when a digital or physical release date is on or before the
+    /// evaluation day.
+    pub home_release_available: Observation<bool>,
+    /// Days from the evaluation day to the earliest release date. Absent once
+    /// any release date has passed, and when there is none.
+    pub days_until_release: Observation<i64>,
+
+    // ── demand ──
+    /// Other members who asked for this identity on an earlier request, as its
+    /// submitter or a joined co-requester.
+    pub other_requester_count: Observation<i64>,
+    /// True when another member's request for this identity is still pending.
+    pub pending_by_other_requester: Observation<bool>,
+
+    // ── requester's own watchlist ──
+    /// True when the title is on one of the requester's own watchlists. Absent
+    /// when the requester has no watchlist linked.
+    pub on_requester_watchlist: Observation<bool>,
+    /// Days since the title first appeared on the requester's watchlist.
+    pub requester_watchlist_days: Observation<i64>,
+
+    // ── list exclusion ──
+    /// True when an operator excluded this title from lists, for every list or
+    /// for the list submitting the request.
+    pub list_excluded: Observation<bool>,
+
+    // ── requester in this library ──
+    /// Titles in the target library that this requester's requests created.
+    pub requester_titles_in_library_count: Observation<i64>,
+
+    // ── storage (the root the title will be placed on) ──
+    /// The library root an approved title lands on: the library's default
+    /// root, else its first.
+    pub storage_root_id: Observation<String>,
+    pub storage_available_bytes: Observation<i64>,
+    pub storage_total_bytes: Observation<i64>,
+    /// `available / total × 100`.
+    pub storage_available_percent: Observation<f64>,
 }
 
 // ── Contract helpers ────────────────────────────────────────────────────────
@@ -770,6 +843,8 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             library_permissions: vec!["view".to_string(), "request".to_string()],
             linked_providers: vec!["jellyfin".to_string()],
             created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            last_login_at: Some("2023-11-13T00:00:00Z".to_string()),
+            account_age_days: Some(683),
         },
         library: RequestLibraryDoc {
             id: "library-1".to_string(),
@@ -789,6 +864,7 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             quality_profile_name: Some("HD".to_string()),
             monitor_type: Some("futureepisodes".to_string()),
             monitor_selection_season_count: Some(2),
+            monitor_selection_seasons: Some(vec![1, 2]),
             lease_forever: false,
             lease_days: Some(14),
             required_audio_languages: None,
@@ -802,6 +878,8 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
                 owner_is_requester: true,
                 owner_list_policy: "approval".to_string(),
                 rank: Some(1),
+                is_watchlist: false,
+                source_type: "list".to_string(),
             }),
         },
         facts: RequestFactsDoc {
@@ -856,6 +934,26 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             active_lease_count: Observation::known(1),
             days_since_last_request: Observation::known(3),
             library_title_count: Observation::known(120),
+            season_count: Observation::known(2),
+            episode_count: Observation::known(20),
+            aired_episode_count: Observation::known(16),
+            unaired_episode_count: Observation::known(4),
+            next_episode_air_date: Observation::known("2023-11-21".to_string()),
+            theatrical_release_date: Observation::known("2023-10-01".to_string()),
+            digital_release_date: Observation::known("2023-11-01".to_string()),
+            physical_release_date: Observation::known("2023-12-01".to_string()),
+            home_release_available: Observation::known(true),
+            days_until_release: Observation::known(7),
+            other_requester_count: Observation::known(1),
+            pending_by_other_requester: Observation::known(false),
+            on_requester_watchlist: Observation::known(true),
+            requester_watchlist_days: Observation::known(12),
+            list_excluded: Observation::known(false),
+            requester_titles_in_library_count: Observation::known(5),
+            storage_root_id: Observation::known("root-1".to_string()),
+            storage_available_bytes: Observation::known(500_000_000_000),
+            storage_total_bytes: Observation::known(2_000_000_000_000),
+            storage_available_percent: Observation::known(25.0),
         },
     }
 }

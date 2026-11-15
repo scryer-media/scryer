@@ -87,7 +87,10 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         match builder_model_json {
             None => {}
             Some(None) => {
-                self.builder_models.lock().await.remove(&revision.rule_set_id);
+                self.builder_models
+                    .lock()
+                    .await
+                    .remove(&revision.rule_set_id);
             }
             Some(Some(model)) => {
                 self.builder_models

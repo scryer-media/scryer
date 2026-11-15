@@ -172,7 +172,11 @@ pub fn from_request_declared_actions(
             .map(request_action_head_value)
             .collect(),
         quality_profiles: declared.quality_profiles,
-        lease_days: declared.lease_days.into_iter().map(to_graphql_int).collect(),
+        lease_days: declared
+            .lease_days
+            .into_iter()
+            .map(to_graphql_int)
+            .collect(),
         monitors: declared.monitors,
         required_audio_languages: declared.required_audio_languages,
         preferred_audio_languages: declared.preferred_audio_languages,
@@ -194,11 +198,7 @@ pub fn from_request_rule_set_detail(
         .flatten()
         .map(from_request_declared_actions);
     RequestRuleSetDetail {
-        rule_set: from_request_rule_set(
-            &detail.rule_set,
-            decision_count,
-            declared_actions.clone(),
-        ),
+        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions.clone()),
         revision: from_request_rule_revision(detail.revision),
         declared_actions,
         builder_model: detail.builder_model.map(async_graphql::Json),
@@ -255,7 +255,11 @@ pub fn from_arbitrated_shaping(
         preferred_audio_languages: value(RequestActionHead::SetPreferredAudioLanguages)
             .and_then(shaped_text_list),
         notifications: if with_notifications {
-            shaping.notifications.iter().filter_map(shaped_text).collect()
+            shaping
+                .notifications
+                .iter()
+                .filter_map(shaped_text)
+                .collect()
         } else {
             Vec::new()
         },
@@ -915,10 +919,18 @@ mod tests {
 
     #[test]
     fn no_shaping_and_unreadable_shaping_both_read_as_null() {
-        assert!(from_request_rule_decision(record(VOTES), false).shaping.is_none());
+        assert!(
+            from_request_rule_decision(record(VOTES), false)
+                .shaping
+                .is_none()
+        );
         let mut unreadable = record(VOTES);
         unreadable.shaping_json = Some("{not json".to_string());
-        assert!(from_request_rule_decision(unreadable, false).shaping.is_none());
+        assert!(
+            from_request_rule_decision(unreadable, false)
+                .shaping
+                .is_none()
+        );
         assert!(
             from_arbitrated_shaping(&scryer_application::ArbitratedShaping::default(), true)
                 .is_none()

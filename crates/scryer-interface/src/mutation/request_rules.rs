@@ -33,7 +33,10 @@ fn preview_matcher(input: &mut PreviewRequestRuleInput) -> GqlResult<RequestRule
 fn detail_wants_declared_actions(ctx: &Context<'_>) -> bool {
     let look_ahead = ctx.look_ahead();
     look_ahead.field("declaredActions").exists()
-        || look_ahead.field("ruleSet").field("declaredActions").exists()
+        || look_ahead
+            .field("ruleSet")
+            .field("declaredActions")
+            .exists()
 }
 
 /// A rule set returned without its revision, with declared actions read only
@@ -240,7 +243,11 @@ impl RequestRuleMutations {
                 .collect(),
             valid: result.valid,
             errors: result.errors,
-            warnings: result.warnings.into_iter().map(diagnostic_payload).collect(),
+            warnings: result
+                .warnings
+                .into_iter()
+                .map(diagnostic_payload)
+                .collect(),
             declared_actions: validation
                 .declared_actions
                 .map(crate::mappers::from_request_declared_actions),

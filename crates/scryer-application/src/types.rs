@@ -3689,6 +3689,14 @@ pub struct UserAuthFactorStatus {
     pub has_passkey: bool,
 }
 
+/// When an account was created and last signed in. Each is `None` when the
+/// account row stores no value for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UserAccountTimestamps {
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct UserLoginSnapshot {
     pub user: scryer_domain::User,

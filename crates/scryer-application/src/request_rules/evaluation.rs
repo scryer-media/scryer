@@ -27,9 +27,9 @@ use crate::request_rules::arbitration::{
     ArbitratedShaping, Arbitration, FALLBACK_ERROR, ScopedError, ScopedVote, arbitrate,
     legacy_outcome,
 };
-use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
 use crate::request_rules::facts::{RequestDraft, build_request_input};
 use crate::{AppResult, AppUseCase};
+use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
 
 /// Prefix on the `request_id` of a trace produced by a pre-flight preview.
 ///

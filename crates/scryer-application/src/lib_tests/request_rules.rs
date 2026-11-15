@@ -322,7 +322,10 @@ fn rules_that_agree_on_a_shaping_value_still_approve() {
         ),
     ];
     let arbitration = arbitrate(&votes, &[], false);
-    assert_eq!(arbitration.policy_outcome, RequestDecisionOutcome::AutoApprove);
+    assert_eq!(
+        arbitration.policy_outcome,
+        RequestDecisionOutcome::AutoApprove
+    );
     assert_eq!(arbitration.fallback_reason, None);
     let shaped = arbitration
         .shaping
@@ -357,7 +360,10 @@ fn rules_that_disagree_on_a_shaping_value_need_a_person() {
         ),
     ];
     let arbitration = arbitrate(&votes, &[], true);
-    assert_eq!(arbitration.policy_outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        arbitration.policy_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
     assert_eq!(arbitration.fallback_reason, Some(FALLBACK_SHAPING_CONFLICT));
     assert_eq!(arbitration.deciding_rule_set_ids, vec!["a", "b"]);
     assert_eq!(arbitration.shaping.conflicts.len(), 1);
@@ -450,7 +456,10 @@ fn an_invalid_shaping_value_turns_an_approval_into_manual_review() {
     ];
     let mut arbitration = arbitrate(&votes, &[], false);
     arbitration.refuse_invalid_shaping(&[RequestActionHead::SetMonitor]);
-    assert_eq!(arbitration.policy_outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        arbitration.policy_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
     assert_eq!(arbitration.fallback_reason, Some(FALLBACK_SHAPING_INVALID));
     assert_eq!(arbitration.deciding_rule_set_ids, vec!["a"]);
     assert_eq!(arbitration.shaping.invalid.len(), 1);
@@ -657,12 +666,7 @@ async fn editing_a_matcher_appends_a_revision_and_leaves_its_predecessor_alone()
 
     let updated = harness
         .app
-        .update_request_rule_matcher(
-            &harness.manager,
-            &detail.rule_set.id,
-            DENY_EVERYTHING,
-            None,
-        )
+        .update_request_rule_matcher(&harness.manager, &detail.rule_set.id, DENY_EVERYTHING, None)
         .await
         .expect("matcher edit should succeed");
     assert_eq!(updated.revision.revision_number, 2);
@@ -2496,8 +2500,14 @@ async fn a_shaping_value_this_instance_cannot_apply_is_refused_at_save_with_its_
         .await
         .expect("validation runs");
     assert!(!validation.result.valid);
-    assert!(validation.result.diagnostics.iter().any(|diagnostic| diagnostic.code
-        == scryer_rules::diagnostic_codes::RULE_QUALITY_PROFILE_UNKNOWN));
+    assert!(
+        validation
+            .result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code
+                == scryer_rules::diagnostic_codes::RULE_QUALITY_PROFILE_UNKNOWN)
+    );
     let declared = validation.declared_actions.expect("the source reads");
     assert_eq!(declared.quality_profiles, vec!["No Such Profile"]);
 }
@@ -2649,7 +2659,10 @@ fn diagnostic_codes(refusal: &AppError) -> Vec<&'static str> {
     let AppError::ValidationRefused { diagnostics, .. } = refusal else {
         panic!("unexpected refusal: {refusal:?}");
     };
-    diagnostics.iter().map(|diagnostic| diagnostic.code).collect()
+    diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect()
 }
 
 fn approve_setting_monitor(monitor: &str) -> String {
@@ -2993,7 +3006,9 @@ async fn an_automatic_approval_applies_the_shaped_monitor_and_audio_languages() 
         RequestActionHead::SetPreferredAudioLanguages,
     ] {
         assert_eq!(
-            shaping.value(head).map(|shaped| shaped.rule_set_name.as_str()),
+            shaping
+                .value(head)
+                .map(|shaped| shaped.rule_set_name.as_str()),
             Some("Quiet English"),
             "{head:?}"
         );

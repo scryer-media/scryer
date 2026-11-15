@@ -165,6 +165,25 @@ impl UserRepository for UserStore {
         load_user_by_id(self.datastore.read_exec(), id).await
     }
 
+    async fn account_timestamps(
+        &self,
+        user_id: &str,
+    ) -> AppResult<Option<scryer_application::UserAccountTimestamps>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT created_at, last_login_at FROM users WHERE id = {}",
+            &[SqlArg::Text(user_id.to_string())],
+        )
+        .await?;
+        row.map(|row| {
+            Ok(scryer_application::UserAccountTimestamps {
+                created_at: row.opt_timestamp("created_at")?,
+                last_login_at: row.opt_timestamp("last_login_at")?,
+            })
+        })
+        .transpose()
+    }
+
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
@@ -1160,8 +1179,8 @@ async fn save_initial_auth_setting_tx(tx: &mut SqlTx<'_>, key: &str, value: bool
 
 async fn insert_user_tx(tx: &mut SqlTx<'_>, user: &User) -> AppResult<()> {
     tx.execute(
-        "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status)
-         VALUES ({}, {}, {}, {}, {}, {})",
+        "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status, created_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(user.id.clone()),
             SqlArg::Text(user.username.clone()),
@@ -1169,6 +1188,9 @@ async fn insert_user_tx(tx: &mut SqlTx<'_>, user: &User) -> AppResult<()> {
             SqlArg::Bool(user.password_change_required),
             SqlArg::Text(user.account_kind.as_str().to_string()),
             SqlArg::Text(user.login_status().as_storage_str().to_string()),
+            // SQLite's column defaults to '', so without this an account
+            // never records when it was created.
+            SqlArg::Timestamp(Utc::now()),
         ],
     )
     .await?;
@@ -1878,7 +1900,9 @@ mod tests {
                 account_kind TEXT NOT NULL DEFAULT 'local',
                 status TEXT NOT NULL DEFAULT 'active',
                 auth_session_version TEXT,
-                locale TEXT
+                locale TEXT,
+                created_at TEXT NOT NULL DEFAULT '',
+                last_login_at TEXT
             )",
         )
         .execute(&pool)

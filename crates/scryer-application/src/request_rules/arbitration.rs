@@ -229,7 +229,9 @@ fn collect_shaping(votes: &[ScopedVote]) -> ArbitratedShaping {
                     let agreed = shaping.values.remove(&head).expect("value present");
                     let mut rule_set_ids = vec![agreed.rule_set_id];
                     push_unique(&mut rule_set_ids, &vote.rule_set_id);
-                    shaping.conflicts.push(ShapingRefusal { head, rule_set_ids });
+                    shaping
+                        .conflicts
+                        .push(ShapingRefusal { head, rule_set_ids });
                 }
                 None => {
                     shaping.values.insert(

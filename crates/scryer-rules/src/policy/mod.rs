@@ -33,8 +33,7 @@ use crate::runtime::RuntimeLimits;
 
 pub use decode::{
     MAX_REASON_CODE_LEN, MAX_REASON_CODES, MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX, TAG_PATTERN,
-    check_tag,
-    decode_reasons, decode_tags,
+    check_tag, decode_reasons, decode_tags,
 };
 pub use engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
 pub use observation::{

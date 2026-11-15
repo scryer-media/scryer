@@ -53,15 +53,17 @@ fn a_head_written_as_a_function_is_refused() {
             vec![diagnostic_codes::RULE_HEAD_DEFINED_AS_FUNCTION],
             "{body}"
         );
-        assert_eq!((scan.errors[0].line, scan.errors[0].column), (3, 1), "{body}");
+        assert_eq!(
+            (scan.errors[0].line, scan.errors[0].column),
+            (3, 1),
+            "{body}"
+        );
     }
 
     // A valued head written as a function keeps its own code.
-    let scan = scan_request_action_heads(
-        &source("approve := true\nset_monitor(x) := x\n"),
-        RULE_ID,
-    )
-    .expect("parses");
+    let scan =
+        scan_request_action_heads(&source("approve := true\nset_monitor(x) := x\n"), RULE_ID)
+            .expect("parses");
     assert_eq!(
         scan.errors.iter().map(|e| e.code).collect::<Vec<_>>(),
         vec![diagnostic_codes::RULE_ACTION_VALUE_NOT_LITERAL]
@@ -75,7 +77,10 @@ fn data_outside_the_rule_package_is_refused() {
             "approve if data.scryer.request.user.other_rule.approve\n",
             (3, 12),
         ),
-        ("approve if data.scryer.request.wrapper.fixture_rule.decision.approve\n", (3, 12)),
+        (
+            "approve if data.scryer.request.wrapper.fixture_rule.decision.approve\n",
+            (3, 12),
+        ),
         ("approve if count(data) > 0\n", (3, 18)),
         ("approve if {\n\tsome key\n\tdata[key]\n}\n", (5, 2)),
         (
@@ -109,7 +114,10 @@ fn reported_columns_are_character_offsets_after_a_tab() {
     )
     .expect("parses");
     assert_eq!(scan.errors.len(), 1, "{:?}", scan.errors);
-    assert_eq!(scan.errors[0].code, diagnostic_codes::RULE_ACTION_VALUE_INVALID);
+    assert_eq!(
+        scan.errors[0].code,
+        diagnostic_codes::RULE_ACTION_VALUE_INVALID
+    );
     assert_eq!((scan.errors[0].line, scan.errors[0].column), (4, 15));
 }
 
@@ -119,7 +127,10 @@ fn reported_columns_are_character_offsets_after_a_tab() {
 fn the_retired_tags_head_is_refused() {
     let result = validate("approve := true\ntags contains \"family\"\n");
     assert!(!result.valid);
-    assert_eq!(codes(&result), vec![diagnostic_codes::RULE_HEAD_NAME_RETIRED]);
+    assert_eq!(
+        codes(&result),
+        vec![diagnostic_codes::RULE_HEAD_NAME_RETIRED]
+    );
     assert_eq!(
         (result.diagnostics[0].line, result.diagnostics[0].column),
         (Some(4), Some(1))
@@ -135,7 +146,11 @@ fn a_rule_must_decide_something() {
     ] {
         let result = validate(body);
         assert!(!result.valid, "{body}");
-        assert_eq!(codes(&result), vec![diagnostic_codes::RULE_VOTE_REQUIRED], "{body}");
+        assert_eq!(
+            codes(&result),
+            vec![diagnostic_codes::RULE_VOTE_REQUIRED],
+            "{body}"
+        );
     }
 
     for body in [
@@ -213,7 +228,10 @@ fn valued_heads_take_plain_literals_in_range() {
         .collect::<Vec<_>>()
         .join(", ");
     let result = validate(&format!("add_tags := [{too_many}]\n"));
-    assert_eq!(codes(&result), vec![diagnostic_codes::RULE_ACTION_VALUE_INVALID]);
+    assert_eq!(
+        codes(&result),
+        vec![diagnostic_codes::RULE_ACTION_VALUE_INVALID]
+    );
 }
 
 #[test]
@@ -316,7 +334,10 @@ fn a_held_rule_carries_no_shaping() {
         rego_source: source("approve := true\nset_lease_days := 7 if input.facts.is_adult\n"),
     }])
     .expect("policy compiles");
-    let result = engine.evaluator().evaluate(&input).expect("evaluation runs");
+    let result = engine
+        .evaluator()
+        .evaluate(&input)
+        .expect("evaluation runs");
     let decision = &result.records[0].decision;
     assert!(decision.held);
     assert!(decision.shaping.is_empty());
@@ -328,12 +349,17 @@ fn a_held_rule_carries_no_shaping() {
 #[test]
 fn every_head_is_the_table_entry_at_its_index() {
     use crate::request_actions::REQUEST_HEADS;
-    let actions: Vec<RequestActionHead> =
-        REQUEST_HEADS.iter().filter_map(|spec| spec.action).collect();
+    let actions: Vec<RequestActionHead> = REQUEST_HEADS
+        .iter()
+        .filter_map(|spec| spec.action)
+        .collect();
     assert_eq!(actions, RequestActionHead::ALL.to_vec());
     for head in RequestActionHead::ALL {
         assert_eq!(REQUEST_HEADS[head as usize].action, Some(head));
-        assert_eq!(RequestActionHead::from_rule_name(head.rule_name()), Some(head));
+        assert_eq!(
+            RequestActionHead::from_rule_name(head.rule_name()),
+            Some(head)
+        );
     }
     let mut ids: Vec<&str> = REQUEST_HEADS.iter().map(|spec| spec.id).collect();
     let mut names: Vec<&str> = REQUEST_HEADS.iter().map(|spec| spec.rule_name).collect();
@@ -394,7 +420,11 @@ fn the_shaping_and_declared_consumers_cover_every_valued_head() {
         shaping.set(head, sample.clone());
         assert_eq!(
             shaping.get(head),
-            if spec.role == RequestHeadRole::Shaping { sample } else { None },
+            if spec.role == RequestHeadRole::Shaping {
+                sample
+            } else {
+                None
+            },
             "{} round-trips through the shaping exactly when it shapes",
             spec.rule_name
         );
@@ -434,15 +464,33 @@ fn every_template_filled_with_its_sample_validates_and_declares_the_head() {
             "{output}{companion}\n\n{BUILDER_HELPER_RULE} if {{\n\tinput.facts.certification_rank <= 2\n}}\n"
         );
         let result = validate(&body);
-        assert!(result.valid, "{}:\n{body}\n{:?}", spec.rule_name, result.diagnostics);
-        assert!(result.warnings.is_empty(), "{}: {:?}", spec.rule_name, result.warnings);
+        assert!(
+            result.valid,
+            "{}:\n{body}\n{:?}",
+            spec.rule_name, result.diagnostics
+        );
+        assert!(
+            result.warnings.is_empty(),
+            "{}: {:?}",
+            spec.rule_name,
+            result.warnings
+        );
 
         let scan = scan_request_action_heads(&source(&body), RULE_ID).expect("parses");
-        assert!(scan.errors.is_empty(), "{}: {:?}", spec.rule_name, scan.errors);
+        assert!(
+            scan.errors.is_empty(),
+            "{}: {:?}",
+            spec.rule_name,
+            scan.errors
+        );
         match spec.action {
             Some(head) => {
                 let declared = scan.declared_actions();
-                assert!(declared.heads.contains(&head), "{} not declared", spec.rule_name);
+                assert!(
+                    declared.heads.contains(&head),
+                    "{} not declared",
+                    spec.rule_name
+                );
                 let mut declared = declared;
                 match declared.slot_mut(head) {
                     Some(crate::request_actions::DeclaredSlot::Texts(values)) => {
@@ -484,7 +532,10 @@ fn the_output_rules_follow_the_validation_rules() {
     for output in &schema.outputs {
         let head = RequestActionHead::from_rule_name(output.head);
         let spec = crate::request_actions::head_spec(output.head).expect("table entry");
-        let alone = format!("{}\n\nalways := true\n", spec.fill_template("always", spec.sample));
+        let alone = format!(
+            "{}\n\nalways := true\n",
+            spec.fill_template("always", spec.sample)
+        );
         let decides = validate(&alone).valid;
         assert_eq!(
             deciding.contains(&output.id),
@@ -493,8 +544,14 @@ fn the_output_rules_follow_the_validation_rules() {
             output.head
         );
         assert_eq!(head.is_none(), output.id == "REASONS");
-        assert_eq!(output.label_key, format!("ruleOutput.request.{}", output.head));
-        assert_eq!(output.help_key, format!("ruleOutput.request.{}.help", output.head));
+        assert_eq!(
+            output.label_key,
+            format!("ruleOutput.request.{}", output.head)
+        );
+        assert_eq!(
+            output.help_key,
+            format!("ruleOutput.request.{}.help", output.head)
+        );
     }
 }
 
@@ -541,7 +598,11 @@ fn every_item_pattern_matches_the_engine_check() {
         }
         if let Some(max) = spec.max_bytes {
             assert!(rule.check(&"a".repeat(max)).is_ok(), "{}", spec.rule_name);
-            assert!(rule.check(&"a".repeat(max + 1)).is_err(), "{}", spec.rule_name);
+            assert!(
+                rule.check(&"a".repeat(max + 1)).is_err(),
+                "{}",
+                spec.rule_name
+            );
         }
     }
 }
@@ -556,8 +617,7 @@ fn the_builder_schema_file_matches_the_table() {
         serde_json::from_str(&crate::request_actions::request_builder_schema_json())
             .expect("valid JSON");
     assert_eq!(
-        file,
-        table,
+        file, table,
         "crates/scryer-rules/request-builder-schema.json is out of date with REQUEST_HEADS; \
          write request_builder_schema_json() to it and to the web copy, then format the web \
          copy with prettier"

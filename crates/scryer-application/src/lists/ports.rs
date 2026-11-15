@@ -133,6 +133,17 @@ pub trait ListSubscriptionRepository: Send + Sync {
     async fn delete_sync_runs_older_than(&self, cutoff: DateTime<Utc>) -> AppResult<u32>;
 }
 
+/// The identity half of a membership row: what a caller needs to tell whether
+/// the row names a given title, and since when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListMembershipIdentity {
+    pub subscription_id: String,
+    pub kind: MediaFacet,
+    pub external_ids: Vec<ExternalId>,
+    pub smg_title_id: Option<i64>,
+    pub first_seen_at: DateTime<Utc>,
+}
+
 #[async_trait]
 pub trait ListMembershipRepository: Send + Sync {
     /// Insert or refresh rows keyed by (subscription, item). A refreshed row
@@ -164,6 +175,26 @@ pub trait ListMembershipRepository: Send + Sync {
             rows.extend(self.list_active_by_subscription(subscription_id).await?);
         }
         Ok(rows)
+    }
+
+    /// [`Self::list_active_by_subscriptions`] narrowed to the columns an
+    /// identity match reads, in no particular order.
+    async fn list_active_identities_by_subscriptions(
+        &self,
+        subscription_ids: &[String],
+    ) -> AppResult<Vec<ListMembershipIdentity>> {
+        Ok(self
+            .list_active_by_subscriptions(subscription_ids)
+            .await?
+            .into_iter()
+            .map(|row| ListMembershipIdentity {
+                subscription_id: row.subscription_id,
+                kind: row.kind,
+                external_ids: row.external_ids,
+                smg_title_id: row.smg_title_id,
+                first_seen_at: row.first_seen_at,
+            })
+            .collect())
     }
 
     /// Every subscription's row for one title, across both scopes. This is the
@@ -210,6 +241,20 @@ pub trait ListExclusionRepository: Send + Sync {
         external_ids: &[ExternalId],
         subscription_id: Option<&str>,
     ) -> AppResult<Vec<ListExclusion>>;
+
+    /// Whether [`Self::find_matching`] would return anything, without reading
+    /// the exclusions themselves.
+    async fn any_matching(
+        &self,
+        kind: MediaFacet,
+        external_ids: &[ExternalId],
+        subscription_id: Option<&str>,
+    ) -> AppResult<bool> {
+        Ok(!self
+            .find_matching(kind, external_ids, subscription_id)
+            .await?
+            .is_empty())
+    }
 
     async fn delete(&self, id: &str) -> AppResult<()>;
 }

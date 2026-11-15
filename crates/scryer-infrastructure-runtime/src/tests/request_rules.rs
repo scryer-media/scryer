@@ -339,7 +339,11 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
 
     // A revision can replace the builder document, and another can clear it.
     store
-        .add_revision(&revision("rule-a", 3), Utc::now(), Some(Some(r#"{"rows":[3]}"#)))
+        .add_revision(
+            &revision("rule-a", 3),
+            Utc::now(),
+            Some(Some(r#"{"rows":[3]}"#)),
+        )
         .await?;
     assert_eq!(
         store.get_builder_model("rule-a").await?.as_deref(),
@@ -477,7 +481,11 @@ async fn assert_decisions_outlive_their_rule_set(
     decisions: &dyn RequestRuleDecisionRepository,
 ) -> AppResult<()> {
     rules
-        .create_rule_set(&rule_set("rule-b", Vec::new()), &revision("rule-b", 1), None)
+        .create_rule_set(
+            &rule_set("rule-b", Vec::new()),
+            &revision("rule-b", 1),
+            None,
+        )
         .await?;
     decisions
         .record(&decision(
