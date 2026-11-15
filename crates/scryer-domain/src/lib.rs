@@ -6130,6 +6130,10 @@ pub struct LifecycleCandidate {
     /// closed action enum lives in the application layer, so the domain row
     /// carries the string the revision's spec serialized to.
     pub action_kind: String,
+    /// What the rule decided for this subject when it last matched, as the
+    /// stored JSON of its decided actions. Null on candidates written before
+    /// rules declared their own actions.
+    pub decided_actions_json: Option<String>,
     pub grace_days: i64,
     pub first_matched_at: DateTime<Utc>,
     pub last_matched_at: DateTime<Utc>,

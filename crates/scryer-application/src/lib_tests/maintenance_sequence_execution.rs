@@ -15,9 +15,9 @@ use crate::maintenance_rules::sequence_execution::{
     install_test_completed_sequence_job_adapter, set_test_completed_sequence_job_state,
 };
 use crate::maintenance_rules::{
-    MaintenanceActionDefinition, MaintenanceActionSequence, MaintenanceActionStep,
-    MaintenanceActionStepKind, MaintenanceActionStepParameters, MaintenanceGatesUpdate,
-    MaintenanceRuleDraft, MaintenanceSearchCondition,
+    MaintenanceActionSequence, MaintenanceActionStep, MaintenanceActionStepKind,
+    MaintenanceActionStepParameters, MaintenanceGatesUpdate, MaintenanceRuleDraft,
+    MaintenanceSearchCondition,
 };
 use crate::ports::{
     LifecycleActionRunRepository, MaintenanceActionStepRepository, MaintenanceCandidateRepository,
@@ -30,17 +30,48 @@ use scryer_domain::{
 };
 use std::collections::HashMap;
 
-const ALWAYS_MATCHER: &str = "match := true\n";
+pub(super) const ALWAYS_MATCHER: &str = "match := true\n";
+
+/// Store an explicit step order on the rule's current revision, the shape a
+/// revision saved before rules declared their actions carries. The executor
+/// still runs such a revision step by step.
+pub(super) async fn store_step_order(
+    fixture: &crate::lib_tests::maintenance_execution::ExecutionFixture,
+    rule_set_id: &str,
+    revision_number: i64,
+    steps: Vec<MaintenanceActionStep>,
+) {
+    let stored = fixture
+        .rules
+        .get_revision(rule_set_id, revision_number)
+        .await
+        .expect("read revision")
+        .expect("revision exists");
+    fixture
+        .rules
+        .replace_revision_in_place(scryer_domain::MaintenanceRuleRevision {
+            action_spec_json: crate::maintenance_rules::MaintenanceActionDefinition::Sequence(
+                crate::maintenance_rules::MaintenanceActionSequence::new(steps),
+            )
+            .to_persisted_json()
+            .expect("encode step order"),
+            ..stored
+        })
+        .await;
+}
+
+/// Swap a sequence draft's always-true matcher for another, keeping the
+/// action heads its steps added.
+pub(super) fn with_matcher(draft: &mut MaintenanceRuleDraft, matcher: &str) {
+    draft.rego_source = draft.rego_source.replacen(ALWAYS_MATCHER, matcher, 1);
+}
 
 pub(super) fn sequence_draft(steps: Vec<MaintenanceActionStep>) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
         subject_kind: MaintenanceRuleSubjectKind::Title,
         name: "Sequence executor regression".to_string(),
         description: String::new(),
-        rego_source: ALWAYS_MATCHER.to_string(),
-        action_definition: MaintenanceActionDefinition::Sequence(MaintenanceActionSequence::new(
-            steps,
-        )),
+        rego_source: crate::lib_tests::steps_source(ALWAYS_MATCHER, &steps),
         grace_days: 0,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -88,35 +119,17 @@ async fn arm_and_evaluate_all(
         )
         .await
         .expect("enable maintenance and unpause actions");
-    if crate::maintenance_rules::derived_effect_arming(&created.action_definition)
-        == MaintenanceEffectArming::Reversible
-    {
-        super::maintenance_rules::arm_rule(
-            &fixture.app,
-            &fixture.user,
-            &rule_set_id,
-            MaintenanceEffectArming::Reversible,
-            None,
-        )
-        .await;
-    } else {
-        // A rule that deletes, or does nothing, cannot be enabled for library
-        // updates only. Stored rows can still hold that arming, and the
-        // executor must treat them exactly as it always has.
-        assert!(
-            fixture
-                .rules
-                .update_rule_set_state(
-                    &rule_set_id,
-                    scryer_domain::MaintenanceEvaluationMode::Observe,
-                    MaintenanceEffectArming::Reversible,
-                    None,
-                    chrono::Utc::now(),
-                )
-                .await
-                .expect("store reversible arming")
-        );
-    }
+    // Arm before the first evaluation: a delete rule confirms the empty
+    // candidate list it has at that point.
+    let arming = crate::maintenance_rules::derived_effect_arming(&created.action_definition);
+    super::maintenance_rules::arm_rule(
+        &fixture.app,
+        &fixture.user,
+        &rule_set_id,
+        arming,
+        (arming == MaintenanceEffectArming::Destructive).then_some(0),
+    )
+    .await;
     fixture
         .app
         .run_maintenance_rule_evaluation_job()
@@ -345,7 +358,36 @@ async fn sequence_unmonitor_executes_and_records_its_stable_step() {
 async fn empty_sequence_remains_membership_only_when_armed() {
     let fixture = execution_app(None);
     seed_title(&fixture.app, &fixture.user, "V2 empty membership", false).await;
-    let (_rule_set_id, candidate) = arm_and_evaluate(&fixture, sequence_draft(Vec::new())).await;
+    let (rule_set_id, candidate) = arm_and_evaluate(
+        &fixture,
+        sequence_draft(vec![MaintenanceActionStep {
+            id: "unmonitor".to_string(),
+            kind: MaintenanceActionStepKind::Unmonitor,
+            parameters: MaintenanceActionStepParameters::Unmonitor {
+                include_descendants: true,
+            },
+        }]),
+    )
+    .await;
+    // A save can no longer write a rule that declares no action, but history
+    // stored before then can still carry an empty step sequence.
+    let stored = fixture
+        .rules
+        .get_revision(&rule_set_id, candidate.revision_number)
+        .await
+        .expect("read revision")
+        .expect("revision exists");
+    fixture
+        .rules
+        .replace_revision_in_place(scryer_domain::MaintenanceRuleRevision {
+            action_spec_json: crate::maintenance_rules::MaintenanceActionDefinition::Sequence(
+                crate::maintenance_rules::MaintenanceActionSequence::new(Vec::new()),
+            )
+            .to_persisted_json()
+            .expect("encode empty sequence"),
+            ..stored
+        })
+        .await;
 
     let report = fixture
         .app
@@ -386,7 +428,7 @@ async fn stale_intent_before_a_tag_mutation_retries_the_proven_idempotent_write(
     let title = seed_title(&fixture.app, &fixture.user, "V2 crash before tag", false).await;
     define_title_tags(&fixture, &["crash-tag"]).await;
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["crash-tag".to_string()],
@@ -430,7 +472,7 @@ async fn stale_intent_with_a_changed_prestate_holds_without_overwriting_live_tag
     let title = seed_title(&fixture.app, &fixture.user, "V2 crash changed tags", false).await;
     define_title_tags(&fixture, &["crash-tag", "external-tag"]).await;
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["crash-tag".to_string()],
@@ -481,7 +523,7 @@ async fn stale_intent_after_a_tag_mutation_recovers_as_already_satisfied() {
     let title = seed_title(&fixture.app, &fixture.user, "V2 crash after tag", false).await;
     define_title_tags(&fixture, &["crash-tag"]).await;
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["crash-tag".to_string()],
@@ -528,7 +570,7 @@ async fn failed_checkpoint_after_tag_mutation_recovers_without_losing_its_attrib
     let title = seed_title(&fixture.app, &fixture.user, "V2 failed after tag", false).await;
     define_title_tags(&fixture, &["crash-tag"]).await;
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["crash-tag".to_string()],
@@ -582,7 +624,7 @@ async fn exhausted_failed_step_becomes_terminal_without_a_fourth_dispatch() {
     let title = seed_title(&fixture.app, &fixture.user, "V2 exhausted crash", false).await;
     define_title_tags(&fixture, &["crash-tag"]).await;
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["crash-tag".to_string()],
@@ -703,7 +745,7 @@ async fn real_search_acceptance_is_durable_for_unconditional_and_changed_profile
         &conditional,
         sequence_draft(vec![
             MaintenanceActionStep {
-                id: "profile".to_string(),
+                id: "change_quality_profile".to_string(),
                 kind: MaintenanceActionStepKind::ChangeQualityProfile,
                 parameters: MaintenanceActionStepParameters::ChangeQualityProfile {
                     target_quality_profile_id: "4k".to_string(),
@@ -754,7 +796,7 @@ async fn real_search_acceptance_is_durable_for_unconditional_and_changed_profile
         .await
         .expect("profile progress")
         .into_iter()
-        .find(|step| step.key.step_id == "profile")
+        .find(|step| step.key.step_id == "change_quality_profile")
         .expect("profile step");
     let provenance: serde_json::Value =
         serde_json::from_str(&profile.provenance_json).expect("profile provenance");
@@ -788,26 +830,25 @@ async fn completed_job_adapter_holds_without_leasing_then_reconciles_unknown_onc
     let fixture = execution_app(None);
     let title = seed_title(&fixture.app, &fixture.user, "V2 completed job", false).await;
     define_title_tags(&fixture, &["after_completed_job"]).await;
-    let (_rule_set_id, candidate) = arm_and_evaluate(
-        &fixture,
-        sequence_draft(vec![
-            MaintenanceActionStep {
-                id: "search".to_string(),
-                kind: MaintenanceActionStepKind::Search,
-                parameters: MaintenanceActionStepParameters::Search {
-                    condition: MaintenanceSearchCondition::Unconditional,
-                },
+    let steps = vec![
+        MaintenanceActionStep {
+            id: "search".to_string(),
+            kind: MaintenanceActionStepKind::Search,
+            parameters: MaintenanceActionStepParameters::Search {
+                condition: MaintenanceSearchCondition::Unconditional,
             },
-            MaintenanceActionStep {
-                id: "tag".to_string(),
-                kind: MaintenanceActionStepKind::AddTags,
-                parameters: MaintenanceActionStepParameters::Tags {
-                    tags: vec!["after_completed_job".to_string()],
-                },
+        },
+        MaintenanceActionStep {
+            id: "add_tags".to_string(),
+            kind: MaintenanceActionStepKind::AddTags,
+            parameters: MaintenanceActionStepParameters::Tags {
+                tags: vec!["after_completed_job".to_string()],
             },
-        ]),
-    )
-    .await;
+        },
+    ];
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture, sequence_draft(steps.clone())).await;
+    // A search that waits ahead of a tag step is a stored step order.
+    store_step_order(&fixture, &rule_set_id, candidate.revision_number, steps).await;
     let key = MaintenanceActionStepKey {
         candidate_id: candidate.id.clone(),
         match_generation: candidate.match_generation,
@@ -963,7 +1004,7 @@ async fn completed_job_adapter_retries_confirmed_failure_with_a_new_dispatch_rec
                 },
             },
             MaintenanceActionStep {
-                id: "tag".to_string(),
+                id: "add_tags".to_string(),
                 kind: MaintenanceActionStepKind::AddTags,
                 parameters: MaintenanceActionStepParameters::Tags {
                     tags: vec!["after_retry".to_string()],
@@ -1090,7 +1131,7 @@ async fn completed_job_adapter_enforces_the_durable_step_attempt_budget() {
 async fn unmonitor_baseline_keeps_own_change_visible_but_preserves_external_remonitor() {
     let fixture = execution_app(None);
     let title = seed_title(&fixture.app, &fixture.user, "V2 monitoring baseline", true).await;
-    let mut draft = sequence_draft(vec![
+    let steps = vec![
         MaintenanceActionStep {
             id: "unmonitor".to_string(),
             kind: MaintenanceActionStepKind::Unmonitor,
@@ -1105,9 +1146,13 @@ async fn unmonitor_baseline_keeps_own_change_visible_but_preserves_external_remo
                 condition: MaintenanceSearchCondition::Unconditional,
             },
         },
-    ]);
-    draft.rego_source = "match if { input.facts.monitored }\n".to_string();
-    let (_rule_set_id, candidate) = arm_and_evaluate(&fixture, draft).await;
+    ];
+    let mut draft = sequence_draft(steps.clone());
+    with_matcher(&mut draft, "match if { input.facts.monitored }\n");
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture, draft).await;
+    // Declared heads always search before they unmonitor; only a revision
+    // stored with its own step order can unmonitor first.
+    store_step_order(&fixture, &rule_set_id, candidate.revision_number, steps).await;
     let key = MaintenanceActionStepKey {
         candidate_id: candidate.id,
         match_generation: candidate.match_generation,
@@ -1166,14 +1211,14 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
         .expect("seed removable tag");
     let mut draft = sequence_draft(vec![
         MaintenanceActionStep {
-            id: "add".to_string(),
+            id: "add_tags".to_string(),
             kind: MaintenanceActionStepKind::AddTags,
             parameters: MaintenanceActionStepParameters::Tags {
                 tags: vec!["owned-add".to_string()],
             },
         },
         MaintenanceActionStep {
-            id: "remove".to_string(),
+            id: "remove_tags".to_string(),
             kind: MaintenanceActionStepKind::RemoveTags,
             parameters: MaintenanceActionStepParameters::Tags {
                 tags: vec!["owned-remove".to_string()],
@@ -1187,7 +1232,7 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
             },
         },
     ]);
-    draft.rego_source = "match if { input.facts.tags[_] == \"owned-remove\" }\n".to_string();
+    with_matcher(&mut draft, "match if { input.facts.tags[_] == \"owned-remove\" }\n");
     let (_rule_set_id, candidate) = arm_and_evaluate(&fixture, draft).await;
     let key = MaintenanceActionStepKey {
         candidate_id: candidate.id,
@@ -1258,14 +1303,14 @@ async fn sequence_step_budget_stops_between_steps_then_resumes_without_replay() 
         &fixture,
         sequence_draft(vec![
             MaintenanceActionStep {
-                id: "add".to_string(),
+                id: "add_tags".to_string(),
                 kind: MaintenanceActionStepKind::AddTags,
                 parameters: MaintenanceActionStepParameters::Tags {
                     tags: vec!["step-added".to_string()],
                 },
             },
             MaintenanceActionStep {
-                id: "remove".to_string(),
+                id: "remove_tags".to_string(),
                 kind: MaintenanceActionStepKind::RemoveTags,
                 parameters: MaintenanceActionStepParameters::Tags {
                     tags: vec!["step-removed".to_string()],
@@ -1303,7 +1348,7 @@ async fn sequence_step_budget_stops_between_steps_then_resumes_without_replay() 
         .await
         .expect("read paused sequence steps");
     assert_eq!(paused_steps.len(), 1, "{paused_steps:?}");
-    assert_eq!(paused_steps[0].key.step_id, "add");
+    assert_eq!(paused_steps[0].key.step_id, "add_tags");
     assert_eq!(paused_steps[0].attempt, 1);
     assert_eq!(paused_steps[0].state, MaintenanceActionStepState::Succeeded);
 
@@ -1321,7 +1366,7 @@ async fn sequence_step_budget_stops_between_steps_then_resumes_without_replay() 
     assert_eq!(resumed_steps.len(), 3, "{resumed_steps:?}");
     let add = resumed_steps
         .iter()
-        .find(|step| step.key.step_id == "add")
+        .find(|step| step.key.step_id == "add_tags")
         .expect("persisted first step");
     assert_eq!(add.state, MaintenanceActionStepState::Succeeded);
     assert_eq!(add.attempt, 1, "resuming must not replay the first step");

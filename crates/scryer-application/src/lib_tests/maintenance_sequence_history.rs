@@ -29,24 +29,30 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
         .create_title_tag_definition(&fixture.user, "after-search", None)
         .await
         .expect("define follow-up tag");
-    let (rule_set_id, candidate) = arm_and_evaluate(
+    let steps = vec![
+        MaintenanceActionStep {
+            id: "search".to_string(),
+            kind: MaintenanceActionStepKind::Search,
+            parameters: MaintenanceActionStepParameters::Search {
+                condition: MaintenanceSearchCondition::Unconditional,
+            },
+        },
+        MaintenanceActionStep {
+            id: "add_tags".to_string(),
+            kind: MaintenanceActionStepKind::AddTags,
+            parameters: MaintenanceActionStepParameters::Tags {
+                tags: vec!["after-search".to_string()],
+            },
+        },
+    ];
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture, sequence_draft(steps.clone())).await;
+    // Declared heads tag before they search; a revision stored with its own
+    // step order is what still searches first.
+    super::maintenance_sequence_execution::store_step_order(
         &fixture,
-        sequence_draft(vec![
-            MaintenanceActionStep {
-                id: "search".to_string(),
-                kind: MaintenanceActionStepKind::Search,
-                parameters: MaintenanceActionStepParameters::Search {
-                    condition: MaintenanceSearchCondition::Unconditional,
-                },
-            },
-            MaintenanceActionStep {
-                id: "tag".to_string(),
-                kind: MaintenanceActionStepKind::AddTags,
-                parameters: MaintenanceActionStepParameters::Tags {
-                    tags: vec!["after-search".to_string()],
-                },
-            },
-        ]),
+        &rule_set_id,
+        candidate.revision_number,
+        steps,
     )
     .await;
     let search_key = MaintenanceActionStepKey {
@@ -169,7 +175,7 @@ async fn fresh_lease_closes_an_abandoned_sequence_history_before_recording_its_r
         .await
         .expect("define recovery tag");
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["recovered".to_string()],

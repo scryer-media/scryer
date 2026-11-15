@@ -32,8 +32,44 @@ pub struct RuleHandle<X> {
     /// build time. Empty for families that do not track fact references, and
     /// for a policy that reads only always-known sections of the input.
     pub referenced_facts: BTreeSet<String>,
+    /// Why the family refuses to evaluate this policy's current source, read
+    /// off its parsed module at load. A refused policy is an error for every
+    /// run and never yields a decision.
+    pub load_refusal: Option<PolicyRefusal>,
     /// Per-family rule metadata (facets, origin, …).
     pub extra: X,
+}
+
+/// A family's reason not to evaluate a loaded policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRefusal {
+    /// One of the codes in [`crate::diagnostic_codes`].
+    pub code: &'static str,
+    /// Display text; code never reads it.
+    pub message: String,
+}
+
+/// What went wrong with one policy in one run, as a stable kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyErrorKind {
+    /// Regorus failed to evaluate the policy.
+    Evaluation,
+    /// The policy's value is not the family's decision shape, or the family
+    /// rejected the decoded decision.
+    MalformedDecision,
+    /// The family refused the policy at load, with this code.
+    Refused(&'static str),
+}
+
+impl PolicyErrorKind {
+    /// The diagnostic code for this kind.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Evaluation => crate::diagnostic_codes::RULE_RUNTIME_ERROR,
+            Self::MalformedDecision => crate::diagnostic_codes::RULE_OUTPUT_INVALID,
+            Self::Refused(code) => code,
+        }
+    }
 }
 
 /// One policy's decision, attributed to the exact policy revision that produced
@@ -153,6 +189,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 &engine.get_modules()[policy_module_index],
             )
             .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            let load_refusal = F::load_refusal(policy, &engine.get_modules()[policy_module_index]);
             reads_clock |=
                 crate::validation::module_reads_clock(&engine.get_modules()[policy_module_index]);
 
@@ -161,6 +198,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 name: policy.name().to_string(),
                 content_hash: runtime::content_hash(policy.rego_source()),
                 referenced_facts,
+                load_refusal,
                 extra: F::rule_extra(policy),
             });
             timer.finish("ok");
@@ -340,6 +378,15 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                 timer.finish("skipped");
                 continue;
             }
+            if let Some(refusal) = &rule.load_refusal {
+                outcome.errors.push(F::eval_error(
+                    rule,
+                    PolicyErrorKind::Refused(refusal.code),
+                    refusal.message.clone(),
+                ));
+                timer.finish("error");
+                continue;
+            }
 
             if F::TRACKS_REFERENCED_FACTS {
                 let held_by = held_reason_codes(&rule.referenced_facts, &unobservable);
@@ -380,7 +427,11 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                                 %message,
                                 "policy rule output rejected"
                             );
-                            outcome.errors.push(F::eval_error(rule, message));
+                            outcome.errors.push(F::eval_error(
+                                rule,
+                                PolicyErrorKind::MalformedDecision,
+                                message,
+                            ));
                         }
                     },
                     Err(message) => {
@@ -390,7 +441,11 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                             %message,
                             "policy rule produced a malformed decision"
                         );
-                        outcome.errors.push(F::eval_error(rule, message));
+                        outcome.errors.push(F::eval_error(
+                            rule,
+                            PolicyErrorKind::MalformedDecision,
+                            message,
+                        ));
                     }
                 },
                 Err(e) => {
@@ -400,7 +455,11 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                         error = %e,
                         "policy rule evaluation failed, skipping"
                     );
-                    outcome.errors.push(F::eval_error(rule, e.to_string()));
+                    outcome.errors.push(F::eval_error(
+                        rule,
+                        PolicyErrorKind::Evaluation,
+                        e.to_string(),
+                    ));
                 }
             }
             timer.finish(if outcome.errors.len() != errors_before {

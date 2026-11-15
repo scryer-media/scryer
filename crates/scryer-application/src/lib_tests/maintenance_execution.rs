@@ -14,8 +14,8 @@ use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, Maintenan
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::test_support::InMemoryLocationOperationStore;
 use crate::maintenance_rules::{
-    MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceActionKind, MaintenanceActionSpec,
-    MaintenanceMatcherDraft, MaintenanceRuleDraft, execution_reason,
+    MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceMatcherDraft, MaintenanceRuleDraft,
+    execution_reason,
 };
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
@@ -95,9 +95,9 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Unmonitor stale".to_string(),
         description: String::new(),
-        rego_source: rego_source.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            rego_source,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
         storage_root_id: None,
@@ -110,9 +110,9 @@ fn delete_draft() -> MaintenanceRuleDraft {
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Retire".to_string(),
         description: String::new(),
-        rego_source: ALWAYS_MATCHER.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            ALWAYS_MATCHER,
+            crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
         ),
         grace_days: 0,
         storage_root_id: None,
@@ -224,9 +224,9 @@ async fn replacing_the_matcher_disarms_the_rule() {
             &fixture.user,
             &rule_id,
             MaintenanceMatcherDraft {
-                rego_source: ALWAYS_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    ALWAYS_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 0,
                 storage_root_id: None,
@@ -337,39 +337,9 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
     let title = seed_title(&fixture.app, &fixture.user, "Interrupted", true).await;
     fixture.evaluate().await;
 
-    // Attempt one reserved its number and inserted its `running` row, then its
-    // worker died: the candidate is `executing` with nobody driving it and the
-    // run row never finished.
+    // The worker that took the lease died before it ran a step: the candidate
+    // is `executing` with nobody driving it.
     let candidate = fixture.only_candidate().await;
-    fixture
-        .evaluation
-        .record_candidate_attempts(&candidate.id, 1, Utc::now())
-        .await
-        .expect("reserve the interrupted attempt");
-    fixture
-        .evaluation
-        .start_action_run(&scryer_domain::LifecycleActionRun {
-            id: "run-interrupted".to_string(),
-            candidate_id: candidate.id.clone(),
-            rule_set_id: rule_id.clone(),
-            revision_number: candidate.revision_number,
-            title_id: title.id.clone(),
-            subject_id: title.id.clone(),
-            subject_kind: "title".to_string(),
-            action_kind: candidate.action_kind.clone(),
-            match_generation: candidate.match_generation,
-            idempotency_key: "orphan-key".to_string(),
-            attempt: 1,
-            status: scryer_domain::LifecycleActionRunStatus::Running,
-            hold_reason: None,
-            error: None,
-            detail: "{}".to_string(),
-            started_at: Utc::now(),
-            finished_at: None,
-            created_at: Utc::now(),
-        })
-        .await
-        .expect("the interrupted attempt's run row");
     fixture
         .evaluation
         .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
@@ -390,36 +360,18 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
         .expect("title exists");
     assert!(!stored.monitored, "the reclaimed attempt must do the work");
 
-    let runs = fixture.evaluation.all_action_runs().await;
-    let orphan = runs
-        .iter()
-        .find(|run| run.id == "run-interrupted")
-        .expect("the orphaned run row is still there");
-    assert_eq!(
-        orphan.status,
-        scryer_domain::LifecycleActionRunStatus::Failed,
-        "an abandoned attempt must not keep reading as live work"
-    );
-    assert!(
-        orphan
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains(execution_reason::LEASE_RECLAIMED)),
-        "{orphan:?}"
-    );
-
-    let fresh = runs
-        .iter()
-        .find(|run| run.id != "run-interrupted")
-        .expect("the reclaiming attempt wrote its own row");
-    assert_eq!(
-        fresh.attempt, 2,
-        "the reclaim must take the next attempt number, not collide with the orphan's"
-    );
-    assert_eq!(
-        fresh.status,
-        scryer_domain::LifecycleActionRunStatus::Succeeded
-    );
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].attempt, 1, "the reclaim runs the step once");
+    assert!(steps[0].state.is_completion_success(), "{steps:?}");
     assert_eq!(
         fixture.only_candidate().await.state,
         MaintenanceCandidateState::Succeeded
@@ -460,54 +412,6 @@ async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
     let candidate = fixture.only_candidate().await;
     assert_eq!(candidate.state, MaintenanceCandidateState::Canceled);
     assert_eq!(candidate.state_reason, execution_reason::TITLE_MISSING);
-}
-
-#[tokio::test]
-async fn a_candidate_that_crash_looped_through_its_attempts_terminates() {
-    let fixture = execution_app(None);
-    let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
-        .await;
-    fixture.open_gates(true, false).await;
-    fixture
-        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
-        .await;
-    let title = seed_title(&fixture.app, &fixture.user, "Doomed Loop", true).await;
-    fixture.evaluate().await;
-
-    // Every attempt in the budget was reserved and none of them reported back —
-    // the shape a crash loop leaves. Counting reservations is what lets the cap
-    // bite here at all; a counter only advanced on a handled failure would retry
-    // this row forever.
-    let candidate = fixture.only_candidate().await;
-    fixture
-        .evaluation
-        .record_candidate_attempts(&candidate.id, MAINTENANCE_MAX_ACTION_ATTEMPTS, Utc::now())
-        .await
-        .expect("reserve the whole budget");
-    fixture
-        .evaluation
-        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
-        .await;
-
-    let report = fixture.handle().await;
-    assert_eq!(report.failed, 1, "{report:?}");
-    assert_eq!(report.executed, 0);
-
-    let candidate = fixture.only_candidate().await;
-    assert_eq!(candidate.state, MaintenanceCandidateState::Failed);
-    assert_eq!(candidate.state_reason, execution_reason::ACTION_FAILED);
-
-    let stored = fixture
-        .app
-        .get_title(&fixture.user, &title.id)
-        .await
-        .expect("read title")
-        .expect("title exists");
-    assert!(
-        stored.monitored,
-        "an exhausted candidate must not get one more go at the action"
-    );
 }
 
 // ── Concurrent writers cannot clobber each other (Fix 4) ────────────────────
@@ -596,7 +500,7 @@ async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
     );
     assert_ne!(after.state_reason, execution_reason::ACTION_SUCCEEDED);
 
-    // The action itself did happen, and its run row still says so: that is
+    // The action itself did happen, and its step row still says so: that is
     // honest evidence of what this worker did, whoever owns the candidate now.
     let stored = fixture
         .app
@@ -605,12 +509,17 @@ async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
         .expect("read title")
         .expect("title exists");
     assert!(!stored.monitored);
-    let runs = fixture.evaluation.all_action_runs().await;
-    assert_eq!(runs.len(), 1);
-    assert_eq!(
-        runs[0].status,
-        scryer_domain::LifecycleActionRunStatus::Succeeded
-    );
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert!(steps[0].state.is_completion_success(), "{steps:?}");
 }
 
 // ── A transient rule read holds; only a deleted rule cancels (Fix 5) ────────
@@ -798,15 +707,25 @@ async fn an_already_met_postcondition_reports_already_satisfied() {
     seed_title(&fixture.app, &fixture.user, "Already Done", false).await;
     fixture.evaluate().await;
 
-    let report = fixture.handle().await;
-    assert_eq!(report.already_satisfied, 1, "{report:?}");
-    assert_eq!(report.executed, 0);
+    let candidate = fixture.only_candidate().await;
+    fixture.handle().await;
 
     let candidates = fixture.evaluation.all_candidates().await;
     assert_eq!(candidates[0].state, MaintenanceCandidateState::Succeeded);
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
     assert_eq!(
-        candidates[0].state_reason,
-        execution_reason::ALREADY_SATISFIED
+        steps[0].state,
+        scryer_domain::MaintenanceActionStepState::AlreadySatisfied,
+        "an unmonitor of an unmonitored title changes nothing and says so"
     );
 }
 
@@ -1061,8 +980,7 @@ async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same
             &fixture.user,
             &rule_id,
             MaintenanceMatcherDraft {
-                rego_source: ALWAYS_MATCHER.into(),
-                action_definition: draft.action_definition,
+                rego_source: draft.rego_source,
                 grace_days: 0,
                 storage_root_id: None,
             },
@@ -1278,6 +1196,77 @@ async fn a_candidate_inside_its_grace_window_is_not_touched() {
     assert_eq!(report.candidates_considered, 0, "{report:?}");
     let candidates = fixture.evaluation.all_candidates().await;
     assert_eq!(candidates[0].state, MaintenanceCandidateState::Observing);
+}
+
+#[tokio::test]
+async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
+    let fixture = execution_app(None);
+    let mut draft = unmonitor_draft(MONITORED_MATCHER);
+    draft.rego_source = "add_tags := [\"graced\"] if {\n\tinput.facts.monitored\n}\n\n\
+                         unmonitor if {\n\tinput.facts.monitored\n}\n"
+        .to_string();
+    draft.grace_days = 30;
+    fixture
+        .app
+        .create_title_tag_definition(&fixture.user, "graced", None)
+        .await
+        .expect("define title tag");
+    let rule_id = fixture.observed_rule(draft).await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Graced Title", true).await;
+    let untouched = |title: &Title| title.monitored && !title.tags.iter().any(|tag| tag == "graced");
+    let read_title = || async {
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("read title")
+            .expect("title exists")
+    };
+
+    // Every path short of a due candidate: evaluation, preview, the handler,
+    // and evaluation again. None of them applies an action.
+    fixture.evaluate().await;
+    fixture
+        .app
+        .preview_maintenance_rule(
+            &fixture.user,
+            crate::maintenance_rules::MaintenancePreviewRequest {
+                matcher: crate::maintenance_rules::MaintenancePreviewMatcher::Stored {
+                    rule_set_id: rule_id.clone(),
+                },
+                selection: crate::maintenance_rules::MaintenancePreviewSelection::Titles(vec![
+                    title.id.clone(),
+                ]),
+            },
+        )
+        .await
+        .expect("preview the rule");
+    let report = fixture.handle().await;
+    assert_eq!(report.candidates_considered, 0, "{report:?}");
+    fixture.evaluate().await;
+    assert_eq!(fixture.handle().await.candidates_considered, 0);
+    assert!(untouched(&read_title().await));
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Observing);
+    assert!(candidate.due_at > Utc::now() + chrono::Duration::days(29));
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+    assert!(fixture.evaluation.action_steps_with_id("unmonitor").await.is_empty());
+    assert!(fixture.evaluation.action_steps_with_id("add_tags").await.is_empty());
+
+    // Once the grace ends, the same candidate carries the actions.
+    fixture.evaluation.end_every_grace().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    let after = read_title().await;
+    assert!(!after.monitored);
+    assert!(after.tags.iter().any(|tag| tag == "graced"));
 }
 
 #[tokio::test]

@@ -657,6 +657,10 @@ impl AppUseCase {
                 }
             }
 
+            // An unmonitor replay whose before-state names the subject's own
+            // facts (an episode, a season, or a title with its descendants)
+            // is compared with the fresh safety observation below.
+            let mut replay_before_state: Option<MaintenanceActionStepRun> = None;
             // For non-terminal catalog mutations, a running checkpoint whose
             // exact postcondition now holds is recovered without replaying the
             // write. The same applies to a failed or held checkpoint: an
@@ -756,7 +760,9 @@ impl AppUseCase {
                         }
                     }
                 }
-                if !sequence_step_before_state_holds(candidate, step, &existing, &title) {
+                if unmonitor_before_state_reads_subject_facts(candidate, step) {
+                    replay_before_state = Some(existing);
+                } else if !sequence_step_before_state_holds(candidate, step, &existing, &title) {
                     return Ok(SequenceOutcome::Held(
                         execution_reason::UNKNOWN_AT_EXECUTION,
                     ));
@@ -784,6 +790,11 @@ impl AppUseCase {
                 SafetyDecision::Cancel(reason) => return Ok(SequenceOutcome::Canceled(reason)),
                 SafetyDecision::Excluded => return Ok(SequenceOutcome::Excluded),
             };
+            if let Some(existing) = replay_before_state.as_ref()
+                && !unmonitor_before_state_matches_input(existing, &input)
+            {
+                return Ok(SequenceOutcome::Held(execution_reason::UNKNOWN_AT_EXECUTION));
+            }
 
             let lease_id = Id::new().0;
             let key = MaintenanceActionStepKey {
@@ -2121,19 +2132,6 @@ impl AppUseCase {
                     MaintenanceActionStepState::Succeeded,
                 ))
             }
-            Ok(ActionResult::AlreadySatisfied { detail }) => {
-                deletion_run.status = LifecycleActionRunStatus::AlreadySatisfied;
-                deletion_run.detail = detail.to_string();
-                deletion_run.finished_at = Some(Utc::now());
-                self.services
-                    .customization
-                    .maintenance_evaluation
-                    .finish_action_run(&deletion_run)
-                    .await?;
-                Ok(SequenceStepResult::Finished(
-                    MaintenanceActionStepState::AlreadySatisfied,
-                ))
-            }
             Ok(ActionResult::Held { reason, detail }) => {
                 deletion_run.status = LifecycleActionRunStatus::Held;
                 deletion_run.hold_reason = Some(reason.to_string());
@@ -2258,6 +2256,65 @@ fn sequence_step_before_state_holds(
                         .all(|(current, saved)| current == saved)
             }),
         _ => false,
+    }
+}
+
+/// Whether an unmonitor replay must be judged against the subject's own
+/// observed facts rather than the title row. That is every unmonitor except
+/// a title subject without descendants, which the title row answers exactly.
+fn unmonitor_before_state_reads_subject_facts(
+    candidate: &LifecycleCandidate,
+    step: &MaintenanceActionStep,
+) -> bool {
+    match (&step.kind, &step.parameters) {
+        (
+            MaintenanceActionStepKind::Unmonitor,
+            MaintenanceActionStepParameters::Unmonitor {
+                include_descendants,
+            },
+        ) => {
+            *include_descendants
+                || candidate.subject_kind != "title"
+                || candidate.subject_id != candidate.title_id
+        }
+        _ => false,
+    }
+}
+
+/// An unmonitor replay is safe only when the fresh observation of the subject
+/// still equals what the failed attempt recorded before it wrote: the same
+/// monitored fact and, when one was recorded, the same monitored episode
+/// count. Any difference, or a fact that is no longer known, means something
+/// changed the subject since, so the step holds instead of replaying.
+fn unmonitor_before_state_matches_input(
+    run: &MaintenanceActionStepRun,
+    input: &scryer_rules::maintenance::MaintenanceInput,
+) -> bool {
+    use scryer_rules::maintenance::Observation;
+    let Ok(before) = serde_json::from_str::<serde_json::Value>(&run.before_state_json) else {
+        return false;
+    };
+    let Some(before_monitored) = before
+        .get("facts_monitored")
+        .and_then(serde_json::Value::as_bool)
+    else {
+        return false;
+    };
+    if !matches!(&input.facts.monitored, Observation::Known { value, .. } if *value == before_monitored)
+    {
+        return false;
+    }
+    match before
+        .get("facts_monitored_episode_count")
+        .filter(|value| !value.is_null())
+    {
+        None => true,
+        Some(value) => value.as_i64().is_some_and(|count| {
+            matches!(
+                &input.facts.monitored_episode_count,
+                Observation::Known { value, .. } if *value == count
+            )
+        }),
     }
 }
 

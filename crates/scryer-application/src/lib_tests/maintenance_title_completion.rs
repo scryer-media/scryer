@@ -14,8 +14,8 @@ use crate::lib_tests::media_server_signals::{
     jellyfin_connection,
 };
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenancePreviewMatcher,
-    MaintenancePreviewRequest, MaintenancePreviewSelection, MaintenanceRuleDraft,
+    MaintenanceActionKind, MaintenancePreviewMatcher, MaintenancePreviewRequest,
+    MaintenancePreviewSelection, MaintenanceRuleDraft,
 };
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
@@ -209,10 +209,7 @@ async fn create_destructive_rule(
                 subject_kind,
                 name: "Completion acceptance".into(),
                 description: String::new(),
-                rego_source: rego_source.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(action_kind),
-                ),
+                rego_source: crate::lib_tests::legacy_source(rego_source, action_kind),
                 grace_days: 0,
                 storage_root_id: None,
                 library_ids: vec![],
@@ -441,7 +438,8 @@ async fn title_file_only_deletion_retains_show_records_and_linked_or_sibling_fil
             .expect("read sibling")
             .is_some_and(|title| title.monitored)
     );
-    let action_runs = fixture.execution.evaluation.all_action_runs().await;
+    let action_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     assert_eq!(action_runs.len(), 1);
     assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Succeeded);
     let detail: serde_json::Value =
@@ -600,7 +598,8 @@ async fn movie_title_file_only_deletion_retains_title_and_metadata_records() {
             .is_some(),
         "file-only deletion preserves movie metadata episodes"
     );
-    let action_runs = fixture.execution.evaluation.all_action_runs().await;
+    let action_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     assert_eq!(action_runs.len(), 1);
     assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Succeeded);
 }
@@ -627,13 +626,10 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: MaintenanceRuleSubjectKind::Episode,
-                    rego_source: RETAIN_NEWEST_EPISODE.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        RETAIN_NEWEST_EPISODE,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -700,7 +696,8 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
             .is_some_and(|episode| episode.monitored)
     );
     assert_eq!(
-        fixture.execution.evaluation.all_action_runs().await.len(),
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await)
+            .len(),
         2
     );
 }
@@ -781,9 +778,9 @@ async fn preview_whole_show_completion(
             matcher: MaintenancePreviewMatcher::Inline {
                 library_ids: vec![],
                 subject_kind: MaintenanceRuleSubjectKind::Title,
-                rego_source: COMPLETE_SHOW_WATCH.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    COMPLETE_SHOW_WATCH,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
                 storage_root_id: None,

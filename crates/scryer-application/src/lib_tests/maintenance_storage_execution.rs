@@ -10,12 +10,11 @@ use crate::lib_tests::maintenance_title_completion::{TitleFixture, title_fixture
 use crate::maintenance_rules::storage::{
     TestCapacityProbe, install_maintenance_storage_capacity_probe_for_test,
 };
-use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceCandidateFilter, MaintenanceRuleDraft,
-};
+use crate::maintenance_rules::{MaintenanceCandidateFilter, MaintenanceRuleDraft};
 use crate::ports::SubtitleDownloadRepository;
 use scryer_domain::{
-    ExternalSubtitleSourceKind, LifecycleActionRunStatus, MaintenanceEffectArming,
+    ExternalSubtitleSourceKind, LifecycleActionRunStatus, MaintenanceActionStepState,
+    MaintenanceEffectArming,
     MaintenanceRuleSubjectKind, SubtitleBlocklistEntry, SubtitleDownload,
 };
 use std::collections::VecDeque;
@@ -162,6 +161,26 @@ fn scripted_capacity_probe(
     })
 }
 
+/// Low readings taken before the first unlink of an armed title deletion: the
+/// evaluation pass, then for each of the unmonitor and delete steps the safety
+/// pass before the step is claimed and the one under the title guard.
+fn low_readings_before_first_unlink() -> Vec<Option<crate::helpers::FilesystemSpace>> {
+    vec![Some(capacity(100)); 5]
+}
+
+/// Low readings for a retry that resumes a held delete step: the scheduled
+/// evaluation pass, then the delete step's two safety passes. The completed
+/// unmonitor step is not run again.
+fn low_readings_before_resumed_unlink() -> Vec<Option<crate::helpers::FilesystemSpace>> {
+    vec![Some(capacity(100)); 3]
+}
+
+fn scripted(
+    phases: impl IntoIterator<Item = Vec<Option<crate::helpers::FilesystemSpace>>>,
+) -> TestCapacityProbe {
+    scripted_capacity_probe(phases.into_iter().flatten())
+}
+
 async fn selected_root_id(fixture: &TitleFixture) -> String {
     selected_root_id_at(fixture, &fixture.root).await
 }
@@ -238,9 +257,9 @@ async fn arm_storage_title_deletion_with_matcher(
                 subject_kind: MaintenanceRuleSubjectKind::Title,
                 name: "Storage pressure".into(),
                 description: String::new(),
-                rego_source: matcher,
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorTitleDeleteAllFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    matcher,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
                 ),
                 grace_days: 0,
                 storage_root_id: Some(storage_root_id),
@@ -508,13 +527,11 @@ async fn evaluation_pass_probes_each_file_once_and_sees_what_a_fresh_load_sees()
 
 #[tokio::test]
 async fn storage_recovery_stops_before_the_next_file() {
-    // Evaluation, action safety, first file, then a recovered capacity before
-    // the second file. The recovery must cancel the remaining manifest.
-    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(700)),
+    // Low through the first file, then a recovered capacity before the second
+    // file. The recovery must cancel the remaining manifest.
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+        vec![Some(capacity(100)), Some(capacity(700))],
     ]))
     .await;
     let fixture = title_fixture("Pressure Movie", MediaFacet::Movie).await;
@@ -538,24 +555,22 @@ async fn storage_recovery_stops_before_the_next_file() {
         second.exists(),
         "exactly one file was deleted"
     );
-    let action_runs = fixture.execution.evaluation.all_action_runs().await;
+    let action_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     assert_eq!(action_runs.len(), 1);
     assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Held);
 }
 
 #[tokio::test]
 async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resumes() {
-    // Evaluation, the initial action check, and the first file are low. The
-    // second per-file refresh is unavailable, then scheduled evaluation and a
-    // retry can reuse the incomplete manifest without repeating file one.
-    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
-        None,
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
+    // Everything through the first file is low. The second per-file refresh
+    // is unavailable, then scheduled evaluation and a retry can reuse the
+    // incomplete manifest without repeating file one.
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+        vec![Some(capacity(100)), None],
+        low_readings_before_resumed_unlink(),
+        vec![Some(capacity(100))],
     ]))
     .await;
     let fixture = title_fixture("Recoverable Unknown", MediaFacet::Movie).await;
@@ -570,7 +585,8 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
         .await
         .expect("hold while capacity is unavailable");
     assert_eq!(held.held, 1);
-    let action_runs = fixture.execution.evaluation.all_action_runs().await;
+    let action_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     assert_eq!(action_runs.len(), 1);
     assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Held);
     let detail: serde_json::Value =
@@ -605,9 +621,16 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
         .into_iter()
         .find(|candidate| candidate.rule_set_id == rule_set_id)
         .expect("candidate remains for recovery");
+    let held_steps = fixture
+        .execution
+        .evaluation
+        .action_steps_with_id("delete_files")
+        .await;
+    assert_eq!(held_steps.len(), 1);
+    assert_eq!(held_steps[0].state, MaintenanceActionStepState::Held);
     assert_eq!(
-        held_candidate.action_attempts, 0,
-        "unknown capacity refunds the attempt"
+        held_steps[0].attempt, 1,
+        "unknown capacity does not consume an attempt"
     );
     let match_generation = held_candidate.match_generation;
     let due_at = held_candidate.due_at;
@@ -628,7 +651,6 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
         .expect("partial candidate stays active after evaluation");
     assert_eq!(after_evaluation.match_generation, match_generation);
     assert_eq!(after_evaluation.due_at, due_at);
-    assert_eq!(after_evaluation.action_attempts, 0);
 
     let resumed = fixture
         .execution
@@ -645,26 +667,35 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
         "retry resumes at the journaled remaining file"
     );
     assert!(!remaining_path.exists());
-    let candidates = fixture.execution.evaluation.all_candidates().await;
-    assert_eq!(candidates[0].action_attempts, 1);
-    let action_runs = fixture.execution.evaluation.all_action_runs().await;
-    assert_eq!(action_runs.len(), 2);
-    assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Held);
-    assert_eq!(action_runs[1].status, LifecycleActionRunStatus::Succeeded);
+    let resumed_steps = fixture
+        .execution
+        .evaluation
+        .action_steps_with_id("delete_files")
+        .await;
+    assert_eq!(resumed_steps.len(), 1);
+    assert_eq!(resumed_steps[0].state, MaintenanceActionStepState::Succeeded);
+    assert_eq!(
+        resumed_steps[0].attempt, 1,
+        "the resumed delete reuses the attempt the unknown hold refunded"
+    );
+    let action_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    // The resumed delete step continues the held journal row rather than
+    // opening a second one.
+    assert_eq!(action_runs.len(), 1);
+    assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Succeeded);
 }
 
 #[tokio::test]
 async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanup() {
-    // The first action creates and persists the manifest, then capacity becomes
+    // The delete step creates and persists the manifest, then capacity becomes
     // unavailable before unlink. Removing the path now models a crash after an
     // authorized unlink but before the catalog row and journal were reconciled.
-    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([
-        Some(capacity(100)),
-        Some(capacity(100)),
-        None,
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+        vec![None],
+        low_readings_before_resumed_unlink(),
+        vec![Some(capacity(100))],
     ]))
     .await;
     let fixture = title_fixture("Interrupted Cleanup", MediaFacet::Movie).await;
@@ -678,7 +709,8 @@ async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanu
         .await
         .expect("persist manifest before the interrupted unlink");
     assert_eq!(held.held, 1);
-    let held_runs = fixture.execution.evaluation.all_action_runs().await;
+    let held_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     assert_eq!(held_runs.len(), 1);
     let held_detail: serde_json::Value =
         serde_json::from_str(&held_runs[0].detail).expect("parse held journal");
@@ -721,12 +753,14 @@ async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanu
             .is_none(),
         "the exact missing path's catalog row is reconciled"
     );
-    let action_runs = fixture.execution.evaluation.all_action_runs().await;
-    assert_eq!(action_runs.len(), 2);
-    assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Held);
-    assert_eq!(action_runs[1].status, LifecycleActionRunStatus::Succeeded);
+    let action_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    // The resumed delete step continues the held journal row rather than
+    // opening a second one.
+    assert_eq!(action_runs.len(), 1);
+    assert_eq!(action_runs[0].status, LifecycleActionRunStatus::Succeeded);
     let completed_detail: serde_json::Value =
-        serde_json::from_str(&action_runs[1].detail).expect("parse completed journal");
+        serde_json::from_str(&action_runs[0].detail).expect("parse completed journal");
     assert_eq!(
         completed_detail["files"]
             .as_array()
@@ -744,14 +778,75 @@ async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanu
 }
 
 #[tokio::test]
+async fn a_file_replaced_after_its_deletion_was_planned_is_preserved_on_retry() {
+    // The delete step persists its plan, then capacity becomes unavailable
+    // before unlink. A replacement written to the planned path afterwards no
+    // longer matches the plan's proof, so the retry must keep it.
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+        vec![None],
+        low_readings_before_resumed_unlink(),
+        vec![Some(capacity(100)); 2],
+    ]))
+    .await;
+    let fixture = title_fixture("Replaced Plan", MediaFacet::Movie).await;
+    let (media_path, media_file_id) = add_movie_file(&fixture, "Replaced/movie.mkv").await;
+    arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+
+    let held = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("persist the plan before the interrupted unlink");
+    assert_eq!(held.held, 1);
+    assert!(media_path.exists());
+
+    std::fs::write(&media_path, b"new replacement version").expect("replace planned file");
+    fixture
+        .execution
+        .app
+        .run_maintenance_rule_evaluation_job()
+        .await
+        .expect("re-evaluate the planned deletion");
+    let retried = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("retry the planned deletion");
+    assert_eq!(retried.executed, 0);
+    assert_eq!(
+        std::fs::read(&media_path).expect("read replacement"),
+        b"new replacement version"
+    );
+    assert!(
+        fixture
+            .execution
+            .app
+            .services
+            .library
+            .media_files
+            .get_media_file_by_id(&media_file_id)
+            .await
+            .expect("read retained media row")
+            .is_some()
+    );
+    let runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    assert!(
+        runs.iter().any(|run| run.detail.contains("file changed")),
+        "the journal records why the file was kept"
+    );
+}
+
+#[tokio::test]
 async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_roots() {
-    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([
-        Some(capacity(100)),
-        Some(capacity(100)),
-        None,
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+        vec![None],
+        low_readings_before_resumed_unlink(),
+        vec![Some(capacity(100))],
     ]))
     .await;
     let fixture = title_fixture("Two Roots", MediaFacet::Movie).await;
@@ -784,7 +879,8 @@ async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_root
         .await
         .expect("hold selected-root journal before unlink");
     assert_eq!(held.held, 1);
-    let held_runs = fixture.execution.evaluation.all_action_runs().await;
+    let held_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     let held_detail: serde_json::Value =
         serde_json::from_str(&held_runs[0].detail).expect("parse selected-root journal");
     let journal_file_ids = held_detail["files"]
@@ -841,11 +937,15 @@ async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_root
 
 #[tokio::test]
 async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() {
-    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
-        Some(capacity(100)),
+    // The storage guard holds the delete step after the unmonitor step has
+    // already run. An operator then re-monitors the title. The retry must see
+    // that live state: the unmonitor baseline may stand in for the monitored
+    // fact only while Scryer's own unmonitor still holds, and the delete step
+    // rechecks its unmonitored prerequisite before any unlink.
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+        low_readings_before_resumed_unlink(),
+        vec![Some(capacity(100)); 2],
     ]))
     .await;
     let fixture = title_fixture("Guarded Retry", MediaFacet::Movie).await;
@@ -854,12 +954,8 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
         "match if {{ input.subject.title_id == {:?}; input.facts.monitored; input.facts.storage_available_bytes < 200 }}",
         fixture.title.id
     );
-    let rule_set_id = arm_storage_title_deletion_with_matcher(
-        &fixture,
-        selected_root_id(&fixture).await,
-        matcher,
-    )
-    .await;
+    arm_storage_title_deletion_with_matcher(&fixture, selected_root_id(&fixture).await, matcher)
+        .await;
     let guard = fixture
         .execution
         .app
@@ -878,29 +974,26 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
         .expect("hold before mutation starts");
     assert_eq!(held.held, 1);
     assert!(media_path.exists());
-    let held_runs = fixture.execution.evaluation.all_action_runs().await;
+    let held_runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
     let held_detail: serde_json::Value =
         serde_json::from_str(&held_runs[0].detail).expect("parse pre-mutation journal");
     assert_eq!(held_detail["mutation_started"], false);
-    let held_candidate = fixture
+    let held_steps = fixture
         .execution
         .evaluation
-        .all_candidates()
-        .await
-        .into_iter()
-        .find(|candidate| candidate.rule_set_id == rule_set_id)
-        .expect("candidate remains after guard hold");
-    assert_eq!(
-        held_candidate.action_attempts, 0,
-        "guard hold refunds attempt"
-    );
+        .action_steps_with_id("delete_files")
+        .await;
+    assert_eq!(held_steps.len(), 1);
+    assert_eq!(held_steps[0].state, MaintenanceActionStepState::Held);
+    assert_eq!(held_steps[0].attempt, 1, "guard hold does not consume an attempt");
 
     fixture
         .execution
         .app
-        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, true)
         .await
-        .expect("change monitoring while mutation has not started");
+        .expect("re-monitor while mutation has not started");
     drop(guard);
     let retried = fixture
         .execution
@@ -908,11 +1001,10 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
         .run_lifecycle_action_handling_job()
         .await
         .expect("retry with live monitoring state");
-    assert_eq!(retried.canceled, 1);
     assert_eq!(retried.executed, 0);
     assert!(
         media_path.exists(),
-        "an unstarted checkpoint never restores its stale monitored fact"
+        "an unstarted checkpoint never deletes over a live re-monitor"
     );
     assert!(
         fixture
@@ -930,11 +1022,11 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
 
 #[tokio::test]
 async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video_deletion() {
-    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted_capacity_probe([
-        Some(capacity(100)),
-        Some(capacity(100)),
-    ]))
-    .await;
+    let _probe =
+        install_maintenance_storage_capacity_probe_for_test(scripted([
+            low_readings_before_first_unlink(),
+        ]))
+        .await;
     let mut fixture = title_fixture("Bounded Subtitle", MediaFacet::Movie).await;
     let subtitles = Arc::new(TrackedSubtitleRepo::default());
     fixture.execution.app = fixture
@@ -999,5 +1091,13 @@ async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video
         .into_iter()
         .next()
         .expect("candidate remains held");
-    assert_eq!(candidate.action_attempts, 0);
+    assert!(!candidate.state.is_terminal(), "candidate remains held");
+    let held_steps = fixture
+        .execution
+        .evaluation
+        .action_steps_with_id("delete_files")
+        .await;
+    assert_eq!(held_steps.len(), 1);
+    assert_eq!(held_steps[0].state, MaintenanceActionStepState::Held);
+    assert_eq!(held_steps[0].attempt, 1);
 }

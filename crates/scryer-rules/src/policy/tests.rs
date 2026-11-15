@@ -204,7 +204,11 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
         Ok(())
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        _kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         ProbeError {
             rule_set_id: rule.id.clone(),
             tier: rule.extra,

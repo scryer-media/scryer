@@ -1979,6 +1979,13 @@ pub mod maintenance {
     pub const RULE_SOURCE_INVALID: &str = "MAINTENANCE_RULE_SOURCE_INVALID";
     /// The maintenance action configuration is invalid.
     pub const ACTION_CONFIGURATION_INVALID: &str = "MAINTENANCE_ACTION_CONFIGURATION_INVALID";
+    /// The rule source defines no action head, so it could never do anything.
+    pub const ACTION_HEAD_REQUIRED: &str = "MAINTENANCE_ACTION_HEAD_REQUIRED";
+    /// The rule defines an action head its scope cannot run.
+    pub const ACTION_HEAD_UNSUPPORTED_FOR_SCOPE: &str =
+        "MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE";
+    /// A `set_quality_profile` literal names no existing quality profile.
+    pub const QUALITY_PROFILE_NOT_FOUND: &str = "MAINTENANCE_QUALITY_PROFILE_NOT_FOUND";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
@@ -2025,6 +2032,9 @@ pub mod maintenance {
         DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
         RULE_SOURCE_INVALID,
         ACTION_CONFIGURATION_INVALID,
+        ACTION_HEAD_REQUIRED,
+        ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
+        QUALITY_PROFILE_NOT_FOUND,
     ];
 }
 

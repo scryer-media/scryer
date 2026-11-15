@@ -528,7 +528,11 @@ impl PolicyFamily for ReleaseFamily {
         Ok(())
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        _kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         RuleEvalError {
             rule_set_id: rule.id.clone(),
             rule_set_name: rule.name.clone(),

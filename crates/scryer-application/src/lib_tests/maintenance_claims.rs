@@ -10,8 +10,8 @@ use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
 use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
 use crate::lib_tests::request_rules_support::InMemoryLifecycleClaimRepo;
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenancePreviewMatcher,
-    MaintenancePreviewRequest, MaintenancePreviewSelection, MaintenanceRuleDraft, execution_reason,
+    MaintenanceActionKind, MaintenancePreviewMatcher, MaintenancePreviewRequest,
+    MaintenancePreviewSelection, MaintenanceRuleDraft, execution_reason,
 };
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
@@ -116,10 +116,7 @@ fn draft(rego_source: &str, kind: MaintenanceActionKind) -> MaintenanceRuleDraft
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Lease rule".to_string(),
         description: String::new(),
-        rego_source: rego_source.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(kind),
-        ),
+        rego_source: crate::lib_tests::legacy_source(rego_source, kind),
         grace_days: 0,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -513,11 +510,10 @@ async fn preview_reads_the_same_claim_facts_as_the_pass() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: EXPIRED_LEASE_MATCHER.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        EXPIRED_LEASE_MATCHER,
+                        crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -731,11 +727,11 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
     assert_eq!(detail.revision.created_by, None);
     assert_eq!(
         detail.revision.action_spec_json,
-        r#"{"schema_version":2,"steps":[{"id":"legacy-delete-title","kind":"delete_title_and_files"}]}"#
+        r#"{"schema_version":3,"heads":["delete_title"],"destructive":true,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
     );
     assert_eq!(
         scryer_rules::strip_editor_source(&detail.revision.rego_source),
-        EXPIRED_LEASE_MATCHER
+        "delete_title if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n"
     );
 }
 
@@ -782,14 +778,12 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
         MaintenanceEffectArming::Destructive
     );
     let stored_source = scryer_rules::strip_editor_source(&detail.revision.rego_source);
-    let matcher = |rego_source: &str, action_definition, grace_days| {
-        crate::maintenance_rules::MaintenanceMatcherDraft {
+    let matcher =
+        |rego_source: &str, grace_days| crate::maintenance_rules::MaintenanceMatcherDraft {
             rego_source: rego_source.to_string(),
-            action_definition,
             grace_days,
             storage_root_id: None,
-        }
-    };
+        };
     let refused = |result: AppResult<_>| {
         matches!(
             result,
@@ -821,11 +815,7 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
     assert!(refused(
         fixture
             .app
-            .update_maintenance_rule_matcher(
-                &fixture.user,
-                &id,
-                matcher(ALWAYS_MATCHER, detail.action_definition.clone(), 7),
-            )
+            .update_maintenance_rule_matcher(&fixture.user, &id, matcher(ALWAYS_MATCHER, 7),)
             .await
             .map(|_| ())
     ));
@@ -835,13 +825,8 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
             .update_maintenance_rule_matcher(
                 &fixture.user,
                 &id,
-                matcher(
-                    &stored_source,
-                    crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                        MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
-                    ),
-                    7,
-                ),
+                // The shipped source with another action declared beside it.
+                matcher(&format!("{stored_source}\nunmonitor := true\n"), 7),
             )
             .await
             .map(|_| ())
@@ -860,11 +845,7 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
     // drop to Dry run that every matcher or scope edit of an enabled rule has.
     let regraced = fixture
         .app
-        .update_maintenance_rule_matcher(
-            &fixture.user,
-            &id,
-            matcher(&stored_source, detail.action_definition.clone(), 14),
-        )
+        .update_maintenance_rule_matcher(&fixture.user, &id, matcher(&stored_source, 14))
         .await
         .expect("grace period is editable");
     assert_eq!(regraced.revision.grace_days, 14);
@@ -1006,4 +987,70 @@ async fn startup_replaces_the_previously_shipped_matcher() {
         3,
         "a rule already on the current matcher is left alone"
     );
+}
+
+/// Instances that seeded the rule while a separate action definition deleted
+/// what `match` matched get the current source on the next boot. It deletes
+/// exactly the same titles, so the rule keeps its state, arming and grace.
+#[tokio::test]
+async fn startup_moves_the_match_form_rule_to_the_current_source_keeping_its_state() {
+    let fixture = claims_app();
+    fixture
+        .app
+        .ensure_expired_request_leases_rule()
+        .await
+        .expect("seed");
+    let id = fixture.shipped_rule().await.rule_set.id;
+    super::maintenance_rules::set_rule_state(
+        &fixture.app,
+        &fixture.user,
+        &id,
+        MaintenanceRuleState::Enabled,
+        Some(0),
+    )
+    .await;
+    let armed = fixture.shipped_rule().await;
+    let store = &fixture.app.services.customization.maintenance_rule_sets;
+    let match_source = scryer_rules::maintenance::rewrite_package_declaration(
+        "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
+        &id,
+    );
+    let now = Utc::now();
+    let match_form = scryer_domain::MaintenanceRuleRevision {
+        id: "match-form-revision".to_string(),
+        revision_number: 2,
+        rego_source: match_source.clone(),
+        grace_days: 12,
+        matcher_content_hash: scryer_rules::runtime::content_hash(&match_source),
+        created_at: now,
+        ..armed.revision.clone()
+    };
+    store
+        .add_revision_keeping_arming(&match_form, now)
+        .await
+        .expect("match-form revision");
+
+    fixture
+        .app
+        .ensure_expired_request_leases_rule()
+        .await
+        .expect("upgrade");
+    let upgraded = fixture.shipped_rule().await;
+    assert_eq!(upgraded.rule_set.id, id);
+    assert_eq!(upgraded.revision.revision_number, 3);
+    assert_eq!(upgraded.revision.grace_days, 12);
+    assert_eq!(
+        scryer_rules::strip_editor_source(&upgraded.revision.rego_source),
+        "delete_title if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n"
+    );
+    assert_eq!(
+        crate::maintenance_rules::maintenance_rule_state(&upgraded),
+        MaintenanceRuleState::Enabled
+    );
+    assert_eq!(
+        upgraded.rule_set.effect_arming,
+        MaintenanceEffectArming::Destructive
+    );
+    assert!(!upgraded.rule_set.destructive_rearm_required);
+    assert_eq!(upgraded.rule_set.description, armed.rule_set.description);
 }

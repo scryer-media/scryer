@@ -10801,6 +10801,21 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
+    /// Append `revision` and repoint the rule set at it without touching its
+    /// arming, atomically. Only for a revision that declares no delete action:
+    /// the destructive acknowledgement is bound to the delete heads a matcher
+    /// declares, so a revision that cannot delete carries no new blast radius
+    /// to acknowledge. A revision that declares a delete action must go
+    /// through [`Self::add_revision`], with one exception: startup moving the
+    /// shipped rule from its `match` form to the source that deletes exactly
+    /// the same titles, so the acknowledgement already given still describes
+    /// it.
+    async fn add_revision_keeping_arming(
+        &self,
+        revision: &MaintenanceRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
     async fn get_revision(
         &self,
         rule_set_id: &str,

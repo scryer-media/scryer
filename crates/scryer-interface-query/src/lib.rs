@@ -4167,28 +4167,6 @@ impl AcquisitionQueries {
             .collect())
     }
 
-    /// List the static maintenance action catalog the rule builder chooses from.
-    async fn maintenance_action_descriptors(
-        &self,
-        ctx: &Context<'_>,
-    ) -> GqlResult<Vec<MaintenanceActionDescriptor>> {
-        // The catalog is static, so no service call enforces the permission the
-        // rest of this surface requires; the gate has to happen here.
-        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
-        Ok(crate::mappers::maintenance_action_descriptors())
-    }
-
-    /// List the backend-owned schema-2 action-sequence catalog. Authoring
-    /// clients use its parameter and dependency descriptors directly rather
-    /// than maintaining a parallel effect matrix.
-    async fn maintenance_action_step_descriptors(
-        &self,
-        ctx: &Context<'_>,
-    ) -> GqlResult<Vec<MaintenanceActionStepDescriptor>> {
-        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
-        Ok(crate::mappers::maintenance_action_step_descriptors())
-    }
-
     /// List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
     ///
     /// Candidates are ordered by due time across rules, soonest first, and

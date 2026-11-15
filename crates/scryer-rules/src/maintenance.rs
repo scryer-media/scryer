@@ -367,6 +367,11 @@ pub type MaintenanceEvalRecord = EvalRecord<MaintenanceDecision>;
 pub struct MaintenanceEvalError {
     pub rule_set_id: String,
     pub rule_set_name: String,
+    /// What went wrong, as one of the codes in [`crate::diagnostic_codes`]:
+    /// `RULE_RUNTIME_ERROR`, `RULE_OUTPUT_INVALID`, or the code of the
+    /// condition that refused the rule's source at load.
+    pub code: &'static str,
+    /// Display text; code never reads it.
     pub message: String,
 }
 
@@ -386,11 +391,11 @@ pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
 
 /// Source for the generated evaluation entry point.
 ///
-/// `object.get` with a default is what makes `unknown` and `reasons` optional
-/// and an undefined `match` mean "did not match": a rule whose body fails
-/// leaves the name off the package document entirely, and the default fills in.
-/// A `match` that is defined but not boolean survives to the host, which
-/// rejects it rather than coercing it.
+/// `object.get` with a default is what makes `unknown`, `reasons` and every
+/// action head optional: a rule whose body fails leaves the name off the
+/// package document entirely, and the default fills in. A head that is defined
+/// with the wrong type survives to the host, which rejects it rather than
+/// coercing it. `match` is not projected: it is an ordinary author helper.
 pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
     object_wrapper_source(
         WRAPPER_PACKAGE_PREFIX,
@@ -398,7 +403,6 @@ pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
         rule_id,
         "decision",
         &[
-            WrapperField::new("matched", "match", "false"),
             WrapperField::new("unknown", HOLD_RULE_NAME, "false"),
             WrapperField::new("reasons", "reasons", "[]"),
         ]
@@ -536,10 +540,24 @@ impl PolicyFamily for MaintenanceFamily {
         decode_decision(value)
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    /// The same action scan validation runs. A stored source that would no
+    /// longer save, or whose actions the host cannot read, never decides.
+    fn load_refusal(
+        _policy: &Self::Policy,
+        module: &regorus::unstable::Module,
+    ) -> Option<crate::policy::PolicyRefusal> {
+        maintenance_actions::load_refusal(module)
+    }
+
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         MaintenanceEvalError {
             rule_set_id: rule.id.clone(),
             rule_set_name: rule.name.clone(),
+            code: kind.code(),
             message,
         }
     }
@@ -597,9 +615,6 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
         return Err("decision must be an object".to_string());
     }
 
-    let matched = *value["matched"]
-        .as_bool()
-        .map_err(|_| "'match' must be a boolean".to_string())?;
     let unknown = *value["unknown"]
         .as_bool()
         .map_err(|_| "'unknown' must be a boolean".to_string())?;
@@ -608,11 +623,12 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
     // error for the rule even on a subject the rule holds.
     let actions = decode_actions(value)?;
 
-    // Unknown wins over match: a rule that cannot see enough to decide must
-    // hold the candidate rather than advance it.
+    // Unknown wins over every action: a rule that cannot see enough to decide
+    // must hold the candidate rather than advance it. Otherwise a subject
+    // matches exactly when at least one action head fired for it.
     let outcome = if unknown {
         MaintenanceOutcome::Unknown
-    } else if matched {
+    } else if !actions.is_empty() {
         MaintenanceOutcome::Match
     } else {
         MaintenanceOutcome::NoMatch
@@ -765,7 +781,7 @@ mod tests {
     fn stereo_boolean_is_available_to_maintenance_rules() {
         let policy = policy(
             "stereo_file",
-            "match if { input.facts.files[_].is_3d == true }",
+            "unmonitor if { input.facts.files[_].is_3d == true }",
         );
         let validation =
             crate::validation::validate_maintenance_rule(&policy.rego_source, &policy.id).unwrap();
@@ -807,7 +823,7 @@ mod tests {
     fn matching_rule_reports_match() {
         let result = evaluate(&[policy(
             "monitored_movie",
-            "match if {\n  input.facts.monitored\n}\n",
+            "unmonitor if {\n  input.facts.monitored\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -823,7 +839,7 @@ mod tests {
     fn evaluator_reuse_tracks_changed_known_and_unknown_facts() {
         let engine = MaintenanceRulesEngine::build(&[policy(
             "monitored_movie",
-            "match if {\n  input.facts.monitored\n}\n",
+            "unmonitor if {\n  input.facts.monitored\n}\n",
         )])
         .expect("policy should compile");
         let mut evaluator = engine.evaluator();
@@ -869,7 +885,7 @@ mod tests {
     fn undefined_match_reports_no_match() {
         let result = evaluate(&[policy(
             "never_matches",
-            "match if {\n  input.subject.facet == \"series\"\n}\n",
+            "unmonitor if {\n  input.subject.facet == \"series\"\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -885,7 +901,7 @@ mod tests {
     fn a_policy_declared_unknown_takes_precedence_over_match() {
         let result = evaluate(&[policy(
             "holds_on_unknown",
-            "match := true\n\nunknown if {\n  input.observations.last_upgraded_at.status == \"known\"\n}\n",
+            "unmonitor := true\n\nunknown if {\n  input.observations.last_upgraded_at.status == \"known\"\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -905,7 +921,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "downloads_in_flight",
-                "match if {\n  not input.facts.active_downloads\n}\n",
+                "unmonitor if {\n  not input.facts.active_downloads\n}\n",
             )],
             input,
         );
@@ -931,7 +947,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "not_ranked_episode",
-                "match if {\n  not input.facts.episode_position_by_air_date\n}\n",
+                "unmonitor if {\n  not input.facts.episode_position_by_air_date\n}\n",
             )],
             input,
         );
@@ -953,9 +969,9 @@ mod tests {
         // These are the editor's scope-specific examples: rank one is newest,
         // so a policy deletes only positions after the retained window.
         const KEEP_NEWEST_TWO_DOWNLOADED_EPISODES: &str =
-            "match if {\n  input.facts.episode_position_by_air_date > 2\n}\n";
+            "unmonitor if {\n  input.facts.episode_position_by_air_date > 2\n}\n";
         const KEEP_NEWEST_ONE_DOWNLOADED_SEASON: &str =
-            "match if {\n  input.facts.season_position_by_air_date > 1\n}\n";
+            "unmonitor if {\n  input.facts.season_position_by_air_date > 1\n}\n";
 
         let mut episode_input = synthetic_maintenance_input();
         episode_input.subject.kind = MaintenanceSubjectKind::Episode;
@@ -1002,7 +1018,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "system_added",
-                "match if {\n  not input.facts.added_by_user_id\n  input.facts.has_file\n}\n",
+                "unmonitor if {\n  not input.facts.added_by_user_id\n  input.facts.has_file\n}\n",
             )],
             input,
         );
@@ -1026,7 +1042,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "many_unknowns",
-                "match if {\n  input.facts.active_downloads\n  input.facts.last_upgraded_at\n  \
+                "unmonitor if {\n  input.facts.active_downloads\n  input.facts.last_upgraded_at\n  \
                  input.facts.added_by_username == \"operator\"\n}\n",
             )],
             input,
@@ -1052,7 +1068,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "inspects_the_envelope",
-                "match if {\n  input.observations.active_downloads.status == \"unknown\"\n}\n\n\
+                "unmonitor if {\n  input.observations.active_downloads.status == \"unknown\"\n}\n\n\
                  reasons contains reason if {\n  \
                    reason := input.observations.active_downloads.reason\n\
                  }\n",
@@ -1076,7 +1092,7 @@ mod tests {
     #[test]
     fn evaluation_time_supports_date_arithmetic() {
         const AGE_MATCHER: &str = "day_ns := (24 * 60 * 60) * 1000000000\n\n\
-             match if {\n  \
+             unmonitor if {\n  \
                age := time.parse_rfc3339_ns(input.evaluation_time) - \
              time.parse_rfc3339_ns(input.facts.added_at)\n  \
                age > 180 * day_ns\n\
@@ -1107,7 +1123,7 @@ mod tests {
     fn reason_codes_are_collected_from_a_set_rule() {
         let result = evaluate(&[policy(
             "set_reasons",
-            "match := true\n\nreasons contains \"stale\"\n\nreasons contains \"unwatched\"\n",
+            "unmonitor := true\n\nreasons contains \"stale\"\n\nreasons contains \"unwatched\"\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -1121,7 +1137,7 @@ mod tests {
     fn reason_codes_are_collected_from_an_array_rule() {
         let result = evaluate(&[policy(
             "array_reasons",
-            "match := true\n\nreasons := [\"first\", \"second\"]\n",
+            "unmonitor := true\n\nreasons := [\"first\", \"second\"]\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -1133,14 +1149,14 @@ mod tests {
 
     #[test]
     fn non_boolean_match_is_an_error_not_a_decision() {
-        let result = evaluate(&[policy("numeric_match", "match := 1\n")]);
+        let result = evaluate(&[policy("numeric_match", "unmonitor := 1\n")]);
 
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert_eq!(result.errors.len(), 1);
         assert!(
             result.errors[0]
                 .message
-                .contains("'match' must be a boolean"),
+                .contains("'unmonitor' must be a boolean"),
             "{}",
             result.errors[0].message
         );
@@ -1154,7 +1170,7 @@ mod tests {
             .join(", ");
         let result = evaluate(&[policy(
             "too_many_reasons",
-            &format!("match := true\n\nreasons := [{entries}]\n"),
+            &format!("unmonitor := true\n\nreasons := [{entries}]\n"),
         )]);
 
         assert!(result.records.is_empty(), "{:?}", result.records);
@@ -1170,7 +1186,7 @@ mod tests {
         let long = "x".repeat(MAX_REASON_CODE_LEN + 1);
         let result = evaluate(&[policy(
             "long_reason",
-            &format!("match := true\n\nreasons := [\"{long}\"]\n"),
+            &format!("unmonitor := true\n\nreasons := [\"{long}\"]\n"),
         )]);
 
         assert!(result.records.is_empty(), "{:?}", result.records);
@@ -1186,9 +1202,9 @@ mod tests {
         let result = evaluate(&[
             policy(
                 "broken",
-                "match if {\n  lower(input.subject.year) == \"x\"\n}\n",
+                "unmonitor if {\n  lower(input.subject.year) == \"x\"\n}\n",
             ),
-            policy("healthy", "match := true\n"),
+            policy("healthy", "unmonitor := true\n"),
         ]);
 
         assert_eq!(result.errors.len(), 1);
@@ -1209,7 +1225,7 @@ mod tests {
 
         let policies = [policy(
             "runaway",
-            "match if {\n  count([1 |\n    some i in numbers.range(1, 3000)\n    some j in numbers.range(1, 3000)\n    i == j\n  ]) > 0\n}\n",
+            "unmonitor if {\n  count([1 |\n    some i in numbers.range(1, 3000)\n    some j in numbers.range(1, 3000)\n    i == j\n  ]) > 0\n}\n",
         )];
         let engine =
             MaintenanceRulesEngine::build_with_limits(&policies, limits).expect("should compile");
@@ -1225,7 +1241,7 @@ mod tests {
 
     #[test]
     fn records_carry_a_stable_policy_content_hash() {
-        let policies = [policy("hashed", "match := true\n")];
+        let policies = [policy("hashed", "unmonitor := true\n")];
         let first = evaluate(&policies);
         let second = evaluate(&policies);
 
@@ -1256,9 +1272,11 @@ mod tests {
     fn oversized_input_is_rejected_before_evaluation() {
         let mut limits = RuntimeLimits::maintenance_defaults();
         limits.max_input_bytes = 16;
-        let engine =
-            MaintenanceRulesEngine::build_with_limits(&[policy("tiny", "match := true\n")], limits)
-                .expect("should compile");
+        let engine = MaintenanceRulesEngine::build_with_limits(
+            &[policy("tiny", "unmonitor := true\n")],
+            limits,
+        )
+        .expect("should compile");
         let err = engine
             .evaluator()
             .evaluate(&synthetic_maintenance_input())
@@ -1318,7 +1336,6 @@ mod tests {
             "package scryer.maintenance.wrapper.rule_1\n\
              import rego.v1\n\n\
              decision := {\n\
-             \t\"matched\": object.get(data.scryer.maintenance.user.rule_1, \"match\", false),\n\
              \t\"unknown\": object.get(data.scryer.maintenance.user.rule_1, \"unknown\", false),\n\
              \t\"reasons\": object.get(data.scryer.maintenance.user.rule_1, \"reasons\", []),\n\
              \t\"unmonitor\": object.get(data.scryer.maintenance.user.rule_1, \"unmonitor\", false),\n\

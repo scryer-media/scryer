@@ -2,9 +2,9 @@ use super::*;
 
 use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
 use crate::maintenance_rules::{
-    MAINTENANCE_MAX_GRACE_DAYS, MaintenanceActionKind, MaintenanceActionSpec,
-    MaintenanceMatcherDraft, MaintenancePreviewMatcher, MaintenancePreviewRequest,
-    MaintenancePreviewSelection, MaintenanceRuleDraft,
+    MAINTENANCE_MAX_GRACE_DAYS, MaintenanceActionKind, MaintenanceMatcherDraft,
+    MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
+    MaintenanceRuleDraft,
 };
 use scryer_domain::{
     LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate, MaintenanceCandidateState,
@@ -153,6 +153,22 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         // permissive double here would hide an arming that survived a matcher
         // swap.
         rule_set.disarm_after_edit();
+        rule_set.updated_at = updated_at;
+        self.revisions.lock().await.push(revision.clone());
+        Ok(())
+    }
+
+    async fn add_revision_keeping_arming(
+        &self,
+        revision: &MaintenanceRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut rule_sets = self.rule_sets.lock().await;
+        let rule_set = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.id == revision.rule_set_id)
+            .ok_or_else(|| AppError::NotFound(revision.rule_set_id.clone()))?;
+        rule_set.current_revision_number = revision.revision_number;
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
         Ok(())
@@ -344,6 +360,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
         last_evaluated_at: now,
         held_since: None,
         action_attempts: 0,
+        decided_actions_json: None,
         created_at: now,
         updated_at: now,
     }
@@ -354,9 +371,9 @@ fn draft(rego_source: &str) -> MaintenanceRuleDraft {
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: "Unwatched for a long time".to_string(),
-        rego_source: rego_source.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            rego_source,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 7,
         storage_root_id: None,
@@ -570,9 +587,9 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
             &user,
             &created.rule_set.id,
             MaintenanceMatcherDraft {
-                rego_source: NEVER_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    NEVER_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 30,
                 storage_root_id: None,
@@ -628,9 +645,9 @@ async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_
             &user,
             &created.rule_set.id,
             MaintenanceMatcherDraft {
-                rego_source: NEVER_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    NEVER_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 7,
                 storage_root_id: None,
@@ -648,9 +665,9 @@ async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_
             &user,
             &created.rule_set.id,
             MaintenanceMatcherDraft {
-                rego_source: NEVER_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    NEVER_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 7,
                 storage_root_id: Some(None),
@@ -993,93 +1010,60 @@ async fn a_matcher_reading_an_undocumented_fact_is_rejected() {
     assert!(rules.list_rule_sets().await.unwrap().is_empty());
 }
 
+/// A season or episode rule acts on one subject's monitoring and files only,
+/// so a head that needs the whole title is refused at save, pointing at the
+/// head, on creation and on a matcher replacement alike.
 #[tokio::test]
-async fn an_action_that_supports_neither_movies_nor_shows_is_rejected() {
+async fn a_head_the_scope_cannot_run_is_refused_with_its_position() {
     let MaintenanceFixture { app, user, .. } = maintenance_app();
+    let source = "package whatever\nimport rego.v1\n\nunmonitor := true\n\nsearch if input.facts.monitored\n";
 
     let error = app
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
-                // Season/episode only, so it can never run on a title-scoped rule.
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeDeleteFiles),
-                ),
+                subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Season,
+                rego_source: source.to_string(),
                 ..draft(MONITORED_MATCHER)
             },
         )
         .await
-        .expect_err("subject mismatch must be rejected");
-
-    assert!(
-        matches!(
-            error,
-            AppError::Validation(_)
-                | AppError::ValidationRefused { .. }
-                | AppError::ValidationRefusedWithCount { .. }
-        ),
+        .expect_err("a season rule cannot search");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::maintenance::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE),
         "{error:?}"
     );
-    assert!(
-        error.to_string().contains("title-scoped"),
-        "the message should name the scope: {error}"
+    let AppError::ValidationRefused { diagnostics, .. } = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.line, diagnostic.column))
+            .collect::<Vec<_>>(),
+        vec![(Some(6), Some(1))]
     );
-}
+    assert!(rules_are_empty(&app, &user).await);
 
-#[tokio::test]
-async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time() {
-    let MaintenanceFixture { app, user, .. } = maintenance_app();
-
-    // The show-subject delete action passes the descriptor's subject check — a
-    // title-scoped rule covers shows — so it used to save cleanly and then hard
-    // fail at execution, three attempts into a terminal `Failed` candidate that
-    // nothing could rescue. Authoring now refuses it up front.
-    let error = app
-        .create_maintenance_rule_set(
-            &user,
-            MaintenanceRuleDraft {
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
-                    ),
-                ),
-                ..draft(MONITORED_MATCHER)
-            },
-        )
-        .await
-        .expect_err("an action the executor refuses must not be savable");
-
-    assert!(
-        matches!(
-            error,
-            AppError::Validation(_)
-                | AppError::ValidationRefused { .. }
-                | AppError::ValidationRefusedWithCount { .. }
-        ),
-        "{error:?}"
-    );
-    assert!(
-        error
-            .to_string()
-            .contains("cannot run for a title-scoped rule"),
-        "{error}"
-    );
-
-    // The same gate applies to a matcher replacement, not just to creation.
     let created = app
-        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Season,
+                ..draft(MONITORED_MATCHER)
+            },
+        )
         .await
-        .expect("create a rule with a runnable action");
+        .expect("a season rule may unmonitor");
     let refused = app
         .update_maintenance_rule_matcher(
             &user,
             &created.rule_set.id,
             MaintenanceMatcherDraft {
-                rego_source: MONITORED_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(
-                        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
-                    ),
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 7,
                 storage_root_id: None,
@@ -1087,15 +1071,42 @@ async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time()
         )
         .await
         .expect_err("a revision cannot smuggle in an unrunnable action either");
-    assert!(
-        matches!(
-            refused,
-            AppError::Validation(_)
-                | AppError::ValidationRefused { .. }
-                | AppError::ValidationRefusedWithCount { .. }
-        ),
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE),
         "{refused:?}"
     );
+}
+
+/// A source with no action head could never do anything, so it is refused
+/// at save with its own code; `match` is an ordinary helper now.
+#[tokio::test]
+async fn a_source_without_an_action_head_is_refused() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+
+    let error = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                rego_source: MONITORED_MATCHER.to_string(),
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect_err("a rule with only `match` does nothing");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::maintenance::ACTION_HEAD_REQUIRED),
+        "{error:?}"
+    );
+    assert!(rules_are_empty(&app, &user).await);
+}
+
+async fn rules_are_empty(app: &AppUseCase, user: &User) -> bool {
+    app.list_maintenance_rule_sets(user)
+        .await
+        .expect("list rules")
+        .is_empty()
 }
 
 #[tokio::test]
@@ -1173,9 +1184,9 @@ async fn the_grace_period_is_bounded_at_ten_years() {
             &user,
             &accepted.rule_set.id,
             MaintenanceMatcherDraft {
-                rego_source: MONITORED_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
                 storage_root_id: None,
@@ -1235,13 +1246,10 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: MONITORED_MATCHER.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        MONITORED_MATCHER,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1330,13 +1338,10 @@ async fn preview_holds_when_selected_root_membership_cannot_be_proved() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: MONITORED_MATCHER.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        MONITORED_MATCHER,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: Some(scryer_domain::root_folder_id_for_path("/data/movies")),
                 },
@@ -1371,13 +1376,10 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: NEEDS_UPGRADE_HISTORY_MATCHER.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        NEEDS_UPGRADE_HISTORY_MATCHER,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1413,9 +1415,9 @@ async fn an_inline_preview_persists_nothing() {
             matcher: MaintenancePreviewMatcher::Inline {
                 library_ids: vec![],
                 subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                rego_source: MONITORED_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
                 storage_root_id: None,
@@ -1443,13 +1445,10 @@ async fn preview_refuses_a_selection_above_the_cap() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: MONITORED_MATCHER.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        MONITORED_MATCHER,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1479,18 +1478,33 @@ async fn validate_reports_errors_without_storing_anything() {
     } = maintenance_app();
 
     let valid = app
-        .validate_maintenance_rule_source(&user, MONITORED_MATCHER)
+        .validate_maintenance_rule_source(
+            &user,
+            &crate::lib_tests::legacy_source(
+                MONITORED_MATCHER,
+                crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+            ),
+        )
         .await
         .expect("validate");
-    assert!(valid.valid, "{:?}", valid.errors);
+    assert!(valid.result.valid, "{:?}", valid.result.errors);
+    assert!(valid.declared_actions.is_some());
 
-    // A matcher with no `match` rule compiles but can never decide anything.
+    // A matcher with no action head compiles but can never decide anything.
     let invalid = app
         .validate_maintenance_rule_source(&user, "reasons := [\"stale\"]\n")
         .await
         .expect("validate");
-    assert!(!invalid.valid);
-    assert!(!invalid.errors.is_empty());
+    assert!(!invalid.result.valid);
+    assert_eq!(
+        invalid
+            .result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        vec![scryer_rules::diagnostic_codes::RULE_ACTION_REQUIRED]
+    );
 
     assert!(rules.list_rule_sets().await.unwrap().is_empty());
 }
@@ -1530,13 +1544,10 @@ async fn file_facts_distinguish_having_files_from_having_none() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: matcher.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        matcher,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1575,16 +1586,10 @@ async fn episode_counts_are_absent_for_movies() {
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
                     rego_source: "package whatever\n\
                          import rego.v1\n\n\
-                         match if {\n\
+                         unmonitor if {\n\
                          \tnot input.facts.episode_count\n\
                          }\n"
                     .to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
                     grace_days: 0,
                     storage_root_id: None,
                 },
@@ -1665,13 +1670,10 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
                 matcher: MaintenancePreviewMatcher::Inline {
                     library_ids: vec![],
                     subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-                    rego_source: matcher.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        matcher,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                 },

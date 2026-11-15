@@ -11,9 +11,8 @@ use std::sync::atomic::AtomicBool;
 
 use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
 use crate::maintenance_rules::{
-    ACTION_SEQUENCE_KIND, MaintenanceActionDefinition, MaintenanceActionKind,
-    MaintenanceActionSpec, MaintenanceCandidateFilter, MaintenanceGates, MaintenanceGatesUpdate,
-    MaintenanceMatcherDraft, MaintenanceRuleDraft, candidate_reason,
+    ACTION_SEQUENCE_KIND, MaintenanceActionKind, MaintenanceCandidateFilter, MaintenanceGates,
+    MaintenanceGatesUpdate, MaintenanceMatcherDraft, MaintenanceRuleDraft, candidate_reason,
 };
 use crate::ports::{MaintenanceActionStepCandidateKey, MaintenanceCandidateQuery};
 use scryer_domain::{
@@ -75,7 +74,7 @@ pub(super) struct InMemoryMaintenanceEvaluationRepo {
     action_step_attempts: Mutex<Vec<MaintenanceActionStepAttempt>>,
     pub(super) action_job_receipts: MaintenanceActionJobReceipts,
     sequence_terminal_memberships: Mutex<Vec<MaintenanceSequenceTerminalMembership>>,
-    /// When set to a candidate id, the next [`Self::finish_action_run`] also
+    /// When set to a candidate id, the next finished action run or step also
     /// moves that candidate out of `executing`, exactly as a concurrent pass
     /// reclaiming a stale lease would.
     ///
@@ -97,6 +96,25 @@ impl InMemoryMaintenanceEvaluationRepo {
 
     pub(super) async fn all_action_runs(&self) -> Vec<LifecycleActionRun> {
         self.action_runs.lock().await.clone()
+    }
+
+    /// Move every candidate's grace deadline into the past, as the clock
+    /// passing the deadline would.
+    pub(super) async fn end_every_grace(&self) {
+        for candidate in self.candidates.lock().await.iter_mut() {
+            candidate.due_at = Utc::now() - chrono::Duration::seconds(1);
+        }
+    }
+
+    /// Durable step rows for one step id, across every candidate.
+    pub(super) async fn action_steps_with_id(&self, step_id: &str) -> Vec<MaintenanceActionStepRun> {
+        self.action_steps
+            .lock()
+            .await
+            .iter()
+            .filter(|step| step.key.step_id == step_id)
+            .cloned()
+            .collect()
     }
 
     /// Seed a terminal marker for evaluator-only reconciliation tests. The
@@ -125,6 +143,21 @@ impl InMemoryMaintenanceEvaluationRepo {
         candidate.state = MaintenanceCandidateState::Executing;
         candidate.state_reason = "execution_leased".to_string();
         candidate.updated_at = updated_at;
+    }
+
+    /// The armed lease theft, if any: a concurrent pass decided this lease
+    /// was stale and took it while the action was still running.
+    async fn steal_armed_lease(&self) {
+        if let Some(candidate_id) = self.steal_lease_on_finish.lock().await.take() {
+            let mut rows = self.candidates.lock().await;
+            if let Some(candidate) = rows
+                .iter_mut()
+                .find(|candidate| candidate.id == candidate_id)
+            {
+                candidate.state = MaintenanceCandidateState::Due;
+                candidate.state_reason = "execution_lease_reclaimed".to_string();
+            }
+        }
     }
 
     /// Arm the lease theft described on [`Self::steal_lease_on_finish`].
@@ -480,18 +513,7 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
             *stored = run.clone();
         }
 
-        // The armed lease theft, if any: a concurrent pass decided this lease
-        // was stale and took it while the action was still running.
-        if let Some(candidate_id) = self.steal_lease_on_finish.lock().await.take() {
-            let mut rows = self.candidates.lock().await;
-            if let Some(candidate) = rows
-                .iter_mut()
-                .find(|candidate| candidate.id == candidate_id)
-            {
-                candidate.state = MaintenanceCandidateState::Due;
-                candidate.state_reason = "execution_lease_reclaimed".to_string();
-            }
-        }
+        self.steal_armed_lease().await;
         Ok(())
     }
 
@@ -770,7 +792,11 @@ impl MaintenanceActionStepRepository for InMemoryMaintenanceEvaluationRepo {
                 "a maintenance action step finish must carry an attempt result".into(),
             ));
         }
-        update_in_memory_action_step(self, step, expected_lease_id, true).await
+        let finished = update_in_memory_action_step(self, step, expected_lease_id, true).await?;
+        if finished {
+            self.steal_armed_lease().await;
+        }
+        Ok(finished)
     }
 
     async fn list_action_steps(
@@ -1399,10 +1425,10 @@ fn draft(rego_source: &str, grace_days: i64) -> MaintenanceRuleDraft {
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: String::new(),
-        rego_source: rego_source.to_string(),
-        action_definition: MaintenanceActionDefinition::Legacy(MaintenanceActionSpec::new(
-            MaintenanceActionKind::UnmonitorScopeKeepFiles,
-        )),
+        rego_source: crate::lib_tests::legacy_source(
+            rego_source,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+        ),
         grace_days,
         storage_root_id: None,
         library_ids: Vec::new(),
@@ -1687,41 +1713,6 @@ async fn each_state_writes_its_mode_and_arming_and_creation_still_ships_dark() {
 }
 
 #[tokio::test]
-async fn a_rule_whose_action_changes_nothing_cannot_be_enabled() {
-    let fixture = evaluation_app();
-    let mut tracking = draft(MONITORED_MATCHER, 7);
-    tracking.action_definition = MaintenanceActionDefinition::Legacy(MaintenanceActionSpec::new(
-        MaintenanceActionKind::DoNothing,
-    ));
-    let created = fixture
-        .app
-        .create_maintenance_rule_set(&fixture.user, tracking)
-        .await
-        .expect("create rule set");
-
-    let refused = fixture
-        .app
-        .set_maintenance_rule_state(
-            &fixture.user,
-            &created.rule_set.id,
-            MaintenanceRuleState::Enabled,
-            None,
-            None,
-        )
-        .await
-        .expect_err("nothing to arm");
-    assert!(
-        matches!(
-            refused,
-            AppError::Validation(_)
-                | AppError::ValidationRefused { .. }
-                | AppError::ValidationRefusedWithCount { .. }
-        ),
-        "{refused:?}"
-    );
-}
-
-#[tokio::test]
 async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
     let fixture = evaluation_app();
     let created = fixture
@@ -1745,8 +1736,10 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
             &fixture.user,
             &id,
             MaintenanceMatcherDraft {
-                rego_source: MONITORED_MATCHER.into(),
-                action_definition: created.action_definition.clone(),
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    MaintenanceActionKind::DeleteTitleAndFiles,
+                ),
                 grace_days: 3,
                 storage_root_id: None,
             },
@@ -1780,8 +1773,10 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
             &fixture.user,
             &id,
             MaintenanceMatcherDraft {
-                rego_source: MONITORED_MATCHER.into(),
-                action_definition: created.action_definition.clone(),
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    MaintenanceActionKind::DeleteTitleAndFiles,
+                ),
                 grace_days: 4,
                 storage_root_id: None,
             },
@@ -1795,7 +1790,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
         &fixture.user,
         &id,
         MaintenanceRuleState::Enabled,
-        None,
+        Some(0),
     )
     .await;
     assert!(!reenabled.rule_set.destructive_rearm_required);
@@ -1820,8 +1815,10 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
             &fixture.user,
             &id,
             MaintenanceMatcherDraft {
-                rego_source: MONITORED_MATCHER.into(),
-                action_definition: created.action_definition,
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    MaintenanceActionKind::DeleteTitleAndFiles,
+                ),
                 grace_days: 5,
                 storage_root_id: None,
             },
@@ -1861,8 +1858,8 @@ async fn a_first_match_opens_a_candidate_and_starts_the_clock() {
     assert_eq!(candidate.held_since, None);
     assert_eq!(
         candidate.action_kind,
-        MaintenanceActionKind::UnmonitorScopeKeepFiles.as_wire_str(),
-        "the candidate records what the revision authorizes, even though nothing runs it"
+        crate::maintenance_rules::ACTION_SEQUENCE_KIND,
+        "a rule that declares its actions records the sequence kind"
     );
 }
 
@@ -2025,10 +2022,10 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
             &fixture.user,
             &rule_set_id,
             MaintenanceMatcherDraft {
-                rego_source: MONITORED_MATCHER.to_string(),
-                action_definition: MaintenanceActionDefinition::Legacy(MaintenanceActionSpec::new(
-                    MaintenanceActionKind::DeleteTitleAndFiles,
-                )),
+                rego_source: crate::lib_tests::legacy_source(
+                    MONITORED_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
+                ),
                 grace_days: 30,
                 storage_root_id: None,
             },
@@ -2070,7 +2067,7 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
     );
     assert_eq!(
         fresh.action_kind,
-        MaintenanceActionKind::DeleteTitleAndFiles.as_wire_str()
+        crate::maintenance_rules::ACTION_SEQUENCE_KIND
     );
 }
 
@@ -2458,10 +2455,13 @@ async fn swap_matcher_in_place(
             rule_set_id: rule_set_id.to_string(),
             revision_number: reference.revision_number,
             rego_source: scryer_rules::maintenance::rewrite_package_declaration(
-                rego_source,
+                &crate::lib_tests::legacy_source(
+                    rego_source,
+                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                ),
                 rule_set_id,
             ),
-            action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#
+            action_spec_json: r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
                 .to_string(),
             grace_days: reference.grace_days,
             storage_root_id: None,

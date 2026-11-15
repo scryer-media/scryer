@@ -1,28 +1,22 @@
-//! Projections for the maintenance-rule authoring surface (RFC 137).
+//! Projections for the maintenance-rule authoring surface.
 //!
-//! The application layer owns the closed action catalog; this module only
-//! renames its values onto the wire. Every string projected here (effect
-//! classes, timing mode, repeat modes) uses the same snake_case wire name the
-//! stored action spec serializes to, so a descriptor and a stored revision
-//! never disagree about what an action is called.
+//! A rule's source declares its own actions; this module renames the declared
+//! and decided actions onto the wire. Historical candidates and runs keep the
+//! v1 action kind or v2 sequence they were written with.
 
 use super::*;
 
 use scryer_application::maintenance_rules::{
-    MaintenanceActionCompletionPolicy as AppActionCompletionPolicy,
-    MaintenanceActionDefinition as AppActionDefinition,
-    MaintenanceActionDescriptor as AppActionDescriptor, MaintenanceActionKind as AppActionKind,
-    MaintenanceActionParameters as AppActionParameters,
-    MaintenanceActionSequence as AppActionSequence, MaintenanceActionSpec as AppActionSpec,
-    MaintenanceActionStep as AppActionStep,
-    MaintenanceActionStepDescriptor as AppActionStepDescriptor,
+    MaintenanceActionDefinition as AppActionDefinition, MaintenanceActionKind as AppActionKind,
+    MaintenanceActionSequence as AppActionSequence,
     MaintenanceActionStepKind as AppActionStepKind,
     MaintenanceActionStepParameters as AppActionStepParameters,
-    MaintenanceActionStepRequirement as AppActionStepRequirement,
-    MaintenanceEffectClass as AppEffectClass, MaintenanceRepeatMode as AppRepeatMode,
-    MaintenanceRiskClass as AppRiskClass, MaintenanceSearchCondition as AppSearchCondition,
-    MaintenanceSubjectKind as AppSubjectKind, MaintenanceTimingMode as AppTimingMode,
-    action_catalog, action_sequence_catalog, derived_effect_arming, maintenance_rule_state,
+    MaintenanceDeclaredActions as AppDeclaredActions,
+    MaintenanceSearchCondition as AppSearchCondition, decided_actions_from_json,
+    decided_heads_in_execution_order, derived_effect_arming, maintenance_rule_state,
+};
+use scryer_rules::maintenance_actions::{
+    MaintenanceActionHead as AppActionHead, MaintenanceActions as AppDecidedActions,
 };
 use scryer_application::maintenance_rules::{
     MaintenancePreviewResult as AppPreviewResult, MaintenanceRuleSetDetail as AppRuleSetDetail,
@@ -103,10 +97,9 @@ pub fn from_maintenance_action_run(
         } else {
             maintenance_action_kind_value(AppActionKind::parse_wire_str(&run.action_kind)?)
         };
-    let action_sequence = action_definition.as_ref().and_then(|definition| {
-        let (_, sequence) = from_maintenance_action_definition(definition);
-        sequence
-    });
+    let action_sequence = action_definition
+        .as_ref()
+        .and_then(from_maintenance_action_definition);
     Some(MaintenanceActionRun {
         subject_label,
         subject_kind: run.subject_kind,
@@ -196,84 +189,6 @@ pub fn maintenance_action_kind_value(kind: AppActionKind) -> MaintenanceActionKi
     }
 }
 
-pub fn maintenance_action_kind_into_application(kind: MaintenanceActionKind) -> AppActionKind {
-    match kind {
-        MaintenanceActionKind::ActionSequence => {
-            unreachable!("ACTION_SEQUENCE is an output-only legacy projection")
-        }
-        MaintenanceActionKind::DoNothing => AppActionKind::DoNothing,
-        MaintenanceActionKind::UnmonitorScopeKeepFiles => AppActionKind::UnmonitorScopeKeepFiles,
-        MaintenanceActionKind::DeleteTitleAndFiles => AppActionKind::DeleteTitleAndFiles,
-        MaintenanceActionKind::UnmonitorTitleDeleteAllFiles => {
-            AppActionKind::UnmonitorTitleDeleteAllFiles
-        }
-        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles => {
-            AppActionKind::UnmonitorShowDeleteExistingFiles
-        }
-        MaintenanceActionKind::UnmonitorScopeDeleteFiles => {
-            AppActionKind::UnmonitorScopeDeleteFiles
-        }
-        MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty => {
-            AppActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
-        }
-        MaintenanceActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
-            AppActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty
-        }
-        MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
-            AppActionKind::ChangeQualityProfileAndSearchIfChanged
-        }
-        MaintenanceActionKind::AddTags => AppActionKind::AddTags,
-        MaintenanceActionKind::RemoveTags => AppActionKind::RemoveTags,
-    }
-}
-
-fn maintenance_action_subject_value(subject: AppSubjectKind) -> MaintenanceActionSubject {
-    match subject {
-        AppSubjectKind::Movie => MaintenanceActionSubject::Movie,
-        AppSubjectKind::Show => MaintenanceActionSubject::Show,
-        AppSubjectKind::Season => MaintenanceActionSubject::Season,
-        AppSubjectKind::Episode => MaintenanceActionSubject::Episode,
-    }
-}
-
-fn maintenance_risk_class_value(risk: AppRiskClass) -> MaintenanceRiskClass {
-    match risk {
-        AppRiskClass::None => MaintenanceRiskClass::None,
-        AppRiskClass::Low => MaintenanceRiskClass::Low,
-        AppRiskClass::Medium => MaintenanceRiskClass::Medium,
-        AppRiskClass::High => MaintenanceRiskClass::High,
-    }
-}
-
-fn maintenance_effect_class_name(effect: AppEffectClass) -> &'static str {
-    match effect {
-        AppEffectClass::Protect => "protect",
-        AppEffectClass::Communicate => "communicate",
-        AppEffectClass::CatalogIntent => "catalog_intent",
-        AppEffectClass::MetadataRepair => "metadata_repair",
-        AppEffectClass::Acquisition => "acquisition",
-        AppEffectClass::FileOrganization => "file_organization",
-        AppEffectClass::DestructiveStorage => "destructive_storage",
-    }
-}
-
-fn maintenance_timing_mode_name(timing: AppTimingMode) -> &'static str {
-    match timing {
-        AppTimingMode::MembershipTracking => "membership_tracking",
-        AppTimingMode::AfterGrace => "after_grace",
-        AppTimingMode::ZeroGraceNextHandlerPass => "zero_grace_next_handler_pass",
-    }
-}
-
-fn maintenance_repeat_mode_name(repeat: AppRepeatMode) -> &'static str {
-    match repeat {
-        AppRepeatMode::EnsureState => "ensure_state",
-        AppRepeatMode::OncePerMatch => "once_per_match",
-        AppRepeatMode::PeriodicWhileMatching => "periodic_while_matching",
-        AppRepeatMode::ContinuousClaim => "continuous_claim",
-    }
-}
-
 fn maintenance_outcome_value(
     outcome: scryer_rules::maintenance::MaintenanceOutcome,
 ) -> MaintenanceOutcome {
@@ -290,8 +205,6 @@ fn maintenance_outcome_value(
 /// list into N+1 requests.
 pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSet {
     let rule_set = &detail.rule_set;
-    let (action_spec, action_sequence) =
-        from_maintenance_action_definition(&detail.action_definition);
     MaintenanceRuleSet {
         id: ID::from(rule_set.id.clone()),
         name: rule_set.name.clone(),
@@ -306,8 +219,7 @@ pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSe
         subject_kind: maintenance_rule_subject_kind_value(rule_set.subject_kind),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         grace_days: to_graphql_int(detail.revision.grace_days),
-        action_spec,
-        action_sequence,
+        declared_actions: from_maintenance_declared_definition(&detail.action_definition),
         created_at: rule_set.created_at,
         updated_at: rule_set.updated_at,
     }
@@ -332,36 +244,11 @@ pub fn from_maintenance_rule_revision(
     }
 }
 
-pub fn from_maintenance_action_spec(spec: &AppActionSpec) -> MaintenanceActionSpec {
-    MaintenanceActionSpec {
-        kind: maintenance_action_kind_value(spec.kind),
-        schema_version: to_graphql_int(i64::from(spec.schema_version)),
-        target_quality_profile_id: match &spec.parameters {
-            AppActionParameters::ChangeQualityProfile {
-                target_quality_profile_id,
-            } => Some(target_quality_profile_id.clone()),
-            AppActionParameters::None | AppActionParameters::Tags { .. } => None,
-        },
-        tags: spec.parameters.tag_labels().to_vec(),
-    }
-}
-
 fn maintenance_search_condition_value(condition: AppSearchCondition) -> MaintenanceSearchCondition {
     match condition {
         AppSearchCondition::Unconditional => MaintenanceSearchCondition::Unconditional,
         AppSearchCondition::PreviousProfileChanged => {
             MaintenanceSearchCondition::PreviousProfileChanged
-        }
-    }
-}
-
-fn maintenance_search_condition_into_application(
-    condition: MaintenanceSearchCondition,
-) -> AppSearchCondition {
-    match condition {
-        MaintenanceSearchCondition::Unconditional => AppSearchCondition::Unconditional,
-        MaintenanceSearchCondition::PreviousProfileChanged => {
-            AppSearchCondition::PreviousProfileChanged
         }
     }
 }
@@ -434,157 +321,91 @@ fn maintenance_action_step_kind_value(kind: AppActionStepKind) -> MaintenanceAct
     }
 }
 
-fn maintenance_action_step_kind_into_application(
-    kind: MaintenanceActionStepKind,
-) -> AppActionStepKind {
-    match kind {
-        MaintenanceActionStepKind::Unmonitor => AppActionStepKind::Unmonitor,
-        MaintenanceActionStepKind::DeleteFiles => AppActionStepKind::DeleteFiles,
-        MaintenanceActionStepKind::ChangeQualityProfile => AppActionStepKind::ChangeQualityProfile,
-        MaintenanceActionStepKind::Search => AppActionStepKind::Search,
-        MaintenanceActionStepKind::AddTags => AppActionStepKind::AddTags,
-        MaintenanceActionStepKind::RemoveTags => AppActionStepKind::RemoveTags,
-        MaintenanceActionStepKind::DeleteTitleAndFiles => AppActionStepKind::DeleteTitleAndFiles,
-    }
-}
-
+/// The v2 sequence a historical candidate or run was written with. A v1
+/// action and a declared-actions revision have none.
 fn from_maintenance_action_definition(
     definition: &AppActionDefinition,
-) -> (MaintenanceActionSpec, Option<MaintenanceActionSequence>) {
+) -> Option<MaintenanceActionSequence> {
     match definition {
-        AppActionDefinition::Legacy(spec) => (from_maintenance_action_spec(spec), None),
-        AppActionDefinition::Sequence(sequence) => (
-            MaintenanceActionSpec {
-                kind: MaintenanceActionKind::ActionSequence,
-                schema_version: to_graphql_int(i64::from(sequence.schema_version)),
-                target_quality_profile_id: None,
-                tags: Vec::new(),
-            },
-            Some(from_maintenance_action_sequence(sequence)),
-        ),
+        AppActionDefinition::Sequence(sequence) => Some(from_maintenance_action_sequence(sequence)),
+        AppActionDefinition::Legacy(_) | AppActionDefinition::Declared(_) => None,
     }
 }
 
-pub fn from_maintenance_rule_set_detail(detail: AppRuleSetDetail) -> MaintenanceRuleSetDetail {
-    let (action_spec, action_sequence) =
-        from_maintenance_action_definition(&detail.action_definition);
-    let rule_set = from_maintenance_rule_set(&detail);
-    MaintenanceRuleSetDetail {
-        rule_set,
-        revision: from_maintenance_rule_revision(detail.revision),
-        action_spec,
-        action_sequence,
+pub fn maintenance_action_head_value(head: AppActionHead) -> MaintenanceActionHead {
+    match head {
+        AppActionHead::Unmonitor => MaintenanceActionHead::Unmonitor,
+        AppActionHead::DeleteFiles => MaintenanceActionHead::DeleteFiles,
+        AppActionHead::DeleteTitle => MaintenanceActionHead::DeleteTitle,
+        AppActionHead::Search => MaintenanceActionHead::Search,
+        AppActionHead::SetQualityProfile => MaintenanceActionHead::SetQualityProfile,
+        AppActionHead::AddTags => MaintenanceActionHead::AddTags,
+        AppActionHead::RemoveTags => MaintenanceActionHead::RemoveTags,
     }
 }
 
-fn from_maintenance_action_descriptor(
-    descriptor: &AppActionDescriptor,
-) -> MaintenanceActionDescriptor {
-    MaintenanceActionDescriptor {
-        supported_rule_scopes: [
-            scryer_domain::MaintenanceRuleSubjectKind::Title,
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
-        ]
-        .into_iter()
-        .filter(|scope| {
-            scryer_application::maintenance_rules::action_execution::supported_scope_actions(*scope)
-                .contains(&descriptor.kind)
-        })
-        .map(maintenance_rule_subject_kind_value)
-        .collect(),
-        kind: maintenance_action_kind_value(descriptor.kind),
-        supported_subjects: descriptor
-            .supported_subjects
+pub fn from_maintenance_declared_actions(declared: &AppDeclaredActions) -> MaintenanceDeclaredActions {
+    MaintenanceDeclaredActions {
+        heads: declared
+            .heads
             .iter()
-            .map(|subject| maintenance_action_subject_value(*subject))
+            .map(|head| maintenance_action_head_value(*head))
             .collect(),
-        risk_class: maintenance_risk_class_value(descriptor.risk_class),
-        effect_classes: descriptor
-            .effect_classes
-            .iter()
-            .map(|effect| maintenance_effect_class_name(*effect).to_string())
-            .collect(),
-        timing_mode: maintenance_timing_mode_name(descriptor.timing_mode).to_string(),
-        allowed_repeat_modes: descriptor
-            .allowed_repeat_modes
-            .iter()
-            .map(|repeat| maintenance_repeat_mode_name(*repeat).to_string())
-            .collect(),
-        requires_target_quality_profile: descriptor.kind
-            == AppActionKind::ChangeQualityProfileAndSearchIfChanged,
-        requires_tags: matches!(
-            descriptor.kind,
-            AppActionKind::AddTags | AppActionKind::RemoveTags
-        ),
-        supports_storage_scope:
-            scryer_application::maintenance_rules::action_execution::supports_storage_scope(
-                descriptor.kind,
-            ),
+        destructive: declared.destructive,
+        quality_profiles: declared.quality_profiles.clone(),
+        add_tags: declared.add_tags.clone(),
+        remove_tags: declared.remove_tags.clone(),
+        libraries: Vec::new(),
+        roots: Vec::new(),
+        notifications: Vec::new(),
     }
 }
 
-/// The static action registry, in catalog order.
-pub fn maintenance_action_descriptors() -> Vec<MaintenanceActionDescriptor> {
-    action_catalog()
-        .iter()
-        .map(from_maintenance_action_descriptor)
-        .collect()
-}
-
-fn maintenance_action_step_requirement_name(requirement: AppActionStepRequirement) -> &'static str {
-    match requirement {
-        AppActionStepRequirement::PriorCompleteCoveringUnmonitor => {
-            "prior_complete_covering_unmonitor"
+/// Every revision in force has been converted to declared actions by the
+/// startup migration. A revision that could not be converted keeps its old
+/// definition and is disabled; it declares nothing here.
+fn from_maintenance_declared_definition(
+    definition: &AppActionDefinition,
+) -> MaintenanceDeclaredActions {
+    match definition {
+        AppActionDefinition::Declared(declared) => from_maintenance_declared_actions(declared),
+        AppActionDefinition::Legacy(_) | AppActionDefinition::Sequence(_) => {
+            MaintenanceDeclaredActions {
+                heads: Vec::new(),
+                destructive: false,
+                quality_profiles: Vec::new(),
+                add_tags: Vec::new(),
+                remove_tags: Vec::new(),
+                libraries: Vec::new(),
+                roots: Vec::new(),
+                notifications: Vec::new(),
+            }
         }
     }
 }
 
-fn maintenance_action_completion_policy_name(policy: AppActionCompletionPolicy) -> &'static str {
-    match policy {
-        AppActionCompletionPolicy::Accepted => "accepted",
-        AppActionCompletionPolicy::Completed => "completed",
+pub fn from_maintenance_decided_actions(actions: &AppDecidedActions) -> MaintenanceDecidedActions {
+    MaintenanceDecidedActions {
+        heads: decided_heads_in_execution_order(actions)
+            .into_iter()
+            .map(maintenance_action_head_value)
+            .collect(),
+        quality_profile: actions.set_quality_profile.clone(),
+        add_tags: actions.add_tags.clone(),
+        remove_tags: actions.remove_tags.clone(),
+        library: None,
+        root: None,
+        notification: None,
     }
 }
 
-fn from_maintenance_action_step_descriptor(
-    descriptor: &AppActionStepDescriptor,
-) -> MaintenanceActionStepDescriptor {
-    MaintenanceActionStepDescriptor {
-        id: descriptor.id.to_string(),
-        kind: maintenance_action_step_kind_value(descriptor.kind),
-        label: descriptor.label.to_string(),
-        supported_subjects: descriptor
-            .supported_subjects
-            .iter()
-            .map(|subject| maintenance_action_subject_value(*subject))
-            .collect(),
-        parameter_schema: descriptor.parameter_schema.to_string(),
-        effect_classes: descriptor
-            .effect_classes
-            .iter()
-            .map(|effect| maintenance_effect_class_name(*effect).to_string())
-            .collect(),
-        risk_class: maintenance_risk_class_value(descriptor.risk_class),
-        requires: descriptor
-            .requires
-            .iter()
-            .map(|requirement| maintenance_action_step_requirement_name(*requirement).to_string())
-            .collect(),
-        terminal: descriptor.terminal,
-        completion_policy: maintenance_action_completion_policy_name(descriptor.completion_policy)
-            .to_string(),
-        storage_root_allowed: descriptor.storage_root_allowed,
+pub fn from_maintenance_rule_set_detail(detail: AppRuleSetDetail) -> MaintenanceRuleSetDetail {
+    let rule_set = from_maintenance_rule_set(&detail);
+    MaintenanceRuleSetDetail {
+        declared_actions: rule_set.declared_actions.clone(),
+        rule_set,
+        revision: from_maintenance_rule_revision(detail.revision),
     }
-}
-
-/// The sequence catalog is the source of authoring availability and parameter
-/// forms for schema-2 actions.
-pub fn maintenance_action_step_descriptors() -> Vec<MaintenanceActionStepDescriptor> {
-    action_sequence_catalog()
-        .iter()
-        .map(from_maintenance_action_step_descriptor)
-        .collect()
 }
 
 pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenancePreviewPayload {
@@ -613,13 +434,14 @@ pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenanceP
                 outcome: title.outcome.map(maintenance_outcome_value),
                 reason_codes: title.reason_codes,
                 error: title.error,
+                actions: title.actions.as_ref().map(from_maintenance_decided_actions),
                 facts: title.facts.map(async_graphql::Json),
             })
             .collect(),
     }
 }
 
-// ── Scheduled evaluation (RFC 137 tracks C1/C2) ─────────────────────────────
+// ── Scheduled evaluation ────────────────────────────────────────────────────
 
 pub fn maintenance_candidate_state_value(
     state: scryer_domain::MaintenanceCandidateState,
@@ -676,10 +498,12 @@ pub fn from_maintenance_candidate(
         action_definition,
         sequence_steps,
     } = view;
-    let action_sequence = action_definition.as_ref().and_then(|definition| {
-        let (_, sequence) = from_maintenance_action_definition(definition);
-        sequence
-    });
+    let action_sequence = action_definition
+        .as_ref()
+        .and_then(from_maintenance_action_definition);
+    let actions = decided_actions_from_json(candidate.decided_actions_json.as_deref())
+        .as_ref()
+        .map(from_maintenance_decided_actions);
     MaintenanceCandidate {
         file_count: file_count.map(to_graphql_int),
         total_size_bytes,
@@ -709,6 +533,7 @@ pub fn from_maintenance_candidate(
                     .unwrap_or(AppActionKind::DoNothing),
             )
         },
+        actions,
         action_sequence,
         sequence_steps: sequence_steps
             .iter()
@@ -780,174 +605,6 @@ pub fn from_maintenance_evaluation_trigger(
     }
 }
 
-/// Shape mapping only: the kind and its one optional parameter are handed to
-/// the application layer as written, and every illegal pairing (a
-/// quality-profile action with no target above all) is rejected by the service
-/// validation that also guards stored revisions. A target supplied for a
-/// parameterless kind is dropped, because the catalog has nowhere to put it.
-pub fn maintenance_action_spec_from_input(input: MaintenanceActionInput) -> AppActionSpec {
-    let kind = maintenance_action_kind_into_application(input.kind);
-    match kind {
-        AppActionKind::ChangeQualityProfileAndSearchIfChanged => {
-            match input.target_quality_profile_id {
-                Some(target) => AppActionSpec::change_quality_profile(target),
-                None => AppActionSpec::new(kind),
-            }
-        }
-        AppActionKind::AddTags | AppActionKind::RemoveTags => {
-            AppActionSpec::tags(kind, input.tags.unwrap_or_default())
-        }
-        kind => AppActionSpec::new(kind),
-    }
-}
-
-/// Resolve the two mutually exclusive authoring shapes without ever converting
-/// a legacy action into a sequence during a read. GraphQL calls this before it
-/// reaches the service, and the service receives one typed definition only.
-pub fn maintenance_action_definition_from_inputs(
-    action: Option<MaintenanceActionInput>,
-    action_sequence: Option<MaintenanceActionSequenceInput>,
-) -> Result<AppActionDefinition, scryer_application::AppError> {
-    match (action, action_sequence) {
-        (Some(_), Some(_)) => Err(scryer_application::AppError::validation_refused(
-            scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_CONFLICT,
-            "supply either 'action' or 'actionSequence', not both",
-        )),
-        (None, None) => Err(scryer_application::AppError::validation_refused(
-            scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_REQUIRED,
-            "a maintenance rule requires 'action' or 'actionSequence'",
-        )),
-        (Some(action), None) => {
-            if action.kind == MaintenanceActionKind::ActionSequence {
-                return Err(scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_SEQUENCE_INPUT_REQUIRED,
-                    "ACTION_SEQUENCE is output-only; use 'actionSequence'",
-                ));
-            }
-            Ok(AppActionDefinition::Legacy(
-                maintenance_action_spec_from_input(action),
-            ))
-        }
-        (None, Some(sequence)) => {
-            let schema_version = u32::try_from(sequence.schema_version).map_err(|_| {
-                scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_SCHEMA_VERSION_INVALID,
-                    "actionSequence.schemaVersion must be zero or greater",
-                )
-            })?;
-            let steps = sequence
-                .steps
-                .into_iter()
-                .map(maintenance_action_step_from_input)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(AppActionDefinition::Sequence(AppActionSequence {
-                schema_version,
-                steps,
-            }))
-        }
-    }
-}
-
-fn maintenance_action_step_from_input(
-    input: MaintenanceActionStepInput,
-) -> Result<AppActionStep, scryer_application::AppError> {
-    let kind = maintenance_action_step_kind_into_application(input.kind);
-    let parameters = maintenance_action_step_parameters_from_input(kind, input.parameters)?;
-    Ok(AppActionStep {
-        id: input.id.to_string(),
-        kind,
-        parameters,
-    })
-}
-
-fn maintenance_action_step_parameters_from_input(
-    kind: AppActionStepKind,
-    input: MaintenanceActionStepParametersInput,
-) -> Result<AppActionStepParameters, scryer_application::AppError> {
-    let MaintenanceActionStepParametersInput {
-        include_descendants,
-        target_quality_profile_id,
-        search_condition,
-        tags,
-    } = input;
-    let allows_only =
-        |allows_descendants: bool, allows_target: bool, allows_search: bool, allows_tags: bool| {
-            (allows_descendants || include_descendants.is_none())
-                && (allows_target || target_quality_profile_id.is_none())
-                && (allows_search || search_condition.is_none())
-                && (allows_tags || tags.is_none())
-        };
-    match kind {
-        AppActionStepKind::Unmonitor => {
-            if !allows_only(true, false, false, false) {
-                return Err(scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_UNMONITOR_PARAMETERS_INVALID,
-                    "unmonitor accepts only includeDescendants",
-                ));
-            }
-            Ok(AppActionStepParameters::Unmonitor {
-                include_descendants: include_descendants
-                    .ok_or_else(|| scryer_application::AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_ACTION_UNMONITOR_DESCENDANTS_REQUIRED, "unmonitor requires includeDescendants"))?,
-            })
-        }
-        AppActionStepKind::ChangeQualityProfile => {
-            if !allows_only(false, true, false, false) {
-                return Err(scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_QUALITY_PARAMETERS_INVALID,
-                    "change-quality-profile accepts only targetQualityProfileId",
-                ));
-            }
-            Ok(AppActionStepParameters::ChangeQualityProfile {
-                target_quality_profile_id: target_quality_profile_id.ok_or_else(|| {
-                    scryer_application::AppError::validation_refused(
-                        scryer_interface_core::refusal::INTERFACE_ACTION_QUALITY_PROFILE_REQUIRED,
-                        "change-quality-profile requires targetQualityProfileId",
-                    )
-                })?,
-            })
-        }
-        AppActionStepKind::Search => {
-            if !allows_only(false, false, true, false) {
-                return Err(scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_SEARCH_PARAMETERS_INVALID,
-                    "search accepts only searchCondition",
-                ));
-            }
-            Ok(AppActionStepParameters::Search {
-                condition: maintenance_search_condition_into_application(
-                    search_condition
-                        .ok_or_else(|| scryer_application::AppError::validation_refused(scryer_interface_core::refusal::INTERFACE_ACTION_SEARCH_CONDITION_REQUIRED, "search requires searchCondition"))?,
-                ),
-            })
-        }
-        AppActionStepKind::AddTags | AppActionStepKind::RemoveTags => {
-            if !allows_only(false, false, false, true) {
-                return Err(scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_TAG_PARAMETERS_INVALID,
-                    "a tag step accepts only tags",
-                ));
-            }
-            Ok(AppActionStepParameters::Tags {
-                tags: tags.ok_or_else(|| {
-                    scryer_application::AppError::validation_refused(
-                        scryer_interface_core::refusal::INTERFACE_ACTION_TAGS_REQUIRED,
-                        "a tag step requires tags",
-                    )
-                })?,
-            })
-        }
-        AppActionStepKind::DeleteFiles | AppActionStepKind::DeleteTitleAndFiles => {
-            if !allows_only(false, false, false, false) {
-                return Err(scryer_application::AppError::validation_refused(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_PARAMETERS_UNEXPECTED,
-                    "this step does not accept parameters",
-                ));
-            }
-            Ok(AppActionStepParameters::None)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -962,265 +619,8 @@ mod tests {
         MaintenanceActionStepRun, MaintenanceActionStepState, MaintenanceCandidateState,
     };
 
-    /// The descriptor strings are hand-written above so the schema does not
-    /// depend on serde's rename rules; this proves the two never drift.
-    fn serde_name<T: serde::Serialize>(value: &T) -> String {
-        serde_json::to_value(value)
-            .expect("catalog enums serialize")
-            .as_str()
-            .expect("catalog enums serialize as strings")
-            .to_string()
-    }
-
     #[test]
-    fn descriptor_strings_match_the_stored_action_wire_names() {
-        for descriptor in action_catalog() {
-            assert_eq!(
-                maintenance_timing_mode_name(descriptor.timing_mode),
-                serde_name(&descriptor.timing_mode)
-            );
-            for effect in descriptor.effect_classes {
-                assert_eq!(
-                    maintenance_effect_class_name(*effect),
-                    serde_name(effect),
-                    "effect drift for {:?}",
-                    descriptor.kind
-                );
-            }
-            for repeat in descriptor.allowed_repeat_modes {
-                assert_eq!(
-                    maintenance_repeat_mode_name(*repeat),
-                    serde_name(repeat),
-                    "repeat mode drift for {:?}",
-                    descriptor.kind
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn every_catalog_action_is_projected_and_only_one_needs_a_profile() {
-        let descriptors = maintenance_action_descriptors();
-        assert_eq!(descriptors.len(), action_catalog().len());
-        let requiring: Vec<_> = descriptors
-            .iter()
-            .filter(|descriptor| descriptor.requires_target_quality_profile)
-            .map(|descriptor| descriptor.kind)
-            .collect();
-        assert_eq!(
-            requiring,
-            vec![MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged]
-        );
-        let storage_scoped: Vec<_> = descriptors
-            .iter()
-            .filter(|descriptor| descriptor.supports_storage_scope)
-            .map(|descriptor| descriptor.kind)
-            .collect();
-        assert_eq!(
-            storage_scoped,
-            vec![
-                MaintenanceActionKind::DoNothing,
-                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
-                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
-            ]
-        );
-        for descriptor in &descriptors {
-            assert!(!descriptor.supported_subjects.is_empty());
-            assert!(!descriptor.effect_classes.is_empty());
-            assert!(!descriptor.allowed_repeat_modes.is_empty());
-        }
-    }
-
-    #[test]
-    fn action_input_maps_the_quality_profile_target_and_leaves_it_off_other_kinds() {
-        let quality = maintenance_action_spec_from_input(MaintenanceActionInput {
-            kind: MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
-            target_quality_profile_id: Some("hd-1080p".to_string()),
-            tags: None,
-        });
-        assert_eq!(
-            quality,
-            AppActionSpec::change_quality_profile("hd-1080p"),
-            "the target must reach the stored spec"
-        );
-
-        // No resolver-side gate: the missing target has to fail in the same
-        // validation that guards a stored revision.
-        let missing_target = maintenance_action_spec_from_input(MaintenanceActionInput {
-            kind: MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
-            target_quality_profile_id: None,
-            tags: None,
-        });
-        assert!(
-            missing_target.validate(AppSubjectKind::Movie).is_err(),
-            "a quality-profile action without a target must be rejected downstream"
-        );
-
-        let parameterless = maintenance_action_spec_from_input(MaintenanceActionInput {
-            kind: MaintenanceActionKind::DeleteTitleAndFiles,
-            target_quality_profile_id: Some("hd-1080p".to_string()),
-            tags: Some(vec!["keep".to_string()]),
-        });
-        assert_eq!(
-            parameterless,
-            AppActionSpec::new(AppActionKind::DeleteTitleAndFiles),
-            "parameters the kind cannot hold are dropped rather than smuggled through"
-        );
-    }
-
-    #[test]
-    fn action_input_maps_tags_only_onto_the_tag_kinds() {
-        for kind in [
-            MaintenanceActionKind::AddTags,
-            MaintenanceActionKind::RemoveTags,
-        ] {
-            let spec = maintenance_action_spec_from_input(MaintenanceActionInput {
-                kind,
-                target_quality_profile_id: Some("hd-1080p".to_string()),
-                tags: Some(vec!["needs review".to_string()]),
-            });
-            assert_eq!(
-                spec,
-                AppActionSpec::tags(
-                    maintenance_action_kind_into_application(kind),
-                    vec!["needs review".to_string()]
-                )
-            );
-            assert!(spec.validate(AppSubjectKind::Show).is_ok());
-        }
-
-        // No resolver-side gate here either: an empty tag list has to fail in
-        // the same validation that guards a stored revision.
-        let missing = maintenance_action_spec_from_input(MaintenanceActionInput {
-            kind: MaintenanceActionKind::AddTags,
-            target_quality_profile_id: None,
-            tags: None,
-        });
-        assert!(missing.validate(AppSubjectKind::Movie).is_err());
-    }
-
-    #[test]
-    fn action_spec_round_trips_through_the_wire_projection() {
-        let projected =
-            from_maintenance_action_spec(&AppActionSpec::change_quality_profile("hd-1080p"));
-        assert_eq!(
-            projected.kind,
-            MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged
-        );
-        assert_eq!(
-            projected.target_quality_profile_id.as_deref(),
-            Some("hd-1080p")
-        );
-        assert_eq!(
-            from_maintenance_action_spec(&AppActionSpec::new(AppActionKind::DoNothing))
-                .target_quality_profile_id,
-            None
-        );
-    }
-
-    fn step_parameters() -> MaintenanceActionStepParametersInput {
-        MaintenanceActionStepParametersInput {
-            include_descendants: None,
-            target_quality_profile_id: None,
-            search_condition: None,
-            tags: None,
-        }
-    }
-
-    #[test]
-    fn action_definition_input_requires_exactly_one_shape() {
-        let action = MaintenanceActionInput {
-            kind: MaintenanceActionKind::DoNothing,
-            target_quality_profile_id: None,
-            tags: None,
-        };
-        let sequence = MaintenanceActionSequenceInput {
-            schema_version: 2,
-            steps: Vec::new(),
-        };
-
-        assert!(
-            maintenance_action_definition_from_inputs(None, None)
-                .expect_err("missing action definition must fail")
-                .validation_reason()
-                == Some(scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_REQUIRED)
-        );
-        assert!(
-            maintenance_action_definition_from_inputs(Some(action), Some(sequence))
-                .expect_err("both action shapes must fail")
-                .validation_reason()
-                == Some(scryer_interface_core::refusal::INTERFACE_ACTION_DEFINITION_CONFLICT)
-        );
-    }
-
-    #[test]
-    fn sequence_input_keeps_typed_parameters_and_rejects_stale_ones() {
-        let mut unmonitor_parameters = step_parameters();
-        unmonitor_parameters.include_descendants = Some(true);
-        let mut search_parameters = step_parameters();
-        search_parameters.search_condition = Some(MaintenanceSearchCondition::Unconditional);
-        let definition = maintenance_action_definition_from_inputs(
-            None,
-            Some(MaintenanceActionSequenceInput {
-                schema_version: 2,
-                steps: vec![
-                    MaintenanceActionStepInput {
-                        id: ID::from("unmonitor"),
-                        kind: MaintenanceActionStepKind::Unmonitor,
-                        parameters: unmonitor_parameters,
-                    },
-                    MaintenanceActionStepInput {
-                        id: ID::from("search"),
-                        kind: MaintenanceActionStepKind::Search,
-                        parameters: search_parameters,
-                    },
-                ],
-            }),
-        )
-        .expect("typed sequence input maps");
-        let AppActionDefinition::Sequence(sequence) = definition else {
-            panic!("expected sequence definition");
-        };
-        assert_eq!(sequence.schema_version, 2);
-        assert!(matches!(
-            sequence.steps[0].parameters,
-            AppActionStepParameters::Unmonitor {
-                include_descendants: true
-            }
-        ));
-        assert!(matches!(
-            sequence.steps[1].parameters,
-            AppActionStepParameters::Search {
-                condition: AppSearchCondition::Unconditional
-            }
-        ));
-
-        let mut invalid_parameters = step_parameters();
-        invalid_parameters.include_descendants = Some(true);
-        invalid_parameters.tags = Some(vec!["keep".into()]);
-        assert!(
-            maintenance_action_definition_from_inputs(
-                None,
-                Some(MaintenanceActionSequenceInput {
-                    schema_version: 2,
-                    steps: vec![MaintenanceActionStepInput {
-                        id: ID::from("invalid"),
-                        kind: MaintenanceActionStepKind::Unmonitor,
-                        parameters: invalid_parameters,
-                    }],
-                }),
-            )
-            .expect_err("a step must reject fields from another parameter schema")
-            .validation_reason()
-                == Some(
-                    scryer_interface_core::refusal::INTERFACE_ACTION_UNMONITOR_PARAMETERS_INVALID
-                )
-        );
-    }
-
-    #[test]
-    fn sequence_projection_uses_the_sentinel_and_preserves_every_step() {
+    fn sequence_projection_preserves_every_step() {
         let definition = AppActionDefinition::Sequence(AppActionSequence {
             schema_version: 2,
             steps: vec![AppActionStep {
@@ -1232,12 +632,8 @@ mod tests {
             }],
         });
 
-        let (legacy_projection, sequence) = from_maintenance_action_definition(&definition);
-        assert_eq!(
-            legacy_projection.kind,
-            MaintenanceActionKind::ActionSequence
-        );
-        let sequence = sequence.expect("sequence payload is never replaced by a legacy action");
+        let sequence = from_maintenance_action_definition(&definition)
+            .expect("sequence payload is never replaced by a legacy action");
         assert_eq!(sequence.steps[0].kind, MaintenanceActionStepKind::Search);
         assert_eq!(
             sequence.steps[0].parameters.search_condition,
@@ -1399,6 +795,7 @@ mod tests {
             due_at: now,
             last_evaluated_at: now,
             held_since: Some(now),
+            decided_actions_json: None,
             action_attempts: 0,
             created_at: now,
             updated_at: now,
@@ -1437,9 +834,11 @@ mod tests {
             storage_root_total_size_bytes: None,
             rule_name: "Rule".into(),
             title_name: "Example".into(),
-            action_definition: Some(AppActionDefinition::Legacy(AppActionSpec::new(
-                AppActionKind::DoNothing,
-            ))),
+            action_definition: Some(AppActionDefinition::Legacy(
+                scryer_application::maintenance_rules::MaintenanceActionSpec::new(
+                    AppActionKind::DoNothing,
+                ),
+            )),
             sequence_steps: Vec::new(),
         };
         let legacy = from_maintenance_candidate(legacy_view);
@@ -1448,5 +847,40 @@ mod tests {
         assert_eq!(legacy.storage_root_total_size_bytes, None);
         assert!(legacy.action_sequence.is_none());
         assert!(legacy.sequence_steps.is_empty());
+    }
+
+    #[test]
+    fn decided_actions_project_in_execution_order_and_declared_ones_in_source_order() {
+        let decided = from_maintenance_decided_actions(&AppDecidedActions {
+            delete_files: true,
+            add_tags: vec!["stale".into()],
+            set_quality_profile: Some("Compact 1080p".into()),
+            search: true,
+            ..AppDecidedActions::default()
+        });
+        assert_eq!(
+            decided.heads,
+            vec![
+                MaintenanceActionHead::AddTags,
+                MaintenanceActionHead::SetQualityProfile,
+                MaintenanceActionHead::Search,
+                MaintenanceActionHead::Unmonitor,
+                MaintenanceActionHead::DeleteFiles,
+            ]
+        );
+        assert_eq!(decided.quality_profile.as_deref(), Some("Compact 1080p"));
+        assert_eq!(decided.add_tags, vec!["stale".to_string()]);
+
+        let scan = scryer_rules::maintenance_actions::scan_maintenance_action_heads(
+            "package rules\nimport rego.v1\n\nsearch if {\n\ttrue\n}\n\ndelete_title if {\n\tfalse\n}\n",
+            "rule-1",
+        )
+        .expect("source parses");
+        let declared = from_maintenance_declared_actions(&AppDeclaredActions::from_scan(&scan));
+        assert_eq!(
+            declared.heads,
+            vec![MaintenanceActionHead::Search, MaintenanceActionHead::DeleteTitle]
+        );
+        assert!(declared.destructive);
     }
 }

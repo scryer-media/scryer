@@ -1,5 +1,4 @@
-//! Authoring and on-demand preview for maintenance rule sets (RFC 137 tracks
-//! A3/A4).
+//! Authoring and on-demand preview for maintenance rule sets.
 //!
 //! Everything here is authoring-time. Nothing schedules evaluation, writes
 //! candidates, or executes an action: [`preview_maintenance_rule`] is the only
@@ -24,20 +23,18 @@ use scryer_rules::validation::{
     ValidationResult, maintenance_referenced_facts, validate_maintenance_rule,
 };
 
-use crate::maintenance_rules::action_execution::{
-    EXECUTABLE_TITLE_RULE_ACTIONS, title_rule_action_not_executable,
-};
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
     build_subject_input,
 };
 use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
 use crate::maintenance_rules::{
-    MaintenanceActionDefinition, MaintenanceActionSequence, MaintenanceActionSpec,
-    MaintenanceActionStep, MaintenanceActionStepKind, MaintenanceSubjectKind as ActionSubjectKind,
-    action_definition_from_persisted_json,
+    MaintenanceActionDefinition, MaintenanceDeclaredActions, action_definition_from_persisted_json,
+    head_supported_for_scope,
 };
 use crate::{AppError, AppResult, AppUseCase};
+use scryer_rules::maintenance_actions::scan_maintenance_action_heads;
+use scryer_rules::validation::ValidationDiagnostic;
 
 /// Upper bound on how many titles one preview may evaluate. Preview is
 /// synchronous and builds a fact snapshot per title, so the cap is what keeps a
@@ -69,19 +66,23 @@ const STORAGE_MAINTENANCE_FACTS: [&str; 4] = [
 const STORAGE_ROOT_MEMBERSHIP_UNAVAILABLE: &str = "storage_root_membership_unavailable";
 
 /// Name of the maintenance rule every instance ships with.
-const EXPIRED_REQUEST_LEASES_RULE_NAME: &str = "Expired request leases";
+pub(crate) const EXPIRED_REQUEST_LEASES_RULE_NAME: &str = "Expired request leases";
 
 /// Matcher of that rule. The web editor's `expired-request-leases` template
 /// carries the same source; keep the two identical.
-pub const EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n";
+pub const EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\ndelete_title if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n";
 
-const EXPIRED_REQUEST_LEASES_DESCRIPTION: &str =
+/// The matcher that rule shipped with while a separate action definition said
+/// what a match did: delete the title and its files. Startup replaces it with
+/// [`EXPIRED_REQUEST_LEASES_REGO`].
+pub(crate) const MATCH_FORM_EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n";
+
+pub(crate) const EXPIRED_REQUEST_LEASES_DESCRIPTION: &str =
     "Deletes a requested title and its files once its request lease has expired.";
 
-/// The matcher and description that rule shipped with while a request could
-/// also write a keep claim. Startup replaces them with the current ones.
-const PREVIOUS_EXPIRED_REQUEST_LEASES_REGO: &str = "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n\tnot input.facts.keep_claim_active\n}\n";
-const PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION: &str = "Deletes a requested title and its files once its request lease has expired, unless someone keeps it.";
+/// The description that rule shipped with while a request could also write a
+/// keep claim. Startup replaces it with the current one.
+pub(crate) const PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION: &str = "Deletes a requested title and its files once its request lease has expired, unless someone keeps it.";
 
 // ── Request models ──────────────────────────────────────────────────────────
 
@@ -91,8 +92,8 @@ pub struct MaintenanceRuleDraft {
     pub subject_kind: MaintenanceRuleSubjectKind,
     pub name: String,
     pub description: String,
+    /// The rule source. Its action heads say what a match does.
     pub rego_source: String,
-    pub action_definition: MaintenanceActionDefinition,
     pub grace_days: i64,
     /// Configured root for storage-capacity facts and root-filtered deletion.
     pub storage_root_id: Option<String>,
@@ -105,7 +106,6 @@ pub struct MaintenanceRuleDraft {
 #[derive(Clone, Debug)]
 pub struct MaintenanceMatcherDraft {
     pub rego_source: String,
-    pub action_definition: MaintenanceActionDefinition,
     pub grace_days: i64,
     /// `None` preserves the stored root for older GraphQL clients. `Some(None)`
     /// explicitly clears it, and `Some(Some(_))` replaces it.
@@ -122,7 +122,6 @@ pub enum MaintenancePreviewMatcher {
         library_ids: Vec<String>,
         subject_kind: MaintenanceRuleSubjectKind,
         rego_source: String,
-        action_definition: MaintenanceActionDefinition,
         grace_days: i64,
         storage_root_id: Option<String>,
     },
@@ -162,6 +161,15 @@ pub struct MaintenanceRuleSetDetail {
     pub action_definition: MaintenanceActionDefinition,
 }
 
+/// What validating a draft source found: the validation result, and the
+/// actions the source declares. `declared_actions` is `None` only when the
+/// source does not parse.
+#[derive(Clone, Debug)]
+pub struct MaintenanceRuleSourceValidation {
+    pub result: ValidationResult,
+    pub declared_actions: Option<MaintenanceDeclaredActions>,
+}
+
 #[derive(Clone, Debug)]
 pub struct MaintenancePreviewResult {
     /// The stored rule set's id, or the throwaway id an inline draft compiled
@@ -197,6 +205,8 @@ pub struct MaintenancePreviewTitleResult {
     pub outcome: Option<MaintenanceOutcome>,
     pub reason_codes: Vec<String>,
     pub error: Option<String>,
+    /// What the rule decided for this subject. `None` unless it matched.
+    pub actions: Option<scryer_rules::maintenance_actions::MaintenanceActions>,
     /// The input document the rule evaluated for this subject, facts and
     /// observations both. `None` unless the caller may read facts about
     /// specific people, because the document carries them.
@@ -297,10 +307,10 @@ impl AppUseCase {
             &id,
             draft.subject_kind,
             &draft.rego_source,
-            &draft.action_definition,
             draft.grace_days,
+            storage_root_id.is_some(),
         )?;
-        self.require_registered_action_tags(&draft.action_definition)
+        self.require_declared_action_targets(&prepared.declared, &prepared.scan)
             .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
@@ -308,8 +318,6 @@ impl AppUseCase {
             &prepared.rego_source,
             &id,
             storage_root_id.as_deref(),
-            draft.subject_kind,
-            &draft.action_definition,
         )
         .await?;
 
@@ -351,24 +359,26 @@ impl AppUseCase {
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_definition: draft.action_definition,
+            action_definition: MaintenanceActionDefinition::Declared(prepared.declared),
         })
     }
 
     /// Appends revision N+1. Revision N is left exactly as it was written, so a
-    /// candidate recorded against it stays attributable (RFC 7.1).
+    /// candidate recorded against it stays attributable.
     ///
-    /// Appending a revision also disarms the rule
-    /// ([`MaintenanceEffectArming::None`]), atomically with the append. Arming
-    /// never outlives the revision it was granted against: an operator armed a
-    /// specific matcher plus action after acknowledging *that* matcher's blast
-    /// radius, so a replacement matcher has to be armed again on its own terms.
-    /// Without this, catalog-settings authority alone would be enough to swap an
-    /// armed rule's matcher and have the next handler pass act destructively
-    /// under someone else's acknowledgement.
+    /// When the new source defines a delete action, appending it also disarms
+    /// the rule ([`MaintenanceEffectArming::None`]), atomically with the
+    /// append. The destructive acknowledgement is bound to the matcher it was
+    /// granted against, so a replacement matcher that can delete has to be
+    /// confirmed again on its own terms. Without this, catalog-settings
+    /// authority alone would be enough to swap an armed rule's matcher and have
+    /// the next handler pass delete under someone else's acknowledgement. A
+    /// rule that was armed is flagged as edited since it was enabled, so the
+    /// operator is told to review it and enable it again.
     ///
-    /// A rule that was armed is flagged as edited since it was enabled, so the
-    /// operator is told to review it and enable it again. A metadata rename
+    /// A new source that defines no delete action keeps the rule's state: it
+    /// cannot delete anything, so there is no destructive blast radius to
+    /// acknowledge again. A metadata rename
     /// does *not* disarm: it changes neither what the rule matches nor what it
     /// does, so the acknowledgement still describes the same blast radius.
     ///
@@ -403,8 +413,8 @@ impl AppUseCase {
             &rule_set.id,
             rule_set.subject_kind,
             &draft.rego_source,
-            &draft.action_definition,
             draft.grace_days,
+            storage_root_id.is_some(),
         )?;
         if rule_set.system_owned
             && (prepared.action_spec_json != current_revision.action_spec_json
@@ -417,7 +427,7 @@ impl AppUseCase {
                  period, libraries and state can.",
             ));
         }
-        self.require_registered_action_tags(&draft.action_definition)
+        self.require_declared_action_targets(&prepared.declared, &prepared.scan)
             .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
@@ -425,8 +435,6 @@ impl AppUseCase {
             &prepared.rego_source,
             &rule_set.id,
             storage_root_id.as_deref(),
-            rule_set.subject_kind,
-            &draft.action_definition,
         )
         .await?;
 
@@ -442,21 +450,26 @@ impl AppUseCase {
             now,
         );
 
-        self.services
-            .customization
-            .maintenance_rule_sets
-            .add_revision(&revision, now)
-            .await?;
+        let destructive = prepared.declared.destructive;
+        let rules = &self.services.customization.maintenance_rule_sets;
+        if destructive {
+            rules.add_revision(&revision, now).await?;
+        } else {
+            rules.add_revision_keeping_arming(&revision, now).await?;
+        }
 
         rule_set.current_revision_number = revision_number;
-        // Mirrors what `add_revision` wrote in the same transaction, so the
-        // detail this returns can never claim an arming the store just cleared.
-        rule_set.disarm_after_edit();
+        if destructive {
+            // Mirrors what `add_revision` wrote in the same transaction, so the
+            // detail this returns can never claim an arming the store just
+            // cleared.
+            rule_set.disarm_after_edit();
+        }
         rule_set.updated_at = now;
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_definition: draft.action_definition,
+            action_definition: MaintenanceActionDefinition::Declared(prepared.declared),
         })
     }
 
@@ -605,21 +618,13 @@ impl AppUseCase {
             return self.upgrade_expired_request_leases_rule(existing).await;
         }
         let id = Id::new_rego_safe().0;
-        let action_definition =
-            MaintenanceActionDefinition::Sequence(MaintenanceActionSequence::new(vec![
-                MaintenanceActionStep {
-                    id: "legacy-delete-title".into(),
-                    kind: MaintenanceActionStepKind::DeleteTitleAndFiles,
-                    parameters: Default::default(),
-                },
-            ]));
         let grace_days = 7;
         let prepared = prepare_matcher(
             &id,
             MaintenanceRuleSubjectKind::Title,
             EXPIRED_REQUEST_LEASES_REGO,
-            &action_definition,
             grace_days,
+            false,
         )?;
         let now = Utc::now();
         let revision = build_revision(&id, 1, &prepared, grace_days, None, None, now);
@@ -641,11 +646,18 @@ impl AppUseCase {
         rules.create_rule_set(&rule_set, &revision).await
     }
 
-    /// Replace the matcher the rule shipped with before leases became only a
-    /// time to delete. The new revision keeps the operator's grace period and
-    /// storage root, and like any matcher change it disarms the rule, so an
-    /// operator re-arms it against the new matcher. A rule already on any
-    /// other matcher is left alone.
+    /// Bring the shipped rule onto the current source, keeping its identity,
+    /// state, grace period, libraries and storage root. The rule's matcher
+    /// and action could never be edited, so a stored source is one of the
+    /// sources the rule shipped with:
+    ///
+    /// - the current one: left alone;
+    /// - the `match` form, whose separate action deleted the title and its
+    ///   files: replaced, keeping the rule's arming, because the new source
+    ///   deletes exactly the same titles the operator armed it for;
+    /// - the keep-claim matcher: replaced and disarmed, because it also
+    ///   spared kept titles, so the operator re-arms it against the new one;
+    /// - anything else: replaced and disarmed, the same conservative way.
     async fn upgrade_expired_request_leases_rule(
         &self,
         rule_set: MaintenanceRuleSet,
@@ -657,21 +669,25 @@ impl AppUseCase {
         else {
             return Ok(());
         };
-        let previous =
-            rewrite_package_declaration(PREVIOUS_EXPIRED_REQUEST_LEASES_REGO, &rule_set.id);
-        if scryer_rules::strip_editor_source(&current.rego_source)
-            != scryer_rules::strip_editor_source(&previous)
-        {
+        let stored = scryer_rules::strip_editor_source(&current.rego_source);
+        let is_stored = |source: &str| {
+            stored
+                == scryer_rules::strip_editor_source(&rewrite_package_declaration(
+                    source,
+                    &rule_set.id,
+                ))
+        };
+        if is_stored(EXPIRED_REQUEST_LEASES_REGO) {
             return Ok(());
         }
+        let keeps_arming = is_stored(MATCH_FORM_EXPIRED_REQUEST_LEASES_REGO);
 
-        let action_definition = decode_action_definition(&current)?;
         let prepared = prepare_matcher(
             &rule_set.id,
             rule_set.subject_kind,
             EXPIRED_REQUEST_LEASES_REGO,
-            &action_definition,
             current.grace_days,
+            current.storage_root_id.is_some(),
         )?;
         let now = Utc::now();
         let revision = build_revision(
@@ -683,7 +699,11 @@ impl AppUseCase {
             None,
             now,
         );
-        rules.add_revision(&revision, now).await?;
+        if keeps_arming {
+            rules.add_revision_keeping_arming(&revision, now).await?;
+        } else {
+            rules.add_revision(&revision, now).await?;
+        }
 
         if rule_set.description == PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION {
             rules
@@ -706,17 +726,27 @@ impl AppUseCase {
         &self,
         actor: &User,
         rego_source: &str,
-    ) -> AppResult<ValidationResult> {
+    ) -> AppResult<MaintenanceRuleSourceValidation> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
         let scratch_id = Id::new_rego_safe().0;
         let rewritten = rewrite_package_declaration(rego_source, &scratch_id);
-        validate_maintenance_rule(&rewritten, &scratch_id).map_err(|e| {
+        let result = validate_maintenance_rule(&rewritten, &scratch_id).map_err(|e| {
             AppError::validation_refused(
                 crate::error_reasons::maintenance::RULE_VALIDATION_FAILED,
                 format!("rule validation failed: {e}"),
             )
+        })?;
+        // A source that does not parse declares nothing; one that parses
+        // declares its heads even while some other check refuses it, so the
+        // editor can show what the rule would do while the author fixes it.
+        let declared_actions = scan_maintenance_action_heads(&rewritten, &scratch_id)
+            .ok()
+            .map(|scan| MaintenanceDeclaredActions::from_scan(&scan));
+        Ok(MaintenanceRuleSourceValidation {
+            result,
+            declared_actions,
         })
     }
 
@@ -956,10 +986,11 @@ impl AppUseCase {
                     )
                 })?;
 
-                let (outcome, reason_codes, error) = if storage_root_membership_unknown {
+                let (outcome, reason_codes, error, actions) = if storage_root_membership_unknown {
                     (
                         Some(MaintenanceOutcome::Unknown),
                         vec![STORAGE_ROOT_MEMBERSHIP_UNAVAILABLE.to_string()],
+                        None,
                         None,
                     )
                 } else {
@@ -968,12 +999,17 @@ impl AppUseCase {
                             Some(record.decision.outcome),
                             record.decision.reason_codes.clone(),
                             None,
+                            (record.decision.outcome == MaintenanceOutcome::Match)
+                                .then(|| record.decision.actions.clone()),
                         ),
-                        (None, Some(failure)) => (None, Vec::new(), Some(failure.message.clone())),
+                        (None, Some(failure)) => {
+                            (None, Vec::new(), Some(failure.message.clone()), None)
+                        }
                         (None, None) => (
                             None,
                             Vec::new(),
                             Some("rule produced no decision".to_string()),
+                            None,
                         ),
                     }
                 };
@@ -1030,6 +1066,7 @@ impl AppUseCase {
                     outcome,
                     reason_codes,
                     error,
+                    actions,
                     facts,
                 });
             }
@@ -1114,8 +1151,6 @@ impl AppUseCase {
         rego_source: &str,
         rule_set_id: &str,
         storage_root_id: Option<&str>,
-        subject_kind: MaintenanceRuleSubjectKind,
-        action_definition: &MaintenanceActionDefinition,
     ) -> AppResult<()> {
         let referenced =
             maintenance_referenced_facts(rego_source, rule_set_id).map_err(|error| {
@@ -1133,7 +1168,6 @@ impl AppUseCase {
         let Some(storage_root_id) = storage_root_id else {
             return Ok(());
         };
-        validate_action_definition_for_scope(subject_kind, action_definition, true)?;
         let roots = self.services.catalog.libraries.list(None).await?;
         if roots
             .iter()
@@ -1197,8 +1231,6 @@ impl AppUseCase {
                     &detail.revision.rego_source,
                     &detail.rule_set.id,
                     detail.revision.storage_root_id.as_deref(),
-                    detail.rule_set.subject_kind,
-                    &detail.action_definition,
                 )
                 .await?;
                 Ok((
@@ -1217,7 +1249,6 @@ impl AppUseCase {
                 library_ids,
                 subject_kind,
                 rego_source,
-                action_definition,
                 grace_days,
                 storage_root_id,
             } => {
@@ -1226,15 +1257,13 @@ impl AppUseCase {
                     &scratch_id,
                     subject_kind,
                     &rego_source,
-                    &action_definition,
                     grace_days,
+                    storage_root_id.is_some(),
                 )?;
                 self.require_storage_root_for_matcher(
                     &prepared.rego_source,
                     &scratch_id,
                     storage_root_id.as_deref(),
-                    subject_kind,
-                    &action_definition,
                 )
                 .await?;
                 Ok((
@@ -1326,28 +1355,55 @@ impl AppUseCase {
 }
 
 impl AppUseCase {
-    /// The registry half of tag-action validation.
+    /// The live half of declared-action validation.
     ///
-    /// Action-definition validation is static, while whether a tag label is
-    /// currently registered is a live question. Check every tag-writing step
-    /// here when a revision is authored; the executor repeats the check before
-    /// it mutates a title.
-    async fn require_registered_action_tags(
+    /// Whether a tag label is registered and whether a quality profile name
+    /// exists are live questions, so they are checked here when a revision is
+    /// authored; the executor repeats both before it changes a title. Each is
+    /// one read for every literal in the source.
+    async fn require_declared_action_targets(
         &self,
-        action_definition: &MaintenanceActionDefinition,
+        declared: &MaintenanceDeclaredActions,
+        scan: &scryer_rules::maintenance_actions::MaintenanceActionScan,
     ) -> AppResult<()> {
-        let labels = match action_definition {
-            MaintenanceActionDefinition::Legacy(spec) => spec.parameters.tag_labels().to_vec(),
-            MaintenanceActionDefinition::Sequence(sequence) => sequence
-                .steps
-                .iter()
-                .flat_map(|step| step.parameters.tag_labels().iter().cloned())
-                .collect(),
-        };
-        if labels.is_empty() {
+        let labels: Vec<String> = declared
+            .add_tags
+            .iter()
+            .chain(declared.remove_tags.iter())
+            .cloned()
+            .collect();
+        if !labels.is_empty() {
+            self.require_registered_title_tags(&labels).await?;
+        }
+        if declared.quality_profiles.is_empty() {
             return Ok(());
         }
-        self.require_registered_title_tags(&labels).await
+        let profiles = self.maintenance_quality_profile_ids_by_name().await?;
+        let diagnostics: Vec<ValidationDiagnostic> = scan
+            .quality_profiles
+            .iter()
+            .filter(|literal| !profiles.contains_key(&literal.value))
+            .map(|literal| {
+                let mut diagnostic = ValidationDiagnostic::new(
+                    crate::error_reasons::maintenance::QUALITY_PROFILE_NOT_FOUND,
+                    format!(
+                        "set_quality_profile names \"{}\", which is not a quality profile",
+                        literal.value
+                    ),
+                );
+                diagnostic.line = Some(literal.line);
+                diagnostic.column = Some(literal.column);
+                diagnostic
+            })
+            .collect();
+        if diagnostics.is_empty() {
+            return Ok(());
+        }
+        Err(AppError::validation_refused_with_diagnostics(
+            crate::error_reasons::maintenance::QUALITY_PROFILE_NOT_FOUND,
+            "The rule names a quality profile that does not exist.",
+            diagnostics,
+        ))
     }
 }
 
@@ -1358,18 +1414,20 @@ struct PreparedMatcher {
     rego_source: String,
     content_hash: String,
     action_spec_json: String,
+    declared: MaintenanceDeclaredActions,
+    scan: scryer_rules::maintenance_actions::MaintenanceActionScan,
 }
 
 /// Rewrite the package to the system-assigned id, then run every check that
-/// must hold before a revision is written: the matcher compiles and reads only
-/// documented facts, the action is legal for a title-scoped rule, and the grace
-/// period is a real duration.
+/// must hold before a revision is written: the matcher compiles, reads only
+/// documented facts and defines at least one action head, every head it
+/// defines is one its scope can run, and the grace period is a real duration.
 fn prepare_matcher(
     rule_id: &str,
     subject_kind: MaintenanceRuleSubjectKind,
     rego_source: &str,
-    action_definition: &MaintenanceActionDefinition,
     grace_days: i64,
+    storage_root_selected: bool,
 ) -> AppResult<PreparedMatcher> {
     if grace_days < 0 {
         return Err(AppError::validation_refused(
@@ -1383,7 +1441,6 @@ fn prepare_matcher(
             format!("grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"),
         ));
     }
-    validate_action_definition_for_scope(subject_kind, action_definition, false)?;
 
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
     let validation = validate_maintenance_rule(&rewritten, rule_id).map_err(|e| {
@@ -1393,138 +1450,67 @@ fn prepare_matcher(
         )
     })?;
     if !validation.valid {
+        let reason = if validation.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == scryer_rules::diagnostic_codes::RULE_ACTION_REQUIRED
+        }) {
+            crate::error_reasons::maintenance::ACTION_HEAD_REQUIRED
+        } else {
+            crate::error_reasons::maintenance::RULE_SOURCE_INVALID
+        };
         return Err(AppError::validation_refused_with_diagnostics(
-            crate::error_reasons::maintenance::RULE_SOURCE_INVALID,
+            reason,
             format_maintenance_validation_errors(&validation),
             validation.diagnostics,
         ));
     }
-
-    let action_spec_json = action_definition.to_persisted_json().map_err(|e| {
+    let scan = scan_maintenance_action_heads(&rewritten, rule_id).map_err(|e| {
         AppError::validation_refused(
-            crate::error_reasons::maintenance::ACTION_NOT_STORABLE,
-            format!("maintenance action is not storable: {e}"),
+            crate::error_reasons::maintenance::RULE_VALIDATION_FAILED,
+            format!("rule validation failed: {e}"),
         )
     })?;
+
+    let unsupported: Vec<ValidationDiagnostic> = scan
+        .defined_heads
+        .iter()
+        .filter(|head| !head_supported_for_scope(**head, subject_kind, storage_root_selected))
+        .map(|head| {
+            let mut diagnostic = ValidationDiagnostic::new(
+                crate::error_reasons::maintenance::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
+                format!("{} cannot run for this rule's scope", head.rule_name()),
+            );
+            if let Some((line, column)) = scan.head_positions.get(head) {
+                diagnostic.line = Some(*line);
+                diagnostic.column = Some(*column);
+            }
+            diagnostic
+        })
+        .collect();
+    if !unsupported.is_empty() {
+        return Err(AppError::validation_refused_with_diagnostics(
+            crate::error_reasons::maintenance::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
+            "The rule defines an action its scope cannot run.",
+            unsupported,
+        ));
+    }
+
+    let declared = MaintenanceDeclaredActions::from_scan(&scan);
+    let action_spec_json = MaintenanceActionDefinition::Declared(declared.clone())
+        .to_persisted_json()
+        .map_err(|e| {
+            AppError::validation_refused(
+                crate::error_reasons::maintenance::ACTION_NOT_STORABLE,
+                format!("maintenance action is not storable: {e}"),
+            )
+        })?;
 
     Ok(PreparedMatcher {
         content_hash: content_hash(&rewritten),
         rego_source: rewritten,
         action_spec_json,
+        declared,
+        scan,
     })
-}
-
-/// Validate either persisted action shape for a rule scope. Legacy specs retain
-/// their executor-specific authoring gate; sequences validate only through the
-/// closed schema-2 catalog and are dispatched by the sequence executor.
-fn validate_action_definition_for_scope(
-    scope: MaintenanceRuleSubjectKind,
-    definition: &MaintenanceActionDefinition,
-    storage_root_selected: bool,
-) -> AppResult<()> {
-    match definition {
-        MaintenanceActionDefinition::Legacy(spec) => {
-            validate_scope_action(scope, spec)?;
-            if storage_root_selected && !super::action_execution::supports_storage_scope(spec.kind)
-            {
-                return Err(AppError::validation_refused(
-                    crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
-                    "this action is not supported for a storage-root-scoped maintenance rule",
-                ));
-            }
-            Ok(())
-        }
-        MaintenanceActionDefinition::Sequence(sequence) => {
-            let validate_subject = |subject| {
-                if storage_root_selected {
-                    sequence.validate_for_storage_root(subject)
-                } else {
-                    sequence.validate(subject)
-                }
-                .map_err(|error| {
-                    AppError::validation_refused(
-                        crate::error_reasons::maintenance::ACTION_CONFIGURATION_INVALID,
-                        error.to_string(),
-                    )
-                })
-            };
-            match scope {
-                MaintenanceRuleSubjectKind::Title => {
-                    let movie = validate_subject(ActionSubjectKind::Movie);
-                    if movie.is_ok() || validate_subject(ActionSubjectKind::Show).is_ok() {
-                        Ok(())
-                    } else {
-                        movie
-                    }
-                }
-                MaintenanceRuleSubjectKind::Season => validate_subject(ActionSubjectKind::Season),
-                MaintenanceRuleSubjectKind::Episode => validate_subject(ActionSubjectKind::Episode),
-            }
-        }
-    }
-}
-
-/// A title-scoped legacy rule set spans both movie and show libraries, so its
-/// action need only be legal for one of them. Which one applies to a given
-/// candidate is decided per title from its facet at evaluation time; rejecting
-/// an action here because it is movie-only would make it unusable in movie
-/// libraries.
-///
-/// Passing the descriptor's subject check is necessary but not sufficient: the
-/// action also has to be one the title executor dispatches. The show-subject
-/// `unmonitor_show_delete_existing_files` used to pass here and then hard-fail
-/// at execution, burning its three attempts into a terminal `Failed` candidate,
-/// so [`EXECUTABLE_TITLE_RULE_ACTIONS`] — the executor's own list — is the gate
-/// on both sides.
-pub(super) fn validate_scope_action(
-    scope: MaintenanceRuleSubjectKind,
-    spec: &MaintenanceActionSpec,
-) -> AppResult<()> {
-    if scope == MaintenanceRuleSubjectKind::Title {
-        return validate_title_scope_action(spec);
-    }
-    if !super::action_execution::supported_scope_actions(scope).contains(&spec.kind) {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
-            "action is not supported for this maintenance scope",
-        ));
-    }
-    let subject = match scope {
-        MaintenanceRuleSubjectKind::Season => ActionSubjectKind::Season,
-        MaintenanceRuleSubjectKind::Episode => ActionSubjectKind::Episode,
-        _ => unreachable!(),
-    };
-    spec.validate(subject).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::maintenance::ACTION_CONFIGURATION_INVALID,
-            error.to_string(),
-        )
-    })
-}
-
-pub(super) fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
-    if !EXECUTABLE_TITLE_RULE_ACTIONS.contains(&spec.kind) {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::maintenance::ACTION_UNSUPPORTED,
-            title_rule_action_not_executable(spec.kind),
-        ));
-    }
-
-    if spec.validate(ActionSubjectKind::Movie).is_ok()
-        || spec.validate(ActionSubjectKind::Show).is_ok()
-    {
-        return Ok(());
-    }
-
-    // Both failed; the movie error names the reason (schema version and
-    // parameter shape are subject-independent, so it is the same either way).
-    let error = spec
-        .validate(ActionSubjectKind::Movie)
-        .expect_err("action rejected for both movie and show subjects");
-    Err(AppError::validation_refused(
-        crate::error_reasons::maintenance::ACTION_INVALID,
-        format!("maintenance action is not valid for a title-scoped rule: {error}"),
-    ))
 }
 
 /// Whether two library scopes describe different sets of libraries.
@@ -1613,3 +1599,7 @@ fn format_maintenance_validation_errors(validation: &ValidationResult) -> String
         validation.errors.join("\n- ")
     )
 }
+
+#[cfg(test)]
+#[path = "web_template_tests.rs"]
+mod web_template_tests;

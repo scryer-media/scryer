@@ -109,6 +109,42 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         .await
     }
 
+    async fn add_revision_keeping_arming(
+        &self,
+        revision: &MaintenanceRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let revision_args = revision_args(revision);
+        let pointer_args = vec![
+            SqlArg::I64(revision.revision_number),
+            SqlArg::Timestamp(updated_at),
+            SqlArg::Text(revision.rule_set_id.clone()),
+        ];
+
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "add_maintenance_rule_revision_keeping_arming",
+            move |tx| {
+                let revision_args = revision_args.clone();
+                let pointer_args = pointer_args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
+                        .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE maintenance_rule_sets
+                            SET current_revision_number = {}, updated_at = {}
+                          WHERE id = {}",
+                        &pointer_args,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn get_revision(
         &self,
         rule_set_id: &str,

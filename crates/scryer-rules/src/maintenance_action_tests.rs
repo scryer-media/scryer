@@ -119,11 +119,18 @@ fn each_boolean_head_is_decoded_on_its_own() {
     }
 }
 
+/// The wrapper's default for every head decodes to no action. A source that
+/// defines no head at all never gets this far: it is refused at load.
 #[test]
 fn undefined_heads_decode_to_no_actions() {
-    let result = evaluate("match := true\n");
+    let defaults: String = MaintenanceActionHead::ALL
+        .iter()
+        .map(|head| format!("\"{}\": {}", head.rule_name(), head.wrapper_default()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let value = regorus::Value::from_json_str(&format!("{{{defaults}}}")).expect("json");
 
-    let actions = actions_of(&result);
+    let actions = &crate::maintenance_actions::decode_actions(&value).expect("decodes");
     assert_eq!(actions, &MaintenanceActions::default());
     assert!(actions.is_empty());
     assert!(!actions.defines_destructive_action());
@@ -143,55 +150,58 @@ fn a_head_whose_condition_fails_decodes_to_its_default() {
     assert!(actions_of(&result).is_empty());
 }
 
-/// Action heads leave the outcome alone: it still follows `match` and
-/// `unknown` only.
+/// The outcome follows the action heads: a subject matches when at least
+/// one head fired for it, and a rule named `match` is an ordinary helper.
 #[test]
-fn action_heads_do_not_change_the_outcome() {
-    let without_match = evaluate("unmonitor if input.facts.monitored\n");
-    assert!(actions_of(&without_match).unmonitor);
+fn a_fired_action_head_is_what_makes_a_match() {
+    let fired = evaluate("unmonitor if input.facts.monitored\n");
+    assert!(actions_of(&fired).unmonitor);
+    assert_eq!(fired.records[0].decision.outcome, MaintenanceOutcome::Match);
+
+    let none_fired = evaluate("match := true\nunmonitor if not match\n");
+    assert!(actions_of(&none_fired).is_empty());
     assert_eq!(
-        without_match.records[0].decision.outcome,
+        none_fired.records[0].decision.outcome,
         MaintenanceOutcome::NoMatch
     );
 
-    let with_match = evaluate("match := true\nunmonitor if input.facts.monitored\n");
-    assert!(actions_of(&with_match).unmonitor);
+    let held = evaluate("unknown := true\nunmonitor := true\n");
     assert_eq!(
-        with_match.records[0].decision.outcome,
-        MaintenanceOutcome::Match
+        held.records[0].decision.outcome,
+        MaintenanceOutcome::Unknown
     );
 }
 
+/// A flag of the wrong type gets past the scan, which reads only value heads,
+/// and fails when its decision is decoded. A value head that is not a literal
+/// the action accepts never runs: the engine refuses the source at load with
+/// the scan's code.
 #[test]
 fn a_head_of_the_wrong_type_is_an_error_not_a_coerced_action() {
-    for (body, head) in [
-        ("unmonitor := \"yes\"\n", "unmonitor"),
-        ("delete_files := [true]\n", "delete_files"),
-        ("delete_title := 1\n", "delete_title"),
-        ("search := null\n", "search"),
-        ("set_quality_profile := 7\n", "set_quality_profile"),
-        ("set_quality_profile := true\n", "set_quality_profile"),
-        (
-            "set_quality_profile := [\"Fixture HD\"]\n",
-            "set_quality_profile",
-        ),
-        ("set_quality_profile := \"\"\n", "set_quality_profile"),
-        ("add_tags := [\"stale\", 1]\n", "add_tags"),
-        ("add_tags := \"stale\"\n", "add_tags"),
-        ("add_tags := {\"stale\"}\n", "add_tags"),
-        ("add_tags contains \"stale\"\n", "add_tags"),
-        ("remove_tags := [null]\n", "remove_tags"),
-        ("remove_tags := true\n", "remove_tags"),
+    let malformed = diagnostic_codes::RULE_OUTPUT_INVALID;
+    let not_literal = diagnostic_codes::RULE_ACTION_VALUE_NOT_LITERAL;
+    let invalid = diagnostic_codes::RULE_ACTION_VALUE_INVALID;
+    for (body, code) in [
+        ("unmonitor := \"yes\"\n", malformed),
+        ("delete_files := [true]\n", malformed),
+        ("delete_title := 1\n", malformed),
+        ("search := null\n", malformed),
+        ("set_quality_profile := 7\n", not_literal),
+        ("set_quality_profile := true\n", not_literal),
+        ("set_quality_profile := [\"Fixture HD\"]\n", not_literal),
+        ("set_quality_profile := \"\"\n", invalid),
+        ("add_tags := [\"stale\", 1]\n", not_literal),
+        ("add_tags := \"stale\"\n", not_literal),
+        ("add_tags := {\"stale\"}\n", not_literal),
+        ("add_tags contains \"stale\"\n", not_literal),
+        ("remove_tags := [null]\n", not_literal),
+        ("remove_tags := true\n", not_literal),
     ] {
-        let result = evaluate(&format!("match := true\n{body}"));
+        let result = evaluate(&format!("unknown := false\n{body}"));
 
         assert!(result.records.is_empty(), "{body}: {:?}", result.records);
         assert_eq!(result.errors.len(), 1, "{body}");
-        assert!(
-            result.errors[0].message.contains(&format!("'{head}'")),
-            "{body}: {}",
-            result.errors[0].message
-        );
+        assert_eq!(result.errors[0].code, code, "{body}");
     }
 }
 
@@ -200,10 +210,10 @@ fn tags_keep_the_bounds_every_policy_tag_has() {
     let result = evaluate("add_tags := [\"scryer:managed\"]\n");
 
     assert!(result.records.is_empty(), "{:?}", result.records);
-    assert!(
-        result.errors[0].message.contains("reserved"),
-        "{}",
-        result.errors[0].message
+    assert_eq!(result.errors.len(), 1);
+    assert_eq!(
+        result.errors[0].code,
+        diagnostic_codes::RULE_ACTION_VALUE_INVALID
     );
 }
 
@@ -309,14 +319,16 @@ fn an_else_chain_on_a_value_head_yields_the_first_branch_that_holds() {
 
 // ── days_since ──────────────────────────────────────────────────────────────
 
-/// Tags the subject with the number of days the helper returned, so a test can
-/// read the exact value back.
-const DAYS_PROBE: &str = "add_tags := [sprintf(\"days %d\", [days_since(input.facts.added_at)])]\n";
+/// Reports the number of days the helper returned as a reason, so a test can
+/// read the exact value back. An action value must be a literal, so a reason
+/// carries it.
+const DAYS_PROBE: &str = "unmonitor := true\n\
+                          reasons contains sprintf(\"days %d\", [days_since(input.facts.added_at)])\n";
 
 fn probed_days(input: MaintenanceInput) -> Vec<String> {
-    actions_of(&evaluate_against(DAYS_PROBE, input))
-        .add_tags
-        .clone()
+    let result = evaluate_against(DAYS_PROBE, input);
+    assert!(actions_of(&result).unmonitor);
+    result.records[0].decision.reason_codes.clone()
 }
 
 #[test]
@@ -419,25 +431,33 @@ fn days_since_of_a_malformed_timestamp_is_an_error_for_the_rule() {
     assert_eq!(result.errors.len(), 1);
 }
 
+/// A stored source that defines its own `days_since` still loads, because
+/// the host leaves its helper out rather than conflict with it, but it never
+/// decides: the engine refuses it the way validation does.
 #[test]
-fn an_author_definition_of_days_since_replaces_the_host_one() {
+fn an_author_definition_of_days_since_is_refused_at_save_and_at_load() {
     // A function of the same shape.
     let function = "days_since(timestamp) := 7 if timestamp != \"\"\n\
                     unmonitor if days_since(input.facts.added_at) == 7\n";
-    assert!(actions_of(&evaluate(function)).unmonitor);
-
     // A function of another arity, which could not coexist with the host's.
     let other_arity = "days_since(from, to) := 3 if from != to\n\
                        unmonitor if days_since(input.facts.added_at, \"fixture\") == 3\n";
-    assert!(actions_of(&evaluate(other_arity)).unmonitor);
-
     // A plain value under the same name.
     let value = "days_since := 5\nunmonitor if days_since == 5\n";
-    assert!(actions_of(&evaluate(value)).unmonitor);
+
+    for body in [function, other_arity, value] {
+        let result = evaluate(body);
+        assert!(result.records.is_empty(), "{body}: {:?}", result.records);
+        assert_eq!(
+            result.errors[0].code,
+            diagnostic_codes::RULE_HOST_HELPER_REDEFINED,
+            "{body}"
+        );
+    }
 
     // Validation refuses every redefinition, pointing at the definition.
     for body in [function, other_arity, value] {
-        let validation = validate(&format!("match := true\n{body}"));
+        let validation = validate(&format!("unmonitor := true\n{body}"));
         assert!(!validation.valid, "{body}");
         let error = validation
             .diagnostics
@@ -451,7 +471,7 @@ fn an_author_definition_of_days_since_replaces_the_host_one() {
 
 #[test]
 fn days_since_works_in_the_validation_dry_run() {
-    let validation = validate("match if days_since(input.facts.added_at) > 30\n");
+    let validation = validate("unmonitor if days_since(input.facts.added_at) > 30\n");
 
     assert!(validation.valid, "{:?}", validation.errors);
     assert!(validation.warnings.is_empty(), "{:?}", validation.warnings);
@@ -493,9 +513,11 @@ fn the_scan_reports_the_action_heads_a_source_defines() {
     );
     assert!(scan.defines_destructive_action());
 
-    let harmless =
-        scan_maintenance_action_heads(&source("match := true\nsearch := true\n"), "fixture_rule")
-            .expect("source parses");
+    let harmless = scan_maintenance_action_heads(
+        &source("unmonitor := true\nsearch := true\n"),
+        "fixture_rule",
+    )
+    .expect("source parses");
     assert!(!harmless.defines_destructive_action());
 }
 
@@ -606,7 +628,6 @@ fn a_value_head_that_is_not_a_plain_literal_is_refused() {
         // A value assembled out of pieces.
         ("add_tags contains \"stale\"\n", 3, 1),
         ("remove_tags[\"stale\"] := true\n", 3, 1),
-        ("add_tags(extra) := [\"stale\"] if extra\n", 3, 1),
     ] {
         let scan =
             scan_maintenance_action_heads(&source(body), "fixture_rule").expect("source parses");
@@ -619,9 +640,19 @@ fn a_value_head_that_is_not_a_plain_literal_is_refused() {
             "{body}"
         );
         assert_eq!((error.line, error.column), (line, column), "{body}");
+        // Only the literal first branch of the `else` case contributes a
+        // literal; a refused definition contributes nothing.
+        let expected_profiles = if line == 3 && column == 69 {
+            vec![literal("Fixture HD", 3, 24)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(scan.quality_profiles, expected_profiles, "{body}");
+        assert!(scan.add_tags.is_empty(), "{body}: {:?}", scan.add_tags);
         assert!(
-            scan.quality_profiles.len() + scan.add_tags.len() <= 1,
-            "{body}: only a literal branch contributes a literal"
+            scan.remove_tags.is_empty(),
+            "{body}: {:?}",
+            scan.remove_tags
         );
     }
 }
@@ -652,10 +683,40 @@ fn a_literal_the_action_does_not_accept_is_refused() {
 }
 
 #[test]
+fn a_tag_head_with_more_entries_than_a_decision_allows_is_refused_at_save() {
+    let tags: Vec<String> = (0..=crate::policy::MAX_TAGS)
+        .map(|index| format!("\"tag{index}\""))
+        .collect();
+    for head in ["add_tags", "remove_tags"] {
+        let body = format!("{head} := [{}]\n", tags.join(", "));
+        let scan =
+            scan_maintenance_action_heads(&source(&body), "fixture_rule").expect("source parses");
+        assert_eq!(scan.errors.len(), 1, "{head}: {:?}", scan.errors);
+        assert_eq!(
+            scan.errors[0].code,
+            diagnostic_codes::RULE_ACTION_VALUE_INVALID
+        );
+        assert_eq!(
+            (scan.errors[0].line, scan.errors[0].column),
+            (3, head.len() + 5),
+            "{head}"
+        );
+
+        let at_limit = format!(
+            "{head} := [{}]\n",
+            tags[..crate::policy::MAX_TAGS].join(", ")
+        );
+        let scan = scan_maintenance_action_heads(&source(&at_limit), "fixture_rule")
+            .expect("source parses");
+        assert!(scan.errors.is_empty(), "{head}: {:?}", scan.errors);
+    }
+}
+
+#[test]
 fn a_rule_name_nothing_uses_is_a_warning() {
     let scan = scan_maintenance_action_heads(
         &source(
-            "match := true\n\
+            "unknown := false\n\
              delet_title if input.facts.has_file\n\
              delet_title if input.facts.monitored\n",
         ),
@@ -687,7 +748,7 @@ fn helpers_that_are_used_and_contract_heads_do_not_warn() {
              \tlabels[\"stale\"]\n\
              }\n\
              by_path if data.scryer.maintenance.user.fixture_rule.archive\n\
-             match if by_path\n\
+             search if by_path\n\
              unknown if input.observations.added_at.status == \"unknown\"\n\
              reasons contains \"archived\" if archive\n\
              unmonitor if archive\n",
@@ -726,7 +787,7 @@ fn a_source_that_does_not_parse_has_no_scan() {
 
 #[test]
 fn validation_refuses_a_computed_action_value_with_its_position() {
-    let validation = validate("match := true\nadd_tags := input.facts.tags\n");
+    let validation = validate("unmonitor := true\nadd_tags := input.facts.tags\n");
 
     assert!(!validation.valid);
     assert_eq!(validation.diagnostics.len(), 1);
@@ -748,7 +809,7 @@ fn validation_refuses_a_computed_action_value_with_its_position() {
 #[test]
 fn validation_refuses_an_unacceptable_literal_that_no_dry_run_would_reach() {
     let validation = validate(
-        "match := true\nadd_tags := [\"scryer:managed\"] if input.subject.facet == \"never\"\n",
+        "unmonitor := true\nadd_tags := [\"scryer:managed\"] if input.subject.facet == \"never\"\n",
     );
 
     assert!(!validation.valid);
@@ -760,7 +821,7 @@ fn validation_refuses_an_unacceptable_literal_that_no_dry_run_would_reach() {
 
 #[test]
 fn validation_reports_an_unused_name_without_refusing_the_source() {
-    let validation = validate("match := true\ndelet_title if input.facts.has_file\n");
+    let validation = validate("unmonitor := true\ndelet_title if input.facts.has_file\n");
 
     assert!(validation.valid, "{:?}", validation.errors);
     assert!(validation.errors.is_empty());
@@ -776,7 +837,7 @@ fn validation_reports_an_unused_name_without_refusing_the_source() {
 
 #[test]
 fn validation_accepts_a_rule_with_action_heads_and_a_shared_helper() {
-    let validation = validate(&format!("match if archive\n{ARCHIVE_RULE}"));
+    let validation = validate(&format!("search if archive\n{ARCHIVE_RULE}"));
 
     assert!(validation.valid, "{:?}", validation.errors);
     assert!(validation.warnings.is_empty(), "{:?}", validation.warnings);
@@ -784,11 +845,302 @@ fn validation_accepts_a_rule_with_action_heads_and_a_shared_helper() {
 
 #[test]
 fn validation_refuses_a_wrong_typed_head_the_dry_run_reaches() {
-    let validation = validate("match := true\ndelete_title := 1\n");
+    let validation = validate("unmonitor := true\ndelete_title := 1\n");
 
     assert!(!validation.valid);
     assert_eq!(
         validation.diagnostics[0].code,
         diagnostic_codes::RULE_OUTPUT_INVALID
+    );
+}
+
+// ── Sources the scan refuses, at save and at load ───────────────────────────
+
+/// The first scan error for a body, as (code, line, column).
+fn first_scan_error(body: &str) -> (&'static str, usize, usize) {
+    let scan = scan_maintenance_action_heads(&source(body), "fixture_rule").expect("source parses");
+    let error = scan
+        .errors
+        .first()
+        .unwrap_or_else(|| panic!("{body}: no scan error"));
+    (error.code, error.line, error.column)
+}
+
+/// Regorus evaluates a function of no arguments into the package document, so
+/// `delete_title() if …` would delete while the scan saw no head. Any function
+/// under an action name is refused, whatever its arity.
+#[test]
+fn an_action_head_written_as_a_function_is_refused_at_any_arity() {
+    for body in [
+        "delete_title() if input.facts.has_file\n",
+        "unmonitor() := true\n",
+        "add_tags() := [\"stale\"]\n",
+        "add_tags(extra) := [\"stale\"] if extra\n",
+        "search(x) if x\n",
+    ] {
+        assert_eq!(
+            first_scan_error(body),
+            (diagnostic_codes::RULE_ACTION_HEAD_FUNCTION, 3, 1),
+            "{body}"
+        );
+    }
+
+    let scan = scan_maintenance_action_heads(
+        &source("delete_title() if input.facts.has_file\n"),
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert!(!scan.defines_destructive_action());
+    let result = evaluate("delete_title() if input.facts.has_file\n");
+    assert!(result.records.is_empty(), "{:?}", result.records);
+    assert_eq!(
+        result.errors[0].code,
+        diagnostic_codes::RULE_ACTION_HEAD_FUNCTION
+    );
+}
+
+/// A stored source the scan refuses is never evaluated: the engine reports it
+/// in error with the scan's code instead of applying the heads it can read.
+#[test]
+fn the_engine_refuses_a_source_the_scan_refuses() {
+    for (body, code) in [
+        (
+            "unmonitor if input.facts.has_file\nadd_tags := input.facts.tags\n",
+            diagnostic_codes::RULE_ACTION_VALUE_NOT_LITERAL,
+        ),
+        (
+            "unmonitor if input.facts.has_file\ndays_since(ts) := 0 if ts\n",
+            diagnostic_codes::RULE_HOST_HELPER_REDEFINED,
+        ),
+        (
+            "unmonitor if data.scryer.maintenance.user.other_rule.match\n",
+            diagnostic_codes::RULE_FOREIGN_DATA_REFERENCE,
+        ),
+        (
+            "match if input.facts.has_file\n",
+            diagnostic_codes::RULE_ACTION_REQUIRED,
+        ),
+    ] {
+        let result = evaluate(body);
+
+        assert!(result.records.is_empty(), "{body}: {:?}", result.records);
+        assert_eq!(result.errors.len(), 1, "{body}");
+        assert_eq!(result.errors[0].code, code, "{body}");
+    }
+
+    let clean = evaluate("unmonitor if input.facts.has_file\n");
+    assert!(clean.errors.is_empty(), "{:?}", clean.errors);
+}
+
+/// Another rule's document, or `data` as a whole, is outside the unknown-fact
+/// hold: the host never sees which facts it was built from.
+#[test]
+fn a_read_of_data_outside_the_rule_package_is_refused_with_its_position() {
+    for (body, line, column) in [
+        (
+            "unmonitor if data.scryer.maintenance.user.other_rule.match\n",
+            3,
+            14,
+        ),
+        ("unmonitor if data.scryer.maintenance\n", 3, 14),
+        ("unmonitor if count(data) > 0\n", 3, 20),
+        ("unmonitor if data[\"scryer\"]\n", 3, 14),
+        ("unmonitor if {\n\tsome x in data.scryer\n\tx\n}\n", 4, 12),
+    ] {
+        assert_eq!(
+            first_scan_error(body),
+            (diagnostic_codes::RULE_FOREIGN_DATA_REFERENCE, line, column),
+            "{body}"
+        );
+    }
+
+    let scan = scan_maintenance_action_heads(
+        &format!(
+            "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
+             import data.scryer.maintenance.user.other_rule\n\
+             unmonitor if other_rule.match\n"
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert_eq!(
+        scan.errors
+            .iter()
+            .map(|error| (error.code, error.line, error.column))
+            .collect::<Vec<_>>(),
+        vec![(diagnostic_codes::RULE_FOREIGN_DATA_REFERENCE, 3, 8)]
+    );
+
+    let own = scan_maintenance_action_heads(
+        &source(
+            "archive if input.facts.has_file\n\
+             unmonitor if data.scryer.maintenance.user.fixture_rule.archive\n",
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert!(own.errors.is_empty(), "{:?}", own.errors);
+}
+
+/// Regorus resolves a call in the package before the builtins, and an import
+/// alias shadows a builtin namespace, so each name `days_since` calls is as
+/// reserved as `days_since` itself.
+#[test]
+fn a_name_the_day_count_helper_calls_cannot_be_redefined() {
+    for (body, line, column) in [
+        (
+            "unmonitor if input.facts.has_file\nfloor(x) := 0 if x\n",
+            4,
+            1,
+        ),
+        (
+            "unmonitor if input.facts.has_file\nis_string(x) if x\n",
+            4,
+            1,
+        ),
+        (
+            "unmonitor if input.facts.has_file\ntime.parse_rfc3339_ns(x) := 0 if x\n",
+            4,
+            1,
+        ),
+        ("unmonitor if input.facts.has_file\ndays_since := 3\n", 4, 1),
+    ] {
+        assert_eq!(
+            first_scan_error(body),
+            (diagnostic_codes::RULE_HOST_HELPER_REDEFINED, line, column),
+            "{body}"
+        );
+    }
+
+    let aliased = scan_maintenance_action_heads(
+        "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
+         import input.facts as time\n\
+         unmonitor if input.facts.has_file\n",
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert_eq!(
+        aliased
+            .errors
+            .iter()
+            .map(|error| (error.code, error.rule.as_str(), error.line, error.column))
+            .collect::<Vec<_>>(),
+        vec![(diagnostic_codes::RULE_HOST_HELPER_REDEFINED, "time", 3, 23)]
+    );
+
+    // Shadowing would otherwise change what the helper returns.
+    let result = evaluate(
+        "floor(x) := 1000 if x\n\
+         unmonitor if days_since(\"2000-01-01T00:00:00Z\") == 1000\n",
+    );
+    assert!(result.records.is_empty(), "{:?}", result.records);
+    assert_eq!(
+        result.errors[0].code,
+        diagnostic_codes::RULE_HOST_HELPER_REDEFINED
+    );
+}
+
+#[test]
+fn more_tags_than_a_decision_may_carry_are_refused_by_the_scan() {
+    let tags = (0..17)
+        .map(|index| format!("\"tag{index}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert_eq!(
+        first_scan_error(&format!("add_tags := [{tags}]\n")),
+        (diagnostic_codes::RULE_ACTION_VALUE_INVALID, 3, 13)
+    );
+
+    let sixteen = (0..16)
+        .map(|index| format!("\"tag{index}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let scan = scan_maintenance_action_heads(
+        &source(&format!("remove_tags := [{sixteen}]\n")),
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert!(scan.errors.is_empty(), "{:?}", scan.errors);
+    assert_eq!(scan.remove_tags.len(), 16);
+}
+
+#[test]
+fn diagnostics_about_a_named_rule_carry_the_name_in_path() {
+    let warned = validate("unmonitor := true\ndelet_title if input.facts.has_file\n");
+    assert_eq!(warned.warnings[0].path.as_deref(), Some("delet_title"));
+
+    let refused = validate("unmonitor := true\nfloor(x) := 0 if x\n");
+    assert_eq!(
+        refused.diagnostics[0].code,
+        diagnostic_codes::RULE_HOST_HELPER_REDEFINED
+    );
+    assert_eq!(refused.diagnostics[0].path.as_deref(), Some("floor"));
+
+    // Action-value codes name their head in the code's own meaning.
+    let literal = validate("unmonitor := true\nadd_tags := input.facts.tags\n");
+    assert_eq!(literal.diagnostics[0].path, None);
+}
+
+/// Regorus counts a tab as four columns and a token by its bytes. Every
+/// position a client sees counts characters, as an editor does.
+#[test]
+fn positions_count_characters_on_tab_indented_and_non_ascii_lines() {
+    let scan = scan_maintenance_action_heads(
+        &source(
+            "add_tags := [\"stale\"] if {\n\
+             \tinput.facts.has_file\n\
+             }\n\
+             remove_tags := [\"x\"] if {\n\
+             \t\tinput.subject.name == \"Café\"\n\
+             } else := [\"y\"] if {\n\
+             \tinput.facts.monitored\n\
+             }\n\
+             unmonitor if {\n\
+             \tdata.scryer.other\n\
+             }\n",
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert_eq!(scan.add_tags, vec![literal("stale", 3, 14)]);
+    assert_eq!(
+        scan.remove_tags,
+        vec![literal("x", 6, 17), literal("y", 8, 12)]
+    );
+    assert_eq!(
+        scan.errors
+            .iter()
+            .map(|error| (error.code, error.line, error.column))
+            .collect::<Vec<_>>(),
+        vec![(diagnostic_codes::RULE_FOREIGN_DATA_REFERENCE, 12, 2)]
+    );
+
+    let after_non_ascii = scan_maintenance_action_heads(
+        &source(
+            "unmonitor if input.subject.name == \"é\"\nadd_tags := [\"é\", \"stale\"] if true\n",
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+    assert_eq!(after_non_ascii.add_tags, vec![literal("stale", 4, 19)]);
+
+    // A compile error regorus reports on a tab-indented line.
+    let validation = validate("unmonitor if {\n\t\tinput.facts.has_file ==\n}\n");
+    assert_eq!(
+        validation.diagnostics[0].code,
+        diagnostic_codes::RULE_COMPILATION_ERROR
+    );
+    let column = validation.diagnostics[0]
+        .column
+        .expect("compile error column");
+    let line = validation.diagnostics[0].line.expect("compile error line");
+    let source = rewrite_package_declaration(
+        "unmonitor if {\n\t\tinput.facts.has_file ==\n}\n",
+        "fixture_rule",
+    );
+    let text: Vec<char> = source.split('\n').nth(line - 1).unwrap().chars().collect();
+    assert!(
+        column <= text.len() + 1,
+        "{column} is past line {line}: {text:?}"
     );
 }

@@ -127,6 +127,11 @@ pub mod candidate_reason {
     /// closes and follows the surviving title as history; the survivor is
     /// re-evaluated on its own facts at the next pass.
     pub const MERGED_INTO_DESTINATION: &str = "merged_into_destination";
+    /// The subject still matches but the rule now decides different actions
+    /// for it. The old candidate closes with this reason, and the candidate
+    /// that replaces it carries the reason too when it keeps the old grace
+    /// clock.
+    pub const ACTIONS_CHANGED: &str = "actions_changed";
 }
 
 // ── Instance gates ──────────────────────────────────────────────────────────
@@ -1307,16 +1312,23 @@ impl AppUseCase {
         detail: &MaintenanceRuleSetDetail,
         evaluation_time: DateTime<Utc>,
     ) -> AppResult<()> {
-        let MaintenanceActionDefinition::Sequence(sequence) = &detail.action_definition else {
-            return Ok(());
+        // A stored sequence fixes the steps for every subject. Declared
+        // actions build each subject's steps from what it was decided, so the
+        // membership's own recorded steps are the identity to check.
+        let revision_sequence = match &detail.action_definition {
+            MaintenanceActionDefinition::Sequence(sequence) => {
+                let hash = sequence
+                    .content_hash()
+                    .map_err(|error| AppError::Validation(error.to_string()))?;
+                let ids: Vec<String> = sequence.steps.iter().map(|step| step.id.clone()).collect();
+                Some((hash, ids))
+            }
+            MaintenanceActionDefinition::Declared(_) => None,
+            MaintenanceActionDefinition::Legacy(_) => return Ok(()),
         };
         let Some(storage_root_id) = detail.revision.storage_root_id.as_deref() else {
             return Ok(());
         };
-        let sequence_hash = sequence
-            .content_hash()
-            .map_err(|error| AppError::Validation(error.to_string()))?;
-        let expected_step_ids: Vec<_> = sequence.steps.iter().map(|step| step.id.clone()).collect();
         let candidates = &self.services.customization.maintenance_evaluation;
         let mut after_id = None;
         loop {
@@ -1335,6 +1347,13 @@ impl AppUseCase {
             after_id = Some(next_after_id);
 
             for membership in memberships {
+                let (sequence_hash, expected_step_ids) = match &revision_sequence {
+                    Some((hash, ids)) => (hash.clone(), ids.clone()),
+                    None => (
+                        membership.sequence_content_hash.clone(),
+                        membership.expected_step_ids.clone(),
+                    ),
+                };
                 let completed_prefix_is_valid = membership.completed_step_ids.len()
                     <= expected_step_ids.len()
                     && expected_step_ids
@@ -1620,10 +1639,13 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let rule_set_id = detail.rule_set.id.as_str();
         let candidates = &self.services.customization.maintenance_evaluation;
-        let sequence = match &detail.action_definition {
-            MaintenanceActionDefinition::Sequence(sequence) => Some(sequence),
-            MaintenanceActionDefinition::Legacy(_) => None,
-        };
+        // Stored sequences and declared actions both run through the
+        // sequence executor and share its completion latch.
+        let sequence_executor = !matches!(
+            detail.action_definition,
+            MaintenanceActionDefinition::Legacy(_)
+        );
+        let declared = detail.action_definition.declared().is_some();
 
         let mut active = candidates
             .get_active_subject_candidate(rule_set_id, subject.kind.as_storage_str(), &subject.id)
@@ -1782,6 +1804,47 @@ impl AppUseCase {
         match decision.outcome {
             MaintenanceOutcome::Match => {
                 counts.matched += 1;
+                // What the rule decided for this subject now. A continuing
+                // match that decides different actions is a different intent:
+                // the old candidate closes and a new one carries the new
+                // actions. The grace clock carries over, except when deleting
+                // is newly decided, which restarts it so a delete always waits
+                // out the full grace.
+                let decided_json = declared
+                    .then(|| super::declared_actions::decided_actions_to_json(&decision.actions));
+                let mut carried_clock = None;
+                if declared && let Some(candidate) = active.as_ref() {
+                    let stored = super::declared_actions::decided_actions_from_json(
+                        candidate.decided_actions_json.as_deref(),
+                    );
+                    if stored.as_ref() != Some(&decision.actions) {
+                        let newly_destructive = decision.actions.defines_destructive_action()
+                            && !stored
+                                .as_ref()
+                                .is_some_and(|stored| stored.defines_destructive_action());
+                        if candidates
+                            .transition_candidate_state(
+                                &candidate.id,
+                                MaintenanceCandidateState::Canceled,
+                                candidate_reason::ACTIONS_CHANGED,
+                                EVALUATOR_WRITABLE_STATES,
+                                evaluation_time,
+                            )
+                            .await?
+                        {
+                            counts.superseded += 1;
+                            if !newly_destructive {
+                                carried_clock =
+                                    Some((candidate.first_matched_at, candidate.due_at));
+                            }
+                            active = None;
+                        } else {
+                            // Another writer owns the row now; the next pass
+                            // decides again.
+                            return Ok(());
+                        }
+                    }
+                }
                 match active {
                     Some(candidate) => {
                         // Continuing membership: the clock keeps running from
@@ -1803,8 +1866,8 @@ impl AppUseCase {
                         // must never manufacture a new generation and reset
                         // its step budgets. Only the confirmed no-match arm
                         // below releases this marker.
-                        if sequence.is_some()
-                            && candidates
+                        if sequence_executor
+                            && let Some(latch) = candidates
                                 .get_active_sequence_completion(
                                     rule_set_id,
                                     detail.rule_set.current_revision_number,
@@ -1812,9 +1875,27 @@ impl AppUseCase {
                                     &subject.id,
                                 )
                                 .await?
-                                .is_some()
                         {
-                            return Ok(());
+                            // Declared actions build their steps per subject:
+                            // a decision that would now run different steps
+                            // is new work, not the finished membership.
+                            let same_steps = !declared
+                                || latch.expected_step_ids
+                                    == super::declared_actions::declared_step_ids(
+                                        &decision.actions,
+                                    );
+                            if same_steps {
+                                return Ok(());
+                            }
+                            candidates
+                                .release_sequence_completion_on_confirmed_non_match(
+                                    rule_set_id,
+                                    detail.rule_set.current_revision_number,
+                                    subject.kind.as_storage_str(),
+                                    &subject.id,
+                                    evaluation_time,
+                                )
+                                .await?;
                         }
                         let generation = candidates
                             .max_subject_match_generation(
@@ -1825,6 +1906,12 @@ impl AppUseCase {
                             .await?
                             + 1;
                         let grace_days = detail.revision.grace_days.max(0);
+                        let (first_matched_at, due_at) = carried_clock.unwrap_or((
+                            evaluation_time,
+                            // Materialized, so a zero-day grace is due the
+                            // instant it matches.
+                            evaluation_time + Duration::days(grace_days),
+                        ));
                         candidates
                             .create_candidate(&LifecycleCandidate {
                                 id: Id::new().0,
@@ -1842,15 +1929,19 @@ impl AppUseCase {
                                     .to_string(),
                                 match_generation: generation,
                                 state: MaintenanceCandidateState::Observing,
-                                state_reason: candidate_reason::FIRST_MATCH.to_string(),
+                                state_reason: if carried_clock.is_some() {
+                                    candidate_reason::ACTIONS_CHANGED
+                                } else {
+                                    candidate_reason::FIRST_MATCH
+                                }
+                                .to_string(),
                                 reason_codes: decision.reason_codes.clone(),
                                 action_kind: detail.action_definition.action_kind().to_string(),
+                                decided_actions_json: decided_json,
                                 grace_days,
-                                first_matched_at: evaluation_time,
+                                first_matched_at,
                                 last_matched_at: evaluation_time,
-                                // Materialized, so a zero-day grace is due the
-                                // instant it matches.
-                                due_at: evaluation_time + Duration::days(grace_days),
+                                due_at,
                                 last_evaluated_at: evaluation_time,
                                 held_since: None,
                                 action_attempts: 0,
@@ -1868,7 +1959,7 @@ impl AppUseCase {
                 // ban. A raw confirmed no-match is the only evidence that
                 // starts a fresh generation; unknown and hold paths never
                 // reach this branch.
-                if sequence.is_some() {
+                if sequence_executor {
                     candidates
                         .release_sequence_completion_on_confirmed_non_match(
                             rule_set_id,

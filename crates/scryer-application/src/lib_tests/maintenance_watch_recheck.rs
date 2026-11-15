@@ -14,9 +14,7 @@ use crate::lib_tests::media_server_signals::{
     CONNECTION_ID, InMemorySignalRepo, StubExternalAccounts, StubSignalConnections,
     jellyfin_connection, named_jellyfin_connection,
 };
-use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceRuleDraft, execution_reason,
-};
+use crate::maintenance_rules::{MaintenanceRuleDraft, execution_reason};
 use crate::media_server_signals::reasons;
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, MediaServerSignalReader,
@@ -536,13 +534,10 @@ impl RecheckFixture {
                     subject_kind: scope,
                     name: "Watched subjects".to_string(),
                     description: String::new(),
-                    rego_source: matcher.to_string(),
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        matcher,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                    ),
                     grace_days: 0,
                     storage_root_id: None,
                     library_ids: Vec::new(),
@@ -654,7 +649,8 @@ async fn a_clean_recheck_lets_the_action_run_and_leaves_the_stored_facts_alone()
     }));
     let (title_id, before) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
 
-    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
+    // The step re-reads before it claims and again under the title guard.
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
     assert!(!fixture.monitored(&title_id).await, "the action ran");
     let candidates = fixture.evaluation.all_candidates().await;
     assert_eq!(candidates[0].state, MaintenanceCandidateState::Succeeded);
@@ -773,7 +769,8 @@ async fn a_mapped_title_still_unplayed_lets_the_action_run() {
         )
         .await;
 
-    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
+    // The step re-reads before it claims and again under the title guard.
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
     assert!(!fixture.monitored(&title_id).await, "the action ran");
 }
 
@@ -895,7 +892,7 @@ async fn a_title_mapped_on_every_server_is_read_on_each_and_runs() {
         .await
         .expect("handler pass");
 
-    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 4);
     assert!(!fixture.monitored(&title.id).await, "the action ran");
 }
 
@@ -919,6 +916,8 @@ async fn a_season_subject_is_rechecked_through_its_episodes_items() {
 
     let mut asked = fixture.asked.lock().unwrap().clone();
     asked.sort();
+    // Each item is read before the step claims and again under the title guard.
+    asked.dedup();
     let mut expected: Vec<String> = episodes
         .iter()
         .map(|episode| item_id(&episode.id))
@@ -950,13 +949,15 @@ async fn an_episode_subject_is_rechecked_through_its_own_item() {
     // One candidate per episode, each reading only its own item.
     let mut asked = fixture.asked.lock().unwrap().clone();
     asked.sort();
+    // Each item is read before the step claims and again under the title guard.
+    asked.dedup();
     let mut expected: Vec<String> = episodes
         .iter()
         .map(|episode| item_id(&episode.id))
         .collect();
     expected.sort();
     assert_eq!(asked, expected);
-    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), episodes.len());
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2 * episodes.len());
     let candidates = fixture.evaluation.all_candidates().await;
     assert_eq!(candidates.len(), episodes.len(), "{candidates:?}");
     assert!(
@@ -1048,7 +1049,8 @@ async fn an_old_stored_play_is_not_a_newer_play_while_a_link_awaits_its_sweep() 
 
     fixture.arm_and_run(&title.id, ANYONE_WATCHED_MATCHER).await;
 
-    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
+    // The step re-reads before it claims and again under the title guard.
+    assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
     let runs = fixture.evaluation.all_action_runs().await;
     assert!(
         runs.iter()

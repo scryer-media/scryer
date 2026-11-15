@@ -179,6 +179,20 @@ impl MaintenanceActionSequence {
         }
     }
 
+    /// Whether running this sequence needs the reversible-effects gate. The
+    /// unmonitor that comes with a file delete is part of that delete and
+    /// rides the destructive gate, the way the single delete actions did.
+    pub fn requires_reversible_gate(&self) -> bool {
+        let deletes_files = self
+            .steps
+            .iter()
+            .any(|step| step.kind == MaintenanceActionStepKind::DeleteFiles);
+        self.steps.iter().any(|step| {
+            step.descriptor().risk_class != MaintenanceRiskClass::High
+                && !(deletes_files && step.kind == MaintenanceActionStepKind::Unmonitor)
+        })
+    }
+
     /// Computes the revision-bound identity from ordered content. A reorder is
     /// a new hash even when it contains the same individual steps.
     pub fn content_hash(&self) -> Result<String, MaintenanceActionSequenceError> {
@@ -328,15 +342,28 @@ impl MaintenanceActionSequence {
 /// rewrite legacy rows into a tagged envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MaintenanceActionDefinition {
+    /// A v1 action spec. Only revisions written before rules declared their
+    /// own actions hold one; nothing executes it.
     Legacy(MaintenanceActionSpec),
+    /// A v2 action sequence. Only revisions written before rules declared
+    /// their own actions hold one as their definition.
     Sequence(MaintenanceActionSequence),
+    /// The actions the revision's source declares.
+    Declared(super::declared_actions::MaintenanceDeclaredActions),
 }
 
 impl MaintenanceActionDefinition {
     pub fn action_kind(&self) -> &'static str {
         match self {
             Self::Legacy(spec) => spec.kind.as_wire_str(),
-            Self::Sequence(_) => ACTION_SEQUENCE_KIND,
+            Self::Sequence(_) | Self::Declared(_) => ACTION_SEQUENCE_KIND,
+        }
+    }
+
+    pub fn declared(&self) -> Option<&super::declared_actions::MaintenanceDeclaredActions> {
+        match self {
+            Self::Declared(declared) => Some(declared),
+            Self::Legacy(_) | Self::Sequence(_) => None,
         }
     }
 
@@ -347,6 +374,8 @@ impl MaintenanceActionDefinition {
         match self {
             Self::Legacy(spec) => spec.validate(subject).map_err(Into::into),
             Self::Sequence(sequence) => sequence.validate(subject),
+            // Heads are checked against the rule's scope when it is saved.
+            Self::Declared(_) => Ok(()),
         }
     }
 
@@ -357,6 +386,7 @@ impl MaintenanceActionDefinition {
         match self {
             Self::Legacy(spec) => spec.validate(subject).map_err(Into::into),
             Self::Sequence(sequence) => sequence.validate_for_storage_root(subject),
+            Self::Declared(_) => Ok(()),
         }
     }
 
@@ -365,6 +395,8 @@ impl MaintenanceActionDefinition {
             Self::Legacy(spec) => serde_json::to_string(spec)
                 .map_err(|error| MaintenanceActionSequenceError::Serialization(error.to_string())),
             Self::Sequence(sequence) => serde_json::to_string(sequence)
+                .map_err(|error| MaintenanceActionSequenceError::Serialization(error.to_string())),
+            Self::Declared(declared) => serde_json::to_string(declared)
                 .map_err(|error| MaintenanceActionSequenceError::Serialization(error.to_string())),
         }
     }
@@ -391,6 +423,15 @@ pub fn action_definition_from_persisted_json(
                     MaintenanceActionSequenceError::InvalidEnvelope(error.to_string())
                 })?;
             Ok(MaintenanceActionDefinition::Sequence(sequence))
+        }
+        Some(version)
+            if version
+                == super::declared_actions::MAINTENANCE_DECLARED_ACTIONS_SCHEMA_VERSION as u64 =>
+        {
+            let declared = serde_json::from_value(value).map_err(|error| {
+                MaintenanceActionSequenceError::InvalidEnvelope(error.to_string())
+            })?;
+            Ok(MaintenanceActionDefinition::Declared(declared))
         }
         Some(_) | None => {
             let spec: MaintenanceActionSpec = serde_json::from_value(value).map_err(|error| {

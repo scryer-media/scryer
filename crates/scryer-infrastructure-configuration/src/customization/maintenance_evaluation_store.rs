@@ -46,14 +46,14 @@ impl MaintenanceEvaluationStore {
 const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash, title_id,
     library_id, facet, subject_kind, subject_id, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
-    held_since, action_attempts, created_at, updated_at";
+    held_since, action_attempts, created_at, updated_at, decided_actions_json";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
         (id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id, facet,
          subject_kind, subject_id, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
-         action_attempts, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         action_attempts, created_at, updated_at, decided_actions_json)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const ACTION_RUN_COLUMNS: &str =
     "id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id,
@@ -1800,6 +1800,7 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::I64(candidate.action_attempts),
         SqlArg::Timestamp(candidate.created_at),
         SqlArg::Timestamp(candidate.updated_at),
+        SqlArg::OptText(candidate.decided_actions_json.clone()),
     ])
 }
 
@@ -2493,6 +2494,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         state_reason: row.text("state_reason")?,
         reason_codes: reason_codes(row)?,
         action_kind: row.text("action_kind")?,
+        decided_actions_json: row.opt_text("decided_actions_json")?,
         grace_days: row.i64("grace_days")?,
         first_matched_at: row.timestamp("first_matched_at")?,
         last_matched_at: row.timestamp("last_matched_at")?,

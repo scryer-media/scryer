@@ -37,7 +37,7 @@ pub(super) fn deletion_steps() -> Vec<MaintenanceActionStep> {
             },
         },
         MaintenanceActionStep {
-            id: "delete-files".to_string(),
+            id: "delete_files".to_string(),
             kind: MaintenanceActionStepKind::DeleteFiles,
             parameters: MaintenanceActionStepParameters::None,
         },
@@ -379,9 +379,12 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
         add_episode_file(&fixture, &other_season, "Sequence/Season 02/S02E02.mkv").await;
     let mut draft = sequence_draft(deletion_steps());
     draft.subject_kind = scryer_domain::MaintenanceRuleSubjectKind::Episode;
-    draft.rego_source = format!(
-        "package selected_episode\nimport rego.v1\n\nmatch if {{\n  input.subject.subject_id == {:?}\n}}\n",
-        selected.id
+    super::maintenance_sequence_execution::with_matcher(
+        &mut draft,
+        &format!(
+            "package selected_episode\nimport rego.v1\n\nmatch if {{\n  input.subject.subject_id == {:?}\n}}\n",
+            selected.id
+        ),
     );
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     assert_eq!(candidate.subject_id, selected.id);
@@ -564,7 +567,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     assert_eq!(deletion_run.status, LifecycleActionRunStatus::Held);
     let journal: serde_json::Value =
         serde_json::from_str(&deletion_run.detail).expect("parse storage journal");
-    assert_eq!(journal["sequence_step_id"].as_str(), Some("delete-files"));
+    assert_eq!(journal["sequence_step_id"].as_str(), Some("delete_files"));
     let journal_files = journal["files"].as_array().expect("journal files");
     assert_eq!(
         journal_files
@@ -724,7 +727,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     assert_eq!(
         steps
             .iter()
-            .find(|step| step.key.step_id == "delete-files")
+            .find(|step| step.key.step_id == "delete_files")
             .expect("persisted DeleteFiles step")
             .state,
         MaintenanceActionStepState::Held
@@ -732,7 +735,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     assert_eq!(
         steps
             .iter()
-            .find(|step| step.key.step_id == "delete-files")
+            .find(|step| step.key.step_id == "delete_files")
             .and_then(|step| step.hold_reason.as_deref()),
         Some(execution_reason::UNKNOWN_AT_EXECUTION)
     );

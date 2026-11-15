@@ -1673,6 +1673,15 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
             "maintenance rule repository is not configured".to_string(),
         ))
     }
+    async fn add_revision_keeping_arming(
+        &self,
+        _revision: &MaintenanceRuleRevision,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
     async fn get_revision(
         &self,
         _rule_set_id: &str,

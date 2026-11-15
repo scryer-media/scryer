@@ -1528,13 +1528,10 @@ impl ScopedMaintenanceFixture {
                     subject_kind: scope,
                     name: "Scoped deletion".into(),
                     description: String::new(),
-                    rego_source: matcher,
-                    action_definition:
-                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                            MaintenanceActionSpec::new(
-                                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
-                            ),
-                        ),
+                    rego_source: crate::lib_tests::legacy_source(
+                        matcher,
+                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                    ),
                     grace_days: grace,
                     storage_root_id: None,
                     library_ids: vec![],
@@ -1653,7 +1650,7 @@ async fn maintenance_scope_episode_deletion_preserves_siblings_and_records() {
             .unwrap()
             .monitored
     );
-    let runs = setup.evaluation.all_action_runs().await;
+    let runs = crate::lib_tests::deletion_runs(setup.evaluation.all_action_runs().await);
     assert_eq!(runs.len(), 1);
     let detail: serde_json::Value = serde_json::from_str(&runs[0].detail).unwrap();
     assert_eq!(detail["files"].as_array().unwrap().len(), 2);
@@ -1832,7 +1829,30 @@ async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_t
 }
 
 #[tokio::test]
-async fn maintenance_scope_changed_file_is_preserved_on_retry() {
+async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
+    // The season unmonitor writes the season flag, then fails on its
+    // episodes. The subject no longer equals the recorded before-state, so the
+    // retry holds rather than replaying, and every file stays.
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            "match if { input.subject.season_number == 1 }".into(),
+            0,
+        )
+        .await;
+    *setup.shows.fail_monitoring.lock().await = true;
+    let first = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(first.executed, 0);
+    assert_eq!(f.remaining_file_ids().await.len(), 6);
+    *setup.shows.fail_monitoring.lock().await = false;
+    let held = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(held.executed, 0, "{held:?}");
+    assert_eq!(held.held, 1, "{held:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 6);
+
+    // An episode subject whose failed attempt changed nothing replays.
     let setup = scoped_maintenance_fixture().await;
     let f = &setup.fixture;
     setup
@@ -1848,14 +1868,9 @@ async fn maintenance_scope_changed_file_is_preserved_on_retry() {
     *setup.shows.fail_monitoring.lock().await = true;
     f.app.run_lifecycle_action_handling_job().await.unwrap();
     *setup.shows.fail_monitoring.lock().await = false;
-    append_maintenance_safety_holds(&setup).await;
-    let path = f.root.join("Emberfall/Season 01/Emberfall - S01E02.mkv");
-    std::fs::write(&path, b"new replacement version").unwrap();
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
-    assert_eq!(report.executed, 0);
-    assert_eq!(std::fs::read(path).unwrap(), b"new replacement version");
-    let runs = setup.evaluation.all_action_runs().await;
-    assert!(runs.iter().any(|run| run.detail.contains("file changed")));
+    let replayed = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(replayed.executed, 1, "{replayed:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 5);
 }
 
 async fn append_maintenance_safety_holds(setup: &ScopedMaintenanceFixture) {
@@ -1873,9 +1888,10 @@ async fn append_maintenance_safety_holds(setup: &ScopedMaintenanceFixture) {
         held.finished_at = Some(held.started_at);
         setup.evaluation.start_action_run(&held).await.unwrap();
     }
+    let unmonitor_steps = setup.evaluation.action_steps_with_id("unmonitor").await;
+    assert_eq!(unmonitor_steps.len(), 1);
     assert_eq!(
-        setup.evaluation.all_candidates().await[0].action_attempts,
-        1,
+        unmonitor_steps[0].attempt, 1,
         "safety holds do not spend mutation attempts"
     );
 }
@@ -1913,7 +1929,7 @@ async fn maintenance_scope_partial_preview_failure_records_each_file_and_preserv
             .exists()
     );
     assert!(f.remaining_file_ids().await.contains(&rejected));
-    let runs = setup.evaluation.all_action_runs().await;
+    let runs = crate::lib_tests::deletion_runs(setup.evaluation.all_action_runs().await);
     let detail: serde_json::Value = serde_json::from_str(&runs[0].detail).unwrap();
     let outcomes = detail["files"].as_array().unwrap();
     assert_eq!(

@@ -21,9 +21,8 @@ use crate::lib_tests::media_server_signals::{
     jellyfin_connection, named_jellyfin_connection,
 };
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceMatcherDraft,
-    MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewResult,
-    MaintenancePreviewSelection, MaintenanceRuleDraft,
+    MaintenanceMatcherDraft, MaintenancePreviewMatcher, MaintenancePreviewRequest,
+    MaintenancePreviewResult, MaintenancePreviewSelection, MaintenanceRuleDraft,
 };
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
@@ -205,9 +204,9 @@ fn draft(rego_source: &str) -> MaintenanceRuleDraft {
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Watched movies".to_string(),
         description: String::new(),
-        rego_source: rego_source.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            rego_source,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
         storage_root_id: None,
@@ -286,9 +285,9 @@ fn inline_matcher(rego_source: &str) -> MaintenancePreviewMatcher {
     MaintenancePreviewMatcher::Inline {
         library_ids: vec![],
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
-        rego_source: rego_source.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            rego_source,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
         storage_root_id: None,
@@ -793,9 +792,9 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
             &catalog_only_author(),
             &created.rule_set.id,
             MaintenanceMatcherDraft {
-                rego_source: WATCHED_BY_ALL_REQUESTERS_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    WATCHED_BY_ALL_REQUESTERS_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
                 storage_root_id: None,
