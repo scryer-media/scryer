@@ -202,8 +202,9 @@ pub mod unknown_reason {
     pub const AUDIENCE_NOT_READ: &str = "audience_not_read";
 
     /// A member's watchlist subscription has not synced successfully: it has
-    /// never run, or its last run failed. The watchlist facts need every
-    /// watchlist read, so they are unknown for every title.
+    /// never run, its last run failed, or it is switched off, set not to
+    /// sync, or has lost the account it reads through. The watchlist facts
+    /// need every watchlist read, so they are unknown for every title.
     pub const WATCHLIST_NOT_SYNCED: &str = "watchlist_not_synced";
 
     /// A member's watchlist subscription last synced longer ago than its
@@ -230,8 +231,14 @@ pub mod unknown_reason {
     /// day. An *absence* reason.
     pub const NO_SCHEDULED_EPISODE: &str = "no_scheduled_episode";
 
-    /// Every enabled media server is Plex, which has no favourites, so the
-    /// favourite facts do not apply. An *absence* reason.
+    /// The show has no regular episode stored. That is how a show looks
+    /// before its episode list has been read from metadata, and nothing
+    /// stored says it truly has none, so its episode-list shape is unknown.
+    pub const EPISODE_LIST_EMPTY: &str = "episode_list_empty";
+
+    /// Every enabled media server is Plex, which Scryer cannot read favourites
+    /// from, so nobody's favourites are known. An *unknown* reason: a rule
+    /// that reads a favourite fact is held, never told nobody favourited.
     pub const FAVORITES_UNSUPPORTED: &str = "favorites_unsupported";
 
     /// A linked member can only be observed through Plex, which has no
@@ -240,6 +247,24 @@ pub mod unknown_reason {
 
     /// The stored favourites could not be read for this pass.
     pub const FAVORITES_UNREADABLE: &str = "favorites_unreadable";
+
+    /// `favorited_by_anyone` needs every account's favourites on every
+    /// enabled Jellyfin and Emby server, and at least one account has no
+    /// recent read of them in full: no sweep has read them yet, the last read
+    /// failed or left a favourite Scryer could not place, or it is older than
+    /// the freshness window.
+    pub const AUDIENCE_FAVORITES_NOT_READ: &str = "audience_favorites_not_read";
+
+    /// A member's favourites on a Jellyfin or Emby account they linked have
+    /// no recent read in full: no sweep has read them yet, the last read
+    /// failed or left a favourite Scryer could not place, or it is older than
+    /// the freshness window. Only that member's answer is unknown.
+    pub const FAVORITES_MEMBER_NOT_READ: &str = "favorites_member_not_read";
+
+    /// An enabled Plex server's accounts could have favourited the subject if
+    /// Plex had favourites, so `favorited_by_anyone` cannot be false while
+    /// one is enabled beside Jellyfin or Emby.
+    pub const AUDIENCE_FAVORITES_UNSUPPORTED: &str = "audience_favorites_unsupported";
 
     /// Every code above. A released code is part of the rule-authoring
     /// contract, so none may be renamed, reused or repurposed.
@@ -284,9 +309,13 @@ pub mod unknown_reason {
         EPISODE_STORE_UNREADABLE,
         NO_AIRED_EPISODE,
         NO_SCHEDULED_EPISODE,
+        EPISODE_LIST_EMPTY,
         FAVORITES_UNSUPPORTED,
         FAVORITE_MEMBER_UNOBSERVABLE,
         FAVORITES_UNREADABLE,
+        AUDIENCE_FAVORITES_NOT_READ,
+        FAVORITES_MEMBER_NOT_READ,
+        AUDIENCE_FAVORITES_UNSUPPORTED,
     ];
 }
 
@@ -382,6 +411,21 @@ pub struct MaintenanceWatchContext {
     /// [`Self::favorite_connection_ids`]. A linked user outside it can only be
     /// observed through Plex, so whether they favourited anything is unknown.
     pub favorite_user_ids: HashSet<String>,
+    /// The Scryer users behind each account a read link reaches on one of
+    /// [`Self::favorite_connection_ids`], keyed by connection and the
+    /// server's account id. The audience favourites are attributed through
+    /// it.
+    pub favorite_accounts: HashMap<(String, String), BTreeSet<String>>,
+    /// Users in [`Self::favorite_user_ids`] with a linked account whose
+    /// favourites have no recent read in full. Their favourites are unknown.
+    pub favorite_unread_user_ids: HashSet<String>,
+    /// Whether every account on every favourite connection had its
+    /// favourites read in full recently. `favorited_by_anyone` is false only
+    /// then.
+    pub audience_favorites: WatchSignalFreshness,
+    /// Whether an enabled Plex connection is part of the picture: its
+    /// accounts' favourites cannot be read.
+    pub plex_connected: bool,
 }
 
 impl MaintenanceWatchContext {
@@ -718,7 +762,13 @@ pub(crate) fn days_since(evaluation_time: DateTime<Utc>, since: DateTime<Utc>) -
     Observation::known((evaluation_time - since).num_days().max(0))
 }
 
+/// The tallest video among the files. Unknown while any file has no
+/// completed scan, whether it is waiting, failed or needs review: the height
+/// of that file is not known, so neither is the largest.
 fn max_video_height_observation(files: &[TitleMediaFile]) -> Observation<i64> {
+    if files.iter().any(|file| file.scan_status != "scanned") {
+        return Observation::unknown(unknown_reason::NOT_YET_COLLECTED);
+    }
     optional_known(
         files
             .iter()
@@ -1524,6 +1574,23 @@ fn retention_rank_observations(
     }
 }
 
+/// Whether an episode with this stored air date has aired by the evaluation
+/// day: the calendar day the air date is written with, its first ten
+/// characters, is on or before that day. This is the one definition of
+/// "aired" for lifecycle rules; the episode-shape read in the title store
+/// applies the same day comparison in SQL. `None` is a date this cannot read.
+/// An episode with no air date at all is the caller's to place: the shape
+/// facts count it as not aired, and the scoped watch facts hold.
+pub(crate) fn air_date_has_aired(
+    air_date: &str,
+    evaluation_day: chrono::NaiveDate,
+) -> Option<bool> {
+    let day = air_date.trim().get(..10)?;
+    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .ok()
+        .map(|day| day <= evaluation_day)
+}
+
 fn scoped_watch_observations(
     evaluation_time: DateTime<Utc>,
     subject: &super::subjects::MaintenanceSubject,
@@ -1540,11 +1607,7 @@ fn scoped_watch_observations(
             let Some(air_date) = episode.air_date.as_deref() else {
                 return WatchObservations::all_unknown(unknown_reason::EPISODE_AIR_DATE_UNRESOLVED);
             };
-            let aired = if let Some(instant) = parse_timestamp(air_date) {
-                instant <= evaluation_time
-            } else if let Ok(date) = chrono::NaiveDate::parse_from_str(air_date, "%Y-%m-%d") {
-                date <= evaluation_time.date_naive()
-            } else {
+            let Some(aired) = air_date_has_aired(air_date, evaluation_time.date_naive()) else {
                 return WatchObservations::all_unknown(unknown_reason::EPISODE_AIR_DATE_UNRESOLVED);
             };
             if !aired {
@@ -1803,6 +1866,7 @@ pub(crate) mod tests {
             audience: WatchSignalFreshness::Fresh,
             favorite_connection_ids: HashSet::new(),
             favorite_user_ids: HashSet::new(),
+            ..MaintenanceWatchContext::default()
         }
     }
 
@@ -1850,6 +1914,50 @@ pub(crate) mod tests {
             assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
             assert_eq!(doc["observations"][fact]["reason"], reason, "{fact}");
         }
+    }
+
+    fn scanned_file(status: &str, height: Option<i32>) -> TitleMediaFile {
+        TitleMediaFile {
+            scan_status: status.to_string(),
+            video_height: height,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn video_height_is_unknown_while_any_file_has_no_completed_scan() {
+        for status in ["pending", "failed", "scan_failed", "review_required", ""] {
+            let files = [
+                scanned_file("scanned", Some(2160)),
+                scanned_file(status, None),
+            ];
+            let observation = serde_json::to_value(max_video_height_observation(&files))
+                .expect("observation serializes");
+            assert_eq!(observation["status"], "unknown", "{status}");
+            assert_eq!(
+                observation["reason"],
+                unknown_reason::NOT_YET_COLLECTED,
+                "{status}"
+            );
+        }
+
+        let files = [
+            scanned_file("scanned", Some(1080)),
+            scanned_file("scanned", Some(2160)),
+        ];
+        let observation = serde_json::to_value(max_video_height_observation(&files))
+            .expect("observation serializes");
+        assert_eq!(observation["status"], "known");
+        assert_eq!(observation["value"], 2160);
+
+        // Scanned with no video stream, and no files at all, are both answers.
+        let audio_only = [scanned_file("scanned", None)];
+        let observation = serde_json::to_value(max_video_height_observation(&audio_only))
+            .expect("observation serializes");
+        assert_eq!(observation["status"], "absent");
+        let observation = serde_json::to_value(max_video_height_observation(&[]))
+            .expect("observation serializes");
+        assert_eq!(observation["status"], "absent");
     }
 
     #[test]

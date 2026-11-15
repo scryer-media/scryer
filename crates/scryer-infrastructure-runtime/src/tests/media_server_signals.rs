@@ -963,3 +963,384 @@ async fn an_unchanged_sweep_writes_nothing() {
 
     let _ = std::fs::remove_file(db);
 }
+
+fn audience_favourite(
+    account: &str,
+    item_id: &str,
+    kind: MediaServerSignalKind,
+    title_id: Option<&str>,
+) -> scryer_application::AudienceFavorite {
+    scryer_application::AudienceFavorite {
+        connection_id: CONNECTION_ID.to_string(),
+        external_account_id: account.to_string(),
+        provider_item_id: item_id.to_string(),
+        kind,
+        scryer_title_id: title_id.map(str::to_string),
+        scryer_episode_id: None,
+        season_number: matches!(kind, MediaServerSignalKind::Season).then_some(1),
+    }
+}
+
+fn favourites_read(
+    account: &str,
+    favorites: Vec<scryer_application::AudienceFavorite>,
+    unplaced: Option<&str>,
+) -> scryer_application::AudienceFavoriteAccount {
+    scryer_application::AudienceFavoriteAccount {
+        external_account_id: account.to_string(),
+        read: scryer_application::AudienceFavoriteAccountRead::Read {
+            favorites,
+            unplaced: unplaced.map(str::to_string),
+        },
+    }
+}
+
+fn favourites_failed(account: &str, reason: &str) -> scryer_application::AudienceFavoriteAccount {
+    scryer_application::AudienceFavoriteAccount {
+        external_account_id: account.to_string(),
+        read: scryer_application::AudienceFavoriteAccountRead::Failed {
+            reason: reason.to_string(),
+        },
+    }
+}
+
+fn read_state(
+    reads: &[scryer_application::AudienceFavoriteRead],
+    account: &str,
+) -> (bool, Option<String>) {
+    let read = reads
+        .iter()
+        .find(|read| read.external_account_id == account)
+        .unwrap_or_else(|| panic!("no read state for {account}"));
+    (read.read_at.is_some(), read.failure_reason.clone())
+}
+
+async fn favourite_items(
+    store: &crate::MediaServerSignalStore,
+    title: &str,
+) -> Vec<(String, String)> {
+    let mut items = store
+        .audience_favorites_for_titles(&[title.to_string()])
+        .await
+        .expect("favourites by title")
+        .remove(title)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| (row.external_account_id, row.provider_item_id))
+        .collect::<Vec<_>>();
+    items.sort();
+    items
+}
+
+#[tokio::test]
+async fn audience_favourites_are_stored_per_account_and_read_by_title() {
+    let (services, db) = temp_services("scryer_media_server_audience_favourites").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    let written = store
+        .replace_audience_favorites(
+            CONNECTION_ID,
+            &[
+                favourites_read(
+                    "account-a",
+                    vec![
+                        audience_favourite(
+                            "account-a",
+                            "jf-movie-1",
+                            MediaServerSignalKind::Movie,
+                            Some("title-movie"),
+                        ),
+                        audience_favourite(
+                            "account-a",
+                            "jf-season-1",
+                            MediaServerSignalKind::Season,
+                            Some("title-show"),
+                        ),
+                        // Listed twice: stored once.
+                        audience_favourite(
+                            "account-a",
+                            "jf-movie-1",
+                            MediaServerSignalKind::Movie,
+                            Some("title-movie"),
+                        ),
+                    ],
+                    None,
+                ),
+                favourites_read(
+                    "account-b",
+                    vec![
+                        audience_favourite(
+                            "account-b",
+                            "jf-movie-1",
+                            MediaServerSignalKind::Movie,
+                            Some("title-movie"),
+                        ),
+                        // Not placed on Scryer media: stored with no title.
+                        audience_favourite(
+                            "account-b",
+                            "jf-unknown",
+                            MediaServerSignalKind::Movie,
+                            None,
+                        ),
+                    ],
+                    Some("WATCH_SYNC_UNPLACED_FAVORITES"),
+                ),
+                favourites_read("account-c", Vec::new(), None),
+            ],
+            Utc::now(),
+        )
+        .await
+        .expect("first favourites read");
+    assert_eq!(written, 4);
+
+    assert_eq!(
+        favourite_items(&store, "title-movie").await,
+        vec![
+            ("account-a".to_string(), "jf-movie-1".to_string()),
+            ("account-b".to_string(), "jf-movie-1".to_string()),
+        ]
+    );
+    let show = store
+        .audience_favorites_for_titles(&["title-show".to_string()])
+        .await
+        .expect("read")
+        .remove("title-show")
+        .expect("the season favourite");
+    assert_eq!(show[0].kind, MediaServerSignalKind::Season);
+    assert_eq!(show[0].season_number, Some(1));
+    assert!(
+        store
+            .audience_favorites_for_titles(&[])
+            .await
+            .expect("an empty read")
+            .is_empty()
+    );
+
+    let reads = store.audience_favorite_reads().await.expect("reads");
+    assert_eq!(
+        reads.len(),
+        3,
+        "an account with no favourites is still read"
+    );
+    assert_eq!(read_state(&reads, "account-a"), (true, None));
+    assert_eq!(
+        read_state(&reads, "account-b"),
+        (false, Some("WATCH_SYNC_UNPLACED_FAVORITES".to_string()))
+    );
+    assert_eq!(read_state(&reads, "account-c"), (true, None));
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn a_favourites_sweep_replaces_changed_accounts_keeps_failed_ones_and_drops_unlisted_ones() {
+    let (services, db) = temp_services("scryer_media_server_audience_favourites_sweep").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+
+    store
+        .replace_audience_favorites(
+            CONNECTION_ID,
+            &[
+                favourites_read(
+                    "account-a",
+                    vec![audience_favourite(
+                        "account-a",
+                        "jf-movie-1",
+                        MediaServerSignalKind::Movie,
+                        Some("title-movie"),
+                    )],
+                    None,
+                ),
+                favourites_read(
+                    "account-b",
+                    vec![audience_favourite(
+                        "account-b",
+                        "jf-movie-1",
+                        MediaServerSignalKind::Movie,
+                        Some("title-movie"),
+                    )],
+                    None,
+                ),
+                favourites_read(
+                    "account-c",
+                    vec![audience_favourite(
+                        "account-c",
+                        "jf-movie-1",
+                        MediaServerSignalKind::Movie,
+                        Some("title-movie"),
+                    )],
+                    None,
+                ),
+            ],
+            Utc::now(),
+        )
+        .await
+        .expect("first sweep");
+
+    // a changes its favourite, b's read fails, c is no longer listed.
+    let written = store
+        .replace_audience_favorites(
+            CONNECTION_ID,
+            &[
+                favourites_read(
+                    "account-a",
+                    vec![audience_favourite(
+                        "account-a",
+                        "jf-movie-2",
+                        MediaServerSignalKind::Movie,
+                        Some("title-other"),
+                    )],
+                    None,
+                ),
+                favourites_failed("account-b", "WATCH_SYNC_ITEMS_UNREADABLE"),
+            ],
+            Utc::now(),
+        )
+        .await
+        .expect("second sweep");
+    assert_eq!(written, 2);
+
+    assert_eq!(
+        favourite_items(&store, "title-movie").await,
+        vec![("account-b".to_string(), "jf-movie-1".to_string())],
+        "a's old favourite and the unlisted account's are gone; the failed account keeps its row"
+    );
+    assert_eq!(
+        favourite_items(&store, "title-other").await,
+        vec![("account-a".to_string(), "jf-movie-2".to_string())]
+    );
+    let reads = store.audience_favorite_reads().await.expect("reads");
+    assert_eq!(reads.len(), 2, "the unlisted account's read state is gone");
+    assert_eq!(read_state(&reads, "account-a"), (true, None));
+    assert_eq!(
+        read_state(&reads, "account-b"),
+        (false, Some("WATCH_SYNC_ITEMS_UNREADABLE".to_string()))
+    );
+
+    // The account list itself could not be read: rows stay, nothing counts.
+    store
+        .clear_audience_favorite_reads(CONNECTION_ID, "WATCH_SYNC_REQUEST_FAILED")
+        .await
+        .expect("clear");
+    let reads = store.audience_favorite_reads().await.expect("reads");
+    assert!(reads.iter().all(|read| read.read_at.is_none()));
+    assert!(
+        reads
+            .iter()
+            .all(|read| read.failure_reason.as_deref() == Some("WATCH_SYNC_REQUEST_FAILED"))
+    );
+    assert_eq!(favourite_items(&store, "title-other").await.len(), 1);
+
+    // An empty listing removes every account.
+    let written = store
+        .replace_audience_favorites(CONNECTION_ID, &[], Utc::now())
+        .await
+        .expect("empty listing");
+    assert_eq!(written, 0);
+    assert!(
+        store
+            .audience_favorite_reads()
+            .await
+            .expect("reads")
+            .is_empty()
+    );
+    assert!(favourite_items(&store, "title-movie").await.is_empty());
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// A sweep that reads back what is stored rewrites no favourite row; only the
+/// per-account read marker moves forward.
+#[tokio::test]
+async fn an_unchanged_favourites_sweep_rewrites_no_favourite_row() {
+    let (services, db) = temp_services("scryer_media_server_audience_favourites_unchanged").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+    let accounts = [favourites_read(
+        "account-a",
+        vec![audience_favourite(
+            "account-a",
+            "jf-movie-1",
+            MediaServerSignalKind::Movie,
+            Some("title-movie"),
+        )],
+        None,
+    )];
+    store
+        .replace_audience_favorites(CONNECTION_ID, &accounts, Utc::now())
+        .await
+        .expect("first sweep");
+    let rowid_before: i64 = sqlx::query_scalar(
+        "SELECT rowid FROM media_server_audience_favorites WHERE provider_item_id = 'jf-movie-1'",
+    )
+    .fetch_one(services.pool())
+    .await
+    .expect("rowid");
+
+    let later = Utc::now() + chrono::Duration::hours(6);
+    store
+        .replace_audience_favorites(CONNECTION_ID, &accounts, later)
+        .await
+        .expect("unchanged sweep");
+    let rowid_after: i64 = sqlx::query_scalar(
+        "SELECT rowid FROM media_server_audience_favorites WHERE provider_item_id = 'jf-movie-1'",
+    )
+    .fetch_one(services.pool())
+    .await
+    .expect("rowid");
+    assert_eq!(
+        rowid_after, rowid_before,
+        "the favourite row was not rewritten"
+    );
+    let reads = store.audience_favorite_reads().await.expect("reads");
+    assert_eq!(
+        reads[0].sweep_started_at.timestamp_micros(),
+        later.timestamp_micros()
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// A title read past SQLite's bind limit is split, not refused.
+#[tokio::test]
+async fn a_favourite_title_read_past_the_bind_limit_is_chunked() {
+    let (services, db) = temp_services("scryer_media_server_audience_favourites_binds").await;
+    seed_connection(&services).await;
+    let store = signal_store(&services);
+    store
+        .replace_audience_favorites(
+            CONNECTION_ID,
+            &[favourites_read(
+                "account-a",
+                vec![audience_favourite(
+                    "account-a",
+                    "jf-movie-1",
+                    MediaServerSignalKind::Movie,
+                    Some("title-movie"),
+                )],
+                None,
+            )],
+            Utc::now(),
+        )
+        .await
+        .expect("sweep");
+
+    let mut ids = (0..40_000)
+        .map(|index| format!("title-absent-{index}"))
+        .collect::<Vec<_>>();
+    ids.push("title-movie".to_string());
+    let favourites = store
+        .audience_favorites_for_titles(&ids)
+        .await
+        .expect("a long title read");
+    assert_eq!(favourites.len(), 1);
+    let plays = store
+        .audience_plays_for_titles(&ids)
+        .await
+        .expect("a long play read");
+    assert!(plays.is_empty());
+
+    let _ = std::fs::remove_file(db);
+}

@@ -461,11 +461,25 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
     }
 
     async fn count_live_for_user(&self, user_id: &str) -> AppResult<u64> {
-        let state_placeholders = std::iter::repeat_n("{}", LIFECYCLE_CLAIM_LIVE_STATES.len())
+        // The live states are written literally, and the producer is named,
+        // so the predicate implies `idx_lifecycle_claims_live_producer`'s and
+        // the join probes that partial index once per request: SQLite cannot
+        // match a partial index whose predicate value arrives as a bound
+        // parameter. Request leases are the only producer that refers to a
+        // request, so naming it keeps the count unchanged.
+        let live_states = LIFECYCLE_CLAIM_LIVE_STATES
+            .iter()
+            .map(|state| format!("'{state}'"))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut args = vec![SqlArg::Text(user_id.to_string())];
-        args.extend(live_state_args());
+        let args = vec![
+            SqlArg::Text(user_id.to_string()),
+            SqlArg::Text(
+                LifecycleClaimProducer::RequestLease
+                    .as_storage_str()
+                    .to_string(),
+            ),
+        ];
         // Joined through the producing request rather than taking a caller
         // supplied id list: the alternative asks the caller to first read every
         // request the user ever made, which is the more expensive of the two by
@@ -475,7 +489,9 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
                FROM lifecycle_claims claims
                JOIN media_requests requests ON requests.id = claims.producer_ref
               WHERE requests.created_by_user_id = {{}}
-                AND claims.state IN ({state_placeholders})"
+                AND claims.producer = {{}}
+                AND claims.producer_ref IS NOT NULL
+                AND claims.state IN ({live_states})"
         );
         let row = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?;
         let Some(row) = row else {

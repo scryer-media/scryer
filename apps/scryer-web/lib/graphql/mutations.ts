@@ -421,6 +421,8 @@ export const createIndexerMutation = `mutation CreateIndexer($input: CreateIndex
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     isEnabled
     isManaged
@@ -451,6 +453,8 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     isEnabled
     isManaged

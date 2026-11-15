@@ -1374,9 +1374,8 @@ impl AppUseCase {
             JobKey::ProwlarrSync => self.prowlarr_sync_tick_has_work().await,
             JobKey::StagedNzbPrune => self.staged_nzb_prune_tick_has_work().await,
             JobKey::ListSync => self.list_sync_tick_has_work().await,
-            // Each rule acts right after its own scheduled evaluation, so the
-            // instance-wide tick has nothing left to do. An explicit run
-            // still acts for every armed rule.
+            // Each rule acts only through its own fires, so the
+            // instance-wide tick has nothing to do.
             JobKey::LifecycleActionHandling => false,
             _ => return true,
         };
@@ -2220,6 +2219,15 @@ impl AppUseCase {
             JobKey::LifecycleActionHandling => {
                 let report = self.run_lifecycle_action_handling_job().await?;
                 let summary_json = serde_json::to_string(&report).ok();
+                if report.rules_considered == 0 {
+                    return Ok(JobExecutionOutcome::new(
+                        Some(
+                            "Each maintenance rule acts on its own schedule; this job acted on nothing"
+                                .to_string(),
+                        ),
+                        summary_json,
+                    ));
+                }
                 if !report.gates_enabled {
                     return Ok(JobExecutionOutcome::new(
                         Some(

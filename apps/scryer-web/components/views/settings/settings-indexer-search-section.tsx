@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ERROR_REASON_KEYS } from "@/lib/graphql/error-message";
 import { IndexerCategoryPicker } from "@/components/views/media-content/indexer-category-picker";
 import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
 import { IconButton } from "@/components/ui/icon-button";
@@ -609,6 +610,12 @@ function indexerChipTitle(
         : t("indexerSearch.skipReason.backedOff");
     case "NO_TEXT_SEARCH":
       return t("indexerSearch.skipReason.noTextSearch");
+    case "MONTHLY_LIMIT": {
+      const code = entry.failureReasonCode;
+      return code && Object.hasOwn(ERROR_REASON_KEYS, code)
+        ? t(ERROR_REASON_KEYS[code]!)
+        : (entry.failureReason ?? undefined);
+    }
     default:
       return entry.failureReason ?? undefined;
   }

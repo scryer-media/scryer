@@ -22,18 +22,22 @@
 //! on the bare `input.facts` surface an unknown certification is just a missing
 //! key, which a rule would read as a decisive "not rated above PG-13".
 //!
-//! Rules may also stamp `tags` on the title the request creates. Tags are
-//! collected on every path where the rule actually ran — including an abstain,
-//! because "this is a kids' film" is true whether or not the rule had an opinion
-//! about approving it — and never on a held rule, which by construction did not
-//! run.
+//! Rules may also tag the title the request creates with `add_tags`, shape
+//! what an approval writes with the `set_*` heads, and send a notification
+//! with `notify` (see [`crate::request_actions`]). These are collected on every path where the
+//! rule actually ran — including an abstain, because "this is a kids' film" is
+//! true whether or not the rule had an opinion about approving it — and never on
+//! a held rule, which by construction did not run.
 
 use crate::RulesError;
-use crate::policy::decode::{decode_reasons, decode_tags};
+use crate::policy::decode::decode_reasons;
 use crate::policy::engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
 use crate::policy::observation::serialize_fact_namespaces;
 use crate::policy::wrapper::{WrapperField, object_wrapper_source};
 use crate::policy::{PolicyFamily, PolicyRecord};
+use crate::request_actions::{
+    REQUEST_HEADS, RequestActionHead, RequestShaping, decode_request_actions,
+};
 use crate::runtime::RuntimeLimits;
 use crate::validation;
 use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
@@ -178,8 +182,15 @@ pub struct RequestRequesterDoc {
     pub library_permissions: Vec<String>,
     /// External accounts verified as linked to this one.
     pub linked_providers: Vec<String>,
-    /// RFC3339. Optional because accounts predating the column have none.
+    /// RFC3339. Null when the account row carries no creation time (accounts
+    /// created before the column was written).
     pub created_at: Option<String>,
+    /// RFC3339 of the account's last sign-in. Null when it has never signed in,
+    /// or the stored value is empty.
+    pub last_login_at: Option<String>,
+    /// Whole days from `created_at` to `evaluation_time`. Null exactly when
+    /// `created_at` is.
+    pub account_age_days: Option<i64>,
 }
 
 /// The library the request is targeting.
@@ -204,6 +215,9 @@ pub struct RequestDoc {
     pub quality_profile_name: Option<String>,
     pub monitor_type: Option<String>,
     pub monitor_selection_season_count: Option<i64>,
+    /// The season numbers the requester asked for, ascending and without
+    /// repeats. Null when the request names no season selection.
+    pub monitor_selection_seasons: Option<Vec<i64>>,
     /// True when the requester asked to keep the title indefinitely. `lease_days`
     /// is then meaningless and absent, which is why a rule about finite leases
     /// has to say `not input.request.lease_forever` first.
@@ -236,6 +250,12 @@ pub struct RequestListDoc {
     pub owner_list_policy: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rank: Option<i64>,
+    /// True when the list is a member's own "want to watch" list, judged the
+    /// way Discovery judges it: a personal list of a watchlist source.
+    pub is_watchlist: bool,
+    /// The provider's list type, as the list source names it (`watchlist`,
+    /// `plantowatch`, `list`, …), lowercased.
+    pub source_type: String,
 }
 
 /// One content-rating certification as the metadata source reported it.
@@ -318,6 +338,63 @@ pub struct RequestFactsDoc {
 
     // ── library ──
     pub library_title_count: Observation<i64>,
+
+    // ── series shape (series and anime only; absent for movies) ──
+    /// Seasons with at least one regular episode. Specials are not counted.
+    pub season_count: Observation<i64>,
+    /// Regular episodes the metadata source lists. Specials are not counted.
+    pub episode_count: Observation<i64>,
+    /// Regular episodes whose air date is on or before the evaluation day.
+    pub aired_episode_count: Observation<i64>,
+    /// Regular episodes not yet aired, including those with no air date.
+    pub unaired_episode_count: Observation<i64>,
+    /// `YYYY-MM-DD` of the next regular episode to air after the evaluation
+    /// day. Absent when none is scheduled.
+    pub next_episode_air_date: Observation<String>,
+
+    // ── release dates (movies only; absent for series) ──
+    /// `YYYY-MM-DD`, the earliest in the release market, else in any market.
+    pub theatrical_release_date: Observation<String>,
+    pub digital_release_date: Observation<String>,
+    pub physical_release_date: Observation<String>,
+    /// True when a digital or physical release date is on or before the
+    /// evaluation day.
+    pub home_release_available: Observation<bool>,
+    /// Days from the evaluation day to the earliest release date. Absent once
+    /// any release date has passed, and when there is none.
+    pub days_until_release: Observation<i64>,
+
+    // ── demand ──
+    /// Other members who asked for this identity on an earlier request, as its
+    /// submitter or a joined co-requester.
+    pub other_requester_count: Observation<i64>,
+    /// True when another member's request for this identity is still pending.
+    pub pending_by_other_requester: Observation<bool>,
+
+    // ── requester's own watchlist ──
+    /// True when the title is on one of the requester's own watchlists. Absent
+    /// when the requester has no watchlist linked.
+    pub on_requester_watchlist: Observation<bool>,
+    /// Days since the title first appeared on the requester's watchlist.
+    pub requester_watchlist_days: Observation<i64>,
+
+    // ── list exclusion ──
+    /// True when an operator excluded this title from lists, for every list or
+    /// for the list submitting the request.
+    pub list_excluded: Observation<bool>,
+
+    // ── requester in this library ──
+    /// Titles in the target library that this requester's requests created.
+    pub requester_titles_in_library_count: Observation<i64>,
+
+    // ── storage (the root the title will be placed on) ──
+    /// The library root an approved title lands on: the library's default
+    /// root, else its first.
+    pub storage_root_id: Observation<String>,
+    pub storage_available_bytes: Observation<i64>,
+    pub storage_total_bytes: Observation<i64>,
+    /// `available / total × 100`.
+    pub storage_available_percent: Observation<f64>,
 }
 
 // ── Contract helpers ────────────────────────────────────────────────────────
@@ -409,10 +486,13 @@ pub enum RequestVote {
 pub struct RequestRuleDecision {
     pub vote: RequestVote,
     pub reason_codes: Vec<String>,
-    /// Tags to stamp on the title the request creates. Collected on every path
-    /// where the rule ran, including an abstain; always empty on a held rule,
-    /// which did not run.
+    /// Tags `add_tags` stamps on the title the request creates. Collected on every path where the rule ran,
+    /// including an abstain; always empty on a held rule, which did not run.
     pub tags: Vec<String>,
+    /// What the rule's shaping heads set; empty on a held rule.
+    pub shaping: RequestShaping,
+    /// The text `notify` produced, if it fired; never on a held rule.
+    pub notify: Option<String>,
     /// True when the host held this rule because a fact it reads was
     /// unobservable, rather than the rule declaring `manual` itself. Both
     /// arbitrate the same way; only the trace tells them apart.
@@ -448,24 +528,24 @@ pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
 
 /// Source for the generated evaluation entry point.
 ///
-/// Five heads, each defaulted with `object.get`, which is what makes every one
-/// of them optional: a rule that only denies leaves `approve`, `manual`, and
-/// `tags` off its package document entirely and the defaults fill in. A head
-/// that *is* defined but has the wrong type survives to the host, which rejects
-/// it rather than coercing it — a `deny := "yes"` must not deny.
+/// Every head in [`REQUEST_HEADS`], each defaulted with `object.get`, which is
+/// what makes every one of them optional: a rule that only denies leaves
+/// `approve`, `manual`, and the rest off its package document entirely and the
+/// defaults fill in. A head that *is* defined but has the wrong type survives
+/// to the host, which rejects it rather than coercing it — a `deny := "yes"`
+/// must not deny.
 pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
+    debug_assert_eq!(RequestActionHead::Manual.rule_name(), HOLD_RULE_NAME);
+    let fields: Vec<WrapperField<'_>> = REQUEST_HEADS
+        .iter()
+        .map(|spec| WrapperField::new(spec.rule_name, spec.rule_name, spec.wrapper_default))
+        .collect();
     object_wrapper_source(
         WRAPPER_PACKAGE_PREFIX,
         USER_PACKAGE_PREFIX,
         rule_id,
         "decision",
-        &[
-            WrapperField::new("approve", "approve", "false"),
-            WrapperField::new("deny", "deny", "false"),
-            WrapperField::new("manual", HOLD_RULE_NAME, "false"),
-            WrapperField::new("reasons", "reasons", "[]"),
-            WrapperField::new("tags", "tags", "[]"),
-        ],
+        &fields,
     )
 }
 
@@ -477,7 +557,7 @@ pub(crate) fn decision_wrapper_policy_path(rule_id: &str) -> String {
     format!("internal/{rule_id}_request_wrapper.rego")
 }
 
-pub(crate) fn user_policy_path(rule_id: &str) -> String {
+pub fn user_policy_path(rule_id: &str) -> String {
     format!("request/{rule_id}.rego")
 }
 
@@ -577,6 +657,8 @@ impl PolicyFamily for RequestFamily {
             vote: RequestVote::Manual,
             reason_codes,
             tags: Vec::new(),
+            shaping: RequestShaping::default(),
+            notify: None,
             held: true,
         }
     }
@@ -660,7 +742,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
         .as_bool()
         .map_err(|_| "'manual' must be a boolean".to_string())?;
     let reason_codes = decode_reasons(&value["reasons"])?;
-    let tags = decode_tags(&value["tags"])?;
+    let actions = decode_request_actions(value)?;
 
     // Most restrictive wins inside one rule, and `manual` is the least
     // committed answer rather than the least permissive one: a rule saying both
@@ -682,7 +764,9 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
     Ok(RequestRuleDecision {
         vote,
         reason_codes,
-        tags,
+        tags: actions.add_tags,
+        shaping: actions.shaping,
+        notify: actions.notify,
         held: false,
     })
 }
@@ -691,7 +775,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
 
 /// The family-rated approval from the plan's worked examples: named requesters,
 /// PG-13 or gentler, tagged `family` when it is gentler still.
-pub const EXAMPLE_NAMED_REQUESTERS_FAMILY_RATED: &str = "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains \"family\" if {\n\tinput.facts.certification_rank <= 1\n}\n";
+pub const EXAMPLE_NAMED_REQUESTERS_FAMILY_RATED: &str = "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := [\"family\"] if {\n\tinput.facts.certification_rank <= 1\n}\n";
 
 /// Short leases only, for one requester. `lease_forever` has to be ruled out
 /// first: a forever lease carries no `lease_days` at all, and a rule that only
@@ -763,6 +847,8 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             library_permissions: vec!["view".to_string(), "request".to_string()],
             linked_providers: vec!["jellyfin".to_string()],
             created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            last_login_at: Some("2023-11-13T00:00:00Z".to_string()),
+            account_age_days: Some(683),
         },
         library: RequestLibraryDoc {
             id: "library-1".to_string(),
@@ -782,6 +868,7 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             quality_profile_name: Some("HD".to_string()),
             monitor_type: Some("futureepisodes".to_string()),
             monitor_selection_season_count: Some(2),
+            monitor_selection_seasons: Some(vec![1, 2]),
             lease_forever: false,
             lease_days: Some(14),
             required_audio_languages: None,
@@ -795,6 +882,8 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
                 owner_is_requester: true,
                 owner_list_policy: "approval".to_string(),
                 rank: Some(1),
+                is_watchlist: false,
+                source_type: "list".to_string(),
             }),
         },
         facts: RequestFactsDoc {
@@ -849,6 +938,26 @@ pub(crate) fn synthetic_request_input() -> RequestInput {
             active_lease_count: Observation::known(1),
             days_since_last_request: Observation::known(3),
             library_title_count: Observation::known(120),
+            season_count: Observation::known(2),
+            episode_count: Observation::known(20),
+            aired_episode_count: Observation::known(16),
+            unaired_episode_count: Observation::known(4),
+            next_episode_air_date: Observation::known("2023-11-21".to_string()),
+            theatrical_release_date: Observation::known("2023-10-01".to_string()),
+            digital_release_date: Observation::known("2023-11-01".to_string()),
+            physical_release_date: Observation::known("2023-12-01".to_string()),
+            home_release_available: Observation::known(true),
+            days_until_release: Observation::known(7),
+            other_requester_count: Observation::known(1),
+            pending_by_other_requester: Observation::known(false),
+            on_requester_watchlist: Observation::known(true),
+            requester_watchlist_days: Observation::known(12),
+            list_excluded: Observation::known(false),
+            requester_titles_in_library_count: Observation::known(5),
+            storage_root_id: Observation::known("root-1".to_string()),
+            storage_available_bytes: Observation::known(500_000_000_000),
+            storage_total_bytes: Observation::known(2_000_000_000_000),
+            storage_available_percent: Observation::known(25.0),
         },
     }
 }
@@ -904,7 +1013,7 @@ mod tests {
             "classification",
             "approve if {\n  input.facts.certification_rank <= 2\n}\n\
              deny if {\n  input.facts.certification_rank >= 3\n}\n\
-             tags contains \"family\" if {\n  input.facts.certification_rank <= 2\n}\n",
+             add_tags := [\"family\"] if {\n  input.facts.certification_rank <= 2\n}\n",
         )])
         .expect("policy should compile");
         let mut evaluator = engine.evaluator();
@@ -988,24 +1097,24 @@ mod tests {
         for (id, body, expected) in [
             (
                 "tagged_approve",
-                "approve := true\n\ntags contains \"kids\"\n",
+                "approve := true\n\nadd_tags := [\"kids\"]\n",
                 RequestVote::Approve,
             ),
             (
                 "tagged_deny",
-                "deny := true\n\ntags contains \"kids\"\n",
+                "deny := true\n\nadd_tags := [\"kids\"]\n",
                 RequestVote::Deny,
             ),
             (
                 "tagged_manual",
-                "manual := true\n\ntags contains \"kids\"\n",
+                "manual := true\n\nadd_tags := [\"kids\"]\n",
                 RequestVote::Manual,
             ),
             (
                 // Abstaining is still running: "this is a kids' film" is true
                 // whether or not the rule had an opinion about approving it.
                 "tagged_abstain",
-                "tags contains \"kids\"\n",
+                "add_tags := [\"kids\"]\n",
                 RequestVote::Abstain,
             ),
         ] {
@@ -1020,7 +1129,7 @@ mod tests {
     fn tags_are_collected_from_an_array_rule_in_order() {
         let result = evaluate(&[policy(
             "array_tags",
-            "approve := true\n\ntags := [\"family\", \"kids\"]\n",
+            "approve := true\n\nadd_tags := [\"family\", \"kids\"]\n",
         )]);
         assert_eq!(
             only_decision(&result).tags,
@@ -1036,7 +1145,7 @@ mod tests {
     fn a_malformed_tag_turns_the_whole_rule_into_an_error() {
         let result = evaluate(&[policy(
             "bad_tag",
-            "approve := true\n\ntags contains \"kids/teens\"\n",
+            "approve := true\n\nadd_tags := [\"kids/teens\"]\n",
         )]);
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert_eq!(result.errors.len(), 1);
@@ -1051,7 +1160,7 @@ mod tests {
     fn a_reserved_tag_prefix_turns_the_whole_rule_into_an_error() {
         let result = evaluate(&[policy(
             "reserved_tag",
-            "approve := true\n\ntags contains \"scryer:managed\"\n",
+            "approve := true\n\nadd_tags := [\"scryer:managed\"]\n",
         )]);
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert!(
@@ -1069,7 +1178,7 @@ mod tests {
             .join(", ");
         let result = evaluate(&[policy(
             "too_many_tags",
-            &format!("approve := true\n\ntags := [{entries}]\n"),
+            &format!("approve := true\n\nadd_tags := [{entries}]\n"),
         )]);
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert!(
@@ -1140,7 +1249,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "family_rated",
-                "approve if {\n  input.facts.certification_rank <= 2\n}\n\ntags contains \"family\"\n",
+                "approve if {\n  input.facts.certification_rank <= 2\n}\n\nadd_tags := [\"family\"]\n",
             )],
             input,
         );
@@ -1445,7 +1554,7 @@ mod tests {
     /// is a contract with the rules in people's databases from the moment this
     /// ships.
     #[test]
-    fn the_generated_wrapper_projects_five_heads_and_the_family_hold_head() {
+    fn the_generated_wrapper_projects_every_head_and_the_family_hold_head() {
         assert_eq!(
             decision_wrapper_source("rule_1"),
             "package scryer.request.wrapper.rule_1\n\
@@ -1454,8 +1563,14 @@ mod tests {
              \t\"approve\": object.get(data.scryer.request.user.rule_1, \"approve\", false),\n\
              \t\"deny\": object.get(data.scryer.request.user.rule_1, \"deny\", false),\n\
              \t\"manual\": object.get(data.scryer.request.user.rule_1, \"manual\", false),\n\
+             \t\"set_quality_profile\": object.get(data.scryer.request.user.rule_1, \"set_quality_profile\", null),\n\
+             \t\"set_lease_days\": object.get(data.scryer.request.user.rule_1, \"set_lease_days\", null),\n\
+             \t\"set_monitor\": object.get(data.scryer.request.user.rule_1, \"set_monitor\", null),\n\
+             \t\"set_required_audio_languages\": object.get(data.scryer.request.user.rule_1, \"set_required_audio_languages\", null),\n\
+             \t\"set_preferred_audio_languages\": object.get(data.scryer.request.user.rule_1, \"set_preferred_audio_languages\", null),\n\
+             \t\"add_tags\": object.get(data.scryer.request.user.rule_1, \"add_tags\", []),\n\
+             \t\"notify\": object.get(data.scryer.request.user.rule_1, \"notify\", null),\n\
              \t\"reasons\": object.get(data.scryer.request.user.rule_1, \"reasons\", []),\n\
-             \t\"tags\": object.get(data.scryer.request.user.rule_1, \"tags\", []),\n\
              }\n"
         );
         assert_eq!(

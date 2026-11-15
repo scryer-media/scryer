@@ -57,6 +57,7 @@ fn requested(title: &Title, n: usize, library_id: &str, tvdb: i64) -> DomainEven
         requested_quality_profile_name: None,
         requested_monitor_type: None,
         requested_lease_days: None,
+        rule_notifications: Vec::new(),
     })
 }
 

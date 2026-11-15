@@ -694,21 +694,15 @@ fn a_title_on_members_watchlists_names_who_wants_it() {
     );
 }
 
-/// Only a member's own synced watchlist counts. A public list, a disabled
-/// one, one read without the member's account, a list that is not a
-/// watchlist, and a row that left contribute nothing, and none of them can
-/// hold the facts either.
+/// Only a member's own synced watchlist counts. A public list, a list that is
+/// not a watchlist, and a row that left contribute nothing, and none of them
+/// can hold the facts either.
 #[test]
 fn only_members_own_watchlists_count() {
     let now = at(10 * 24 * 60);
     let mut public = watchlist("public-plex", "user-anna", "plex", "watchlist");
     public.scope = ListScope::Public;
-    let mut disabled = watchlist("disabled-plex", "user-anna", "plex", "watchlist");
-    disabled.enabled = false;
-    disabled.sync.state = ListSyncState::Fail;
-    let mut no_account = watchlist("anon-trakt", "user-anna", "trakt", "watchlist");
-    no_account.credential_id = None;
-    no_account.sync.state = ListSyncState::New;
+    public.enabled = false;
     let mut rss = watchlist("plex-rss", "user-anna", "plex", "watchlist_rss");
     rss.sync.state = ListSyncState::Fail;
     let mut not_planning = watchlist("anilist-done", "user-anna", "anilist", "status");
@@ -716,12 +710,11 @@ fn only_members_own_watchlists_count() {
         .source
         .params
         .insert("status".to_string(), "completed".to_string());
+    not_planning.credential_id = None;
     let kept = watchlist("plex-boris", "user-boris", "plex", "watchlist");
-    let subscriptions = [public, disabled, no_account, rss, not_planning, kept];
+    let subscriptions = [public, rss, not_planning, kept];
     let rows = [
         on_list("public-plex", "a", "title-alpha"),
-        on_list("disabled-plex", "b", "title-alpha"),
-        on_list("anon-trakt", "c", "title-alpha"),
         on_list("plex-rss", "d", "title-alpha"),
         on_list("anilist-done", "e", "title-alpha"),
         left(on_list("plex-boris", "f", "title-alpha"), 60),
@@ -731,6 +724,37 @@ fn only_members_own_watchlists_count() {
         watchlists_from_rows(&rows, &subscriptions, now),
         WatchlistLoad::Loaded(HashMap::new())
     );
+}
+
+/// A member's watchlist that exists but is not being read (switched off, set
+/// not to sync, or without the account it reads through) could hold any
+/// title, so every watchlist fact is unknown until it syncs again.
+#[test]
+fn a_watchlist_that_is_not_syncing_holds_every_watchlist_fact() {
+    let now = at(10 * 24 * 60);
+    let rows = [on_list("plex-boris", "alpha", "title-alpha")];
+    let kept = watchlist("plex-boris", "user-boris", "plex", "watchlist");
+
+    let mut disabled = watchlist("plex-anna", "user-anna", "plex", "watchlist");
+    disabled.enabled = false;
+    let mut sync_off = watchlist("trakt-anna", "user-anna", "trakt", "watchlist");
+    sync_off.sync.state = ListSyncState::Off;
+    let mut lost_credential = anilist_planning("anilist-anna", "user-anna");
+    lost_credential.credential_id = None;
+    for unread in [disabled, sync_off, lost_credential] {
+        assert_eq!(
+            watchlists_from_rows(&rows, &[kept.clone(), unread.clone()], now),
+            WatchlistLoad::Unknown(unknown_reason::WATCHLIST_NOT_SYNCED),
+            "{}",
+            unread.id
+        );
+    }
+
+    // With none of them, the member's own synced list answers as before.
+    assert!(matches!(
+        watchlists_from_rows(&rows, &[kept], now),
+        WatchlistLoad::Loaded(by_title) if by_title.contains_key("title-alpha")
+    ));
 }
 
 /// A watchlist Scryer has not read lately could hold any title, so every
@@ -840,7 +864,7 @@ fn a_rule_loads_only_the_groups_it_reads() {
     let reads = |body: &str| {
         MaintenanceFactLoads::for_rule(
             &format!("package whatever\nimport rego.v1\n\nunmonitor if {{\n\t{body}\n}}\n"),
-            "rule-fixture",
+            "rule_fixture",
         )
     };
     assert_eq!(
@@ -875,7 +899,7 @@ fn a_rule_loads_only_the_groups_it_reads() {
         }
     );
     assert_eq!(
-        MaintenanceFactLoads::for_rule("not rego", "rule-fixture"),
+        MaintenanceFactLoads::for_rule("not rego", "rule_fixture"),
         MaintenanceFactLoads::ALL,
         "a source whose facts cannot be listed loads everything"
     );
@@ -1025,8 +1049,11 @@ fn a_show_with_unaired_and_missing_episodes_reports_its_shape() {
     );
 }
 
+/// A show with no regular episode stored has not had its episode list read as
+/// far as anything stored says, so its shape is unknown rather than zero, and
+/// a rule that reads "nothing has aired" holds.
 #[test]
-fn a_show_with_no_regular_episode_has_zero_counts_and_no_dates() {
+fn a_show_with_no_regular_episode_holds_its_shape_unknown() {
     let lists = with_episode_shapes(shape_load(Some(HashMap::new())));
     let names = usernames();
     let mut input = show_input();
@@ -1037,30 +1064,30 @@ fn a_show_with_no_regular_episode_has_zero_counts_and_no_dates() {
         people_with(None, &names),
     );
     let observations = observations(&input);
-    for fact in [
-        "season_count",
-        "aired_episode_count",
-        "unaired_episode_count",
-        "missing_episode_count",
-    ] {
-        assert_eq!(observations[fact], known(0.into()), "{fact}");
+    for fact in scryer_rules::maintenance::EPISODE_SHAPE_MAINTENANCE_FACTS {
+        assert_eq!(observations[fact], unknown("episode_list_empty"), "{fact}");
     }
     assert_eq!(
-        observations["aired_episode_file_percent"],
-        absent("no_aired_episode")
+        rule_outcome(
+            &input,
+            "delete_title if input.facts.aired_episode_count == 0\n"
+        ),
+        scryer_rules::maintenance::MaintenanceOutcome::Unknown
     );
-    assert_eq!(
-        observations["latest_season_number"],
-        serde_json::json!({"status": "absent"})
-    );
-    assert_eq!(
-        observations["latest_aired_episode_date"],
-        absent("no_aired_episode")
-    );
-    assert_eq!(
-        observations["next_episode_air_date"],
-        absent("no_scheduled_episode")
-    );
+}
+
+/// One definition of "aired": the calendar day the air date is written with,
+/// on or before the evaluation day. A time later that same day has aired; the
+/// next day has not; text that is not a date is unreadable.
+#[test]
+fn an_air_date_has_aired_by_its_calendar_day() {
+    use super::super::facts::air_date_has_aired;
+    let day = chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap();
+    assert_eq!(air_date_has_aired("2024-02-01", day), Some(true));
+    assert_eq!(air_date_has_aired("2024-02-01T23:30:00Z", day), Some(true));
+    assert_eq!(air_date_has_aired(" 2024-01-31 ", day), Some(true));
+    assert_eq!(air_date_has_aired("2024-02-02T00:00:00Z", day), Some(false));
+    assert_eq!(air_date_has_aired("soon", day), None);
 }
 
 #[test]
@@ -1120,33 +1147,34 @@ fn favourite(
     kind: MediaServerSignalKind,
     season: Option<i64>,
     episode: Option<&str>,
-) -> UserMediaSignal {
-    UserMediaSignal {
-        id: format!("row-{item}"),
+) -> AudienceFavorite {
+    AudienceFavorite {
         connection_id: "connection-jellyfin".to_string(),
-        provider: scryer_domain::MediaServerProvider::Jellyfin,
-        external_user_id: format!("external-{}", user.unwrap_or("nobody")),
-        scryer_user_id: user.map(str::to_string),
+        external_account_id: format!("external-{}", user.unwrap_or("nobody")),
         provider_item_id: item.to_string(),
         kind,
         scryer_title_id: Some("title-1".to_string()),
         scryer_episode_id: episode.map(str::to_string),
         season_number: season,
-        played: false,
-        play_count: 0,
-        last_played_at: None,
-        is_favorite: true,
-        observed_at: at(0),
-        sync_generation: 1,
-        created_at: at(0),
-        updated_at: at(0),
     }
 }
 
+/// Every account read in full; each observable member reached through the
+/// account `external-<user>`.
 fn favourite_rows(
-    rows: Vec<UserMediaSignal>,
+    rows: Vec<AudienceFavorite>,
     linked: &[&str],
     observable: &[&str],
+) -> FavoriteLoad {
+    favourite_rows_with(rows, linked, observable, &[], None)
+}
+
+fn favourite_rows_with(
+    rows: Vec<AudienceFavorite>,
+    linked: &[&str],
+    observable: &[&str],
+    unread: &[&str],
+    audience_gate: Option<&'static str>,
 ) -> FavoriteLoad {
     FavoriteLoad::Loaded(FavoriteRows {
         by_title: if rows.is_empty() {
@@ -1156,6 +1184,18 @@ fn favourite_rows(
         },
         linked_user_ids: linked.iter().map(|id| (*id).to_string()).collect(),
         favorite_user_ids: observable.iter().map(|id| (*id).to_string()).collect(),
+        favorite_accounts: observable
+            .iter()
+            .map(|id| {
+                (
+                    ("connection-jellyfin".to_string(), format!("external-{id}")),
+                    BTreeSet::from([(*id).to_string()]),
+                )
+            })
+            .collect(),
+        favorite_unread_user_ids: unread.iter().map(|id| (*id).to_string()).collect(),
+        member_gate: None,
+        audience_gate,
     })
 }
 
@@ -1222,7 +1262,8 @@ fn an_unplayed_favourite_becomes_a_fact() {
         known(false.into())
     );
 
-    // Nobody's favourite, everyone observable: a decisive no.
+    // Nobody's favourite, every account read in full: a decisive no for
+    // the members and for anyone.
     let observations = favourite_observations(
         built_input(),
         favourite_rows(Vec::new(), &["user-anna"], &["user-anna"]),
@@ -1237,11 +1278,120 @@ fn an_unplayed_favourite_becomes_a_fact() {
         observations["favorited_by_any_requester"],
         absent("title_not_requested")
     );
+
+    // One account somewhere was not read in full: "anyone" cannot be false,
+    // and a rule that reads "not favourited by anyone" holds.
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows_with(
+            Vec::new(),
+            &["user-anna"],
+            &["user-anna"],
+            &[],
+            Some("audience_favorites_not_read"),
+        ),
+        None,
+    );
+    assert_eq!(
+        observations["favorited_by_anyone"],
+        unknown("audience_favorites_not_read")
+    );
+    assert_eq!(
+        observations["favorited_by_user_ids"],
+        known(serde_json::json!([]))
+    );
 }
 
-/// A series title counts the series, any season and any episode. A season
-/// counts the series, itself and its own episodes; an episode the series, its
-/// season and itself.
+/// A favourite from an account nobody linked counts for "anyone" and names
+/// nobody.
+#[test]
+fn an_unlinked_accounts_favourite_counts_only_for_anyone() {
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows(
+            vec![favourite(
+                "movie",
+                Some("stranger"),
+                MediaServerSignalKind::Movie,
+                None,
+                None,
+            )],
+            &["user-anna"],
+            &["user-anna"],
+        ),
+        None,
+    );
+    assert_eq!(observations["favorited_by_anyone"], known(true.into()));
+    assert_eq!(
+        observations["favorited_by_user_ids"],
+        known(serde_json::json!([]))
+    );
+}
+
+/// A member whose favourites read failed, or left a favourite Scryer could
+/// not place, is unknown; a favourite another member holds is still a yes.
+#[test]
+fn a_member_whose_favourites_were_not_read_is_unknown_for_that_member() {
+    let requesters = vec!["user-boris".to_string()];
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows_with(
+            Vec::new(),
+            &["user-anna", "user-boris"],
+            &["user-anna", "user-boris"],
+            &["user-boris"],
+            Some("audience_favorites_not_read"),
+        ),
+        Some(&requesters),
+    );
+    for fact in [
+        "favorited_by_user_ids",
+        "favorited_by_usernames",
+        "favorited_by_any_requester",
+    ] {
+        assert_eq!(
+            observations[fact],
+            unknown("favorites_member_not_read"),
+            "{fact}"
+        );
+    }
+    assert_eq!(
+        observations["favorited_by_anyone"],
+        unknown("audience_favorites_not_read")
+    );
+
+    // The requester's own favourite still answers yes.
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows_with(
+            vec![favourite(
+                "movie",
+                Some("user-anna"),
+                MediaServerSignalKind::Movie,
+                None,
+                None,
+            )],
+            &["user-anna", "user-boris"],
+            &["user-anna", "user-boris"],
+            &["user-boris"],
+            Some("audience_favorites_not_read"),
+        ),
+        Some(&["user-anna".to_string()]),
+    );
+    assert_eq!(
+        observations["favorited_by_any_requester"],
+        known(true.into())
+    );
+    assert_eq!(observations["favorited_by_anyone"], known(true.into()));
+}
+
+/// A provider's seasons need not be numbered like Scryer's. A series or
+/// season favourite counts for the series and every season and episode of
+/// it. A resolved episode favourite counts for that episode, the Scryer
+/// season it is filed under (the row's season number, set from the Scryer
+/// episode when the batch is read) and the series; one Scryer could not place
+/// in a season counts for every season; one Scryer could not resolve to an
+/// episode counts for every subject.
 #[test]
 fn series_season_and_episode_favourites_roll_up_to_the_title() {
     let rows = || {
@@ -1268,25 +1418,68 @@ fn series_season_and_episode_favourites_roll_up_to_the_title() {
                     Some(1),
                     Some("episode-1-5"),
                 ),
+                favourite(
+                    "episode-unplaced",
+                    Some("user-dmitri"),
+                    MediaServerSignalKind::Episode,
+                    None,
+                    Some("episode-3-1"),
+                ),
+                favourite(
+                    "episode-unresolved",
+                    Some("user-elif"),
+                    MediaServerSignalKind::Episode,
+                    Some(7),
+                    None,
+                ),
             ],
-            &["user-anna", "user-boris", "user-cara"],
-            &["user-anna", "user-boris", "user-cara"],
+            &[
+                "user-anna",
+                "user-boris",
+                "user-cara",
+                "user-dmitri",
+                "user-elif",
+            ],
+            &[
+                "user-anna",
+                "user-boris",
+                "user-cara",
+                "user-dmitri",
+                "user-elif",
+            ],
         )
     };
     let ids = |observations: &serde_json::Value| observations["favorited_by_user_ids"].clone();
+    let everyone = [
+        "user-anna",
+        "user-boris",
+        "user-cara",
+        "user-dmitri",
+        "user-elif",
+    ];
 
     let title = favourite_observations(built_input(), rows(), None);
-    assert_eq!(
-        ids(&title),
-        known(serde_json::json!(["user-anna", "user-boris", "user-cara"]))
-    );
+    assert_eq!(ids(&title), known(serde_json::json!(everyone)));
 
     let mut season_one = built_input();
     season_one.subject.kind = MaintenanceSubjectKind::Season;
     season_one.subject.season_number = Some(1);
     assert_eq!(
         ids(&favourite_observations(season_one, rows(), None)),
-        known(serde_json::json!(["user-anna", "user-cara"]))
+        known(serde_json::json!(everyone))
+    );
+
+    let mut season_two = built_input();
+    season_two.subject.kind = MaintenanceSubjectKind::Season;
+    season_two.subject.season_number = Some(2);
+    assert_eq!(
+        ids(&favourite_observations(season_two, rows(), None)),
+        known(serde_json::json!([
+            "user-anna",
+            "user-boris",
+            "user-dmitri",
+            "user-elif"
+        ]))
     );
 
     let mut episode_in_two = built_input();
@@ -1295,7 +1488,7 @@ fn series_season_and_episode_favourites_roll_up_to_the_title() {
     episode_in_two.subject.episode_id = Some("episode-2-1".to_string());
     assert_eq!(
         ids(&favourite_observations(episode_in_two, rows(), None)),
-        known(serde_json::json!(["user-anna", "user-boris"]))
+        known(serde_json::json!(["user-anna", "user-boris", "user-elif"]))
     );
 
     let mut episode_five = built_input();
@@ -1304,7 +1497,12 @@ fn series_season_and_episode_favourites_roll_up_to_the_title() {
     episode_five.subject.episode_id = Some("episode-1-5".to_string());
     assert_eq!(
         ids(&favourite_observations(episode_five, rows(), None)),
-        known(serde_json::json!(["user-anna", "user-cara"]))
+        known(serde_json::json!([
+            "user-anna",
+            "user-boris",
+            "user-cara",
+            "user-elif"
+        ]))
     );
 }
 
@@ -1353,26 +1551,66 @@ fn a_plex_only_member_never_reads_as_not_favourited() {
     );
 }
 
-/// An instance whose enabled servers are all Plex has no favourites: the
-/// facts are absent, whatever the watch gate says. With no server at all, or
-/// a closed gate, they are unknown for the gate's reason.
+/// Evaluate one synthetic rule body against an input and return its outcome.
+fn rule_outcome(
+    input: &MaintenanceInput,
+    body: &str,
+) -> scryer_rules::maintenance::MaintenanceOutcome {
+    let engine = scryer_rules::maintenance::MaintenanceRulesEngine::build(&[
+        scryer_rules::maintenance::MaintenancePolicy {
+            id: "rule_fixture".to_string(),
+            name: "Fixture rule".to_string(),
+            rego_source: scryer_rules::maintenance::rewrite_package_declaration(
+                body,
+                "rule_fixture",
+            ),
+        },
+    ])
+    .expect("fixture rule compiles");
+    let result = engine
+        .evaluator()
+        .evaluate(input)
+        .expect("fixture rule runs");
+    result.records[0].decision.outcome
+}
+
+/// An instance whose enabled servers are all Plex cannot read favourites:
+/// nobody's favourites are known, so the facts are unknown and a rule that
+/// reads "not favourited" holds instead of acting. With no server at all, or a
+/// closed gate, they are unknown for the gate's reason.
 #[test]
-fn a_plex_only_instance_has_the_favourite_facts_absent() {
+fn a_plex_only_instance_holds_a_not_favourited_rule() {
     use super::super::facts::{MaintenanceWatchContext, WatchSignalFreshness};
     let plex_only = MaintenanceWatchContext {
+        freshness: WatchSignalFreshness::Fresh,
         enabled_connection_ids: HashSet::from(["connection-plex".to_string()]),
         ..MaintenanceWatchContext::default()
     };
     let load = favorite_gate(&plex_only).expect("closed");
-    assert_eq!(load, FavoriteLoad::Absent("favorites_unsupported"));
-    let observations = favourite_observations(built_input(), load, None);
+    assert_eq!(load, FavoriteLoad::Unknown("favorites_unsupported"));
+    let mut input = built_input();
+    let names = usernames();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &with_favourites(load),
+        "title-1",
+        people_with(None, &names),
+    );
+    let observations = observations(&input);
     for fact in FAVOURITE_FACTS {
         assert_eq!(
             observations[fact],
-            absent("favorites_unsupported"),
+            unknown("favorites_unsupported"),
             "{fact}"
         );
     }
+    assert_eq!(
+        rule_outcome(
+            &input,
+            "delete_title if not input.facts.favorited_by_anyone\n"
+        ),
+        scryer_rules::maintenance::MaintenanceOutcome::Unknown
+    );
 
     assert_eq!(
         favorite_gate(&MaintenanceWatchContext::default()),
@@ -1390,9 +1628,39 @@ fn a_plex_only_instance_has_the_favourite_facts_absent() {
     );
     let open = MaintenanceWatchContext {
         freshness: WatchSignalFreshness::Fresh,
-        ..stale
+        ..stale.clone()
     };
     assert_eq!(favorite_gate(&open), None);
+
+    // Nobody linked yet: the per-user facts wait, but the audience read
+    // still answers for anyone.
+    let nobody_linked = MaintenanceWatchContext {
+        freshness: WatchSignalFreshness::Unavailable("no_linked_participants"),
+        audience: WatchSignalFreshness::Fresh,
+        audience_favorites: WatchSignalFreshness::Fresh,
+        ..stale.clone()
+    };
+    assert_eq!(favorite_gate(&nobody_linked), None);
+    assert_eq!(audience_favorite_gate(&nobody_linked), None);
+
+    // Plex beside Jellyfin: its accounts' favourites cannot be read, so
+    // "anyone" is never false.
+    let mixed = MaintenanceWatchContext {
+        plex_connected: true,
+        ..nobody_linked.clone()
+    };
+    assert_eq!(
+        audience_favorite_gate(&mixed),
+        Some("audience_favorites_unsupported")
+    );
+    let unread = MaintenanceWatchContext {
+        audience_favorites: WatchSignalFreshness::Unavailable("audience_favorites_not_read"),
+        ..nobody_linked
+    };
+    assert_eq!(
+        audience_favorite_gate(&unread),
+        Some("audience_favorites_not_read")
+    );
 }
 
 /// A rule that names no favourite fact does not load the group, and its facts
@@ -1406,7 +1674,7 @@ fn unloaded_favourites_stay_not_yet_collected() {
     let reads = |source: &str| {
         MaintenanceFactLoads::for_rule(
             &format!("package whatever\nimport rego.v1\n\nunmonitor if {{\n\t{source}\n}}\n"),
-            "rule-fixture",
+            "rule_fixture",
         )
     };
     assert!(reads("input.facts.favorited_by_anyone").favorites);

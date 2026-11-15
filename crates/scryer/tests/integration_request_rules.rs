@@ -95,7 +95,7 @@ const APPROVE_EVERYTHING: &str = "approve if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n\
      \n\
-     tags contains \"auto-approved\" if {\n\
+     add_tags := [\"auto-approved\"] if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n";
 
@@ -127,7 +127,7 @@ const MANUAL_WITH_TAG: &str = "manual if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n\
      \n\
-     tags contains \"family\" if {\n\
+     add_tags := [\"family\"] if {\n\
      \tinput.request.origin == \"manual\"\n\
      }\n";
 

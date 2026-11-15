@@ -371,7 +371,7 @@ async fn title_file_only_deletion_retains_show_records_and_linked_or_sibling_fil
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute deletion");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -542,7 +542,7 @@ async fn movie_title_file_only_deletion_retains_title_and_metadata_records() {
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute movie deletion");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -674,7 +674,7 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute retention");
     assert_eq!(report.executed, 2, "{report:?}");

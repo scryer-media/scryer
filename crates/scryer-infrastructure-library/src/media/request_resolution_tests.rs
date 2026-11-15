@@ -420,6 +420,7 @@ fn reopened_event(request: &MediaRequest) -> NewDomainEvent {
                 requested_quality_profile_name: None,
                 requested_monitor_type: None,
                 requested_lease_days: None,
+                rule_notifications: Vec::new(),
             },
         ),
     }

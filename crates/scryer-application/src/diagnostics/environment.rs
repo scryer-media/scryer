@@ -310,7 +310,9 @@ fn probe_root(path: &str) -> RootFacts {
     let Ok(metadata) = std::fs::metadata(path) else {
         return RootFacts::default();
     };
-    let space = crate::helpers::filesystem_space_raw(path).ok();
+    let space = crate::storage_capacity::StorageCapacity::process()
+        .refresh_blocking(path)
+        .ok();
     RootFacts {
         exists: true,
         filesystem_type: filesystem_type(path),

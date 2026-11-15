@@ -9,7 +9,7 @@ use crate::lib_tests::maintenance_execution::{execution_app, seed_title};
 use crate::lib_tests::maintenance_sequence_deletion::{
     add_catalog_movie_file_without_physical_path, selected_root_sequence_deletion_draft,
 };
-use crate::lib_tests::maintenance_title_completion::title_fixture;
+use crate::lib_tests::maintenance_title_completion::{TitleFixture, title_fixture};
 use crate::maintenance_rules::sequence_execution::{
     TestCompletedSequenceJobMap, TestCompletedSequenceJobState,
     install_test_completed_sequence_job_adapter, set_test_completed_sequence_job_state,
@@ -320,7 +320,7 @@ async fn sequence_unmonitor_executes_and_records_its_stable_step() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute sequence");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -385,7 +385,7 @@ async fn empty_sequence_remains_membership_only_when_armed() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("skip empty sequence execution");
     assert_eq!(report.rules_eligible, 0, "{report:?}");
@@ -434,7 +434,7 @@ async fn stale_intent_before_a_tag_mutation_retries_the_proven_idempotent_write(
         seed_stale_running_add_tag_step(&fixture, &candidate, &sequence, &sequence.steps[0]).await;
 
     let report = fresh_runtime_app(&fixture.app)
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("reclaim stale intent");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -486,7 +486,7 @@ async fn reclaim_stale_fetch_subtitles(
     )
     .await;
     fresh_runtime_app(&fixture.app)
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("reclaim stale fetch-subtitles step");
     let step = fixture
@@ -558,7 +558,7 @@ async fn stale_intent_with_a_changed_prestate_holds_without_overwriting_live_tag
         .expect("apply external tag mutation");
 
     let report = fresh_runtime_app(&fixture.app)
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("hold changed stale intent");
     assert_eq!(report.held, 1, "{report:?}");
@@ -609,7 +609,7 @@ async fn stale_intent_after_a_tag_mutation_recovers_as_already_satisfied() {
         .expect("apply interrupted mutation");
 
     let report = fresh_runtime_app(&fixture.app)
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("recover stale postcondition");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -657,7 +657,7 @@ async fn failed_checkpoint_after_tag_mutation_recovers_without_losing_its_attrib
     finish_seeded_step_as_failed(&fixture, &candidate, &key, 1).await;
 
     let report = fresh_runtime_app(&fixture.app)
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("recover failed postcondition");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -701,7 +701,7 @@ async fn exhausted_failed_step_becomes_terminal_without_a_fourth_dispatch() {
     finish_seeded_step_as_failed(&fixture, &candidate, &key, 3).await;
 
     let report = fresh_runtime_app(&fixture.app)
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("terminalize exhausted step");
     assert_eq!(report.failed, 1, "{report:?}");
@@ -756,7 +756,7 @@ async fn real_search_acceptance_is_durable_for_unconditional_and_changed_profile
     assert_eq!(
         unconditional
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("accept unconditional maintenance search")
             .executed,
@@ -780,7 +780,7 @@ async fn real_search_acceptance_is_durable_for_unconditional_and_changed_profile
     );
     assert_eq!(
         fresh_runtime_app(&unconditional.app)
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("restart after accepted unconditional search")
             .executed,
@@ -828,7 +828,7 @@ async fn real_search_acceptance_is_durable_for_unconditional_and_changed_profile
     assert_eq!(
         conditional
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("accept profile-changed maintenance search")
             .executed,
@@ -872,7 +872,7 @@ async fn real_search_acceptance_is_durable_for_unconditional_and_changed_profile
     );
     assert_eq!(
         fresh_runtime_app(&conditional.app)
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("restart after conditional accepted search")
             .executed,
@@ -925,7 +925,7 @@ async fn completed_job_adapter_holds_without_leasing_then_reconciles_unknown_onc
 
     let waiting = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("accepted job holds");
     assert_eq!(waiting.held, 1, "{waiting:?}");
@@ -1008,7 +1008,7 @@ async fn completed_job_adapter_holds_without_leasing_then_reconciles_unknown_onc
     };
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Unknown);
     let unknown = restarted
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("unknown job holds");
     assert_eq!(unknown.held, 1, "{unknown:?}");
@@ -1020,8 +1020,9 @@ async fn completed_job_adapter_holds_without_leasing_then_reconciles_unknown_onc
     assert_eq!(receipts.len(), 1, "unknown must not submit a second job");
 
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let completed = restarted
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("reconcile completed job");
     assert_eq!(completed.executed, 1, "{completed:?}");
@@ -1089,7 +1090,7 @@ async fn completed_job_adapter_retries_confirmed_failure_with_a_new_dispatch_rec
 
     let failed = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("record confirmed job failure");
     assert_eq!(failed.failed, 1, "{failed:?}");
@@ -1099,9 +1100,10 @@ async fn completed_job_adapter_retries_confirmed_failure_with_a_new_dispatch_rec
     );
 
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let retried = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("retry confirmed job failure");
     assert_eq!(retried.executed, 1, "{retried:?}");
@@ -1156,9 +1158,10 @@ async fn completed_job_adapter_enforces_the_durable_step_attempt_budget() {
     .await;
 
     for retry in 1..=3 {
+        fixture.evaluation.begin_next_evaluation().await;
         let report = fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("record bounded failed step attempt");
         assert_eq!(report.failed, 1, "retry {retry}: {report:?}");
@@ -1229,7 +1232,7 @@ async fn unmonitor_after_a_waiting_search_reads_monitoring_when_it_runs() {
 
     let waiting = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("search waits ahead of the unmonitor");
     assert_eq!(waiting.held, 1, "{waiting:?}");
@@ -1244,9 +1247,10 @@ async fn unmonitor_after_a_waiting_search_reads_monitoring_when_it_runs() {
         "nothing is unmonitored while the search waits"
     );
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let completed = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("the unmonitor runs once the search completes");
     assert_eq!(completed.executed, 1, "{completed:?}");
@@ -1319,7 +1323,7 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
     assert_eq!(
         fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("own tag deltas keep matcher eligible")
             .held,
@@ -1336,10 +1340,11 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
         .await
         .expect("external tag update");
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     assert_eq!(
         fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("live external tag does not cancel the sequence")
             .executed,
@@ -1406,7 +1411,7 @@ async fn the_rule_maximum_counts_titles_and_leaves_the_rest_for_the_next_fire() 
 
     let first_pass = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("run the rule up to its maximum");
     assert_eq!(first_pass.executed, 3, "{first_pass:?}");
@@ -1462,7 +1467,7 @@ async fn the_rule_maximum_counts_titles_and_leaves_the_rest_for_the_next_fire() 
 
     let next_fire = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("the next fire continues");
     assert_eq!(next_fire.executed, 1, "{next_fire:?}");
@@ -1508,6 +1513,7 @@ async fn high_risk_sequence_failures_trip_the_per_pass_breaker_before_a_fourth_d
         .await;
     }
     let draft = selected_root_sequence_deletion_draft(&fixture).await;
+    sample_fixture_root(&fixture);
     let (rule_set_id, candidates) = arm_and_evaluate_all(&fixture.execution, draft).await;
     assert_eq!(candidates.len(), 4, "{candidates:?}");
     super::maintenance_rules::arm_rule(
@@ -1527,7 +1533,7 @@ async fn high_risk_sequence_failures_trip_the_per_pass_breaker_before_a_fourth_d
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("handle high-risk failing sequence pass");
     let candidates = fixture.execution.evaluation.all_candidates().await;
@@ -1630,7 +1636,7 @@ async fn transient_tag_conflict_scan_failure_holds_tags_but_not_unrelated_action
         .store(true, std::sync::atomic::Ordering::SeqCst);
     fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("handler");
     let candidates = fixture.evaluation.all_candidates().await;
@@ -1731,7 +1737,7 @@ async fn a_stored_step_sequence_revision_is_refused_and_deletes_nothing() {
     fixture.evaluation.end_every_grace().await;
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("action pass");
     assert_eq!(report.executed, 0, "{report:?}");
@@ -1918,7 +1924,7 @@ async fn a_candidate_without_decided_actions_cannot_execute() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("action pass");
     assert_eq!(report.executed, 0, "{report:?}");
@@ -1968,7 +1974,7 @@ async fn a_decision_naming_an_undeclared_head_is_held() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("action pass");
     assert_eq!(report.executed, 0, "{report:?}");
@@ -2021,7 +2027,7 @@ async fn a_storage_root_revision_with_a_whole_title_step_is_held() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("action pass");
     assert_eq!(report.executed, 0, "{report:?}");
@@ -2166,6 +2172,7 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     draft.rego_source = "match := true\n\nunmonitor if {\n\tinput.facts.monitored\n}\n\n\
                          delete_files if {\n\tmatch\n}\n"
         .to_string();
+    sample_fixture_root(&fixture);
     let (rule_set_id, candidates) = arm_and_evaluate_all(&fixture.execution, draft).await;
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     super::maintenance_rules::arm_rule(
@@ -2196,7 +2203,7 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("first pass");
     let first = delete_attempts().await;
@@ -2232,10 +2239,11 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     for _ in 0..4 {
         std::fs::write(&path, b"admit the configured-root title").expect("restore file");
         fixture.execution.evaluation.end_every_grace().await;
+        fixture.execution.evaluation.begin_next_evaluation().await;
         fixture
             .execution
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("later pass");
     }
@@ -2310,7 +2318,7 @@ async fn a_monitor_rule_monitors_the_title_and_notifies_once() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute sequence");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -2354,7 +2362,7 @@ async fn a_monitor_rule_monitors_the_title_and_notifies_once() {
             .expect("re-evaluate");
         fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("later action pass");
     }
@@ -2389,7 +2397,7 @@ async fn run_several_passes(fixture: &crate::lib_tests::maintenance_execution::E
             .expect("re-evaluate");
         fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("later action pass");
     }
@@ -2415,7 +2423,7 @@ async fn an_unmonitor_if_monitored_rule_notifies_once_for_its_one_act() {
     .await;
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute sequence");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -2454,7 +2462,7 @@ async fn an_add_tags_rule_notifies_once_for_its_one_act() {
     .await;
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute sequence");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -2486,7 +2494,7 @@ async fn a_notify_only_rule_notifies_once_per_membership() {
     arm_and_evaluate(&fixture, self_retiring_draft("", "Just so you know")).await;
     fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute sequence");
     assert_eq!(notified_events(&events).await.len(), 1);
@@ -2533,7 +2541,7 @@ async fn a_rule_that_would_undo_another_rules_monitoring_holds_instead_of_flippi
     // The title starts unmonitored: only the monitor side matches, and acts.
     fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("first action pass");
     assert!(monitored().await);
@@ -2548,7 +2556,7 @@ async fn a_rule_that_would_undo_another_rules_monitoring_holds_instead_of_flippi
             .expect("re-evaluate");
         fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("later action pass");
         assert!(
@@ -2580,7 +2588,7 @@ async fn a_rule_that_would_undo_another_rules_monitoring_holds_instead_of_flippi
     let before = fixture.evaluation.all_candidates().await;
     fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("idle action pass");
     assert_eq!(
@@ -2607,7 +2615,7 @@ async fn a_rule_that_would_undo_another_rules_monitoring_holds_instead_of_flippi
         .await;
     fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("action pass after the window");
     assert!(!monitored().await);
@@ -2652,7 +2660,7 @@ async fn a_dry_run_rule_never_notifies() {
             .expect("evaluate");
         let report = fixture
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("action pass");
         assert_eq!(report.executed, 0, "{report:?}");
@@ -2694,7 +2702,7 @@ async fn conflicting_decided_actions_hold_with_a_code_and_change_nothing() {
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("action pass");
     assert_eq!(report.executed, 0, "{report:?}");
@@ -2951,4 +2959,24 @@ async fn a_rule_runs_on_the_default_schedule_until_one_is_chosen() {
         .await
         .expect("rename");
     assert_eq!(kept.schedule, daily);
+}
+
+/// A scheduled evaluation reads free space from the capacity owner's cache,
+/// never the disk: record a fresh sample of the fixture root, as the sampler
+/// would have.
+fn sample_fixture_root(fixture: &TitleFixture) {
+    fixture
+        .execution
+        .app
+        .runtime
+        .health
+        .storage_capacity
+        .record_for_test(
+            &fixture.root.to_string_lossy(),
+            Utc::now(),
+            Some(crate::helpers::FilesystemSpace {
+                total_bytes: 1_000,
+                available_bytes: 100,
+            }),
+        );
 }

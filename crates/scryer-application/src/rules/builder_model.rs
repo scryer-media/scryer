@@ -36,6 +36,7 @@ pub fn rule_builder_schema(family: &str) -> AppResult<RuleBuilderSchema> {
 pub enum BuilderFamily {
     Scoring,
     Maintenance,
+    Request,
 }
 
 impl BuilderFamily {
@@ -43,6 +44,7 @@ impl BuilderFamily {
         match self {
             Self::Scoring => "scoring",
             Self::Maintenance => "maintenance",
+            Self::Request => "request",
         }
     }
 }

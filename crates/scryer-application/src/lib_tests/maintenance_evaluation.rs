@@ -107,6 +107,37 @@ impl InMemoryMaintenanceEvaluationRepo {
         self.runs.lock().await.clone()
     }
 
+    /// Move every recorded evaluation start `by` into the past, so a hold an
+    /// action pass writes afterwards is certainly later than it.
+    pub(super) async fn age_evaluation_runs(&self, by: chrono::Duration) {
+        for run in self.runs.lock().await.iter_mut() {
+            run.started_at -= by;
+        }
+    }
+
+    /// Record that each evaluated rule's next evaluation began now, without
+    /// running it, as the evaluation that opens a scheduled fire would. For a
+    /// test that pins only the action half of consecutive fires: a candidate
+    /// held by one fire's action pass is examined again by the next.
+    pub(super) async fn begin_next_evaluation(&self) {
+        let mut runs = self.runs.lock().await;
+        let mut latest: HashMap<String, MaintenanceEvaluationRun> = HashMap::new();
+        for run in runs.iter() {
+            let newer = latest
+                .get(&run.rule_set_id)
+                .is_none_or(|seen| seen.started_at < run.started_at);
+            if newer {
+                latest.insert(run.rule_set_id.clone(), run.clone());
+            }
+        }
+        let now = Utc::now();
+        for (_, mut run) in latest {
+            run.id = scryer_domain::Id::new().0;
+            run.started_at = now;
+            runs.push(run);
+        }
+    }
+
     pub(super) async fn all_action_runs(&self) -> Vec<LifecycleActionRun> {
         self.action_runs.lock().await.clone()
     }
@@ -500,6 +531,7 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        held_after: Option<DateTime<Utc>>,
         after: Option<&crate::MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
@@ -524,6 +556,10 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
                             | MaintenanceCandidateState::Blocked
                     ) || (candidate.state == MaintenanceCandidateState::Executing
                         && candidate.updated_at < stale_before))
+                    && !held_after.is_some_and(|held_after| {
+                        candidate.state == MaintenanceCandidateState::Blocked
+                            && candidate.updated_at > held_after
+                    })
                     && after.is_none_or(|after| {
                         (candidate.due_at, candidate.id.as_str())
                             > (after.due_at, after.id.as_str())

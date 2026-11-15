@@ -2977,6 +2977,12 @@ pub enum IndexerSearchOutcome {
     ClientUnavailable {
         reason: &'static str,
     },
+    /// A local monthly limit on the indexer refused the request, or its usage
+    /// could not be checked. Nothing was sent, so the indexer did not fail and
+    /// its health is untouched. `reason` is the stable code of the refusal.
+    LocalLimit {
+        reason: &'static str,
+    },
     Errored,
 }
 
@@ -3687,6 +3693,14 @@ pub struct TotpFailedAttemptRecord {
 pub struct UserAuthFactorStatus {
     pub has_mfa: bool,
     pub has_passkey: bool,
+}
+
+/// When an account was created and last signed in. Each is `None` when the
+/// account row stores no value for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UserAccountTimestamps {
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -5456,6 +5470,8 @@ mod indexer_search_identity_tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

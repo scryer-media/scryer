@@ -1207,20 +1207,6 @@ pub(crate) fn rule_head_name(expr: &Expr) -> Option<&str> {
     }
 }
 
-fn module_defines_rule(module: &Module, name: &str) -> bool {
-    module.policy.iter().any(|rule| {
-        let refr = match rule.as_ref() {
-            Rule::Spec { head, .. } => match head {
-                RuleHead::Compr { refr, .. }
-                | RuleHead::Set { refr, .. }
-                | RuleHead::Func { refr, .. } => refr,
-            },
-            Rule::Default { refr, .. } => refr,
-        };
-        rule_head_name(refr) == Some(name)
-    })
-}
-
 fn visit_rule(rule: &Rule, sink: &mut dyn FnMut(&InputReferencePath), ctx: InputPathContext) {
     match rule {
         Rule::Spec { head, bodies, .. } => {
@@ -1792,9 +1778,12 @@ fn action_scan_diagnostic(
     diagnostic
 }
 
-/// The heads a request rule may write. At least one of the first four has to be
-/// defined or the rule can never contribute anything to a decision.
-const REQUEST_VOTE_HEADS: [&str; 4] = ["approve", "deny", "manual", "tags"];
+fn rule_scan_diagnostic(issue: &crate::rule_scan::RuleScanIssue) -> ValidationDiagnostic {
+    let mut diagnostic = ValidationDiagnostic::new(issue.code, issue.message.clone());
+    diagnostic.line = Some(issue.line);
+    diagnostic.column = Some(issue.column);
+    diagnostic
+}
 
 /// Validate a user-authored request rule without persisting it.
 ///
@@ -1809,12 +1798,19 @@ const REQUEST_VOTE_HEADS: [&str; 4] = ["approve", "deny", "manual", "tags"];
 ///    the referenced-fact set statically resolvable, which is what lets the
 ///    engine hold a rule whose facts it cannot observe.
 /// 4. Every `input.*` reference resolves in the request catalog.
-/// 5. The source defines at least one of `approve`, `deny`, `manual`, or `tags`.
-///    The wrapper defaults every head, so a rule defining none of them — one
-///    that only writes `reasons`, say — would compile, load, and abstain
-///    forever; this is the only place that catches it.
-/// 6. A dry run against synthetic input yields a well-formed decision, which is
-///    also what proves the rule's `reasons` and `tags` are inside their bounds.
+/// 5. The head scan of [`crate::request_actions`]: every valued head is a plain
+///    literal it accepts, no head the host reads is a function, and `data` is
+///    read only inside the rule's own package.
+/// 6. The source decides something: a vote, a shaping head, or `add_tags`. The wrapper defaults every head, so a rule defining none of
+///    them — one that only writes `reasons` or `notify`, say — would compile,
+///    load, and abstain forever; this is the only place that catches it.
+/// 7. A dry run against synthetic input yields a well-formed decision, which is
+///    also what proves the rule's `reasons` and tags are inside their bounds.
+///
+/// Whether a quality profile, monitor type or audio language a rule writes
+/// exists for this instance is the host's check, made on the literals the
+/// scan reports. A rule name that is neither a head nor used anywhere else in
+/// the source is reported in `warnings` and does not make the source invalid.
 pub fn validate_request_rule(
     rego_source: &str,
     rule_set_id: &str,
@@ -1841,7 +1837,8 @@ pub fn validate_request_rule(
         return Ok(ValidationResult::compilation_error(e));
     }
 
-    let module = &engine.get_modules()[policy_module_index];
+    let module = engine.get_modules()[policy_module_index].clone();
+    let module = module.as_ref();
 
     if let Some(error) = input_import_error(module, "request") {
         return Ok(ValidationResult::invalid_code(
@@ -1855,34 +1852,40 @@ pub fn validate_request_rule(
         return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
-    if !REQUEST_VOTE_HEADS
-        .iter()
-        .any(|head| module_defines_rule(module, head))
-    {
+    let scan = crate::request_actions::scan_request_module(module);
+    let warnings: Vec<ValidationDiagnostic> =
+        scan.warnings.iter().map(rule_scan_diagnostic).collect();
+    if !scan.errors.is_empty() {
+        let errors = scan.errors.iter().map(rule_scan_diagnostic).collect();
+        return Ok(ValidationResult::from_diagnostics(errors).with_warnings(warnings));
+    }
+    if !scan.decides_something() {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_VOTE_REQUIRED,
-            "request rule can never vote: define at least one of 'approve', 'deny', 'manual', \
-             or 'tags', for example: approve if { ... }",
-        ));
+            "request rule decides nothing: define a vote ('approve', 'deny' or 'manual'), \
+             a 'set_' head or 'add_tags', for example: approve if { ... }",
+        )
+        .with_warnings(warnings));
     }
 
     let input_value = serde_json::to_value(request::synthetic_request_input())
         .map_err(RulesError::Serialization)?;
     engine.set_input(input_value.into());
 
-    match engine.eval_rule(request::decision_wrapper_rule_path(rule_set_id)) {
+    let result = match engine.eval_rule(request::decision_wrapper_rule_path(rule_set_id)) {
         Ok(value) => match request::decode_decision(&value) {
-            Ok(_) => Ok(ValidationResult::valid()),
-            Err(e) => Ok(ValidationResult::invalid_code(
+            Ok(_) => ValidationResult::valid(),
+            Err(e) => ValidationResult::invalid_code(
                 crate::diagnostic_codes::RULE_OUTPUT_INVALID,
                 format!("output error: {e}"),
-            )),
+            ),
         },
-        Err(e) => Ok(ValidationResult::invalid_code(
+        Err(e) => ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_RUNTIME_ERROR,
             format!("runtime error: {e}"),
-        )),
-    }
+        ),
+    };
+    Ok(result.with_warnings(warnings))
 }
 
 /// Verify that the evaluation result is a map of string → integer.
@@ -3264,7 +3267,7 @@ mod tests {
                input.facts.certification_rank <= 2\n  \
                input.request.lease_days <= 30\n\
              }\n\n\
-             tags contains \"family\"\n\n\
+             add_tags := [\"family\"]\n\n\
              reasons contains \"family_rated\"\n",
         );
         assert!(result.valid, "errors: {:?}", result.errors);
@@ -3294,12 +3297,11 @@ mod tests {
             "reasons contains \"adult_content\" if {\n  input.facts.is_adult\n}\n",
         );
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("can never vote")
-                && result.errors[0].contains("'approve'")
-                && result.errors[0].contains("'tags'"),
+        assert_eq!(
+            result.diagnostics[0].code,
+            crate::diagnostic_codes::RULE_VOTE_REQUIRED,
             "{:?}",
-            result.errors
+            result.diagnostics
         );
     }
 
@@ -3309,7 +3311,7 @@ mod tests {
     fn request_rule_that_only_tags_is_accepted() {
         let result = validate_request_body(
             "tags_only",
-            "tags contains \"family\" if {\n  input.facts.certification_rank <= 1\n}\n",
+            "add_tags := [\"family\"] if {\n  input.facts.certification_rank <= 1\n}\n",
         );
         assert!(result.valid, "errors: {:?}", result.errors);
     }
@@ -3417,20 +3419,21 @@ mod tests {
         }
     }
 
-    /// The bounded decoders run in the dry-run too, so an author learns their
-    /// tag is unusable at save time rather than at submit time.
+    /// An `add_tags` literal is checked at save time, at the literal, so an
+    /// author learns it is unusable before any request reaches the rule.
     #[test]
-    fn request_rule_emitting_a_malformed_tag_is_rejected() {
+    fn request_rule_adding_a_malformed_tag_is_rejected_at_the_literal() {
         let result = validate_request_body(
             "bad_tag",
-            "approve := true\n\ntags contains \"scryer:managed\"\n",
+            "approve := true\n\nadd_tags := [\"scryer:managed\"]\n",
         );
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("output error") && result.errors[0].contains("reserved"),
-            "{:?}",
-            result.errors
+        let diagnostic = &result.diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            crate::diagnostic_codes::RULE_ACTION_VALUE_INVALID
         );
+        assert_eq!((diagnostic.line, diagnostic.column), (Some(5), Some(14)));
     }
 
     #[test]

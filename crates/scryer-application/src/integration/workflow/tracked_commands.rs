@@ -3030,38 +3030,63 @@ async fn handle_tracked_download_command(
             if let Some((id, _)) = &target
                 && tracked_work_in_flight.contains(id)
             {
-                let _ = reply.send(Err(AppError::validation_refused(crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING, format!(
-                    "tracked download {requested_id} is busy processing"
-                ))));
+                let _ = reply.send(Err(AppError::validation_refused(
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_BUSY_PROCESSING,
+                    format!("tracked download {requested_id} is busy processing"),
+                )));
                 return;
             }
             let Some(tracked) = target
                 .and_then(|(_, download_id)| tracker.get_by_download_id(download_id))
                 .cloned()
             else {
-                let _ = reply.send(Err(AppError::not_found_reason(crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND, format!(
-                    "tracked download {requested_id}"
-                ))));
+                let _ = reply.send(Err(AppError::not_found_reason(
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND,
+                    format!("tracked download {requested_id}"),
+                )));
                 return;
             };
+            // A grab history that could not be read is not a missing one: the
+            // refusal below tells the operator the history does not exist.
             let has_grabbed_submission =
-                crate::failed_download_handler::tracked_download_has_grabbed_submission(
+                match crate::failed_download_handler::tracked_download_grabbed_submission_lookup(
                     app, &tracked,
                 )
-                .await;
-            if has_grabbed_submission
-                && !crate::tracked_downloads::persist_tracked_download_state_marker(
-                    app,
-                    &tracked,
-                    TrackedDownloadState::FailedPending,
-                    Some(if skip_reacquire {
-                        crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON
-                    } else {
-                        crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
-                    }),
-                    None,
-                )
                 .await
+                {
+                    Ok(found) => found,
+                    Err(error) => {
+                        tracing::warn!(
+                            download_id = %tracked.download_id,
+                            error = %error,
+                            "could not read grab history for a manual failure request"
+                        );
+                        let _ = reply.send(Err(AppError::Repository(
+                            "could not read this download's grab history; download preserved"
+                                .into(),
+                        )));
+                        return;
+                    }
+                };
+            if !has_grabbed_submission {
+                let _ = reply.send(Err(AppError::validation_refused(
+                    crate::error_reasons::integration::DOWNLOAD_NOT_GRABBED,
+                    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
+                )));
+                return;
+            }
+            if !crate::tracked_downloads::persist_tracked_download_state_marker(
+                app,
+                &tracked,
+                TrackedDownloadState::FailedPending,
+                Some(if skip_reacquire {
+                    crate::tracked_downloads::MANUAL_FAILURE_NO_REACQUIRE_REASON
+                } else {
+                    crate::tracked_downloads::MANUAL_FAILURE_CLEANUP_REASON
+                }),
+                None,
+            )
+            .await
             {
                 let _ = reply.send(Err(AppError::Repository(
                     "could not persist manual blocklist request; download preserved".into(),
@@ -3069,38 +3094,29 @@ async fn handle_tracked_download_command(
                 return;
             }
             let result = if let Some(td) = tracker.get_mut_by_download_id(tracked.download_id) {
-                if !has_grabbed_submission {
-                    crate::failed_download_handler::warn_download_not_grabbed(td);
-                    if td.state == TrackedDownloadState::FailedPending {
-                        td.state = TrackedDownloadState::Downloading;
-                    }
-                    td.skip_reacquire_on_failure = false;
-                    td.manual_failure_cleanup = false;
-                    Ok(())
-                } else {
-                    td.state = TrackedDownloadState::FailedPending;
-                    td.status = TrackedDownloadStatus::Error;
-                    td.status_messages.clear();
-                    td.skip_reacquire_on_failure = skip_reacquire;
-                    td.manual_failure_cleanup = true;
-                    td.blocklist_confirmation_failed = false;
-                    let completed_lookup =
-                        crate::completed_download_handler::CompletedDownloadLookup::default();
-                    let _ = try_dispatch_tracked_download_background_work(
-                        app,
-                        actor,
-                        tracker,
-                        tracked_work_in_flight,
-                        tracked_work_result_tx,
-                        tracked.download_id,
-                        &completed_lookup,
-                    );
-                    Ok(())
-                }
+                td.state = TrackedDownloadState::FailedPending;
+                td.status = TrackedDownloadStatus::Error;
+                td.status_messages.clear();
+                td.skip_reacquire_on_failure = skip_reacquire;
+                td.manual_failure_cleanup = true;
+                td.blocklist_confirmation_failed = false;
+                let completed_lookup =
+                    crate::completed_download_handler::CompletedDownloadLookup::default();
+                let _ = try_dispatch_tracked_download_background_work(
+                    app,
+                    actor,
+                    tracker,
+                    tracked_work_in_flight,
+                    tracked_work_result_tx,
+                    tracked.download_id,
+                    &completed_lookup,
+                );
+                Ok(())
             } else {
-                Err(AppError::not_found_reason(crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND, format!(
-                    "tracked download {requested_id}"
-                )))
+                Err(AppError::not_found_reason(
+                    crate::error_reasons::integration::TRACKED_DOWNLOAD_NOT_FOUND,
+                    format!("tracked download {requested_id}"),
+                ))
             };
             if result.is_ok() {
                 let activity_item = tracker

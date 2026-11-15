@@ -263,6 +263,14 @@ pub struct MaintenanceFactsDoc {
     /// Storage capacity is exposed only after the host applies a selected
     /// configured root. Without that root these remain absent; a storage-aware
     /// rule must be validated with an explicit root selection before it runs.
+    ///
+    /// Scheduled evaluation reads the capacity sampler's last figure for the
+    /// root and never calls the disk: a root not yet sampled is unknown with
+    /// `storage_not_sampled`, one sampled more than two sampling intervals ago
+    /// with `storage_sample_stale`, and one whose last sample failed with
+    /// `storage_capacity_unavailable`. Preview and the execution-time guard
+    /// take a figure now, which is unknown only with
+    /// `storage_capacity_unavailable`.
     pub storage_root_id: Observation<String>,
     pub storage_available_bytes: Observation<i64>,
     pub storage_total_bytes: Observation<i64>,
@@ -285,14 +293,19 @@ pub struct MaintenanceFactsDoc {
     /// Whole days since the subject was added, against the evaluation clock.
     pub days_since_added: Observation<i64>,
     /// The tallest video stream among the subject's files, in pixels; absent
-    /// when no file reports one.
+    /// when no file reports one. Unknown (`not_yet_collected`) while any of
+    /// the files has no completed scan, including one whose scan failed or
+    /// needs review.
     pub max_video_height: Observation<i64>,
     /// The shape of a show's whole episode list, whatever the subject: its
     /// seasons and its regular episodes, specials left out. An episode has
-    /// aired once its air date is on or before the evaluation day; one with
-    /// no air date or a later one has not. Missing means aired, monitored and
-    /// without a file. Absent for movies; unknown when the episode store
-    /// could not be read.
+    /// aired once the calendar day of its air date (UTC) is on or before the
+    /// evaluation day, the same test the scoped watch facts use; one with no
+    /// air date counts as not aired here, and one with a later day has not
+    /// aired. Missing means aired, monitored and without a file. Absent for
+    /// movies; unknown when the episode store could not be read, and unknown
+    /// (`episode_list_empty`) for a show with no regular episode stored, which
+    /// is what a show looks like before its episode list has been read.
     pub season_count: Observation<i64>,
     pub aired_episode_count: Observation<i64>,
     pub unaired_episode_count: Observation<i64>,
@@ -334,12 +347,17 @@ pub struct MaintenanceFactsDoc {
     pub watchlist_added_at: Observation<String>,
     pub watchlist_origins: Observation<Vec<String>>,
     /// Members who marked the subject a favourite on an enabled Jellyfin or
-    /// Emby server. For a series title a favourite of the series itself, or
-    /// of any of its seasons or episodes, counts; a season or episode
-    /// subject counts its own favourites and, for an episode, its season's
-    /// and its series'. Plex has no favourites: an instance whose only
-    /// enabled servers are Plex has these absent, and while any linked member
-    /// can only be observed through Plex they are unknown.
+    /// Emby server. A series title counts a favourite of the series or of any
+    /// of its seasons or episodes. A provider's seasons need not be numbered
+    /// like Scryer's, so a favourite of the series or of any season counts for
+    /// every season and episode subject of the series; an episode favourite
+    /// counts for that episode, the season Scryer files it under, and the
+    /// series. Scryer cannot read Plex favourites: an instance whose only
+    /// enabled servers are Plex has these unknown (`favorites_unsupported`),
+    /// as they are while any linked member can only be observed through Plex.
+    /// `favorited_by_anyone` is never false: favourites are read only for
+    /// linked members, so with none found it is unknown
+    /// (`audience_favorites_not_read`).
     pub favorited_by_user_ids: Observation<Vec<String>>,
     pub favorited_by_usernames: Observation<Vec<String>>,
     pub favorited_by_anyone: Observation<bool>,

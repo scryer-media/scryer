@@ -66,7 +66,12 @@ export type IndexerCapsSource =
   | "PROVIDER_DECLARATIONS";
 
 export type InteractiveSearchSkipReason =
-  "INDEXER_DISABLED" | "TEMPORARILY_DISABLED" | "BACKED_OFF" | "NO_TEXT_SEARCH";
+  | "INDEXER_DISABLED"
+  | "TEMPORARILY_DISABLED"
+  | "BACKED_OFF"
+  | "NO_TEXT_SEARCH"
+  /** A local monthly limit refused the search; `failureReasonCode` says which. */
+  | "MONTHLY_LIMIT";
 
 export type InteractiveSearchProgress = {
   /**

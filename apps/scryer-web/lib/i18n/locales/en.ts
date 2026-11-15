@@ -1646,6 +1646,14 @@ const en: LocaleDictionary = {
     "Max queries per minute must be at least 1, or empty for no budget.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Max queries per minute is set on each managed indexer, not on the indexer that syncs them.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "This indexer's locally configured monthly request limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "This indexer's locally configured monthly grab limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Monthly indexer usage could not be durably checked; the request was refused.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Monthly request and grab limits must be positive whole numbers, or empty for no limit.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Minimum seeders floor cannot be negative.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
@@ -6903,6 +6911,8 @@ const en: LocaleDictionary = {
     "Import tracking resumed. Normal import checks still apply.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Only a blocked import can be dismissed, and only a dismissed import can be resumed. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "This client item now belongs to a different download. Refresh the queue and try again.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
@@ -7798,6 +7808,15 @@ const en: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "No limit",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max queries per minute must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxRequestsPerMonth": "Max requests per month",
+  "form.indexerMaxGrabsPerMonth": "Max grabs per month",
+  "form.indexerMonthlyLimitPlaceholder": "No limit",
+  "form.indexerMonthlyLimitHelp":
+    "Counts traffic observed by this Scryer instance only. A grab is reserved before fetching the release and stays counted if its outcome is uncertain. Limits reset at 00:00 UTC on the first of each month.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Max requests per month must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Max grabs per month must be a whole number of at least 1, or empty for no limit.",
   "form.providerTypePlaceholder": "Provider Type",
   "form.subtitleProviderValidation": "Name and provider type are required.",
   "form.subtitleProviderFacetsRequired":
@@ -10691,7 +10710,11 @@ const en: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Media-server and identity providers the account has linked",
   "settings.refReqRequesterCreatedAt":
-    "When the account was created; absent, because Scryer does not record it yet",
+    "When the account was created; absent for an account created before Scryer recorded it",
+  "settings.refReqRequesterLastLoginAt":
+    "When the account last signed in; absent when Scryer has no record of a sign-in",
+  "settings.refReqRequesterAccountAgeDays":
+    "Whole days since the account was created; absent when the creation time is",
   "settings.refReqSectionLibrary": "— The library the request targets",
   "settings.refReqLibraryId": "Identifier of the library",
   "settings.refReqLibraryName": "Name of the library",
@@ -10713,6 +10736,8 @@ const en: LocaleDictionary = {
     "Monitoring the requester asked for (for example ALL_EPISODES)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "How many seasons an advanced monitoring selection named",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Season numbers an advanced monitoring selection named, lowest first; null when there is no selection",
   "settings.refReqRequestLeaseForever":
     "True when the requester asked to keep the media forever",
   "settings.refReqRequestLeaseDays":
@@ -10740,6 +10765,10 @@ const en: LocaleDictionary = {
     "The owner's list policy: auto, approval or none; approval when none is stored",
   "settings.refReqRequestListRank":
     "The item's rank on the list; absent when the list does not rank it",
+  "settings.refReqRequestListIsWatchlist":
+    "True when the list is the owner's own watch-later list on a linked account",
+  "settings.refReqRequestListSourceType":
+    "The kind of list at the provider, in lower case (for example watchlist or user_list)",
   "settings.refReqExternalIdsTmdb":
     "TMDB identifier, when the provider had one",
   "settings.refReqExternalIdsImdb":
@@ -10809,6 +10838,46 @@ const en: LocaleDictionary = {
     "Days since this requester last asked for anything",
   "settings.refReqFactsLibraryTitleCount":
     "How many titles the target library holds",
+  "settings.refReqFactsSeasonCount":
+    "How many seasons the series has, for series",
+  "settings.refReqFactsEpisodeCount":
+    "How many regular episodes the series has, for series",
+  "settings.refReqFactsAiredEpisodeCount":
+    "How many of those episodes have aired by the evaluation day",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "How many of those episodes have not aired yet",
+  "settings.refReqFactsNextEpisodeAirDate":
+    "When the next episode airs",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Theatrical release date, for movies",
+  "settings.refReqFactsDigitalReleaseDate":
+    "Digital release date, for movies",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Physical (disc) release date, for movies",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Whether the movie is out on digital or disc",
+  "settings.refReqFactsDaysUntilRelease":
+    "Days until the movie's first release",
+  "settings.refReqFactsOtherRequesterCount":
+    "How many other members have asked for this title",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Whether another member's request for this title is waiting",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Whether the title is on the requester's own watchlist",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "How long the title has been on the requester's watchlist",
+  "settings.refReqFactsListExcluded":
+    "Whether a list exclusion covers this title",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "How many titles this requester's requests have added to the target library",
+  "settings.refReqFactsStorageRootId":
+    "The root folder the title would be stored in",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Free space on that root, in bytes",
+  "settings.refReqFactsStorageTotalBytes":
+    "Total size of that root's filesystem, in bytes",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Free space on that root, as a percentage",
   "settings.refReqSectionCertifications":
     "— One entry per certification in input.facts.certifications",
   "settings.refReqCertCountry": "Country the certification was issued in",
@@ -10889,6 +10958,46 @@ const en: LocaleDictionary = {
     "Whole days since the requester's previous request; absent with reason no_previous_request when this is their first",
   "settings.refReqFactsLibraryTitleCountValue":
     "Number of titles in the target library",
+  "settings.refReqFactsSeasonCountValue":
+    "Number of seasons; absent with reason not_a_series for a movie, unknown with reason metadata_unavailable when the request carries no series shape",
+  "settings.refReqFactsEpisodeCountValue":
+    "Number of regular episodes; absent and unknown as for season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Episodes aired when the request was made, plus those scheduled on or before the evaluation day",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count minus aired_episode_count, never below zero",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD of the first episode after the evaluation day; absent with reason no_scheduled_episode when none is scheduled",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; absent with reason no_theatrical_release_date when there is none, with reason not_a_movie for a series; unknown with reason not_yet_collected or metadata_unavailable when the dates were not gathered",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; absent with reason no_digital_release_date when there is none; otherwise as theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; absent with reason no_physical_release_date when there is none; otherwise as theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True when a digital or physical date is on or before the evaluation day",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Whole days to the earliest known date; absent with reason already_released once it is out, or no_release_date when no date is known",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Number of distinct other requesters; unknown with reason catalog_unavailable when Scryer could not read its requests",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True when another member's request is still waiting on a decision; unknown as for other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True when a synced watchlist the requester linked holds the title; absent with reason no_watchlist_linked when they linked none; unknown with reason watchlist_not_synced, watchlist_stale or list_store_unreadable when the lists cannot be trusted",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Whole days since it first appeared there; absent with reason not_on_a_watchlist when it is not on one; otherwise as on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True when an exclusion for every list, or for the list behind this request, names the title; unknown with reason list_exclusions_unavailable when they could not be read",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Number of titles in the target library created from this requester's requests; unknown with reason requester_titles_unavailable when they could not be counted",
+  "settings.refReqFactsStorageRootIdValue":
+    "Identifier of the library's default root, or its first root; unknown with reason storage_root_unavailable when the library has none",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Bytes free when Scryer last sampled the root, at most ten minutes before; observed_at says when. Unknown, never zero, with reason storage_not_sampled, storage_sample_stale or storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Total bytes from the same sample; unknown as for storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Available bytes times 100 divided by total bytes, from the same sample; unknown as for storage_available_bytes",
 
   "move.dialogTitle": "Move titles",
   "move.destinationLibrary": "Destination library",
@@ -12348,6 +12457,18 @@ const en: LocaleDictionary = {
     "This rule reads data outside its own package. Use input instead.",
   "error.ruleWithTargetNotAllowed":
     'This rule cannot replace {{path}} with "with". Its decision must rest on what Scryer observed.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} has a meaning to Scryer and cannot be a function. Write it as a rule instead.",
+  "error.ruleHeadNameRetired":
+    "Request rules no longer read {{path}}. Tag a title with add_tags instead.",
+  "error.ruleQualityProfileUnknown":
+    "No quality profile has this name, so the rule cannot apply it.",
+  "error.ruleQualityProfileAmbiguous":
+    "More than one quality profile has this name. Rename one so the rule names a single profile.",
+  "error.ruleMonitorUnsupported":
+    "No library this rule applies to accepts this monitor type.",
+  "error.ruleAudioLanguageUnknown":
+    "Scryer does not know this audio language.",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "Set titles per run. These actions of the rule need it: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":

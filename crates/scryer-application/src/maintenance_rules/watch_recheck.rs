@@ -28,7 +28,7 @@ use scryer_domain::{
 use super::action_execution::execution_reason;
 use super::facts::{MaintenanceWatchContext, WatchSignalFreshness};
 use crate::AppUseCase;
-use crate::ports::{AudiencePlay, ProviderItemRecheck};
+use crate::ports::{AudienceFavorite, AudiencePlay, ProviderItemRecheck};
 
 /// What a live re-check found, as the hold it causes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +44,9 @@ pub(crate) enum WatchRecheck {
     /// An observed connection has no mapped item for the subject, so no
     /// read was attempted there.
     Unmapped,
+    /// A counted account made an item a favourite since the stored
+    /// favourites were read.
+    NewerFavorite,
 }
 
 impl WatchRecheck {
@@ -55,7 +58,33 @@ impl WatchRecheck {
             Self::UncreditedPlay => Some(execution_reason::WATCH_RECHECK_UNCREDITED_PLAY),
             Self::Unavailable => Some(execution_reason::WATCH_RECHECK_UNAVAILABLE),
             Self::Unmapped => Some(execution_reason::WATCH_RECHECK_UNMAPPED),
+            Self::NewerFavorite => Some(execution_reason::WATCH_RECHECK_NEWER_FAVORITE),
         }
+    }
+}
+
+/// Compare one item's live favourite flags with the favourites stored for it
+/// on its connection. `stored_favorites` holds this item's stored favourite
+/// rows there. A counted account that has the item as a favourite now, with
+/// no stored favourite row for it, is a newer favourite. A favourite removed
+/// since the sweep never holds: that is the next sweep's to record.
+///
+/// Only the item itself is compared. A favourite on the item's series or
+/// season is on another server item, compared by [`fold_parent_favorites`].
+pub(crate) fn fold_item_favorites(
+    stored_favorites: &[&AudienceFavorite],
+    recheck: &ProviderItemRecheck,
+) -> WatchRecheck {
+    let newer = recheck.participants.iter().any(|live| {
+        live.is_favorite
+            && !stored_favorites
+                .iter()
+                .any(|row| row.external_account_id == live.external_user_id)
+    });
+    if newer {
+        WatchRecheck::NewerFavorite
+    } else {
+        WatchRecheck::Clear
     }
 }
 
@@ -64,6 +93,17 @@ impl WatchRecheck {
 pub(crate) fn rule_reads_watch_facts(rego_source: &str, rule_set_id: &str) -> bool {
     match scryer_rules::validation::maintenance_referenced_facts(rego_source, rule_set_id) {
         Ok(facts) => scryer_rules::maintenance::WATCH_MAINTENANCE_FACTS
+            .iter()
+            .any(|fact| facts.contains(*fact)),
+        Err(_) => true,
+    }
+}
+
+/// Whether a matcher reads any favourite fact. A source whose facts cannot be
+/// listed counts as reading one, as for [`rule_reads_watch_facts`].
+pub(crate) fn rule_reads_favorite_facts(rego_source: &str, rule_set_id: &str) -> bool {
+    match scryer_rules::validation::maintenance_referenced_facts(rego_source, rule_set_id) {
+        Ok(facts) => scryer_rules::maintenance::FAVORITE_MAINTENANCE_FACTS
             .iter()
             .any(|fact| facts.contains(*fact)),
         Err(_) => true,
@@ -205,6 +245,15 @@ impl AppUseCase {
     /// a gate that is not open are [`WatchRecheck::Unavailable`]. An entity
     /// an observed connection has no mapped item for is
     /// [`WatchRecheck::Unmapped`], decided before any read.
+    ///
+    /// `favorites`, given only for a rule that reads a favourite fact, are
+    /// the title's stored favourite rows. The same answers then also carry
+    /// each counted account's favourite flag for every item read, and an item
+    /// favourited since those rows were stored is
+    /// [`WatchRecheck::NewerFavorite`]. The series and seasons those answers
+    /// name are then read once more on each connection, per counted account
+    /// in batches (see [`fold_parent_favorites`]); a rule that reads no
+    /// favourite fact makes no such request.
     pub(crate) async fn maintenance_watch_recheck(
         &self,
         context: &MaintenanceWatchContext,
@@ -212,6 +261,7 @@ impl AppUseCase {
         audience: &[AudiencePlay],
         episode_ids: Option<&HashSet<String>>,
         entities: Option<&[(MediaServerPlaybackEntityKind, String)]>,
+        favorites: Option<&[AudienceFavorite]>,
     ) -> WatchRecheck {
         // The anonymous facts can be open while the per-user ones are not
         // (no linked user yet); either open gate is a picture to re-check.
@@ -331,6 +381,18 @@ impl AppUseCase {
             }
         }
 
+        // Connection and item → that item's stored favourite rows, built once.
+        let favorites_by_item = favorites.map(|favorites| {
+            let mut by_item: HashMap<(&str, &str), Vec<&AudienceFavorite>> = HashMap::new();
+            for row in favorites {
+                by_item
+                    .entry((row.connection_id.as_str(), row.provider_item_id.trim()))
+                    .or_default()
+                    .push(row);
+            }
+            by_item
+        });
+
         for (connection_id, connection_items) in items {
             let connection = match self
                 .services
@@ -361,6 +423,27 @@ impl AppUseCase {
                 Ok(answers) => answers,
                 Err(_) => return WatchRecheck::Unavailable,
             };
+            // The series and seasons the items are filed under, which the
+            // item read names but does not return. Read once more for them,
+            // per participant, only for a rule that reads a favourite fact.
+            let parent_ids: Vec<String> = if favorites_by_item.is_some() {
+                let mut parents: Vec<String> = Vec::new();
+                for parent in answers
+                    .values()
+                    .flat_map(|recheck| recheck.parent_item_ids.iter())
+                {
+                    let parent = parent.trim();
+                    if !parent.is_empty()
+                        && !connection_items.contains_key(parent)
+                        && !parents.iter().any(|seen| seen == parent)
+                    {
+                        parents.push(parent.to_string());
+                    }
+                }
+                parents
+            } else {
+                Vec::new()
+            };
             for (item_id, (stored, audience)) in connection_items {
                 let Some(recheck) = answers.get(item_id) else {
                     return WatchRecheck::Unavailable;
@@ -369,8 +452,57 @@ impl AppUseCase {
                 if outcome != WatchRecheck::Clear {
                     return outcome;
                 }
+                if let Some(favorites_by_item) = &favorites_by_item {
+                    let stored_favorites = favorites_by_item
+                        .get(&(connection_id, item_id))
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    let outcome = fold_item_favorites(stored_favorites, recheck);
+                    if outcome != WatchRecheck::Clear {
+                        return outcome;
+                    }
+                }
+            }
+            if let Some(favorites_by_item) = &favorites_by_item
+                && !parent_ids.is_empty()
+                && !participants.is_empty()
+            {
+                let live = match reader.recheck_favorites(&parent_ids, &participants).await {
+                    Ok(live) => live,
+                    Err(_) => return WatchRecheck::Unavailable,
+                };
+                let outcome = fold_parent_favorites(connection_id, favorites_by_item, &live);
+                if outcome != WatchRecheck::Clear {
+                    return outcome;
+                }
             }
         }
+        WatchRecheck::Clear
+    }
+}
+
+/// Compare the live favourites of the items' series and seasons with the
+/// favourites stored for them on `connection_id`. `live` holds, per parent
+/// item, the counted accounts that have it as a favourite now. One with no
+/// stored favourite row for that account is a newer favourite; one removed
+/// since the sweep never holds.
+pub(crate) fn fold_parent_favorites(
+    connection_id: &str,
+    stored: &HashMap<(&str, &str), Vec<&AudienceFavorite>>,
+    live: &BTreeMap<String, Vec<String>>,
+) -> WatchRecheck {
+    let newer = live.iter().any(|(item_id, accounts)| {
+        let rows = stored
+            .get(&(connection_id, item_id.trim()))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        accounts
+            .iter()
+            .any(|account| !rows.iter().any(|row| row.external_account_id == *account))
+    });
+    if newer {
+        WatchRecheck::NewerFavorite
+    } else {
         WatchRecheck::Clear
     }
 }
@@ -416,6 +548,7 @@ mod tests {
         last_played_at: Option<DateTime<Utc>>,
     ) -> ProviderItemPlay {
         ProviderItemPlay {
+            is_favorite: false,
             external_user_id: account.to_string(),
             played,
             last_played_at,
@@ -426,10 +559,113 @@ mod tests {
         ids.iter().map(|id| id.to_string()).collect()
     }
 
+    fn favourite(account: &str, item: &str, kind: MediaServerSignalKind) -> AudienceFavorite {
+        AudienceFavorite {
+            connection_id: "conn-example".to_string(),
+            external_account_id: account.to_string(),
+            provider_item_id: item.to_string(),
+            kind,
+            scryer_title_id: Some("title-1".to_string()),
+            scryer_episode_id: None,
+            season_number: None,
+        }
+    }
+
+    fn favourited(account: &str) -> ProviderItemPlay {
+        ProviderItemPlay {
+            is_favorite: true,
+            ..live(account, false, None)
+        }
+    }
+
+    #[test]
+    fn a_favourite_set_since_the_sweep_is_a_newer_favourite() {
+        let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
+            participants: vec![favourited("100"), live("200", false, None)],
+            history: Vec::new(),
+        };
+        assert_eq!(
+            fold_item_favorites(&[], &recheck),
+            WatchRecheck::NewerFavorite
+        );
+        // A stored favourite by someone else does not account for it.
+        let other = favourite("200", "item-1", MediaServerSignalKind::Movie);
+        assert_eq!(
+            fold_item_favorites(&[&other], &recheck),
+            WatchRecheck::NewerFavorite
+        );
+    }
+
+    #[test]
+    fn a_parent_favourite_is_newer_only_without_a_stored_row_for_that_account() {
+        let series = favourite("100", "series-1", MediaServerSignalKind::Series);
+        let mut by_item: HashMap<(&str, &str), Vec<&AudienceFavorite>> = HashMap::new();
+        by_item
+            .entry(("conn-example", "series-1"))
+            .or_default()
+            .push(&series);
+        let live = |item: &str, accounts: &[&str]| {
+            BTreeMap::from([(
+                item.to_string(),
+                accounts.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+            )])
+        };
+
+        assert_eq!(
+            fold_parent_favorites("conn-example", &by_item, &live("series-1", &["100"])),
+            WatchRecheck::Clear
+        );
+        assert_eq!(
+            fold_parent_favorites("conn-example", &by_item, &live("series-1", &["200"])),
+            WatchRecheck::NewerFavorite
+        );
+        assert_eq!(
+            fold_parent_favorites("conn-example", &by_item, &live("season-2", &["100"])),
+            WatchRecheck::NewerFavorite
+        );
+        // Stored on another connection is not stored here.
+        assert_eq!(
+            fold_parent_favorites("conn-other", &by_item, &live("series-1", &["100"])),
+            WatchRecheck::NewerFavorite
+        );
+        // Removed since the sweep never holds.
+        assert_eq!(
+            fold_parent_favorites("conn-example", &by_item, &BTreeMap::new()),
+            WatchRecheck::Clear
+        );
+    }
+
+    #[test]
+    fn a_stored_favourite_or_one_removed_since_the_sweep_is_clear() {
+        let row = favourite("100", "item-1", MediaServerSignalKind::Movie);
+        let still = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
+            participants: vec![favourited("100")],
+            history: Vec::new(),
+        };
+        assert_eq!(fold_item_favorites(&[&row], &still), WatchRecheck::Clear);
+        let removed = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
+            participants: vec![live("100", false, None)],
+            history: Vec::new(),
+        };
+        assert_eq!(fold_item_favorites(&[&row], &removed), WatchRecheck::Clear);
+    }
+
+    #[test]
+    fn a_rule_reads_favourite_facts_only_through_a_favourite_fact() {
+        let favourite = "package whatever\nimport rego.v1\n\nmatch if {\n\tnot input.facts.favorited_by_any_requester\n}\n";
+        let watch = "package whatever\nimport rego.v1\n\nmatch if {\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n";
+        assert!(rule_reads_favorite_facts(favourite, "rule-a"));
+        assert!(!rule_reads_favorite_facts(watch, "rule-a"));
+    }
+
     #[test]
     fn a_live_state_matching_the_stored_facts_is_clear() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(at(48))), live("200", false, None)],
             history: vec![live("100", true, Some(at(48)))],
         };
@@ -465,6 +701,7 @@ mod tests {
             last_played_at: Some(stored_time),
         };
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(server_time))],
             history: vec![
                 live("100", true, Some(server_time)),
@@ -478,6 +715,7 @@ mod tests {
 
         // A play one second later is a newer play.
         let later = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(server_time + Duration::seconds(1)))],
             history: Vec::new(),
         };
@@ -491,6 +729,7 @@ mod tests {
     fn a_first_play_since_the_sweep_is_a_newer_play() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![
                 live("100", true, Some(at(48))),
                 live("200", true, Some(at(1))),
@@ -507,6 +746,7 @@ mod tests {
     fn a_rewatch_since_the_sweep_is_a_newer_play() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(at(1)))],
             history: Vec::new(),
         };
@@ -520,6 +760,7 @@ mod tests {
     fn an_item_unplayed_since_the_sweep_does_not_hold() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", false, None)],
             history: Vec::new(),
         };
@@ -533,6 +774,7 @@ mod tests {
     fn a_participant_missing_from_the_answer_is_unavailable() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(at(48)))],
             history: Vec::new(),
         };
@@ -546,6 +788,7 @@ mod tests {
     fn a_history_play_by_an_account_no_fact_credits_is_uncredited() {
         let row = stored("100", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(at(48)))],
             history: vec![
                 live("100", true, Some(at(48))),
@@ -564,6 +807,7 @@ mod tests {
         // and a row past the stored time is a play the sweep did not see.
         let row = stored("300", Some(at(48)));
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("300", true, Some(at(48)))],
             history: vec![
                 live("300", true, Some(at(2))),
@@ -580,6 +824,7 @@ mod tests {
     fn a_stored_play_without_a_time_does_not_credit_a_timed_history_play() {
         let row = stored("100", None);
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, None)],
             history: vec![live("100", true, Some(at(5)))],
         };
@@ -603,6 +848,7 @@ mod tests {
             last_played_at: Some(at(200)),
         };
         let recheck = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live("100", true, Some(at(48)))],
             history: vec![
                 live("100", true, Some(at(48))),
@@ -615,6 +861,7 @@ mod tests {
         );
         // A play by that account after the audience read is still uncredited.
         let newer = ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             history: vec![live("900", true, Some(at(3)))],
             ..recheck
         };
@@ -630,6 +877,8 @@ mod tests {
             WatchRecheck::NewerPlay,
             WatchRecheck::UncreditedPlay,
             WatchRecheck::Unavailable,
+            WatchRecheck::Unmapped,
+            WatchRecheck::NewerFavorite,
         ]
         .map(|outcome| outcome.hold_reason().expect("a hold has a reason"));
         let distinct = reasons.iter().collect::<HashSet<_>>();

@@ -132,8 +132,9 @@ use quick_xml::events::Event;
 use reqwest::StatusCode;
 use scryer_application::media_server_signals::reasons;
 use scryer_application::{
-    MediaServerSignalReader, MediaServerSignalSource, ProviderAudiencePlay, ProviderItemPlay,
-    ProviderItemRecheck, ProviderPlayedItem, SignalReadFailure,
+    MediaServerSignalReader, MediaServerSignalSource, ProviderAccountFavorites,
+    ProviderAudiencePlay, ProviderItemPlay, ProviderItemRecheck, ProviderPlayedItem,
+    SignalReadFailure,
 };
 use scryer_domain::{MediaServerConnection, MediaServerProvider, MediaServerSignalKind};
 use scryer_outbound_http::generic_reqwest_client;
@@ -1158,6 +1159,7 @@ impl HttpMediaServerSignalSource {
                         return Err(unreadable_items());
                     };
                     plays.push(ProviderItemPlay {
+                        is_favorite: false,
                         external_user_id: plex_history_account(account, Some(owner_id)),
                         played: true,
                         last_played_at: Some(viewed_at),
@@ -1369,6 +1371,36 @@ impl MediaServerSignalReader for UserItemsReader {
         Ok(plays)
     }
 
+    /// Every user the admin key can list (`GET /Users`), each one's
+    /// favourites read exactly as [`Self::fetch_favorite_items`] reads them:
+    /// one listing per user, paged, plus the batched series lookup when
+    /// favourite seasons or episodes name series. A user whose read fails
+    /// carries that failure; the others' reads stand.
+    async fn fetch_audience_favorites(
+        &self,
+    ) -> Result<Vec<ProviderAccountFavorites>, SignalReadFailure> {
+        let (auth, fields) = self.auth_and_fields();
+        let mut accounts = Vec::new();
+        for user_id in self.list_user_ids().await? {
+            let favorites = self
+                .source
+                .fetch_user_items(
+                    &self.connection,
+                    &self.base,
+                    auth,
+                    fields,
+                    &user_id,
+                    UserItemListing::Favorites,
+                )
+                .await;
+            accounts.push(ProviderAccountFavorites {
+                external_account_id: user_id,
+                favorites,
+            });
+        }
+        Ok(accounts)
+    }
+
     /// Each item's user data for every user the admin key can list
     /// (`GET /Users`) and every participant, read per user in batches of
     /// [`LOOKUP_BATCH`] ids through `/Users/{userId}/Items?Ids=`. Neither
@@ -1427,15 +1459,16 @@ impl MediaServerSignalReader for UserItemsReader {
                         "item re-check: the server answered for an item not asked about",
                     ));
                 }
-                states.push((id, user_item_state(entry, &user)?));
+                let parents = item_parent_ids(entry);
+                states.push((id, (user_item_state(entry, &user)?, parents)));
             }
             Ok((user, Some(states)))
         });
-        let answers: Vec<(String, Option<Vec<(String, ProviderItemPlay)>>)> =
-            futures_util::stream::iter(reads)
-                .buffer_unordered(RECHECK_CONCURRENCY)
-                .try_collect()
-                .await?;
+        type ItemAnswer = (String, (ProviderItemPlay, Vec<String>));
+        let answers: Vec<(String, Option<Vec<ItemAnswer>>)> = futures_util::stream::iter(reads)
+            .buffer_unordered(RECHECK_CONCURRENCY)
+            .try_collect()
+            .await?;
         if !answers.is_empty() && answers.iter().all(|(_, states)| states.is_none()) {
             return Err(SignalReadFailure::new(
                 reasons::ACCESS_DENIED,
@@ -1444,8 +1477,15 @@ impl MediaServerSignalReader for UserItemsReader {
         }
 
         let mut states: BTreeMap<(String, String), ProviderItemPlay> = BTreeMap::new();
+        let mut parents: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (user, answer) in answers {
-            for (id, state) in answer.into_iter().flatten() {
+            for (id, (state, item_parents)) in answer.into_iter().flatten() {
+                let known = parents.entry(id.clone()).or_default();
+                for parent in item_parents {
+                    if !known.contains(&parent) {
+                        known.push(parent);
+                    }
+                }
                 states.insert((user.clone(), id), state);
             }
         }
@@ -1462,6 +1502,7 @@ impl MediaServerSignalReader for UserItemsReader {
                     .get(&(user.to_string(), id.clone()))
                     .cloned()
                     .unwrap_or_else(|| ProviderItemPlay {
+                        is_favorite: false,
                         external_user_id: user.to_string(),
                         played: false,
                         last_played_at: None,
@@ -1477,11 +1518,100 @@ impl MediaServerSignalReader for UserItemsReader {
                     .map(|user| state_of(user))
                     .filter(|state| state.played)
                     .collect(),
+                parent_item_ids: parents.remove(&id).unwrap_or_default(),
             };
             rechecks.insert(id, recheck);
         }
         Ok(rechecks)
     }
+
+    /// Each participant's favourite flags for the items, read per
+    /// participant in batches of [`LOOKUP_BATCH`] ids through the same
+    /// `/Users/{userId}/Items?Ids=` read [`Self::recheck_items`] makes. Only
+    /// the participants are read: the favourite facts are theirs alone.
+    async fn recheck_favorites(
+        &self,
+        provider_item_ids: &[String],
+        participants: &[String],
+    ) -> Result<BTreeMap<String, Vec<String>>, SignalReadFailure> {
+        let (auth, fields) = self.auth_and_fields();
+        let ids = recheck_item_ids(provider_item_ids)?;
+        let mut readers: Vec<String> = Vec::new();
+        for participant in participants {
+            let participant = participant_id(participant)?.to_string();
+            if !readers.contains(&participant) {
+                readers.push(participant);
+            }
+        }
+
+        let source = &self.source;
+        let base = &self.base;
+        let jobs: Vec<(String, Vec<String>)> = readers
+            .iter()
+            .flat_map(|user| {
+                ids.chunks(LOOKUP_BATCH)
+                    .map(move |chunk| (user.clone(), chunk.to_vec()))
+            })
+            .collect();
+        let reads = jobs.into_iter().map(|(user, chunk)| async move {
+            let url = items_by_id_url(base, &user, &chunk, fields)?;
+            let entries = match source.request_json(url, auth, None).await {
+                Ok(body) => field(&body, "Items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .ok_or_else(unreadable_listing)?,
+                // The item read this one follows already proved the
+                // credential; a participant refused here has no favourites.
+                Err(FetchFailure::Status(StatusCode::NOT_FOUND | StatusCode::FORBIDDEN)) => {
+                    return Ok::<_, SignalReadFailure>((user, Vec::new()));
+                }
+                Err(failure) => return Err(failure.into_failure()),
+            };
+            let mut favourites = Vec::new();
+            for entry in &entries {
+                let id = string_field(entry, "Id").ok_or_else(unreadable_items)?;
+                if !chunk.contains(&id) {
+                    return Err(SignalReadFailure::new(
+                        reasons::FILTER_NOT_HONOURED,
+                        "favourite re-check: the server answered for an item not asked about",
+                    ));
+                }
+                if user_item_state(entry, &user)?.is_favorite {
+                    favourites.push(id);
+                }
+            }
+            Ok((user, favourites))
+        });
+        let answers: Vec<(String, Vec<String>)> = futures_util::stream::iter(reads)
+            .buffer_unordered(RECHECK_CONCURRENCY)
+            .try_collect()
+            .await?;
+
+        let mut favourites: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (user, items) in answers {
+            for id in items {
+                let accounts = favourites.entry(id).or_default();
+                if !accounts.contains(&user) {
+                    accounts.push(user.clone());
+                }
+            }
+        }
+        Ok(favourites)
+    }
+}
+
+/// The series and season an episode answer names, in that order. A movie,
+/// or an answer that names neither, has none.
+fn item_parent_ids(entry: &Value) -> Vec<String> {
+    let mut parents = Vec::new();
+    for key in ["SeriesId", "SeasonId"] {
+        if let Some(id) = string_field(entry, key).filter(|id| !id.trim().is_empty())
+            && !parents.contains(&id)
+        {
+            parents.push(id);
+        }
+    }
+    parents
 }
 
 /// One user's state from a single-item answer. The answer must be the item
@@ -1503,12 +1633,18 @@ fn user_item_state(body: &Value, external_user_id: &str) -> ReadResult<ProviderI
                 "the item answer did not say whether it was played",
             )
         })?;
+    // Read as the sweep reads it: an answer that leaves the flag out is not
+    // a favourite.
+    let is_favorite = field(user_data, "IsFavorite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(ProviderItemPlay {
         external_user_id: external_user_id.to_string(),
         played,
         last_played_at: field(user_data, "LastPlayedDate")
             .and_then(Value::as_str)
             .and_then(parse_timestamp),
+        is_favorite,
     })
 }
 
@@ -1749,6 +1885,8 @@ impl MediaServerSignalReader for PlexReader {
                     ProviderItemRecheck {
                         participants: Vec::with_capacity(participants.len()),
                         history,
+                        // Plex has no favourites to read on a parent.
+                        parent_item_ids: Vec::new(),
                     },
                 )
             })
@@ -1757,11 +1895,13 @@ impl MediaServerSignalReader for PlexReader {
         for participant in participants {
             let external_user_id = participant_id(participant)?;
             let unplayed = || ProviderItemPlay {
+                is_favorite: false,
                 external_user_id: external_user_id.to_string(),
                 played: false,
                 last_played_at: None,
             };
             let as_state = |item: &ProviderPlayedItem| ProviderItemPlay {
+                is_favorite: false,
                 external_user_id: external_user_id.to_string(),
                 played: item.played,
                 last_played_at: item.last_played_at,
@@ -1800,6 +1940,7 @@ impl MediaServerSignalReader for PlexReader {
                             .filter_map(|play| play.last_played_at)
                             .max();
                         recheck.participants.push(ProviderItemPlay {
+                            is_favorite: false,
                             external_user_id: external_user_id.to_string(),
                             played: last_played_at.is_some(),
                             last_played_at,
@@ -4198,6 +4339,61 @@ mod tests {
         assert_eq!(plays[0].item.play_count, 3);
     }
 
+    /// Every listed user's favourites are read with the same admin key and
+    /// user list as the audience plays: one `GET /Users`, then one favourites
+    /// listing per user. A user whose listing fails carries that failure;
+    /// the others' reads stand.
+    #[tokio::test]
+    async fn jellyfin_audience_favourites_read_every_listed_user_and_fail_per_user() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "Id": "jf-user-a", "Name": "Example Viewer A" },
+                { "Id": "jf-user-b", "Name": "Example Viewer B" }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Users/jf-user-a/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "Items": [movie_item()], "TotalRecordCount": 1 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Users/jf-user-b/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        let accounts = HttpMediaServerSignalSource::new()
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_audience_favorites()
+            .await
+            .expect("the account list reads");
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].external_account_id, "jf-user-a");
+        let favourites = accounts[0].favorites.as_ref().expect("user a reads");
+        assert_eq!(favourites.len(), 1);
+        assert_eq!(favourites[0].provider_item_id, "jf-movie-1");
+        assert_eq!(accounts[1].external_account_id, "jf-user-b");
+        assert!(accounts[1].favorites.is_err(), "user b's failure is theirs");
+    }
+
     /// Emby may wrap the user list in `Items`; the admin key travels in
     /// Emby's own header. A listed user with no id fails the read rather
     /// than going missing from it.
@@ -5149,17 +5345,20 @@ mod tests {
             recheck.participants,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_OWNER_ID.into(),
                     played: true,
                     last_played_at: at(1_756_100_000),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_SHARED_ID.into(),
                     played: false,
                     last_played_at: None,
                 },
                 // Read from history: their state is their newest row there.
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "3003".into(),
                     played: true,
                     last_played_at: at(1_756_300_000),
@@ -5258,6 +5457,7 @@ mod tests {
             assert_eq!(
                 recheck.participants,
                 vec![ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_SHARED_ID.into(),
                     played: false,
                     last_played_at: None,
@@ -5455,11 +5655,13 @@ mod tests {
             recheck.participants,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-1".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-2".into(),
                     played: false,
                     last_played_at: None,
@@ -5470,16 +5672,131 @@ mod tests {
             recheck.history,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-1".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-3".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-31T21:00:00Z"),
                 },
             ]
+        );
+    }
+
+    /// The favourite flag comes from the same user data the play state does,
+    /// with no extra request; an answer that leaves it out is not a favourite.
+    #[tokio::test]
+    async fn a_jellyfin_recheck_reads_each_participants_favourite_flag() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2"]).await;
+        mount_user_items(
+            &server,
+            "",
+            "jf-user-1",
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": [{
+                "Id": "jf-item-4",
+                "Type": "Episode",
+                "UserData": { "Played": false, "PlayCount": 0, "IsFavorite": true }
+            }]})),
+        )
+        .await;
+        mount_user_items(
+            &server,
+            "",
+            "jf-user-2",
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": [{
+                "Id": "jf-item-4",
+                "Type": "Episode",
+                "UserData": { "Played": false, "PlayCount": 0 }
+            }]})),
+        )
+        .await;
+
+        let recheck = jellyfin_recheck(&server, &["jf-item-4"], &["jf-user-1", "jf-user-2"])
+            .await
+            .expect("the item re-checks")
+            .remove("jf-item-4")
+            .expect("the item is answered");
+
+        let favourites: Vec<(&str, bool)> = recheck
+            .participants
+            .iter()
+            .map(|state| (state.external_user_id.as_str(), state.is_favorite))
+            .collect();
+        assert_eq!(favourites, vec![("jf-user-1", true), ("jf-user-2", false)]);
+        assert!(recheck.history.is_empty(), "a favourite is not a play");
+    }
+
+    /// An episode answer names its series and season. Their favourite flags
+    /// are read per participant only, through the same batched `Ids` read,
+    /// and a participant the server refuses has no favourites.
+    #[tokio::test]
+    async fn a_jellyfin_favourite_recheck_reads_the_series_and_season_per_participant() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2", "jf-unlinked"]).await;
+        let answer = |favourite: &'static str| {
+            move |request: &Request| {
+                let items = query_value(request, "Ids")
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|id| !id.is_empty())
+                    .map(|id| {
+                        json!({
+                            "Id": id,
+                            "Type": if id == "jf-ep-1" { "Episode" } else { "Series" },
+                            "SeriesId": "jf-series-1",
+                            "SeasonId": "jf-season-1",
+                            "UserData": { "Played": false, "IsFavorite": id == favourite }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                ResponseTemplate::new(200).set_body_json(json!({ "Items": items }))
+            }
+        };
+        mount_user_items(&server, "", "jf-user-1", answer("jf-series-1")).await;
+        mount_user_items(&server, "", "jf-user-2", ResponseTemplate::new(404)).await;
+        mount_user_items(&server, "", "jf-unlinked", answer("jf-season-1")).await;
+
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+        let reader = HttpMediaServerSignalSource::new()
+            .open(&connection)
+            .await
+            .expect("opens");
+        let participants = vec!["jf-user-1".to_string(), "jf-user-2".to_string()];
+        let recheck = reader
+            .recheck_items(&["jf-ep-1".to_string()], &participants)
+            .await
+            .expect("the episode re-checks")
+            .remove("jf-ep-1")
+            .expect("the episode is answered");
+        assert_eq!(recheck.parent_item_ids, vec!["jf-series-1", "jf-season-1"]);
+        let before = server.received_requests().await.expect("recorded").len();
+
+        let favourites = reader
+            .recheck_favorites(&recheck.parent_item_ids, &participants)
+            .await
+            .expect("the parents re-check");
+        assert_eq!(
+            favourites,
+            BTreeMap::from([("jf-series-1".to_string(), vec!["jf-user-1".to_string()])]),
+            "only participants are read; the unlinked user's season favourite is not theirs"
+        );
+        let requests = server.received_requests().await.expect("recorded");
+        // Reads run concurrently, so their order is not the point.
+        let mut parent_reads: Vec<&str> = requests[before..]
+            .iter()
+            .map(|request| request.url.path())
+            .collect();
+        parent_reads.sort_unstable();
+        assert_eq!(
+            parent_reads,
+            vec!["/Users/jf-user-1/Items", "/Users/jf-user-2/Items"],
+            "one batched read per participant"
         );
     }
 

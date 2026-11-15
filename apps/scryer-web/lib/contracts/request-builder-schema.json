@@ -87,7 +87,7 @@
       "pattern": null,
       "template": "{head} := {value} if {helper}",
       "perItem": false,
-      "destructive": false,
+      "destructive": true,
       "variants": null,
       "conflictsWith": []
     },
@@ -118,9 +118,9 @@
       "options": "audioLanguages",
       "min": null,
       "max": null,
-      "maxItems": null,
-      "maxBytes": null,
-      "pattern": "[a-z]+",
+      "maxItems": 16,
+      "maxBytes": 32,
+      "pattern": "[A-Za-z_-]+",
       "template": "{head} := [{items}] if {helper}",
       "perItem": false,
       "destructive": false,
@@ -136,9 +136,9 @@
       "options": "audioLanguages",
       "min": null,
       "max": null,
-      "maxItems": null,
-      "maxBytes": null,
-      "pattern": "[a-z]+",
+      "maxItems": 16,
+      "maxBytes": 32,
+      "pattern": "[A-Za-z_-]+",
       "template": "{head} := [{items}] if {helper}",
       "perItem": false,
       "destructive": false,
@@ -173,7 +173,7 @@
       "min": null,
       "max": null,
       "maxItems": null,
-      "maxBytes": null,
+      "maxBytes": 500,
       "pattern": null,
       "template": "{head} := {value} if {helper}",
       "perItem": false,
@@ -202,6 +202,14 @@
   ],
   "outputRules": [
     {
+      "rule": "AT_MOST_ONE",
+      "of": [
+        "APPROVE",
+        "DENY",
+        "MANUAL"
+      ]
+    },
+    {
       "rule": "AT_LEAST_ONE",
       "of": [
         "APPROVE",
@@ -213,14 +221,6 @@
         "SET_REQUIRED_AUDIO_LANGUAGES",
         "SET_PREFERRED_AUDIO_LANGUAGES",
         "ADD_TAGS"
-      ]
-    },
-    {
-      "rule": "AT_MOST_ONE",
-      "of": [
-        "APPROVE",
-        "DENY",
-        "MANUAL"
       ]
     }
   ]

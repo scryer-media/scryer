@@ -107,6 +107,21 @@ ARCHIVE_EXTRACTION_TIMED_OUT, TITLE_FOLDER_CONFLICT.
 `operation`: CONNECTION_TEST, INTERACTIVE_SEARCH, AUTOMATIC_SEARCH, RSS_SYNC,
 INDEXER_ACTION, MANAGEMENT_SYNC, CAPS_REFRESH.
 
+Monthly limits (`maxRequestsPerMonth`, `maxGrabsPerMonth` in
+`IndexerStatus.graphql`) are refused by Scryer before anything is sent, so
+they never appear as an indexer error, a failed query or a backoff. The
+indexer is skipped, not failing: searches and RSS use the other indexers, and
+its releases stay eligible. It resumes on the 1st of the month (UTC) or when
+the limit is changed. The refusal carries one of these reason codes, on a
+manual grab or connection test and as `failureReasonCode` beside
+`skipReason: MONTHLY_LIMIT` on an interactive search:
+
+| code | meaning |
+|---|---|
+| `INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED` | `maxRequestsPerMonth` is used up; searches, RSS and grabs from it wait |
+| `INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED` | `maxGrabsPerMonth` is used up; it is still searched, its releases are not grabbed |
+| `INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE` | usage could not be checked, so the request was refused; it is retried on the next pass |
+
 ## Health checks
 
 From `HealthChecks.graphql`: `summaryJson.checks[] = {source, status, message}`.

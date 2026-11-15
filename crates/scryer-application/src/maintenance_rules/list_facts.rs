@@ -25,7 +25,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use chrono::{DateTime, Duration, Utc};
 use scryer_domain::{
     ListMembership, ListScope, ListSubscription, ListSyncState, MediaFacet, MediaRequestOrigin,
-    MediaServerSignalKind, Title, UserMediaSignal,
+    MediaServerSignalKind, Title,
 };
 use scryer_rules::maintenance::{
     EPISODE_SHAPE_MAINTENANCE_FACTS, FAVORITE_MAINTENANCE_FACTS, METADATA_MAINTENANCE_FACTS,
@@ -33,9 +33,12 @@ use scryer_rules::maintenance::{
     WATCHLIST_MAINTENANCE_FACTS,
 };
 
-use super::facts::{MaintenanceTitlePeople, MaintenanceWatchContext, unknown_reason};
+use super::facts::{
+    MaintenanceTitlePeople, MaintenanceWatchContext, WatchSignalFreshness, unknown_reason,
+};
 use crate::discovery::discovery_watchlist_source_matches;
 use crate::lists::ListSubscriptionQuery;
+use crate::ports::AudienceFavorite;
 use crate::{AppResult, AppUseCase, TitleEpisodeShape, TitleRatingSummary};
 
 /// What the list store says about one title.
@@ -84,7 +87,7 @@ pub(crate) struct MaintenanceListFacts {
     pub metadata: MetadataLoad,
     /// The shows' episode-list shapes, read the same way.
     pub episode_shapes: EpisodeShapeLoad,
-    /// The members' stored Jellyfin and Emby favourites.
+    /// Every account's stored Jellyfin and Emby favourites.
     pub favorites: FavoriteLoad,
 }
 
@@ -94,9 +97,8 @@ pub(crate) enum FavoriteLoad {
     /// No rule being evaluated reads a favourite fact.
     #[default]
     NotLoaded,
-    /// Every enabled media server is Plex: the facts do not apply.
-    Absent(&'static str),
-    /// The watch gate is closed or the store could not be read.
+    /// Every enabled media server is Plex, both the watch gate and the
+    /// audience gate are closed, or the store could not be read.
     Unknown(&'static str),
     Loaded(FavoriteRows),
 }
@@ -104,13 +106,25 @@ pub(crate) enum FavoriteLoad {
 /// The batch's favourites, and who they could have come from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FavoriteRows {
-    /// Favourite rows from the observed Jellyfin and Emby connections, keyed
-    /// by title id. A title with no entry is nobody's favourite.
-    pub by_title: HashMap<String, Vec<UserMediaSignal>>,
+    /// Every account's favourites on the enabled Jellyfin and Emby
+    /// connections, keyed by title id. A title with no entry is nobody's
+    /// favourite among the accounts read.
+    pub by_title: HashMap<String, Vec<AudienceFavorite>>,
     /// Every linked member the watch gate observes.
     pub linked_user_ids: HashSet<String>,
     /// The linked members observed on a server that has favourites.
     pub favorite_user_ids: HashSet<String>,
+    /// The Scryer users behind each favourite account a read link reaches.
+    pub favorite_accounts: HashMap<(String, String), BTreeSet<String>>,
+    /// Members with a linked account whose favourites were not read in full
+    /// recently.
+    pub favorite_unread_user_ids: HashSet<String>,
+    /// Why the per-user favourite facts cannot be answered, if they cannot:
+    /// the watch gate.
+    pub member_gate: Option<&'static str>,
+    /// Why `favorited_by_anyone` cannot be false, if it cannot: the audience
+    /// gate, an account whose favourites were not read, or a Plex server.
+    pub audience_gate: Option<&'static str>,
 }
 
 /// The episode-list shapes of a batch's shows.
@@ -250,6 +264,16 @@ pub(crate) fn watchlists_from_rows(
     subscriptions: &[ListSubscription],
     now: DateTime<Utc>,
 ) -> WatchlistLoad {
+    // A member's watchlist that is switched off, set not to sync, or has lost
+    // the account it reads through still exists; Scryer just cannot read it.
+    // Leaving it out would make "on nobody's watchlist" a guess.
+    if subscriptions.iter().any(|subscription| {
+        subscription.scope == ListScope::Personal
+            && discovery_watchlist_source_matches(subscription)
+            && !is_member_watchlist(subscription)
+    }) {
+        return WatchlistLoad::Unknown(unknown_reason::WATCHLIST_NOT_SYNCED);
+    }
     let watchlists: HashMap<&str, &ListSubscription> = subscriptions
         .iter()
         .filter(|subscription| is_member_watchlist(subscription))
@@ -393,9 +417,9 @@ impl AppUseCase {
         }
     }
 
-    /// One indexed read of the batch's stored favourites, behind the watch
-    /// gate. Nothing is read when the gate is closed or no enabled server has
-    /// favourites.
+    /// One indexed, bind-safe read of the batch's stored favourites. Nothing
+    /// is read when no enabled server has favourites, or when both the watch
+    /// gate and the audience gate are closed.
     async fn maintenance_favorite_rows(
         &self,
         title_ids: &[String],
@@ -408,21 +432,69 @@ impl AppUseCase {
             .services
             .integrations
             .media_server_signals
-            .favorite_signals_for_titles(title_ids)
+            .audience_favorites_for_titles(title_ids)
             .await
         {
             Ok(mut by_title) => {
                 for rows in by_title.values_mut() {
-                    rows.retain(|row| {
-                        row.is_favorite
-                            && watch.favorite_connection_ids.contains(&row.connection_id)
-                    });
+                    rows.retain(|row| watch.favorite_connection_ids.contains(&row.connection_id));
                 }
                 by_title.retain(|_, rows| !rows.is_empty());
+                // A resolved episode favourite is placed in its Scryer season,
+                // never the provider's: the two can number seasons apart. One
+                // bind-safe read of just those episodes; an episode whose
+                // Scryer season cannot be read is left unplaced (None), which
+                // counts it for every season of the series.
+                let episode_ids: Vec<String> = by_title
+                    .values()
+                    .flatten()
+                    .filter(|row| row.kind == MediaServerSignalKind::Episode)
+                    .filter_map(|row| row.scryer_episode_id.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                if !episode_ids.is_empty() {
+                    let seasons: HashMap<String, i64> = match self
+                        .services
+                        .catalog
+                        .shows
+                        .get_episodes_by_ids(&episode_ids)
+                        .await
+                    {
+                        Ok(episodes) => episodes
+                            .into_iter()
+                            .filter_map(|episode| {
+                                let season = episode
+                                    .season_number
+                                    .as_deref()
+                                    .and_then(|value| value.trim().parse::<i64>().ok())?;
+                                Some((episode.id, season))
+                            })
+                            .collect(),
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                "could not place favourited episodes in their seasons; favourite facts are unknown for this batch"
+                            );
+                            return FavoriteLoad::Unknown(unknown_reason::FAVORITES_UNREADABLE);
+                        }
+                    };
+                    for row in by_title.values_mut().flatten() {
+                        if row.kind == MediaServerSignalKind::Episode
+                            && let Some(episode_id) = row.scryer_episode_id.as_deref()
+                        {
+                            row.season_number = seasons.get(episode_id).copied();
+                        }
+                    }
+                }
                 FavoriteLoad::Loaded(FavoriteRows {
                     by_title,
                     linked_user_ids: watch.linked_user_ids.clone(),
                     favorite_user_ids: watch.favorite_user_ids.clone(),
+                    favorite_accounts: watch.favorite_accounts.clone(),
+                    favorite_unread_user_ids: watch.favorite_unread_user_ids.clone(),
+                    member_gate: watch.unavailable_reason(),
+                    audience_gate: audience_favorite_gate(watch),
                 })
             }
             Err(error) => {
@@ -739,13 +811,38 @@ pub(crate) fn apply_list_facts(
 }
 
 /// Why the favourites cannot be read for this run, if they cannot. Plex has
-/// no favourites whatever its sweep says, so an instance served only by Plex
-/// answers "does not apply" before the watch gate is asked.
+/// no favourites whatever its sweep says, so on an instance served only by
+/// Plex nobody's favourites can be seen: that is "cannot know", never "not a
+/// favourite", and it is answered before the watch gate is asked. The rows
+/// are read while either the watch gate (the per-user facts) or the audience
+/// gate (the anonymous fact) is open.
 pub(crate) fn favorite_gate(watch: &MaintenanceWatchContext) -> Option<FavoriteLoad> {
     if !watch.enabled_connection_ids.is_empty() && watch.favorite_connection_ids.is_empty() {
-        return Some(FavoriteLoad::Absent(unknown_reason::FAVORITES_UNSUPPORTED));
+        return Some(FavoriteLoad::Unknown(unknown_reason::FAVORITES_UNSUPPORTED));
     }
-    watch.unavailable_reason().map(FavoriteLoad::Unknown)
+    match (
+        watch.unavailable_reason(),
+        watch.audience_unavailable_reason(),
+    ) {
+        (Some(reason), Some(_)) => Some(FavoriteLoad::Unknown(reason)),
+        _ => None,
+    }
+}
+
+/// Why `favorited_by_anyone` cannot be known false, if it cannot: the
+/// audience gate, then an account on a favourite server whose favourites were
+/// not read in full recently, then an enabled Plex server whose accounts'
+/// favourites cannot be read at all.
+pub(crate) fn audience_favorite_gate(watch: &MaintenanceWatchContext) -> Option<&'static str> {
+    watch
+        .audience_unavailable_reason()
+        .or(match watch.audience_favorites {
+            WatchSignalFreshness::Fresh => None,
+            WatchSignalFreshness::Unavailable(reason) => Some(reason),
+        })
+        .or(watch
+            .plex_connected
+            .then_some(unknown_reason::AUDIENCE_FAVORITES_UNSUPPORTED))
 }
 
 /// Lay the batch's watchlist, genre and rating facts over one subject's
@@ -764,30 +861,31 @@ pub(crate) fn apply_watchlist_and_metadata_facts(
 
 /// Whether a favourite row covers the subject.
 ///
-/// A title subject counts every favourite of the title: the movie, or the
-/// series and any of its seasons and episodes. A season counts its own
-/// favourite, its episodes' and the series'. An episode counts its own, its
-/// season's and the series'.
-fn favorite_covers_subject(input: &MaintenanceInput, row: &UserMediaSignal) -> bool {
+/// A title subject counts every favourite of the title. A provider's season
+/// numbers need not be Scryer's, so a favourite of the series or of one of its
+/// seasons counts for the series and for every season and episode subject of
+/// it. A resolved episode favourite counts for that episode, for the season
+/// Scryer files the episode under (its `season_number` here, set from the
+/// Scryer episode when the batch is read), and for the series; one Scryer
+/// could not place in a season counts for every season. An episode favourite
+/// Scryer could not resolve to an episode counts at series level, for every
+/// subject.
+fn favorite_covers_subject(input: &MaintenanceInput, row: &AudienceFavorite) -> bool {
     let subject = &input.subject;
     let season = subject.season_number.map(i64::from);
-    match subject.kind {
-        MaintenanceSubjectKind::Title => true,
-        MaintenanceSubjectKind::Season => match row.kind {
-            MediaServerSignalKind::Series => true,
-            MediaServerSignalKind::Season | MediaServerSignalKind::Episode => {
-                season.is_some() && row.season_number == season
-            }
-            MediaServerSignalKind::Movie => false,
-        },
-        MaintenanceSubjectKind::Episode => match row.kind {
-            MediaServerSignalKind::Series => true,
-            MediaServerSignalKind::Season => season.is_some() && row.season_number == season,
-            MediaServerSignalKind::Episode => {
-                subject.episode_id.is_some() && row.scryer_episode_id == subject.episode_id
-            }
-            MediaServerSignalKind::Movie => false,
-        },
+    match (subject.kind, row.kind) {
+        (MaintenanceSubjectKind::Title, _) => true,
+        (_, MediaServerSignalKind::Movie) => false,
+        (_, MediaServerSignalKind::Series | MediaServerSignalKind::Season) => true,
+        (MaintenanceSubjectKind::Season, MediaServerSignalKind::Episode) => {
+            row.scryer_episode_id.is_none()
+                || row.season_number.is_none()
+                || (season.is_some() && row.season_number == season)
+        }
+        (MaintenanceSubjectKind::Episode, MediaServerSignalKind::Episode) => {
+            row.scryer_episode_id.is_none()
+                || (subject.episode_id.is_some() && row.scryer_episode_id == subject.episode_id)
+        }
     }
 }
 
@@ -799,14 +897,6 @@ fn apply_favorite_facts(
 ) {
     let rows = match loaded {
         FavoriteLoad::NotLoaded => return,
-        FavoriteLoad::Absent(reason) => {
-            let facts = &mut input.facts;
-            facts.favorited_by_user_ids = Observation::absent_because(*reason);
-            facts.favorited_by_usernames = Observation::absent_because(*reason);
-            facts.favorited_by_anyone = Observation::absent_because(*reason);
-            facts.favorited_by_any_requester = Observation::absent_because(*reason);
-            return;
-        }
         FavoriteLoad::Unknown(reason) => {
             let facts = &mut input.facts;
             facts.favorited_by_user_ids = Observation::unknown(*reason);
@@ -819,7 +909,6 @@ fn apply_favorite_facts(
     };
 
     let mut favoriters: BTreeSet<String> = BTreeSet::new();
-    let mut unattributed = false;
     let mut any = false;
     for row in rows
         .by_title
@@ -830,16 +919,13 @@ fn apply_favorite_facts(
         .filter(|row| favorite_covers_subject(input, row))
     {
         any = true;
-        match row
-            .scryer_user_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|user_id| !user_id.is_empty())
+        // An account no read link reaches is nobody Scryer knows: it counts
+        // only for the anonymous fact.
+        if let Some(user_ids) = rows
+            .favorite_accounts
+            .get(&(row.connection_id.clone(), row.external_account_id.clone()))
         {
-            Some(user_id) => {
-                favoriters.insert(user_id.to_string());
-            }
-            None => unattributed = true,
+            favoriters.extend(user_ids.iter().cloned());
         }
     }
     // A linked member seen only through Plex could have favourited it there
@@ -848,20 +934,31 @@ fn apply_favorite_facts(
         .linked_user_ids
         .iter()
         .any(|user_id| !rows.favorite_user_ids.contains(user_id));
+    let unread = rows
+        .linked_user_ids
+        .iter()
+        .any(|user_id| rows.favorite_unread_user_ids.contains(user_id));
 
     let facts = &mut input.facts;
+    // A favourite found is decisive. Its absence is known only once every
+    // account on every favourite server was read in full, and no account
+    // could have favourited it where Scryer cannot read favourites.
     facts.favorited_by_anyone = if any {
         Observation::known(true)
+    } else if let Some(reason) = rows.audience_gate {
+        Observation::unknown(reason)
     } else if unobservable {
         Observation::unknown(unknown_reason::FAVORITE_MEMBER_UNOBSERVABLE)
     } else {
         Observation::known(false)
     };
 
-    let complete = if unattributed {
-        Err(unknown_reason::SIGNAL_IDENTITY_MISSING)
+    let complete = if let Some(reason) = rows.member_gate {
+        Err(reason)
     } else if unobservable {
         Err(unknown_reason::FAVORITE_MEMBER_UNOBSERVABLE)
+    } else if unread {
+        Err(unknown_reason::FAVORITES_MEMBER_NOT_READ)
     } else {
         Ok(())
     };
@@ -887,13 +984,13 @@ fn apply_favorite_facts(
     let requesters = people.requester_user_ids.unwrap_or_default();
     facts.favorited_by_any_requester = if requesters.is_empty() {
         Observation::absent_because(unknown_reason::TITLE_NOT_REQUESTED)
-    } else if unattributed {
-        Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING)
     } else if requesters
         .iter()
         .any(|requester| favoriters.contains(requester))
     {
         Observation::known(true)
+    } else if let Some(reason) = rows.member_gate {
+        Observation::unknown(reason)
     } else if requesters
         .iter()
         .any(|requester| !rows.linked_user_ids.contains(requester))
@@ -904,6 +1001,11 @@ fn apply_favorite_facts(
         .any(|requester| !rows.favorite_user_ids.contains(requester))
     {
         Observation::unknown(unknown_reason::FAVORITE_MEMBER_UNOBSERVABLE)
+    } else if requesters
+        .iter()
+        .any(|requester| rows.favorite_unread_user_ids.contains(requester))
+    {
+        Observation::unknown(unknown_reason::FAVORITES_MEMBER_NOT_READ)
     } else {
         Observation::known(false)
     };
@@ -919,19 +1021,29 @@ fn apply_episode_shape_facts(
         return;
     }
     let facts = &mut input.facts;
-    let Some(shapes) = &loaded.shapes else {
-        let reason = unknown_reason::EPISODE_STORE_UNREADABLE;
-        facts.season_count = Observation::unknown(reason);
-        facts.aired_episode_count = Observation::unknown(reason);
-        facts.unaired_episode_count = Observation::unknown(reason);
-        facts.missing_episode_count = Observation::unknown(reason);
-        facts.aired_episode_file_percent = Observation::unknown(reason);
-        facts.latest_season_number = Observation::unknown(reason);
-        facts.latest_aired_episode_date = Observation::unknown(reason);
-        facts.next_episode_air_date = Observation::unknown(reason);
-        return;
+    // A show with no regular episode row has not had its episode list read,
+    // as far as anything stored says: zero counts would be a guess.
+    let shape = match &loaded.shapes {
+        None => Err(unknown_reason::EPISODE_STORE_UNREADABLE),
+        Some(shapes) => shapes
+            .get(title_id)
+            .cloned()
+            .ok_or(unknown_reason::EPISODE_LIST_EMPTY),
     };
-    let shape = shapes.get(title_id).cloned().unwrap_or_default();
+    let shape = match shape {
+        Ok(shape) => shape,
+        Err(reason) => {
+            facts.season_count = Observation::unknown(reason);
+            facts.aired_episode_count = Observation::unknown(reason);
+            facts.unaired_episode_count = Observation::unknown(reason);
+            facts.missing_episode_count = Observation::unknown(reason);
+            facts.aired_episode_file_percent = Observation::unknown(reason);
+            facts.latest_season_number = Observation::unknown(reason);
+            facts.latest_aired_episode_date = Observation::unknown(reason);
+            facts.next_episode_air_date = Observation::unknown(reason);
+            return;
+        }
+    };
     facts.season_count = Observation::known(shape.season_count);
     facts.aired_episode_count = Observation::known(shape.aired_episode_count);
     facts.unaired_episode_count = Observation::known(shape.unaired_episode_count);

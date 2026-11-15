@@ -87,6 +87,16 @@ impl RssSeenGuids {
         is_new
     }
 
+    /// Drops `guid` from `indexer`'s set, so its next poll treats the item as
+    /// new again. Used for a release passed over only because its indexer was
+    /// at its monthly limit: nothing was decided about it, so it must come
+    /// back once the limit lifts.
+    fn forget(&mut self, indexer: &str, guid: &str) {
+        if let Some(seen) = self.by_indexer.get_mut(indexer) {
+            seen.remove(guid);
+        }
+    }
+
     /// Trims each indexer polled this cycle back to its bound, dropping its
     /// least recently returned GUIDs first. This cycle's GUIDs are never
     /// evicted: dropping one would let the next poll, which reads back to the
@@ -115,6 +125,16 @@ impl RssSeenGuids {
             }
         }
     }
+}
+
+/// The identity an RSS item is remembered by in [`RssSeenGuids`].
+fn rss_seen_guid(result: &IndexerSearchResult) -> &str {
+    result
+        .guid
+        .as_deref()
+        .or(result.download_url.as_deref())
+        .or(result.link.as_deref())
+        .unwrap_or(&result.title)
 }
 
 /// The key a feed item's GUID is remembered under: the indexer that returned
@@ -1570,13 +1590,15 @@ impl AppUseCase {
             let mut seen_guids = self.runtime.acquisition.rss_seen_guids.write().await;
             let mut new_results: Vec<IndexerSearchResult> = Vec::new();
             for result in results {
+                // A release from an indexer already known to be at its
+                // monthly limit cannot be grabbed, so it is neither matched nor
+                // remembered: the first poll after the limit lifts sees it as
+                // new.
+                if self.indexer_monthly_grab_refused_now(result.indexer_id.as_deref()) {
+                    continue;
+                }
                 let release_identity = rss_release_identity(&result);
-                let guid = result
-                    .guid
-                    .as_deref()
-                    .or(result.download_url.as_deref())
-                    .or(result.link.as_deref())
-                    .unwrap_or(&result.title);
+                let guid = rss_seen_guid(&result);
 
                 // Record every fresh GUID, then give an active unknown-age row
                 // one more look even if it was already seen this process
@@ -2121,7 +2143,7 @@ impl AppUseCase {
         // Snapshot download client state
         let dl_snapshot = super::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
         let delay_profiles = self.load_delay_profiles().await;
-        let mut grabbed_urls: HashSet<String> = HashSet::new();
+        let mut pass = RssPassState::default();
         let mut report = RssSyncReport {
             releases_fetched: total_new,
             releases_matched: matched_count,
@@ -2198,7 +2220,7 @@ impl AppUseCase {
                     &dl_snapshot,
                     queue,
                     &delay_profiles,
-                    &mut grabbed_urls,
+                    &mut pass,
                     &mut report,
                     &now,
                 )
@@ -2210,7 +2232,7 @@ impl AppUseCase {
                     &dl_snapshot,
                     queue,
                     &delay_profiles,
-                    &mut grabbed_urls,
+                    &mut pass,
                     &mut report,
                     &now,
                 )
@@ -2236,7 +2258,7 @@ impl AppUseCase {
                     &dl_snapshot,
                     queue,
                     &delay_profiles,
-                    &mut grabbed_urls,
+                    &mut pass,
                     &mut report,
                     &now,
                 )
@@ -2477,7 +2499,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -2557,7 +2579,7 @@ impl AppUseCase {
             dl_snapshot,
             queue,
             delay_profiles,
-            grabbed_urls,
+            pass,
             report,
             now,
         )
@@ -2579,7 +2601,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -2753,7 +2775,7 @@ impl AppUseCase {
                 dl_snapshot,
                 queue,
                 delay_profiles,
-                grabbed_urls,
+                pass,
                 report,
                 now,
             )
@@ -2773,7 +2795,7 @@ impl AppUseCase {
                 dl_snapshot,
                 queue,
                 delay_profiles,
-                grabbed_urls,
+                pass,
                 report,
                 now,
             )
@@ -2858,7 +2880,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -2964,7 +2986,7 @@ impl AppUseCase {
             dl_snapshot,
             queue,
             delay_profiles,
-            grabbed_urls,
+            pass,
             report,
             now,
         )
@@ -2986,7 +3008,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -3140,7 +3162,7 @@ impl AppUseCase {
                 dl_snapshot,
                 queue,
                 delay_profiles,
-                grabbed_urls,
+                pass,
                 report,
                 now,
             )
@@ -3204,6 +3226,17 @@ impl AppUseCase {
         .map(|batch| batch.results)
     }
 
+    /// Drops `result` from the RSS seen set, so a release passed over for its
+    /// indexer's monthly limit is seen as new by a later poll.
+    async fn forget_rss_seen_guid(&self, result: &IndexerSearchResult) {
+        self.runtime
+            .acquisition
+            .rss_seen_guids
+            .write()
+            .await
+            .forget(rss_seen_guid_indexer(result), rss_seen_guid(result));
+    }
+
     /// Try to grab the best candidate from scored RSS releases.
     /// Reuses the same logic as process_single_wanted_item for consistency.
     ///
@@ -3231,7 +3264,7 @@ impl AppUseCase {
         dl_snapshot: &super::acquisition_workflow::DownloadClientSnapshot,
         queue: Option<&TitleQueueSnapshot>,
         delay_profiles: &[DelayProfile],
-        grabbed_urls: &mut HashSet<String>,
+        pass: &mut RssPassState,
         report: &mut RssSyncReport,
         now: &DateTime<Utc>,
     ) {
@@ -3423,6 +3456,19 @@ impl AppUseCase {
 
         let mut ranked = Vec::with_capacity(scored.len());
         for (index, candidate) in scored.iter().enumerate() {
+            // An indexer whose monthly limit already refused a grab in this
+            // pass is passed over; its releases stay eligible for a later one.
+            // An indexer already known to be at its limit is passed over the
+            // same way, before anything is written for its release.
+            if pass.indexer_limit_refused(candidate.indexer_id.as_deref()) {
+                self.forget_rss_seen_guid(candidate).await;
+                continue;
+            }
+            if self.indexer_monthly_grab_refused_now(candidate.indexer_id.as_deref()) {
+                pass.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+                self.forget_rss_seen_guid(candidate).await;
+                continue;
+            }
             let scope = candidate
                 .coverage_scope
                 .as_ref()
@@ -3576,7 +3622,7 @@ impl AppUseCase {
                 .unwrap_or(ReleaseAutoDecisionCode::QualityBlocked)
             } else if route_key
                 .as_ref()
-                .is_some_and(|route| grabbed_urls.contains(route))
+                .is_some_and(|route| pass.grabbed_urls.contains(route))
             {
                 ReleaseAutoDecisionCode::DownloadClientUnavailable
             } else {
@@ -3915,7 +3961,7 @@ impl AppUseCase {
             .map(|(_, kind)| *kind)
             .or(best.source_kind);
         if let Some(url) = source_hint.as_deref()
-            && !grabbed_urls.insert(url.to_string())
+            && !pass.grabbed_urls.insert(url.to_string())
         {
             return;
         }
@@ -4262,6 +4308,37 @@ impl AppUseCase {
 
                 report.releases_grabbed += 1;
             }
+            Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                // Nothing was sent, so this says nothing about the release:
+                // no failed attempt, no blocklist entry. The rest of the pass
+                // skips this indexer and the walk continues with the others.
+                // Everything up to the refused release is already decided and
+                // recorded, so only what follows it is walked again.
+                debug!(
+                    title = title.name.as_str(),
+                    release = best.title.as_str(),
+                    indexer_id = ?best.indexer_id,
+                    reason = err.reason().unwrap_or_default(),
+                    "RSS sync: grab refused by the indexer's monthly limit"
+                );
+                pass.mark_indexer_limit_refused(best.indexer_id.as_deref());
+                self.forget_rss_seen_guid(best).await;
+                Box::pin(self.try_grab_rss_release(
+                    reads,
+                    title,
+                    &wanted,
+                    &scored[best_index + 1..],
+                    _category,
+                    scope_override,
+                    dl_snapshot,
+                    queue,
+                    delay_profiles,
+                    pass,
+                    report,
+                    now,
+                ))
+                .await;
+            }
             Err(err) => {
                 warn!(
                     title = title.name.as_str(),
@@ -4303,7 +4380,8 @@ impl AppUseCase {
                     if let Some(route) =
                         crate::acquisition_workflow::DownloadRouteKey::for_candidate(best)
                     {
-                        grabbed_urls.insert(format!("__rss_failed_route:{route:?}"));
+                        pass.grabbed_urls
+                            .insert(format!("__rss_failed_route:{route:?}"));
                     }
                     // Walk the failed head again only to persist its temporary
                     // route-unavailable observation; the marker makes the
@@ -4318,7 +4396,7 @@ impl AppUseCase {
                         dl_snapshot,
                         queue,
                         delay_profiles,
-                        grabbed_urls,
+                        pass,
                         report,
                         now,
                     ))
@@ -4342,7 +4420,7 @@ impl AppUseCase {
                         dl_snapshot,
                         queue,
                         delay_profiles,
-                        grabbed_urls,
+                        pass,
                         report,
                         now,
                     ))
@@ -4409,12 +4487,34 @@ impl AppUseCase {
                     dl_snapshot,
                     queue,
                     delay_profiles,
-                    grabbed_urls,
+                    pass,
                     report,
                     now,
                 ))
                 .await;
             }
+        }
+    }
+}
+
+/// What one RSS grab pass remembers across the titles it walks.
+#[derive(Default)]
+pub(crate) struct RssPassState {
+    /// Download sources already submitted in this pass.
+    grabbed_urls: HashSet<String>,
+    /// Indexers whose monthly limit refuses a grab. Their remaining releases
+    /// are passed over for the rest of the pass and stay eligible.
+    limit_refused_indexers: HashSet<String>,
+}
+
+impl RssPassState {
+    fn indexer_limit_refused(&self, indexer_id: Option<&str>) -> bool {
+        indexer_id.is_some_and(|id| self.limit_refused_indexers.contains(id))
+    }
+
+    fn mark_indexer_limit_refused(&mut self, indexer_id: Option<&str>) {
+        if let Some(id) = indexer_id {
+            self.limit_refused_indexers.insert(id.to_string());
         }
     }
 }

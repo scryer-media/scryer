@@ -442,11 +442,13 @@ struct StubSignalSource {
     open_failure: Option<SignalReadFailure>,
     opens: AtomicUsize,
     calls: Arc<AtomicUsize>,
-    /// Each participant's favourites; `None` is a server with none (the
-    /// reader's default).
+    /// Every listed account's favourites; `None` keeps the reader's default
+    /// refusal.
     favorites: Option<HashMap<String, Vec<ProviderPlayedItem>>>,
-    /// While set, every favourites read fails.
+    /// While set, the account list itself cannot be read.
     favorites_failing: Arc<std::sync::atomic::AtomicBool>,
+    /// While set, every listed account's favourites read fails.
+    account_favorites_failing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct StubSignalReader {
@@ -456,6 +458,7 @@ struct StubSignalReader {
     calls: Arc<AtomicUsize>,
     favorites: Option<HashMap<String, Vec<ProviderPlayedItem>>>,
     favorites_failing: Arc<std::sync::atomic::AtomicBool>,
+    account_favorites_failing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait]
@@ -475,6 +478,7 @@ impl MediaServerSignalSource for StubSignalSource {
             calls: self.calls.clone(),
             favorites: self.favorites.clone(),
             favorites_failing: self.favorites_failing.clone(),
+            account_favorites_failing: self.account_favorites_failing.clone(),
         }))
     }
 }
@@ -496,20 +500,38 @@ impl MediaServerSignalReader for StubSignalReader {
             .unwrap_or_default())
     }
 
-    async fn fetch_favorite_items(
+    async fn fetch_audience_favorites(
         &self,
-        external_user_id: &str,
-    ) -> Result<Option<Vec<ProviderPlayedItem>>, SignalReadFailure> {
+    ) -> Result<Vec<crate::ports::ProviderAccountFavorites>, SignalReadFailure> {
+        let Some(favorites) = &self.favorites else {
+            return Err(SignalReadFailure::new(
+                reasons::SOURCE_UNAVAILABLE,
+                "no favourites in this fixture",
+            ));
+        };
         if self.favorites_failing.load(Ordering::SeqCst) {
             return Err(SignalReadFailure::new(
                 reasons::REQUEST_FAILED,
-                "favourites unavailable",
+                "account list unavailable",
             ));
         }
-        Ok(self
-            .favorites
-            .as_ref()
-            .map(|favorites| favorites.get(external_user_id).cloned().unwrap_or_default()))
+        let failing = self.account_favorites_failing.load(Ordering::SeqCst);
+        let mut accounts: Vec<_> = favorites.iter().collect();
+        accounts.sort_by(|left, right| left.0.cmp(right.0));
+        Ok(accounts
+            .into_iter()
+            .map(|(account, items)| crate::ports::ProviderAccountFavorites {
+                external_account_id: account.clone(),
+                favorites: if failing {
+                    Err(SignalReadFailure::new(
+                        reasons::ITEMS_UNREADABLE,
+                        "favourites unavailable",
+                    ))
+                } else {
+                    Ok(items.clone())
+                },
+            })
+            .collect())
     }
 
     async fn fetch_audience_plays(
@@ -538,6 +560,8 @@ pub(super) struct InMemorySignalRepo {
     roster: Mutex<Vec<crate::ports::SignalRosterEntry>>,
     pub(super) audience: Mutex<Vec<crate::ports::AudiencePlay>>,
     pub(super) audience_reads: Mutex<Vec<crate::ports::AudienceRead>>,
+    pub(super) audience_favorites: Mutex<Vec<crate::ports::AudienceFavorite>>,
+    pub(super) audience_favorite_reads: Mutex<Vec<crate::ports::AudienceFavoriteRead>>,
 }
 
 impl InMemorySignalRepo {
@@ -708,6 +732,94 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
 
     async fn signal_roster(&self) -> AppResult<Vec<crate::ports::SignalRosterEntry>> {
         Ok(self.roster.lock().await.clone())
+    }
+
+    async fn replace_audience_favorites(
+        &self,
+        connection_id: &str,
+        accounts: &[crate::ports::AudienceFavoriteAccount],
+        sweep_started_at: chrono::DateTime<Utc>,
+    ) -> AppResult<u64> {
+        use crate::ports::{AudienceFavoriteAccountRead, AudienceFavoriteRead};
+        let mut rows = self.audience_favorites.lock().await;
+        let mut reads = self.audience_favorite_reads.lock().await;
+        let listed: HashSet<&str> = accounts
+            .iter()
+            .map(|account| account.external_account_id.as_str())
+            .collect();
+        rows.retain(|row| {
+            row.connection_id != connection_id || listed.contains(row.external_account_id.as_str())
+        });
+        reads.retain(|read| read.connection_id != connection_id);
+        for account in accounts {
+            let (read_at, failure_reason) = match &account.read {
+                AudienceFavoriteAccountRead::Read {
+                    favorites,
+                    unplaced,
+                } => {
+                    rows.retain(|row| {
+                        row.connection_id != connection_id
+                            || row.external_account_id != account.external_account_id
+                    });
+                    rows.extend(favorites.iter().cloned());
+                    (unplaced.is_none().then(Utc::now), unplaced.clone())
+                }
+                AudienceFavoriteAccountRead::Failed { reason } => (None, Some(reason.clone())),
+            };
+            reads.push(AudienceFavoriteRead {
+                connection_id: connection_id.to_string(),
+                external_account_id: account.external_account_id.clone(),
+                sweep_started_at,
+                read_at,
+                failure_reason,
+            });
+        }
+        Ok(rows
+            .iter()
+            .filter(|row| row.connection_id == connection_id)
+            .count() as u64)
+    }
+
+    async fn clear_audience_favorite_reads(
+        &self,
+        connection_id: &str,
+        reason: &str,
+    ) -> AppResult<()> {
+        for read in self
+            .audience_favorite_reads
+            .lock()
+            .await
+            .iter_mut()
+            .filter(|read| read.connection_id == connection_id)
+        {
+            read.read_at = None;
+            read.failure_reason = Some(reason.to_string());
+        }
+        Ok(())
+    }
+
+    async fn audience_favorite_reads(&self) -> AppResult<Vec<crate::ports::AudienceFavoriteRead>> {
+        Ok(self.audience_favorite_reads.lock().await.clone())
+    }
+
+    async fn audience_favorites_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<crate::ports::AudienceFavorite>>> {
+        let mut grouped: HashMap<String, Vec<crate::ports::AudienceFavorite>> = HashMap::new();
+        for row in self.audience_favorites.lock().await.iter() {
+            if let Some(title_id) = row
+                .scryer_title_id
+                .as_ref()
+                .filter(|title_id| title_ids.contains(title_id))
+            {
+                grouped
+                    .entry(title_id.clone())
+                    .or_default()
+                    .push(row.clone());
+            }
+        }
+        Ok(grouped)
     }
 
     async fn replace_connection_audience(
@@ -2108,23 +2220,44 @@ async fn seed_series_title(app: &AppUseCase, title_id: &str, tvdb: &str) {
         .expect("seed series title");
 }
 
-/// A favourite nobody played is stored as an unplayed favourite row; a played
-/// item that is also a favourite stays one row, marked; a favourite series
-/// and season land on the series title, the season keeping its number.
+const STRANGER_ACCOUNT: &str = "jf-user-unlinked";
+
+async fn favourite_reads(
+    fixture: &SyncFixture,
+) -> HashMap<String, crate::ports::AudienceFavoriteRead> {
+    fixture
+        .signals
+        .audience_favorite_reads
+        .lock()
+        .await
+        .iter()
+        .map(|read| (read.external_account_id.clone(), read.clone()))
+        .collect()
+}
+
+/// Every listed account's favourites are stored, linked or not. A series and
+/// season land on the series title, the season keeping its number; an
+/// episode whose series resolves but whose episode does not counts at series
+/// level; a favourite whose ids no Scryer title claims is outside Scryer and
+/// is dropped. The participant's plays are unchanged by any of it.
 #[tokio::test]
-async fn a_sweep_stores_unplayed_and_series_level_favourites() {
+async fn a_sweep_stores_every_accounts_favourites_beside_unchanged_plays() {
     let mut series = favorite_item("jf-series-fav", MediaServerSignalKind::Series);
     series.external_ids = BTreeMap::from([("tvdb".to_string(), "81189".to_string())]);
     let mut season = favorite_item("jf-season-fav", MediaServerSignalKind::Season);
     season.series_external_ids = BTreeMap::from([("tvdb".to_string(), "81189".to_string())]);
     season.series_provider_item_id = Some("jf-series-fav".to_string());
     season.season_number = Some(2);
+    let mut unknown_episode = favorite_item("jf-episode-fav", MediaServerSignalKind::Episode);
+    unknown_episode.series_external_ids =
+        BTreeMap::from([("tvdb".to_string(), "81189".to_string())]);
+    unknown_episode.series_provider_item_id = Some("jf-series-fav".to_string());
+    unknown_episode.season_number = Some(9);
+    unknown_episode.episode_number = Some(9);
     let mut unplayed_movie = favorite_item("jf-movie-unplayed", MediaServerSignalKind::Movie);
     unplayed_movie.external_ids = BTreeMap::from([("tmdb".to_string(), "604".to_string())]);
-    let mut played_again = played_movie("jf-movie-1", "603");
-    // The favourites listing's own play fields are not trusted over the
-    // played read: they must not change the played row.
-    played_again.play_count = 99;
+    let mut foreign = favorite_item("jf-home-video", MediaServerSignalKind::Movie);
+    foreign.external_ids = BTreeMap::from([("tmdb".to_string(), "999999".to_string())]);
 
     let fixture = sync_app(
         vec![jellyfin_connection(true)],
@@ -2134,10 +2267,13 @@ async fn a_sweep_stores_unplayed_and_series_level_favourites() {
                 PARTICIPANT_EXTERNAL_ID.to_string(),
                 vec![played_movie("jf-movie-1", "603")],
             )]),
-            favorites: Some(HashMap::from([(
-                PARTICIPANT_EXTERNAL_ID.to_string(),
-                vec![played_again, unplayed_movie, series, season],
-            )])),
+            favorites: Some(HashMap::from([
+                (
+                    PARTICIPANT_EXTERNAL_ID.to_string(),
+                    vec![unplayed_movie, series, season, foreign],
+                ),
+                (STRANGER_ACCOUNT.to_string(), vec![unknown_episode]),
+            ])),
             ..Default::default()
         },
     );
@@ -2151,42 +2287,119 @@ async fn a_sweep_stores_unplayed_and_series_level_favourites() {
         .await
         .expect("sweep");
     assert_eq!(report.participants_synced, 1);
-    assert_eq!(report.signals_unmapped, 0);
-
     let rows = fixture.signals.rows_for(PARTICIPANT_EXTERNAL_ID).await;
+    assert_eq!(rows.len(), 1, "plays only: favourites live elsewhere");
+    assert!(!rows[0].is_favorite);
+
+    let favourites = fixture.signals.audience_favorites.lock().await.clone();
     let row = |item: &str| {
-        rows.iter()
+        favourites
+            .iter()
             .find(|row| row.provider_item_id == item)
             .unwrap_or_else(|| panic!("{item} stored"))
+            .clone()
     };
-    assert_eq!(rows.len(), 4, "the played favourite is one row, not two");
-    let played = row("jf-movie-1");
-    assert!(played.played && played.is_favorite);
-    assert_eq!(played.play_count, 2);
-    let unplayed = row("jf-movie-unplayed");
-    assert_eq!(unplayed.scryer_title_id.as_deref(), Some("title-unplayed"));
-    assert!(!unplayed.played && unplayed.is_favorite);
-    let series = row("jf-series-fav");
-    assert_eq!(series.kind, MediaServerSignalKind::Series);
-    assert_eq!(series.scryer_title_id.as_deref(), Some("title-show"));
-    assert_eq!(series.season_number, None);
+    assert_eq!(favourites.len(), 4, "the foreign favourite is dropped");
+    assert_eq!(
+        row("jf-movie-unplayed").scryer_title_id.as_deref(),
+        Some("title-unplayed")
+    );
+    assert_eq!(
+        row("jf-series-fav").scryer_title_id.as_deref(),
+        Some("title-show")
+    );
     let season = row("jf-season-fav");
-    assert_eq!(season.kind, MediaServerSignalKind::Season);
     assert_eq!(season.scryer_title_id.as_deref(), Some("title-show"));
-    assert_eq!(season.scryer_episode_id, None);
     assert_eq!(season.season_number, Some(2));
+    let episode = row("jf-episode-fav");
+    assert_eq!(episode.external_account_id, STRANGER_ACCOUNT);
+    assert_eq!(episode.scryer_title_id.as_deref(), Some("title-show"));
+    assert_eq!(episode.scryer_episode_id, None, "counted at series level");
+
+    let reads = favourite_reads(&fixture).await;
+    assert_eq!(reads.len(), 2);
+    assert!(reads.values().all(|read| read.read_at.is_some()));
+    let state = fixture
+        .signals
+        .state_for(CONNECTION_ID)
+        .await
+        .expect("sync state");
+    assert!(state.last_error.is_none());
 }
 
-/// A failed favourites read fails that participant before anything is
-/// written, so the favourites stored by the last good sweep stay.
+/// An episode favourite with no series to place it under could be Scryer's,
+/// so it is stored unplaced and holds that account unknown, and only that
+/// account.
 #[tokio::test]
-async fn a_failed_favourites_read_keeps_the_stored_favourites() {
+async fn an_unplaceable_favourite_holds_its_account_unknown_and_nothing_else() {
+    let mut orphan = favorite_item("jf-orphan-episode", MediaServerSignalKind::Episode);
+    orphan.season_number = Some(1);
+    orphan.episode_number = Some(1);
+    let mut movie = favorite_item("jf-movie-fav", MediaServerSignalKind::Movie);
+    movie.external_ids = BTreeMap::from([("tmdb".to_string(), "603".to_string())]);
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource {
+            items: HashMap::from([(
+                PARTICIPANT_EXTERNAL_ID.to_string(),
+                vec![played_movie("jf-movie-1", "603")],
+            )]),
+            favorites: Some(HashMap::from([
+                (PARTICIPANT_EXTERNAL_ID.to_string(), vec![movie]),
+                (STRANGER_ACCOUNT.to_string(), vec![orphan]),
+            ])),
+            ..Default::default()
+        },
+    );
+    seed_movie_title(&fixture.app, "title-movie", "603").await;
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+
+    let reads = favourite_reads(&fixture).await;
+    let stranger = &reads[STRANGER_ACCOUNT];
+    assert_eq!(stranger.read_at, None);
+    assert_eq!(
+        stranger.failure_reason.as_deref(),
+        Some(reasons::UNPLACED_FAVORITES)
+    );
+    assert!(reads[PARTICIPANT_EXTERNAL_ID].read_at.is_some());
+    let orphan = fixture
+        .signals
+        .audience_favorites
+        .lock()
+        .await
+        .iter()
+        .find(|row| row.provider_item_id == "jf-orphan-episode")
+        .cloned()
+        .expect("the unplaced favourite is kept");
+    assert_eq!(orphan.scryer_title_id, None);
+    let state = fixture
+        .signals
+        .state_for(CONNECTION_ID)
+        .await
+        .expect("sync state");
+    assert!(state.last_error.is_none(), "plays are unaffected");
+}
+
+/// A favourites read that fails, for one account or for the whole account
+/// list, never holds back anyone's plays or the sweep: the stored favourites
+/// stay, and the failed accounts are unknown until a read succeeds.
+#[tokio::test]
+async fn a_failed_favourites_read_never_holds_back_plays() {
     let mut series = favorite_item("jf-series-fav", MediaServerSignalKind::Series);
     series.external_ids = BTreeMap::from([("tvdb".to_string(), "81189".to_string())]);
     let fixture = sync_app(
         vec![jellyfin_connection(true)],
         vec![verified_account()],
         StubSignalSource {
+            items: HashMap::from([(
+                PARTICIPANT_EXTERNAL_ID.to_string(),
+                vec![played_movie("jf-movie-1", "603")],
+            )]),
             favorites: Some(HashMap::from([(
                 PARTICIPANT_EXTERNAL_ID.to_string(),
                 vec![series],
@@ -2194,49 +2407,49 @@ async fn a_failed_favourites_read_keeps_the_stored_favourites() {
             ..Default::default()
         },
     );
+    seed_movie_title(&fixture.app, "title-movie", "603").await;
     seed_series_title(&fixture.app, "title-show", "81189").await;
     fixture
         .app
         .run_media_server_signal_sync_job()
         .await
         .expect("first sweep");
-    assert_eq!(
-        fixture
-            .signals
-            .rows_for(PARTICIPANT_EXTERNAL_ID)
+    assert_eq!(fixture.signals.audience_favorites.lock().await.len(), 1);
+
+    for failing in [
+        &fixture.source.account_favorites_failing,
+        &fixture.source.favorites_failing,
+    ] {
+        failing.store(true, Ordering::SeqCst);
+        let report = fixture
+            .app
+            .run_media_server_signal_sync_job()
             .await
-            .len(),
-        1
-    );
-
-    fixture
-        .source
-        .favorites_failing
-        .store(true, Ordering::SeqCst);
-    let report = fixture
-        .app
-        .run_media_server_signal_sync_job()
-        .await
-        .expect("second sweep");
-    assert_eq!(report.participants_failed, 1);
-    let rows = fixture.signals.rows_for(PARTICIPANT_EXTERNAL_ID).await;
-    assert_eq!(rows.len(), 1, "a failed read deletes nothing");
-    assert!(rows[0].is_favorite);
-    let state = fixture
-        .signals
-        .state_for(CONNECTION_ID)
-        .await
-        .expect("sync state");
-    assert!(state.last_error.is_some(), "the sweep is not clean");
-}
-
-/// A server with no favourites (Plex) leaves the played read as it is.
-#[tokio::test]
-async fn a_reader_without_favourites_changes_nothing() {
-    let merged = crate::media_server_signals::sync::merge_favorite_items(
-        vec![played_movie("jf-movie-1", "603")],
-        None,
-    );
-    assert_eq!(merged.len(), 1);
-    assert!(!merged[0].is_favorite);
+            .expect("sweep");
+        assert_eq!(report.participants_synced, 1);
+        assert_eq!(report.participants_failed, 0);
+        assert_eq!(
+            fixture
+                .signals
+                .rows_for(PARTICIPANT_EXTERNAL_ID)
+                .await
+                .len(),
+            1
+        );
+        assert_eq!(
+            fixture.signals.audience_favorites.lock().await.len(),
+            1,
+            "a failed read deletes nothing"
+        );
+        let read = favourite_reads(&fixture).await[PARTICIPANT_EXTERNAL_ID].clone();
+        assert_eq!(read.read_at, None);
+        assert!(read.failure_reason.is_some());
+        let state = fixture
+            .signals
+            .state_for(CONNECTION_ID)
+            .await
+            .expect("sync state");
+        assert!(state.last_error.is_none(), "the sweep stays clean");
+        failing.store(false, Ordering::SeqCst);
+    }
 }

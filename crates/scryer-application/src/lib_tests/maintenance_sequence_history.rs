@@ -56,7 +56,7 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
 
     let waiting = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute accepted search");
     assert_eq!(waiting.held, 1, "the external job remains pending");
@@ -90,9 +90,10 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
     );
 
     set_test_completed_sequence_job_state(&search_key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let completed = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("resume completed search and apply tag");
     assert_eq!(completed.executed, 1);
@@ -206,7 +207,7 @@ async fn fresh_lease_closes_an_abandoned_sequence_history_before_recording_its_r
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("reclaim stale lease and execute sequence");
     assert_eq!(report.executed, 1, "the retry executes exactly once");

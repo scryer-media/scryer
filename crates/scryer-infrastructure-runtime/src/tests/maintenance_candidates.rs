@@ -1504,7 +1504,14 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         .expect("create blocked");
 
     let due = store
-        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), None, 10)
+        .list_due_candidates(
+            "rule-a",
+            now,
+            now - chrono::Duration::hours(1),
+            None,
+            None,
+            10,
+        )
         .await
         .expect("list due");
     let ids: Vec<&str> = due.iter().map(|row| row.id.as_str()).collect();
@@ -1512,6 +1519,57 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         ids,
         vec!["cand-blocked", "cand-due"],
         "oldest due first; blocked re-checks, future stays out"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn due_selection_leaves_out_a_hold_written_after_the_cutoff_until_it_passes() {
+    let (services, db) = temp_services("scryer_maintenance_due_held_after").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+    let evaluated_at = now - chrono::Duration::minutes(30);
+
+    // Held by an action pass after the evaluation began.
+    let mut held_since_evaluation = candidate("cand-held-later", "rule-a", "title-1", 1);
+    held_since_evaluation.state = MaintenanceCandidateState::Blocked;
+    held_since_evaluation.due_at = now - chrono::Duration::hours(2);
+    held_since_evaluation.updated_at = evaluated_at + chrono::Duration::minutes(1);
+    // Held by the evaluation itself, stamped with its start.
+    let mut held_by_evaluation = candidate("cand-held-by-eval", "rule-a", "title-2", 1);
+    held_by_evaluation.state = MaintenanceCandidateState::Blocked;
+    held_by_evaluation.due_at = now - chrono::Duration::hours(2);
+    held_by_evaluation.updated_at = evaluated_at;
+    // Due work written after the cutoff is never left out.
+    let mut due_row = candidate("cand-due", "rule-a", "title-3", 1);
+    due_row.state = MaintenanceCandidateState::Due;
+    due_row.due_at = now - chrono::Duration::hours(1);
+    due_row.updated_at = evaluated_at + chrono::Duration::minutes(2);
+    for row in [&held_since_evaluation, &held_by_evaluation, &due_row] {
+        store.create_candidate(row).await.expect("create");
+    }
+
+    let stale_before = now - chrono::Duration::hours(1);
+    let ids = |rows: Vec<LifecycleCandidate>| -> Vec<String> {
+        rows.into_iter().map(|row| row.id).collect()
+    };
+    let skipped = store
+        .list_due_candidates("rule-a", now, stale_before, Some(evaluated_at), None, 10)
+        .await
+        .expect("list with a cutoff");
+    assert_eq!(ids(skipped), vec!["cand-held-by-eval", "cand-due"]);
+
+    // The next evaluation moves the cutoff past the hold, which returns it.
+    let next_evaluation = evaluated_at + chrono::Duration::minutes(5);
+    let released = store
+        .list_due_candidates("rule-a", now, stale_before, Some(next_evaluation), None, 10)
+        .await
+        .expect("list after the next evaluation");
+    assert_eq!(
+        ids(released),
+        vec!["cand-held-by-eval", "cand-held-later", "cand-due"]
     );
 
     let _ = std::fs::remove_file(db);
@@ -1541,7 +1599,7 @@ async fn due_selection_pages_past_a_cursor_in_due_then_id_order() {
     let mut cursor: Option<scryer_application::MaintenanceDueCursor> = None;
     loop {
         let page = store
-            .list_due_candidates("rule-a", now, stale_before, cursor.as_ref(), 2)
+            .list_due_candidates("rule-a", now, stale_before, None, cursor.as_ref(), 2)
             .await
             .expect("list a page");
         let Some(last) = page.last() else { break };
@@ -1578,7 +1636,14 @@ async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
     // A worker holding a fresh lease is doing its job; selecting the row again
     // would put two workers on one candidate.
     let live = store
-        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), None, 10)
+        .list_due_candidates(
+            "rule-a",
+            now,
+            now - chrono::Duration::hours(1),
+            None,
+            None,
+            10,
+        )
         .await
         .expect("list with a live lease");
     assert!(
@@ -1596,6 +1661,7 @@ async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
             "rule-a",
             later,
             later - chrono::Duration::hours(1),
+            None,
             None,
             10,
         )

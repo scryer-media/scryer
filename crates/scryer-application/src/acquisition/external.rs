@@ -408,7 +408,7 @@ impl AppUseCase {
             external_actor: actor.cloned(),
             ..Default::default()
         };
-        let mut grabbed_urls = HashSet::new();
+        let mut pass = super::rss::RssPassState::default();
         let mut context = super::RssTitleContext::new(&title.id);
         if has_episodes {
             self.process_rss_series_releases(
@@ -418,7 +418,7 @@ impl AppUseCase {
                 &snapshot,
                 queue.as_ref(),
                 &profiles,
-                &mut grabbed_urls,
+                &mut pass,
                 &mut report,
                 &now,
             )
@@ -430,7 +430,7 @@ impl AppUseCase {
                 &snapshot,
                 queue.as_ref(),
                 &profiles,
-                &mut grabbed_urls,
+                &mut pass,
                 &mut report,
                 &now,
             )
@@ -443,7 +443,7 @@ impl AppUseCase {
                 &snapshot,
                 queue.as_ref(),
                 &profiles,
-                &mut grabbed_urls,
+                &mut pass,
                 &mut report,
                 &now,
             )

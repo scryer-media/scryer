@@ -2056,6 +2056,14 @@ pub struct IndexerConfig {
     /// budget beyond the request interval.
     #[serde(default)]
     pub max_queries_per_minute: Option<i64>,
+    /// Maximum Scryer-observed HTTP requests in a UTC calendar month.
+    #[serde(default)]
+    pub max_requests_per_month: Option<i64>,
+    /// Maximum Scryer-initiated grabs in a UTC calendar month. The slot is
+    /// reserved before artifact retrieval and remains consumed if its outcome
+    /// is uncertain.
+    #[serde(default)]
+    pub max_grabs_per_month: Option<i64>,
     pub disabled_until: Option<DateTime<Utc>>,
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
@@ -2380,6 +2388,10 @@ pub struct NewIndexerConfig {
     pub rate_limit_burst: Option<i64>,
     #[serde(default)]
     pub max_queries_per_minute: Option<i64>,
+    #[serde(default)]
+    pub max_requests_per_month: Option<i64>,
+    #[serde(default)]
+    pub max_grabs_per_month: Option<i64>,
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,
@@ -4550,6 +4562,18 @@ pub struct MediaRequestSubmittedEventData {
     /// leases existed carry no lease at all, which is exactly "forever".
     #[serde(default)]
     pub requested_lease_days: Option<i64>,
+    /// Messages request rules asked to send when this request was submitted.
+    /// Empty for an update and for events written before rules could notify.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_notifications: Vec<RequestRuleNotification>,
+}
+
+/// One `notify` message a request rule set produced for a request.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleNotification {
+    pub rule_set_id: String,
+    pub rule_set_name: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -6820,6 +6844,11 @@ pub struct RequestRuleDecisionRecord {
     pub votes_json: String,
     /// Tags the rules emitted, in the order the arbitration produced them.
     pub tags: Vec<String>,
+    /// Serialized shaping the rules set: each agreed value with its rule set,
+    /// the heads they disagreed on or that could not apply, and the
+    /// notifications. JSON for the same reason as `votes_json`. `None` when
+    /// no rule set any.
+    pub shaping_json: Option<String>,
     /// Hash of the bounded input document, so a decision can be compared
     /// against the data it was made on.
     pub input_hash: String,

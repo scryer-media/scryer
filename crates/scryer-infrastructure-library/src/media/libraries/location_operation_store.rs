@@ -192,7 +192,7 @@ struct StoredRecoveryPlanEvidence {
 enum RecoveryCommitStep {
     /// The commit ran to its end: the stored event, or `None` for a recovery
     /// that was already committed.
-    Settled(Option<scryer_domain::DomainEvent>),
+    Settled(Option<Box<scryer_domain::DomainEvent>>),
     /// The stored plan is not the one the evidence was read from, so nothing
     /// was decided.
     StoredPlanChanged,
@@ -444,11 +444,11 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE location_operations SET recovery_committed_at = {} WHERE id = {}",
                     &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(operation_id)]).await?;
-                Ok(RecoveryCommitStep::Settled(Some(stored)))
+                Ok(RecoveryCommitStep::Settled(Some(Box::new(stored))))
             })
             }).await;
             match step {
-                Ok(RecoveryCommitStep::Settled(stored)) => break Ok(stored),
+                Ok(RecoveryCommitStep::Settled(stored)) => break Ok(stored.map(|event| *event)),
                 Ok(RecoveryCommitStep::StoredPlanChanged) if evidence_reads_left > 0 => {}
                 Ok(RecoveryCommitStep::StoredPlanChanged) => {
                     break Err(AppError::validation_refused(

@@ -412,8 +412,164 @@ impl AppUseCase {
         {
             outcome.record_error(failure);
         }
+        if connection.provider.has_favorites()
+            && let Some(failure) = self
+                .sync_connection_favorites(connection, reader.as_ref(), library, started_at)
+                .await
+        {
+            outcome.record_error(failure);
+        }
 
         outcome
+    }
+
+    /// Read every account's favourites on the connection and store them.
+    ///
+    /// Only the favourite facts read these rows, so a failed read is not the
+    /// connection's failure and holds back nobody's plays. An account whose
+    /// favourites could not be read keeps its stored rows and is unknown
+    /// until a read succeeds; when the account list itself cannot be read,
+    /// every account of the connection is.
+    ///
+    /// A store failure is returned for the connection's state, as for the
+    /// audience read: a read state that cannot be written could leave a
+    /// failed read looking like the last good one.
+    async fn sync_connection_favorites(
+        &self,
+        connection: &MediaServerConnection,
+        reader: &dyn MediaServerSignalReader,
+        library: &ScryerLibraryPaths,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Option<SignalReadFailure> {
+        let store = &self.services.integrations.media_server_signals;
+        let listed = match reader.fetch_audience_favorites().await {
+            Ok(listed) => listed,
+            Err(failure) => {
+                warn!(
+                    connection_id = connection.id.as_str(),
+                    reason = failure.reason,
+                    error = %failure,
+                    "media-server favourites read failed; the favourite facts are unknown until one succeeds"
+                );
+                return store
+                    .clear_audience_favorite_reads(&connection.id, failure.reason)
+                    .await
+                    .err()
+                    .map(|error| {
+                        store_failure(
+                            "could not clear the favourite read states after a failed read",
+                            error,
+                        )
+                    });
+            }
+        };
+        let accounts = match self
+            .place_audience_favorites(connection, library, listed)
+            .await
+        {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                return store
+                    .clear_audience_favorite_reads(&connection.id, reasons::STORE_FAILED)
+                    .await
+                    .err()
+                    .or(Some(error))
+                    .map(|error| store_failure("could not map audience favourites", error));
+            }
+        };
+        store
+            .replace_audience_favorites(&connection.id, &accounts, started_at)
+            .await
+            .err()
+            .map(|error| store_failure("could not store audience favourites", error))
+    }
+
+    /// Place every listed account's favourites on Scryer media in one mapping
+    /// pass over all of them.
+    ///
+    /// A favourite whose title resolves keeps it; an episode whose series
+    /// resolves but whose episode does not counts at series level. One that
+    /// resolves to nothing is dropped when its ids show it to be outside
+    /// Scryer, and is otherwise kept unplaced and holds that account
+    /// unknown: it could be a Scryer title the server never identified.
+    async fn place_audience_favorites(
+        &self,
+        connection: &MediaServerConnection,
+        library: &ScryerLibraryPaths,
+        listed: Vec<crate::ports::ProviderAccountFavorites>,
+    ) -> AppResult<Vec<crate::ports::AudienceFavoriteAccount>> {
+        use crate::ports::{
+            AudienceFavorite, AudienceFavoriteAccount, AudienceFavoriteAccountRead,
+        };
+
+        let mut items: Vec<ProviderPlayedItem> = Vec::new();
+        let mut owners: Vec<usize> = Vec::new();
+        let mut accounts: Vec<AudienceFavoriteAccount> = Vec::with_capacity(listed.len());
+        for (position, account) in listed.into_iter().enumerate() {
+            let read = match account.favorites {
+                Ok(favorites) => {
+                    owners.extend(std::iter::repeat_n(position, favorites.len()));
+                    items.extend(favorites);
+                    AudienceFavoriteAccountRead::Read {
+                        favorites: Vec::new(),
+                        unplaced: None,
+                    }
+                }
+                Err(failure) => {
+                    warn!(
+                        connection_id = connection.id.as_str(),
+                        reason = failure.reason,
+                        error = %failure,
+                        "one account's favourites could not be read; that account's favourites are unknown"
+                    );
+                    AudienceFavoriteAccountRead::Failed {
+                        reason: failure.reason.to_string(),
+                    }
+                }
+            };
+            accounts.push(AudienceFavoriteAccount {
+                external_account_id: account.external_account_id,
+                read,
+            });
+        }
+
+        let (subjects, titles) = self.map_played_items(&items).await?;
+        for ((item, subject), owner) in items.iter().zip(subjects).zip(owners) {
+            let title_id = subject
+                .title_id
+                .or_else(|| crate::media_server_signals::mapping::resolve_title(item, &titles));
+            let unplaced = title_id.is_none();
+            if unplaced && is_foreign_item(item, &titles, library) {
+                continue;
+            }
+            let account = &mut accounts[owner];
+            let external_account_id = account.external_account_id.clone();
+            let AudienceFavoriteAccountRead::Read {
+                favorites,
+                unplaced: reason,
+            } = &mut account.read
+            else {
+                continue;
+            };
+            if unplaced {
+                *reason = Some(reasons::UNPLACED_FAVORITES.to_string());
+            }
+            favorites.push(AudienceFavorite {
+                connection_id: connection.id.clone(),
+                external_account_id,
+                provider_item_id: item.provider_item_id.clone(),
+                kind: item.kind,
+                scryer_title_id: title_id,
+                scryer_episode_id: subject.episode_id,
+                season_number: match item.kind {
+                    MediaServerSignalKind::Episode | MediaServerSignalKind::Season => {
+                        item.season_number
+                    }
+                    MediaServerSignalKind::Movie | MediaServerSignalKind::Series => None,
+                },
+            });
+        }
+        Ok(accounts)
     }
 
     /// Read every account's plays on the connection and replace its audience
@@ -556,11 +712,9 @@ impl AppUseCase {
         started_at: chrono::DateTime<Utc>,
     ) -> Result<ParticipantOutcome, SignalReadFailure> {
         let scryer_user_id = participant.user_id.as_str();
-        let played = reader.fetch_played_items(external_user_id).await?;
-        // Read before anything is written: a failed favourites read fails the
-        // participant, and every stored row of theirs stays as it was.
-        let favorites = reader.fetch_favorite_items(external_user_id).await?;
-        let items = merge_favorite_items(played, favorites);
+        // Plays only: favourites come from the audience favourites read, so
+        // a favourites failure never holds back anyone's plays.
+        let items = reader.fetch_played_items(external_user_id).await?;
 
         let observed_at = Utc::now();
         let (subjects, titles) = self
@@ -813,42 +967,4 @@ pub fn log_signal_sync_report(report: &MediaServerSignalSyncReport) {
         signals_unmapped = report.signals_unmapped,
         "media-server signal sync finished"
     );
-}
-
-/// One participant's rows: every played item, with the favourites read laid
-/// over it.
-///
-/// A favourite that was also played marks that row. A favourite nobody played
-/// becomes its own unplayed row: whatever the favourites listing says about
-/// plays is ignored, so the watch facts still come from the played read
-/// alone. `None` (a server with no favourites) leaves the played read as it
-/// is.
-pub(crate) fn merge_favorite_items(
-    mut played: Vec<ProviderPlayedItem>,
-    favorites: Option<Vec<ProviderPlayedItem>>,
-) -> Vec<ProviderPlayedItem> {
-    let Some(favorites) = favorites else {
-        return played;
-    };
-    let positions: HashMap<String, usize> = played
-        .iter()
-        .enumerate()
-        .map(|(position, item)| (item.provider_item_id.clone(), position))
-        .collect();
-    let mut appended = HashSet::new();
-    for mut favorite in favorites {
-        if let Some(position) = positions.get(&favorite.provider_item_id) {
-            played[*position].is_favorite = true;
-            continue;
-        }
-        if !appended.insert(favorite.provider_item_id.clone()) {
-            continue;
-        }
-        favorite.is_favorite = true;
-        favorite.played = false;
-        favorite.play_count = 0;
-        favorite.last_played_at = None;
-        played.push(favorite);
-    }
-    played
 }

@@ -573,6 +573,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        held_after: Option<DateTime<Utc>>,
         after: Option<&scryer_application::MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
@@ -589,12 +590,19 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         } else {
             ""
         };
+        // A row an action pass held after the rule's latest evaluation began
+        // waits for the next one; see the port.
+        let held_clause = if held_after.is_some() {
+            " AND NOT (state = {} AND updated_at > {})"
+        } else {
+            ""
+        };
         let sql = format!(
             "SELECT {CANDIDATE_COLUMNS}
                FROM lifecycle_candidates
               WHERE rule_set_id = {{}} AND due_at <= {{}}{cursor_clause}
                 AND (state IN ({{}}, {{}}, {{}}, {{}})
-                     OR (state = {{}} AND updated_at < {{}}))
+                     OR (state = {{}} AND updated_at < {{}})){held_clause}
               ORDER BY due_at ASC, id ASC
               LIMIT {{}}"
         );
@@ -630,8 +638,16 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
                     .to_string(),
             ),
             SqlArg::Timestamp(stale_before),
-            SqlArg::I64(limit as i64),
         ]);
+        if let Some(held_after) = held_after {
+            args.push(SqlArg::Text(
+                MaintenanceCandidateState::Blocked
+                    .as_storage_str()
+                    .to_string(),
+            ));
+            args.push(SqlArg::Timestamp(held_after));
+        }
+        args.push(SqlArg::I64(limit as i64));
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()

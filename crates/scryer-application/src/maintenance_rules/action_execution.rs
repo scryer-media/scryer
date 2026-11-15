@@ -36,7 +36,6 @@ use scryer_rules::maintenance::{
 use serde::Serialize;
 use tracing::warn;
 
-use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::action_catalog::{
     MaintenanceRiskClass, MaintenanceSubjectKind as ActionSubjectKind,
 };
@@ -227,6 +226,10 @@ pub mod execution_reason {
     /// subject (or one of its episodes with a file), so it could not be read
     /// back there and no read was attempted.
     pub const WATCH_RECHECK_UNMAPPED: &str = "watch_recheck_unmapped";
+    /// Reading the subject's items back from the media server found an item
+    /// a counted account has made a favourite since the stored favourites
+    /// were read, for a rule that reads a favourite fact.
+    pub const WATCH_RECHECK_NEWER_FAVORITE: &str = "watch_recheck_newer_favorite";
     /// The title has a grab, download, or import in flight.
     pub const ACTIVE_ACQUISITION: &str = "active_acquisition";
     /// Acquisition activity could not be ruled out.
@@ -323,6 +326,7 @@ pub mod execution_reason {
         WATCH_RECHECK_UNCREDITED_PLAY,
         WATCH_RECHECK_UNAVAILABLE,
         WATCH_RECHECK_UNMAPPED,
+        WATCH_RECHECK_NEWER_FAVORITE,
         ACTIVE_ACQUISITION,
         ACQUISITION_UNKNOWN,
         STORAGE_DELETION_IN_PROGRESS,
@@ -374,12 +378,12 @@ pub mod execution_reason {
                     "{reason} has a stray underscore"
                 );
             }
-            assert_eq!(ALL.len(), 36);
+            assert_eq!(ALL.len(), 37);
         }
     }
 }
 
-/// Job report for [`JobKey::LifecycleActionHandling`], serialized onto the run.
+/// Job report for [`crate::jobs::JobKey::LifecycleActionHandling`], serialized onto the run.
 #[derive(Debug, Default, Serialize)]
 pub struct MaintenanceActionHandlingReport {
     /// False when both effect gates were off and the pass did nothing.
@@ -961,14 +965,30 @@ impl AppUseCase {
             .collect())
     }
 
-    /// Manual trigger for the action handler, mirroring
-    /// [`AppUseCase::run_maintenance_evaluation_now`].
+    /// Manual trigger for one rule's actions: the rule's due candidates are
+    /// acted on now, exactly as its own scheduled fire would act on them,
+    /// under the same claim. Rules act only through their own fires, so a
+    /// trigger that names no rule is refused.
     pub async fn run_maintenance_action_handler_now(
         &self,
         actor: &User,
+        rule_set_id: Option<String>,
     ) -> AppResult<MaintenanceEvaluationTrigger> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
+
+        let Some(rule_set_id) = rule_set_id else {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::ACTION_RUN_RULE_REQUIRED,
+                "each maintenance rule acts on its own schedule; name the rule to act for it now",
+            ));
+        };
+        let rule_set = self.require_maintenance_rule_set(&rule_set_id).await?;
+        let detail = self.load_maintenance_rule_detail(rule_set).await?;
+        if let Some(reason) = detail.refusal() {
+            return Err(super::service::stored_actions_refused(reason));
+        }
+        let rule_set = detail.rule_set;
 
         let gates = self.load_maintenance_gates().await?;
         if !gates.reversible_effects_enabled && !gates.destructive_effects_enabled {
@@ -980,34 +1000,35 @@ impl AppUseCase {
             });
         }
 
-        if self
-            .runtime
-            .jobs
-            .job_run_tracker
-            .has_active_job(JobKey::LifecycleActionHandling)
-            .await
-        {
+        // The same claim a scheduled fire takes: a rule never acts beside
+        // itself, so a manual run and a fire together still act on at most
+        // the rule's maximum each, one after the other.
+        let Some(claim) = self.claim_maintenance_rule_run(&rule_set_id) else {
             return Ok(MaintenanceEvaluationTrigger {
                 started: false,
-                message: Some("an action-handling run is already in progress".to_string()),
+                message: Some(format!(
+                    "maintenance rule {} is already running",
+                    rule_set.name
+                )),
             });
-        }
+        };
 
         let app = self.clone();
         // Tracked, so a restore drain waits for the run instead of swapping
         // the database under it.
         self.restore_coordinator().spawn_task(async move {
-            if let Err(error) = app
-                .run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
-                .await
-            {
-                warn!(error = %error, "manual maintenance action-handling run failed");
+            let _claim = claim;
+            if let Err(error) = app.run_lifecycle_action_handling(Some(&rule_set_id)).await {
+                warn!(rule_set_id = %rule_set_id, error = %error, "manual maintenance rule action run failed");
             }
         });
 
         Ok(MaintenanceEvaluationTrigger {
             started: true,
-            message: Some("Maintenance action handling started".to_string()),
+            message: Some(format!(
+                "Maintenance rule {} is acting on its due titles",
+                rule_set.name
+            )),
         })
     }
 }
@@ -1015,8 +1036,25 @@ impl AppUseCase {
 // ── The handler ─────────────────────────────────────────────────────────────
 
 impl AppUseCase {
-    /// Job body for [`JobKey::LifecycleActionHandling`].
+    /// Job body for [`crate::jobs::JobKey::LifecycleActionHandling`].
+    ///
+    /// A rule's candidates are acted on only by that rule's own fire, on its
+    /// schedule or by its manual trigger, so a rule's most titles per run
+    /// bounds everything it does between two of its fires and a rule on a
+    /// manual schedule is never run by anything else. The instance-wide job
+    /// has no work of its own left: abandoned leases are reclaimed by the
+    /// owning rule's next fire, which selects them with its due work. It acts
+    /// on nothing.
     pub(crate) async fn run_lifecycle_action_handling_job(
+        &self,
+    ) -> AppResult<MaintenanceActionHandlingReport> {
+        Ok(MaintenanceActionHandlingReport::default())
+    }
+
+    /// Act on the due candidates of every armed rule in one pass, as the
+    /// action tests drive them. Production acts only per rule.
+    #[cfg(test)]
+    pub(crate) async fn run_every_rule_action_pass_for_tests(
         &self,
     ) -> AppResult<MaintenanceActionHandlingReport> {
         self.run_lifecycle_action_handling(None).await
@@ -1117,12 +1155,13 @@ impl AppUseCase {
             if !eligible {
                 continue;
             }
-            if high_risk && detail.rule_set.max_titles_per_run.is_none() {
+            if let Some(reason) = detail.action_refusal {
                 // Saving and arming refuse this shape; a row that reached it
-                // anyway acts on nothing rather than on everything.
+                // anyway acts on nothing rather than on everything, and the
+                // rule shows the refusal until a maximum is set.
                 warn!(
                     rule_set_id = detail.rule_set.id.as_str(),
-                    "skipping destructive maintenance rule without a most-titles-per-run"
+                    reason, "skipping maintenance rule whose actions are refused"
                 );
                 continue;
             }
@@ -1148,6 +1187,26 @@ impl AppUseCase {
             }
             eligible_rules.push((detail, action, high_risk));
         }
+
+        // A candidate an earlier pass held waits for its rule's next
+        // evaluation: when each eligible rule's latest one began, read once
+        // for all of them. A rule with no recorded evaluation skips nothing.
+        let held_after: HashMap<String, chrono::DateTime<Utc>> = if eligible_rules.is_empty() {
+            HashMap::new()
+        } else {
+            let ids: Vec<String> = eligible_rules
+                .iter()
+                .map(|(detail, _, _)| detail.rule_set.id.clone())
+                .collect();
+            self.services
+                .customization
+                .maintenance_evaluation
+                .rule_schedule_anchors(&ids)
+                .await?
+                .into_iter()
+                .filter_map(|(id, anchor)| anchor.last_run_at.map(|started| (id, started)))
+                .collect()
+        };
 
         // Titles two rules would tag in opposite directions this pass. Computed
         // before any of them acts, so both sides hold rather than the later one
@@ -1205,6 +1264,14 @@ impl AppUseCase {
             // until the rule has acted on its own most titles per fire. A
             // candidate this pass rewrites is stamped later than `now`, so it
             // never comes back in a later page of the same walk.
+            //
+            // A candidate held after the rule's latest evaluation began is
+            // left out until the next evaluation: holding it again would
+            // repeat the same reads and writes for the same answer. The
+            // evaluation that starts each scheduled fire releases every such
+            // hold, so a hold that clears by itself is seen again on the next
+            // fire and nothing stays held unexamined past it.
+            let held_after_evaluation = held_after.get(&detail.rule_set.id).copied();
             let maximum = detail
                 .rule_set
                 .max_titles_per_run
@@ -1225,6 +1292,7 @@ impl AppUseCase {
                         &detail.rule_set.id,
                         now,
                         stale_before,
+                        held_after_evaluation,
                         cursor.as_ref(),
                         MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
                     )
@@ -1397,6 +1465,10 @@ impl AppUseCase {
                         &detail.rule_set.id,
                         now,
                         stale_before,
+                        // Held rows included: a candidate held earlier and
+                        // waiting for its rule's next evaluation still means
+                        // to patch, so the other side must not act around it.
+                        None,
                         cursor.as_ref(),
                         MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
                     )
@@ -1544,7 +1616,7 @@ impl AppUseCase {
             Ok(gates) => gates,
             Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
         };
-        if detail.load_refusal.is_some()
+        if detail.refusal().is_some()
             || candidate.action_kind != ACTION_SEQUENCE_KIND
             || detail.revision.revision_number != candidate.revision_number
         {
@@ -1950,6 +2022,7 @@ impl AppUseCase {
             .populate_maintenance_storage_facts(
                 &mut input,
                 detail.revision.storage_root_id.as_deref(),
+                super::storage::MaintenanceStorageRead::Refresh,
             )
             .await
             .is_err()
@@ -2269,6 +2342,28 @@ impl AppUseCase {
                     }
                 }
             };
+            // A rule that reads a favourite fact also compares each item's
+            // live favourite flags, carried in the same answers, with the
+            // favourites stored for the title.
+            let favorites = if super::watch_recheck::rule_reads_favorite_facts(
+                &detail.revision.rego_source,
+                &candidate.rule_set_id,
+            ) {
+                match self
+                    .services
+                    .integrations
+                    .media_server_signals
+                    .audience_favorites_for_titles(std::slice::from_ref(&title.id))
+                    .await
+                {
+                    Ok(mut stored) => Some(stored.remove(&title.id).unwrap_or_default()),
+                    Err(_) => {
+                        return SafetyDecision::Hold(execution_reason::WATCH_RECHECK_UNAVAILABLE);
+                    }
+                }
+            } else {
+                None
+            };
             let recheck = self
                 .maintenance_watch_recheck(
                     &watch_context,
@@ -2279,6 +2374,7 @@ impl AppUseCase {
                         .unwrap_or_default(),
                     episode_ids.as_ref(),
                     entities.as_deref(),
+                    favorites.as_deref(),
                 )
                 .await;
             if let Some(reason) = recheck.hold_reason() {

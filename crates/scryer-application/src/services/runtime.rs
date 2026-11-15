@@ -2390,6 +2390,10 @@ pub struct AppRuntimeJobState {
 #[derive(Clone)]
 pub struct AppRuntimeHealthState {
     pub results: Arc<tokio::sync::RwLock<Vec<HealthCheckResult>>>,
+    /// The canonical free-space owner: every capacity figure Scryer reads
+    /// comes through it. Request rules read its cache and never call a share
+    /// while the requester waits.
+    pub(crate) storage_capacity: crate::storage_capacity::StorageCapacity,
 }
 
 #[derive(Clone)]
@@ -2778,6 +2782,7 @@ impl AppRuntimeState {
             },
             health: AppRuntimeHealthState {
                 results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+                storage_capacity: crate::storage_capacity::StorageCapacity::process(),
             },
             plugins: AppRuntimePluginState {
                 settings_write_lock: Arc::new(tokio::sync::Mutex::new(())),

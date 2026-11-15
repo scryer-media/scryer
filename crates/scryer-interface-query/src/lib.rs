@@ -759,6 +759,9 @@ pub fn from_interactive_release_search_snapshot(
                     }
                     Reason::BackedOff => InteractiveReleaseSearchSkipReasonValue::BackedOff,
                     Reason::NoTextSearch => InteractiveReleaseSearchSkipReasonValue::NoTextSearch,
+                    Reason::MonthlyLimit { .. } => {
+                        InteractiveReleaseSearchSkipReasonValue::MonthlyLimit
+                    }
                 }
             }),
             skipped_until: indexer.skipped_until,
@@ -4357,12 +4360,19 @@ impl AcquisitionQueries {
             .request_rule_decision_counts(&actor, &ids)
             .await
             .map_err(to_gql_error)?;
+        // The scan parses each source, so it runs only when the selection asks
+        // for it; the revisions are already in hand from the one batched read.
+        let with_declared_actions = ctx.look_ahead().field("declaredActions").exists();
         Ok(details
             .iter()
             .map(|detail| {
                 crate::mappers::from_request_rule_set(
                     &detail.rule_set,
                     counts.get(&detail.rule_set.id).copied().unwrap_or_default(),
+                    with_declared_actions
+                        .then(|| detail.declared_actions())
+                        .flatten()
+                        .map(crate::mappers::from_request_declared_actions),
                 )
             })
             .collect())
@@ -4377,8 +4387,15 @@ impl AcquisitionQueries {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
+        let look_ahead = ctx.look_ahead();
+        let with_builder_model = look_ahead.field("builderModel").exists();
+        let with_declared_actions = look_ahead.field("declaredActions").exists()
+            || look_ahead
+                .field("ruleSet")
+                .field("declaredActions")
+                .exists();
         let Some(detail) = app
-            .get_request_rule_set(&actor, id.as_ref())
+            .get_request_rule_set(&actor, id.as_ref(), with_builder_model)
             .await
             .map_err(to_gql_error)?
         else {
@@ -4390,7 +4407,9 @@ impl AcquisitionQueries {
             .map_err(to_gql_error)?;
         let count = counts.get(&detail.rule_set.id).copied().unwrap_or_default();
         Ok(Some(crate::mappers::from_request_rule_set_detail(
-            detail, count,
+            detail,
+            count,
+            with_declared_actions,
         )))
     }
 

@@ -188,7 +188,7 @@ impl ExecutionFixture {
 
     async fn handle(&self) -> crate::maintenance_rules::MaintenanceActionHandlingReport {
         self.app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("handler pass")
     }
@@ -1523,7 +1523,7 @@ async fn an_undecidable_subject_blocks_at_execution() {
 }
 
 #[tokio::test]
-async fn a_blocked_candidate_is_retried_on_the_next_pass() {
+async fn a_held_candidate_waits_for_the_next_evaluation_then_is_examined_again() {
     let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(1)));
     let rule_id = fixture
         .observed_rule(unmonitor_draft(MONITORED_MATCHER))
@@ -1534,16 +1534,33 @@ async fn a_blocked_candidate_is_retried_on_the_next_pass() {
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Later", true).await;
     fixture.evaluate().await;
+    // The evaluation began before anything the passes below write.
+    fixture
+        .evaluation
+        .age_evaluation_runs(chrono::Duration::seconds(1))
+        .await;
 
+    // Playback is going on: a hold meant to clear by itself.
     let first = fixture.handle().await;
     assert_eq!(first.held, 1);
+    let held = fixture.evaluation.all_candidates().await;
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].state, MaintenanceCandidateState::Blocked);
 
-    // Playback ends: swap the probe by rebuilding the app? The probe is fixed,
-    // so instead assert the Blocked candidate is selected again on the next
-    // pass and held again, which is the re-check contract.
-    let second = fixture.handle().await;
-    assert_eq!(second.candidates_considered, 1, "{second:?}");
-    assert_eq!(second.held, 1);
+    // Until the rule evaluates again, every pass leaves the hold alone: it
+    // is not examined, nothing is read for it and nothing is written.
+    for _ in 0..2 {
+        let idle = fixture.handle().await;
+        assert_eq!(idle.candidates_considered, 0, "{idle:?}");
+        assert_eq!(idle.held, 0, "{idle:?}");
+        assert_eq!(fixture.evaluation.all_candidates().await, held);
+    }
+
+    // The next evaluation releases it, and the pass after examines it again.
+    fixture.evaluate().await;
+    let after = fixture.handle().await;
+    assert_eq!(after.candidates_considered, 1, "{after:?}");
+    assert_eq!(after.held, 1);
     let stored = fixture
         .app
         .get_title(&fixture.user, &title.id)

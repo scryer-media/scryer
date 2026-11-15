@@ -1879,6 +1879,7 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         _rule_set_id: &str,
         _due_before: DateTime<Utc>,
         _stale_before: DateTime<Utc>,
+        _held_after: Option<DateTime<Utc>>,
         _after: Option<&crate::MaintenanceDueCursor>,
         _limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
@@ -3611,6 +3612,7 @@ impl crate::ports::RequestRuleSetRepository for NullRequestRuleSetRepository {
         &self,
         _rule_set: &scryer_domain::RequestRuleSet,
         _revision: &scryer_domain::RequestRuleRevision,
+        _builder_model_json: Option<&str>,
     ) -> AppResult<()> {
         Err(AppError::Repository(
             REQUEST_RULE_NOT_CONFIGURED.to_string(),
@@ -3620,10 +3622,14 @@ impl crate::ports::RequestRuleSetRepository for NullRequestRuleSetRepository {
         &self,
         _revision: &scryer_domain::RequestRuleRevision,
         _updated_at: DateTime<Utc>,
+        _builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
         Err(AppError::Repository(
             REQUEST_RULE_NOT_CONFIGURED.to_string(),
         ))
+    }
+    async fn get_builder_model(&self, _rule_set_id: &str) -> AppResult<Option<String>> {
+        Ok(None)
     }
     async fn get_revision(
         &self,

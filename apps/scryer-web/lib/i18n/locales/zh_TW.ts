@@ -5045,7 +5045,11 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "該帳號已關聯的媒體伺服器與身分識別提供者",
   "settings.refReqRequesterCreatedAt":
-    "帳號建立時間；缺失，因為 Scryer 尚未記錄它",
+    "帳號建立時間；在 Scryer 開始記錄之前建立的帳號則缺失",
+  "settings.refReqRequesterLastLoginAt":
+    "帳號最後一次登入的時間；若 Scryer 沒有登入紀錄則缺失",
+  "settings.refReqRequesterAccountAgeDays":
+    "帳號建立至今的完整天數；若建立時間缺失則缺失",
   "settings.refReqSectionLibrary": "— 請求所針對的媒體庫",
   "settings.refReqLibraryId": "媒體庫識別碼",
   "settings.refReqLibraryName": "媒體庫名稱",
@@ -5065,6 +5069,12 @@ const zh_TW: LocaleDictionary = {
     "請求者要求的監控類型（例如 ALL_EPISODES）",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "進階監控選擇所指定的季度數",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "進階監看選擇所列的季數，由小到大；沒有選擇時為 null",
+  "settings.refReqRequestListIsWatchlist":
+    "當清單是擁有者在已連結帳號上的稍後觀看清單時為 true",
+  "settings.refReqRequestListSourceType":
+    "提供者端的清單類型，小寫（例如 watchlist 或 user_list）",
   "settings.refReqRequestLeaseForever": "請求者要求永久保留媒體時為 true",
   "settings.refReqRequestLeaseDays":
     "請求者要求保留的天數；若要求永久保留則缺失",
@@ -5125,6 +5135,46 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsDaysSinceLastRequest":
     "距離此請求者上次發起任何請求的天數",
   "settings.refReqFactsLibraryTitleCount": "目標媒體庫包含的作品數量",
+  "settings.refReqFactsSeasonCount":
+    "影集的季數，適用於影集",
+  "settings.refReqFactsEpisodeCount":
+    "影集的一般集數，適用於影集",
+  "settings.refReqFactsAiredEpisodeCount":
+    "截至評估當天已播出的集數",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "尚未播出的集數",
+  "settings.refReqFactsNextEpisodeAirDate":
+    "下一集的播出日期",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "院線上映日期，適用於電影",
+  "settings.refReqFactsDigitalReleaseDate":
+    "數位發行日期，適用於電影",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "實體（光碟）發行日期，適用於電影",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "電影是否已推出數位版或光碟",
+  "settings.refReqFactsDaysUntilRelease":
+    "距離電影首次發行的天數",
+  "settings.refReqFactsOtherRequesterCount":
+    "有多少其他成員請求過這部作品",
+  "settings.refReqFactsPendingByOtherRequester":
+    "其他成員對這部作品的請求是否仍在等待",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "作品是否在請求者自己的稍後觀看清單上",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "作品在請求者稍後觀看清單上的時間",
+  "settings.refReqFactsListExcluded":
+    "此作品是否受清單排除規則涵蓋",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "此請求者的請求已加入目標媒體庫的作品數",
+  "settings.refReqFactsStorageRootId":
+    "作品將存放的根資料夾",
+  "settings.refReqFactsStorageAvailableBytes":
+    "該根目錄的可用空間，以位元組計",
+  "settings.refReqFactsStorageTotalBytes":
+    "該根目錄所在檔案系統的總大小，以位元組計",
+  "settings.refReqFactsStorageAvailablePercent":
+    "該根目錄的可用空間百分比",
   "settings.refReqSectionCertifications":
     "— input.facts.certifications 中每個分級認證對應一項",
   "settings.refReqCertCountry": "頒發分級認證的國家/地區",
@@ -5196,6 +5246,46 @@ const zh_TW: LocaleDictionary = {
   "settings.refReqFactsDaysSinceLastRequestValue":
     "自請求者前次請求以來的完整天數；若為首次請求則 absent，原因為 no_previous_request",
   "settings.refReqFactsLibraryTitleCountValue": "目標媒體庫中的作品數量",
+  "settings.refReqFactsSeasonCountValue":
+    "季數；電影為 absent，原因為 not_a_series；請求未帶影集結構時為 unknown，原因為 metadata_unavailable",
+  "settings.refReqFactsEpisodeCountValue":
+    "一般集數；absent 與 unknown 的情況同 season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "提出請求時已播出的集數，加上排定在評估當天或之前播出的集數",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count 減去 aired_episode_count，不會小於零",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "評估當天之後第一集的 YYYY-MM-DD；沒有排定時為 absent，原因為 no_scheduled_episode",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD；沒有時為 absent，原因為 no_theatrical_release_date，影集則為 not_a_movie；日期未蒐集時為 unknown，原因為 not_yet_collected 或 metadata_unavailable",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD；沒有時為 absent，原因為 no_digital_release_date；其餘同 theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD；沒有時為 absent，原因為 no_physical_release_date；其餘同 theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "數位或實體日期在評估當天或之前時為 true",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "距離最早已知日期的完整天數；已發行時為 absent，原因為 already_released；沒有已知日期時原因為 no_release_date",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "不同的其他請求者人數；Scryer 無法讀取請求時為 unknown，原因為 catalog_unavailable",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "其他成員的請求仍在等待決定時為 true；unknown 的情況同 other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "請求者連結且已同步的稍後觀看清單包含此作品時為 true；未連結時為 absent，原因為 no_watchlist_linked；清單不可信時為 unknown，原因為 watchlist_not_synced、watchlist_stale 或 list_store_unreadable",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "首次出現在清單上至今的完整天數；不在清單上時為 absent，原因為 not_on_a_watchlist；其餘同 on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "適用所有清單或此請求來源清單的排除規則列出此作品時為 true；無法讀取時為 unknown，原因為 list_exclusions_unavailable",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "目標媒體庫中由此請求者的請求建立的作品數；無法計算時為 unknown，原因為 requester_titles_unavailable",
+  "settings.refReqFactsStorageRootIdValue":
+    "媒體庫預設根目錄或第一個根目錄的識別碼；媒體庫沒有根目錄時為 unknown，原因為 storage_root_unavailable",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Scryer 最近一次量測根目錄時的可用位元組，最多十分鐘前；observed_at 標示時間。無法得知時為 unknown，絕不為零，原因為 storage_not_sampled、storage_sample_stale 或 storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "同一次量測的總位元組；unknown 的情況同 storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "同一次量測的可用位元組乘以 100 再除以總位元組；unknown 的情況同 storage_available_bytes",
   "move.dialogTitle": "移動標題",
   "move.destinationLibrary": "目標庫",
   "move.destinationRoot": "目標根目錄",
@@ -6003,6 +6093,18 @@ const zh_TW: LocaleDictionary = {
     "此規則讀取了自身套件以外的 data，請改用 input。",
   "error.ruleWithTargetNotAllowed":
     '此規則不能以 "with" 取代 {{path}}。其決定必須基於 Scryer 實際觀察到的內容。',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} 對 Scryer 有特定意義，不能寫成函式。請改寫為規則。",
+  "error.ruleHeadNameRetired":
+    "請求規則不再讀取 {{path}}。請改用 add_tags 為作品加上標籤。",
+  "error.ruleQualityProfileUnknown":
+    "沒有品質設定檔使用此名稱，因此規則無法套用。",
+  "error.ruleQualityProfileAmbiguous":
+    "有多個品質設定檔使用此名稱。請重新命名其中一個，讓規則只指向單一設定檔。",
+  "error.ruleMonitorUnsupported":
+    "此規則適用的媒體庫都不接受這種監看類型。",
+  "error.ruleAudioLanguageUnknown":
+    "Scryer 不認得此音訊語言。",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "請設定每次執行的作品數。此規則的以下動作需要它：{{actions}}。",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
