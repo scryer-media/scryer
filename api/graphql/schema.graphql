@@ -33833,6 +33833,16 @@ type TitlePayload {
 	"""
 	ratings: TitleRatingPayload!
 	"""
+	Content ratings from the title's last metadata refresh, one entry per
+	country in the provider's order. Empty until the title is refreshed.
+	"""
+	contentRatings: [DiscoveryContentRatingPayload!]!
+	"""
+	US certification label, such as `PG-13`, or null when the title has
+	none. It is the value the `certification_label` request rule fact reads.
+	"""
+	certificationLabel: String
+	"""
 	Public lists this title is on or has left, lists it is still on
 	first. Personal lists are never included.
 	"""

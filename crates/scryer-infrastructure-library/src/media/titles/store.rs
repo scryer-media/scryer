@@ -2549,6 +2549,21 @@ impl TitleRepository for TitleStore {
         load_title_ratings_batch(&self.datastore, title_ids).await
     }
 
+    async fn list_title_content_ratings(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Vec<scryer_application::ContentRating>)>> {
+        let mut by_title = crate::media::title_content_ratings::load_title_content_ratings(
+            self.datastore.read_exec(),
+            title_ids,
+        )
+        .await?;
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), by_title.remove(id).unwrap_or_default()))
+            .collect())
+    }
+
     async fn list_title_episode_shapes(
         &self,
         title_ids: &[String],
@@ -3579,6 +3594,7 @@ impl TitleRepository for TitleStore {
                 let metadata = metadata.clone();
                 Box::pin(async move {
                     let ratings = metadata.ratings.clone();
+                    let content_ratings = metadata.content_ratings.clone();
                     let credits = metadata.credits.clone();
                     let canonical_tags = metadata.canonical_tags.clone();
                     let mut title = load_title_canonical_tx_or_not_found(tx, &id, true).await?;
@@ -3606,6 +3622,15 @@ impl TitleRepository for TitleStore {
                     // None and keep the cached rows.
                     if let Some(credits) = credits {
                         replace_title_credits_tx(tx, &title.id, &credits).await?;
+                    }
+                    // Same Some/None contract again: hydration replaces the set.
+                    if let Some(content_ratings) = content_ratings {
+                        crate::media::title_content_ratings::replace_title_content_ratings_tx(
+                            tx,
+                            &title.id,
+                            &content_ratings,
+                        )
+                        .await?;
                     }
                     load_title_tx_or_not_found(tx, &id, true).await
                 })

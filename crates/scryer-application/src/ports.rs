@@ -2775,6 +2775,17 @@ pub trait TitleRepository: Send + Sync {
         }
         Ok(ratings)
     }
+    /// The stored content ratings of each title, in SMG's order, for a batch
+    /// of titles. A title with none has an empty list.
+    async fn list_title_content_ratings(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Vec<crate::types::ContentRating>)>> {
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), Vec::new()))
+            .collect())
+    }
     /// The stored genre names of each title, in tag order, for a batch of
     /// titles. A title with no stored genre has an empty list. The default
     /// reads the titles' tags; a store answers it with one bounded read.

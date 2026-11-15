@@ -566,6 +566,30 @@ pub fn from_media_request_lease(
 
 // ── Submit-time metadata snapshot ───────────────────────────────────────────
 
+/// Content ratings as the API shows them, for a request snapshot and a library
+/// title alike.
+pub fn content_rating_payloads(
+    content_ratings: &[scryer_application::ContentRating],
+) -> Vec<DiscoveryContentRatingPayload> {
+    content_ratings
+        .iter()
+        .map(|rating| DiscoveryContentRatingPayload {
+            country: rating.country.clone(),
+            certifications: rating
+                .certifications
+                .iter()
+                .map(|certification| DiscoveryContentCertificationPayload {
+                    value: certification.value.clone(),
+                    source: certification.source.clone(),
+                    release_type: certification.release_type,
+                })
+                .collect(),
+            age_rating: rating.age_rating,
+            age_rating_source: rating.age_rating_source.clone(),
+        })
+        .collect()
+}
+
 pub fn from_media_request_metadata(
     snapshot: &MediaRequestMetadataSnapshot,
 ) -> MediaRequestMetadataPayload {
@@ -574,24 +598,7 @@ pub fn from_media_request_metadata(
         partial: snapshot.partial,
         missing: snapshot.missing.clone(),
         genres: snapshot.genres.clone(),
-        content_ratings: snapshot
-            .content_ratings
-            .iter()
-            .map(|rating| DiscoveryContentRatingPayload {
-                country: rating.country.clone(),
-                certifications: rating
-                    .certifications
-                    .iter()
-                    .map(|certification| DiscoveryContentCertificationPayload {
-                        value: certification.value.clone(),
-                        source: certification.source.clone(),
-                        release_type: certification.release_type,
-                    })
-                    .collect(),
-                age_rating: rating.age_rating,
-                age_rating_source: rating.age_rating_source.clone(),
-            })
-            .collect(),
+        content_ratings: content_rating_payloads(&snapshot.content_ratings),
         age_rating: snapshot_age_rating(snapshot).map(to_graphql_int),
         certification_rank: certification_label
             .as_deref()

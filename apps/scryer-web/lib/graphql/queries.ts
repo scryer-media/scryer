@@ -669,6 +669,7 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
       items {${WANTED_ITEM_FIELDS}
       }
     }
+    certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
     }${TITLE_CAST_CREDIT_SELECTION}
     mediaFiles {${TITLE_MEDIA_FILE_FIELDS}${TITLE_MEDIA_FILE_SCORE_FIELDS}
@@ -730,6 +731,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     }
     seriesMovieLinks {${SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS}
     }
+    certificationLabel
     ratings {${TITLE_RATING_SUMMARY_FIELDS}
     }${TITLE_CAST_CREDIT_SELECTION}`;
 

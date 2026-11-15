@@ -151,6 +151,10 @@ pub struct TitleMetadataUpdate {
     pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
     /// Ratings returned by SMG/MDBList. `Some(default)` clears stale stored ratings.
     pub ratings: Option<TitleRatingSummary>,
+    /// Content ratings returned by SMG, one entry per country, in the shape the
+    /// request rules read. `Some(vec![])` clears stale stored ratings; `None`
+    /// leaves the stored rows untouched for callers that do not hydrate.
+    pub content_ratings: Option<Vec<ContentRating>>,
     /// Complete credit set returned by SMG. `Some(vec![])` clears the stale cache;
     /// `None` leaves the existing rows untouched for callers that do not hydrate.
     pub credits: Option<Vec<TitleCredit>>,

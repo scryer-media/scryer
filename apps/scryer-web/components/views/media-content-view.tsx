@@ -77,6 +77,7 @@ import { TitleCastStrip } from "@/components/views/title-cast-strip";
 import { HorizontalRailScrollGroup } from "@/components/common/horizontal-scroll-fade";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
+import { selectorId } from "@/lib/utils/dom-ids";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
 import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import type {
@@ -1458,6 +1459,14 @@ function TitleContextPanel({
                     {pill}
                   </span>
                 ))}
+                {title.certificationLabel ? (
+                  <span
+                    id={selectorId("title-hero-certification", title.id)}
+                    className="inline-flex h-6 max-w-[8rem] items-center truncate rounded-[5px] border border-white/25 px-1.5 text-[11px] font-bold tracking-wide text-[#e6ebf7]"
+                  >
+                    {title.certificationLabel}
+                  </span>
+                ) : null}
                 {heroMutedMetadata.map((pill, index) => (
                   <span
                     key={`${index}-${pill}`}

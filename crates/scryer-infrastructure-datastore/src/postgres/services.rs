@@ -302,6 +302,7 @@ mod tests {
                         movie_release_dates: None,
                         ratings: None,
                         credits: None,
+                        content_ratings: None,
                         extra_external_ids: Vec::new(),
                         extra_tags: Vec::new(),
                     },

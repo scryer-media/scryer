@@ -51,8 +51,8 @@ pub use evaluation::{
 };
 pub use facts::{
     RequestCatalogContext, RequestDraft, RequestInputContext, RequestQualityContext,
-    RequestRequesterHistoryContext, build_request_input, snapshot_age_rating,
-    us_certification_label,
+    RequestRequesterHistoryContext, build_request_input, content_ratings_us_certification_label,
+    snapshot_age_rating, us_certification_label,
 };
 pub use preflight::RequestPreflight;
 pub use read_model::{
