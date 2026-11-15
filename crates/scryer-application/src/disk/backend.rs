@@ -87,6 +87,32 @@ pub enum SyncOutcome {
     Unconfirmed,
 }
 
+/// How an exclusive write failed.
+#[derive(Debug)]
+pub(crate) struct WriteFailure {
+    /// The file did not exist before this call and this call created it:
+    /// the failure came while writing or syncing it, or later. `false` when
+    /// the exclusive create itself was refused, an existing file included.
+    pub created: bool,
+    pub error: io::Error,
+}
+
+impl WriteFailure {
+    pub(crate) fn not_created(error: io::Error) -> Self {
+        Self {
+            created: false,
+            error,
+        }
+    }
+
+    pub(crate) fn created(error: io::Error) -> Self {
+        Self {
+            created: true,
+            error,
+        }
+    }
+}
+
 /// The disk seam. One method per platform operation.
 pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// Follows links.
@@ -111,8 +137,9 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn symlink(&self, target: &Path, at: &Path) -> io::Result<()>;
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
     fn create_dir(&self, path: &Path) -> io::Result<()>;
-    /// Creates `path` exclusively, writes `bytes`, and syncs it.
-    fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<SyncOutcome>;
+    /// Creates `path` exclusively, writes `bytes`, and syncs it. A failure
+    /// says whether this call had created the file.
+    fn write_new(&self, path: &Path, bytes: &[u8]) -> Result<SyncOutcome, WriteFailure>;
     /// Syncs an existing file.
     fn sync_file(&self, path: &Path) -> io::Result<SyncOutcome>;
 }
@@ -233,14 +260,15 @@ impl DiskBackend for SystemBackend {
         std::fs::create_dir(path)
     }
 
-    fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<SyncOutcome> {
+    fn write_new(&self, path: &Path, bytes: &[u8]) -> Result<SyncOutcome, WriteFailure> {
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(path)?;
-        file.write_all(bytes)?;
-        settled(&file)
+            .open(path)
+            .map_err(WriteFailure::not_created)?;
+        file.write_all(bytes).map_err(WriteFailure::created)?;
+        settled(&file).map_err(WriteFailure::created)
     }
 
     fn sync_file(&self, path: &Path) -> io::Result<SyncOutcome> {
@@ -443,7 +471,8 @@ mod tests {
         let path = dir.path().join("invented-notes.txt");
         backend_write(&path, b"first");
         let refused = SystemBackend.write_new(&path, b"second").unwrap_err();
-        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(refused.error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(!refused.created, "the existing file was not this call's");
         assert_eq!(std::fs::read(&path).unwrap(), b"first");
         SystemBackend
             .sync_file(&path)

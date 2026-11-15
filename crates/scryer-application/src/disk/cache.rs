@@ -2,9 +2,9 @@
 //!
 //! Readings are kept in memory only, never persisted, never written to the
 //! database, and only for paths under a configured root that is cacheable.
-//! A reading is reused by a probing read for [`DISK_STAT_REUSE`]; a cache-only
-//! read accepts a reading up to [`DISK_OBSERVED_MAX_AGE`] old, except that a
-//! missing path is never believed for longer than [`DISK_STAT_REUSE`].
+//! A reading is trusted for [`DISK_STAT_REUSE`], by a probing read and a
+//! cache-only read alike, whatever it says; past that, a cache-only read
+//! reports nothing and a probing read probes.
 //!
 //! Every mutation made through the owner evicts what it can have changed.
 //! A probe that was out while an eviction happened does not store its answer,
@@ -24,11 +24,6 @@ use super::{read, write};
 /// disk again, so a burst of callers costs at most one call per path per
 /// second: the same rule capacity readings follow.
 pub const DISK_STAT_REUSE: std::time::Duration = super::capacity::STORAGE_CAPACITY_REFRESH_REUSE;
-
-/// How old a reading a cache-only read still reports. Long enough that
-/// evidence a scan or listing gathered serves readers in the same minute;
-/// anything that acts on a path probes it instead.
-pub const DISK_OBSERVED_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Paths kept at most. Past that, the oldest readings with no probe out are
 /// dropped down to three quarters of this, so trimming is not paid per insert.
@@ -69,11 +64,7 @@ impl StatCache {
         let reading = read(&self.entries)
             .get(key)
             .and_then(|entry| entry.reading)?;
-        let bound = match reading {
-            PathReading::Missing { .. } => DISK_STAT_REUSE,
-            _ => DISK_OBSERVED_MAX_AGE,
-        };
-        age_under(reading.observed_at()?, now, bound).then_some(reading)
+        age_under(reading.observed_at()?, now, DISK_STAT_REUSE).then_some(reading)
     }
 
     /// A complete reading taken after `asked_at` or under [`DISK_STAT_REUSE`]
@@ -246,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_is_believed_no_longer_than_the_reuse_window() {
+    fn every_reading_is_believed_no_longer_than_the_reuse_window() {
         let cache = StatCache::default();
         cache.store(
             &key("/srv/m/gone"),
@@ -256,8 +247,8 @@ mod tests {
         cache.store(&key("/srv/m/here"), known(0), 0);
         assert!(cache.current(&key("/srv/m/gone"), at(0)).is_some());
         assert!(cache.current(&key("/srv/m/gone"), at(1)).is_none());
-        assert!(cache.current(&key("/srv/m/here"), at(59)).is_some());
-        assert!(cache.current(&key("/srv/m/here"), at(60)).is_none());
+        assert!(cache.current(&key("/srv/m/here"), at(0)).is_some());
+        assert!(cache.current(&key("/srv/m/here"), at(1)).is_none());
     }
 
     #[test]

@@ -11,13 +11,15 @@
 //! a dead mount blocks it outright. So reads come in two modes, as capacity
 //! readings do:
 //!
-//! - [`Disk::observed`] never touches the disk. It answers from what the
-//!   owner already holds, or [`PathReading::NotObserved`].
+//! - [`Disk::observed`] never touches the disk. It answers from a reading the
+//!   owner took under [`DISK_STAT_REUSE`] ago, or [`PathReading::NotObserved`].
 //! - [`Disk::fresh_blocking`] and [`Disk::fresh`] probe now, unless a probe of
 //!   the same path started after the caller asked or finished under
 //!   [`DISK_STAT_REUSE`] ago. The async form runs off the runtime, bounded by
 //!   the root's timeout; a probe that does not answer in time reads
-//!   [`PathReading::Unreachable`].
+//!   [`PathReading::Unreachable`]. While such a probe is still out, further
+//!   async reads under that root answer unreachable at once, but for one
+//!   trial at a time, so a dead mount does not collect blocking threads.
 //!
 //! Deletion guards always use a fresh read, never [`Disk::observed`] and never
 //! a [`DiskPass`]'s evidence.
@@ -29,7 +31,9 @@
 //!
 //! Every mutation evicts what it can have changed: the path, its parent, and
 //! for a directory removal or a move the whole subtree. No mutation here adds
-//! deletion of its own: each removes exactly what the caller named, once.
+//! deletion of its own: each removes exactly what the caller named, once. The
+//! one exception is [`Disk::write_atomic_blocking`]: when it fails, it removes
+//! the hidden staging file that the same call created, and nothing else.
 //! Verified copies are not here yet; the verified copier and the
 //! copy-and-verify move fallback move behind this owner later.
 
@@ -51,7 +55,7 @@ use cache::{StatCache, key_of};
 use volume::Volumes;
 
 pub use backend::SyncOutcome;
-pub use cache::{DISK_OBSERVED_MAX_AGE, DISK_STAT_REUSE};
+pub use cache::DISK_STAT_REUSE;
 pub use pass::DiskPass;
 pub use reading::{DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, reason};
 pub use volume::VolumeClass;
@@ -122,6 +126,34 @@ pub(crate) async fn offload<T: Send + 'static>(
     match joined {
         Ok(value) => Offloaded::Done(value),
         Err(join) => Offloaded::Failed(join.to_string()),
+    }
+}
+
+/// How a read sent through [`Disk::bounded`] ended.
+enum Bounded<T> {
+    Done(T),
+    /// Not sent: its path or its root has a read out past its bound.
+    Refused,
+    TimedOut,
+    Failed(String),
+}
+
+impl<T> From<Offloaded<T>> for Bounded<T> {
+    fn from(outcome: Offloaded<T>) -> Self {
+        match outcome {
+            Offloaded::Done(value) => Self::Done(value),
+            Offloaded::TimedOut => Self::TimedOut,
+            Offloaded::Failed(message) => Self::Failed(message),
+        }
+    }
+}
+
+/// Reports an admitted read as answered when its job ends.
+struct Answers(Arc<volume::Ticket>);
+
+impl Drop for Answers {
+    fn drop(&mut self) {
+        self.0.answered();
     }
 }
 
@@ -287,24 +319,40 @@ impl Disk {
     /// [`Self::fresh_blocking`] off the async runtime, bounded by the root's
     /// timeout. A probe that does not answer in time is recorded as
     /// unreachable; when it answers later, its reading replaces that.
+    ///
+    /// While a read of the same path, or of anything under the same root, is
+    /// out past its bound, this answers unreachable at once without probing
+    /// (see [`Self::bounded`]); a reading still inside the reuse window is
+    /// answered as usual.
     pub async fn fresh(&self, path: impl Into<PathBuf>) -> PathReading {
         let path = path.into();
-        let timeout = self.traits(&path).probe_timeout;
+        let traits = self.traits(&path);
+        if traits.cacheable
+            && let Some(reading) = self
+                .inner
+                .cache
+                .reusable(&key_of(&path), self.inner.clock.now())
+        {
+            return reading;
+        }
         let owner = self.clone();
         let probed = path.clone();
-        match offload(timeout, move || owner.fresh_blocking(&probed)).await {
-            Offloaded::Done(reading) => reading,
-            Offloaded::TimedOut => {
-                let reading = PathReading::Unreachable {
-                    observed_at: self.inner.clock.now(),
-                };
+        let unreachable = PathReading::Unreachable {
+            observed_at: self.inner.clock.now(),
+        };
+        match self
+            .bounded(&path, traits.probe_timeout, move || {
+                owner.fresh_blocking(&probed)
+            })
+            .await
+        {
+            Bounded::Done(reading) => reading,
+            Bounded::TimedOut => {
                 let cache = &self.inner.cache;
-                cache.store(&key_of(&path), reading, cache.epoch());
-                reading
+                cache.store(&key_of(&path), unreachable, cache.epoch());
+                unreachable
             }
-            Offloaded::Failed(_) => PathReading::Unreachable {
-                observed_at: self.inner.clock.now(),
-            },
+            Bounded::Refused | Bounded::Failed(_) => unreachable,
         }
     }
 
@@ -319,9 +367,13 @@ impl Disk {
         let path = path.into();
         let timeout = self.traits(&path).probe_timeout;
         let owner = self.clone();
-        match offload(timeout, move || owner.follow_blocking(&path)).await {
-            Offloaded::Done(reading) => reading,
-            Offloaded::TimedOut | Offloaded::Failed(_) => PathReading::Unreachable {
+        let followed = path.clone();
+        match self
+            .bounded(&path, timeout, move || owner.follow_blocking(&followed))
+            .await
+        {
+            Bounded::Done(reading) => reading,
+            Bounded::Refused | Bounded::TimedOut | Bounded::Failed(_) => PathReading::Unreachable {
                 observed_at: self.inner.clock.now(),
             },
         }
@@ -527,8 +579,11 @@ impl Disk {
     /// a hidden sibling and are synced, then the sibling is renamed into
     /// place. With [`Replace::Never`] an existing `path` is refused and kept.
     ///
-    /// When the write or the rename fails, the hidden sibling is left where
-    /// it is, not removed.
+    /// When this call created the hidden sibling and then the write, the
+    /// sync or the rename fails, it removes that one sibling, once, best
+    /// effort; the caller gets the original error either way. A sibling it
+    /// did not create (the exclusive create was refused) is left alone, and
+    /// it never removes `path` or a parent directory it created.
     pub fn write_atomic_blocking(
         &self,
         path: &Path,
@@ -542,17 +597,29 @@ impl Disk {
             self.create_dir_blocking(parent, Parents::Create)?;
         }
         let staged = staging_path_for(path);
-        let synced = self
-            .call("write_new", || self.inner.backend.write_new(&staged, bytes))
-            .map_err(|error| DiskError::new(DiskVerb::Write, path, error))?;
-        let placed = match replace {
-            Replace::Allowed => self.call("rename", || self.inner.backend.rename(&staged, path)),
-            Replace::Never => self.rename_exclusive(&staged, path),
-        };
+        let written = self.call("write_new", || self.inner.backend.write_new(&staged, bytes));
+        let placed = written.and_then(|synced| {
+            let renamed = match replace {
+                Replace::Allowed => {
+                    self.call("rename", || self.inner.backend.rename(&staged, path))
+                }
+                Replace::Never => self.rename_exclusive(&staged, path),
+            };
+            renamed
+                .map(|()| synced)
+                .map_err(backend::WriteFailure::created)
+        });
+        let result = placed.map_err(|failure| {
+            if failure.created {
+                // Best effort: an error here, or a sibling already gone,
+                // leaves the caller's error as it is.
+                let _ = self.call("remove_file", || self.inner.backend.remove_file(&staged));
+            }
+            DiskError::new(DiskVerb::Write, path, failure.error)
+        });
         self.inner.cache.evict(&key_of(path));
-        placed
-            .map(|()| synced)
-            .map_err(|error| DiskError::new(DiskVerb::Write, path, error))
+        self.inner.cache.evict(&key_of(&staged));
+        result
     }
 
     pub async fn write_atomic(
@@ -641,7 +708,9 @@ impl Disk {
         call()
     }
 
-    /// Run a blocking verb off the async runtime.
+    /// Run a blocking verb off the async runtime. A read passes its root's
+    /// timeout and is admitted as [`Self::bounded`] says; a refused read fails
+    /// as a timed-out one does. Mutations pass no timeout and always run.
     async fn run<T: Send + 'static>(
         &self,
         verb: DiskVerb,
@@ -651,17 +720,58 @@ impl Disk {
     ) -> Result<T, DiskError> {
         let owner = self.clone();
         let target = path.clone();
-        match offload(timeout, move || job(&owner, &target)).await {
-            Offloaded::Done(result) => result,
-            Offloaded::TimedOut => Err(DiskError::timed_out(
+        match self
+            .bounded(&path, timeout, move || job(&owner, &target))
+            .await
+        {
+            Bounded::Done(result) => result,
+            Bounded::Refused | Bounded::TimedOut => Err(DiskError::timed_out(
                 verb,
                 &path,
                 timeout.unwrap_or_default(),
             )),
-            Offloaded::Failed(message) => {
-                Err(DiskError::new(verb, &path, io::Error::other(message)))
-            }
+            Bounded::Failed(message) => Err(DiskError::new(verb, &path, io::Error::other(message))),
         }
+    }
+
+    /// Run `job` on a blocking thread, waiting at most `timeout`.
+    ///
+    /// A timed-out job keeps its thread until the disk answers, so on a dead
+    /// mount every further call would hold one more. A read that timed out and
+    /// has not answered therefore marks its path and its root: further reads
+    /// of that path are refused outright, and reads of anything under that
+    /// root are refused but for one trial at a time. Once any read under the
+    /// root answers, however late, reads go out again. Without a timeout
+    /// (application data, mutations) the job always runs.
+    async fn bounded<T: Send + 'static>(
+        &self,
+        path: &Path,
+        timeout: Option<std::time::Duration>,
+        job: impl FnOnce() -> T + Send + 'static,
+    ) -> Bounded<T> {
+        let learned = timeout.and_then(|_| read(&self.inner.volumes).learned(path));
+        let Some(learned) = learned else {
+            return offload(timeout, job).await.into();
+        };
+        let key = key_of(path);
+        if learned.is_stuck(&key) {
+            return Bounded::Refused;
+        }
+        let Some(trial) = learned.admit() else {
+            return Bounded::Refused;
+        };
+        let ticket = volume::Ticket::new(learned, key, trial);
+        let answers = Answers(ticket.clone());
+        let outcome = offload(timeout, move || {
+            // Dropped when the job returns or unwinds, however late.
+            let _answers = answers;
+            job()
+        })
+        .await;
+        if matches!(outcome, Offloaded::TimedOut) {
+            ticket.timed_out();
+        }
+        outcome.into()
     }
 
     /// Backend calls of `operation` this owner has made, for tests.

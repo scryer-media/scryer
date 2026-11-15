@@ -9,9 +9,10 @@
 //! (an exclusive rename it does not offer, say) is kept per root here, so the
 //! next operation goes straight to what works. Callers never see it.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The kinds of configured root.
@@ -61,6 +62,107 @@ impl VolumeClass {
 pub(crate) struct Learned {
     /// The filesystem answered an exclusive rename with "unsupported".
     pub no_exclusive_rename: AtomicBool,
+    /// Reads that outlived their bound and have not answered yet.
+    stuck: Mutex<Stuck>,
+    /// A trial read is out while the root is suspect.
+    trial: AtomicBool,
+}
+
+#[derive(Debug, Default)]
+struct Stuck {
+    /// Timed-out reads per path, still out.
+    paths: HashMap<PathBuf, usize>,
+    /// A read under the root timed out and no read under it has answered
+    /// since. While set, async reads are refused but for one trial at a time,
+    /// so a dead mount holds at most a few blocking threads, not one per call.
+    suspect: bool,
+}
+
+impl Learned {
+    fn stuck(&self) -> std::sync::MutexGuard<'_, Stuck> {
+        self.stuck
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A read of `key` timed out and has not answered.
+    pub(crate) fn is_stuck(&self, key: &Path) -> bool {
+        self.stuck().paths.contains_key(key)
+    }
+
+    /// Whether an async read may go out now: `Some(false)` for an ordinary
+    /// read, `Some(true)` for the root's one trial while it is suspect, and
+    /// `None` when it must be refused.
+    pub(crate) fn admit(&self) -> Option<bool> {
+        let stuck = self.stuck();
+        if !stuck.suspect {
+            return Some(false);
+        }
+        self.trial
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+            .then_some(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_clear(&self) -> bool {
+        let stuck = self.stuck();
+        stuck.paths.is_empty() && !stuck.suspect && !self.trial.load(Ordering::SeqCst)
+    }
+}
+
+/// One admitted async read under a root, which reports how it ended.
+#[derive(Debug)]
+pub(crate) struct Ticket {
+    learned: Arc<Learned>,
+    key: PathBuf,
+    trial: bool,
+    /// Both flags change only under the root's `stuck` lock, so a timeout and
+    /// an answer racing each other leave the record consistent.
+    answered: AtomicBool,
+    counted: AtomicBool,
+}
+
+impl Ticket {
+    pub(crate) fn new(learned: Arc<Learned>, key: PathBuf, trial: bool) -> Arc<Self> {
+        Arc::new(Self {
+            learned,
+            key,
+            trial,
+            answered: AtomicBool::new(false),
+            counted: AtomicBool::new(false),
+        })
+    }
+
+    /// The caller stopped waiting. Unless the read answered in the meantime,
+    /// it is recorded as still out and the root becomes suspect.
+    pub(crate) fn timed_out(&self) {
+        let mut stuck = self.learned.stuck();
+        if self.answered.load(Ordering::SeqCst) {
+            return;
+        }
+        *stuck.paths.entry(self.key.clone()).or_default() += 1;
+        stuck.suspect = true;
+        self.counted.store(true, Ordering::SeqCst);
+    }
+
+    /// The read returned, however late: the root answers again.
+    pub(crate) fn answered(&self) {
+        let mut stuck = self.learned.stuck();
+        self.answered.store(true, Ordering::SeqCst);
+        if self.counted.load(Ordering::SeqCst)
+            && let Some(count) = stuck.paths.get_mut(&self.key)
+        {
+            *count -= 1;
+            if *count == 0 {
+                stuck.paths.remove(&self.key);
+            }
+        }
+        stuck.suspect = false;
+        if self.trial {
+            self.learned.trial.store(false, Ordering::SeqCst);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +209,11 @@ impl Volumes {
             .iter()
             .filter(|volume| crate::recycle_bin::path_is_under_configured_root(path, &volume.root))
             .max_by_key(|volume| volume.root.components().count())
+    }
+
+    /// What has been learned about the root `path` is under, if any.
+    pub(crate) fn learned(&self, path: &Path) -> Option<Arc<Learned>> {
+        self.resolve(path).map(|volume| volume.learned.clone())
     }
 
     pub(crate) fn class_of(&self, path: &Path) -> VolumeClass {
