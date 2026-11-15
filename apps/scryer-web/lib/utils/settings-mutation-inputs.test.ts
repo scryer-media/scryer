@@ -35,6 +35,7 @@ const proxyDraft = {
   hasStoredTunnelMtu: false,
   tunnelKeepaliveSeconds: "",
   hasStoredTunnelKeepaliveSeconds: false,
+  reachThroughProxyConfigId: "",
   remoteDns: false,
   isEnabled: true,
 };
@@ -101,12 +102,48 @@ test("proxy updates omit immutable provider type", () => {
     baseUrl: "http://proxy:8191",
     requestTimeoutSeconds: 60,
     isEnabled: true,
+    reachThroughProxyConfigId: null,
   });
   assert.equal("providerType" in input, false);
 });
 
 test("proxy creates include provider type", () => {
   assert.equal(buildCreateProxyInput(proxyDraft).providerType, "trawl");
+});
+
+test("a solver's reach-through is sent by solvers only, and an update can clear it", () => {
+  const routed = { ...proxyDraft, reachThroughProxyConfigId: " tunnel-a " };
+  assert.equal(
+    buildCreateProxyInput(routed).reachThroughProxyConfigId,
+    "tunnel-a",
+  );
+  assert.equal(
+    buildUpdateProxyInput("solver-a", routed).reachThroughProxyConfigId,
+    "tunnel-a",
+  );
+  // A direct solver omits the field on create and clears it on update.
+  assert.equal(
+    "reachThroughProxyConfigId" in buildCreateProxyInput(proxyDraft),
+    false,
+  );
+  assert.equal(
+    buildUpdateProxyInput("solver-a", proxyDraft).reachThroughProxyConfigId,
+    null,
+  );
+  // A transport never carries one, even from a stale draft.
+  const staleTransport = {
+    ...socksProxyDraft,
+    reachThroughProxyConfigId: "tunnel-a",
+  };
+  assert.equal(
+    "reachThroughProxyConfigId" in buildCreateProxyInput(staleTransport),
+    false,
+  );
+  assert.equal(
+    "reachThroughProxyConfigId" in
+      buildUpdateProxyInput("socks-a", staleTransport),
+    false,
+  );
 });
 
 test("challenge solvers never carry transport-only fields", () => {

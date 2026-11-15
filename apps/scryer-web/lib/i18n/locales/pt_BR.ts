@@ -3941,6 +3941,65 @@ const pt_BR: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Arraste para reordenar {{value}}",
   "qualityProfile.decisionStepMoveUp": "Mover {{value}} para cima",
   "qualityProfile.decisionStepMoveDown": "Mover {{value}} para baixo",
+  "settings.proxyReachThrough": "Acessar por meio de",
+  "settings.proxyReachThroughHelp":
+    "O Scryer envia suas solicitações a este solucionador pelo proxy de transporte ou túnel escolhido. Direto acessa o solucionador pela própria rede do Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Um solucionador de desafios não pode ser acessado por meio de outro solucionador de desafios.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Um solucionador de desafios não pode ser acessado por meio de si mesmo.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "O proxy ou túnel para acessar o solucionador não foi encontrado.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "O proxy ou túnel para acessar o solucionador está desativado.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Somente um solucionador de desafios pode ser acessado por meio de outro proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Um ou mais solucionadores de desafios são acessados por meio deste proxy. Altere-os primeiro.",
+  "tours.onboarding.welcome.title": "Boas-vindas ao Scryer",
+  "tours.onboarding.welcome.body":
+    "O Scryer encontra, baixa e organiza seus filmes, séries e animes. Aqui vai um tour rápido; você pode pular quando quiser.",
+  "tours.onboarding.search.title": "Pesquise tudo",
+  "tours.onboarding.search.body":
+    "Encontre um título, uma configuração ou uma ação de qualquer lugar. Pressione ⌘K ou Ctrl+K para abrir a pesquisa pelo teclado.",
+  "tours.onboarding.libraries.title": "Suas bibliotecas",
+  "tours.onboarding.libraries.body":
+    "Filmes, séries e animes têm cada um sua biblioteca: o que você tem, o que falta e o que está a caminho.",
+  "tours.onboarding.discover.title": "Descubra e solicite",
+  "tours.onboarding.discover.body":
+    "Explore sugestões baseadas nas suas bibliotecas, solicite um título e acompanhe cada solicitação em Solicitações.",
+  "tours.onboarding.lists.title": "Listas",
+  "tours.onboarding.lists.body":
+    "Siga listas de provedores como o Trakt ou sua watchlist do Plex. O Scryer as mantém sincronizadas e adiciona ou solicita os títulos para você.",
+  "tours.onboarding.activity.title": "Atividade",
+  "tours.onboarding.activity.body":
+    "Downloads e importações em tempo real, e tudo o que precisa de uma decisão sua.",
+  "tours.onboarding.indexers.title": "Indexadores e clientes de download",
+  "tours.onboarding.indexers.body":
+    "O Scryer precisa de pelo menos um indexador para encontrar lançamentos e de um cliente de download para baixá-los. Os clientes de download ficam logo abaixo.",
+  "tours.onboarding.indexers.action": "Adicionar um indexador",
+  "tours.onboarding.qualityProfiles.title": "Perfis de qualidade",
+  "tours.onboarding.qualityProfiles.body":
+    "Um perfil de qualidade define quais qualidades um título pode ter e quando o Scryer continua procurando um lançamento melhor.",
+  "tours.onboarding.rules.title": "Regras",
+  "tours.onboarding.rules.body":
+    "As regras pontuam os lançamentos para que o Scryer prefira os que você quer e ignore os que não quer.",
+  "tours.onboarding.mediaServers.title": "Servidores de mídia",
+  "tours.onboarding.mediaServers.body":
+    "Conecte Jellyfin, Plex ou Emby para que o Scryer saiba o que você já assistiu. Para que o servidor atualize quando o Scryer importar algo, instale também o plugin desse servidor em Plugins.",
+  "tours.onboarding.notifications.title": "Notificações",
+  "tours.onboarding.notifications.body":
+    "Saiba de capturas, importações e tudo que precisa de atenção, onde preferir.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Plugins adicionam indexadores, clientes de download e serviços de notificação. Instale e atualize-os aqui.",
+  "tours.stepOf": "Etapa {{current}} de {{total}}",
+  "tours.skip": "Pular tour",
+  "tours.back": "Voltar",
+  "tours.next": "Próximo",
+  "tours.done": "Concluir",
+  "tours.saveFailed":
+    "Não foi possível salvar o progresso do tour, então ele pode aparecer novamente.",
 };
 
 export default pt_BR;

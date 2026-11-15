@@ -506,12 +506,10 @@ impl MediaServerSignalReader for StubSignalReader {
                 "favourites unavailable",
             ));
         }
-        Ok(self.favorites.as_ref().map(|favorites| {
-            favorites
-                .get(external_user_id)
-                .cloned()
-                .unwrap_or_default()
-        }))
+        Ok(self
+            .favorites
+            .as_ref()
+            .map(|favorites| favorites.get(external_user_id).cloned().unwrap_or_default()))
     }
 
     async fn fetch_audience_plays(

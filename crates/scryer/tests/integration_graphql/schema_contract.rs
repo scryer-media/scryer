@@ -927,8 +927,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Ignoring pending imports in bulk adds `ignorePendingImports`, one call
     // for a selection instead of one per row: 294->295.
     assert!(mutation_field_names.contains(&"ignorePendingImports"));
+    // Guided tours record what an account has seen with `recordMyUiTours`:
+    // 295->296.
+    assert!(mutation_field_names.contains(&"recordMyUiTours"));
     assert_eq!(
-        mutation_field_count, 295,
+        mutation_field_count, 296,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1497,20 +1500,30 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Guided tours add UiTourProgressPayload, RecordMyUiToursInput and
+    // UiTourOutcomeValue: public types 1036->1039, OBJECT 562->563,
+    // INPUT_OBJECT 246->247, ENUM 216->217.
+    for name in [
+        "UiTourProgressPayload",
+        "RecordMyUiToursInput",
+        "UiTourOutcomeValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1036,
+        1039,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 562);
+    assert_eq!(kind_count("OBJECT"), 563);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
-    assert_eq!(kind_count("INPUT_OBJECT"), 246);
+    assert_eq!(kind_count("INPUT_OBJECT"), 247);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 216);
+    assert_eq!(kind_count("ENUM"), 217);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

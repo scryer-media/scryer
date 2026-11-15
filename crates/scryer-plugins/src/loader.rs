@@ -1258,7 +1258,12 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     ) -> Option<Arc<dyn IndexerClient>> {
         let provider_key = config.provider_type.trim().to_ascii_lowercase();
         let (proxy_id, proxy_revision) = proxy_config
-            .map(|config| (config.id.clone(), config.updated_at.to_rfc3339()))
+            .map(|config| {
+                (
+                    config.id.clone(),
+                    scryer_application::transport_proxy::transport_proxy_revision(config),
+                )
+            })
             .unwrap_or_else(|| (String::new(), String::new()));
         let now = (self.clock)();
         let cache_key = (

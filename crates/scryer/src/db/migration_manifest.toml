@@ -4094,120 +4094,154 @@ scope = "all"
 
 [[migration]]
 version = 345
-description = "lifecycle candidate decided actions"
+description = "proxy reach through"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0345_lifecycle_candidate_decided_actions.sql"
+file = "migrations/0345_proxy_reach_through.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0345_lifecycle_candidate_decided_actions.sql"
+file = "postgres/migrations/0345_proxy_reach_through.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
 version = 346
-description = "remove user maintenance rules"
+description = "user ui tours"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0346_remove_user_maintenance_rules.sql"
+file = "migrations/0346_user_ui_tours.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0346_remove_user_maintenance_rules.sql"
+file = "postgres/migrations/0346_user_ui_tours.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
 version = 347
-description = "rule builder models"
+description = "lifecycle candidate decided actions"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0347_rule_builder_models.sql"
+file = "migrations/0347_lifecycle_candidate_decided_actions.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0347_rule_builder_models.sql"
+file = "postgres/migrations/0347_lifecycle_candidate_decided_actions.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
 version = 348
-description = "maintenance rule schedules"
+description = "remove user maintenance rules"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0348_maintenance_rule_schedules.sql"
+file = "migrations/0348_remove_user_maintenance_rules.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0348_maintenance_rule_schedules.sql"
+file = "postgres/migrations/0348_remove_user_maintenance_rules.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
 version = 349
-description = "maintenance step attempt window"
+description = "rule builder models"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0349_maintenance_step_attempt_window.sql"
+file = "migrations/0349_rule_builder_models.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0349_maintenance_step_attempt_window.sql"
+file = "postgres/migrations/0349_rule_builder_models.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
 version = 350
-description = "maintenance rule max titles per run"
+description = "maintenance rule schedules"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0350_maintenance_rule_max_titles_per_run.sql"
+file = "migrations/0350_maintenance_rule_schedules.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0350_maintenance_rule_max_titles_per_run.sql"
+file = "postgres/migrations/0350_maintenance_rule_schedules.sql"
 engine = "postgres"
 scope = "all"
 
 [[migration]]
 version = 351
-description = "media server signal series favorites"
+description = "maintenance step attempt window"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0351_media_server_signal_series_favorites.sql"
+file = "migrations/0351_maintenance_step_attempt_window.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0351_media_server_signal_series_favorites.sql"
+file = "postgres/migrations/0351_maintenance_step_attempt_window.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 352
+description = "maintenance rule max titles per run"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0352_maintenance_rule_max_titles_per_run.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0352_maintenance_rule_max_titles_per_run.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 353
+description = "media server signal series favorites"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0353_media_server_signal_series_favorites.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0353_media_server_signal_series_favorites.sql"
 engine = "postgres"
 scope = "all"
 

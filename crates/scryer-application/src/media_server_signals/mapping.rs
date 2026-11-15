@@ -105,9 +105,7 @@ fn facet_accepts(kind: MediaServerSignalKind, facet: &MediaFacet) -> bool {
 pub fn resolve_title(item: &ProviderPlayedItem, index: &TitleExternalIdIndex) -> Option<String> {
     let ids = match item.kind {
         MediaServerSignalKind::Movie | MediaServerSignalKind::Series => &item.external_ids,
-        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => {
-            &item.series_external_ids
-        }
+        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => &item.series_external_ids,
     };
 
     for source in SIGNAL_EXTERNAL_ID_SOURCES {
@@ -200,9 +198,7 @@ pub fn is_foreign_item(
     }
     let ids = match item.kind {
         MediaServerSignalKind::Movie | MediaServerSignalKind::Series => &item.external_ids,
-        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => {
-            &item.series_external_ids
-        }
+        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => &item.series_external_ids,
     };
     let mut usable = SIGNAL_EXTERNAL_ID_SOURCES
         .iter()

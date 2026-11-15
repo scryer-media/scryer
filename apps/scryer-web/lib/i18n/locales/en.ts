@@ -12622,6 +12622,65 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
   "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
   "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
+  "settings.proxyReachThrough": "Reach through",
+  "settings.proxyReachThroughHelp":
+    "Scryer sends its requests to this solver through the chosen transport proxy or tunnel. Direct reaches the solver from Scryer's own network.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "A challenge solver cannot be reached through another challenge solver.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "A challenge solver cannot be reached through itself.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "The proxy or tunnel to reach the solver through was not found.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "The proxy or tunnel to reach the solver through is disabled.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Only a challenge solver can be reached through another proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "One or more challenge solvers are reached through this proxy. Change them first.",
+  "tours.onboarding.welcome.title": "Welcome to Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer finds, downloads and organizes your movies, series and anime. Here is a quick look around; you can skip it at any time.",
+  "tours.onboarding.search.title": "Search everything",
+  "tours.onboarding.search.body":
+    "Find a title, a setting or an action from anywhere. Press ⌘K or Ctrl+K to open search from the keyboard.",
+  "tours.onboarding.libraries.title": "Your libraries",
+  "tours.onboarding.libraries.body":
+    "Movies, series and anime each have a library: what you have, what is missing and what is on its way.",
+  "tours.onboarding.discover.title": "Discover and request",
+  "tours.onboarding.discover.body":
+    "Browse suggestions drawn from your libraries, request a title, and follow each request in Requests.",
+  "tours.onboarding.lists.title": "Lists",
+  "tours.onboarding.lists.body":
+    "Follow lists from providers such as Trakt or your Plex watchlist. Scryer keeps them in sync and adds or requests their titles for you.",
+  "tours.onboarding.activity.title": "Activity",
+  "tours.onboarding.activity.body":
+    "Downloads and imports as they happen, and anything that needs a decision from you.",
+  "tours.onboarding.indexers.title": "Indexers and download clients",
+  "tours.onboarding.indexers.body":
+    "Scryer needs at least one indexer to find releases and a download client to fetch them. Download clients are just below.",
+  "tours.onboarding.indexers.action": "Add an indexer",
+  "tours.onboarding.qualityProfiles.title": "Quality profiles",
+  "tours.onboarding.qualityProfiles.body":
+    "A quality profile sets which qualities a title may have and when Scryer keeps looking for a better release.",
+  "tours.onboarding.rules.title": "Rules",
+  "tours.onboarding.rules.body":
+    "Rules score releases, so Scryer prefers the ones you want and passes over the ones you don't.",
+  "tours.onboarding.mediaServers.title": "Media servers",
+  "tours.onboarding.mediaServers.body":
+    "Connect Jellyfin, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
+  "tours.onboarding.notifications.title": "Notifications",
+  "tours.onboarding.notifications.body":
+    "Hear about grabs, imports and anything that needs attention, wherever you want to be told.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Plugins add indexers, download clients and notification services. Install and update them here.",
+  "tours.stepOf": "Step {{current}} of {{total}}",
+  "tours.skip": "Skip tour",
+  "tours.back": "Back",
+  "tours.next": "Next",
+  "tours.done": "Done",
+  "tours.saveFailed":
+    "Your tour progress could not be saved, so this tour may appear again.",
 };
 
 export default en;

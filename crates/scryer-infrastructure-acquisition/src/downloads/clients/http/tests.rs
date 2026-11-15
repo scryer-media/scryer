@@ -1381,6 +1381,8 @@ fn a_mixed_set_of_refusals_names_the_last_one() {
 fn transport_proxy(base_url: &str) -> scryer_domain::ProxyConfig {
     let created_at = Utc::now();
     scryer_domain::ProxyConfig {
+        reach_through_proxy_config_id: None,
+        reach_through: None,
         id: format!("proxy-{}", uuid::Uuid::new_v4()),
         name: "Synthetic Proxy".to_string(),
         provider_type: scryer_domain::ProxyProviderType::Http,

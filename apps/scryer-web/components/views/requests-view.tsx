@@ -146,6 +146,7 @@ import {
 import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { HelpLabel, InfoHelp } from "@/components/common/info-help";
 
 type QualityProfileOption = {
   id: string;
@@ -1827,12 +1828,11 @@ export function RequestsView({
           ) : null}
           {approvalRequest ? (
             <div className="space-y-2">
-              <span className="block text-sm font-medium text-card-foreground">
-                {t("requests.approvedTags")}
-              </span>
-              <p className="text-xs text-muted-foreground">
-                {t("requests.approvedTagsHelp")}
-              </p>
+              <HelpLabel
+                className="text-sm font-medium text-card-foreground"
+                label={t("requests.approvedTags")}
+                help={t("requests.approvedTagsHelp")}
+              />
               {/* The registry is the vocabulary: an approver picks from the
                   same list the title editor offers rather than typing a label
                   the server would then refuse after they pressed approve. */}
@@ -2011,9 +2011,15 @@ export function RequestsView({
             </label>
           ) : null}
           {pendingClaimAction?.kind === "release" ? (
-            <label className="space-y-2">
-              <span className="block text-sm font-medium text-card-foreground">
-                {t("requests.claimReleaseReason")}
+            <div className="space-y-2">
+              <span className="flex items-center gap-1 text-sm font-medium text-card-foreground">
+                <label htmlFor={TITLE_CLAIM_RELEASE_REASON_ID}>
+                  {t("requests.claimReleaseReason")}
+                </label>
+                <InfoHelp
+                  text={t("requests.claimReleaseReasonHelp")}
+                  ariaLabel={t("requests.claimReleaseReason")}
+                />
               </span>
               <Input
                 id={TITLE_CLAIM_RELEASE_REASON_ID}
@@ -2027,10 +2033,7 @@ export function RequestsView({
                   )
                 }
               />
-              <span className="block text-xs text-muted-foreground">
-                {t("requests.claimReleaseReasonHelp")}
-              </span>
-            </label>
+            </div>
           ) : null}
           <DialogFooter>
             <Button

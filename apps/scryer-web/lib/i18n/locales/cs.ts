@@ -7288,6 +7288,65 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
   "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
   "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
+  "settings.proxyReachThrough": "Připojit přes",
+  "settings.proxyReachThroughHelp":
+    "Scryer posílá požadavky na tento řešitel přes zvolenou transportní proxy nebo tunel. Přímo znamená připojení z vlastní sítě Scryeru.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Řešitel výzev nelze připojit přes jiný řešitel výzev.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Řešitel výzev nelze připojit přes sebe sama.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Proxy nebo tunel pro připojení k řešiteli nebyl nalezen.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Proxy nebo tunel pro připojení k řešiteli je zakázán.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Přes jinou proxy lze připojit pouze řešitel výzev.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Přes tuto proxy se připojuje jeden nebo více řešitelů výzev. Nejprve je změňte.",
+  "tours.onboarding.welcome.title": "Vítejte ve Scryeru",
+  "tours.onboarding.welcome.body":
+    "Scryer vyhledává, stahuje a třídí vaše filmy, seriály a anime. Tady je krátká prohlídka; kdykoli ji můžete přeskočit.",
+  "tours.onboarding.search.title": "Hledejte cokoli",
+  "tours.onboarding.search.body":
+    "Najděte titul, nastavení nebo akci odkudkoli. Stisknutím ⌘K nebo Ctrl+K otevřete hledání z klávesnice.",
+  "tours.onboarding.libraries.title": "Vaše knihovny",
+  "tours.onboarding.libraries.body":
+    "Filmy, seriály a anime mají každé svou knihovnu: co máte, co chybí a co je na cestě.",
+  "tours.onboarding.discover.title": "Objevujte a žádejte",
+  "tours.onboarding.discover.body":
+    "Procházejte návrhy podle svých knihoven, požádejte o titul a sledujte každou žádost v Žádostech.",
+  "tours.onboarding.lists.title": "Seznamy",
+  "tours.onboarding.lists.body":
+    "Sledujte seznamy od poskytovatelů, jako je Trakt nebo váš seznam Plex Watchlist. Scryer je udržuje synchronizované a jejich tituly za vás přidá nebo o ně požádá.",
+  "tours.onboarding.activity.title": "Aktivita",
+  "tours.onboarding.activity.body":
+    "Stahování a importy tak, jak probíhají, a vše, co čeká na vaše rozhodnutí.",
+  "tours.onboarding.indexers.title": "Indexery a klienti pro stahování",
+  "tours.onboarding.indexers.body":
+    "Scryer potřebuje alespoň jeden indexer k hledání vydání a klienta pro stahování, který je stáhne. Klienti pro stahování jsou hned pod ním.",
+  "tours.onboarding.indexers.action": "Přidat indexer",
+  "tours.onboarding.qualityProfiles.title": "Profily kvality",
+  "tours.onboarding.qualityProfiles.body":
+    "Profil kvality určuje, jaké kvality může titul mít a kdy má Scryer dál hledat lepší vydání.",
+  "tours.onboarding.rules.title": "Pravidla",
+  "tours.onboarding.rules.body":
+    "Pravidla hodnotí vydání, aby Scryer upřednostnil ta, která chcete, a vynechal ta, která nechcete.",
+  "tours.onboarding.mediaServers.title": "Mediální servery",
+  "tours.onboarding.mediaServers.body":
+    "Připojte Jellyfin, Plex nebo Emby, aby Scryer věděl, co jste viděli. Aby se server obnovil po každém importu ve Scryeru, nainstalujte také plugin daného serveru v Pluginech.",
+  "tours.onboarding.notifications.title": "Oznámení",
+  "tours.onboarding.notifications.body":
+    "Dozvíte se o stažených vydáních, importech a všem, co vyžaduje pozornost, tam, kde chcete.",
+  "tours.onboarding.plugins.title": "Pluginy",
+  "tours.onboarding.plugins.body":
+    "Pluginy přidávají indexery, klienty pro stahování a služby oznámení. Zde je instalujete a aktualizujete.",
+  "tours.stepOf": "Krok {{current}} z {{total}}",
+  "tours.skip": "Přeskočit prohlídku",
+  "tours.back": "Zpět",
+  "tours.next": "Další",
+  "tours.done": "Hotovo",
+  "tours.saveFailed":
+    "Průběh prohlídky se nepodařilo uložit, takže se může zobrazit znovu.",
 };
 
 export default cs;

@@ -547,6 +547,38 @@ pub struct UiSettingsPayload {
     pub catalog_views: Vec<UiCatalogViewSettingPayload>,
     /// Saved dashboard layouts, one per breakpoint that has one; a breakpoint without an entry uses the default layout.
     pub dashboard_layouts: Vec<UiDashboardLayout>,
+    /// Guided tours (onboarding and release highlights) the caller has finished or skipped; a tour without an entry has not been shown.
+    pub tours: Vec<UiTourProgressPayload>,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// How the caller left a guided tour. Either way the tour is not offered again.
+pub enum UiTourOutcomeValue {
+    /// The caller reached the last step.
+    Completed,
+    /// The caller dismissed the tour before the end.
+    Skipped,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A guided tour the caller has finished or skipped.
+pub struct UiTourProgressPayload {
+    /// Tour identifier from the web's tour registry, e.g. `onboarding`.
+    pub tour_id: String,
+    /// How the caller left the tour.
+    pub outcome: UiTourOutcomeValue,
+    /// When the outcome was recorded.
+    pub recorded_at: DateTime<Utc>,
+}
+
+#[derive(InputObject, Clone)]
+/// Guided tours to record for the caller, all with one outcome.
+pub struct RecordMyUiToursInput {
+    /// Tour identifiers: 1 to 32 ids of 1 to 64 lowercase letters, digits, dots or hyphens. Repeated ids count once.
+    pub tour_ids: Vec<String>,
+    /// How the caller left these tours.
+    pub outcome: UiTourOutcomeValue,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
