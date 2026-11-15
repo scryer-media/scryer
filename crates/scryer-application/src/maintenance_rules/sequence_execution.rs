@@ -237,7 +237,7 @@ impl AppUseCase {
         if !candidates
             .lease_candidate_for_execution(
                 &candidate.id,
-                now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                self.maintenance_lease_stale_before(now),
                 now,
             )
             .await?
@@ -266,20 +266,24 @@ impl AppUseCase {
                 return Ok(CandidateOutcome::LeaseLost);
             }
         };
-        let outcome = match self
-            .run_maintenance_action_sequence(
-                &candidate,
-                SequenceCandidateExecutionContext {
-                    detail,
-                    sequence,
-                    evaluator,
-                    libraries,
-                    tag_conflicts,
-                    budget,
-                },
-            )
-            .await
-        {
+        let run = async {
+            let notify = self.maintenance_notify_context(&candidate).await?;
+            let outcome = self
+                .run_maintenance_action_sequence(
+                    &candidate,
+                    SequenceCandidateExecutionContext {
+                        detail,
+                        sequence,
+                        evaluator,
+                        libraries,
+                        tag_conflicts,
+                        budget,
+                    },
+                )
+                .await?;
+            AppResult::Ok((outcome, notify))
+        };
+        let (outcome, notify) = match run.await {
             Ok(outcome) => outcome,
             Err(error) => {
                 if candidates
@@ -311,13 +315,25 @@ impl AppUseCase {
                 // the in-memory progress map that led us here. A process may
                 // have crossed a persistence boundary between a last step and
                 // this candidate-level commit.
-                let durable_success_ids: HashSet<_> = candidates
+                let durable_runs = candidates
                     .list_action_steps(
                         &candidate.id,
                         candidate.match_generation,
                         candidate.revision_number,
                     )
-                    .await?
+                    .await?;
+                // A notification reports an act. A sequence whose steps all
+                // found their work already done, or that has no steps because
+                // this subject's actions are already in place, changed
+                // nothing to report. That is what keeps a candidate recreated
+                // after its actions changed from repeating the notification.
+                // Only a rule that declares nothing but `notify` has a
+                // notification that is itself the act.
+                let changed_anything = durable_runs
+                    .iter()
+                    .any(|run| run.state == MaintenanceActionStepState::Succeeded)
+                    || (sequence.steps.is_empty() && rule_only_notifies(detail));
+                let durable_success_ids: HashSet<_> = durable_runs
                     .into_iter()
                     .filter(|run| run.state.is_completion_success())
                     .map(|run| run.key.step_id)
@@ -335,6 +351,22 @@ impl AppUseCase {
                     completed_step_ids.clone(),
                     None,
                 )?;
+                // The notification goes out once every action, including a
+                // title deletion, is durably recorded, and before the
+                // candidate is committed. A pass that stops between the two
+                // leaves the candidate to be reclaimed, and the reclaiming
+                // pass sends it again under the same event id, which records
+                // it only once. Once the candidate is terminal no pass would
+                // send it, so nothing after the commit, such as closing the
+                // history entry, can drop it.
+                if changed_anything && let Some(notify) = notify {
+                    self.send_maintenance_rule_notification(
+                        &candidate,
+                        &detail.rule_set.name,
+                        notify,
+                    )
+                    .await;
+                }
                 if candidates
                     .finish_sequence_terminal_membership_and_candidate(
                         &membership,
@@ -581,6 +613,24 @@ impl AppUseCase {
                     step_id: step.id.clone(),
                 });
             }
+            // A candidate that replaced one whose decided actions changed
+            // carries the attempts its high-risk steps already spent; a
+            // recreate never hands a failing delete a fresh budget.
+            let carried_high_risk_attempts = if step.descriptor().risk_class
+                == crate::maintenance_rules::MaintenanceRiskClass::High
+            {
+                candidate.action_attempts.max(0)
+            } else {
+                0
+            };
+            if !completed.contains_key(&step.id)
+                && carried_high_risk_attempts
+                    >= super::action_execution::MAINTENANCE_MAX_ACTION_ATTEMPTS
+            {
+                return Ok(SequenceOutcome::Failed {
+                    step_id: step.id.clone(),
+                });
+            }
 
             // The terminal deletion can remove its catalog target before a
             // crash reaches `finish_action_step`. Its immutable target record
@@ -606,7 +656,7 @@ impl AppUseCase {
                             .maintenance_evaluation
                             .claim_action_step(
                                 &existing,
-                                Utc::now() - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                                self.maintenance_lease_stale_before(Utc::now()),
                                 &lease_id,
                                 Utc::now(),
                             )
@@ -679,6 +729,7 @@ impl AppUseCase {
                 && !matches!(
                     step.kind,
                     MaintenanceActionStepKind::Search
+                        | MaintenanceActionStepKind::FetchSubtitles
                         | MaintenanceActionStepKind::DeleteFiles
                         | MaintenanceActionStepKind::DeleteTitleAndFiles
                 )
@@ -725,7 +776,7 @@ impl AppUseCase {
                         .maintenance_evaluation
                         .claim_action_step(
                             &recovery_claim,
-                            Utc::now() - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                            self.maintenance_lease_stale_before(Utc::now()),
                             &lease_id,
                             Utc::now(),
                         )
@@ -778,6 +829,7 @@ impl AppUseCase {
             let decision = self
                 .maintenance_execution_safety_checks(
                     detail,
+                    sequence,
                     evaluator,
                     candidate,
                     libraries,
@@ -793,7 +845,9 @@ impl AppUseCase {
             if let Some(existing) = replay_before_state.as_ref()
                 && !unmonitor_before_state_matches_input(existing, &input)
             {
-                return Ok(SequenceOutcome::Held(execution_reason::UNKNOWN_AT_EXECUTION));
+                return Ok(SequenceOutcome::Held(
+                    execution_reason::UNKNOWN_AT_EXECUTION,
+                ));
             }
 
             let lease_id = Id::new().0;
@@ -803,13 +857,15 @@ impl AppUseCase {
                 revision_number: candidate.revision_number,
                 step_id: step.id.clone(),
             };
-            let attempt = completed.get(&step.id).map_or(1, |run| {
-                if run.state == MaintenanceActionStepState::Failed {
-                    run.attempt + 1
-                } else {
-                    run.attempt
-                }
-            });
+            let attempt = completed
+                .get(&step.id)
+                .map_or(carried_high_risk_attempts + 1, |run| {
+                    if run.state == MaintenanceActionStepState::Failed {
+                        run.attempt + 1
+                    } else {
+                        run.attempt
+                    }
+                });
             let mut run = sequence_step_run(
                 key,
                 SequenceStepRunContext {
@@ -828,7 +884,7 @@ impl AppUseCase {
                 .maintenance_evaluation
                 .claim_action_step(
                     &run,
-                    Utc::now() - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                    self.maintenance_lease_stale_before(Utc::now()),
                     &lease_id,
                     Utc::now(),
                 )
@@ -886,6 +942,7 @@ impl AppUseCase {
                         match self
                             .maintenance_execution_safety_checks(
                                 detail,
+                                sequence,
                                 evaluator,
                                 candidate,
                                 libraries,
@@ -935,6 +992,15 @@ impl AppUseCase {
                         "",
                     )
                 })
+            };
+            // A location operation that took the title after the recheck is a
+            // wait, not a failure: the operation releases its claim on every
+            // terminal path, so the step keeps its attempt and retries.
+            let result = match result {
+                Err(AppError::LocationOperationBusy(_)) => Ok(SequenceStepResult::Held(
+                    execution_reason::LOCATION_OPERATION_HOLD,
+                )),
+                other => other,
             };
             match result {
                 Ok(SequenceStepResult::Finished(state)) => {
@@ -1343,6 +1409,185 @@ impl AppUseCase {
                 )
                 .await
             }
+            (MaintenanceActionStepKind::Monitor, MaintenanceActionStepParameters::None) => {
+                let before_monitored = match &input.facts.monitored {
+                    scryer_rules::maintenance::Observation::Known { value, .. } => Some(*value),
+                    scryer_rules::maintenance::Observation::Unknown { .. }
+                    | scryer_rules::maintenance::Observation::Absent { .. } => None,
+                };
+                let already_satisfied = self
+                    .maintenance_monitoring_is_confirmed(candidate, title)
+                    .await?;
+                run.provenance_json = sequence_step_provenance(
+                    candidate,
+                    step,
+                    serde_json::json!({
+                        "monitoring_changed": !already_satisfied,
+                        "expected_postcondition": "monitored",
+                    }),
+                );
+                run.before_state_json = serde_json::json!({
+                    "schema_version": 1,
+                    "facts_monitored": before_monitored,
+                    "monitoring_changed": !already_satisfied,
+                })
+                .to_string();
+                self.checkpoint_sequence_step(run).await?;
+                if already_satisfied {
+                    return Ok(SequenceStepResult::Finished(
+                        MaintenanceActionStepState::AlreadySatisfied,
+                    ));
+                }
+                self.monitor_maintenance_subject(candidate, title).await?;
+                if !self
+                    .maintenance_monitoring_is_confirmed(candidate, title)
+                    .await?
+                {
+                    return Err(AppError::Repository(
+                        "maintenance Monitor postcondition was not confirmed".to_string(),
+                    ));
+                }
+                Ok(SequenceStepResult::Finished(
+                    MaintenanceActionStepState::Succeeded,
+                ))
+            }
+            (MaintenanceActionStepKind::FetchSubtitles, MaintenanceActionStepParameters::None) => {
+                // The searches run in the background through the subtitle
+                // pipeline, which skips a file that already has its wanted
+                // languages. Starting them is this step's whole effect.
+                //
+                // An earlier attempt that recorded its start already started
+                // them; its result just failed to land. Replaying it would
+                // start every search a second time.
+                if let Some(started) = completed
+                    .get(&step.id)
+                    .and_then(subtitle_searches_already_started)
+                {
+                    run.provenance_json = sequence_step_provenance(
+                        candidate,
+                        step,
+                        serde_json::json!({
+                            "expected_postcondition": "subtitle_search_started",
+                            "searches_started": started,
+                        }),
+                    );
+                    return Ok(SequenceStepResult::Finished(if started == 0 {
+                        MaintenanceActionStepState::AlreadySatisfied
+                    } else {
+                        MaintenanceActionStepState::Succeeded
+                    }));
+                }
+                run.provenance_json = sequence_step_provenance(
+                    candidate,
+                    step,
+                    serde_json::json!({"expected_postcondition": "subtitle_search_started"}),
+                );
+                self.checkpoint_sequence_step(run).await?;
+                let started = self
+                    .fetch_maintenance_subject_subtitles(candidate, title)
+                    .await?;
+                run.provenance_json = sequence_step_provenance(
+                    candidate,
+                    step,
+                    serde_json::json!({
+                        "expected_postcondition": "subtitle_search_started",
+                        "searches_started": started,
+                    }),
+                );
+                // The start marker: once this lands, a replay of the step
+                // finishes instead of starting the searches again.
+                self.checkpoint_sequence_step(run).await?;
+                Ok(SequenceStepResult::Finished(if started == 0 {
+                    MaintenanceActionStepState::AlreadySatisfied
+                } else {
+                    MaintenanceActionStepState::Succeeded
+                }))
+            }
+            (
+                MaintenanceActionStepKind::MoveToLibrary,
+                MaintenanceActionStepParameters::Library { library: target },
+            )
+            | (
+                MaintenanceActionStepKind::MoveToRoot,
+                MaintenanceActionStepParameters::Root { root: target },
+            ) => {
+                let move_target = if step.kind == MaintenanceActionStepKind::MoveToLibrary {
+                    super::title_actions::MaintenanceMoveTarget::Library(target)
+                } else {
+                    super::title_actions::MaintenanceMoveTarget::Root(target)
+                };
+                run.before_state_json = serde_json::json!({
+                    "schema_version": 1,
+                    "library_id": title.library_id,
+                    "library_name": input.library.name,
+                    "root_folder_id": title.root_folder_id,
+                })
+                .to_string();
+                let planned = match self.maintenance_resolve_move(title, move_target).await? {
+                    Ok(planned) => planned,
+                    Err(super::title_actions::MaintenanceMoveOutcome::AlreadyThere) => {
+                        return Ok(SequenceStepResult::Finished(
+                            MaintenanceActionStepState::AlreadySatisfied,
+                        ));
+                    }
+                    Err(super::title_actions::MaintenanceMoveOutcome::Held(reason)) => {
+                        return Ok(SequenceStepResult::Held(reason));
+                    }
+                    Err(super::title_actions::MaintenanceMoveOutcome::Started { .. }) => {
+                        return Ok(SequenceStepResult::Held(
+                            execution_reason::UNKNOWN_AT_EXECUTION,
+                        ));
+                    }
+                };
+                // The target and the id the operation will be created with
+                // are durable before the move is asked for, so a pass that
+                // finds this checkpoint after a crash can tell whether the
+                // title landed and which operation put it there.
+                let operation_id = Id::new().0;
+                run.provenance_json = sequence_step_provenance(
+                    candidate,
+                    step,
+                    serde_json::json!({
+                        "move_started": false,
+                        "expected_postcondition": "title_at_move_target",
+                        "operation_id": operation_id,
+                        "target_library_id": planned.library_id,
+                        "target_root_id": planned.root_id,
+                    }),
+                );
+                self.checkpoint_sequence_step(run).await?;
+                match self
+                    .maintenance_start_move(title, planned, Some(operation_id))
+                    .await?
+                {
+                    super::title_actions::MaintenanceMoveOutcome::AlreadyThere => Ok(
+                        SequenceStepResult::Finished(MaintenanceActionStepState::AlreadySatisfied),
+                    ),
+                    super::title_actions::MaintenanceMoveOutcome::Started {
+                        operation_id,
+                        library_id,
+                        root_id,
+                    } => {
+                        run.provenance_json = sequence_step_provenance(
+                            candidate,
+                            step,
+                            serde_json::json!({
+                                "move_started": true,
+                                "expected_postcondition": "title_at_move_target",
+                                "operation_id": operation_id,
+                                "target_library_id": library_id,
+                                "target_root_id": root_id,
+                            }),
+                        );
+                        Ok(SequenceStepResult::Finished(
+                            MaintenanceActionStepState::Succeeded,
+                        ))
+                    }
+                    super::title_actions::MaintenanceMoveOutcome::Held(reason) => {
+                        Ok(SequenceStepResult::Held(reason))
+                    }
+                }
+            }
             _ => Err(AppError::validation_refused(
                 crate::error_reasons::maintenance::SEQUENCE_STEP_PARAMETERS_INVALID,
                 "maintenance sequence step parameters are invalid",
@@ -1424,6 +1669,18 @@ impl AppUseCase {
                         )
                     })
             })),
+            (MaintenanceActionStepKind::Monitor, MaintenanceActionStepParameters::None) => {
+                self.maintenance_monitoring_is_confirmed(candidate, title)
+                    .await
+            }
+            (
+                MaintenanceActionStepKind::MoveToLibrary,
+                MaintenanceActionStepParameters::Library { .. },
+            )
+            | (
+                MaintenanceActionStepKind::MoveToRoot,
+                MaintenanceActionStepParameters::Root { .. },
+            ) => Ok(sequence_move_landed(&provenance, title)),
             _ => Ok(false),
         }
     }
@@ -2102,6 +2359,7 @@ impl AppUseCase {
         let action = {
             let mut context = MaintenanceExecutionContext {
                 detail,
+                sequence,
                 candidate,
                 title,
                 input,
@@ -2255,7 +2513,70 @@ fn sequence_step_before_state_holds(
                         .zip(tags)
                         .all(|(current, saved)| current == saved)
             }),
+        (MaintenanceActionStepKind::Monitor, MaintenanceActionStepParameters::None)
+            if candidate.subject_kind == "title"
+                && candidate.subject_id == candidate.title_id
+                && title.id == candidate.title_id =>
+        {
+            before
+                .get("facts_monitored")
+                .and_then(serde_json::Value::as_bool)
+                .is_some_and(|monitored| title.monitored == monitored)
+        }
+        // A move may be asked for again only while the title is still where
+        // the interrupted attempt found it. A move already running for the
+        // title refuses the new one, so the step holds until it settles.
+        (
+            MaintenanceActionStepKind::MoveToLibrary,
+            MaintenanceActionStepParameters::Library { .. },
+        )
+        | (MaintenanceActionStepKind::MoveToRoot, MaintenanceActionStepParameters::Root { .. }) => {
+            before.get("library_id").and_then(serde_json::Value::as_str)
+                == Some(title.library_id.as_str())
+                && before
+                    .get("root_folder_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(title.root_folder_id.as_str())
+        }
         _ => false,
+    }
+}
+
+/// Whether the rule's source defines `notify` and no other action head. A
+/// revision whose action column cannot be read does not count.
+fn rule_only_notifies(detail: &MaintenanceRuleSetDetail) -> bool {
+    super::declared_actions::MaintenanceDeclaredActions::from_persisted_json(
+        &detail.revision.action_spec_json,
+    )
+    .ok()
+    .flatten()
+    .is_some_and(|declared| {
+        !declared.heads.is_empty()
+            && declared.heads.iter().all(|head| {
+                *head == scryer_rules::maintenance_actions::MaintenanceActionHead::Notify
+            })
+    })
+}
+
+/// Whether the title now sits where a recorded move sent it: in the target
+/// library, and on the target root when the move named one. A move whose
+/// provenance names no target never counts as landed.
+pub(super) fn sequence_move_landed(provenance: &serde_json::Value, title: &Title) -> bool {
+    let Some(library_id) = provenance
+        .get("target_library_id")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    if title.library_id != library_id {
+        return false;
+    }
+    match provenance
+        .get("target_root_id")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(root_id) => title.root_folder_id == root_id,
+        None => true,
     }
 }
 
@@ -2276,6 +2597,11 @@ fn unmonitor_before_state_reads_subject_facts(
             *include_descendants
                 || candidate.subject_kind != "title"
                 || candidate.subject_id != candidate.title_id
+        }
+        // Monitoring a season or an episode is judged the same way: its
+        // recorded monitored fact against the fresh one.
+        (MaintenanceActionStepKind::Monitor, MaintenanceActionStepParameters::None) => {
+            candidate.subject_kind != "title" || candidate.subject_id != candidate.title_id
         }
         _ => false,
     }
@@ -2377,6 +2703,15 @@ fn sequence_step_run(
         updated_at: now,
         finished_at: None,
     })
+}
+
+/// How many subtitle searches an earlier attempt of a fetch-subtitles step
+/// recorded starting, if it got that far.
+fn subtitle_searches_already_started(run: &MaintenanceActionStepRun) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(&run.provenance_json)
+        .ok()?
+        .get("searches_started")?
+        .as_u64()
 }
 
 fn sequence_step_provenance(

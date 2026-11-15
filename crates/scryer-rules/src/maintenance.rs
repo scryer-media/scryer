@@ -1153,10 +1153,9 @@ mod tests {
 
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert_eq!(result.errors.len(), 1);
-        assert!(
-            result.errors[0]
-                .message
-                .contains("'unmonitor' must be a boolean"),
+        assert_eq!(
+            result.errors[0].code,
+            crate::diagnostic_codes::RULE_OUTPUT_INVALID,
             "{}",
             result.errors[0].message
         );
@@ -1345,6 +1344,11 @@ mod tests {
              \t\"set_quality_profile\": object.get(data.scryer.maintenance.user.rule_1, \"set_quality_profile\", null),\n\
              \t\"add_tags\": object.get(data.scryer.maintenance.user.rule_1, \"add_tags\", []),\n\
              \t\"remove_tags\": object.get(data.scryer.maintenance.user.rule_1, \"remove_tags\", []),\n\
+             \t\"monitor\": object.get(data.scryer.maintenance.user.rule_1, \"monitor\", false),\n\
+             \t\"fetch_subtitles\": object.get(data.scryer.maintenance.user.rule_1, \"fetch_subtitles\", false),\n\
+             \t\"move_to_library\": object.get(data.scryer.maintenance.user.rule_1, \"move_to_library\", null),\n\
+             \t\"move_to_root\": object.get(data.scryer.maintenance.user.rule_1, \"move_to_root\", null),\n\
+             \t\"notify\": object.get(data.scryer.maintenance.user.rule_1, \"notify\", null),\n\
              }\n"
         );
         assert_eq!(
@@ -1366,5 +1370,38 @@ mod tests {
             decision_wrapper_source("rule_1").contains(&format!("\"{hold}\", false)")),
             "the wrapper must read the head the family declares"
         );
+    }
+
+    #[test]
+    fn an_action_head_written_under_data_is_refused_at_compile() {
+        // The action scan reads heads by their leading name, so a head
+        // spelled as a full `data.` path would slip past it. The Rego compiler
+        // refuses any rule that shadows `data`, which keeps such a head from
+        // ever deciding an action.
+        for body in [
+            "data.scryer.maintenance.user.data_head.delete_files := true\n",
+            "data.scryer.maintenance.user.data_head.delete_title if { true }\n",
+        ] {
+            assert!(
+                MaintenanceRulesEngine::build(&[policy("data_head", body)]).is_err(),
+                "{body}"
+            );
+            let validated = crate::validation::validate_maintenance_rule(
+                &rewrite_package_declaration(body, "data_head"),
+                "data_head",
+            )
+            .expect("validation runs");
+            assert!(!validated.valid, "{body}");
+            let codes: Vec<&str> = validated
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect();
+            assert_eq!(
+                codes,
+                vec![crate::diagnostic_codes::RULE_COMPILATION_ERROR],
+                "{body}"
+            );
+        }
     }
 }

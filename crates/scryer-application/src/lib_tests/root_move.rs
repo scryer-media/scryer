@@ -3568,3 +3568,298 @@ async fn a_catalog_change_after_the_preview_refuses_the_confirmation_as_stale() 
             .exists()
     );
 }
+
+mod maintenance_moves {
+    //! A lifecycle rule's `move_to_root` and `move_to_library` actions run
+    //! through the same managed move an operator starts, so the files are
+    //! copied and verified before the source is released.
+
+    use super::*;
+    use crate::maintenance_rules::action_execution::execution_reason;
+    use crate::maintenance_rules::title_actions::{MaintenanceMoveOutcome, MaintenanceMoveTarget};
+
+    async fn started_operation(outcome: MaintenanceMoveOutcome) -> String {
+        match outcome {
+            MaintenanceMoveOutcome::Started { operation_id, .. } => operation_id,
+            other => panic!("expected the move to start, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rule_move_to_another_root_lands_the_files_and_leaves_unrelated_files_alone() {
+        let fixture = RootMoveFixture::new().await;
+        let title = fixture
+            .seed_title(
+                "Synthetic Rule Move",
+                2021,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Rule Move (2021)",
+                &[
+                    ("Synthetic.Rule.Move.2021.1080p.mkv", 2048),
+                    ("movie.nfo", 64),
+                ],
+            )
+            .await;
+        let neighbour = fixture
+            .seed_title(
+                "Synthetic Neighbour",
+                2020,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Neighbour (2020)",
+                &[("Synthetic.Neighbour.2020.1080p.mkv", 1024)],
+            )
+            .await;
+        let loose_source = fixture.root_a().join("loose-note.txt");
+        let loose_destination = fixture.root_b().join("already-here.txt");
+        std::fs::write(&loose_source, b"unrelated").expect("write loose source file");
+        std::fs::write(&loose_destination, b"unrelated").expect("write loose destination file");
+
+        // A trailing separator names the same configured root.
+        let root_b = format!("{}/", fixture.root_b().to_string_lossy());
+        let outcome = fixture
+            .app
+            .maintenance_move_title(&title, MaintenanceMoveTarget::Root(&root_b))
+            .await
+            .expect("ask for the move");
+        if let MaintenanceMoveOutcome::Started {
+            library_id,
+            root_id,
+            ..
+        } = &outcome
+        {
+            assert_eq!(library_id, &fixture.library_id());
+            assert_eq!(root_id.as_deref(), Some(fixture.root_b_id.as_str()));
+        }
+        let operation = fixture.settle(&started_operation(outcome).await).await;
+        assert_eq!(operation.state, LocationOperationState::Completed);
+
+        let destination = fixture.root_b().join("Synthetic Rule Move (2021)");
+        assert!(
+            destination
+                .join("Synthetic.Rule.Move.2021.1080p.mkv")
+                .exists()
+        );
+        assert!(destination.join("movie.nfo").exists());
+        assert!(!fixture.root_a().join("Synthetic Rule Move (2021)").exists());
+        let moved = fixture.title(&title.id).await;
+        assert_eq!(moved.root_folder_id, fixture.root_b_id);
+        assert!(
+            fixture
+                .verifications()
+                .iter()
+                .all(|record| record.outcome.permits_source_removal())
+        );
+
+        // Nothing outside the moved title's folder changed.
+        assert!(
+            fixture
+                .root_a()
+                .join("Synthetic Neighbour (2020)")
+                .join("Synthetic.Neighbour.2020.1080p.mkv")
+                .exists()
+        );
+        assert_eq!(
+            fixture.title(&neighbour.id).await.root_folder_id,
+            fixture.root_a_id
+        );
+        assert_eq!(std::fs::read(&loose_source).unwrap(), b"unrelated");
+        assert_eq!(std::fs::read(&loose_destination).unwrap(), b"unrelated");
+
+        // Asking again once it landed starts nothing.
+        assert_eq!(
+            fixture
+                .app
+                .maintenance_move_title(&moved, MaintenanceMoveTarget::Root(&root_b))
+                .await
+                .unwrap(),
+            MaintenanceMoveOutcome::AlreadyThere
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rule_move_runs_as_the_operation_id_recorded_before_it_started() {
+        let fixture = RootMoveFixture::new().await;
+        let title = fixture
+            .seed_title(
+                "Synthetic Recorded Move",
+                2023,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Recorded Move (2023)",
+                &[("Synthetic.Recorded.Move.2023.1080p.mkv", 1024)],
+            )
+            .await;
+        let root_b = fixture.root_b().to_string_lossy().to_string();
+        let planned = fixture
+            .app
+            .maintenance_resolve_move(&title, MaintenanceMoveTarget::Root(&root_b))
+            .await
+            .expect("resolve the move")
+            .expect("the move has somewhere to go");
+        assert_eq!(planned.library_id, fixture.library_id());
+        assert_eq!(planned.root_id.as_deref(), Some(fixture.root_b_id.as_str()));
+
+        // Before the move is asked for, its recorded id names no operation.
+        let recorded = "synthetic-recorded-operation".to_string();
+        assert!(
+            !fixture
+                .app
+                .maintenance_any_move_operation_completed(std::slice::from_ref(&recorded))
+                .await
+                .expect("read operations")
+        );
+
+        let operation_id = started_operation(
+            fixture
+                .app
+                .maintenance_start_move(&title, planned, Some(recorded.clone()))
+                .await
+                .expect("start the move"),
+        )
+        .await;
+        assert_eq!(operation_id, recorded);
+        let operation = fixture.settle(&operation_id).await;
+        assert_eq!(operation.state, LocationOperationState::Completed);
+        assert_eq!(
+            fixture.title(&title.id).await.root_folder_id,
+            fixture.root_b_id
+        );
+        assert!(
+            fixture
+                .app
+                .maintenance_any_move_operation_completed(&[
+                    "synthetic-never-created".to_string(),
+                    recorded,
+                ])
+                .await
+                .expect("read operations"),
+            "the completed operation the step recorded is what vouches for the move"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rule_move_that_cannot_place_the_files_keeps_the_source() {
+        let fixture = RootMoveFixture::new().await;
+        let title = fixture
+            .seed_title(
+                "Synthetic Blocked Rule",
+                2022,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Blocked Rule (2022)",
+                &[("Synthetic.Blocked.Rule.2022.1080p.mkv", 1024)],
+            )
+            .await;
+        // A plain file where the destination folder has to go.
+        std::fs::write(
+            fixture.root_b().join("Synthetic Blocked Rule (2022)"),
+            b"not a directory",
+        )
+        .expect("occupy the destination path");
+
+        let root_b = fixture.root_b().to_string_lossy().to_string();
+        let outcome = fixture
+            .app
+            .maintenance_move_title(&title, MaintenanceMoveTarget::Root(&root_b))
+            .await
+            .expect("ask for the move");
+        let operation = fixture.settle(&started_operation(outcome).await).await;
+        assert_eq!(operation.state, LocationOperationState::Failed);
+
+        let unmoved = fixture.title(&title.id).await;
+        assert_eq!(unmoved.root_folder_id, fixture.root_a_id);
+        assert!(
+            fixture
+                .root_a()
+                .join("Synthetic Blocked Rule (2022)")
+                .join("Synthetic.Blocked.Rule.2022.1080p.mkv")
+                .exists(),
+            "the source content is untouched"
+        );
+        assert_eq!(
+            std::fs::read(fixture.root_b().join("Synthetic Blocked Rule (2022)")).unwrap(),
+            b"not a directory",
+            "the file in the way is preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rule_move_to_a_root_outside_the_titles_library_holds_without_touching_files() {
+        let fixture = RootMoveFixture::new().await;
+        let title = fixture
+            .seed_title(
+                "Synthetic Held Rule",
+                2019,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Held Rule (2019)",
+                &[("Synthetic.Held.Rule.2019.1080p.mkv", 512)],
+            )
+            .await;
+        let elsewhere = fixture.temp.path().join("not-a-root");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        let outcome = fixture
+            .app
+            .maintenance_move_title(
+                &title,
+                MaintenanceMoveTarget::Root(elsewhere.to_string_lossy().as_ref()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            MaintenanceMoveOutcome::Held(execution_reason::MOVE_ROOT_NOT_IN_LIBRARY)
+        );
+        let outcome = fixture
+            .app
+            .maintenance_move_title(&title, MaintenanceMoveTarget::Library("Synthetic Missing"))
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            MaintenanceMoveOutcome::Held(execution_reason::MOVE_LIBRARY_UNRESOLVED)
+        );
+        assert!(fixture.operations.operation_count() == 0);
+        assert!(
+            fixture
+                .root_a()
+                .join("Synthetic Held Rule (2019)")
+                .join("Synthetic.Held.Rule.2019.1080p.mkv")
+                .exists()
+        );
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_rule_move_to_the_titles_own_root_or_library_is_a_no_op() {
+        let fixture = RootMoveFixture::new().await;
+        let title = fixture
+            .seed_title(
+                "Synthetic Settled Rule",
+                2018,
+                &fixture.root_a_id,
+                &fixture.root_a(),
+                "Synthetic Settled Rule (2018)",
+                &[("Synthetic.Settled.Rule.2018.1080p.mkv", 512)],
+            )
+            .await;
+        let root_a = fixture.root_a().to_string_lossy().to_string();
+        for target in [
+            MaintenanceMoveTarget::Root(&root_a),
+            MaintenanceMoveTarget::Library("Movies"),
+        ] {
+            assert_eq!(
+                fixture
+                    .app
+                    .maintenance_move_title(&title, target)
+                    .await
+                    .unwrap(),
+                MaintenanceMoveOutcome::AlreadyThere
+            );
+        }
+        assert!(fixture.operations.operation_count() == 0);
+    }
+}

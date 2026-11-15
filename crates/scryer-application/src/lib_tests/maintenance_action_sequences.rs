@@ -3,17 +3,16 @@
 //! The executor has its own sequence tests. These cover the authoring boundary:
 //! a source's heads become an immutable revision, an edit that can delete
 //! invalidates the acknowledgement while any other edit keeps the rule's
-//! state, storage rules use only the filesystem-safe heads, and revisions
-//! stored with a step sequence still read.
+//! state, storage rules use only the filesystem-safe heads, and a revision
+//! stored before sources declared their actions is refused rather than read.
 
 use super::*;
 
 use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
 use crate::maintenance_rules::{
-    ACTION_SEQUENCE_KIND, MaintenanceActionDefinition, MaintenanceActionSequence,
-    MaintenanceActionStep, MaintenanceActionStepKind, MaintenanceActionStepParameters,
-    MaintenanceMatcherDraft, MaintenanceRuleDraft, MaintenanceSearchCondition,
-    action_definition_from_persisted_json,
+    MaintenanceActionSequence, MaintenanceActionStep, MaintenanceActionStepKind,
+    MaintenanceActionStepParameters, MaintenanceDeclaredActions, MaintenanceMatcherDraft,
+    MaintenanceRuleDraft, MaintenanceSearchCondition,
 };
 use scryer_domain::{
     MaintenanceEffectArming, MaintenanceRuleState, MaintenanceRuleSubjectKind, User,
@@ -78,11 +77,11 @@ fn matcher(rego_source: &str, grace_days: i64) -> MaintenanceMatcherDraft {
     }
 }
 
-fn declared_heads(definition: &MaintenanceActionDefinition) -> Vec<MaintenanceActionHead> {
-    match definition {
-        MaintenanceActionDefinition::Declared(declared) => declared.heads.clone(),
-        other => panic!("expected declared actions, got {other:?}"),
-    }
+fn persisted_heads(action_spec_json: &str) -> Vec<MaintenanceActionHead> {
+    MaintenanceDeclaredActions::from_persisted_json(action_spec_json)
+        .expect("persisted actions decode")
+        .expect("persisted actions are declared")
+        .heads
 }
 
 #[tokio::test]
@@ -99,17 +98,19 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
         MaintenanceEffectArming::None
     );
     assert_eq!(created.revision.grace_days, 19);
-    let persisted = action_definition_from_persisted_json(&created.revision.action_spec_json)
-        .expect("persisted action definition");
+    assert_eq!(created.load_refusal, None);
     assert_eq!(
-        declared_heads(&persisted),
+        persisted_heads(&created.revision.action_spec_json),
         vec![
             MaintenanceActionHead::Unmonitor,
             MaintenanceActionHead::Search
         ],
         "heads are recorded in source order"
     );
-    assert_eq!(persisted, created.action_definition);
+    assert_eq!(
+        created.declared_actions.heads,
+        persisted_heads(&created.revision.action_spec_json)
+    );
 
     let updated = app
         .update_maintenance_rule_matcher(&user, &created.rule_set.id, matcher(SEARCH_ONLY, 41))
@@ -117,7 +118,7 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
         .expect("save a new revision");
     assert_eq!(updated.rule_set.current_revision_number, 2);
     assert_eq!(
-        declared_heads(&updated.action_definition),
+        updated.declared_actions.heads.clone(),
         vec![MaintenanceActionHead::Search]
     );
 
@@ -131,10 +132,7 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
         .expect("first revision remains available");
     assert_eq!(first.grace_days, 19);
     assert_eq!(
-        declared_heads(
-            &action_definition_from_persisted_json(&first.action_spec_json)
-                .expect("decode original definition")
-        ),
+        persisted_heads(&first.action_spec_json),
         vec![
             MaintenanceActionHead::Unmonitor,
             MaintenanceActionHead::Search
@@ -192,9 +190,11 @@ async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
     assert!(dropped.rule_set.destructive_rearm_required);
 }
 
-/// History written before sources declared their actions still decodes.
+/// An action document written before sources declared their actions does not
+/// decode as declared actions, so the revision it belongs to can never be read
+/// as a set of heads that run.
 #[test]
-fn a_stored_step_sequence_still_reads() {
+fn a_stored_step_sequence_is_not_read_as_declared_actions() {
     let sequence = MaintenanceActionSequence::new(vec![
         MaintenanceActionStep {
             id: "unmonitor".to_string(),
@@ -211,20 +211,24 @@ fn a_stored_step_sequence_still_reads() {
             },
         },
     ]);
-    let stored = MaintenanceActionDefinition::Sequence(sequence.clone())
-        .to_persisted_json()
-        .expect("encode");
+    let stored = serde_json::to_string(&sequence).expect("encode");
     assert_eq!(
-        action_definition_from_persisted_json(&stored).expect("decode"),
-        MaintenanceActionDefinition::Sequence(sequence)
+        MaintenanceDeclaredActions::from_persisted_json(&stored).expect("decode"),
+        None
     );
-
-    let empty = MaintenanceActionDefinition::Sequence(MaintenanceActionSequence::new(Vec::new()));
-    assert_eq!(empty.action_kind(), ACTION_SEQUENCE_KIND);
     assert_eq!(
-        action_definition_from_persisted_json(&empty.to_persisted_json().expect("encode"))
-            .expect("decode empty envelope"),
-        empty
+        MaintenanceDeclaredActions::from_persisted_json(r#"{"kind":"delete_title_and_files"}"#)
+            .expect("decode"),
+        None,
+        "a v1 action document has no schema version and is not declared"
+    );
+    assert!(MaintenanceDeclaredActions::from_persisted_json("not json").is_err());
+
+    let declared = MaintenanceDeclaredActions::none();
+    assert_eq!(
+        MaintenanceDeclaredActions::from_persisted_json(&declared.to_persisted_json())
+            .expect("decode"),
+        Some(declared)
     );
 }
 
@@ -258,5 +262,62 @@ async fn storage_scoped_rules_require_a_root_and_the_storage_safe_heads() {
         unsupported.validation_reason(),
         Some(crate::error_reasons::maintenance::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE),
         "{unsupported:?}"
+    );
+}
+
+/// An edit that removes every delete head leaves nothing armed for deletes:
+/// the arming drops to what the new heads can arm, and a stale save is
+/// refused with a stable code.
+#[tokio::test]
+async fn an_edit_without_delete_heads_drops_destructive_arming() {
+    let (app, user) = authoring_app();
+    let created = app
+        .create_maintenance_rule_set(&user, draft(DELETES_FILES, 0, None))
+        .await
+        .expect("create delete rule");
+    super::maintenance_rules::arm_rule(
+        &app,
+        &user,
+        &created.rule_set.id,
+        MaintenanceEffectArming::Destructive,
+        Some(0),
+    )
+    .await;
+
+    let edited = app
+        .update_maintenance_rule_matcher(&user, &created.rule_set.id, matcher(SEARCH_ONLY, 0))
+        .await
+        .expect("edit away the delete head");
+    assert_eq!(
+        edited.rule_set.effect_arming,
+        MaintenanceEffectArming::Reversible
+    );
+    let stored = app
+        .get_maintenance_rule_set(&user, &created.rule_set.id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(
+        stored.rule_set.effect_arming,
+        MaintenanceEffectArming::Reversible
+    );
+
+    // The revision already in force, saved again as if prepared before it.
+    let stale = stored.revision.clone();
+    let refused = app
+        .services
+        .customization
+        .maintenance_rule_sets
+        .add_revision_keeping_arming(
+            &stale,
+            MaintenanceEffectArming::Reversible,
+            chrono::Utc::now(),
+        )
+        .await
+        .expect_err("a save that does not follow the current revision is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_REVISION_CONFLICT),
+        "{refused:?}"
     );
 }

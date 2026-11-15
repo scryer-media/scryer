@@ -949,6 +949,7 @@ async fn startup_replaces_the_previously_shipped_matcher() {
             &seeded.rule_set.name,
             "Deletes a requested title and its files once its request lease has expired, unless someone keeps it.",
             &[],
+            None,
             false,
             now,
         )
@@ -1026,7 +1027,7 @@ async fn startup_moves_the_match_form_rule_to_the_current_source_keeping_its_sta
         ..armed.revision.clone()
     };
     store
-        .add_revision_keeping_arming(&match_form, now)
+        .add_revision_keeping_arming(&match_form, armed.rule_set.effect_arming, now)
         .await
         .expect("match-form revision");
 

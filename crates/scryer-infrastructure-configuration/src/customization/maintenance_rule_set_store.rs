@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use scryer_application::{AppResult, MaintenanceRuleSetRepository};
+use scryer_application::{AppError, AppResult, MaintenanceRuleSetRepository};
 use scryer_domain::{
     MaintenanceEffectArming, MaintenanceEvaluationMode, MaintenanceRuleRevision,
     MaintenanceRuleSet, MaintenanceRuleSubjectKind,
@@ -46,7 +46,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         rule_set: &MaintenanceRuleSet,
         revision: &MaintenanceRuleRevision,
     ) -> AppResult<()> {
-        let rule_set_args = rule_set_args(rule_set);
+        let rule_set_args = rule_set_args(rule_set)?;
         let revision_args = revision_args(revision);
         let rule_set_id = rule_set.id.clone();
         let library_ids = rule_set.library_ids.clone();
@@ -75,12 +75,14 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         // The disarm rides in the pointer update rather than in a second call:
         // arming acknowledges one specific matcher's blast radius, so there must
         // be no instant at which the new revision is in force under the old
-        // revision's arming.
+        // revision's arming. The pointer moves first and only from the
+        // revision this one follows, as in `add_revision_keeping_arming`.
         let mut pointer_args = vec![SqlArg::I64(revision.revision_number)];
         pointer_args.extend(disarm_args());
         pointer_args.extend([
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(revision.rule_set_id.clone()),
+            SqlArg::I64(revision.revision_number - 1),
         ]);
 
         SqlRuntime::run_in_transaction(
@@ -90,18 +92,21 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                 let revision_args = revision_args.clone();
                 let pointer_args = pointer_args.clone();
                 Box::pin(async move {
-                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
-                        .await?;
-                    SqlRuntime::execute(
+                    let moved = SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         &format!(
                             "UPDATE maintenance_rule_sets
                                 SET current_revision_number = {{}}, {DISARM_AFTER_EDIT_SET}, updated_at = {{}}
-                              WHERE id = {{}}"
+                              WHERE id = {{}} AND current_revision_number = {{}}"
                         ),
                         &pointer_args,
                     )
                     .await?;
+                    if moved != 1 {
+                        return Err(revision_conflict());
+                    }
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
+                        .await?;
                     Ok(())
                 })
             },
@@ -112,14 +117,52 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
     async fn add_revision_keeping_arming(
         &self,
         revision: &MaintenanceRuleRevision,
+        effect_arming: MaintenanceEffectArming,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
-        let pointer_args = vec![
-            SqlArg::I64(revision.revision_number),
+        // The pointer moves first and only from the revision this one
+        // follows, so a concurrent save that got there first makes this one
+        // write nothing rather than collide on the revision number.
+        //
+        // The arming written is the lower of the stored one and the caller's:
+        // the caller read the row earlier, and an edit must never raise an
+        // arming another admin lowered in between. Only `effect_arming` and
+        // the pointer move, so a concurrent state change (a disable) stands.
+        let below: Vec<MaintenanceEffectArming> = [
+            MaintenanceEffectArming::None,
+            MaintenanceEffectArming::Reversible,
+            MaintenanceEffectArming::Destructive,
+        ]
+        .into_iter()
+        .take_while(|level| *level != effect_arming)
+        .collect();
+        let mut pointer_args = vec![SqlArg::I64(revision.revision_number)];
+        let arming_set = if below.is_empty() {
+            pointer_args.push(SqlArg::Text(effect_arming.as_storage_str().to_string()));
+            "effect_arming = {}".to_string()
+        } else {
+            pointer_args.extend(
+                below
+                    .iter()
+                    .map(|level| SqlArg::Text(level.as_storage_str().to_string())),
+            );
+            pointer_args.push(SqlArg::Text(effect_arming.as_storage_str().to_string()));
+            format!(
+                "effect_arming = CASE WHEN effect_arming IN ({}) THEN effect_arming ELSE {{}} END",
+                vec!["{}"; below.len()].join(", ")
+            )
+        };
+        pointer_args.extend([
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(revision.rule_set_id.clone()),
-        ];
+            SqlArg::I64(revision.revision_number - 1),
+        ]);
+        let pointer_sql = format!(
+            "UPDATE maintenance_rule_sets
+                SET current_revision_number = {{}}, {arming_set}, updated_at = {{}}
+              WHERE id = {{}} AND current_revision_number = {{}}"
+        );
 
         SqlRuntime::run_in_transaction(
             &self.datastore,
@@ -127,17 +170,15 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
             move |tx| {
                 let revision_args = revision_args.clone();
                 let pointer_args = pointer_args.clone();
+                let pointer_sql = pointer_sql.clone();
                 Box::pin(async move {
+                    let moved =
+                        SqlRuntime::execute(SqlExec::Tx(tx), &pointer_sql, &pointer_args).await?;
+                    if moved != 1 {
+                        return Err(revision_conflict());
+                    }
                     SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
                         .await?;
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "UPDATE maintenance_rule_sets
-                            SET current_revision_number = {}, updated_at = {}
-                          WHERE id = {}",
-                        &pointer_args,
-                    )
-                    .await?;
                     Ok(())
                 })
             },
@@ -226,6 +267,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         name: &str,
         description: &str,
         library_ids: &[String],
+        schedule: Option<&scryer_domain::ScriptSchedule>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -233,23 +275,24 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
             SqlArg::Text(name.to_string()),
             SqlArg::Text(description.to_string()),
         ];
+        let mut set = String::from("name = {}, description = {}");
+        if let Some(schedule) = schedule {
+            set.push_str(", schedule_json = {}");
+            args.push(SqlArg::Text(schedule_json(schedule)?));
+        }
         // The disarm rides in the same transaction as the scope that invalidated it,
         // exactly as `add_revision` carries its own: there must be no instant at
         // which a re-scoped rule is in force under the previous scope's arming.
-        let sql = if disarm {
+        if disarm {
+            set.push_str(", ");
+            set.push_str(DISARM_AFTER_EDIT_SET);
             args.extend(disarm_args());
-            format!(
-                "UPDATE maintenance_rule_sets
-                    SET name = {{}}, description = {{}}, {DISARM_AFTER_EDIT_SET},
-                        updated_at = {{}}
-                  WHERE id = {{}}"
-            )
-        } else {
+        }
+        let sql = format!(
             "UPDATE maintenance_rule_sets
-                SET name = {}, description = {}, updated_at = {}
-              WHERE id = {}"
-                .to_string()
-        };
+                SET {set}, updated_at = {{}}
+              WHERE id = {{}}"
+        );
         args.push(SqlArg::Timestamp(updated_at));
         args.push(SqlArg::Text(id.to_string()));
         let id = id.to_string();
@@ -382,6 +425,14 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
 // expressions read the row as it was before the update on both engines.
 const DISARM_AFTER_EDIT_SET: &str = "destructive_rearm_required = CASE WHEN effect_arming <> {} THEN {} ELSE destructive_rearm_required END, effect_arming = {}";
 
+/// A revision save that did not follow the revision in force.
+fn revision_conflict() -> AppError {
+    AppError::validation_refused(
+        scryer_application::error_reasons::maintenance::RULE_REVISION_CONFLICT,
+        "the rule was changed by another save; reload it and save again".to_string(),
+    )
+}
+
 fn disarm_args() -> [SqlArg; 3] {
     let none = MaintenanceEffectArming::None.as_storage_str();
     [
@@ -393,25 +444,26 @@ fn disarm_args() -> [SqlArg; 3] {
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
 const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
-    subject_kind, system_owned, current_revision_number, created_at, updated_at, scope.library_id AS scope_library_id
+    subject_kind, system_owned, current_revision_number, schedule_json, created_at, updated_at, scope.library_id AS scope_library_id
     FROM maintenance_rule_sets
     LEFT JOIN maintenance_rule_set_libraries scope ON scope.rule_set_id = maintenance_rule_sets.id";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, action_spec,
-    grace_days, storage_root_id, matcher_content_hash, created_by, created_at";
+    grace_days, storage_root_id, matcher_content_hash, created_by, created_at, builder_model_json";
 
 /// Revision keys per statement: two binds each, well under every engine's ceiling.
 const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO maintenance_rule_sets
         (id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required, subject_kind,
-         system_owned, current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         system_owned, current_revision_number, schedule_json, created_at, updated_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO maintenance_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
-         grace_days, storage_root_id, matcher_content_hash, created_by, created_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         grace_days, storage_root_id, matcher_content_hash, created_by, created_at,
+         builder_model_json)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 async fn execute_write(
     datastore: &StoreDatastore,
@@ -429,8 +481,8 @@ async fn execute_write(
     .await
 }
 
-fn rule_set_args(rule_set: &MaintenanceRuleSet) -> Vec<SqlArg> {
-    vec![
+fn rule_set_args(rule_set: &MaintenanceRuleSet) -> AppResult<Vec<SqlArg>> {
+    Ok(vec![
         SqlArg::Text(rule_set.id.clone()),
         SqlArg::Text(rule_set.name.clone()),
         SqlArg::Text(rule_set.description.clone()),
@@ -441,9 +493,30 @@ fn rule_set_args(rule_set: &MaintenanceRuleSet) -> Vec<SqlArg> {
         SqlArg::Text(rule_set.subject_kind.as_storage_str().to_string()),
         SqlArg::Bool(rule_set.system_owned),
         SqlArg::I64(rule_set.current_revision_number),
+        SqlArg::Text(schedule_json(&rule_set.schedule)?),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
-    ]
+    ])
+}
+
+fn schedule_json(schedule: &scryer_domain::ScriptSchedule) -> AppResult<String> {
+    serde_json::to_string(schedule).map_err(repo_err)
+}
+
+/// A rule with no stored schedule runs on the default one. A schedule this
+/// build cannot decode was written by a newer build; it reads as manual so
+/// this build never fires a rule on timing it does not understand.
+fn stored_schedule(row: &SqlRow) -> AppResult<scryer_domain::ScriptSchedule> {
+    let Some(raw) = row
+        .opt_text("schedule_json")?
+        .filter(|raw| !raw.trim().is_empty())
+    else {
+        return Ok(scryer_domain::default_maintenance_rule_schedule());
+    };
+    Ok(serde_json::from_str(&raw).unwrap_or_else(|error| {
+        tracing::warn!(%error, "maintenance rule schedule could not be decoded; treating it as manual");
+        scryer_domain::ScriptSchedule::Manual
+    }))
 }
 
 fn revision_args(revision: &MaintenanceRuleRevision) -> Vec<SqlArg> {
@@ -458,6 +531,7 @@ fn revision_args(revision: &MaintenanceRuleRevision) -> Vec<SqlArg> {
         SqlArg::Text(revision.matcher_content_hash.clone()),
         SqlArg::OptText(revision.created_by.clone()),
         SqlArg::Timestamp(revision.created_at),
+        SqlArg::OptText(revision.builder_model_json.clone()),
     ]
 }
 
@@ -482,6 +556,7 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<MaintenanceRuleSet> {
             .unwrap_or_default(),
         system_owned: row.bool("system_owned")?,
         current_revision_number: row.i64("current_revision_number")?,
+        schedule: stored_schedule(row)?,
         created_at: timestamp_or_now(row, "created_at")?,
         updated_at: timestamp_or_now(row, "updated_at")?,
     })
@@ -499,6 +574,7 @@ fn row_to_revision(row: &SqlRow) -> AppResult<MaintenanceRuleRevision> {
         matcher_content_hash: row.text("matcher_content_hash")?,
         created_by: row.opt_text("created_by")?,
         created_at: timestamp_or_now(row, "created_at")?,
+        builder_model_json: row.opt_text("builder_model_json")?,
     })
 }
 

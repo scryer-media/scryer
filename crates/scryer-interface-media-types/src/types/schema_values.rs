@@ -894,6 +894,8 @@ pub enum DomainEventTypeValue {
     ListSyncFinished,
     /// A list was followed, changed, turned on or off, or unfollowed.
     ListSubscriptionChanged,
+    /// A maintenance rule applied its actions and sent its own message.
+    MaintenanceRuleNotified,
 }
 
 impl DomainEventTypeValue {
@@ -959,6 +961,7 @@ impl DomainEventTypeValue {
             DomainEventType::ListUnfollowed => Self::ListUnfollowed,
             DomainEventType::ListSyncFinished => Self::ListSyncFinished,
             DomainEventType::ListSubscriptionChanged => Self::ListSubscriptionChanged,
+            DomainEventType::MaintenanceRuleNotified => Self::MaintenanceRuleNotified,
         }
     }
 
@@ -1024,6 +1027,7 @@ impl DomainEventTypeValue {
             Self::ListUnfollowed => DomainEventType::ListUnfollowed,
             Self::ListSyncFinished => DomainEventType::ListSyncFinished,
             Self::ListSubscriptionChanged => DomainEventType::ListSubscriptionChanged,
+            Self::MaintenanceRuleNotified => DomainEventType::MaintenanceRuleNotified,
         }
     }
 }

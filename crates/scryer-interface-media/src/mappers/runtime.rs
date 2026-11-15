@@ -172,6 +172,7 @@ pub fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
         managed_tag_filter: rs.managed_tag_filter,
         created_at: rs.created_at,
         updated_at: rs.updated_at,
+        builder_model: None,
     }
 }
 

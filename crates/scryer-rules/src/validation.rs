@@ -2662,27 +2662,46 @@ mod tests {
         );
     }
 
-    /// Over-approximating on purpose: a `with input.facts.<name> as ...`
-    /// override still names its fact, so the referenced-fact set keeps counting
-    /// it — the rule is held on a fact it only substitutes for, which errs
-    /// toward holding rather than deciding.
+    /// A `with input.facts.<name> as ...` override decides from a value the
+    /// rule wrote, not the one Scryer observed, so it is refused at both the
+    /// save and the load, by code.
     #[test]
-    fn maintenance_rule_may_override_a_named_fact() {
+    fn maintenance_rule_overriding_a_named_fact_is_refused() {
         let body = "unmonitor if {\n  \
                       inner with input.facts.monitored as false\n\
                     }\n\n\
                     inner if {\n  not input.facts.monitored\n}\n";
         let result = validate_maintenance_body("named_fact_override", body);
-        assert!(result.valid, "errors: {:?}", result.errors);
+        assert!(!result.valid);
+        let codes: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![crate::diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED],
+            "{:?}",
+            result.errors
+        );
 
-        let facts = maintenance_referenced_facts(
-            &maintenance::rewrite_package_declaration(body, "named_fact_override"),
+        let engine = maintenance::MaintenanceRulesEngine::build(&[maintenance_policy(
             "named_fact_override",
-        )
-        .expect("named-fact override should resolve a fact set");
-        assert!(
-            facts.contains("monitored"),
-            "override should still count the fact: {facts:?}"
+            body,
+        )])
+        .expect("a refused rule still loads");
+        let evaluation = engine
+            .evaluator()
+            .evaluate(&maintenance::synthetic_maintenance_input())
+            .expect("evaluation runs");
+        assert!(evaluation.records.is_empty(), "{:?}", evaluation.records);
+        assert_eq!(
+            evaluation
+                .errors
+                .iter()
+                .map(|error| error.code)
+                .collect::<Vec<_>>(),
+            vec![crate::diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED]
         );
     }
 
@@ -2810,8 +2829,14 @@ mod tests {
     fn maintenance_rule_with_non_boolean_match_is_rejected() {
         let result = validate_maintenance_body("numeric_match", "unmonitor := 42\n");
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("'unmonitor' must be a boolean"),
+        let codes: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![crate::diagnostic_codes::RULE_OUTPUT_INVALID],
             "{:?}",
             result.errors
         );

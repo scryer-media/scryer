@@ -72,14 +72,20 @@ fn assert_error_contains(body: &Value, expected: &str) {
     );
 }
 
-/// Matches every monitored title. The package line is deliberately absent: the
-/// server owns it, and the editor never sees it.
-const MONITORED_MATCHER: &str = "match if {\n\
+/// Deletes every monitored title. The package line is deliberately absent: the
+/// server owns it, and the editor never sees it. The source declares both when
+/// it acts and what it does.
+const MONITORED_MATCHER: &str = "delete_title if {\n\
      \tinput.facts.monitored\n\
      }\n";
 
-/// Matches nothing: the facet never equals this sentinel.
-const NEVER_MATCHER: &str = "match if {\n\
+/// Unmonitors every monitored title, keeping its files.
+const MONITORED_UNMONITOR: &str = "unmonitor if {\n\
+     \tinput.facts.monitored\n\
+     }\n";
+
+/// Acts on nothing: the facet never equals this sentinel.
+const NEVER_MATCHER: &str = "unmonitor if {\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
      }\n";
 
@@ -87,11 +93,26 @@ const NEVER_MATCHER: &str = "match if {\n\
 /// than reported as a no-match. Nothing in the source says so: the server
 /// derives the hold from the fact the matcher references, which is exactly the
 /// mistake an author can no longer make.
-const ACTIVE_DOWNLOADS_MATCHER: &str = "match if {\n\
+const ACTIVE_DOWNLOADS_MATCHER: &str = "delete_title if {\n\
      \tnot input.facts.active_downloads\n\
      }\n";
 
-const INVALID_MATCHER: &str = "match if { this is not rego\n";
+/// Compiles, but defines no action, so it could never do anything.
+const NO_ACTION_MATCHER: &str = "match if {\n\
+     \tinput.facts.monitored\n\
+     }\n";
+
+const INVALID_MATCHER: &str = "delete_title if { this is not rego\n";
+
+/// Adds `tag` to every monitored title.
+fn add_tag_source(tag: &str) -> String {
+    format!("add_tags := [\"{tag}\"] if {{\n\tinput.facts.monitored\n}}\n")
+}
+
+/// Removes `tag` from every monitored title.
+fn remove_tag_source(tag: &str) -> String {
+    format!("remove_tags := [\"{tag}\"] if {{\n\tinput.facts.monitored\n}}\n")
+}
 
 const DETAIL_FIELDS: &str = r#"
     ruleSet {
@@ -105,7 +126,8 @@ const DETAIL_FIELDS: &str = r#"
         subjectKind
         currentRevisionNumber
         graceDays
-        actionSpec { kind schemaVersion targetQualityProfileId }
+        declaredActions { heads destructive qualityProfiles addTags removeTags }
+        loadRefusal
         createdAt
         updatedAt
     }
@@ -119,12 +141,13 @@ const DETAIL_FIELDS: &str = r#"
         createdBy
         createdAt
     }
-    actionSpec {
-        kind
-        schemaVersion
-        targetQualityProfileId
-    }
+    declaredActions { heads destructive qualityProfiles addTags removeTags }
 "#;
+
+/// The stable reason code of the first GraphQL error.
+fn error_reason(body: &Value) -> &Value {
+    &body["errors"][0]["extensions"]["reason"]
+}
 
 fn create_mutation() -> String {
     format!(
@@ -159,7 +182,8 @@ const LIST_QUERY: &str = r#"query {
         libraryIds
         currentRevisionNumber
         graceDays
-        actionSpec { kind schemaVersion targetQualityProfileId }
+        declaredActions { heads destructive }
+        loadRefusal
     }
 }"#;
 
@@ -187,16 +211,24 @@ const PREVIEW_MUTATION: &str = r#"mutation($input: PreviewMaintenanceRuleInput!)
             outcome
             reasonCodes
             error
+            errorCode
+            actions { heads }
         }
     }
 }"#;
 
 const VALIDATE_MUTATION: &str = r#"mutation($input: ValidateMaintenanceRuleInput!) {
-    validateMaintenanceRule(input: $input) { valid errors }
+    validateMaintenanceRule(input: $input) {
+        valid
+        errors
+        diagnostics { code }
+        warnings { code }
+        declaredActions { heads destructive }
+    }
 }"#;
 
 /// Create a rule set and return the whole detail payload.
-async fn create_rule(ctx: &TestContext, name: &str, rego: &str, action: Value) -> Value {
+async fn create_rule(ctx: &TestContext, name: &str, rego: &str) -> Value {
     let body = gql(
         ctx,
         &create_mutation(),
@@ -204,17 +236,12 @@ async fn create_rule(ctx: &TestContext, name: &str, rego: &str, action: Value) -
             "input": {
                 "name": name,
                 "regoSource": rego,
-                "action": action,
             }
         }),
     )
     .await;
     assert_no_errors(&body);
     body["data"]["createMaintenanceRuleSet"].clone()
-}
-
-fn delete_action() -> Value {
-    json!({ "kind": "DELETE_TITLE_AND_FILES" })
 }
 
 fn movie_library_id() -> String {
@@ -306,7 +333,6 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
                 "name": "Stale movies",
                 "description": "Movies nobody monitors",
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
                 "graceDays": 14,
                 "libraryIds": [movie_library_id()],
             }
@@ -347,9 +373,11 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
         "server-owned boilerplate must be stripped for the editor: {source}"
     );
 
-    assert_eq!(detail["actionSpec"]["kind"], "DELETE_TITLE_AND_FILES");
-    assert_eq!(detail["actionSpec"]["schemaVersion"], 1);
-    assert_eq!(detail["actionSpec"]["targetQualityProfileId"], Value::Null);
+    // What the rule does is read from its own source.
+    assert_eq!(detail["declaredActions"]["heads"], json!(["DELETE_TITLE"]));
+    assert_eq!(detail["declaredActions"]["destructive"], true);
+    assert_eq!(rule_set["declaredActions"], detail["declaredActions"]);
+    assert_eq!(rule_set["loadRefusal"], Value::Null);
 
     let list = gql(&ctx, LIST_QUERY, json!({})).await;
     assert_no_errors(&list);
@@ -362,14 +390,12 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
     // The list carries what the revision in force does, so rendering a saved
     // rule never costs a second round trip.
     assert_eq!(rule_sets[0]["graceDays"], 14);
-    assert_eq!(rule_sets[0]["actionSpec"]["kind"], "DELETE_TITLE_AND_FILES");
-    assert_eq!(rule_sets[0]["actionSpec"]["schemaVersion"], 1);
     assert_eq!(
-        rule_sets[0]["actionSpec"]["targetQualityProfileId"],
-        Value::Null
+        rule_sets[0]["declaredActions"],
+        json!({ "heads": ["DELETE_TITLE"], "destructive": true })
     );
+    assert_eq!(rule_sets[0]["loadRefusal"], Value::Null);
     assert_eq!(rule_set["graceDays"], 14);
-    assert_eq!(rule_set["actionSpec"]["kind"], "DELETE_TITLE_AND_FILES");
 
     let fetched = gql(&ctx, &get_query(), json!({ "id": id })).await;
     assert_no_errors(&fetched);
@@ -381,36 +407,34 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
 }
 
 #[tokio::test]
-async fn maintenance_rule_carries_the_quality_profile_target_through_the_action_spec() {
+async fn maintenance_rule_declares_several_actions_in_source_order() {
     let ctx = TestContext::new().await;
 
     let detail = create_rule(
         &ctx,
-        "Upgrade to 1080p",
-        MONITORED_MATCHER,
-        json!({
-            "kind": "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-            "targetQualityProfileId": "hd-1080p",
-        }),
+        "Unmonitor and search",
+        "unmonitor if {\n\tinput.facts.monitored\n}\n\n\
+         search if {\n\tinput.facts.monitored\n}\n",
     )
     .await;
     assert_eq!(
-        detail["actionSpec"]["kind"],
-        "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED"
+        detail["declaredActions"]["heads"],
+        json!(["UNMONITOR", "SEARCH"])
     );
-    assert_eq!(detail["actionSpec"]["targetQualityProfileId"], "hd-1080p");
+    assert_eq!(detail["declaredActions"]["destructive"], false);
+    assert_eq!(detail["ruleSet"]["enabledArming"], "REVERSIBLE");
 
     let id = detail["ruleSet"]["id"].as_str().expect("rule set id");
     let fetched = gql(&ctx, &get_query(), json!({ "id": id })).await;
     assert_no_errors(&fetched);
     assert_eq!(
-        fetched["data"]["maintenanceRuleSet"]["actionSpec"]["targetQualityProfileId"],
-        "hd-1080p"
+        fetched["data"]["maintenanceRuleSet"]["declaredActions"],
+        detail["declaredActions"]
     );
 }
 
 #[tokio::test]
-async fn maintenance_rule_quality_profile_action_without_a_target_is_rejected() {
+async fn maintenance_rule_naming_an_unknown_quality_profile_is_rejected() {
     let ctx = TestContext::new().await;
 
     let body = gql(
@@ -419,13 +443,18 @@ async fn maintenance_rule_quality_profile_action_without_a_target_is_rejected() 
         json!({
             "input": {
                 "name": "Missing target",
-                "regoSource": MONITORED_MATCHER,
-                "action": { "kind": "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED" },
+                "regoSource": "set_quality_profile := \"No Such Profile\" if {\n\
+                               \tinput.facts.monitored\n\
+                               }\n",
             }
         }),
     )
     .await;
-    assert_error_contains(&body, "validation:");
+    assert_eq!(
+        *error_reason(&body),
+        json!("MAINTENANCE_QUALITY_PROFILE_NOT_FOUND"),
+        "{body}"
+    );
 
     let list = gql(&ctx, LIST_QUERY, json!({})).await;
     assert_no_errors(&list);
@@ -442,7 +471,7 @@ async fn maintenance_rule_quality_profile_action_without_a_target_is_rejected() 
 async fn maintenance_rule_matcher_update_appends_a_revision() {
     let ctx = TestContext::new().await;
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
     let first_hash = created["revision"]["matcherContentHash"]
         .as_str()
@@ -456,7 +485,6 @@ async fn maintenance_rule_matcher_update_appends_a_revision() {
             "input": {
                 "id": id,
                 "regoSource": NEVER_MATCHER,
-                "action": { "kind": "UNMONITOR_SCOPE_KEEP_FILES" },
                 "graceDays": 30,
             }
         }),
@@ -468,7 +496,7 @@ async fn maintenance_rule_matcher_update_appends_a_revision() {
     assert_eq!(detail["ruleSet"]["currentRevisionNumber"], 2);
     assert_eq!(detail["revision"]["revisionNumber"], 2);
     assert_eq!(detail["revision"]["graceDays"], 30);
-    assert_eq!(detail["actionSpec"]["kind"], "UNMONITOR_SCOPE_KEEP_FILES");
+    assert_eq!(detail["declaredActions"]["heads"], json!(["UNMONITOR"]));
     assert_ne!(
         detail["revision"]["matcherContentHash"],
         json!(first_hash),
@@ -495,6 +523,174 @@ async fn maintenance_rule_matcher_update_appends_a_revision() {
     );
 }
 
+/// Omitting `builderModel` keeps the stored document, `null` clears it, and a
+/// value replaces it, for maintenance and scoring rules alike.
+#[tokio::test]
+async fn builder_models_are_kept_cleared_and_replaced_through_graphql() {
+    let ctx = TestContext::new().await;
+    let model = json!({
+        "version": 2,
+        "family": "maintenance",
+        "join": "ALL",
+        "conditions": [],
+        "outputs": {"UNMONITOR": true}
+    });
+    let builder_query = "query($id: ID!) {
+        maintenanceRuleSet(id: $id) { revision { revisionNumber } builderModel }
+    }";
+
+    let created = gql(
+        &ctx,
+        &create_mutation(),
+        json!({"input": {
+            "name": "Built rule",
+            "regoSource": MONITORED_UNMONITOR,
+            "builderModel": model,
+        }}),
+    )
+    .await;
+    assert_no_errors(&created);
+    let id = created["data"]["createMaintenanceRuleSet"]["ruleSet"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let read = gql(&ctx, builder_query, json!({"id": id})).await;
+    assert_no_errors(&read);
+    assert_eq!(read["data"]["maintenanceRuleSet"]["builderModel"], model);
+
+    // Omitted: the new revision keeps the document.
+    let kept = gql(
+        &ctx,
+        &update_matcher_mutation(),
+        json!({"input": {"id": id, "regoSource": MONITORED_UNMONITOR, "graceDays": 3}}),
+    )
+    .await;
+    assert_no_errors(&kept);
+    let read = gql(&ctx, builder_query, json!({"id": id})).await;
+    assert_eq!(
+        read["data"]["maintenanceRuleSet"]["revision"]["revisionNumber"],
+        2
+    );
+    assert_eq!(read["data"]["maintenanceRuleSet"]["builderModel"], model);
+
+    // Omitted with a changed source: the hand edit drops the document.
+    let edited = gql(
+        &ctx,
+        &update_matcher_mutation(),
+        json!({"input": {"id": id, "regoSource": NEVER_MATCHER}}),
+    )
+    .await;
+    assert_no_errors(&edited);
+    let read = gql(&ctx, builder_query, json!({"id": id})).await;
+    assert_eq!(
+        read["data"]["maintenanceRuleSet"]["builderModel"],
+        Value::Null
+    );
+    let rebuilt = gql(
+        &ctx,
+        &update_matcher_mutation(),
+        json!({"input": {"id": id, "regoSource": MONITORED_UNMONITOR, "builderModel": model}}),
+    )
+    .await;
+    assert_no_errors(&rebuilt);
+
+    // A document for another family is refused with its code.
+    let refused = gql(
+        &ctx,
+        &update_matcher_mutation(),
+        json!({"input": {
+            "id": id,
+            "regoSource": MONITORED_UNMONITOR,
+            "builderModel": {"version": 2, "family": "scoring"},
+        }}),
+    )
+    .await;
+    assert_eq!(error_reason(&refused), "RULE_BUILDER_MODEL_INVALID");
+
+    // Null: cleared.
+    let cleared = gql(
+        &ctx,
+        &update_matcher_mutation(),
+        json!({"input": {"id": id, "regoSource": MONITORED_UNMONITOR, "builderModel": null}}),
+    )
+    .await;
+    assert_no_errors(&cleared);
+    let read = gql(&ctx, builder_query, json!({"id": id})).await;
+    assert_eq!(
+        read["data"]["maintenanceRuleSet"]["builderModel"],
+        Value::Null
+    );
+
+    // Scoring: read only by `ruleSet(id)`.
+    let scoring_model = json!({
+        "version": 2,
+        "family": "scoring",
+        "join": "ALL",
+        "conditions": [],
+        "outputs": {}
+    });
+    let created = gql(
+        &ctx,
+        "mutation($input: CreateRuleSetInput!) { createRuleSet(input: $input) { id } }",
+        json!({"input": {
+            "name": "Built scoring rule",
+            "regoSource": "score_entry[\"built\"] := 5 if { true }",
+            "appliedFacets": ["movie"],
+            "builderModel": scoring_model,
+        }}),
+    )
+    .await;
+    assert_no_errors(&created);
+    let scoring_id = created["data"]["createRuleSet"]["id"]
+        .as_str()
+        .expect("scoring id")
+        .to_string();
+    let scoring_query = "query($id: ID!) { ruleSet(id: $id) { name builderModel } }";
+    let read = gql(&ctx, scoring_query, json!({"id": scoring_id})).await;
+    assert_no_errors(&read);
+    assert_eq!(read["data"]["ruleSet"]["builderModel"], scoring_model);
+
+    let renamed = gql(
+        &ctx,
+        "mutation($input: UpdateRuleSetInput!) { updateRuleSet(input: $input) { id } }",
+        json!({"input": {"id": scoring_id, "name": "Renamed scoring rule"}}),
+    )
+    .await;
+    assert_no_errors(&renamed);
+    let read = gql(&ctx, scoring_query, json!({"id": scoring_id})).await;
+    assert_eq!(read["data"]["ruleSet"]["builderModel"], scoring_model);
+
+    let cleared = gql(
+        &ctx,
+        "mutation($input: UpdateRuleSetInput!) { updateRuleSet(input: $input) { id } }",
+        json!({"input": {"id": scoring_id, "builderModel": null}}),
+    )
+    .await;
+    assert_no_errors(&cleared);
+    let read = gql(&ctx, scoring_query, json!({"id": scoring_id})).await;
+    assert_eq!(read["data"]["ruleSet"]["builderModel"], Value::Null);
+    assert_eq!(read["data"]["ruleSet"]["name"], "Renamed scoring rule");
+
+    // Omitted with a changed source: the document is dropped, the rule kept.
+    let rebuilt = gql(
+        &ctx,
+        "mutation($input: UpdateRuleSetInput!) { updateRuleSet(input: $input) { id } }",
+        json!({"input": {"id": scoring_id, "builderModel": scoring_model}}),
+    )
+    .await;
+    assert_no_errors(&rebuilt);
+    let edited = gql(
+        &ctx,
+        "mutation($input: UpdateRuleSetInput!) { updateRuleSet(input: $input) { id } }",
+        json!({"input": {"id": scoring_id, "regoSource": "score_entry[\"built\"] := 7 if { true }"}}),
+    )
+    .await;
+    assert_no_errors(&edited);
+    let read = gql(&ctx, scoring_query, json!({"id": scoring_id})).await;
+    assert_eq!(read["data"]["ruleSet"]["builderModel"], Value::Null);
+    assert_eq!(read["data"]["ruleSet"]["name"], "Renamed scoring rule");
+}
+
 #[tokio::test]
 async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
     let ctx = TestContext::new().await;
@@ -503,7 +699,7 @@ async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
         scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
     ];
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
 
     let renamed = gql(
@@ -516,7 +712,7 @@ async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
                 libraryIds
                 currentRevisionNumber
                 graceDays
-                actionSpec { kind targetQualityProfileId }
+                declaredActions { heads }
             }
         }"#,
         json!({
@@ -536,10 +732,13 @@ async fn maintenance_rule_metadata_update_does_not_create_a_revision() {
     assert_eq!(rule_set["description"], "Now scoped");
     assert_eq!(rule_set["libraryIds"], json!(library_ids));
     assert_eq!(rule_set["currentRevisionNumber"], 1);
-    // Renaming leaves the matcher alone, so the action it authorizes is
+    // Renaming leaves the source alone, so the actions it declares are
     // unchanged and still reported on the rule set itself.
     assert_eq!(rule_set["graceDays"], 0);
-    assert_eq!(rule_set["actionSpec"]["kind"], "DELETE_TITLE_AND_FILES");
+    assert_eq!(
+        rule_set["declaredActions"]["heads"],
+        json!(["DELETE_TITLE"])
+    );
 
     let revisions = gql(&ctx, REVISIONS_QUERY, json!({ "ruleSetId": id })).await;
     assert_no_errors(&revisions);
@@ -590,6 +789,26 @@ async fn maintenance_rule_validation_reports_errors_without_persisting() {
         valid["data"]["validateMaintenanceRule"]["errors"],
         json!([])
     );
+    // Validation reports what the source would do before it is saved.
+    assert_eq!(
+        valid["data"]["validateMaintenanceRule"]["declaredActions"],
+        json!({ "heads": ["DELETE_TITLE"], "destructive": true })
+    );
+
+    // A source that defines no action could never do anything.
+    let no_action = gql(
+        &ctx,
+        VALIDATE_MUTATION,
+        json!({ "input": { "regoSource": NO_ACTION_MATCHER } }),
+    )
+    .await;
+    assert_no_errors(&no_action);
+    let result = &no_action["data"]["validateMaintenanceRule"];
+    assert_eq!(result["valid"], false);
+    assert_eq!(
+        result["diagnostics"],
+        json!([{ "code": "RULE_ACTION_REQUIRED" }])
+    );
 
     let list = gql(&ctx, LIST_QUERY, json!({})).await;
     assert_no_errors(&list);
@@ -613,12 +832,33 @@ async fn maintenance_rule_creation_rejects_a_matcher_that_does_not_compile() {
             "input": {
                 "name": "Broken",
                 "regoSource": INVALID_MATCHER,
-                "action": delete_action(),
             }
         }),
     )
     .await;
     assert_error_contains(&body, "validation:");
+
+    let no_action = gql(
+        &ctx,
+        &create_mutation(),
+        json!({
+            "input": {
+                "name": "Does nothing",
+                "regoSource": NO_ACTION_MATCHER,
+            }
+        }),
+    )
+    .await;
+    assert!(no_action.get("errors").is_some(), "{no_action}");
+    let list = gql(&ctx, LIST_QUERY, json!({})).await;
+    assert_no_errors(&list);
+    assert!(
+        list["data"]["maintenanceRuleSets"]
+            .as_array()
+            .expect("rule set list")
+            .is_empty(),
+        "a source without an action must not persist a rule set"
+    );
 }
 
 // ===========================================================================
@@ -637,7 +877,6 @@ async fn maintenance_rule_preview_separates_match_from_no_match() {
         json!({
             "input": {
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
                 "titleIds": ["title-monitored", "title-unmonitored"],
             }
         }),
@@ -657,6 +896,8 @@ async fn maintenance_rule_preview_separates_match_from_no_match() {
     let matched = outcome_for(preview, "title-monitored");
     assert_eq!(matched["outcome"], "MATCH");
     assert_eq!(matched["error"], Value::Null);
+    assert_eq!(matched["errorCode"], Value::Null);
+    assert_eq!(matched["actions"]["heads"], json!(["DELETE_TITLE"]));
     assert_eq!(matched["titleName"], "Monitored Movie");
     assert_eq!(matched["facet"], "movie");
     assert_eq!(matched["libraryId"], json!(movie_library_id()));
@@ -664,6 +905,7 @@ async fn maintenance_rule_preview_separates_match_from_no_match() {
     let unmatched = outcome_for(preview, "title-unmonitored");
     assert_eq!(unmatched["outcome"], "NO_MATCH");
     assert_eq!(unmatched["error"], Value::Null);
+    assert_eq!(unmatched["actions"], Value::Null);
 
     // Preview answers "what would this match", never "what happened".
     let list = gql(&ctx, LIST_QUERY, json!({})).await;
@@ -687,7 +929,6 @@ async fn maintenance_rule_preview_holds_a_title_on_an_unobservable_fact() {
         json!({
             "input": {
                 "regoSource": ACTIVE_DOWNLOADS_MATCHER,
-                "action": delete_action(),
                 "titleIds": ["title-monitored"],
             }
         }),
@@ -709,7 +950,7 @@ async fn maintenance_rule_preview_runs_a_stored_rule_at_its_current_revision() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-monitored", "Monitored Movie", true).await;
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
 
     let body = gql(
@@ -746,7 +987,6 @@ async fn maintenance_rule_preview_rejects_an_oversized_selection() {
         json!({
             "input": {
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
                 "titleIds": title_ids,
             }
         }),
@@ -766,7 +1006,6 @@ async fn maintenance_rule_preview_requires_exactly_one_matcher_and_one_selection
             "input": {
                 "ruleSetId": "rule-1",
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
                 "titleIds": ["title-1"],
             }
         }),
@@ -787,13 +1026,16 @@ async fn maintenance_rule_preview_requires_exactly_one_matcher_and_one_selection
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": NO_ACTION_MATCHER,
                 "titleIds": ["title-1"],
             }
         }),
     )
     .await;
-    assert_error_contains(&draft_without_action, "requires 'action'");
+    assert!(
+        draft_without_action.get("errors").is_some(),
+        "a draft that defines no action cannot be previewed: {draft_without_action}"
+    );
 
     let both_selections = gql(
         &ctx,
@@ -801,7 +1043,6 @@ async fn maintenance_rule_preview_requires_exactly_one_matcher_and_one_selection
         json!({
             "input": {
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
                 "titleIds": ["title-1"],
                 "libraryId": movie_library_id(),
             }
@@ -816,7 +1057,6 @@ async fn maintenance_rule_preview_requires_exactly_one_matcher_and_one_selection
         json!({
             "input": {
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
             }
         }),
     )
@@ -832,7 +1072,7 @@ async fn maintenance_rule_preview_requires_exactly_one_matcher_and_one_selection
 async fn maintenance_rule_delete_removes_the_rule_set() {
     let ctx = TestContext::new().await;
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
 
     let deleted = gql(
@@ -874,80 +1114,45 @@ async fn maintenance_rule_delete_removes_the_rule_set() {
 }
 
 // ===========================================================================
-// 5. Action catalog
+// 5. Declared actions
 // ===========================================================================
 
+/// The source is the only place a rule's actions come from: the separate
+/// action input and the action catalog that fed it are gone from the schema.
 #[tokio::test]
-async fn maintenance_action_descriptors_expose_the_static_catalog() {
+async fn the_action_input_and_catalog_are_no_longer_part_of_the_api() {
     let ctx = TestContext::new().await;
 
-    let body = gql(
+    let with_action = gql(
         &ctx,
-        r#"query {
-            maintenanceActionDescriptors {
-                kind
-                supportedSubjects
-                riskClass
-                effectClasses
-                timingMode
-                allowedRepeatModes
-                requiresTargetQualityProfile
-                requiresTags
+        &create_mutation(),
+        json!({
+            "input": {
+                "name": "Old shape",
+                "regoSource": MONITORED_MATCHER,
+                "action": { "kind": "DELETE_TITLE_AND_FILES" },
             }
-        }"#,
+        }),
+    )
+    .await;
+    assert!(with_action.get("errors").is_some(), "{with_action}");
+
+    let catalog = gql(
+        &ctx,
+        "query { maintenanceActionDescriptors { kind } }",
         json!({}),
     )
     .await;
-    assert_no_errors(&body);
+    assert!(catalog.get("errors").is_some(), "{catalog}");
 
-    let descriptors = body["data"]["maintenanceActionDescriptors"]
-        .as_array()
-        .expect("descriptor list");
-    assert_eq!(descriptors.len(), 11);
-
-    let delete = descriptors
-        .iter()
-        .find(|descriptor| descriptor["kind"] == "DELETE_TITLE_AND_FILES")
-        .expect("delete descriptor");
-    assert_eq!(delete["supportedSubjects"], json!(["MOVIE", "SHOW"]));
-    assert_eq!(delete["riskClass"], "HIGH");
-    assert_eq!(delete["effectClasses"], json!(["destructive_storage"]));
-    assert_eq!(delete["timingMode"], "after_grace");
-    assert_eq!(delete["allowedRepeatModes"], json!(["once_per_match"]));
-    assert_eq!(delete["requiresTargetQualityProfile"], false);
-
-    let requiring: Vec<&Value> = descriptors
-        .iter()
-        .filter(|descriptor| descriptor["requiresTargetQualityProfile"] == json!(true))
-        .collect();
-    assert_eq!(requiring.len(), 1);
-    assert_eq!(
-        requiring[0]["kind"],
-        "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED"
+    let list = gql(&ctx, LIST_QUERY, json!({})).await;
+    assert_no_errors(&list);
+    assert!(
+        list["data"]["maintenanceRuleSets"]
+            .as_array()
+            .expect("rule set list")
+            .is_empty()
     );
-
-    // The tag actions are the second parameterized pair, and the editor learns
-    // that from the descriptor rather than from a hardcoded list of kinds.
-    let tagging: Vec<&Value> = descriptors
-        .iter()
-        .filter(|descriptor| descriptor["requiresTags"] == json!(true))
-        .collect();
-    assert_eq!(tagging.len(), 2);
-    let tagging_kinds: Vec<&Value> = tagging
-        .iter()
-        .map(|descriptor| &descriptor["kind"])
-        .collect();
-    assert_eq!(
-        tagging_kinds,
-        vec![&json!("ADD_TAGS"), &json!("REMOVE_TAGS")]
-    );
-    let add = tagging[0];
-    assert_eq!(add["supportedSubjects"], json!(["MOVIE", "SHOW"]));
-    assert_eq!(add["riskClass"], "LOW");
-    assert_eq!(add["effectClasses"], json!(["catalog_intent"]));
-    assert_eq!(add["timingMode"], "after_grace");
-    assert_eq!(add["allowedRepeatModes"], json!(["ensure_state"]));
-    assert_eq!(add["requiresTargetQualityProfile"], false);
 }
 
 // ===========================================================================
@@ -966,7 +1171,6 @@ async fn maintenance_rule_surface_denies_an_actor_without_catalog_settings() {
             "input": {
                 "name": "Not allowed",
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
             }
         }),
         &denied,
@@ -977,14 +1181,14 @@ async fn maintenance_rule_surface_denies_an_actor_without_catalog_settings() {
     let listed = gql_as(&ctx, LIST_QUERY, json!({}), &denied).await;
     assert_error_contains(&listed, "unauthorized");
 
-    let descriptors = gql_as(
+    let validated = gql_as(
         &ctx,
-        "query { maintenanceActionDescriptors { kind } }",
-        json!({}),
+        VALIDATE_MUTATION,
+        json!({ "input": { "regoSource": MONITORED_MATCHER } }),
         &denied,
     )
     .await;
-    assert_error_contains(&descriptors, "unauthorized");
+    assert_error_contains(&validated, "unauthorized");
 
     let previewed = gql_as(
         &ctx,
@@ -992,7 +1196,6 @@ async fn maintenance_rule_surface_denies_an_actor_without_catalog_settings() {
         json!({
             "input": {
                 "regoSource": MONITORED_MATCHER,
-                "action": delete_action(),
                 "titleIds": ["title-1"],
             }
         }),
@@ -1029,6 +1232,7 @@ const CANDIDATE_FIELDS: &str = r#"
     stateReason
     reasonCodes
     actionKind
+    actions { heads }
     graceDays
     matchGeneration
     firstMatchedAt
@@ -1205,7 +1409,7 @@ async fn arm_rule_and_gate(ctx: &TestContext, rule_set_id: &str) {
 async fn maintenance_evaluation_is_dark_until_both_the_rule_and_the_gate_are_armed() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-dark-1", "Monitored Movie", true).await;
-    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1258,7 +1462,7 @@ async fn a_dry_run_rule_records_a_candidate_shown_only_while_maintenance_is_on()
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-shadow-1", "Monitored Movie", true).await;
     seed_title(&ctx, "title-shadow-2", "Unmonitored Movie", false).await;
-    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1289,7 +1493,8 @@ async fn a_dry_run_rule_records_a_candidate_shown_only_while_maintenance_is_on()
     assert_eq!(candidate["ruleName"], "Stale movies");
     assert_eq!(candidate["state"], "OBSERVING");
     assert_eq!(candidate["stateReason"], "first_match");
-    assert_eq!(candidate["actionKind"], "DELETE_TITLE_AND_FILES");
+    assert_eq!(candidate["actionKind"], "ACTION_SEQUENCE");
+    assert_eq!(candidate["actions"]["heads"], json!(["DELETE_TITLE"]));
     assert_eq!(candidate["matchGeneration"], 1);
     assert_eq!(candidate["revisionNumber"], 1);
     assert_eq!(candidate["graceDays"], 0);
@@ -1381,7 +1586,7 @@ async fn a_dry_run_rule_records_a_candidate_shown_only_while_maintenance_is_on()
 async fn an_exclusion_round_trips_and_closes_the_candidate_it_covers() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-excl-1", "Hands Off", true).await;
-    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1533,11 +1738,7 @@ async fn the_evaluation_surface_is_permission_gated() {
     assert_error_contains(&excluded, "unauthorized");
 }
 
-// ── Action execution (WP-H) ─────────────────────────────────────────────────
-
-fn unmonitor_action() -> Value {
-    json!({ "kind": "UNMONITOR_SCOPE_KEEP_FILES" })
-}
+// ── Action execution ────────────────────────────────────────────────────────
 
 const RUN_HANDLER_MUTATION: &str = r#"mutation {
     runMaintenanceActionHandlerNow { started message }
@@ -1609,7 +1810,7 @@ async fn wait_for_candidate_state(ctx: &TestContext, rule_set_id: &str, state: &
 #[tokio::test]
 async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_library_scope() {
     let ctx = TestContext::new().await;
-    let detail = create_rule(&ctx, "Review deletion", MONITORED_MATCHER, delete_action()).await;
+    let detail = create_rule(&ctx, "Review deletion", MONITORED_MATCHER).await;
     let id = detail["ruleSet"]["id"].as_str().unwrap();
     for confirmation in [
         Value::Null,
@@ -1622,11 +1823,9 @@ async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_libr
             json!({ "ruleSetId": id, "state": "ENABLED", "confirmation": confirmation }),
         )
         .await;
-        assert!(
-            response["errors"][0]["message"]
-                .as_str()
-                .unwrap()
-                .contains("reviewed again"),
+        assert_eq!(
+            error_reason(&response),
+            "MAINTENANCE_RULE_CONFIGURATION_INVALID",
             "{response}"
         );
     }
@@ -1656,7 +1855,6 @@ async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_libr
         json!({ "input": {
             "id": id,
             "regoSource": MONITORED_MATCHER,
-            "action": delete_action(),
             "graceDays": 3,
         }}),
     )
@@ -1711,7 +1909,7 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
     .expect("record owned media");
     let unrelated = root.path().join("unrelated.txt");
     std::fs::write(&unrelated, b"preserved").expect("write unrelated file");
-    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER, delete_action()).await;
+    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1730,12 +1928,14 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
             "confirmation": { "revisionNumber": 1, "libraryIds": [], "candidateCount": 7 } }),
     )
     .await;
-    let message = mismatch["errors"][0]["message"]
-        .as_str()
-        .expect("mismatch error");
-    assert!(
-        message.contains("acknowledging the current candidate count (1)"),
-        "{message}"
+    assert_eq!(
+        error_reason(&mismatch),
+        "MAINTENANCE_ARM_COUNT_MISMATCH",
+        "{mismatch}"
+    );
+    assert_eq!(
+        mismatch["errors"][0]["extensions"]["currentCount"], 1,
+        "{mismatch}"
     );
 
     let armed = set_rule_state(
@@ -1773,7 +1973,7 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
         .expect("runs");
     assert_eq!(rows.len(), 1, "{runs}");
     assert_eq!(rows[0]["status"], "succeeded");
-    assert_eq!(rows[0]["actionKind"], "DELETE_TITLE_AND_FILES");
+    assert_eq!(rows[0]["actionKind"], "ACTION_SEQUENCE");
     assert_eq!(rows[0]["attempt"], 1);
     assert_ne!(rows[0]["finishedAt"], Value::Null);
 }
@@ -1782,13 +1982,7 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
 async fn a_reversible_unmonitor_journey_needs_no_confirmation() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-unmon", "Stale Movie", true).await;
-    let detail = create_rule(
-        &ctx,
-        "Unmonitor stale",
-        MONITORED_MATCHER,
-        unmonitor_action(),
-    )
-    .await;
+    let detail = create_rule(&ctx, "Unmonitor stale", MONITORED_UNMONITOR).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1819,7 +2013,7 @@ async fn a_reversible_unmonitor_journey_needs_no_confirmation() {
 async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-kept", "Rewatched Movie", true).await;
-    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER, delete_action()).await;
+    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1885,10 +2079,6 @@ async fn define_tag(ctx: &TestContext, label: &str) -> String {
         .to_string()
 }
 
-fn tag_action(kind: &str, tags: &[&str]) -> Value {
-    json!({ "kind": kind, "tags": tags })
-}
-
 /// Seed a title that already carries `tags`, through the repository, so the
 /// fixture does not depend on the assignment path it is testing around.
 async fn seed_tagged_title(ctx: &TestContext, id: &str, name: &str, tags: &[&str]) -> Title {
@@ -1919,18 +2109,16 @@ async fn a_tag_rule_writes_the_label_through_the_normal_assignment_path() {
     let ctx = TestContext::new().await;
     define_tag(&ctx, "needs review").await;
     seed_title(&ctx, "title-untagged", "Untagged Movie", true).await;
-    let detail = create_rule(
-        &ctx,
-        "Flag for review",
-        MONITORED_MATCHER,
-        tag_action("ADD_TAGS", &["needs review"]),
-    )
-    .await;
+    let detail = create_rule(&ctx, "Flag for review", &add_tag_source("needs review")).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
         .to_string();
-    assert_eq!(detail["actionSpec"]["kind"], "ADD_TAGS");
+    assert_eq!(detail["declaredActions"]["heads"], json!(["ADD_TAGS"]));
+    assert_eq!(
+        detail["declaredActions"]["addTags"],
+        json!(["needs review"])
+    );
 
     run_tag_rule(&ctx, &rule_set_id).await;
     let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
@@ -1957,13 +2145,7 @@ async fn a_tag_rule_whose_postcondition_already_holds_reports_already_satisfied(
     let ctx = TestContext::new().await;
     define_tag(&ctx, "needs review").await;
     seed_tagged_title(&ctx, "title-tagged", "Tagged Movie", &["needs review"]).await;
-    let detail = create_rule(
-        &ctx,
-        "Flag for review",
-        MONITORED_MATCHER,
-        tag_action("ADD_TAGS", &["needs review"]),
-    )
-    .await;
+    let detail = create_rule(&ctx, "Flag for review", &add_tag_source("needs review")).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1973,17 +2155,33 @@ async fn a_tag_rule_whose_postcondition_already_holds_reports_already_satisfied(
     let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
     assert_no_errors(&handled);
 
-    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
-    assert_eq!(
-        candidate["stateReason"], "already_satisfied",
-        "the label was already there, so nothing was written"
-    );
-    let runs = gql(&ctx, ACTION_RUNS_QUERY, json!({ "ruleSetId": rule_set_id })).await;
+    // The sequence as a whole succeeds; its one step records that the label
+    // was already there, so nothing was written.
+    wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
+    let runs = gql(
+        &ctx,
+        r#"query($ruleSetId: ID) {
+            maintenanceActionRuns(ruleSetId: $ruleSetId, limit: 10) {
+                actionKind
+                sequenceSteps { step { kind } run { state } }
+            }
+        }"#,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&runs);
-    assert_eq!(
-        runs["data"]["maintenanceActionRuns"][0]["status"],
-        "already_satisfied"
-    );
+    let run = &runs["data"]["maintenanceActionRuns"][0];
+    assert_eq!(run["actionKind"], "ACTION_SEQUENCE", "{runs}");
+    let steps = run["sequenceSteps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 1, "{runs}");
+    assert_eq!(steps[0]["run"]["state"], "already_satisfied", "{runs}");
+    let title = ctx
+        .titles
+        .get_by_id("title-tagged")
+        .await
+        .expect("read title")
+        .expect("title survives");
+    assert_eq!(title.tags, vec!["needs review".to_string()]);
 }
 
 #[tokio::test]
@@ -1991,13 +2189,7 @@ async fn a_tag_rule_holds_when_its_label_was_deleted_after_authoring() {
     let ctx = TestContext::new().await;
     let tag_id = define_tag(&ctx, "needs review").await;
     seed_title(&ctx, "title-orphaned", "Orphaned Movie", true).await;
-    let detail = create_rule(
-        &ctx,
-        "Flag for review",
-        MONITORED_MATCHER,
-        tag_action("ADD_TAGS", &["needs review"]),
-    )
-    .await;
+    let detail = create_rule(&ctx, "Flag for review", &add_tag_source("needs review")).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -2040,13 +2232,7 @@ async fn two_rules_writing_opposite_tag_patches_hold_both_candidates() {
     )
     .await;
 
-    let adder = create_rule(
-        &ctx,
-        "Flag for review",
-        MONITORED_MATCHER,
-        tag_action("ADD_TAGS", &["needs review"]),
-    )
-    .await;
+    let adder = create_rule(&ctx, "Flag for review", &add_tag_source("needs review")).await;
     let adder_id = adder["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -2054,8 +2240,7 @@ async fn two_rules_writing_opposite_tag_patches_hold_both_candidates() {
     let remover = create_rule(
         &ctx,
         "Clear review flag",
-        MONITORED_MATCHER,
-        tag_action("REMOVE_TAGS", &["needs review"]),
+        &remove_tag_source("needs review"),
     )
     .await;
     let remover_id = remover["ruleSet"]["id"]
@@ -2099,11 +2284,14 @@ async fn a_tag_action_naming_an_undefined_label_is_refused_at_authoring_time() {
         json!({
             "input": {
                 "name": "Flag for review",
-                "regoSource": MONITORED_MATCHER,
-                "action": tag_action("ADD_TAGS", &["never defined"]),
+                "regoSource": add_tag_source("never defined"),
             }
         }),
     )
     .await;
-    assert_error_contains(&refused, "is not a defined tag");
+    assert_eq!(
+        error_reason(&refused),
+        "CATALOG_NOT_DEFINED_TAG",
+        "{refused}"
+    );
 }

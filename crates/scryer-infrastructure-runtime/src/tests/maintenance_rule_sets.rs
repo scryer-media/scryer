@@ -386,6 +386,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
                 "Must roll back",
                 "bad scope",
                 &["library-9".into(), "missing-library".into()],
+                None,
                 true,
                 Utc::now()
             )
@@ -410,6 +411,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
             "Scoped",
             "",
             &["library-1".into()],
+            None,
             true,
             Utc::now(),
         )
@@ -439,7 +441,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     );
 
     store
-        .update_rule_set_metadata("scoped", "Global", "", &[], true, Utc::now())
+        .update_rule_set_metadata("scoped", "Global", "", &[], None, true, Utc::now())
         .await
         .unwrap();
     assert!(
@@ -461,6 +463,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
             "Scoped again",
             "",
             &["library-2".into()],
+            None,
             true,
             Utc::now(),
         )
@@ -492,6 +495,7 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> MaintenanceRuleSet {
         subject_kind: MaintenanceRuleSubjectKind::Title,
         system_owned: false,
         current_revision_number: 1,
+        schedule: scryer_domain::default_maintenance_rule_schedule(),
         created_at: now,
         updated_at: now,
     }
@@ -509,6 +513,7 @@ fn revision(rule_set_id: &str, number: i64) -> MaintenanceRuleRevision {
         matcher_content_hash: format!("hash-{number}"),
         created_by: Some("user-1".to_string()),
         created_at: Utc::now(),
+        builder_model_json: None,
     }
 }
 
@@ -562,6 +567,32 @@ async fn rule_sets_and_revisions_round_trip() {
     assert_eq!(stored_revision.matcher_content_hash, "hash-1");
     assert_eq!(stored_revision.grace_days, 7);
     assert_eq!(stored_revision.created_by.as_deref(), Some("user-1"));
+    assert_eq!(stored_revision.builder_model_json, None);
+
+    let mut built = revision("rule-a", 2);
+    built.builder_model_json = Some(r#"{"family":"maintenance","version":2}"#.to_string());
+    store
+        .add_revision(&built, Utc::now())
+        .await
+        .expect("append revision with builder model");
+    assert_eq!(
+        store
+            .get_revision("rule-a", 2)
+            .await
+            .expect("read revision 2")
+            .expect("revision 2 exists")
+            .builder_model_json,
+        built.builder_model_json
+    );
+    assert_eq!(
+        store
+            .get_revision("rule-a", 1)
+            .await
+            .expect("reread revision 1")
+            .expect("revision 1 exists")
+            .builder_model_json,
+        None
+    );
 
     let _ = std::fs::remove_file(db);
 }
@@ -728,6 +759,7 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
             "Renamed",
             "New description",
             &["library-9".to_string()],
+            None,
             false,
             Utc::now(),
         )
@@ -750,6 +782,45 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
         scryer_domain::MaintenanceEffectArming::Reversible
     );
     assert_eq!(store.list_revisions("rule-c").await.unwrap().len(), 1);
+    assert_eq!(
+        loaded.schedule,
+        scryer_domain::default_maintenance_rule_schedule(),
+        "a save without a schedule keeps the stored one"
+    );
+
+    // A schedule rides in the same metadata write and reads back as stored.
+    let weekly = scryer_domain::ScriptSchedule::Weekly {
+        days: vec![scryer_domain::ScheduleWeekday::Monday],
+        time_local: "04:15".to_string(),
+    };
+    store
+        .update_rule_set_metadata(
+            "rule-c",
+            "Renamed",
+            "New description",
+            &["library-9".to_string()],
+            Some(&weekly),
+            false,
+            Utc::now(),
+        )
+        .await
+        .expect("reschedule");
+    let loaded = store
+        .get_rule_set("rule-c")
+        .await
+        .unwrap()
+        .expect("rule set exists");
+    assert_eq!(loaded.schedule, weekly);
+    assert_eq!(
+        loaded.effect_arming,
+        scryer_domain::MaintenanceEffectArming::Reversible,
+        "a schedule change leaves arming alone"
+    );
+    assert_eq!(
+        store.list_rule_sets().await.unwrap()[0].schedule,
+        weekly,
+        "the list read decodes the schedule too"
+    );
 
     let _ = std::fs::remove_file(db);
 }
@@ -775,6 +846,7 @@ async fn a_scope_change_disarms_in_the_same_write() {
             "Stale movies",
             "Unwatched for a long time",
             &["library-1".to_string(), "library-2".to_string()],
+            None,
             true,
             Utc::now(),
         )
@@ -845,4 +917,174 @@ async fn a_duplicate_revision_number_is_rejected() {
     assert_eq!(store.list_revisions("rule-e").await.unwrap().len(), 1);
 
     let _ = std::fs::remove_file(db);
+}
+
+/// An edit prepared from a read taken before another admin disarmed and
+/// disabled the rule must not re-arm or re-enable it.
+#[tokio::test]
+async fn a_revision_keeping_arming_never_raises_a_concurrently_lowered_arming() {
+    use scryer_domain::MaintenanceEffectArming;
+    let temp = tempfile::tempdir().unwrap();
+    let services = SqliteServices::new(
+        temp.path()
+            .join("lowered.db")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .await
+    .unwrap();
+    let store = maintenance_rule_set_store(&services).await;
+    let mut original = rule_set("lowered", vec!["library-1".into()]);
+    original.effect_arming = MaintenanceEffectArming::Reversible;
+    original.evaluation_mode = MaintenanceEvaluationMode::Observe;
+    original.enabled = true;
+    store
+        .create_rule_set(&original, &revision("lowered", 1))
+        .await
+        .unwrap();
+    // The editor reads here: Reversible, Observe.
+    let read = store.get_rule_set("lowered").await.unwrap().unwrap();
+    assert_eq!(read.effect_arming, MaintenanceEffectArming::Reversible);
+
+    // Another admin disables and disarms in between.
+    assert!(
+        store
+            .update_rule_set_state(
+                "lowered",
+                MaintenanceEvaluationMode::Disabled,
+                MaintenanceEffectArming::None,
+                None,
+                Utc::now(),
+            )
+            .await
+            .unwrap()
+    );
+
+    // The edit computed from its stale read still asks for Reversible.
+    store
+        .add_revision_keeping_arming(
+            &revision("lowered", 2),
+            MaintenanceEffectArming::Reversible,
+            Utc::now(),
+        )
+        .await
+        .expect("the edit itself lands");
+    let current = store.get_rule_set("lowered").await.unwrap().unwrap();
+    assert_eq!(current.current_revision_number, 2);
+    assert_eq!(current.effect_arming, MaintenanceEffectArming::None);
+    assert_eq!(current.evaluation_mode, MaintenanceEvaluationMode::Disabled);
+    assert!(!current.enabled);
+
+    // Lowering still works: Destructive stored, Reversible asked.
+    let mut armed = rule_set("armed", vec!["library-1".into()]);
+    armed.effect_arming = MaintenanceEffectArming::Destructive;
+    store
+        .create_rule_set(&armed, &revision("armed", 1))
+        .await
+        .unwrap();
+    store
+        .add_revision_keeping_arming(
+            &revision("armed", 2),
+            MaintenanceEffectArming::Reversible,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_rule_set("armed")
+            .await
+            .unwrap()
+            .unwrap()
+            .effect_arming,
+        MaintenanceEffectArming::Reversible
+    );
+}
+
+#[tokio::test]
+async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
+    use scryer_domain::MaintenanceEffectArming;
+    let temp = tempfile::tempdir().unwrap();
+    let services = SqliteServices::new(
+        temp.path()
+            .join("keeping.db")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .await
+    .unwrap();
+    let store = maintenance_rule_set_store(&services).await;
+    let mut original = rule_set("kept", vec!["library-1".into()]);
+    original.effect_arming = MaintenanceEffectArming::Destructive;
+    store
+        .create_rule_set(&original, &revision("kept", 1))
+        .await
+        .unwrap();
+
+    store
+        .add_revision_keeping_arming(
+            &revision("kept", 2),
+            MaintenanceEffectArming::Reversible,
+            Utc::now(),
+        )
+        .await
+        .expect("the save follows the current revision");
+    let current = store.get_rule_set("kept").await.unwrap().unwrap();
+    assert_eq!(current.current_revision_number, 2);
+    assert_eq!(current.effect_arming, MaintenanceEffectArming::Reversible);
+
+    // A save prepared against revision 1 lost the race to the one above.
+    let mut stale = revision("kept", 2);
+    stale.id = "kept-stale-2".into();
+    let refused = store
+        .add_revision_keeping_arming(&stale, MaintenanceEffectArming::Reversible, Utc::now())
+        .await
+        .expect_err("a stale save is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(scryer_application::error_reasons::maintenance::RULE_REVISION_CONFLICT),
+        "{refused:?}"
+    );
+    let skipped = store
+        .add_revision_keeping_arming(
+            &revision("kept", 4),
+            MaintenanceEffectArming::None,
+            Utc::now(),
+        )
+        .await
+        .expect_err("a save that skips a revision is refused");
+    assert_eq!(
+        skipped.validation_reason(),
+        Some(scryer_application::error_reasons::maintenance::RULE_REVISION_CONFLICT)
+    );
+    let current = store.get_rule_set("kept").await.unwrap().unwrap();
+    assert_eq!(current.current_revision_number, 2);
+    assert_eq!(current.effect_arming, MaintenanceEffectArming::Reversible);
+    assert_eq!(store.list_revisions("kept").await.unwrap().len(), 2);
+
+    // The disarming save follows the same rule, and a stale one disarms
+    // nothing.
+    let mut stale_disarm = revision("kept", 2);
+    stale_disarm.id = "kept-stale-disarm-2".into();
+    let refused = store
+        .add_revision(&stale_disarm, Utc::now())
+        .await
+        .expect_err("a stale disarming save is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(scryer_application::error_reasons::maintenance::RULE_REVISION_CONFLICT),
+        "{refused:?}"
+    );
+    let current = store.get_rule_set("kept").await.unwrap().unwrap();
+    assert_eq!(current.current_revision_number, 2);
+    assert_eq!(current.effect_arming, MaintenanceEffectArming::Reversible);
+
+    store
+        .add_revision(&revision("kept", 3), Utc::now())
+        .await
+        .expect("a disarming save that follows the current revision");
+    let current = store.get_rule_set("kept").await.unwrap().unwrap();
+    assert_eq!(current.current_revision_number, 3);
+    assert_eq!(current.effect_arming, MaintenanceEffectArming::None);
+    assert_eq!(store.list_revisions("kept").await.unwrap().len(), 3);
 }

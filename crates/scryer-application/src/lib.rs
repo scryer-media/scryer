@@ -152,6 +152,11 @@ mod release_facts;
 pub mod request_rules;
 mod rules;
 pub use rules::arr_custom_format;
+pub use rules::builder_model::{
+    BuilderFamily, BuilderModelChange, MAX_BUILDER_MODEL_BYTES, RULE_BUILDER_FAMILIES,
+    RuleBuilderOutputDescriptor, RuleBuilderOutputRule, RuleBuilderOutputRuleKind,
+    RuleBuilderSchema, RuleBuilderValueKind, rule_builder_schema, stored_builder_model,
+};
 pub use rules::preview::{
     RuleSetTestContext, RuleSetTestDraft, RuleSetTestDraftContribution, RuleSetTestEntry,
     RuleSetTestError, RuleSetTestListingFacts, RuleSetTestListingInput, RuleSetTestParsed,
@@ -710,10 +715,10 @@ pub use ports::{
     MaintenanceActionStepClaim, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
     MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
-    MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
-    MaintenanceSequenceCompletionRepository, MediaAnalyzer, MediaFileHashCandidate,
-    MediaFileRepository, MediaRequestOrder, MediaRequestQuery, MediaRequestRepository,
-    MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
+    MaintenanceRuleScheduleAnchor, MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
+    MaintenanceSequenceCompletionRepository, MaintenanceStepAct, MediaAnalyzer,
+    MediaFileHashCandidate, MediaFileRepository, MediaRequestOrder, MediaRequestQuery,
+    MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
     MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
     NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
     NotificationApplicationUpdatePayload, NotificationChannelRepository, NotificationClient,

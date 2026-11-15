@@ -148,6 +148,12 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .iter_mut()
             .find(|rule_set| rule_set.id == revision.rule_set_id)
             .ok_or_else(|| AppError::NotFound(revision.rule_set_id.clone()))?;
+        if rule_set.current_revision_number != revision.revision_number - 1 {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_REVISION_CONFLICT,
+                "the rule was changed by another save; reload it and save again".to_string(),
+            ));
+        }
         rule_set.current_revision_number = revision.revision_number;
         // The SQL store disarms in the same transaction as the pointer move; a
         // permissive double here would hide an arming that survived a matcher
@@ -161,6 +167,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
     async fn add_revision_keeping_arming(
         &self,
         revision: &MaintenanceRuleRevision,
+        effect_arming: scryer_domain::MaintenanceEffectArming,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
@@ -168,7 +175,24 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .iter_mut()
             .find(|rule_set| rule_set.id == revision.rule_set_id)
             .ok_or_else(|| AppError::NotFound(revision.rule_set_id.clone()))?;
+        // The SQL store moves the pointer only from the revision this one
+        // follows.
+        if rule_set.current_revision_number != revision.revision_number - 1 {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::maintenance::RULE_REVISION_CONFLICT,
+                "the rule was changed by another save; reload it and save again".to_string(),
+            ));
+        }
         rule_set.current_revision_number = revision.revision_number;
+        // As the SQL store: never above what is stored now.
+        let rank = |arming: scryer_domain::MaintenanceEffectArming| match arming {
+            scryer_domain::MaintenanceEffectArming::None => 0,
+            scryer_domain::MaintenanceEffectArming::Reversible => 1,
+            scryer_domain::MaintenanceEffectArming::Destructive => 2,
+        };
+        if rank(effect_arming) < rank(rule_set.effect_arming) {
+            rule_set.effect_arming = effect_arming;
+        }
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
         Ok(())
@@ -209,6 +233,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         name: &str,
         description: &str,
         library_ids: &[String],
+        schedule: Option<&scryer_domain::ScriptSchedule>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -220,6 +245,9 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         rule_set.name = name.to_string();
         rule_set.description = description.to_string();
         rule_set.library_ids = library_ids.to_vec();
+        if let Some(schedule) = schedule {
+            rule_set.schedule = schedule.clone();
+        }
         // The SQL store disarms inside the same UPDATE; a permissive double here
         // would hide an arming that survived a scope change.
         if disarm {
@@ -565,6 +593,130 @@ async fn create_persists_a_dormant_rule_set_and_its_first_revision() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
+    use crate::BuilderModelChange;
+
+    let MaintenanceFixture {
+        app, user, rules, ..
+    } = maintenance_app();
+    let model = serde_json::json!({
+        "version": 2,
+        "family": "maintenance",
+        "join": "ALL",
+        "conditions": [],
+        "outputs": {"UNMONITOR": true}
+    });
+    let created = app
+        .create_maintenance_rule_set_with_builder_model(
+            &user,
+            draft(MONITORED_MATCHER),
+            BuilderModelChange::Set(model.clone()),
+        )
+        .await
+        .expect("create with builder model");
+    let stored = created
+        .revision
+        .builder_model_json
+        .clone()
+        .expect("first revision stores the document");
+    assert_eq!(
+        crate::stored_builder_model(Some(&stored)),
+        Some(model.clone())
+    );
+
+    let matcher = |grace_days| MaintenanceMatcherDraft {
+        rego_source: crate::lib_tests::legacy_source(
+            MONITORED_MATCHER,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+        ),
+        grace_days,
+        storage_root_id: None,
+    };
+
+    // Omitted: the new revision carries the current document forward.
+    let kept = app
+        .update_maintenance_rule_matcher(&user, &created.rule_set.id, matcher(8))
+        .await
+        .expect("update keeping model");
+    assert_eq!(
+        kept.revision.builder_model_json.as_deref(),
+        Some(stored.as_str())
+    );
+
+    // A hand edit with the field omitted leaves the new revision without one.
+    let edited = app
+        .update_maintenance_rule_matcher(
+            &user,
+            &created.rule_set.id,
+            MaintenanceMatcherDraft {
+                rego_source: crate::lib_tests::legacy_source(
+                    NEVER_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                ),
+                grace_days: 8,
+                storage_root_id: None,
+            },
+        )
+        .await
+        .expect("hand edit");
+    assert_eq!(edited.revision.builder_model_json, None);
+    let restored = app
+        .update_maintenance_rule_matcher_with_builder_model(
+            &user,
+            &created.rule_set.id,
+            matcher(8),
+            BuilderModelChange::Set(model.clone()),
+        )
+        .await
+        .expect("builder save");
+    assert_eq!(
+        restored.revision.builder_model_json.as_deref(),
+        Some(stored.as_str())
+    );
+
+    // A scoring document is refused and no revision is appended.
+    let refused = app
+        .update_maintenance_rule_matcher_with_builder_model(
+            &user,
+            &created.rule_set.id,
+            matcher(9),
+            BuilderModelChange::Set(serde_json::json!({"version": 2, "family": "scoring"})),
+        )
+        .await
+        .expect_err("wrong family is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::rules::BUILDER_MODEL_INVALID)
+    );
+    assert_eq!(
+        rules
+            .list_revisions(&created.rule_set.id)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+
+    // Cleared: the next revision is hand-written; earlier revisions keep theirs.
+    let cleared = app
+        .update_maintenance_rule_matcher_with_builder_model(
+            &user,
+            &created.rule_set.id,
+            matcher(10),
+            BuilderModelChange::Clear,
+        )
+        .await
+        .expect("clear model");
+    assert_eq!(cleared.revision.builder_model_json, None);
+    let first = rules
+        .get_revision(&created.rule_set.id, 1)
+        .await
+        .unwrap()
+        .expect("revision 1");
+    assert_eq!(first.builder_model_json.as_deref(), Some(stored.as_str()));
 }
 
 #[tokio::test]
@@ -1316,6 +1468,55 @@ async fn preview_separates_match_from_no_match() {
         Some(MaintenanceOutcome::NoMatch)
     );
     assert!(preview.titles.iter().all(|result| result.error.is_none()));
+    assert!(
+        preview
+            .titles
+            .iter()
+            .all(|result| result.error_code.is_none())
+    );
+}
+
+/// A subject the rule fails on reports the failure by code beside its
+/// sentence, and is never shown as a decision.
+#[tokio::test]
+async fn preview_reports_a_failed_subject_by_code() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+    let unmonitored = seed_title(&app, &user, "Unmonitored Movie", false).await;
+    // The save's dry run sees a monitored subject, where this head stays
+    // undefined; on an unmonitored title it is a string, not a boolean.
+    let created = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                rego_source: "package rules\nimport rego.v1\n\nunmonitor := \"yes\" if {\n\tnot input.facts.monitored\n}\n"
+                    .to_string(),
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect("create rule set");
+
+    let preview = app
+        .preview_maintenance_rule(
+            &user,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Stored {
+                    rule_set_id: created.rule_set.id.clone(),
+                },
+                selection: MaintenancePreviewSelection::Titles(vec![unmonitored.id.clone()]),
+            },
+        )
+        .await
+        .expect("preview");
+
+    assert_eq!(preview.titles.len(), 1);
+    let result = &preview.titles[0];
+    assert_eq!(result.outcome, None, "{result:?}");
+    assert!(result.error.is_some(), "{result:?}");
+    assert_eq!(
+        result.error_code,
+        Some(scryer_rules::diagnostic_codes::RULE_OUTPUT_INVALID)
+    );
 }
 
 #[tokio::test]
@@ -1695,4 +1896,149 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
             preview.titles
         );
     }
+}
+
+/// A move names a library or root by what the operator sees. Save refuses a
+/// name that is not exactly one library, a library of another kind than the
+/// rule's libraries, and a path that is not a configured root, each pointing
+/// at the value.
+#[tokio::test]
+async fn a_move_target_that_does_not_exist_is_refused_with_its_position() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+    let libraries = app.services.catalog.libraries.list(None).await.unwrap();
+    let movies = libraries
+        .iter()
+        .find(|library| library.facet == MediaFacet::Movie)
+        .expect("a movie library");
+    let series = libraries
+        .iter()
+        .find(|library| library.facet != MediaFacet::Movie)
+        .expect("a library of another kind");
+    let movie_root = movies
+        .roots
+        .first()
+        .map(|root| root.path.clone())
+        .expect("the movie library has a root");
+
+    let refused = |source: String, library_ids: Vec<String>| {
+        let app = &app;
+        let user = &user;
+        async move {
+            app.create_maintenance_rule_set(
+                user,
+                MaintenanceRuleDraft {
+                    rego_source: source,
+                    library_ids,
+                    ..draft(MONITORED_MATCHER)
+                },
+            )
+            .await
+        }
+    };
+    let source = |head: &str, value: &str| {
+        format!(
+            "package whatever\nimport rego.v1\n\n{head} := {} if input.facts.monitored\n",
+            serde_json::to_string(value).unwrap()
+        )
+    };
+    let position = |error: &AppError| {
+        let AppError::ValidationRefused { diagnostics, .. } = error else {
+            panic!("{error:?}");
+        };
+        diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.line, diagnostic.column))
+            .collect::<Vec<_>>()
+    };
+
+    for (head, value, library_ids, code) in [
+        (
+            "move_to_library",
+            "Synthetic Missing Library",
+            Vec::new(),
+            crate::error_reasons::maintenance::MOVE_LIBRARY_NOT_FOUND,
+        ),
+        (
+            "move_to_library",
+            series.name.as_str(),
+            vec![movies.id.clone()],
+            crate::error_reasons::maintenance::MOVE_LIBRARY_FACET_MISMATCH,
+        ),
+        (
+            "move_to_root",
+            "/synthetic/not/a/root",
+            Vec::new(),
+            crate::error_reasons::maintenance::MOVE_ROOT_NOT_FOUND,
+        ),
+    ] {
+        let error = refused(source(head, value), library_ids)
+            .await
+            .expect_err("a move target that does not exist is refused");
+        assert_eq!(error.validation_reason(), Some(code), "{error:?}");
+        // The position is the value's, after `<head> := `.
+        let column = head.len() + 5;
+        assert_eq!(
+            position(&error),
+            vec![(Some(4), Some(column))],
+            "{head} {value}"
+        );
+    }
+    assert!(rules_are_empty(&app, &user).await);
+
+    refused(
+        source("move_to_library", movies.name.as_str()),
+        vec![movies.id.clone()],
+    )
+    .await
+    .expect("a library of the rule's kind is accepted");
+    refused(
+        source("move_to_root", &format!("{movie_root}/")),
+        Vec::new(),
+    )
+    .await
+    .expect("a configured root is accepted, trailing separator or not");
+
+    // A scope change alone is checked against the same targets: a rule that
+    // moves to the movie library cannot be confined to another kind.
+    let unscoped = refused(source("move_to_library", movies.name.as_str()), Vec::new())
+        .await
+        .expect("an unscoped rule may name any library");
+    let rule_set_id = unscoped.rule_set.id.clone();
+    let error = app
+        .update_maintenance_rule_metadata(
+            &user,
+            &rule_set_id,
+            unscoped.rule_set.name.clone(),
+            String::new(),
+            vec![series.id.clone()],
+        )
+        .await
+        .expect_err("the new scope holds another kind of media");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::maintenance::MOVE_LIBRARY_FACET_MISMATCH),
+        "{error:?}"
+    );
+    assert_eq!(position(&error), vec![(Some(4), Some(20))]);
+    let kept = app
+        .services
+        .customization
+        .maintenance_rule_sets
+        .get_rule_set(&rule_set_id)
+        .await
+        .unwrap()
+        .expect("rule set");
+    assert!(
+        kept.library_ids.is_empty(),
+        "a refused scope is not written"
+    );
+    app.update_maintenance_rule_metadata(
+        &user,
+        &rule_set_id,
+        unscoped.rule_set.name.clone(),
+        String::new(),
+        vec![movies.id.clone()],
+    )
+    .await
+    .expect("a scope of the target's kind is accepted");
 }

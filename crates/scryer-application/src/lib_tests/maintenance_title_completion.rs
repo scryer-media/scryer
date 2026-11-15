@@ -696,8 +696,7 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
             .is_some_and(|episode| episode.monitored)
     );
     assert_eq!(
-        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await)
-            .len(),
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await).len(),
         2
     );
 }

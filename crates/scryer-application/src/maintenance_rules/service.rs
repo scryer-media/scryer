@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use scryer_domain::{
     AppPermission, Id, MaintenanceEvaluationMode, MaintenanceRuleRevision, MaintenanceRuleSet,
-    MaintenanceRuleSubjectKind, MediaFacet, Title, User,
+    MaintenanceRuleSubjectKind, MediaFacet, ScriptSchedule, Title, User,
 };
 use scryer_rules::maintenance::{
     MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine,
@@ -28,10 +28,8 @@ use crate::maintenance_rules::facts::{
     build_subject_input,
 };
 use crate::maintenance_rules::storage::{MaintenanceRootFileSummary, MaintenanceStorageFactCache};
-use crate::maintenance_rules::{
-    MaintenanceActionDefinition, MaintenanceDeclaredActions, action_definition_from_persisted_json,
-    head_supported_for_scope,
-};
+use crate::maintenance_rules::{MaintenanceDeclaredActions, head_supported_for_scope};
+use crate::rules::builder_model::{BuilderFamily, BuilderModelChange, resolved_builder_model};
 use crate::{AppError, AppResult, AppUseCase};
 use scryer_rules::maintenance_actions::scan_maintenance_action_heads;
 use scryer_rules::validation::ValidationDiagnostic;
@@ -152,13 +150,24 @@ pub struct MaintenancePreviewRequest {
 
 // ── Read models ─────────────────────────────────────────────────────────────
 
-/// A rule set with the revision currently in force and its action definition
-/// decoded so no caller downstream handles the persisted JSON shape.
+/// A rule set with the revision currently in force and the actions its source
+/// declares, decoded so no caller downstream handles the persisted JSON shape.
 #[derive(Clone, Debug)]
 pub struct MaintenanceRuleSetDetail {
     pub rule_set: MaintenanceRuleSet,
     pub revision: MaintenanceRuleRevision,
-    pub action_definition: MaintenanceActionDefinition,
+    pub declared_actions: MaintenanceDeclaredActions,
+    /// Set when the current revision cannot be acted on, with the reason
+    /// code. Such a rule declares no action, is never evaluated, never runs
+    /// and cannot be enabled; replacing its source is how it recovers.
+    pub load_refusal: Option<&'static str>,
+}
+
+impl MaintenanceRuleSetDetail {
+    /// Whether the evaluator and executor may act on this rule at all.
+    pub fn is_actionable(&self) -> bool {
+        self.load_refusal.is_none()
+    }
 }
 
 /// What validating a draft source found: the validation result, and the
@@ -205,6 +214,8 @@ pub struct MaintenancePreviewTitleResult {
     pub outcome: Option<MaintenanceOutcome>,
     pub reason_codes: Vec<String>,
     pub error: Option<String>,
+    /// Stable code for `error`; `None` exactly when `error` is.
+    pub error_code: Option<&'static str>,
     /// What the rule decided for this subject. `None` unless it matched.
     pub actions: Option<scryer_rules::maintenance_actions::MaintenanceActions>,
     /// The input document the rule evaluated for this subject, facts and
@@ -296,8 +307,37 @@ impl AppUseCase {
         actor: &User,
         draft: MaintenanceRuleDraft,
     ) -> AppResult<MaintenanceRuleSetDetail> {
+        self.create_maintenance_rule_set_with_builder_model(actor, draft, BuilderModelChange::Keep)
+            .await
+    }
+
+    /// Create a rule set and store the simple builder's document for its
+    /// source alongside the first revision.
+    pub async fn create_maintenance_rule_set_with_builder_model(
+        &self,
+        actor: &User,
+        draft: MaintenanceRuleDraft,
+        builder_model: BuilderModelChange,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
+        self.create_maintenance_rule_set_with_schedule(actor, draft, builder_model, None)
+            .await
+    }
+
+    /// Create a rule set that runs on `schedule`, or on the default schedule
+    /// when it is `None`.
+    pub async fn create_maintenance_rule_set_with_schedule(
+        &self,
+        actor: &User,
+        draft: MaintenanceRuleDraft,
+        builder_model: BuilderModelChange,
+        schedule: Option<ScriptSchedule>,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
+        let schedule = validated_rule_schedule(schedule)?
+            .unwrap_or_else(scryer_domain::default_maintenance_rule_schedule);
+        let builder_model_json =
+            resolved_builder_model(&builder_model, None, BuilderFamily::Maintenance)?;
 
         let name = require_non_empty(&draft.name, "name")?;
         let storage_root_id = draft.storage_root_id;
@@ -310,8 +350,12 @@ impl AppUseCase {
             draft.grace_days,
             storage_root_id.is_some(),
         )?;
-        self.require_declared_action_targets(&prepared.declared, &prepared.scan)
-            .await?;
+        self.require_declared_action_targets(
+            &prepared.declared,
+            &prepared.scan,
+            &draft.library_ids,
+        )
+        .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
         self.require_storage_root_for_matcher(
@@ -337,6 +381,7 @@ impl AppUseCase {
             subject_kind: draft.subject_kind,
             system_owned: false,
             current_revision_number: 1,
+            schedule,
             created_at: now,
             updated_at: now,
         };
@@ -348,6 +393,7 @@ impl AppUseCase {
             storage_root_id,
             Some(actor.id.clone()),
             now,
+            builder_model_json,
         );
 
         self.services
@@ -355,11 +401,14 @@ impl AppUseCase {
             .maintenance_rule_sets
             .create_rule_set(&rule_set, &revision)
             .await?;
+        // A new rule starts disabled, so the scheduler has nothing to add
+        // until it is enabled.
 
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_definition: MaintenanceActionDefinition::Declared(prepared.declared),
+            declared_actions: prepared.declared,
+            load_refusal: None,
         })
     }
 
@@ -389,6 +438,26 @@ impl AppUseCase {
         rule_set_id: &str,
         draft: MaintenanceMatcherDraft,
     ) -> AppResult<MaintenanceRuleSetDetail> {
+        self.update_maintenance_rule_matcher_with_builder_model(
+            actor,
+            rule_set_id,
+            draft,
+            BuilderModelChange::Keep,
+        )
+        .await
+    }
+
+    /// Append a revision as [`Self::update_maintenance_rule_matcher`] does.
+    /// [`BuilderModelChange::Keep`] carries the current revision's builder
+    /// document onto the new one only when the source is unchanged; a changed
+    /// source leaves the new revision without one.
+    pub async fn update_maintenance_rule_matcher_with_builder_model(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        draft: MaintenanceMatcherDraft,
+        builder_model: BuilderModelChange,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
@@ -416,6 +485,11 @@ impl AppUseCase {
             draft.grace_days,
             storage_root_id.is_some(),
         )?;
+        let builder_model_json = resolved_builder_model(
+            &builder_model.after_source_edit(&current_revision.rego_source, &prepared.rego_source),
+            current_revision.builder_model_json.clone(),
+            BuilderFamily::Maintenance,
+        )?;
         if rule_set.system_owned
             && (prepared.action_spec_json != current_revision.action_spec_json
                 || scryer_rules::strip_editor_source(&prepared.rego_source)
@@ -427,8 +501,12 @@ impl AppUseCase {
                  period, libraries and state can.",
             ));
         }
-        self.require_declared_action_targets(&prepared.declared, &prepared.scan)
-            .await?;
+        self.require_declared_action_targets(
+            &prepared.declared,
+            &prepared.scan,
+            &rule_set.library_ids,
+        )
+        .await?;
         self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
         self.require_storage_root_for_matcher(
@@ -448,6 +526,7 @@ impl AppUseCase {
             storage_root_id,
             Some(actor.id.clone()),
             now,
+            builder_model_json,
         );
 
         let destructive = prepared.declared.destructive;
@@ -455,7 +534,24 @@ impl AppUseCase {
         if destructive {
             rules.add_revision(&revision, now).await?;
         } else {
-            rules.add_revision_keeping_arming(&revision, now).await?;
+            let arming = crate::maintenance_rules::arming_kept_across_edit(
+                rule_set.effect_arming,
+                &prepared.declared,
+            );
+            rules
+                .add_revision_keeping_arming(&revision, arming, now)
+                .await?;
+            // The store kept the lower of this arming and whatever another
+            // admin wrote since the read above; report what it holds.
+            match rules.get_rule_set(&rule_set.id).await? {
+                Some(fresh) => {
+                    rule_set.effect_arming = fresh.effect_arming;
+                    rule_set.evaluation_mode = fresh.evaluation_mode;
+                    rule_set.enabled = fresh.enabled;
+                    rule_set.destructive_rearm_required = fresh.destructive_rearm_required;
+                }
+                None => rule_set.effect_arming = arming,
+            }
         }
 
         rule_set.current_revision_number = revision_number;
@@ -469,7 +565,8 @@ impl AppUseCase {
         Ok(MaintenanceRuleSetDetail {
             rule_set,
             revision,
-            action_definition: MaintenanceActionDefinition::Declared(prepared.declared),
+            declared_actions: prepared.declared,
+            load_refusal: None,
         })
     }
 
@@ -498,8 +595,32 @@ impl AppUseCase {
         description: String,
         library_ids: Vec<String>,
     ) -> AppResult<MaintenanceRuleSet> {
+        self.update_maintenance_rule_metadata_with_schedule(
+            actor,
+            rule_set_id,
+            name,
+            description,
+            library_ids,
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::update_maintenance_rule_metadata`], also replacing the
+    /// rule's schedule when `schedule` is `Some`. A schedule is timing only:
+    /// changing it leaves arming alone.
+    pub async fn update_maintenance_rule_metadata_with_schedule(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        name: String,
+        description: String,
+        library_ids: Vec<String>,
+        schedule: Option<ScriptSchedule>,
+    ) -> AppResult<MaintenanceRuleSet> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
+        let schedule = validated_rule_schedule(schedule)?;
 
         let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let name = require_non_empty(&name, "name")?;
@@ -511,6 +632,10 @@ impl AppUseCase {
         }
         let now = Utc::now();
         let scope_changed = library_scope_changed(&rule_set.library_ids, &library_ids);
+        if scope_changed {
+            self.require_move_targets_for_scope(&rule_set, &library_ids)
+                .await?;
+        }
 
         self.services
             .customization
@@ -520,21 +645,50 @@ impl AppUseCase {
                 &name,
                 &description,
                 &library_ids,
+                schedule.as_ref(),
                 scope_changed,
                 now,
             )
             .await?;
 
+        let renamed = rule_set.name != name;
         rule_set.name = name;
         rule_set.description = description;
         rule_set.library_ids = library_ids;
+        let rescheduled = schedule
+            .as_ref()
+            .is_some_and(|schedule| *schedule != rule_set.schedule);
+        if let Some(schedule) = schedule {
+            rule_set.schedule = schedule;
+        }
         if scope_changed {
             // Mirrors what the store wrote in the same statement, so the rule
             // this returns can never claim an arming the store just cleared.
             rule_set.disarm_after_edit();
         }
         rule_set.updated_at = now;
+        if rescheduled || renamed {
+            self.reload_maintenance_rule_schedule().await;
+        }
         Ok(rule_set)
+    }
+
+    /// When a rule next runs on its schedule, read from the in-memory
+    /// scheduler; no store read.
+    pub fn maintenance_rule_next_run_at(&self, rule_set_id: &str) -> Option<chrono::DateTime<Utc>> {
+        self.runtime
+            .jobs
+            .custom_job_scheduler
+            .maintenance_rule_next_run_at(rule_set_id)
+    }
+
+    /// Bring the in-memory schedule up to date after a rule's schedule,
+    /// name or state changed. A failed reload is retried by the scheduler,
+    /// so it never fails the edit that caused it.
+    pub(crate) async fn reload_maintenance_rule_schedule(&self) {
+        if let Err(error) = self.reload_custom_job_schedule().await {
+            tracing::warn!(error = %error, "maintenance rule schedule reload failed; the scheduler retries it");
+        }
     }
 
     /// Delete a rule set that never did anything, and refuse one that did.
@@ -599,7 +753,11 @@ impl AppUseCase {
             .customization
             .maintenance_rule_sets
             .delete_rule_set_if_unused(rule_set_id)
-            .await
+            .await?;
+        if rule_set.evaluation_mode != MaintenanceEvaluationMode::Disabled {
+            self.reload_maintenance_rule_schedule().await;
+        }
+        Ok(())
     }
 
     /// Create the rule every instance ships with: titles whose request lease
@@ -627,7 +785,7 @@ impl AppUseCase {
             false,
         )?;
         let now = Utc::now();
-        let revision = build_revision(&id, 1, &prepared, grace_days, None, None, now);
+        let revision = build_revision(&id, 1, &prepared, grace_days, None, None, now, None);
         let rule_set = MaintenanceRuleSet {
             id,
             name: EXPIRED_REQUEST_LEASES_RULE_NAME.into(),
@@ -640,6 +798,7 @@ impl AppUseCase {
             subject_kind: MaintenanceRuleSubjectKind::Title,
             system_owned: true,
             current_revision_number: 1,
+            schedule: scryer_domain::default_maintenance_rule_schedule(),
             created_at: now,
             updated_at: now,
         };
@@ -698,9 +857,18 @@ impl AppUseCase {
             current.storage_root_id.clone(),
             None,
             now,
+            // The shipped source is replaced, so no stored builder document
+            // describes it any more.
+            None,
         );
         if keeps_arming {
-            rules.add_revision_keeping_arming(&revision, now).await?;
+            let arming = crate::maintenance_rules::arming_kept_across_edit(
+                rule_set.effect_arming,
+                &prepared.declared,
+            );
+            rules
+                .add_revision_keeping_arming(&revision, arming, now)
+                .await?;
         } else {
             rules.add_revision(&revision, now).await?;
         }
@@ -712,6 +880,7 @@ impl AppUseCase {
                     &rule_set.name,
                     EXPIRED_REQUEST_LEASES_DESCRIPTION,
                     &rule_set.library_ids,
+                    None,
                     false,
                     now,
                 )
@@ -1002,17 +1171,24 @@ impl AppUseCase {
                             (record.decision.outcome == MaintenanceOutcome::Match)
                                 .then(|| record.decision.actions.clone()),
                         ),
-                        (None, Some(failure)) => {
-                            (None, Vec::new(), Some(failure.message.clone()), None)
-                        }
+                        (None, Some(failure)) => (
+                            None,
+                            Vec::new(),
+                            Some((failure.code, failure.message.clone())),
+                            None,
+                        ),
                         (None, None) => (
                             None,
                             Vec::new(),
-                            Some("rule produced no decision".to_string()),
+                            Some((
+                                crate::error_reasons::maintenance::PREVIEW_NO_DECISION,
+                                "rule produced no decision".to_string(),
+                            )),
                             None,
                         ),
                     }
                 };
+                let (error_code, error) = error.unzip();
 
                 let facts = if facts_visible {
                     serde_json::to_value(&input)
@@ -1029,29 +1205,15 @@ impl AppUseCase {
                     None
                 };
                 let excluded = subject.excluded_by(&title.id, &exclusions);
-                let active = self
-                    .services
-                    .customization
-                    .maintenance_evaluation
-                    .get_active_subject_candidate(
-                        &rule_set_id,
-                        subject_kind.as_storage_str(),
-                        &subject.id,
-                    )
-                    .await?
-                    .filter(|candidate| candidate.matcher_content_hash == matcher_content_hash);
-                let due_at = if !excluded && outcome == Some(MaintenanceOutcome::Match) {
-                    Some(active.as_ref().map_or(
-                        evaluated_at + chrono::Duration::days(grace_days),
-                        |candidate| candidate.due_at,
-                    ))
-                } else {
-                    None
-                };
+                // A match is first given the estimate a new candidate would
+                // get; the open candidates are read once for the whole page
+                // below and replace it with their real due time.
+                let due_at = (!excluded && outcome == Some(MaintenanceOutcome::Match))
+                    .then(|| evaluated_at + chrono::Duration::days(grace_days));
                 results.push(MaintenancePreviewTitleResult {
                     excluded,
                     due_at,
-                    due_at_is_estimate: due_at.is_some() && active.is_none(),
+                    due_at_is_estimate: due_at.is_some(),
                     subject_kind,
                     subject_id: subject.id,
                     subject_label: subject.label,
@@ -1066,9 +1228,43 @@ impl AppUseCase {
                     outcome,
                     reason_codes,
                     error,
+                    error_code,
                     actions,
                     facts,
                 });
+            }
+        }
+
+        // One read for the open candidates of every matched subject on this
+        // page; their due time replaces the estimate. A candidate opened by
+        // another revision of the source decides nothing here.
+        let matched_ids: Vec<String> = results
+            .iter()
+            .filter(|result| result.due_at.is_some())
+            .map(|result| result.subject_id.clone())
+            .collect();
+        if !matched_ids.is_empty() {
+            let open: HashMap<String, chrono::DateTime<Utc>> = self
+                .services
+                .customization
+                .maintenance_evaluation
+                .list_active_subject_candidates(
+                    &rule_set_id,
+                    subject_kind.as_storage_str(),
+                    &matched_ids,
+                )
+                .await?
+                .into_iter()
+                .filter(|candidate| candidate.matcher_content_hash == matcher_content_hash)
+                .map(|candidate| (candidate.subject_id, candidate.due_at))
+                .collect();
+            for result in &mut results {
+                if result.due_at.is_some()
+                    && let Some(due_at) = open.get(&result.subject_id)
+                {
+                    result.due_at = Some(*due_at);
+                    result.due_at_is_estimate = false;
+                }
             }
         }
 
@@ -1227,6 +1423,9 @@ impl AppUseCase {
             MaintenancePreviewMatcher::Stored { rule_set_id } => {
                 let rule_set = self.require_maintenance_rule_set(&rule_set_id).await?;
                 let detail = self.load_maintenance_rule_detail(rule_set).await?;
+                if let Some(reason) = detail.load_refusal {
+                    return Err(stored_actions_refused(reason));
+                }
                 self.require_storage_root_for_matcher(
                     &detail.revision.rego_source,
                     &detail.rule_set.id,
@@ -1365,6 +1564,7 @@ impl AppUseCase {
         &self,
         declared: &MaintenanceDeclaredActions,
         scan: &scryer_rules::maintenance_actions::MaintenanceActionScan,
+        library_ids: &[String],
     ) -> AppResult<()> {
         let labels: Vec<String> = declared
             .add_tags
@@ -1375,6 +1575,8 @@ impl AppUseCase {
         if !labels.is_empty() {
             self.require_registered_title_tags(&labels).await?;
         }
+        self.require_declared_move_targets(scan, library_ids)
+            .await?;
         if declared.quality_profiles.is_empty() {
             return Ok(());
         }
@@ -1403,6 +1605,124 @@ impl AppUseCase {
             crate::error_reasons::maintenance::QUALITY_PROFILE_NOT_FOUND,
             "The rule names a quality profile that does not exist.",
             diagnostics,
+        ))
+    }
+
+    /// A new library scope is checked against the move targets the current
+    /// revision names, with the same codes a source save uses: the scope
+    /// decides which kind of library a `move_to_library` may name. One
+    /// revision read; the library read happens only for a source that moves.
+    /// A stored source the scan cannot read is left to the executor, which
+    /// holds a move it cannot resolve.
+    async fn require_move_targets_for_scope(
+        &self,
+        rule_set: &MaintenanceRuleSet,
+        library_ids: &[String],
+    ) -> AppResult<()> {
+        let Some(revision) = self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .get_revision(&rule_set.id, rule_set.current_revision_number)
+            .await?
+        else {
+            return Ok(());
+        };
+        let Ok(scan) = scan_maintenance_action_heads(&revision.rego_source, &rule_set.id) else {
+            return Ok(());
+        };
+        self.require_declared_move_targets(&scan, library_ids).await
+    }
+
+    /// The move targets a source names must exist when it is saved: each
+    /// `move_to_library` name is exactly one library, of the media kind of
+    /// every library the rule is confined to, and each `move_to_root` path is
+    /// a configured root. One library read, only for a source that moves.
+    /// The executor checks again against the title it moves.
+    async fn require_declared_move_targets(
+        &self,
+        scan: &scryer_rules::maintenance_actions::MaintenanceActionScan,
+        library_ids: &[String],
+    ) -> AppResult<()> {
+        use crate::error_reasons::maintenance as reasons;
+        if scan.libraries.is_empty() && scan.roots.is_empty() {
+            return Ok(());
+        }
+        let libraries = self.services.catalog.libraries.list(None).await?;
+        let scope_facets: std::collections::HashSet<&scryer_domain::MediaFacet> = libraries
+            .iter()
+            .filter(|library| library_ids.contains(&library.id))
+            .map(|library| &library.facet)
+            .collect();
+        let mut diagnostics: Vec<(&'static str, ValidationDiagnostic)> = Vec::new();
+        let mut refuse =
+            |code: &'static str,
+             message: String,
+             literal: &scryer_rules::maintenance_actions::MaintenanceActionLiteral| {
+                let mut diagnostic = ValidationDiagnostic::new(code, message);
+                diagnostic.line = Some(literal.line);
+                diagnostic.column = Some(literal.column);
+                diagnostics.push((code, diagnostic));
+            };
+        for literal in &scan.libraries {
+            let named: Vec<_> = libraries
+                .iter()
+                .filter(|library| library.name == literal.value)
+                .collect();
+            match named.as_slice() {
+                [library] => {
+                    if scope_facets.iter().any(|facet| **facet != library.facet) {
+                        refuse(
+                            reasons::MOVE_LIBRARY_FACET_MISMATCH,
+                            format!(
+                                "move_to_library names \"{}\", which holds another kind of media \
+                                 than the rule's libraries",
+                                literal.value
+                            ),
+                            literal,
+                        );
+                    }
+                }
+                _ => refuse(
+                    reasons::MOVE_LIBRARY_NOT_FOUND,
+                    format!(
+                        "move_to_library names \"{}\", which is not exactly one library",
+                        literal.value
+                    ),
+                    literal,
+                ),
+            }
+        }
+        for literal in &scan.roots {
+            let wanted = super::title_actions::comparable_root_path(&literal.value);
+            let configured = libraries.iter().any(|library| {
+                library
+                    .roots
+                    .iter()
+                    .any(|root| super::title_actions::comparable_root_path(&root.path) == wanted)
+            });
+            if !configured {
+                refuse(
+                    reasons::MOVE_ROOT_NOT_FOUND,
+                    format!(
+                        "move_to_root names \"{}\", which is not a configured library root",
+                        literal.value
+                    ),
+                    literal,
+                );
+            }
+        }
+        let Some((code, _)) = diagnostics.first() else {
+            return Ok(());
+        };
+        let code = *code;
+        Err(AppError::validation_refused_with_diagnostics(
+            code,
+            "The rule names a move target that does not exist.",
+            diagnostics
+                .into_iter()
+                .map(|(_, diagnostic)| diagnostic)
+                .collect(),
         ))
     }
 }
@@ -1495,14 +1815,7 @@ fn prepare_matcher(
     }
 
     let declared = MaintenanceDeclaredActions::from_scan(&scan);
-    let action_spec_json = MaintenanceActionDefinition::Declared(declared.clone())
-        .to_persisted_json()
-        .map_err(|e| {
-            AppError::validation_refused(
-                crate::error_reasons::maintenance::ACTION_NOT_STORABLE,
-                format!("maintenance action is not storable: {e}"),
-            )
-        })?;
+    let action_spec_json = declared.to_persisted_json();
 
     Ok(PreparedMatcher {
         content_hash: content_hash(&rewritten),
@@ -1525,6 +1838,23 @@ fn library_scope_changed(stored: &[String], replacement: &[String]) -> bool {
     stored != replacement
 }
 
+/// Normalize and validate a rule schedule exactly as a scheduled script's
+/// is, refusing with `SCHEDULE_INVALID`.
+fn validated_rule_schedule(schedule: Option<ScriptSchedule>) -> AppResult<Option<ScriptSchedule>> {
+    let Some(mut schedule) = schedule else {
+        return Ok(None);
+    };
+    if let ScriptSchedule::Weekly { days, .. } = &mut schedule {
+        days.sort();
+        days.dedup();
+    }
+    crate::scripts::schedule::normalize_schedule_time(&mut schedule)
+        .map_err(crate::scripts::schedule::ScheduleError::into_app_error)?;
+    crate::scripts::schedule::validate_schedule(&schedule)
+        .map_err(crate::scripts::schedule::ScheduleError::into_app_error)?;
+    Ok(Some(schedule))
+}
+
 fn require_non_empty(value: &str, field: &str) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1544,6 +1874,7 @@ fn build_revision(
     storage_root_id: Option<String>,
     created_by: Option<String>,
     created_at: chrono::DateTime<Utc>,
+    builder_model_json: Option<String>,
 ) -> MaintenanceRuleRevision {
     MaintenanceRuleRevision {
         id: Id::new().0,
@@ -1556,6 +1887,7 @@ fn build_revision(
         matcher_content_hash: prepared.content_hash.clone(),
         created_by,
         created_at,
+        builder_model_json,
     }
 }
 
@@ -1571,21 +1903,37 @@ fn maintenance_rule_detail(
             rule_set.id, rule_set.current_revision_number
         ))
     })?;
-    let action_definition = decode_action_definition(&revision)?;
+    let (declared_actions, load_refusal) = match decode_declared_actions(&revision)? {
+        Some(declared) => (declared, None),
+        None => (
+            MaintenanceDeclaredActions::none(),
+            Some(crate::error_reasons::maintenance::RULE_STORED_ACTIONS_NOT_DECLARED),
+        ),
+    };
     Ok(MaintenanceRuleSetDetail {
         rule_set,
         revision,
-        action_definition,
+        declared_actions,
+        load_refusal,
     })
 }
 
-/// Read the stored action back through the closed catalog. Stored JSON that no
-/// longer deserializes is a repository fault, not a validation failure: it
-/// means a spec was written by a build whose catalog this one does not have.
-fn decode_action_definition(
+/// The refusal for acting on a rule whose current revision cannot be acted on.
+pub(crate) fn stored_actions_refused(reason: &'static str) -> AppError {
+    AppError::validation_refused(
+        reason,
+        "this rule was saved before rules declared their own actions; save its source again to use it",
+    )
+}
+
+/// Read the stored actions back. `None` is a revision from before rules
+/// declared their own actions. Stored JSON that no longer deserializes is a
+/// repository fault, not a validation failure: it means the document was
+/// written by a build whose head set this one does not have.
+fn decode_declared_actions(
     revision: &MaintenanceRuleRevision,
-) -> AppResult<MaintenanceActionDefinition> {
-    action_definition_from_persisted_json(&revision.action_spec_json).map_err(|error| {
+) -> AppResult<Option<MaintenanceDeclaredActions>> {
+    MaintenanceDeclaredActions::from_persisted_json(&revision.action_spec_json).map_err(|error| {
         AppError::Repository(format!(
             "maintenance rule revision {} has an unreadable action definition: {error}",
             revision.id

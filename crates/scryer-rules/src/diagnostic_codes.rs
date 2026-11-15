@@ -44,8 +44,13 @@ pub const RULE_ACTION_HEAD_FUNCTION: &str = "RULE_ACTION_HEAD_FUNCTION";
 /// A maintenance rule reads `data` outside its own package, which would let a
 /// decision depend on facts the host does not track.
 pub const RULE_FOREIGN_DATA_REFERENCE: &str = "RULE_FOREIGN_DATA_REFERENCE";
+/// A maintenance rule uses `with` to replace its input, its `data`, or a
+/// value the host's helpers depend on, so the decision would rest on facts
+/// the host never observed.
+pub const RULE_WITH_TARGET_NOT_ALLOWED: &str = "RULE_WITH_TARGET_NOT_ALLOWED";
 /// All supported diagnostic codes.
 pub const ALL: &[&str] = &[
+    RULE_WITH_TARGET_NOT_ALLOWED,
     RULE_ACTION_VALUE_NOT_LITERAL,
     RULE_ACTION_VALUE_INVALID,
     RULE_HOST_HELPER_REDEFINED,

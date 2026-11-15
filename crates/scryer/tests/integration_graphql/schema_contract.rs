@@ -800,8 +800,16 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Linking a media server account adds `mediaServerConnectionAccounts`,
     // the accounts a connection offers to link: 201->202.
     assert!(query_field_names.contains(&"mediaServerConnectionAccounts"));
+    // A maintenance rule declares its actions in its own source, so the two
+    // action catalogs `maintenanceActionDescriptors` and
+    // `maintenanceActionStepDescriptors` go: 202->200.
+    assert!(!query_field_names.contains(&"maintenanceActionDescriptors"));
+    assert!(!query_field_names.contains(&"maintenanceActionStepDescriptors"));
+    // The rule builder reads its value and output contract per family from
+    // `ruleBuilderSchema`: 200->201.
+    assert!(query_field_names.contains(&"ruleBuilderSchema"));
     assert_eq!(
-        query_field_count, 202,
+        query_field_count, 201,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -1442,20 +1450,67 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // The request list's order argument adds MediaRequestOrderValue:
     // public types 1036->1037, ENUM 214->215.
     assert!(public_type_names.contains(&"MediaRequestOrderValue"));
+    // A maintenance rule declares its actions in its own Rego source. The
+    // stored action spec, both action catalogs and the four action inputs go
+    // (MaintenanceActionSpec, MaintenanceActionDescriptor,
+    // MaintenanceActionStepDescriptor, MaintenanceActionInput,
+    // MaintenanceActionSequenceInput, MaintenanceActionStepInput,
+    // MaintenanceActionStepParametersInput), with the catalog-only enums
+    // MaintenanceActionSubject and MaintenanceRiskClass. The source's
+    // declaration and a title's decided actions arrive as
+    // MaintenanceDeclaredActions, MaintenanceDecidedActions and the
+    // MaintenanceActionHead enum: public types 1037->1031, OBJECT 560->559,
+    // INPUT_OBJECT 250->246, ENUM 215->214.
+    for name in [
+        "MaintenanceDeclaredActions",
+        "MaintenanceDecidedActions",
+        "MaintenanceActionHead",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    for name in [
+        "MaintenanceActionSpec",
+        "MaintenanceActionDescriptor",
+        "MaintenanceActionStepDescriptor",
+        "MaintenanceActionInput",
+        "MaintenanceActionSequenceInput",
+        "MaintenanceActionStepInput",
+        "MaintenanceActionStepParametersInput",
+        "MaintenanceActionSubject",
+        "MaintenanceRiskClass",
+    ] {
+        assert!(
+            !public_type_names.contains(&name),
+            "type {name} should be gone"
+        );
+    }
+    // The rule builder's per-family contract adds RuleBuilderSchema,
+    // RuleBuilderOutput, RuleBuilderOutputRule and the enums
+    // RuleBuilderValueKind and RuleBuilderOutputRuleKind: public types
+    // 1031->1036, OBJECT 559->562, ENUM 214->216.
+    for name in [
+        "RuleBuilderSchema",
+        "RuleBuilderOutput",
+        "RuleBuilderOutputRule",
+        "RuleBuilderValueKind",
+        "RuleBuilderOutputRuleKind",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1037,
+        1036,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 560);
+    assert_eq!(kind_count("OBJECT"), 562);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).
     // TrackedDownloadImportTrackingInput is the dismissal command's new input.
-    assert_eq!(kind_count("INPUT_OBJECT"), 250);
+    assert_eq!(kind_count("INPUT_OBJECT"), 246);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 215);
+    assert_eq!(kind_count("ENUM"), 216);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
@@ -1479,10 +1534,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
     assert!(query_field_names.contains(&"ruleSet"));
     assert!(query_field_names.contains(&"trackedRulePacks"));
-    assert!(query_field_names.contains(&"maintenanceActionStepDescriptors"));
     assert!(public_type_names.contains(&"MaintenanceActionSequence"));
-    assert!(public_type_names.contains(&"MaintenanceActionSequenceInput"));
-    assert!(public_type_names.contains(&"MaintenanceActionStepDescriptor"));
     assert!(mutation_field_names.contains(&"testRuleSet"));
     assert!(mutation_field_names.contains(&"installTrackedRulePack"));
     assert!(mutation_field_names.contains(&"previewTrackedRulePackUpdate"));

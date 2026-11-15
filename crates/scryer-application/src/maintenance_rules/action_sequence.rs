@@ -1,34 +1,28 @@
-//! Closed, versioned definitions for composable maintenance actions.
+//! The closed step sequence the maintenance executor runs.
 //!
-//! A v2 sequence is deliberately separate from the v1
-//! [`MaintenanceActionSpec`](super::MaintenanceActionSpec) wire shape. Stored
-//! v1 revisions remain raw v1 JSON; a v2 revision is recognized only by its
-//! schema-2 sequence envelope. Policy evaluates membership only and never gets
-//! to choose an action or supply a parameter.
+//! A rule declares its actions in its own Rego source; what one evaluation
+//! decides for one subject is turned into one of these sequences, in an order
+//! the host fixes. The sequence is the executor's representation only: a
+//! revision stores the actions its source declares, never a sequence.
 
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    MaintenanceActionKind, MaintenanceActionParameters, MaintenanceActionSpec,
-    MaintenanceActionSpecError, MaintenanceEffectClass, MaintenanceRiskClass,
-    MaintenanceSubjectKind,
-};
+use super::{MaintenanceEffectClass, MaintenanceRiskClass, MaintenanceSubjectKind};
 
-/// Persisted candidate and legacy-projection value for a v2 sequence.
+/// The action kind every candidate and sequence run records.
 ///
-/// This is an output-only sentinel. It is intentionally absent from the v1
-/// [`MaintenanceActionKind`] enum, so a legacy action payload cannot turn into
-/// an empty sequence by naming this value.
+/// It is intentionally absent from [`super::MaintenanceActionKind`], the names
+/// earlier builds recorded, so history never reads it as one of those.
 pub const ACTION_SEQUENCE_KIND: &str = "action_sequence";
 
 /// The only accepted v2 sequence schema.
 pub const MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION: u32 = 2;
 
 /// A sequence is intentionally compact: every supported primitive may appear
-/// once, and the closed catalog currently contains seven primitives.
-pub const MAINTENANCE_MAX_ACTION_SEQUENCE_STEPS: usize = 7;
+/// once, and the closed catalog currently contains eleven primitives.
+pub const MAINTENANCE_MAX_ACTION_SEQUENCE_STEPS: usize = 11;
 
 /// Whether a durable action job is complete when it is accepted or only when
 /// later reconciliation proves its postcondition.
@@ -51,6 +45,10 @@ pub enum MaintenanceActionStepKind {
     AddTags,
     RemoveTags,
     DeleteTitleAndFiles,
+    Monitor,
+    FetchSubtitles,
+    MoveToLibrary,
+    MoveToRoot,
 }
 
 /// Search execution condition. A sequence author must make conditional search
@@ -72,6 +70,10 @@ impl MaintenanceActionStepKind {
         Self::AddTags,
         Self::RemoveTags,
         Self::DeleteTitleAndFiles,
+        Self::Monitor,
+        Self::FetchSubtitles,
+        Self::MoveToLibrary,
+        Self::MoveToRoot,
     ];
 
     pub const fn as_wire_str(self) -> &'static str {
@@ -83,7 +85,16 @@ impl MaintenanceActionStepKind {
             Self::AddTags => "add_tags",
             Self::RemoveTags => "remove_tags",
             Self::DeleteTitleAndFiles => "delete_title_and_files",
+            Self::Monitor => "monitor",
+            Self::FetchSubtitles => "fetch_subtitles",
+            Self::MoveToLibrary => "move_to_library",
+            Self::MoveToRoot => "move_to_root",
         }
+    }
+
+    /// Whether this step moves the title's files to another place.
+    pub const fn is_move(self) -> bool {
+        matches!(self, Self::MoveToLibrary | Self::MoveToRoot)
     }
 
     pub const fn descriptor(self) -> &'static MaintenanceActionStepDescriptor {
@@ -112,6 +123,16 @@ pub enum MaintenanceActionStepParameters {
     Tags {
         tags: Vec<String>,
     },
+    /// The library a move names, as the rule wrote it. It is resolved to a
+    /// configured library of the title's kind when the step runs.
+    Library {
+        library: String,
+    },
+    /// The root path a move names, as the rule wrote it. It is resolved
+    /// among the title's own library's roots when the step runs.
+    Root {
+        root: String,
+    },
 }
 
 impl MaintenanceActionStepParameters {
@@ -129,8 +150,12 @@ impl MaintenanceActionStepParameters {
             MaintenanceActionStepKind::AddTags | MaintenanceActionStepKind::RemoveTags => {
                 matches!(self, Self::Tags { .. })
             }
+            MaintenanceActionStepKind::MoveToLibrary => matches!(self, Self::Library { .. }),
+            MaintenanceActionStepKind::MoveToRoot => matches!(self, Self::Root { .. }),
             MaintenanceActionStepKind::DeleteFiles
-            | MaintenanceActionStepKind::DeleteTitleAndFiles => self.is_none(),
+            | MaintenanceActionStepKind::DeleteTitleAndFiles
+            | MaintenanceActionStepKind::Monitor
+            | MaintenanceActionStepKind::FetchSubtitles => self.is_none(),
         }
     }
 
@@ -224,6 +249,11 @@ impl MaintenanceActionSequence {
         let mut removed_tags = HashSet::new();
         let mut prior_covering_unmonitor = false;
         let mut includes_delete_files = false;
+        let present: HashSet<MaintenanceActionStepKind> =
+            self.steps.iter().map(|step| step.kind).collect();
+        if let Some((first, second)) = conflicting_step_kinds(&present) {
+            return Err(MaintenanceActionSequenceError::ConflictingSteps { first, second });
+        }
 
         for (index, step) in self.steps.iter().enumerate() {
             validate_step_id(&step.id)?;
@@ -335,116 +365,6 @@ impl MaintenanceActionSequence {
     }
 }
 
-/// Runtime-friendly representation of persisted revision configuration.
-///
-/// This enum intentionally has no serde representation. Persistence uses a
-/// raw v1 spec or a raw v2 sequence so serializing the enum itself can never
-/// rewrite legacy rows into a tagged envelope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaintenanceActionDefinition {
-    /// A v1 action spec. Only revisions written before rules declared their
-    /// own actions hold one; nothing executes it.
-    Legacy(MaintenanceActionSpec),
-    /// A v2 action sequence. Only revisions written before rules declared
-    /// their own actions hold one as their definition.
-    Sequence(MaintenanceActionSequence),
-    /// The actions the revision's source declares.
-    Declared(super::declared_actions::MaintenanceDeclaredActions),
-}
-
-impl MaintenanceActionDefinition {
-    pub fn action_kind(&self) -> &'static str {
-        match self {
-            Self::Legacy(spec) => spec.kind.as_wire_str(),
-            Self::Sequence(_) | Self::Declared(_) => ACTION_SEQUENCE_KIND,
-        }
-    }
-
-    pub fn declared(&self) -> Option<&super::declared_actions::MaintenanceDeclaredActions> {
-        match self {
-            Self::Declared(declared) => Some(declared),
-            Self::Legacy(_) | Self::Sequence(_) => None,
-        }
-    }
-
-    pub fn validate(
-        &self,
-        subject: MaintenanceSubjectKind,
-    ) -> Result<(), MaintenanceActionSequenceError> {
-        match self {
-            Self::Legacy(spec) => spec.validate(subject).map_err(Into::into),
-            Self::Sequence(sequence) => sequence.validate(subject),
-            // Heads are checked against the rule's scope when it is saved.
-            Self::Declared(_) => Ok(()),
-        }
-    }
-
-    pub fn validate_for_storage_root(
-        &self,
-        subject: MaintenanceSubjectKind,
-    ) -> Result<(), MaintenanceActionSequenceError> {
-        match self {
-            Self::Legacy(spec) => spec.validate(subject).map_err(Into::into),
-            Self::Sequence(sequence) => sequence.validate_for_storage_root(subject),
-            Self::Declared(_) => Ok(()),
-        }
-    }
-
-    pub fn to_persisted_json(&self) -> Result<String, MaintenanceActionSequenceError> {
-        match self {
-            Self::Legacy(spec) => serde_json::to_string(spec)
-                .map_err(|error| MaintenanceActionSequenceError::Serialization(error.to_string())),
-            Self::Sequence(sequence) => serde_json::to_string(sequence)
-                .map_err(|error| MaintenanceActionSequenceError::Serialization(error.to_string())),
-            Self::Declared(declared) => serde_json::to_string(declared)
-                .map_err(|error| MaintenanceActionSequenceError::Serialization(error.to_string())),
-        }
-    }
-}
-
-/// Reads either an unchanged raw v1 spec or the explicit raw v2 envelope.
-pub fn action_definition_from_persisted_json(
-    json: &str,
-) -> Result<MaintenanceActionDefinition, MaintenanceActionSequenceError> {
-    let value: serde_json::Value = serde_json::from_str(json)
-        .map_err(|error| MaintenanceActionSequenceError::InvalidEnvelope(error.to_string()))?;
-    let object = value.as_object().ok_or_else(|| {
-        MaintenanceActionSequenceError::InvalidEnvelope(
-            "maintenance action must be an object".into(),
-        )
-    })?;
-    match object
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-    {
-        Some(version) if version == MAINTENANCE_ACTION_SEQUENCE_SCHEMA_VERSION as u64 => {
-            let sequence: MaintenanceActionSequence =
-                serde_json::from_value(value).map_err(|error| {
-                    MaintenanceActionSequenceError::InvalidEnvelope(error.to_string())
-                })?;
-            Ok(MaintenanceActionDefinition::Sequence(sequence))
-        }
-        Some(version)
-            if version
-                == super::declared_actions::MAINTENANCE_DECLARED_ACTIONS_SCHEMA_VERSION as u64 =>
-        {
-            let declared = serde_json::from_value(value).map_err(|error| {
-                MaintenanceActionSequenceError::InvalidEnvelope(error.to_string())
-            })?;
-            Ok(MaintenanceActionDefinition::Declared(declared))
-        }
-        Some(_) | None => {
-            let spec: MaintenanceActionSpec = serde_json::from_value(value).map_err(|error| {
-                MaintenanceActionSequenceError::InvalidEnvelope(error.to_string())
-            })?;
-            if spec.kind.as_wire_str() == ACTION_SEQUENCE_KIND {
-                return Err(MaintenanceActionSequenceError::ActionSequenceSentinelRequiresEnvelope);
-            }
-            Ok(MaintenanceActionDefinition::Legacy(spec))
-        }
-    }
-}
-
 /// A dependency surfaced to authoring and execution. The executor verifies the
 /// persisted evidence afresh; this descriptor only describes the rule shape.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -481,6 +401,7 @@ const TITLE_SUBJECTS: &[MaintenanceSubjectKind] =
     &[MaintenanceSubjectKind::Movie, MaintenanceSubjectKind::Show];
 const CATALOG_INTENT: &[MaintenanceEffectClass] = &[MaintenanceEffectClass::CatalogIntent];
 const ACQUISITION: &[MaintenanceEffectClass] = &[MaintenanceEffectClass::Acquisition];
+const FILE_ORGANIZATION: &[MaintenanceEffectClass] = &[MaintenanceEffectClass::FileOrganization];
 const DESTRUCTIVE_STORAGE: &[MaintenanceEffectClass] =
     &[MaintenanceEffectClass::DestructiveStorage];
 const DELETE_FILES_REQUIREMENT: &[MaintenanceActionStepRequirement] =
@@ -579,6 +500,59 @@ const DELETE_TITLE_AND_FILES: MaintenanceActionStepDescriptor = MaintenanceActio
     storage_root_allowed: false,
 };
 
+const MONITOR: MaintenanceActionStepDescriptor = MaintenanceActionStepDescriptor {
+    id: "monitor",
+    kind: MaintenanceActionStepKind::Monitor,
+    label: "Monitor",
+    supported_subjects: ALL_SUBJECTS,
+    parameter_schema: "none",
+    effect_classes: CATALOG_INTENT,
+    risk_class: MaintenanceRiskClass::Medium,
+    requires: NO_REQUIREMENTS,
+    terminal: false,
+    completion_policy: MaintenanceActionCompletionPolicy::Completed,
+    storage_root_allowed: false,
+};
+const FETCH_SUBTITLES: MaintenanceActionStepDescriptor = MaintenanceActionStepDescriptor {
+    id: "fetch_subtitles",
+    kind: MaintenanceActionStepKind::FetchSubtitles,
+    label: "Fetch subtitles",
+    supported_subjects: ALL_SUBJECTS,
+    parameter_schema: "none",
+    effect_classes: ACQUISITION,
+    risk_class: MaintenanceRiskClass::Low,
+    requires: NO_REQUIREMENTS,
+    terminal: false,
+    completion_policy: MaintenanceActionCompletionPolicy::Accepted,
+    storage_root_allowed: false,
+};
+const MOVE_TO_LIBRARY: MaintenanceActionStepDescriptor = MaintenanceActionStepDescriptor {
+    id: "move_to_library",
+    kind: MaintenanceActionStepKind::MoveToLibrary,
+    label: "Move to library",
+    supported_subjects: TITLE_SUBJECTS,
+    parameter_schema: "library",
+    effect_classes: FILE_ORGANIZATION,
+    risk_class: MaintenanceRiskClass::Medium,
+    requires: NO_REQUIREMENTS,
+    terminal: false,
+    completion_policy: MaintenanceActionCompletionPolicy::Accepted,
+    storage_root_allowed: false,
+};
+const MOVE_TO_ROOT: MaintenanceActionStepDescriptor = MaintenanceActionStepDescriptor {
+    id: "move_to_root",
+    kind: MaintenanceActionStepKind::MoveToRoot,
+    label: "Move to root",
+    supported_subjects: TITLE_SUBJECTS,
+    parameter_schema: "root",
+    effect_classes: FILE_ORGANIZATION,
+    risk_class: MaintenanceRiskClass::Medium,
+    requires: NO_REQUIREMENTS,
+    terminal: false,
+    completion_policy: MaintenanceActionCompletionPolicy::Accepted,
+    storage_root_allowed: false,
+};
+
 const ACTION_SEQUENCE_CATALOG: &[MaintenanceActionStepDescriptor] = &[
     UNMONITOR,
     DELETE_FILES,
@@ -587,6 +561,10 @@ const ACTION_SEQUENCE_CATALOG: &[MaintenanceActionStepDescriptor] = &[
     ADD_TAGS,
     REMOVE_TAGS,
     DELETE_TITLE_AND_FILES,
+    MONITOR,
+    FETCH_SUBTITLES,
+    MOVE_TO_LIBRARY,
+    MOVE_TO_ROOT,
 ];
 
 pub fn action_sequence_catalog() -> &'static [MaintenanceActionStepDescriptor] {
@@ -604,6 +582,10 @@ pub const fn action_sequence_descriptor_for(
         MaintenanceActionStepKind::AddTags => &ADD_TAGS,
         MaintenanceActionStepKind::RemoveTags => &REMOVE_TAGS,
         MaintenanceActionStepKind::DeleteTitleAndFiles => &DELETE_TITLE_AND_FILES,
+        MaintenanceActionStepKind::Monitor => &MONITOR,
+        MaintenanceActionStepKind::FetchSubtitles => &FETCH_SUBTITLES,
+        MaintenanceActionStepKind::MoveToLibrary => &MOVE_TO_LIBRARY,
+        MaintenanceActionStepKind::MoveToRoot => &MOVE_TO_ROOT,
     }
 }
 
@@ -638,25 +620,91 @@ fn validate_step_parameters(
             MaintenanceActionStepParameters::ChangeQualityProfile {
                 target_quality_profile_id,
             },
-        ) => MaintenanceActionSpec::change_quality_profile(target_quality_profile_id.clone())
-            .validate(subject)
-            .map_err(Into::into),
+        ) if target_quality_profile_id.trim().is_empty() => {
+            Err(MaintenanceActionSequenceError::EmptyQualityProfileTarget)
+        }
         (
             MaintenanceActionStepKind::AddTags | MaintenanceActionStepKind::RemoveTags,
             MaintenanceActionStepParameters::Tags { tags },
-        ) => MaintenanceActionSpec {
-            kind: match step.kind {
-                MaintenanceActionStepKind::AddTags => MaintenanceActionKind::AddTags,
-                MaintenanceActionStepKind::RemoveTags => MaintenanceActionKind::RemoveTags,
-                _ => unreachable!("matched tag step kind"),
-            },
-            schema_version: super::MAINTENANCE_ACTION_SCHEMA_VERSION,
-            parameters: MaintenanceActionParameters::Tags { tags: tags.clone() },
-        }
-        .validate(subject)
-        .map_err(Into::into),
+        ) => validate_action_tag_labels(tags),
+        (
+            MaintenanceActionStepKind::MoveToLibrary,
+            MaintenanceActionStepParameters::Library { library: target },
+        )
+        | (
+            MaintenanceActionStepKind::MoveToRoot,
+            MaintenanceActionStepParameters::Root { root: target },
+        ) if target.trim().is_empty() => Err(MaintenanceActionSequenceError::EmptyMoveTarget),
         _ => Ok(()),
     }
+}
+
+/// Static half of tag-parameter validation: shape, normalization, and the
+/// per-title ceiling.
+///
+/// It is deliberately the same normalizer the assignment path uses, so a label
+/// that a human could type into the tag picker is exactly the set of labels a
+/// step can carry, and a step can never carry a spelling that would never
+/// match a bag. Whether the label is *defined* is the other half of the check
+/// and cannot live here: it needs the registry, so the executor performs it
+/// before it acts.
+fn validate_action_tag_labels(tags: &[String]) -> Result<(), MaintenanceActionSequenceError> {
+    if tags.is_empty() {
+        return Err(MaintenanceActionSequenceError::EmptyTagList);
+    }
+    if tags.len() > crate::MAX_USER_TAGS_PER_TITLE {
+        return Err(MaintenanceActionSequenceError::TooManyTags {
+            found: tags.len(),
+            maximum: crate::MAX_USER_TAGS_PER_TITLE,
+        });
+    }
+    let mut seen = HashSet::new();
+    for label in tags {
+        let normalized = crate::normalize_user_title_tag(label).map_err(|reason| {
+            MaintenanceActionSequenceError::InvalidTagLabel {
+                label: label.clone(),
+                reason,
+            }
+        })?;
+        if &normalized != label {
+            // Steps carry the normal form only. Accepting `Needs  Review` here
+            // and normalizing it silently would let the rule and the step
+            // disagree about what the rule says.
+            return Err(MaintenanceActionSequenceError::InvalidTagLabel {
+                label: label.clone(),
+                reason: format!(
+                    "tags are stored lowercase and trimmed, so this must be '{normalized}'"
+                ),
+            });
+        }
+        if !seen.insert(normalized) {
+            return Err(MaintenanceActionSequenceError::DuplicateTagLabel {
+                label: label.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Step kinds that cannot run in one sequence: monitoring with unmonitoring or
+/// either delete, both moves, and a move with either delete.
+fn conflicting_step_kinds(
+    present: &HashSet<MaintenanceActionStepKind>,
+) -> Option<(MaintenanceActionStepKind, MaintenanceActionStepKind)> {
+    use MaintenanceActionStepKind as K;
+    const PAIRS: [(MaintenanceActionStepKind, MaintenanceActionStepKind); 8] = [
+        (K::Monitor, K::Unmonitor),
+        (K::Monitor, K::DeleteFiles),
+        (K::Monitor, K::DeleteTitleAndFiles),
+        (K::MoveToLibrary, K::MoveToRoot),
+        (K::MoveToLibrary, K::DeleteFiles),
+        (K::MoveToLibrary, K::DeleteTitleAndFiles),
+        (K::MoveToRoot, K::DeleteFiles),
+        (K::MoveToRoot, K::DeleteTitleAndFiles),
+    ];
+    PAIRS
+        .into_iter()
+        .find(|(first, second)| present.contains(first) && present.contains(second))
 }
 
 fn unmonitor_covers_scope(
@@ -725,17 +773,35 @@ pub enum MaintenanceActionSequenceError {
     #[error("maintenance action step '{kind:?}' is not allowed on a storage-root rule")]
     UnsupportedStorageRootStep { kind: MaintenanceActionStepKind },
 
-    #[error("the action_sequence sentinel is only valid with a schema-2 sequence envelope")]
-    ActionSequenceSentinelRequiresEnvelope,
+    #[error("target quality profile id must not be empty")]
+    EmptyQualityProfileTarget,
+
+    #[error("a tag action must name at least one tag")]
+    EmptyTagList,
+
+    #[error("'{label}' is not a usable tag: {reason}")]
+    InvalidTagLabel { label: String, reason: String },
+
+    #[error("a tag action may name at most {maximum} tags, and this one names {found}")]
+    TooManyTags { found: usize, maximum: usize },
+
+    #[error("'{label}' is named twice in the same tag action")]
+    DuplicateTagLabel { label: String },
+
+    #[error("maintenance actions '{first:?}' and '{second:?}' cannot run together")]
+    ConflictingSteps {
+        first: MaintenanceActionStepKind,
+        second: MaintenanceActionStepKind,
+    },
+
+    #[error("a move must name its library or root")]
+    EmptyMoveTarget,
 
     #[error("invalid maintenance action envelope: {0}")]
     InvalidEnvelope(String),
 
     #[error("could not serialize maintenance action content: {0}")]
     Serialization(String),
-
-    #[error(transparent)]
-    Legacy(#[from] MaintenanceActionSpecError),
 }
 
 #[cfg(test)]
@@ -755,26 +821,83 @@ mod tests {
     }
 
     #[test]
-    fn legacy_json_is_preserved_and_schema_two_is_explicit() {
-        let legacy = r#"{"kind":"delete_title_and_files","schema_version":1}"#;
-        let definition = action_definition_from_persisted_json(legacy).unwrap();
-        assert_eq!(definition.to_persisted_json().unwrap(), legacy);
-
+    fn a_sequence_names_its_schema_explicitly() {
         let sequence = MaintenanceActionSequence::new(vec![]);
         let json = sequence_json(&sequence);
+        assert_eq!(json, r#"{"schema_version":2,"steps":[]}"#);
         assert_eq!(
-            action_definition_from_persisted_json(&json).unwrap(),
-            MaintenanceActionDefinition::Sequence(sequence)
+            serde_json::from_str::<MaintenanceActionSequence>(&json).unwrap(),
+            sequence
         );
     }
 
+    fn tags_step(kind: MaintenanceActionStepKind, tags: &[&str]) -> MaintenanceActionSequence {
+        MaintenanceActionSequence::new(vec![step(
+            "tags",
+            kind,
+            MaintenanceActionStepParameters::Tags {
+                tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            },
+        )])
+    }
+
     #[test]
-    fn sentinel_never_decodes_as_an_empty_legacy_action() {
+    fn steps_refuse_unusable_profile_and_tag_parameters() {
+        for blank in ["", "   "] {
+            let sequence = MaintenanceActionSequence::new(vec![step(
+                "profile",
+                MaintenanceActionStepKind::ChangeQualityProfile,
+                MaintenanceActionStepParameters::ChangeQualityProfile {
+                    target_quality_profile_id: blank.to_string(),
+                },
+            )]);
+            assert_eq!(
+                sequence.validate(MaintenanceSubjectKind::Movie),
+                Err(MaintenanceActionSequenceError::EmptyQualityProfileTarget)
+            );
+        }
+
+        use MaintenanceActionStepKind::{AddTags, RemoveTags};
+        for kind in [AddTags, RemoveTags] {
+            // A tag step with no tags does nothing at all; that is a mistake,
+            // not a no-op to run.
+            assert_eq!(
+                tags_step(kind, &[]).validate(MaintenanceSubjectKind::Movie),
+                Err(MaintenanceActionSequenceError::EmptyTagList)
+            );
+        }
+        // Membership is by exact label, so a spelling the assignment path would
+        // normalize is refused rather than silently rewritten.
+        assert!(matches!(
+            tags_step(AddTags, &["Needs  Review"]).validate(MaintenanceSubjectKind::Show),
+            Err(MaintenanceActionSequenceError::InvalidTagLabel { .. })
+        ));
+        // The reserved namespace is settings, never a user tag.
+        assert!(matches!(
+            tags_step(AddTags, &["scryer:monitor-type:all"]).validate(MaintenanceSubjectKind::Show),
+            Err(MaintenanceActionSequenceError::InvalidTagLabel { .. })
+        ));
+        assert_eq!(
+            tags_step(RemoveTags, &["keep", "keep"]).validate(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSequenceError::DuplicateTagLabel {
+                label: "keep".to_string()
+            })
+        );
+        let too_many: Vec<String> = (0..=crate::MAX_USER_TAGS_PER_TITLE)
+            .map(|index| format!("tag-{index}"))
+            .collect();
+        let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
+        assert_eq!(
+            tags_step(AddTags, &too_many).validate(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSequenceError::TooManyTags {
+                found: too_many.len(),
+                maximum: crate::MAX_USER_TAGS_PER_TITLE,
+            })
+        );
         assert!(
-            action_definition_from_persisted_json(
-                r#"{"kind":"action_sequence","schema_version":1}"#
-            )
-            .is_err()
+            tags_step(AddTags, &["needs review"])
+                .validate(MaintenanceSubjectKind::Movie)
+                .is_ok()
         );
     }
 
@@ -939,6 +1062,149 @@ mod tests {
             Err(MaintenanceActionSequenceError::SeasonUnmonitorRequiresDescendants)
         );
         assert!(sequence.validate(MaintenanceSubjectKind::Episode).is_ok());
+    }
+
+    #[test]
+    fn conflicting_steps_are_refused_as_a_whole_sequence() {
+        let monitor = step(
+            "monitor",
+            MaintenanceActionStepKind::Monitor,
+            MaintenanceActionStepParameters::None,
+        );
+        let unmonitor = step(
+            "unmonitor",
+            MaintenanceActionStepKind::Unmonitor,
+            MaintenanceActionStepParameters::Unmonitor {
+                include_descendants: true,
+            },
+        );
+        let to_library = step(
+            "move_to_library",
+            MaintenanceActionStepKind::MoveToLibrary,
+            MaintenanceActionStepParameters::Library {
+                library: "Fixture Archive".into(),
+            },
+        );
+        let to_root = step(
+            "move_to_root",
+            MaintenanceActionStepKind::MoveToRoot,
+            MaintenanceActionStepParameters::Root {
+                root: "/fixture/archive".into(),
+            },
+        );
+        let delete_title = step(
+            "delete_title_and_files",
+            MaintenanceActionStepKind::DeleteTitleAndFiles,
+            MaintenanceActionStepParameters::None,
+        );
+        for (steps, first, second) in [
+            (
+                vec![monitor.clone(), unmonitor.clone()],
+                MaintenanceActionStepKind::Monitor,
+                MaintenanceActionStepKind::Unmonitor,
+            ),
+            (
+                vec![to_library.clone(), to_root.clone()],
+                MaintenanceActionStepKind::MoveToLibrary,
+                MaintenanceActionStepKind::MoveToRoot,
+            ),
+            (
+                vec![to_root.clone(), delete_title],
+                MaintenanceActionStepKind::MoveToRoot,
+                MaintenanceActionStepKind::DeleteTitleAndFiles,
+            ),
+        ] {
+            assert_eq!(
+                MaintenanceActionSequence::new(steps).validate(MaintenanceSubjectKind::Movie),
+                Err(MaintenanceActionSequenceError::ConflictingSteps { first, second })
+            );
+        }
+        assert!(
+            MaintenanceActionSequence::new(vec![monitor, to_library, unmonitor.clone()])
+                .validate(MaintenanceSubjectKind::Show)
+                .is_err(),
+            "monitor and unmonitor conflict wherever they sit"
+        );
+        assert!(
+            MaintenanceActionSequence::new(vec![to_root, unmonitor])
+                .validate(MaintenanceSubjectKind::Show)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn moves_are_whole_title_steps_with_a_named_target_and_never_storage_root_steps() {
+        let to_library = |library: &str| {
+            MaintenanceActionSequence::new(vec![step(
+                "move_to_library",
+                MaintenanceActionStepKind::MoveToLibrary,
+                MaintenanceActionStepParameters::Library {
+                    library: library.into(),
+                },
+            )])
+        };
+        assert!(
+            to_library("Fixture Archive")
+                .validate(MaintenanceSubjectKind::Movie)
+                .is_ok()
+        );
+        assert_eq!(
+            to_library(" ").validate(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSequenceError::EmptyMoveTarget)
+        );
+        assert!(matches!(
+            to_library("Fixture Archive").validate(MaintenanceSubjectKind::Episode),
+            Err(MaintenanceActionSequenceError::UnsupportedSubject { .. })
+        ));
+        assert!(matches!(
+            to_library("Fixture Archive").validate_for_storage_root(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSequenceError::UnsupportedStorageRootStep { .. })
+        ));
+        let mismatched = MaintenanceActionSequence::new(vec![step(
+            "move_to_root",
+            MaintenanceActionStepKind::MoveToRoot,
+            MaintenanceActionStepParameters::Library {
+                library: "Fixture Archive".into(),
+            },
+        )]);
+        assert!(matches!(
+            mismatched.validate(MaintenanceSubjectKind::Movie),
+            Err(MaintenanceActionSequenceError::ParameterShapeMismatch { .. })
+        ));
+        let monitor_episode = MaintenanceActionSequence::new(vec![
+            step(
+                "monitor",
+                MaintenanceActionStepKind::Monitor,
+                MaintenanceActionStepParameters::None,
+            ),
+            step(
+                "fetch_subtitles",
+                MaintenanceActionStepKind::FetchSubtitles,
+                MaintenanceActionStepParameters::None,
+            ),
+        ]);
+        assert!(
+            monitor_episode
+                .validate(MaintenanceSubjectKind::Episode)
+                .is_ok()
+        );
+    }
+
+    /// Sequences stored before the newer step kinds existed keep their exact
+    /// form, so their content hash and every recorded step stay valid.
+    #[test]
+    fn a_stored_sequence_of_the_original_kinds_reads_and_hashes_unchanged() {
+        let stored = r#"{"schema_version":2,"steps":[{"id":"unmonitor","kind":"unmonitor","parameters":{"unmonitor":{"include_descendants":true}}},{"id":"delete_files","kind":"delete_files"}]}"#;
+        let sequence: MaintenanceActionSequence =
+            serde_json::from_str(stored).expect("stored sequence reads");
+        assert_eq!(
+            serde_json::to_string(&sequence).expect("serializes"),
+            stored
+        );
+        assert_eq!(
+            sequence.content_hash().expect("hash"),
+            blake3::hash(stored.as_bytes()).to_hex().to_string()
+        );
     }
 
     #[test]

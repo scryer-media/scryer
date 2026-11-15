@@ -23,12 +23,9 @@ use scryer_domain::{
 #[tokio::test]
 async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
     let fixture = execution_app(None);
-    let title = seed_title(&fixture.app, &fixture.user, "Sequence History", false).await;
-    fixture
-        .app
-        .create_title_tag_definition(&fixture.user, "after-search", None)
-        .await
-        .expect("define follow-up tag");
+    let title = seed_title(&fixture.app, &fixture.user, "Sequence History", true).await;
+    // Declared heads always search before they unmonitor, so the unmonitor
+    // is the step that waits behind the accepted search.
     let steps = vec![
         MaintenanceActionStep {
             id: "search".to_string(),
@@ -38,23 +35,14 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
             },
         },
         MaintenanceActionStep {
-            id: "add_tags".to_string(),
-            kind: MaintenanceActionStepKind::AddTags,
-            parameters: MaintenanceActionStepParameters::Tags {
-                tags: vec!["after-search".to_string()],
+            id: "unmonitor".to_string(),
+            kind: MaintenanceActionStepKind::Unmonitor,
+            parameters: MaintenanceActionStepParameters::Unmonitor {
+                include_descendants: true,
             },
         },
     ];
-    let (rule_set_id, candidate) = arm_and_evaluate(&fixture, sequence_draft(steps.clone())).await;
-    // Declared heads tag before they search; a revision stored with its own
-    // step order is what still searches first.
-    super::maintenance_sequence_execution::store_step_order(
-        &fixture,
-        &rule_set_id,
-        candidate.revision_number,
-        steps,
-    )
-    .await;
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture, sequence_draft(steps)).await;
     let search_key = MaintenanceActionStepKey {
         candidate_id: candidate.id.clone(),
         match_generation: candidate.match_generation,
@@ -146,15 +134,13 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
         "the later step is rendered from its durable sequence record",
     );
     assert!(
-        fixture
+        !fixture
             .app
             .get_title(&fixture.user, &title.id)
             .await
             .expect("read title")
             .expect("title survives sequence")
-            .tags
-            .iter()
-            .any(|tag| tag == "after-search"),
+            .monitored,
         "the real follow-up step ran after the accepted job completed"
     );
 }

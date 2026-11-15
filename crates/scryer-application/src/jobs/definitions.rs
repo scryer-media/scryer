@@ -402,10 +402,10 @@ impl JobKey {
             }
             Self::ApplicationUpgrade => "Download, verify, and apply a signed application upgrade.",
             Self::MaintenanceRuleEvaluation => {
-                "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action."
+                "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action."
             }
             Self::LifecycleActionHandling => {
-                "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks."
+                "Execute due maintenance candidates of armed rules, behind the instance effect gates and full safety rechecks. Each rule acts right after its own scheduled evaluation; running this now acts for every armed rule."
             }
             Self::MediaServerSignalSync => {
                 "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."

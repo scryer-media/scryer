@@ -362,6 +362,17 @@ pub(crate) fn steps_source(
                 // The shared bootstrap names each test profile after its id.
                 actions.set_quality_profile = Some(target_quality_profile_id.clone());
             }
+            Kind::Monitor => actions.monitor = true,
+            Kind::FetchSubtitles => actions.fetch_subtitles = true,
+            Kind::MoveToLibrary | Kind::MoveToRoot => match &step.parameters {
+                MaintenanceActionStepParameters::Library { library } => {
+                    actions.move_to_library = Some(library.clone());
+                }
+                MaintenanceActionStepParameters::Root { root } => {
+                    actions.move_to_root = Some(root.clone());
+                }
+                _ => panic!("move step without a target"),
+            },
         }
     }
     append_actions_to_match_source(source.as_ref(), &actions)
@@ -407,8 +418,23 @@ fn append_actions_to_match_source(
     if let Some(profile) = actions.set_quality_profile.as_deref() {
         heads.push(format!("set_quality_profile := {}", rego_string(profile)));
     }
+    if actions.monitor {
+        heads.push("monitor".to_string());
+    }
     if actions.search {
         heads.push("search".to_string());
+    }
+    if actions.fetch_subtitles {
+        heads.push("fetch_subtitles".to_string());
+    }
+    if let Some(library) = actions.move_to_library.as_deref() {
+        heads.push(format!("move_to_library := {}", rego_string(library)));
+    }
+    if let Some(root) = actions.move_to_root.as_deref() {
+        heads.push(format!("move_to_root := {}", rego_string(root)));
+    }
+    if let Some(message) = actions.notify.as_deref() {
+        heads.push(format!("notify := {}", rego_string(message)));
     }
     if actions.unmonitor && !actions.delete_files {
         heads.push("unmonitor".to_string());

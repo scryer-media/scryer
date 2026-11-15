@@ -4340,6 +4340,7 @@ pub enum DomainEventType {
     ListUnfollowed,
     ListSyncFinished,
     ListSubscriptionChanged,
+    MaintenanceRuleNotified,
 }
 
 impl DomainEventType {
@@ -4405,6 +4406,7 @@ impl DomainEventType {
             Self::ListUnfollowed => "list_unfollowed",
             Self::ListSyncFinished => "list_sync_finished",
             Self::ListSubscriptionChanged => "list_subscription_changed",
+            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
         }
     }
 
@@ -4470,6 +4472,7 @@ impl DomainEventType {
             "list_unfollowed" => Some(Self::ListUnfollowed),
             "list_sync_finished" => Some(Self::ListSyncFinished),
             "list_subscription_changed" => Some(Self::ListSubscriptionChanged),
+            "maintenance_rule_notified" => Some(Self::MaintenanceRuleNotified),
             _ => None,
         }
     }
@@ -4572,6 +4575,23 @@ pub struct TitleAddedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleUpdatedEventData {
     pub title: TitleContextSnapshot,
+}
+
+/// A maintenance rule applied its actions to a subject and its `notify`
+/// action asked for this message. Written once per applied candidate.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleNotifiedEventData {
+    pub title: TitleContextSnapshot,
+    pub rule_set_id: String,
+    pub rule_name: String,
+    /// `title`, `season` or `episode`.
+    pub subject_kind: String,
+    pub subject_id: String,
+    /// The subject as a person reads it: the title, or the title with its
+    /// season or episode.
+    pub subject_label: String,
+    /// The message the rule wrote.
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5409,6 +5429,7 @@ pub enum DomainEventPayload {
     ListUnfollowed(ListUnfollowedEventData),
     ListSyncFinished(ListSyncFinishedEventData),
     ListSubscriptionChanged(ListSubscriptionChangedEventData),
+    MaintenanceRuleNotified(MaintenanceRuleNotifiedEventData),
 }
 
 impl DomainEventPayload {
@@ -5476,6 +5497,7 @@ impl DomainEventPayload {
             Self::ListUnfollowed(_) => DomainEventType::ListUnfollowed,
             Self::ListSyncFinished(_) => DomainEventType::ListSyncFinished,
             Self::ListSubscriptionChanged(_) => DomainEventType::ListSubscriptionChanged,
+            Self::MaintenanceRuleNotified(_) => DomainEventType::MaintenanceRuleNotified,
         }
     }
 }
@@ -5950,8 +5972,23 @@ pub struct MaintenanceRuleSet {
     pub system_owned: bool,
     /// Revision number of the matcher currently in force.
     pub current_revision_number: i64,
+    /// When the rule evaluates and then acts on what it decided. `Manual`
+    /// runs it only on request.
+    #[serde(default = "default_maintenance_rule_schedule")]
+    pub schedule: ScriptSchedule,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Seconds between runs of a maintenance rule that has no schedule of its
+/// own, matching the cadence of the instance-wide evaluation job.
+pub const DEFAULT_MAINTENANCE_RULE_INTERVAL_SECONDS: i64 = 8 * 60 * 60;
+
+/// The schedule a maintenance rule runs on until its author picks one.
+pub fn default_maintenance_rule_schedule() -> ScriptSchedule {
+    ScriptSchedule::Interval {
+        every_seconds: DEFAULT_MAINTENANCE_RULE_INTERVAL_SECONDS,
+    }
 }
 
 impl MaintenanceRuleSet {
@@ -6007,9 +6044,10 @@ pub struct MaintenanceRuleRevision {
     /// Rego source with the package declaration already rewritten to the
     /// system-assigned rule ID.
     pub rego_source: String,
-    /// Serialized `MaintenanceActionSpec`. Stored as JSON because the closed
-    /// action catalog lives in the application layer; callers deserialize it at
-    /// that boundary rather than passing the raw text around.
+    /// Serialized declared actions: the action heads the revision's source
+    /// defines. Stored as JSON because the action vocabulary lives in the
+    /// application layer; callers deserialize it at that boundary rather than
+    /// passing the raw text around.
     pub action_spec_json: String,
     pub grace_days: i64,
     /// Configured library root whose capacity and owned files this revision
@@ -6019,6 +6057,10 @@ pub struct MaintenanceRuleRevision {
     pub matcher_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The simple builder's document for this revision's source, as canonical
+    /// JSON text, or `None` when the source was written by hand.
+    #[serde(default)]
+    pub builder_model_json: Option<String>,
 }
 
 /// Lifecycle state of one maintenance candidate (RFC 137 section 8).
@@ -8195,6 +8237,7 @@ pub enum NotificationEventType {
     ListTitleLeft,
     ListSyncFailed,
     ListUnfollowed,
+    MaintenanceRuleNotified,
     Test,
 }
 
@@ -8230,6 +8273,7 @@ impl NotificationEventType {
             Self::ListTitleLeft => "list_title_left",
             Self::ListSyncFailed => "list_sync_failed",
             Self::ListUnfollowed => "list_unfollowed",
+            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
             Self::Test => "test",
         }
     }
@@ -8265,6 +8309,7 @@ impl NotificationEventType {
             Self::ListTitleLeft,
             Self::ListSyncFailed,
             Self::ListUnfollowed,
+            Self::MaintenanceRuleNotified,
             Self::Test,
         ]
     }
@@ -8300,6 +8345,7 @@ impl NotificationEventType {
             "list_title_left" => Some(Self::ListTitleLeft),
             "list_sync_failed" => Some(Self::ListSyncFailed),
             "list_unfollowed" => Some(Self::ListUnfollowed),
+            "maintenance_rule_notified" => Some(Self::MaintenanceRuleNotified),
             "test" => Some(Self::Test),
             "release_grabbed" => Some(Self::Grab),
             "download_failed" => Some(Self::Download),

@@ -10688,6 +10688,21 @@ pub trait RuleSetRepository: Send + Sync {
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<RuleSet>>;
     async fn create_rule_set(&self, rule_set: &RuleSet) -> AppResult<()>;
     async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()>;
+    /// The stored builder document of one rule set, as canonical JSON text.
+    async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>>;
+    /// [`Self::create_rule_set`] storing `builder_model` in the same write.
+    async fn create_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()>;
+    /// [`Self::update_rule_set`] replacing the stored builder document with
+    /// `builder_model` (`None` clears it) in the same write.
+    async fn update_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()>;
     async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
     async fn record_rule_set_history(
         &self,
@@ -10801,8 +10816,14 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
-    /// Append `revision` and repoint the rule set at it without touching its
-    /// arming, atomically. Only for a revision that declares no delete action:
+    /// Append `revision` and repoint the rule set at it, setting its arming to
+    /// `effect_arming`, atomically. The caller passes the stored arming,
+    /// lowered to what the new revision's heads can arm: a revision without a
+    /// delete head never stays armed for deletes. The write only applies while
+    /// the rule's current revision is the one `revision` follows; otherwise it
+    /// writes nothing and refuses with `MAINTENANCE_RULE_REVISION_CONFLICT`.
+    ///
+    /// Only for a revision that declares no delete action:
     /// the destructive acknowledgement is bound to the delete heads a matcher
     /// declares, so a revision that cannot delete carries no new blast radius
     /// to acknowledge. A revision that declares a delete action must go
@@ -10813,6 +10834,7 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     async fn add_revision_keeping_arming(
         &self,
         revision: &MaintenanceRuleRevision,
+        effect_arming: scryer_domain::MaintenanceEffectArming,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
@@ -10849,12 +10871,17 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// operator acknowledged, exactly as a new revision is not. Writing the two
     /// separately would leave an instant in which the new scope is in force
     /// under the old scope's arming.
+    ///
+    /// `schedule` replaces the rule's schedule in the same write; `None`
+    /// keeps the stored one.
+    #[allow(clippy::too_many_arguments)]
     async fn update_rule_set_metadata(
         &self,
         id: &str,
         name: &str,
         description: &str,
         library_ids: &[String],
+        schedule: Option<&scryer_domain::ScriptSchedule>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -10917,6 +10944,23 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         subject_kind: &str,
         subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleCandidate>>;
+
+    /// The non-terminal candidate of each listed subject that has one, in no
+    /// particular order. One read for a whole page of subjects; any number of
+    /// ids is accepted.
+    async fn list_active_subject_candidates(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    /// The candidates with these ids that exist, in no particular order. Any
+    /// number of ids is accepted.
+    async fn get_candidates_by_ids(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
     async fn list_candidates(
         &self,
@@ -11132,6 +11176,14 @@ pub enum MaintenanceActionStepClaim {
     Completed(scryer_domain::MaintenanceActionStepRun),
 }
 
+/// One rule having changed one title with one step kind.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MaintenanceStepAct {
+    pub rule_set_id: String,
+    pub title_id: String,
+    pub step_kind: String,
+}
+
 /// Candidate coordinates for a bounded sequence-progress projection. A caller
 /// supplies only the candidates already on its page; each can contribute at
 /// most seven current step rows.
@@ -11219,6 +11271,17 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
         &self,
         key: &scryer_domain::MaintenanceActionStepKey,
     ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>>;
+
+    /// Across every rule: which rule changed which title with the named step
+    /// kinds, by attempts started at or after `since` that succeeded. Each
+    /// (rule, title, kind) once, at most `limit` of them. Served by the index
+    /// on step attempts' start time.
+    async fn list_step_acts_since(
+        &self,
+        step_kinds: &[&str],
+        since: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<MaintenanceStepAct>>;
 
     async fn get_action_job_receipt(
         &self,
@@ -11348,6 +11411,21 @@ pub trait MaintenanceEvaluationRunRepository: Send + Sync {
         rule_set_id: Option<&str>,
         limit: Option<usize>,
     ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>>;
+
+    /// For each named rule: when its latest evaluation started, and whether
+    /// it holds an `executing` candidate. Two indexed reads for the whole
+    /// list, never one per rule; rules with neither are absent.
+    async fn rule_schedule_anchors(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, MaintenanceRuleScheduleAnchor>>;
+}
+
+/// What a rule's schedule anchors on when it is (re)scheduled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaintenanceRuleScheduleAnchor {
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub in_flight: bool,
 }
 
 /// The maintenance evaluation/execution tables land together, are written by

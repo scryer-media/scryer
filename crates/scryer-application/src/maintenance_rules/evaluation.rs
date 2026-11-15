@@ -40,7 +40,7 @@ use serde::Serialize;
 use tracing::{debug, warn};
 
 use crate::jobs::{JobKey, JobTriggerSource};
-use crate::maintenance_rules::action_sequence::MaintenanceActionDefinition;
+use crate::maintenance_rules::action_sequence::{ACTION_SEQUENCE_KIND, MaintenanceActionSequence};
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
     MaintenanceWatchContext, WatchSignalFreshness,
@@ -193,10 +193,10 @@ pub struct MaintenanceCandidateView {
     pub candidate: LifecycleCandidate,
     pub rule_name: String,
     pub title_name: String,
-    /// The immutable action definition for the revision that opened this
-    /// candidate. It remains available after the rule advances to a later
-    /// revision, so history renders the action this candidate can actually run.
-    pub action_definition: Option<MaintenanceActionDefinition>,
+    /// The steps this candidate runs, built from the actions its rule decided
+    /// for it. `None` when no decision is recorded or a decided target no
+    /// longer resolves; such a candidate cannot run.
+    pub action_sequence: Option<MaintenanceActionSequence>,
     /// Ordered v2 step evidence for this candidate generation.
     pub sequence_steps:
         Vec<crate::maintenance_rules::action_execution::MaintenanceActionStepProgressView>,
@@ -568,19 +568,7 @@ impl AppUseCase {
         let storage_root_summaries = self
             .maintenance_candidate_root_summaries(&visible, &mut inventories)
             .await?;
-        let coordinates: Vec<_> = visible
-            .iter()
-            .map(
-                |candidate| crate::maintenance_rules::action_execution::MaintenanceSequenceProjectionCoordinate {
-                    candidate_id: candidate.id.clone(),
-                    rule_set_id: candidate.rule_set_id.clone(),
-                    match_generation: candidate.match_generation,
-                    revision_number: candidate.revision_number,
-                },
-            )
-            .collect();
-        let (definitions, sequence_steps) =
-            self.maintenance_sequence_projection(&coordinates).await?;
+        let (sequences, sequence_steps) = self.maintenance_sequence_projection(&visible).await?;
         Ok(visible
             .into_iter()
             .map(|candidate| MaintenanceCandidateView {
@@ -605,7 +593,7 @@ impl AppUseCase {
                     .map(|rule_set| rule_set.name.clone())
                     .unwrap_or_default(),
                 title_name: maintenance_title_name(&names, &candidate.title_id),
-                action_definition: definitions.get(&candidate.id).cloned().flatten(),
+                action_sequence: sequences.get(&candidate.id).cloned(),
                 sequence_steps: sequence_steps
                     .get(&candidate.id)
                     .cloned()
@@ -791,6 +779,78 @@ pub(crate) fn maintenance_title_name(names: &HashMap<String, String>, title_id: 
         .unwrap_or_else(|| title_id.to_string())
 }
 
+/// Whether a changed decision deletes something the stored one did not.
+/// Deleting files and deleting the title are compared one by one: a decision
+/// that moves from deleting files to deleting the title is a new delete and
+/// waits out its own grace. A candidate without a stored decision counts as
+/// deleting nothing.
+fn decision_deletes_more(
+    stored: Option<&scryer_rules::maintenance_actions::MaintenanceActions>,
+    decided: &scryer_rules::maintenance_actions::MaintenanceActions,
+) -> bool {
+    let (stored_files, stored_title) = stored.map_or((false, false), |stored| {
+        (stored.delete_files, stored.delete_title)
+    });
+    (decided.delete_files && !stored_files) || (decided.delete_title && !stored_title)
+}
+
+/// The high-risk attempts a superseded candidate spent: the most any of its
+/// high-risk steps spent, or what it carried itself. A failed or running
+/// (possibly dispatched) attempt is spent; a held one is not yet.
+fn carried_high_risk_attempts(
+    candidate: &LifecycleCandidate,
+    steps: &[scryer_domain::MaintenanceActionStepRun],
+) -> i64 {
+    let high_risk = super::action_execution::high_risk_step_kinds();
+    steps
+        .iter()
+        .filter(|step| high_risk.contains(&step.step_kind.as_str()))
+        .map(|step| match step.state {
+            scryer_domain::MaintenanceActionStepState::Failed
+            | scryer_domain::MaintenanceActionStepState::Running => step.attempt,
+            _ => step.attempt - 1,
+        })
+        .fold(candidate.action_attempts.max(0), i64::max)
+}
+
+#[cfg(test)]
+mod decision_change_tests {
+    use super::decision_deletes_more;
+    use scryer_rules::maintenance_actions::MaintenanceActions;
+
+    fn actions(delete_files: bool, delete_title: bool, search: bool) -> MaintenanceActions {
+        MaintenanceActions {
+            delete_files,
+            delete_title,
+            search,
+            ..MaintenanceActions::default()
+        }
+    }
+
+    #[test]
+    fn each_delete_head_is_compared_on_its_own() {
+        let files = actions(true, false, false);
+        let title = actions(false, true, false);
+        let both = actions(true, true, false);
+        let none = actions(false, false, true);
+
+        assert!(decision_deletes_more(Some(&files), &title));
+        assert!(decision_deletes_more(Some(&title), &files));
+        assert!(decision_deletes_more(Some(&files), &both));
+        assert!(decision_deletes_more(Some(&none), &files));
+        assert!(decision_deletes_more(None, &title));
+
+        assert!(!decision_deletes_more(Some(&both), &files));
+        assert!(!decision_deletes_more(Some(&both), &title));
+        assert!(!decision_deletes_more(
+            Some(&files),
+            &actions(true, false, true)
+        ));
+        assert!(!decision_deletes_more(Some(&files), &none));
+        assert!(!decision_deletes_more(None, &none));
+    }
+}
+
 // ── Manual trigger ──────────────────────────────────────────────────────────
 
 impl AppUseCase {
@@ -831,6 +891,17 @@ impl AppUseCase {
                     )),
                 });
             }
+            // The same claim a scheduled fire takes: a rule never evaluates
+            // or acts beside itself.
+            let Some(_claim) = self.claim_maintenance_rule_run(&rule_set_id) else {
+                return Ok(MaintenanceEvaluationTrigger {
+                    started: false,
+                    message: Some(format!(
+                        "maintenance rule {} is already running",
+                        rule_set.name
+                    )),
+                });
+            };
             let report = self.evaluate_maintenance_rules(Some(&rule_set_id)).await?;
             return Ok(MaintenanceEvaluationTrigger {
                 started: true,
@@ -855,7 +926,8 @@ impl AppUseCase {
         }
 
         let app = self.clone();
-        tokio::spawn(async move {
+        // Tracked, so a restore drain waits for the run.
+        self.restore_coordinator().spawn_task(async move {
             if let Err(error) = app
                 .run_scheduled_job_now(JobKey::MaintenanceRuleEvaluation, JobTriggerSource::Manual)
                 .await
@@ -889,6 +961,55 @@ impl AppUseCase {
         report.leases_expired = leases_expired;
         report.leases_activated = leases_activated;
         Ok(report)
+    }
+
+    /// Claim one rule's run for as long as the returned guard lives. `None`
+    /// while a scheduled fire, a manual run, or an all-rules pass is working
+    /// on that rule.
+    pub(crate) fn claim_maintenance_rule_run(
+        &self,
+        rule_set_id: &str,
+    ) -> Option<crate::scripts::scheduler::MaintenanceRuleFireGuard> {
+        self.runtime
+            .jobs
+            .custom_job_scheduler
+            .begin_maintenance_rule_fire(rule_set_id)
+    }
+
+    /// The scheduled pass of [`JobKey::MaintenanceRuleEvaluation`]. Rules run
+    /// on their own schedules, so the instance-wide tick keeps only the lease
+    /// clock; an explicit run still evaluates every rule.
+    pub(crate) async fn run_maintenance_lease_reconciliation_job(
+        &self,
+    ) -> MaintenanceEvaluationReport {
+        let (leases_expired, leases_activated) = self.reconcile_lifecycle_claims(Utc::now()).await;
+        MaintenanceEvaluationReport {
+            leases_expired,
+            leases_activated,
+            ..MaintenanceEvaluationReport::default()
+        }
+    }
+
+    /// One scheduled fire of one rule: evaluate it, then act on what it
+    /// decided. Both halves keep every gate, hold and re-check of the
+    /// instance-wide passes; neither touches another rule's candidates.
+    pub(crate) async fn run_scheduled_maintenance_rule(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<(
+        MaintenanceEvaluationReport,
+        super::action_execution::MaintenanceActionHandlingReport,
+    )> {
+        let evaluation = self.evaluate_maintenance_rules(Some(rule_set_id)).await?;
+        // A drain that began while this rule was evaluating waits for the
+        // fire; it should not also wait for actions nobody started yet.
+        if self.restore_coordinator().shutdown_workers.is_cancelled() {
+            return Ok((evaluation, Default::default()));
+        }
+        let actions = self
+            .run_lifecycle_action_handling(Some(rule_set_id))
+            .await?;
+        Ok((evaluation, actions))
     }
 
     /// One evaluation pass over every enabled rule, or over one named rule.
@@ -931,6 +1052,22 @@ impl AppUseCase {
             if rule_set.evaluation_mode == MaintenanceEvaluationMode::Disabled {
                 continue;
             }
+            // A rule never evaluates beside itself. Scoped, the caller holds
+            // the rule's claim already; across every rule, a rule whose own
+            // fire is running is left to that fire.
+            let _claim = match only_rule_set_id {
+                Some(_) => None,
+                None => match self.claim_maintenance_rule_run(&rule_set.id) {
+                    Some(claim) => Some(claim),
+                    None => {
+                        tracing::info!(
+                            rule_set_id = rule_set.id.as_str(),
+                            "maintenance rule is already running; leaving it to that run"
+                        );
+                        continue;
+                    }
+                },
+            };
 
             match self
                 .evaluate_one_maintenance_rule(
@@ -985,6 +1122,14 @@ impl AppUseCase {
                     rule_set.id
                 ))
             })?;
+        // A revision that does not declare its actions never matches anything:
+        // it is refused before any candidate is written, so its open
+        // candidates keep their state and the executor holds them.
+        if let Some(reason) = detail.load_refusal {
+            return Err(crate::maintenance_rules::service::stored_actions_refused(
+                reason,
+            ));
+        }
 
         let mut run = MaintenanceEvaluationRun {
             id: Id::new().0,
@@ -1312,20 +1457,6 @@ impl AppUseCase {
         detail: &MaintenanceRuleSetDetail,
         evaluation_time: DateTime<Utc>,
     ) -> AppResult<()> {
-        // A stored sequence fixes the steps for every subject. Declared
-        // actions build each subject's steps from what it was decided, so the
-        // membership's own recorded steps are the identity to check.
-        let revision_sequence = match &detail.action_definition {
-            MaintenanceActionDefinition::Sequence(sequence) => {
-                let hash = sequence
-                    .content_hash()
-                    .map_err(|error| AppError::Validation(error.to_string()))?;
-                let ids: Vec<String> = sequence.steps.iter().map(|step| step.id.clone()).collect();
-                Some((hash, ids))
-            }
-            MaintenanceActionDefinition::Declared(_) => None,
-            MaintenanceActionDefinition::Legacy(_) => return Ok(()),
-        };
         let Some(storage_root_id) = detail.revision.storage_root_id.as_deref() else {
             return Ok(());
         };
@@ -1347,13 +1478,11 @@ impl AppUseCase {
             after_id = Some(next_after_id);
 
             for membership in memberships {
-                let (sequence_hash, expected_step_ids) = match &revision_sequence {
-                    Some((hash, ids)) => (hash.clone(), ids.clone()),
-                    None => (
-                        membership.sequence_content_hash.clone(),
-                        membership.expected_step_ids.clone(),
-                    ),
-                };
+                // Declared actions build each subject's steps from what it was
+                // decided, so the membership's own recorded steps are the
+                // identity to check.
+                let sequence_hash = membership.sequence_content_hash.clone();
+                let expected_step_ids = membership.expected_step_ids.clone();
                 let completed_prefix_is_valid = membership.completed_step_ids.len()
                     <= expected_step_ids.len()
                     && expected_step_ids
@@ -1639,13 +1768,6 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let rule_set_id = detail.rule_set.id.as_str();
         let candidates = &self.services.customization.maintenance_evaluation;
-        // Stored sequences and declared actions both run through the
-        // sequence executor and share its completion latch.
-        let sequence_executor = !matches!(
-            detail.action_definition,
-            MaintenanceActionDefinition::Legacy(_)
-        );
-        let declared = detail.action_definition.declared().is_some();
 
         let mut active = candidates
             .get_active_subject_candidate(rule_set_id, subject.kind.as_storage_str(), &subject.id)
@@ -1807,21 +1929,22 @@ impl AppUseCase {
                 // What the rule decided for this subject now. A continuing
                 // match that decides different actions is a different intent:
                 // the old candidate closes and a new one carries the new
-                // actions. The grace clock carries over, except when deleting
-                // is newly decided, which restarts it so a delete always waits
-                // out the full grace.
-                let decided_json = declared
-                    .then(|| super::declared_actions::decided_actions_to_json(&decision.actions));
+                // actions. The grace clock and the attempt count carry over,
+                // except when the decision deletes something the stored one
+                // did not, which restarts both so every delete waits out the
+                // full grace.
+                let decided_json = Some(super::declared_actions::decided_actions_to_json(
+                    &decision.actions,
+                ));
                 let mut carried_clock = None;
-                if declared && let Some(candidate) = active.as_ref() {
+                let mut carried_attempts = 0;
+                if let Some(candidate) = active.as_ref() {
                     let stored = super::declared_actions::decided_actions_from_json(
                         candidate.decided_actions_json.as_deref(),
                     );
                     if stored.as_ref() != Some(&decision.actions) {
-                        let newly_destructive = decision.actions.defines_destructive_action()
-                            && !stored
-                                .as_ref()
-                                .is_some_and(|stored| stored.defines_destructive_action());
+                        let newly_destructive =
+                            decision_deletes_more(stored.as_ref(), &decision.actions);
                         if candidates
                             .transition_candidate_state(
                                 &candidate.id,
@@ -1836,6 +1959,18 @@ impl AppUseCase {
                             if !newly_destructive {
                                 carried_clock =
                                     Some((candidate.first_matched_at, candidate.due_at));
+                                // The budget the executor charges lives on
+                                // the step rows, keyed by candidate; carry
+                                // what the high-risk steps already spent.
+                                // Read only on this rare recreate.
+                                let steps = candidates
+                                    .list_action_steps(
+                                        &candidate.id,
+                                        candidate.match_generation,
+                                        candidate.revision_number,
+                                    )
+                                    .await?;
+                                carried_attempts = carried_high_risk_attempts(candidate, &steps);
                             }
                             active = None;
                         } else {
@@ -1866,24 +2001,20 @@ impl AppUseCase {
                         // must never manufacture a new generation and reset
                         // its step budgets. Only the confirmed no-match arm
                         // below releases this marker.
-                        if sequence_executor
-                            && let Some(latch) = candidates
-                                .get_active_sequence_completion(
-                                    rule_set_id,
-                                    detail.rule_set.current_revision_number,
-                                    subject.kind.as_storage_str(),
-                                    &subject.id,
-                                )
-                                .await?
+                        if let Some(latch) = candidates
+                            .get_active_sequence_completion(
+                                rule_set_id,
+                                detail.rule_set.current_revision_number,
+                                subject.kind.as_storage_str(),
+                                &subject.id,
+                            )
+                            .await?
                         {
                             // Declared actions build their steps per subject:
                             // a decision that would now run different steps
                             // is new work, not the finished membership.
-                            let same_steps = !declared
-                                || latch.expected_step_ids
-                                    == super::declared_actions::declared_step_ids(
-                                        &decision.actions,
-                                    );
+                            let same_steps = latch.expected_step_ids
+                                == super::declared_actions::declared_step_ids(&decision.actions);
                             if same_steps {
                                 return Ok(());
                             }
@@ -1936,7 +2067,7 @@ impl AppUseCase {
                                 }
                                 .to_string(),
                                 reason_codes: decision.reason_codes.clone(),
-                                action_kind: detail.action_definition.action_kind().to_string(),
+                                action_kind: ACTION_SEQUENCE_KIND.to_string(),
                                 decided_actions_json: decided_json,
                                 grace_days,
                                 first_matched_at,
@@ -1944,7 +2075,7 @@ impl AppUseCase {
                                 due_at,
                                 last_evaluated_at: evaluation_time,
                                 held_since: None,
-                                action_attempts: 0,
+                                action_attempts: carried_attempts,
                                 created_at: evaluation_time,
                                 updated_at: evaluation_time,
                             })
@@ -1959,17 +2090,15 @@ impl AppUseCase {
                 // ban. A raw confirmed no-match is the only evidence that
                 // starts a fresh generation; unknown and hold paths never
                 // reach this branch.
-                if sequence_executor {
-                    candidates
-                        .release_sequence_completion_on_confirmed_non_match(
-                            rule_set_id,
-                            detail.rule_set.current_revision_number,
-                            subject.kind.as_storage_str(),
-                            &subject.id,
-                            evaluation_time,
-                        )
-                        .await?;
-                }
+                candidates
+                    .release_sequence_completion_on_confirmed_non_match(
+                        rule_set_id,
+                        detail.rule_set.current_revision_number,
+                        subject.kind.as_storage_str(),
+                        &subject.id,
+                        evaluation_time,
+                    )
+                    .await?;
                 if let Some(candidate) = active
                     && candidates
                         .transition_candidate_state(

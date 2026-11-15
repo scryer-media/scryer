@@ -90,7 +90,20 @@ impl InMemoryMaintenanceEvaluationRepo {
         self.candidates.lock().await.clone()
     }
 
-    async fn all_runs(&self) -> Vec<MaintenanceEvaluationRun> {
+    /// Every recorded step attempt, oldest first.
+    pub(super) async fn all_step_attempts(&self) -> Vec<MaintenanceActionStepAttempt> {
+        self.action_step_attempts.lock().await.clone()
+    }
+
+    /// Move every recorded step attempt `by` into the past, as time passing
+    /// would.
+    pub(super) async fn age_step_attempts(&self, by: chrono::Duration) {
+        for attempt in self.action_step_attempts.lock().await.iter_mut() {
+            attempt.started_at -= by;
+        }
+    }
+
+    pub(super) async fn all_runs(&self) -> Vec<MaintenanceEvaluationRun> {
         self.runs.lock().await.clone()
     }
 
@@ -107,7 +120,10 @@ impl InMemoryMaintenanceEvaluationRepo {
     }
 
     /// Durable step rows for one step id, across every candidate.
-    pub(super) async fn action_steps_with_id(&self, step_id: &str) -> Vec<MaintenanceActionStepRun> {
+    pub(super) async fn action_steps_with_id(
+        &self,
+        step_id: &str,
+    ) -> Vec<MaintenanceActionStepRun> {
         self.action_steps
             .lock()
             .await
@@ -128,6 +144,43 @@ impl InMemoryMaintenanceEvaluationRepo {
             .lock()
             .await
             .push(membership);
+    }
+
+    /// Drop a candidate's recorded decision, the shape a candidate written
+    /// before rules declared their actions carries.
+    pub(super) async fn forget_decided_actions(&self, id: &str) {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .expect("candidate exists");
+        candidate.decided_actions_json = None;
+    }
+
+    /// Overwrite the decision recorded on a candidate, as a row written by
+    /// some other path would carry it.
+    pub(super) async fn force_decided_actions(
+        &self,
+        id: &str,
+        actions: &scryer_rules::maintenance_actions::MaintenanceActions,
+    ) {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .expect("candidate exists");
+        candidate.decided_actions_json =
+            Some(crate::maintenance_rules::declared_actions::decided_actions_to_json(actions));
+    }
+
+    /// Record execution attempts already spent on a candidate.
+    pub(super) async fn set_action_attempts(&self, id: &str, attempts: i64) {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .expect("candidate exists");
+        candidate.action_attempts = attempts;
     }
 
     /// Leave a candidate looking like a crashed worker left it: `executing`,
@@ -186,6 +239,41 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
                     && !candidate.state.is_terminal()
             })
             .cloned())
+    }
+
+    async fn list_active_subject_candidates(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_ids: &[String],
+    ) -> AppResult<Vec<LifecycleCandidate>> {
+        let wanted: std::collections::HashSet<&str> =
+            subject_ids.iter().map(String::as_str).collect();
+        Ok(self
+            .candidates
+            .lock()
+            .await
+            .iter()
+            .filter(|candidate| {
+                candidate.rule_set_id == rule_set_id
+                    && candidate.subject_kind == subject_kind
+                    && wanted.contains(candidate.subject_id.as_str())
+                    && !candidate.state.is_terminal()
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn get_candidates_by_ids(&self, ids: &[String]) -> AppResult<Vec<LifecycleCandidate>> {
+        let wanted: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        Ok(self
+            .candidates
+            .lock()
+            .await
+            .iter()
+            .filter(|candidate| wanted.contains(candidate.id.as_str()))
+            .cloned()
+            .collect())
     }
 
     async fn list_candidates(
@@ -865,6 +953,36 @@ impl MaintenanceActionStepRepository for InMemoryMaintenanceEvaluationRepo {
         Ok(attempts)
     }
 
+    async fn list_step_acts_since(
+        &self,
+        step_kinds: &[&str],
+        since: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<crate::MaintenanceStepAct>> {
+        let steps = self.action_steps.lock().await;
+        let mut acts: Vec<crate::MaintenanceStepAct> = Vec::new();
+        for attempt in self.action_step_attempts.lock().await.iter() {
+            if attempt.started_at < since
+                || attempt.state != scryer_domain::MaintenanceActionStepState::Succeeded
+            {
+                continue;
+            }
+            for step in steps.iter().filter(|step| {
+                step.key == attempt.key && step_kinds.contains(&step.step_kind.as_str())
+            }) {
+                let act = crate::MaintenanceStepAct {
+                    rule_set_id: step.rule_set_id.clone(),
+                    title_id: step.title_id.clone(),
+                    step_kind: step.step_kind.clone(),
+                };
+                if !acts.contains(&act) && acts.len() < limit {
+                    acts.push(act);
+                }
+            }
+        }
+        Ok(acts)
+    }
+
     async fn get_action_job_receipt(
         &self,
         key: &MaintenanceActionStepKey,
@@ -1389,6 +1507,34 @@ impl MaintenanceEvaluationRunRepository for InMemoryMaintenanceEvaluationRepo {
             rows.truncate(limit);
         }
         Ok(rows)
+    }
+
+    async fn rule_schedule_anchors(
+        &self,
+        rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, crate::MaintenanceRuleScheduleAnchor>> {
+        let wanted: std::collections::HashSet<&str> =
+            rule_set_ids.iter().map(String::as_str).collect();
+        let mut anchors =
+            std::collections::HashMap::<String, crate::MaintenanceRuleScheduleAnchor>::new();
+        for run in self.runs.lock().await.iter() {
+            if !wanted.contains(run.rule_set_id.as_str()) {
+                continue;
+            }
+            let anchor = anchors.entry(run.rule_set_id.clone()).or_default();
+            anchor.last_run_at = anchor.last_run_at.max(Some(run.started_at));
+        }
+        for candidate in self.candidates.lock().await.iter() {
+            if wanted.contains(candidate.rule_set_id.as_str())
+                && candidate.state == MaintenanceCandidateState::Executing
+            {
+                anchors
+                    .entry(candidate.rule_set_id.clone())
+                    .or_default()
+                    .in_flight = true;
+            }
+        }
+        Ok(anchors)
     }
 }
 
@@ -2468,6 +2614,7 @@ async fn swap_matcher_in_place(
             matcher_content_hash: reference.matcher_content_hash.clone(),
             created_by: None,
             created_at: Utc::now(),
+            builder_model_json: None,
         })
         .await;
 }

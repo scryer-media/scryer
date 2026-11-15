@@ -27,7 +27,7 @@ use super::action_sequence::{
 };
 
 /// Schema of the stored declared-actions document. Revisions written before
-/// it hold a v1 action spec or a v2 action sequence instead.
+/// it hold an older document, which reads as declaring no action.
 pub const MAINTENANCE_DECLARED_ACTIONS_SCHEMA_VERSION: u32 = 3;
 
 /// What a revision's source can do, as stored on the revision.
@@ -50,6 +50,17 @@ pub struct MaintenanceDeclaredActions {
     /// Every tag written for `remove_tags`.
     #[serde(default)]
     pub remove_tags: Vec<String>,
+    // The lists below are left out while empty, so a document that names
+    // none of them keeps the form it was stored in before they existed.
+    /// Every library name written for `move_to_library`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub libraries: Vec<String>,
+    /// Every root path written for `move_to_root`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<String>,
+    /// Every message written for `notify`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<String>,
 }
 
 impl MaintenanceDeclaredActions {
@@ -79,7 +90,56 @@ impl MaintenanceDeclaredActions {
             quality_profiles: distinct(&scan.quality_profiles),
             add_tags: distinct(&scan.add_tags),
             remove_tags: distinct(&scan.remove_tags),
+            libraries: distinct(&scan.libraries),
+            roots: distinct(&scan.roots),
+            notifications: distinct(&scan.notifications),
         }
+    }
+
+    /// The document for a revision that declares no action.
+    pub fn none() -> Self {
+        Self {
+            schema_version: MAINTENANCE_DECLARED_ACTIONS_SCHEMA_VERSION,
+            heads: Vec::new(),
+            destructive: false,
+            quality_profiles: Vec::new(),
+            add_tags: Vec::new(),
+            remove_tags: Vec::new(),
+            libraries: Vec::new(),
+            roots: Vec::new(),
+            notifications: Vec::new(),
+        }
+    }
+
+    /// Read a revision's stored action column.
+    ///
+    /// `None` is a document of any other schema, written by a build from
+    /// before rules declared their own actions. Nothing reads its contents any
+    /// more, and such a revision is refused: it is never evaluated and nothing
+    /// runs for it. Text that is not a JSON object at all is an error.
+    pub fn from_persisted_json(json: &str) -> Result<Option<Self>, MaintenanceActionSequenceError> {
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|error| MaintenanceActionSequenceError::InvalidEnvelope(error.to_string()))?;
+        let Some(object) = value.as_object() else {
+            return Err(MaintenanceActionSequenceError::InvalidEnvelope(
+                "maintenance action must be an object".into(),
+            ));
+        };
+        let current = object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(u64::from(MAINTENANCE_DECLARED_ACTIONS_SCHEMA_VERSION));
+        if !current {
+            return Ok(None);
+        }
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|error| MaintenanceActionSequenceError::InvalidEnvelope(error.to_string()))
+    }
+
+    /// The document as a revision stores it.
+    pub fn to_persisted_json(&self) -> String {
+        serde_json::to_string(self).expect("declared maintenance actions always serialize")
     }
 
     pub fn defines(&self, head: MaintenanceActionHead) -> bool {
@@ -94,25 +154,23 @@ impl MaintenanceDeclaredActions {
     }
 }
 
-/// Whether a rule of this scope can run this head. Seasons, episodes, and
-/// storage-root rules act only on monitoring and files; everything else is a
-/// whole-title operation.
+/// Whether a rule of this scope can run this head. Storage-root rules act
+/// only on monitoring and files. Seasons and episodes may also be monitored,
+/// have subtitles fetched, and notify; everything else is a whole-title
+/// operation.
 pub fn head_supported_for_scope(
     head: MaintenanceActionHead,
     scope: MaintenanceRuleSubjectKind,
     storage_root_selected: bool,
 ) -> bool {
-    let narrow = storage_root_selected || scope != MaintenanceRuleSubjectKind::Title;
-    if !narrow {
-        return true;
+    if storage_root_selected {
+        return matches!(
+            head,
+            MaintenanceActionHead::Unmonitor | MaintenanceActionHead::DeleteFiles
+        );
     }
-    if head == MaintenanceActionHead::DeleteTitle && scope != MaintenanceRuleSubjectKind::Title {
-        return false;
-    }
-    matches!(
-        head,
-        MaintenanceActionHead::Unmonitor | MaintenanceActionHead::DeleteFiles
-    )
+    scope == MaintenanceRuleSubjectKind::Title
+        || scryer_rules::rule_builder_schema::maintenance_head_allows_narrow_subjects(head)
 }
 
 /// The heads one evaluation decided, in execution order, as shown to the
@@ -130,8 +188,20 @@ pub fn decided_heads_in_execution_order(
     if actions.set_quality_profile.is_some() {
         heads.push(MaintenanceActionHead::SetQualityProfile);
     }
+    if actions.monitor {
+        heads.push(MaintenanceActionHead::Monitor);
+    }
     if actions.search {
         heads.push(MaintenanceActionHead::Search);
+    }
+    if actions.fetch_subtitles {
+        heads.push(MaintenanceActionHead::FetchSubtitles);
+    }
+    if actions.move_to_library.is_some() {
+        heads.push(MaintenanceActionHead::MoveToLibrary);
+    }
+    if actions.move_to_root.is_some() {
+        heads.push(MaintenanceActionHead::MoveToRoot);
     }
     if actions.unmonitor || (actions.delete_files && !actions.delete_title) {
         heads.push(MaintenanceActionHead::Unmonitor);
@@ -141,6 +211,9 @@ pub fn decided_heads_in_execution_order(
     }
     if actions.delete_title {
         heads.push(MaintenanceActionHead::DeleteTitle);
+    }
+    if actions.notify.is_some() {
+        heads.push(MaintenanceActionHead::Notify);
     }
     heads
 }
@@ -163,7 +236,20 @@ pub fn declared_step_ids(actions: &MaintenanceActions) -> Vec<String> {
             actions.set_quality_profile.is_some(),
             MaintenanceActionStepKind::ChangeQualityProfile,
         ),
+        (actions.monitor, MaintenanceActionStepKind::Monitor),
         (actions.search, MaintenanceActionStepKind::Search),
+        (
+            actions.fetch_subtitles,
+            MaintenanceActionStepKind::FetchSubtitles,
+        ),
+        (
+            actions.move_to_library.is_some(),
+            MaintenanceActionStepKind::MoveToLibrary,
+        ),
+        (
+            actions.move_to_root.is_some(),
+            MaintenanceActionStepKind::MoveToRoot,
+        ),
         (
             actions.unmonitor || delete_files,
             MaintenanceActionStepKind::Unmonitor,
@@ -205,7 +291,9 @@ fn step(
 /// The step sequence for what one evaluation decided for one subject.
 ///
 /// Steps run in a fixed order: add tags, remove tags, set quality profile,
-/// search, unmonitor, delete files, delete title. Deleting files unmonitors
+/// monitor, search, fetch subtitles, move, unmonitor, delete files, delete
+/// title. A notification is not a step: it is sent once the whole sequence
+/// has succeeded, so it can follow even a title deletion. Deleting files unmonitors
 /// the subject first. Deleting the title removes its files with it, so a
 /// subject that is also told to delete files gets the title deletion alone.
 /// A search decided together with a profile change runs only when the change
@@ -251,6 +339,12 @@ pub fn build_declared_action_sequence(
             },
         ));
     }
+    if actions.monitor {
+        steps.push(step(
+            MaintenanceActionStepKind::Monitor,
+            MaintenanceActionStepParameters::None,
+        ));
+    }
     if actions.search {
         steps.push(step(
             MaintenanceActionStepKind::Search,
@@ -261,6 +355,26 @@ pub fn build_declared_action_sequence(
                     MaintenanceSearchCondition::Unconditional
                 },
             },
+        ));
+    }
+    if actions.fetch_subtitles {
+        steps.push(step(
+            MaintenanceActionStepKind::FetchSubtitles,
+            MaintenanceActionStepParameters::None,
+        ));
+    }
+    if let Some(library) = &actions.move_to_library {
+        steps.push(step(
+            MaintenanceActionStepKind::MoveToLibrary,
+            MaintenanceActionStepParameters::Library {
+                library: library.clone(),
+            },
+        ));
+    }
+    if let Some(root) = &actions.move_to_root {
+        steps.push(step(
+            MaintenanceActionStepKind::MoveToRoot,
+            MaintenanceActionStepParameters::Root { root: root.clone() },
         ));
     }
     let delete_files = actions.delete_files && !actions.delete_title;
@@ -328,7 +442,7 @@ mod tests {
 
     #[test]
     fn step_ids_match_the_built_sequence_for_every_head_combination() {
-        for bits in 0u32..(1 << 7) {
+        for bits in 0u32..(1 << 12) {
             let actions = MaintenanceActions {
                 unmonitor: bits & 1 != 0,
                 delete_files: bits & 2 != 0,
@@ -345,6 +459,11 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                monitor: bits & 128 != 0,
+                fetch_subtitles: bits & 256 != 0,
+                move_to_library: (bits & 512 != 0).then(|| "Fixture Archive".to_string()),
+                move_to_root: (bits & 1024 != 0).then(|| "/fixture/archive".to_string()),
+                notify: (bits & 2048 != 0).then(|| "Fixture".to_string()),
             };
             let Ok(sequence) =
                 build_declared_action_sequence(&actions, MaintenanceSubjectKind::Show, Some("7"))
@@ -354,6 +473,86 @@ mod tests {
             let built: Vec<String> = sequence.steps.iter().map(|step| step.id.clone()).collect();
             assert_eq!(built, declared_step_ids(&actions), "{actions:?}");
         }
+    }
+
+    #[test]
+    fn the_newer_heads_run_in_their_fixed_places_and_notify_is_not_a_step() {
+        let actions = MaintenanceActions {
+            unmonitor: true,
+            search: true,
+            add_tags: vec!["stale".into()],
+            monitor: false,
+            fetch_subtitles: true,
+            move_to_root: Some("/fixture/archive".into()),
+            notify: Some("Fixture archived".into()),
+            ..MaintenanceActions::default()
+        };
+        let sequence =
+            build_declared_action_sequence(&actions, MaintenanceSubjectKind::Movie, None)
+                .expect("valid");
+        assert_eq!(
+            kinds(&sequence),
+            vec![
+                MaintenanceActionStepKind::AddTags,
+                MaintenanceActionStepKind::Search,
+                MaintenanceActionStepKind::FetchSubtitles,
+                MaintenanceActionStepKind::MoveToRoot,
+                MaintenanceActionStepKind::Unmonitor,
+            ]
+        );
+        assert_eq!(
+            sequence.steps[3].parameters,
+            MaintenanceActionStepParameters::Root {
+                root: "/fixture/archive".into()
+            }
+        );
+        assert_eq!(
+            decided_heads_in_execution_order(&actions),
+            vec![
+                MaintenanceActionHead::AddTags,
+                MaintenanceActionHead::Search,
+                MaintenanceActionHead::FetchSubtitles,
+                MaintenanceActionHead::MoveToRoot,
+                MaintenanceActionHead::Unmonitor,
+                MaintenanceActionHead::Notify,
+            ]
+        );
+
+        // A rule that only notifies runs no step at all.
+        let notify_only = MaintenanceActions {
+            notify: Some("Fixture".into()),
+            ..MaintenanceActions::default()
+        };
+        assert!(
+            build_declared_action_sequence(&notify_only, MaintenanceSubjectKind::Episode, None)
+                .expect("valid")
+                .steps
+                .is_empty()
+        );
+
+        let monitor_and_delete = MaintenanceActions {
+            monitor: true,
+            delete_files: true,
+            ..MaintenanceActions::default()
+        };
+        assert!(matches!(
+            build_declared_action_sequence(
+                &monitor_and_delete,
+                MaintenanceSubjectKind::Movie,
+                None
+            ),
+            Err(MaintenanceActionSequenceError::ConflictingSteps { .. })
+        ));
+    }
+
+    #[test]
+    fn a_declared_document_without_the_newer_lists_keeps_its_stored_form() {
+        let stored = r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#;
+        let declared = MaintenanceDeclaredActions::from_persisted_json(stored)
+            .expect("reads")
+            .expect("current schema");
+        assert!(declared.libraries.is_empty());
+        assert_eq!(declared.to_persisted_json(), stored);
     }
 
     #[test]
@@ -455,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn narrow_scopes_run_only_monitoring_and_file_heads() {
+    fn narrow_scopes_run_only_monitoring_subtitle_notify_and_file_heads() {
         for scope in [
             MaintenanceRuleSubjectKind::Season,
             MaintenanceRuleSubjectKind::Episode,
@@ -465,7 +664,11 @@ mod tests {
                     head_supported_for_scope(head, scope, false),
                     matches!(
                         head,
-                        MaintenanceActionHead::Unmonitor | MaintenanceActionHead::DeleteFiles
+                        MaintenanceActionHead::Unmonitor
+                            | MaintenanceActionHead::DeleteFiles
+                            | MaintenanceActionHead::Monitor
+                            | MaintenanceActionHead::FetchSubtitles
+                            | MaintenanceActionHead::Notify
                     ),
                     "{scope:?} {head:?}"
                 );

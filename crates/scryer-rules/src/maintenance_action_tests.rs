@@ -8,8 +8,8 @@ use crate::maintenance::{
     MaintenanceRulesEngine, Observation, rewrite_package_declaration, synthetic_maintenance_input,
 };
 use crate::maintenance_actions::{
-    MaintenanceActionHead, MaintenanceActionLiteral, MaintenanceActionScan, MaintenanceActions,
-    scan_maintenance_action_heads,
+    MAX_NOTIFY_LEN, MaintenanceActionHead, MaintenanceActionLiteral, MaintenanceActionScan,
+    MaintenanceActions, scan_maintenance_action_heads,
 };
 use crate::validation::{ValidationResult, validate_maintenance_rule};
 use chrono::{DateTime, Utc};
@@ -79,7 +79,12 @@ fn every_action_head_decodes_to_its_declared_type() {
          search if input.facts.monitored\n\
          set_quality_profile := \"Fixture HD\" if input.facts.has_file\n\
          add_tags := [\"stale\", \"fixture tag\"] if input.facts.has_file\n\
-         remove_tags := [\"new\"] if input.facts.has_file\n",
+         remove_tags := [\"new\"] if input.facts.has_file\n\
+         monitor if input.facts.has_file\n\
+         fetch_subtitles if input.facts.has_file\n\
+         move_to_library := \"Fixture Archive\" if input.facts.has_file\n\
+         move_to_root := \"/fixture/archive\" if input.facts.has_file\n\
+         notify := \"Fixture archived\" if input.facts.has_file\n",
     );
 
     let actions = actions_of(&result);
@@ -93,6 +98,11 @@ fn every_action_head_decodes_to_its_declared_type() {
             set_quality_profile: Some("Fixture HD".to_string()),
             add_tags: vec!["stale".to_string(), "fixture tag".to_string()],
             remove_tags: vec!["new".to_string()],
+            monitor: true,
+            fetch_subtitles: true,
+            move_to_library: Some("Fixture Archive".to_string()),
+            move_to_root: Some("/fixture/archive".to_string()),
+            notify: Some("Fixture archived".to_string()),
         }
     );
     assert!(!actions.is_empty());
@@ -107,6 +117,8 @@ fn each_boolean_head_is_decoded_on_its_own() {
         MaintenanceActionHead::DeleteFiles,
         MaintenanceActionHead::DeleteTitle,
         MaintenanceActionHead::Search,
+        MaintenanceActionHead::Monitor,
+        MaintenanceActionHead::FetchSubtitles,
     ] {
         let result = evaluate(&format!("{} if input.facts.has_file\n", head.rule_name()));
         let actions = actions_of(&result);
@@ -196,6 +208,15 @@ fn a_head_of_the_wrong_type_is_an_error_not_a_coerced_action() {
         ("add_tags contains \"stale\"\n", not_literal),
         ("remove_tags := [null]\n", not_literal),
         ("remove_tags := true\n", not_literal),
+        ("monitor := \"yes\"\n", malformed),
+        ("fetch_subtitles := 1\n", malformed),
+        ("move_to_library := 7\n", not_literal),
+        ("move_to_library := [\"Fixture Archive\"]\n", not_literal),
+        ("move_to_library := \" \"\n", invalid),
+        ("move_to_root := true\n", not_literal),
+        ("move_to_root := \"\"\n", invalid),
+        ("notify := input.facts.title\n", not_literal),
+        ("notify := \"\"\n", invalid),
     ] {
         let result = evaluate(&format!("unknown := false\n{body}"));
 
@@ -203,6 +224,111 @@ fn a_head_of_the_wrong_type_is_an_error_not_a_coerced_action() {
         assert_eq!(result.errors.len(), 1, "{body}");
         assert_eq!(result.errors[0].code, code, "{body}");
     }
+}
+
+#[test]
+fn a_notify_message_longer_than_the_bound_is_refused() {
+    let at_bound = "n".repeat(MAX_NOTIFY_LEN);
+    let fits = evaluate(&format!("notify := \"{at_bound}\"\n"));
+    assert_eq!(actions_of(&fits).notify.as_deref(), Some(at_bound.as_str()));
+
+    let over = evaluate(&format!("notify := \"{at_bound}n\"\n"));
+    assert!(over.records.is_empty(), "{:?}", over.records);
+    assert_eq!(over.errors.len(), 1);
+    assert_eq!(
+        over.errors[0].code,
+        diagnostic_codes::RULE_ACTION_VALUE_INVALID
+    );
+}
+
+/// Heads that cannot be applied together are found in execution order, so a
+/// decision with any such pair can be held as a whole.
+#[test]
+fn conflicting_heads_are_reported_as_a_pair() {
+    let decided = |body: &str| actions_of(&evaluate(body)).clone();
+    for (body, pair) in [
+        (
+            "monitor := true\nunmonitor := true\n",
+            (
+                MaintenanceActionHead::Monitor,
+                MaintenanceActionHead::Unmonitor,
+            ),
+        ),
+        (
+            "monitor := true\ndelete_title := true\n",
+            (
+                MaintenanceActionHead::Monitor,
+                MaintenanceActionHead::DeleteTitle,
+            ),
+        ),
+        (
+            "move_to_library := \"Fixture Archive\"\nmove_to_root := \"/fixture/archive\"\n",
+            (
+                MaintenanceActionHead::MoveToLibrary,
+                MaintenanceActionHead::MoveToRoot,
+            ),
+        ),
+        (
+            "move_to_root := \"/fixture/archive\"\ndelete_files := true\n",
+            (
+                MaintenanceActionHead::MoveToRoot,
+                MaintenanceActionHead::DeleteFiles,
+            ),
+        ),
+    ] {
+        assert_eq!(decided(body).conflict(), Some(pair), "{body}");
+    }
+    for body in [
+        "monitor := true\nsearch := true\nnotify := \"Fixture\"\n",
+        "move_to_library := \"Fixture Archive\"\nunmonitor := true\n",
+        "unmonitor := true\ndelete_files := true\n",
+    ] {
+        assert_eq!(decided(body).conflict(), None, "{body}");
+    }
+}
+
+/// Decisions stored before the newer heads existed still read, and a decision
+/// that uses none of them is written back in the same form.
+#[test]
+fn decided_actions_json_without_the_newer_heads_round_trips_unchanged() {
+    let stored = r#"{"unmonitor":true,"delete_files":false,"delete_title":false,"search":false,"set_quality_profile":null,"add_tags":["stale"],"remove_tags":[]}"#;
+    let actions: MaintenanceActions = serde_json::from_str(stored).expect("old form reads");
+    assert!(actions.unmonitor);
+    assert!(!actions.monitor);
+    assert_eq!(actions.move_to_library, None);
+    assert_eq!(serde_json::to_string(&actions).expect("serializes"), stored);
+
+    let newer = MaintenanceActions {
+        monitor: true,
+        move_to_root: Some("/fixture/archive".to_string()),
+        notify: Some("Fixture".to_string()),
+        ..MaintenanceActions::default()
+    };
+    let json = serde_json::to_string(&newer).expect("serializes");
+    assert_eq!(
+        serde_json::from_str::<MaintenanceActions>(&json).expect("reads back"),
+        newer
+    );
+}
+
+#[test]
+fn the_scan_collects_move_and_notify_literals_with_their_positions() {
+    let scan = scan_maintenance_action_heads(
+        &source(
+            "move_to_library := \"Fixture Archive\" if input.facts.has_file\n\
+             move_to_root := \"/fixture/archive\" if not input.facts.has_file\n\
+             notify := \"Fixture moved\" if input.facts.has_file\n",
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+
+    assert!(scan.errors.is_empty(), "{:?}", scan.errors);
+    assert_eq!(scan.libraries, vec![literal("Fixture Archive", 3, 20)]);
+    assert_eq!(scan.roots, vec![literal("/fixture/archive", 4, 17)]);
+    assert_eq!(scan.notifications, vec![literal("Fixture moved", 5, 11)]);
+    assert!(scan.remove_tags.is_empty());
+    assert!(!scan.defines_destructive_action());
 }
 
 #[test]
@@ -759,6 +885,69 @@ fn helpers_that_are_used_and_contract_heads_do_not_warn() {
 
     assert!(scan.errors.is_empty(), "{:?}", scan.errors);
     assert!(scan.warnings.is_empty(), "{:?}", scan.warnings);
+}
+
+#[test]
+fn with_may_not_replace_input_data_or_a_helper_name() {
+    let scan = scan_maintenance_action_heads(
+        &source(
+            "old if input.facts.file_count > 5\n\
+             unmonitor if old with input.facts.file_count as 9\n\
+             search if old with data.scryer.maintenance.user.fixture_rule.old as true\n\
+             delete_files if days_since(input.facts.added_at) > 1 with time.now_ns as 0\n\
+             add_tags := [\"a\"] if count([x | x := 1; old with input as {}]) > 0\n\
+             remove_tags := [\"b\"] if every x in [1] { old with floor as 1 }\n\
+             set_quality_profile := \"HD\" if search with old as true\n",
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+
+    let refused: Vec<(&str, &str, usize)> = scan
+        .errors
+        .iter()
+        .map(|error| (error.code, error.rule.as_str(), error.line))
+        .collect();
+    assert_eq!(
+        refused,
+        vec![
+            (diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED, "input", 4),
+            (diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED, "data", 5),
+            (diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED, "time", 6),
+            (diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED, "input", 7),
+            (diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED, "floor", 8),
+        ],
+        "a rule's own helper may still be replaced"
+    );
+}
+
+#[test]
+fn a_helper_used_through_an_import_alias_does_not_warn() {
+    let scan = scan_maintenance_action_heads(
+        &source(
+            "import data.scryer.maintenance.user.fixture_rule as me\n\
+             import data.scryer.maintenance.user.fixture_rule.stale as is_stale\n\
+             old if input.facts.file_count > 5\n\
+             stale if input.facts.file_count > 9\n\
+             unused_helper := 1\n\
+             unmonitor if me.old\n\
+             search if is_stale\n",
+        ),
+        "fixture_rule",
+    )
+    .expect("source parses");
+
+    assert!(scan.errors.is_empty(), "{:?}", scan.errors);
+    let warned: Vec<(&str, &str)> = scan
+        .warnings
+        .iter()
+        .map(|warning| (warning.code, warning.rule.as_str()))
+        .collect();
+    assert_eq!(
+        warned,
+        vec![(diagnostic_codes::RULE_UNREFERENCED_RULE, "unused_helper")],
+        "only the helper nothing reaches is reported"
+    );
 }
 
 #[test]

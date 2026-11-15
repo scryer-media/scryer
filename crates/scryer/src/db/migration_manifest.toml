@@ -4092,6 +4092,91 @@ hook_id = "backfill_media_request_id_projection"
 engine = "all"
 scope = "all"
 
+[[migration]]
+version = 345
+description = "lifecycle candidate decided actions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0345_lifecycle_candidate_decided_actions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0345_lifecycle_candidate_decided_actions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 346
+description = "remove user maintenance rules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0346_remove_user_maintenance_rules.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0346_remove_user_maintenance_rules.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 347
+description = "rule builder models"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0347_rule_builder_models.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0347_rule_builder_models.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 348
+description = "maintenance rule schedules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0348_maintenance_rule_schedules.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0348_maintenance_rule_schedules.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 349
+description = "maintenance step attempt window"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0349_maintenance_step_attempt_window.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0349_maintenance_step_attempt_window.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

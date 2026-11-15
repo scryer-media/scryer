@@ -4105,11 +4105,37 @@ impl AcquisitionQueries {
     ) -> GqlResult<Option<RuleSetPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let rule_set = app
+        let Some(rule_set) = app
             .get_rule_set(&actor, id.as_ref())
             .await
-            .map_err(to_gql_error)?;
-        Ok(rule_set.map(crate::mappers::from_rule_set))
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        let mut payload = crate::mappers::from_rule_set(rule_set);
+        if ctx.look_ahead().field("builderModel").exists() {
+            payload.builder_model = app
+                .get_rule_set_builder_model(&actor, id.as_ref())
+                .await
+                .map_err(to_gql_error)?
+                .map(async_graphql::Json);
+        }
+        Ok(Some(payload))
+    }
+
+    /// What the rule builder offers for one rule family (`maintenance` or
+    /// `scoring`): its outputs, how each value is entered and bounded, and
+    /// which outputs exclude each other. A family with no schema is refused
+    /// with `RULE_BUILDER_FAMILY_UNKNOWN`.
+    async fn rule_builder_schema(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Rule family whose builder schema to return.")] family: String,
+    ) -> GqlResult<RuleBuilderSchema> {
+        actor_from_ctx(ctx)?;
+        scryer_application::rule_builder_schema(&family)
+            .map(RuleBuilderSchema::from)
+            .map_err(to_gql_error)
     }
 
     // ── Maintenance Rule Sets ────────────────────────────────────────────
@@ -4128,7 +4154,12 @@ impl AcquisitionQueries {
             .map_err(to_gql_error)?;
         Ok(details
             .iter()
-            .map(crate::mappers::from_maintenance_rule_set)
+            .map(|detail| {
+                crate::mappers::from_maintenance_rule_set(
+                    detail,
+                    app.maintenance_rule_next_run_at(&detail.rule_set.id),
+                )
+            })
             .collect())
     }
 
@@ -4145,7 +4176,10 @@ impl AcquisitionQueries {
             .get_maintenance_rule_set(&actor, id.as_ref())
             .await
             .map_err(to_gql_error)?;
-        Ok(detail.map(crate::mappers::from_maintenance_rule_set_detail))
+        Ok(detail.map(|detail| {
+            let next_run_at = app.maintenance_rule_next_run_at(&detail.rule_set.id);
+            crate::mappers::from_maintenance_rule_set_detail(detail, next_run_at)
+        }))
     }
 
     /// List every stored revision of one maintenance rule set, newest first.

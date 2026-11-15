@@ -13,10 +13,7 @@ use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
 use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, MaintenanceRuleReadFault};
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::test_support::InMemoryLocationOperationStore;
-use crate::maintenance_rules::{
-    MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceMatcherDraft, MaintenanceRuleDraft,
-    execution_reason,
-};
+use crate::maintenance_rules::{MaintenanceMatcherDraft, MaintenanceRuleDraft, execution_reason};
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
     PlaybackProbeStatus,
@@ -1217,7 +1214,8 @@ async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
         .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
         .await;
     let title = seed_title(&fixture.app, &fixture.user, "Graced Title", true).await;
-    let untouched = |title: &Title| title.monitored && !title.tags.iter().any(|tag| tag == "graced");
+    let untouched =
+        |title: &Title| title.monitored && !title.tags.iter().any(|tag| tag == "graced");
     let read_title = || async {
         fixture
             .app
@@ -1257,8 +1255,20 @@ async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
     assert_eq!(candidate.state, MaintenanceCandidateState::Observing);
     assert!(candidate.due_at > Utc::now() + chrono::Duration::days(29));
     assert!(fixture.evaluation.all_action_runs().await.is_empty());
-    assert!(fixture.evaluation.action_steps_with_id("unmonitor").await.is_empty());
-    assert!(fixture.evaluation.action_steps_with_id("add_tags").await.is_empty());
+    assert!(
+        fixture
+            .evaluation
+            .action_steps_with_id("unmonitor")
+            .await
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .evaluation
+            .action_steps_with_id("add_tags")
+            .await
+            .is_empty()
+    );
 
     // Once the grace ends, the same candidate carries the actions.
     fixture.evaluation.end_every_grace().await;
@@ -1419,6 +1429,73 @@ async fn a_destructive_action_holds_while_a_location_operation_owns_the_title() 
         candidate.state_reason,
         execution_reason::LOCATION_OPERATION_HOLD
     );
+}
+
+#[tokio::test]
+async fn a_reversible_action_also_holds_while_a_location_operation_owns_the_title() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    operations
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
+        .await
+        .expect("claim the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(
+        stored.monitored,
+        "a held unmonitor must leave the title monitored"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Blocked);
+    assert_eq!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+
+    // Waiting on the operation charges no attempt, however often it repeats.
+    fixture.handle().await;
+    fixture.handle().await;
+    assert!(
+        fixture
+            .evaluation
+            .all_step_attempts()
+            .await
+            .iter()
+            .all(|attempt| attempt.state == scryer_domain::MaintenanceActionStepState::Held),
+        "a location hold must never be recorded as a dispatch"
+    );
+
+    operations
+        .release_location_operation_ownership("operation-1")
+        .await
+        .expect("release the claim");
+    fixture.evaluate().await;
+    let after = fixture.handle().await;
+    assert_eq!(after.held, 0, "{after:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored, "the released title is unmonitored");
 }
 
 #[tokio::test]

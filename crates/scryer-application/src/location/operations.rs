@@ -307,7 +307,7 @@ impl AppUseCase {
         actor: &User,
         request: StartRootMoveRequest,
     ) -> AppResult<LocationOperationAccepted> {
-        self.start_location_change(actor, request, LocationExecutionMode::UserMovedFiles)
+        self.start_location_change(actor, request, LocationExecutionMode::UserMovedFiles, None)
             .await
     }
 
@@ -336,8 +336,25 @@ impl AppUseCase {
         actor: &User,
         request: StartRootMoveRequest,
     ) -> AppResult<LocationOperationAccepted> {
-        self.start_location_change(actor, request, LocationExecutionMode::MoveWithScryer)
+        self.start_location_change(actor, request, LocationExecutionMode::MoveWithScryer, None)
             .await
+    }
+
+    /// [`Self::start_root_move`] with the id the operation is created with,
+    /// chosen by a caller that records it before the operation exists.
+    pub(crate) async fn start_root_move_as(
+        &self,
+        actor: &User,
+        request: StartRootMoveRequest,
+        operation_id: Option<String>,
+    ) -> AppResult<LocationOperationAccepted> {
+        self.start_location_change(
+            actor,
+            request,
+            LocationExecutionMode::MoveWithScryer,
+            operation_id,
+        )
+        .await
     }
 
     async fn start_location_change(
@@ -345,6 +362,7 @@ impl AppUseCase {
         actor: &User,
         request: StartRootMoveRequest,
         mode: LocationExecutionMode,
+        operation_id: Option<String>,
     ) -> AppResult<LocationOperationAccepted> {
         let preview_request = RootMovePreviewRequest {
             title_ids: request.title_ids.clone(),
@@ -371,13 +389,17 @@ impl AppUseCase {
         }
 
         let titles_total = planned.planned.execution.titles.len() as i64;
-        self.admit_location_operation(LocationOperationAdmission {
-            actor,
-            plan,
-            execution: planned.planned.execution,
-            titles_total,
-            failure_message: "The location operation could not be started.",
-        })
+        self.admit_location_operation_dispatch(
+            LocationOperationAdmission {
+                actor,
+                plan,
+                execution: planned.planned.execution,
+                titles_total,
+                failure_message: "The location operation could not be started.",
+            },
+            operation_id,
+            true,
+        )
         .await
     }
 

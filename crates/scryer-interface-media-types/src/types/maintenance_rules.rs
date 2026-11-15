@@ -1,6 +1,8 @@
 use async_graphql::{Enum, ID, InputObject, Json, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
+use super::{ScriptScheduleInput, ScriptSchedulePayload};
+
 // ── Enums ──────────────────────────────────────────────────────────────────
 
 /// The one control of a maintenance rule set.
@@ -188,6 +190,18 @@ pub struct MaintenanceRuleSet {
     pub grace_days: i32,
     /// The actions the source of the revision currently in force declares.
     pub declared_actions: MaintenanceDeclaredActions,
+    /// Stable reason code when the revision in force cannot be evaluated or
+    /// run, such as `MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED` for a rule
+    /// saved before rules declared their own actions. The rule matches nothing
+    /// and cannot be enabled until its source is saved again. Null when the
+    /// rule is usable.
+    pub load_refusal: Option<String>,
+    /// When the rule evaluates and then acts on what it decided. A rule saved
+    /// without one runs every eight hours.
+    pub schedule: ScriptSchedulePayload,
+    /// UTC time of the next scheduled run. Null while the rule is disabled,
+    /// when its schedule is manual, or before the scheduler has loaded it.
+    pub next_run_at: Option<DateTime<Utc>>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
@@ -266,7 +280,7 @@ pub struct MaintenanceDecidedActions {
 /// One typed parameter set for a sequence step. The action catalog decides
 /// which fields are meaningful for each `kind`; the application rejects every
 /// other shape before the sequence can be stored.
-#[derive(SimpleObject, Clone)]
+#[derive(SimpleObject, Clone, Default)]
 pub struct MaintenanceActionStepParameters {
     /// Whether a title-level unmonitor step also unmonitors its seasons and
     /// episodes. This is required before a title file-deletion step can cover
@@ -278,6 +292,10 @@ pub struct MaintenanceActionStepParameters {
     pub search_condition: Option<MaintenanceSearchCondition>,
     /// Tags written by an add-tags or remove-tags step.
     pub tags: Vec<String>,
+    /// Library name a move-to-library step sends the title to.
+    pub target_library: Option<String>,
+    /// Root folder path a move-to-root step sends the title to.
+    pub target_root: Option<String>,
 }
 
 /// The closed catalog of sequence step kinds. These kinds are intentionally
@@ -300,6 +318,14 @@ pub enum MaintenanceActionStepKind {
     RemoveTags,
     /// Delete the selected title record and its authorized files.
     DeleteTitleAndFiles,
+    /// Monitor the selected scope.
+    Monitor,
+    /// Search for subtitles for the selected scope's files.
+    FetchSubtitles,
+    /// Move the selected title into another library.
+    MoveToLibrary,
+    /// Move the selected title to another root folder of its library.
+    MoveToRoot,
 }
 
 /// The explicit condition a search step applies before requesting work.
@@ -341,6 +367,9 @@ pub struct MaintenanceRuleSetDetail {
     pub revision: MaintenanceRuleRevision,
     /// The actions that revision's source declares.
     pub declared_actions: MaintenanceDeclaredActions,
+    /// The simple builder's document for the revision's source, or null when
+    /// the source was written by hand.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
 /// Identifier returned after deleting a maintenance rule set.
@@ -406,6 +435,9 @@ pub struct MaintenancePreviewTitle {
     pub reason_codes: Vec<String>,
     /// Why evaluation failed for this subject, or null when it succeeded.
     pub error: Option<String>,
+    /// Stable code for `error`, such as `RULE_RUNTIME_ERROR` or
+    /// `RULE_OUTPUT_INVALID`; null exactly when `error` is null.
+    pub error_code: Option<String>,
     /// What the rule decided for this subject, or null unless it matched.
     pub actions: Option<MaintenanceDecidedActions>,
     /// The input document the rule evaluated for this subject: its `facts`
@@ -718,6 +750,11 @@ pub struct CreateMaintenanceRuleSetInput {
     /// Configured library root whose capacity and owned files this revision
     /// uses. Required when the matcher reads a storage fact.
     pub storage_root_id: Option<String>,
+    /// The simple builder's document for the source, or omitted for a rule
+    /// written by hand.
+    pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
+    /// When the rule runs. Omitted means every eight hours.
+    pub schedule: Option<ScriptScheduleInput>,
 }
 
 /// Replaces the matcher of an existing rule set, appending a revision.
@@ -733,6 +770,9 @@ pub struct UpdateMaintenanceRuleMatcherInput {
     /// Configured library root. Omission preserves the current root, null
     /// clears it, and a value replaces it.
     pub storage_root_id: MaybeUndefined<ID>,
+    /// The simple builder's document. Omit to keep the current revision's
+    /// document, pass null to clear it, or pass a document to replace it.
+    pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
 }
 
 /// Renames and re-scopes a rule set without touching its matcher.
@@ -746,6 +786,9 @@ pub struct UpdateMaintenanceRuleMetadataInput {
     pub description: Option<String>,
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    /// Replacement schedule. Omitted keeps the current one. Changing it
+    /// leaves the rule's state and arming alone.
+    pub schedule: Option<ScriptScheduleInput>,
 }
 
 /// What the operator reviewed before enabling a rule that can delete files.

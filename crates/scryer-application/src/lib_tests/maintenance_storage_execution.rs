@@ -14,8 +14,7 @@ use crate::maintenance_rules::{MaintenanceCandidateFilter, MaintenanceRuleDraft}
 use crate::ports::SubtitleDownloadRepository;
 use scryer_domain::{
     ExternalSubtitleSourceKind, LifecycleActionRunStatus, MaintenanceActionStepState,
-    MaintenanceEffectArming,
-    MaintenanceRuleSubjectKind, SubtitleBlocklistEntry, SubtitleDownload,
+    MaintenanceEffectArming, MaintenanceRuleSubjectKind, SubtitleBlocklistEntry, SubtitleDownload,
 };
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -673,7 +672,10 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
         .action_steps_with_id("delete_files")
         .await;
     assert_eq!(resumed_steps.len(), 1);
-    assert_eq!(resumed_steps[0].state, MaintenanceActionStepState::Succeeded);
+    assert_eq!(
+        resumed_steps[0].state,
+        MaintenanceActionStepState::Succeeded
+    );
     assert_eq!(
         resumed_steps[0].attempt, 1,
         "the resumed delete reuses the attempt the unknown hold refunded"
@@ -834,9 +836,23 @@ async fn a_file_replaced_after_its_deletion_was_planned_is_preserved_on_retry() 
     );
     let runs =
         crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    let recorded_reasons: Vec<String> = runs
+        .iter()
+        .filter_map(|run| serde_json::from_str::<serde_json::Value>(&run.detail).ok())
+        .flat_map(|detail| {
+            detail["files"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|file| file["error_reason"].as_str().map(str::to_string))
+        })
+        .collect();
     assert!(
-        runs.iter().any(|run| run.detail.contains("file changed")),
-        "the journal records why the file was kept"
+        recorded_reasons.iter().any(
+            |reason| reason == crate::error_reasons::library::MAINTENANCE_DELETION_FILE_CHANGED
+        ),
+        "the journal records why the file was kept: {recorded_reasons:?}"
     );
 }
 
@@ -986,7 +1002,10 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
         .await;
     assert_eq!(held_steps.len(), 1);
     assert_eq!(held_steps[0].state, MaintenanceActionStepState::Held);
-    assert_eq!(held_steps[0].attempt, 1, "guard hold does not consume an attempt");
+    assert_eq!(
+        held_steps[0].attempt, 1,
+        "guard hold does not consume an attempt"
+    );
 
     fixture
         .execution
@@ -1022,11 +1041,10 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
 
 #[tokio::test]
 async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video_deletion() {
-    let _probe =
-        install_maintenance_storage_capacity_probe_for_test(scripted([
-            low_readings_before_first_unlink(),
-        ]))
-        .await;
+    let _probe = install_maintenance_storage_capacity_probe_for_test(scripted([
+        low_readings_before_first_unlink(),
+    ]))
+    .await;
     let mut fixture = title_fixture("Bounded Subtitle", MediaFacet::Movie).await;
     let subtitles = Arc::new(TrackedSubtitleRepo::default());
     fixture.execution.app = fixture

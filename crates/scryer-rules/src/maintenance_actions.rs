@@ -16,10 +16,10 @@
 //! `days_since(ts)`, the whole days between an RFC3339 timestamp and the
 //! run's `input.evaluation_time`.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use regorus::Value;
-use regorus::unstable::{Expr, Module, Rule, RuleHead};
+use regorus::unstable::{Expr, Literal, Module, Query, Rule, RuleHead};
 use serde::{Deserialize, Serialize};
 
 use crate::RulesError;
@@ -42,11 +42,19 @@ pub enum MaintenanceActionHead {
     SetQualityProfile,
     AddTags,
     RemoveTags,
+    Monitor,
+    FetchSubtitles,
+    MoveToLibrary,
+    MoveToRoot,
+    Notify,
 }
+
+/// The longest `notify` message, in bytes.
+pub const MAX_NOTIFY_LEN: usize = 500;
 
 impl MaintenanceActionHead {
     /// Every action head, in the order the wrapper projects them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 12] = [
         Self::Unmonitor,
         Self::DeleteFiles,
         Self::DeleteTitle,
@@ -54,6 +62,28 @@ impl MaintenanceActionHead {
         Self::SetQualityProfile,
         Self::AddTags,
         Self::RemoveTags,
+        Self::Monitor,
+        Self::FetchSubtitles,
+        Self::MoveToLibrary,
+        Self::MoveToRoot,
+        Self::Notify,
+    ];
+
+    /// Every action head, in the order the host applies them. The builder
+    /// offers them in this order too.
+    pub const EXECUTION_ORDER: [Self; 12] = [
+        Self::AddTags,
+        Self::RemoveTags,
+        Self::SetQualityProfile,
+        Self::Monitor,
+        Self::Search,
+        Self::FetchSubtitles,
+        Self::MoveToLibrary,
+        Self::MoveToRoot,
+        Self::Unmonitor,
+        Self::DeleteFiles,
+        Self::DeleteTitle,
+        Self::Notify,
     ];
 
     /// The Rego rule name an author writes.
@@ -66,6 +96,11 @@ impl MaintenanceActionHead {
             Self::SetQualityProfile => "set_quality_profile",
             Self::AddTags => "add_tags",
             Self::RemoveTags => "remove_tags",
+            Self::Monitor => "monitor",
+            Self::FetchSubtitles => "fetch_subtitles",
+            Self::MoveToLibrary => "move_to_library",
+            Self::MoveToRoot => "move_to_root",
+            Self::Notify => "notify",
         }
     }
 
@@ -75,9 +110,14 @@ impl MaintenanceActionHead {
 
     /// Whether the head carries a value rather than a plain yes.
     pub const fn carries_value(self) -> bool {
+        self.carries_string() || matches!(self, Self::AddTags | Self::RemoveTags)
+    }
+
+    /// Whether the head's value is one string rather than a list.
+    pub const fn carries_string(self) -> bool {
         matches!(
             self,
-            Self::SetQualityProfile | Self::AddTags | Self::RemoveTags
+            Self::SetQualityProfile | Self::MoveToLibrary | Self::MoveToRoot | Self::Notify
         )
     }
 
@@ -86,13 +126,60 @@ impl MaintenanceActionHead {
         matches!(self, Self::DeleteFiles | Self::DeleteTitle)
     }
 
+    /// The heads that cannot be applied together with this one. Each pair is
+    /// listed once, on the head that comes first in [`Self::EXECUTION_ORDER`].
+    pub const fn conflicts_with(self) -> &'static [Self] {
+        match self {
+            Self::Monitor => &[Self::Unmonitor, Self::DeleteFiles, Self::DeleteTitle],
+            Self::MoveToLibrary => &[Self::MoveToRoot, Self::DeleteFiles, Self::DeleteTitle],
+            Self::MoveToRoot => &[Self::DeleteFiles, Self::DeleteTitle],
+            _ => &[],
+        }
+    }
+
     /// The Rego literal the wrapper uses when the head is undefined.
     pub(crate) const fn wrapper_default(self) -> &'static str {
         match self {
-            Self::Unmonitor | Self::DeleteFiles | Self::DeleteTitle | Self::Search => "false",
-            Self::SetQualityProfile => "null",
+            Self::Unmonitor
+            | Self::DeleteFiles
+            | Self::DeleteTitle
+            | Self::Search
+            | Self::Monitor
+            | Self::FetchSubtitles => "false",
+            Self::SetQualityProfile | Self::MoveToLibrary | Self::MoveToRoot | Self::Notify => {
+                "null"
+            }
             Self::AddTags | Self::RemoveTags => "[]",
         }
+    }
+
+    /// The example a refusal shows for a value head.
+    fn value_example(self) -> &'static str {
+        match self {
+            Self::SetQualityProfile => "\"HD-1080p\"",
+            Self::MoveToLibrary => "\"Movies\"",
+            Self::MoveToRoot => "\"/media/movies\"",
+            Self::Notify => "\"Archived to cold storage\"",
+            _ => "[\"stale\"]",
+        }
+    }
+
+    /// Why a string value written for this head is refused, if it is.
+    fn check_string(self, value: &str) -> Option<String> {
+        let name = self.rule_name();
+        let blank = match self {
+            Self::SetQualityProfile => value.is_empty(),
+            _ => value.trim().is_empty(),
+        };
+        if blank {
+            return Some(format!("'{name}' must not be empty"));
+        }
+        (self == Self::Notify && value.len() > MAX_NOTIFY_LEN).then(|| {
+            format!(
+                "'{name}' is {} bytes, at most {MAX_NOTIFY_LEN} are allowed",
+                value.len()
+            )
+        })
     }
 }
 
@@ -112,6 +199,18 @@ pub struct MaintenanceActions {
     pub set_quality_profile: Option<String>,
     pub add_tags: Vec<String>,
     pub remove_tags: Vec<String>,
+    // The heads below are left out of the JSON while unset, so a decision
+    // that uses none of them keeps the form it was stored in before.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub monitor: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fetch_subtitles: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_to_library: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_to_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify: Option<String>,
 }
 
 impl MaintenanceActions {
@@ -137,8 +236,28 @@ impl MaintenanceActions {
                 MaintenanceActionHead::SetQualityProfile => self.set_quality_profile.is_some(),
                 MaintenanceActionHead::AddTags => !self.add_tags.is_empty(),
                 MaintenanceActionHead::RemoveTags => !self.remove_tags.is_empty(),
+                MaintenanceActionHead::Monitor => self.monitor,
+                MaintenanceActionHead::FetchSubtitles => self.fetch_subtitles,
+                MaintenanceActionHead::MoveToLibrary => self.move_to_library.is_some(),
+                MaintenanceActionHead::MoveToRoot => self.move_to_root.is_some(),
+                MaintenanceActionHead::Notify => self.notify.is_some(),
             })
             .collect()
+    }
+
+    /// The first pair of decided heads that cannot be applied together, in
+    /// execution order. A decision with one is held and applies nothing.
+    pub fn conflict(&self) -> Option<(MaintenanceActionHead, MaintenanceActionHead)> {
+        let heads = self.heads();
+        MaintenanceActionHead::EXECUTION_ORDER
+            .into_iter()
+            .filter(|head| heads.contains(head))
+            .find_map(|head| {
+                head.conflicts_with()
+                    .iter()
+                    .find(|other| heads.contains(other))
+                    .map(|other| (head, *other))
+            })
     }
 }
 
@@ -153,17 +272,19 @@ pub(crate) fn decode_actions(value: &Value) -> Result<MaintenanceActions, String
             .copied()
             .map_err(|_| format!("'{}' must be a boolean", head.rule_name()))
     };
-    let profile_name = MaintenanceActionHead::SetQualityProfile.rule_name();
-    let set_quality_profile = match &value[profile_name] {
-        Value::Null => None,
-        profile => {
-            let profile = profile
-                .as_string()
-                .map_err(|_| format!("'{profile_name}' must be a string"))?;
-            if profile.is_empty() {
-                return Err(format!("'{profile_name}' must not be empty"));
+    let string = |head: MaintenanceActionHead| -> Result<Option<String>, String> {
+        let name = head.rule_name();
+        match &value[name] {
+            Value::Null => Ok(None),
+            text => {
+                let text = text
+                    .as_string()
+                    .map_err(|_| format!("'{name}' must be a string"))?;
+                if let Some(problem) = head.check_string(text) {
+                    return Err(problem);
+                }
+                Ok(Some(text.to_string()))
             }
-            Some(profile.to_string())
         }
     };
     let tags = |head: MaintenanceActionHead| {
@@ -181,9 +302,14 @@ pub(crate) fn decode_actions(value: &Value) -> Result<MaintenanceActions, String
         delete_files: flag(MaintenanceActionHead::DeleteFiles)?,
         delete_title: flag(MaintenanceActionHead::DeleteTitle)?,
         search: flag(MaintenanceActionHead::Search)?,
-        set_quality_profile,
+        set_quality_profile: string(MaintenanceActionHead::SetQualityProfile)?,
         add_tags: tags(MaintenanceActionHead::AddTags)?,
         remove_tags: tags(MaintenanceActionHead::RemoveTags)?,
+        monitor: flag(MaintenanceActionHead::Monitor)?,
+        fetch_subtitles: flag(MaintenanceActionHead::FetchSubtitles)?,
+        move_to_library: string(MaintenanceActionHead::MoveToLibrary)?,
+        move_to_root: string(MaintenanceActionHead::MoveToRoot)?,
+        notify: string(MaintenanceActionHead::Notify)?,
     })
 }
 
@@ -289,6 +415,12 @@ pub struct MaintenanceActionScan {
     pub add_tags: Vec<MaintenanceActionLiteral>,
     /// Every tag written for `remove_tags`, in source order.
     pub remove_tags: Vec<MaintenanceActionLiteral>,
+    /// Every library name written for `move_to_library`, in source order.
+    pub libraries: Vec<MaintenanceActionLiteral>,
+    /// Every root path written for `move_to_root`, in source order.
+    pub roots: Vec<MaintenanceActionLiteral>,
+    /// Every message written for `notify`, in source order.
+    pub notifications: Vec<MaintenanceActionLiteral>,
     /// Conditions that refuse the rule.
     pub errors: Vec<MaintenanceActionScanIssue>,
     /// Conditions worth telling the author about that do not refuse the rule.
@@ -305,6 +437,9 @@ impl MaintenanceActionScan {
         match head {
             MaintenanceActionHead::SetQualityProfile => &mut self.quality_profiles,
             MaintenanceActionHead::AddTags => &mut self.add_tags,
+            MaintenanceActionHead::MoveToLibrary => &mut self.libraries,
+            MaintenanceActionHead::MoveToRoot => &mut self.roots,
+            MaintenanceActionHead::Notify => &mut self.notifications,
             _ => &mut self.remove_tags,
         }
     }
@@ -470,12 +605,65 @@ fn foreign_data_references(module: &Module) -> Vec<MaintenanceActionScanIssue> {
     issues
 }
 
+/// Every `with` that replaces the rule's input, its `data`, or a name the
+/// host's helpers are built on, once per place.
+///
+/// The unknown-fact hold and the execution re-check both judge the facts the
+/// host observed. A `with input...` or `with data...` would let a decision
+/// rest on values the rule wrote itself, and a `with time...` (or another
+/// helper name) would change what `days_since` computes.
+fn protected_with_targets(module: &Module) -> Vec<MaintenanceActionScanIssue> {
+    fn check_query(query: &Query, issues: &mut Vec<MaintenanceActionScanIssue>) {
+        for statement in &query.stmts {
+            for with_mod in &statement.with_mods {
+                let target = rule_head_name(&with_mod.refr);
+                if target.is_some_and(|name| {
+                    name == "input" || name == "data" || HOST_HELPER_NAMES.contains(&name)
+                }) {
+                    let name = target.unwrap_or_default();
+                    issues.push(issue(
+                        diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED,
+                        name,
+                        format!(
+                            "'with' cannot replace '{name}' in a maintenance rule; the rule \
+                             must decide from what Scryer observed"
+                        ),
+                        source_position(&with_mod.refr),
+                    ));
+                }
+            }
+            if let Literal::Every { query, .. } = &statement.literal {
+                check_query(query, issues);
+            }
+        }
+    }
+
+    let mut issues = Vec::new();
+    for rule in &module.policy {
+        if let Rule::Spec { bodies, .. } = rule.as_ref() {
+            for body in bodies {
+                check_query(&body.query, &mut issues);
+            }
+        }
+        visit_rule_expr_nodes(rule, |expr| match expr {
+            Expr::ArrayCompr { query, .. }
+            | Expr::SetCompr { query, .. }
+            | Expr::ObjectCompr { query, .. } => check_query(query, &mut issues),
+            _ => {}
+        });
+    }
+    let mut seen = BTreeSet::new();
+    issues.retain(|issue| seen.insert((issue.line, issue.column)));
+    issues
+}
+
 fn not_literal(head: MaintenanceActionHead, at: (usize, usize)) -> MaintenanceActionScanIssue {
     let name = head.rule_name();
-    let expected = if head == MaintenanceActionHead::SetQualityProfile {
-        format!("a string literal, for example: {name} := \"HD-1080p\" if {{ ... }}")
+    let example = head.value_example();
+    let expected = if head.carries_string() {
+        format!("a string literal, for example: {name} := {example} if {{ ... }}")
     } else {
-        format!("an array of string literals, for example: {name} := [\"stale\"] if {{ ... }}")
+        format!("an array of string literals, for example: {name} := {example} if {{ ... }}")
     };
     issue(
         diagnostic_codes::RULE_ACTION_VALUE_NOT_LITERAL,
@@ -549,6 +737,7 @@ pub(crate) fn scan_module(module: &Module) -> MaintenanceActionScan {
         }
     }
     scan.errors.extend(foreign_data_references(module));
+    scan.errors.extend(protected_with_targets(module));
 
     let referenced = referenced_names(module);
     for (name, at) in defined {
@@ -619,7 +808,7 @@ fn scan_value_rule(
             scan.errors.push(not_literal(head, source_position(refr)));
             continue;
         };
-        let literals: Vec<&Expr> = if head == MaintenanceActionHead::SetQualityProfile {
+        let literals: Vec<&Expr> = if head.carries_string() {
             vec![value]
         } else {
             match value {
@@ -636,7 +825,7 @@ fn scan_value_rule(
         }
         // The same bound the decision decoder enforces, counted the same way:
         // entries as written, before duplicates fold.
-        if head != MaintenanceActionHead::SetQualityProfile && literals.len() > MAX_TAGS {
+        if !head.carries_string() && literals.len() > MAX_TAGS {
             scan.errors.push(issue(
                 diagnostic_codes::RULE_ACTION_VALUE_INVALID,
                 head.rule_name(),
@@ -655,9 +844,8 @@ fn scan_value_rule(
                 continue;
             };
             let at = source_position(expr);
-            let problem = if head == MaintenanceActionHead::SetQualityProfile {
-                text.is_empty()
-                    .then(|| format!("'{}' must not be empty", head.rule_name()))
+            let problem = if head.carries_string() {
+                head.check_string(&text)
             } else {
                 check_tag(&text).err()
             };
@@ -692,6 +880,20 @@ fn string_literal(expr: &Expr) -> Option<String> {
 /// document (`data.<package>.archive`).
 fn referenced_names(module: &Module) -> HashSet<String> {
     let package = static_reference(&module.package.refr).map(|reference| reference.fields());
+    // A name an import binds stands for the path it imports, so a use of
+    // `me.helper` after `import data.<own package> as me` uses `helper`.
+    let imported: HashMap<String, Vec<String>> = module
+        .imports
+        .iter()
+        .filter_map(|import| {
+            let target = static_reference(&import.refr)?.fields();
+            let alias = match &import.r#as {
+                Some(alias) => alias.text().to_string(),
+                None => target.last()?.clone(),
+            };
+            Some((alias, target))
+        })
+        .collect();
     let mut names = HashSet::new();
     for rule in &module.policy {
         let head_refr: *const Expr = rule_refr(rule);
@@ -702,7 +904,15 @@ fn referenced_names(module: &Module) -> HashSet<String> {
             let Some(reference) = static_reference(expr) else {
                 return;
             };
-            let fields = reference.fields();
+            let mut fields = reference.fields();
+            if let Some(target) = fields.first().and_then(|root| imported.get(root))
+                && target.first().map(String::as_str) == Some("data")
+            {
+                // Keep the alias itself too: a rule may define a name that an
+                // import also binds, and the plain reading must not be lost.
+                names.insert(fields[0].clone());
+                fields.splice(0..1, target.iter().cloned());
+            }
             let name = match fields.first().map(String::as_str) {
                 Some("data") => package.as_ref().and_then(|package| {
                     (fields.len() > package.len() + 1 && fields[1..=package.len()] == package[..])

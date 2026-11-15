@@ -1,25 +1,24 @@
 //! Projections for the maintenance-rule authoring surface.
 //!
 //! A rule's source declares its own actions; this module renames the declared
-//! and decided actions onto the wire. Historical candidates and runs keep the
-//! v1 action kind or v2 sequence they were written with.
+//! and decided actions onto the wire, along with the step sequence each
+//! candidate's decided actions build.
 
 use super::*;
 
 use scryer_application::maintenance_rules::{
-    MaintenanceActionDefinition as AppActionDefinition, MaintenanceActionKind as AppActionKind,
-    MaintenanceActionSequence as AppActionSequence,
+    MaintenanceActionKind as AppActionKind, MaintenanceActionSequence as AppActionSequence,
     MaintenanceActionStepKind as AppActionStepKind,
     MaintenanceActionStepParameters as AppActionStepParameters,
     MaintenanceDeclaredActions as AppDeclaredActions,
     MaintenanceSearchCondition as AppSearchCondition, decided_actions_from_json,
     decided_heads_in_execution_order, derived_effect_arming, maintenance_rule_state,
 };
-use scryer_rules::maintenance_actions::{
-    MaintenanceActionHead as AppActionHead, MaintenanceActions as AppDecidedActions,
-};
 use scryer_application::maintenance_rules::{
     MaintenancePreviewResult as AppPreviewResult, MaintenanceRuleSetDetail as AppRuleSetDetail,
+};
+use scryer_rules::maintenance_actions::{
+    MaintenanceActionHead as AppActionHead, MaintenanceActions as AppDecidedActions,
 };
 
 /// Revision numbers and grace periods are stored as `i64` but are small by
@@ -88,7 +87,7 @@ pub fn from_maintenance_action_run(
         subject_label,
         run,
         title_name,
-        action_definition,
+        action_sequence,
         sequence_steps,
     } = view;
     let action_kind =
@@ -97,9 +96,9 @@ pub fn from_maintenance_action_run(
         } else {
             maintenance_action_kind_value(AppActionKind::parse_wire_str(&run.action_kind)?)
         };
-    let action_sequence = action_definition
+    let action_sequence = action_sequence
         .as_ref()
-        .and_then(from_maintenance_action_definition);
+        .map(from_maintenance_action_sequence);
     Some(MaintenanceActionRun {
         subject_label,
         subject_kind: run.subject_kind,
@@ -203,7 +202,11 @@ fn maintenance_outcome_value(
 /// grace period a list view has to show live on the revision in force, and
 /// making the client fetch each row's detail to render them would turn one
 /// list into N+1 requests.
-pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSet {
+/// `next_run_at` comes from the in-memory scheduler, not from the row.
+pub fn from_maintenance_rule_set(
+    detail: &AppRuleSetDetail,
+    next_run_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> MaintenanceRuleSet {
     let rule_set = &detail.rule_set;
     MaintenanceRuleSet {
         id: ID::from(rule_set.id.clone()),
@@ -211,7 +214,7 @@ pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSe
         description: rule_set.description.clone(),
         state: maintenance_rule_state_value(maintenance_rule_state(detail)),
         enabled_arming: maintenance_effect_arming_value(derived_effect_arming(
-            &detail.action_definition,
+            &detail.declared_actions,
         )),
         edited_since_enabled: rule_set.destructive_rearm_required,
         system_owned: rule_set.system_owned,
@@ -219,7 +222,10 @@ pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSe
         subject_kind: maintenance_rule_subject_kind_value(rule_set.subject_kind),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         grace_days: to_graphql_int(detail.revision.grace_days),
-        declared_actions: from_maintenance_declared_definition(&detail.action_definition),
+        declared_actions: from_maintenance_declared_actions(&detail.declared_actions),
+        load_refusal: detail.load_refusal.map(str::to_string),
+        schedule: rule_set.schedule.clone().into(),
+        next_run_at,
         created_at: rule_set.created_at,
         updated_at: rule_set.updated_at,
     }
@@ -272,39 +278,34 @@ fn from_maintenance_action_step_parameters(
     parameters: &AppActionStepParameters,
 ) -> MaintenanceActionStepParameters {
     match parameters {
-        AppActionStepParameters::None => MaintenanceActionStepParameters {
-            include_descendants: None,
-            target_quality_profile_id: None,
-            search_condition: None,
-            tags: Vec::new(),
-        },
+        AppActionStepParameters::None => MaintenanceActionStepParameters::default(),
         AppActionStepParameters::Unmonitor {
             include_descendants,
         } => MaintenanceActionStepParameters {
             include_descendants: Some(*include_descendants),
-            target_quality_profile_id: None,
-            search_condition: None,
-            tags: Vec::new(),
+            ..MaintenanceActionStepParameters::default()
         },
         AppActionStepParameters::ChangeQualityProfile {
             target_quality_profile_id,
         } => MaintenanceActionStepParameters {
-            include_descendants: None,
             target_quality_profile_id: Some(target_quality_profile_id.clone()),
-            search_condition: None,
-            tags: Vec::new(),
+            ..MaintenanceActionStepParameters::default()
         },
         AppActionStepParameters::Search { condition } => MaintenanceActionStepParameters {
-            include_descendants: None,
-            target_quality_profile_id: None,
             search_condition: Some(maintenance_search_condition_value(*condition)),
-            tags: Vec::new(),
+            ..MaintenanceActionStepParameters::default()
         },
         AppActionStepParameters::Tags { tags } => MaintenanceActionStepParameters {
-            include_descendants: None,
-            target_quality_profile_id: None,
-            search_condition: None,
             tags: tags.clone(),
+            ..MaintenanceActionStepParameters::default()
+        },
+        AppActionStepParameters::Library { library } => MaintenanceActionStepParameters {
+            target_library: Some(library.clone()),
+            ..MaintenanceActionStepParameters::default()
+        },
+        AppActionStepParameters::Root { root } => MaintenanceActionStepParameters {
+            target_root: Some(root.clone()),
+            ..MaintenanceActionStepParameters::default()
         },
     }
 }
@@ -318,17 +319,10 @@ fn maintenance_action_step_kind_value(kind: AppActionStepKind) -> MaintenanceAct
         AppActionStepKind::AddTags => MaintenanceActionStepKind::AddTags,
         AppActionStepKind::RemoveTags => MaintenanceActionStepKind::RemoveTags,
         AppActionStepKind::DeleteTitleAndFiles => MaintenanceActionStepKind::DeleteTitleAndFiles,
-    }
-}
-
-/// The v2 sequence a historical candidate or run was written with. A v1
-/// action and a declared-actions revision have none.
-fn from_maintenance_action_definition(
-    definition: &AppActionDefinition,
-) -> Option<MaintenanceActionSequence> {
-    match definition {
-        AppActionDefinition::Sequence(sequence) => Some(from_maintenance_action_sequence(sequence)),
-        AppActionDefinition::Legacy(_) | AppActionDefinition::Declared(_) => None,
+        AppActionStepKind::Monitor => MaintenanceActionStepKind::Monitor,
+        AppActionStepKind::FetchSubtitles => MaintenanceActionStepKind::FetchSubtitles,
+        AppActionStepKind::MoveToLibrary => MaintenanceActionStepKind::MoveToLibrary,
+        AppActionStepKind::MoveToRoot => MaintenanceActionStepKind::MoveToRoot,
     }
 }
 
@@ -341,10 +335,17 @@ pub fn maintenance_action_head_value(head: AppActionHead) -> MaintenanceActionHe
         AppActionHead::SetQualityProfile => MaintenanceActionHead::SetQualityProfile,
         AppActionHead::AddTags => MaintenanceActionHead::AddTags,
         AppActionHead::RemoveTags => MaintenanceActionHead::RemoveTags,
+        AppActionHead::Monitor => MaintenanceActionHead::Monitor,
+        AppActionHead::FetchSubtitles => MaintenanceActionHead::FetchSubtitles,
+        AppActionHead::MoveToLibrary => MaintenanceActionHead::MoveToLibrary,
+        AppActionHead::MoveToRoot => MaintenanceActionHead::MoveToRoot,
+        AppActionHead::Notify => MaintenanceActionHead::Notify,
     }
 }
 
-pub fn from_maintenance_declared_actions(declared: &AppDeclaredActions) -> MaintenanceDeclaredActions {
+pub fn from_maintenance_declared_actions(
+    declared: &AppDeclaredActions,
+) -> MaintenanceDeclaredActions {
     MaintenanceDeclaredActions {
         heads: declared
             .heads
@@ -355,32 +356,9 @@ pub fn from_maintenance_declared_actions(declared: &AppDeclaredActions) -> Maint
         quality_profiles: declared.quality_profiles.clone(),
         add_tags: declared.add_tags.clone(),
         remove_tags: declared.remove_tags.clone(),
-        libraries: Vec::new(),
-        roots: Vec::new(),
-        notifications: Vec::new(),
-    }
-}
-
-/// Every revision in force has been converted to declared actions by the
-/// startup migration. A revision that could not be converted keeps its old
-/// definition and is disabled; it declares nothing here.
-fn from_maintenance_declared_definition(
-    definition: &AppActionDefinition,
-) -> MaintenanceDeclaredActions {
-    match definition {
-        AppActionDefinition::Declared(declared) => from_maintenance_declared_actions(declared),
-        AppActionDefinition::Legacy(_) | AppActionDefinition::Sequence(_) => {
-            MaintenanceDeclaredActions {
-                heads: Vec::new(),
-                destructive: false,
-                quality_profiles: Vec::new(),
-                add_tags: Vec::new(),
-                remove_tags: Vec::new(),
-                libraries: Vec::new(),
-                roots: Vec::new(),
-                notifications: Vec::new(),
-            }
-        }
+        libraries: declared.libraries.clone(),
+        roots: declared.roots.clone(),
+        notifications: declared.notifications.clone(),
     }
 }
 
@@ -393,18 +371,25 @@ pub fn from_maintenance_decided_actions(actions: &AppDecidedActions) -> Maintena
         quality_profile: actions.set_quality_profile.clone(),
         add_tags: actions.add_tags.clone(),
         remove_tags: actions.remove_tags.clone(),
-        library: None,
-        root: None,
-        notification: None,
+        library: actions.move_to_library.clone(),
+        root: actions.move_to_root.clone(),
+        notification: actions.notify.clone(),
     }
 }
 
-pub fn from_maintenance_rule_set_detail(detail: AppRuleSetDetail) -> MaintenanceRuleSetDetail {
-    let rule_set = from_maintenance_rule_set(&detail);
+pub fn from_maintenance_rule_set_detail(
+    detail: AppRuleSetDetail,
+    next_run_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> MaintenanceRuleSetDetail {
+    let rule_set = from_maintenance_rule_set(&detail, next_run_at);
+    let builder_model =
+        scryer_application::stored_builder_model(detail.revision.builder_model_json.as_deref())
+            .map(async_graphql::Json);
     MaintenanceRuleSetDetail {
         declared_actions: rule_set.declared_actions.clone(),
         rule_set,
         revision: from_maintenance_rule_revision(detail.revision),
+        builder_model,
     }
 }
 
@@ -434,6 +419,7 @@ pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenanceP
                 outcome: title.outcome.map(maintenance_outcome_value),
                 reason_codes: title.reason_codes,
                 error: title.error,
+                error_code: title.error_code.map(str::to_string),
                 actions: title.actions.as_ref().map(from_maintenance_decided_actions),
                 facts: title.facts.map(async_graphql::Json),
             })
@@ -495,12 +481,12 @@ pub fn from_maintenance_candidate(
         candidate,
         rule_name,
         title_name,
-        action_definition,
+        action_sequence,
         sequence_steps,
     } = view;
-    let action_sequence = action_definition
+    let action_sequence = action_sequence
         .as_ref()
-        .and_then(from_maintenance_action_definition);
+        .map(from_maintenance_action_sequence);
     let actions = decided_actions_from_json(candidate.decided_actions_json.as_deref())
         .as_ref()
         .map(from_maintenance_decided_actions);
@@ -609,6 +595,7 @@ pub fn from_maintenance_evaluation_trigger(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use scryer_application::maintenance_rules::MaintenanceActionStep as AppActionStep;
     use scryer_application::maintenance_rules::action_execution::{
         MaintenanceActionRunView, MaintenanceActionStepProgressView,
     };
@@ -621,7 +608,7 @@ mod tests {
 
     #[test]
     fn sequence_projection_preserves_every_step() {
-        let definition = AppActionDefinition::Sequence(AppActionSequence {
+        let definition = AppActionSequence {
             schema_version: 2,
             steps: vec![AppActionStep {
                 id: "search".into(),
@@ -630,10 +617,9 @@ mod tests {
                     condition: AppSearchCondition::PreviousProfileChanged,
                 },
             }],
-        });
+        };
 
-        let sequence = from_maintenance_action_definition(&definition)
-            .expect("sequence payload is never replaced by a legacy action");
+        let sequence = from_maintenance_action_sequence(&definition);
         assert_eq!(sequence.steps[0].kind, MaintenanceActionStepKind::Search);
         assert_eq!(
             sequence.steps[0].parameters.search_condition,
@@ -721,10 +707,10 @@ mod tests {
                 created_at: now,
             },
             title_name: "Example".into(),
-            action_definition: Some(AppActionDefinition::Sequence(AppActionSequence {
+            action_sequence: Some(AppActionSequence {
                 schema_version: 2,
                 steps: vec![profile_step, search_step],
-            })),
+            }),
             sequence_steps: vec![MaintenanceActionStepProgressView {
                 step: AppActionStep {
                     id: "search".into(),
@@ -772,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_projection_preserves_empty_and_legacy_action_definitions() {
+    fn candidate_projection_preserves_empty_and_absent_action_sequences() {
         let now = Utc::now();
         let candidate = LifecycleCandidate {
             id: "candidate-1".into(),
@@ -809,10 +795,10 @@ mod tests {
             candidate: candidate.clone(),
             rule_name: "Rule".into(),
             title_name: "Example".into(),
-            action_definition: Some(AppActionDefinition::Sequence(AppActionSequence {
+            action_sequence: Some(AppActionSequence {
                 schema_version: 2,
                 steps: Vec::new(),
-            })),
+            }),
             sequence_steps: Vec::new(),
         };
         let projected = from_maintenance_candidate(sequence_view);
@@ -834,11 +820,7 @@ mod tests {
             storage_root_total_size_bytes: None,
             rule_name: "Rule".into(),
             title_name: "Example".into(),
-            action_definition: Some(AppActionDefinition::Legacy(
-                scryer_application::maintenance_rules::MaintenanceActionSpec::new(
-                    AppActionKind::DoNothing,
-                ),
-            )),
+            action_sequence: None,
             sequence_steps: Vec::new(),
         };
         let legacy = from_maintenance_candidate(legacy_view);
@@ -879,7 +861,10 @@ mod tests {
         let declared = from_maintenance_declared_actions(&AppDeclaredActions::from_scan(&scan));
         assert_eq!(
             declared.heads,
-            vec![MaintenanceActionHead::Search, MaintenanceActionHead::DeleteTitle]
+            vec![
+                MaintenanceActionHead::Search,
+                MaintenanceActionHead::DeleteTitle
+            ]
         );
         assert!(declared.destructive);
     }
