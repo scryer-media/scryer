@@ -1403,6 +1403,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "user_ui_tours",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "users",
         classification: BackupTableClassification::Export,
     },
