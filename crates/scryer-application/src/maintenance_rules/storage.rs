@@ -161,15 +161,7 @@ impl AppUseCase {
         let Some(root) = self.maintenance_storage_root(storage_root_id).await? else {
             return Ok(false);
         };
-        let path = root.path;
-        let capacity = tokio::time::timeout(
-            ROOT_STAT_TIMEOUT,
-            tokio::task::spawn_blocking(move || storage_capacity_probe(&path)),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten();
+        let capacity = self.maintenance_storage_capacity_now(root.path).await;
         Ok(storage_capacity_values(capacity).is_some())
     }
 
@@ -191,15 +183,9 @@ impl AppUseCase {
         };
 
         input.facts.storage_root_id = Observation::known(root.id.clone());
-        let path = root.path.clone();
-        let capacity = tokio::time::timeout(
-            ROOT_STAT_TIMEOUT,
-            tokio::task::spawn_blocking(move || storage_capacity_probe(&path)),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten();
+        let capacity = self
+            .maintenance_storage_capacity_now(root.path.clone())
+            .await;
         let capacity = storage_capacity_values(capacity);
         let Some((available, total)) = capacity else {
             input.facts.storage_available_bytes =
@@ -374,16 +360,38 @@ fn storage_capacity_values(space: Option<crate::helpers::FilesystemSpace>) -> Op
     (total > 0 && available >= 0 && available <= total).then_some((available, total))
 }
 
-fn storage_capacity_probe(path: &str) -> Option<crate::helpers::FilesystemSpace> {
-    #[cfg(test)]
-    if let Some(probe) = test_capacity_probe_slot()
-        .lock()
-        .expect("maintenance storage capacity probe lock")
-        .clone()
-    {
-        return probe(path);
+impl AppUseCase {
+    /// A current figure for a root, through the canonical capacity owner:
+    /// preview and execution act on it, so it is a refreshing read, bounded
+    /// by [`ROOT_STAT_TIMEOUT`] and single-flighted with every other caller
+    /// asking about the same root.
+    async fn maintenance_storage_capacity_now(
+        &self,
+        path: String,
+    ) -> Option<crate::helpers::FilesystemSpace> {
+        #[cfg(test)]
+        let scripted = test_capacity_probe_slot()
+            .lock()
+            .expect("maintenance storage capacity probe lock")
+            .clone();
+        #[cfg(test)]
+        if let Some(probe) = scripted {
+            return tokio::time::timeout(
+                ROOT_STAT_TIMEOUT,
+                tokio::task::spawn_blocking(move || probe(&path)),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        }
+        self.runtime
+            .health
+            .storage_capacity
+            .refresh(std::path::PathBuf::from(path), ROOT_STAT_TIMEOUT)
+            .await
+            .ok()
     }
-    crate::filesystem_space(path)
 }
 
 /// Resolve physical ownership in one bounded blocking task. `None` means that

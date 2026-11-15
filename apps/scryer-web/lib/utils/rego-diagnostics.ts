@@ -48,6 +48,12 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_ACTION_HEAD_FUNCTION: "error.ruleActionHeadFunction",
   RULE_FOREIGN_DATA_REFERENCE: "error.ruleForeignDataReference",
   RULE_WITH_TARGET_NOT_ALLOWED: "error.ruleWithTargetNotAllowed",
+  RULE_HEAD_DEFINED_AS_FUNCTION: "error.ruleHeadDefinedAsFunction",
+  RULE_HEAD_NAME_RETIRED: "error.ruleHeadNameRetired",
+  RULE_QUALITY_PROFILE_UNKNOWN: "error.ruleQualityProfileUnknown",
+  RULE_QUALITY_PROFILE_AMBIGUOUS: "error.ruleQualityProfileAmbiguous",
+  RULE_MONITOR_UNSUPPORTED: "error.ruleMonitorUnsupported",
+  RULE_AUDIO_LANGUAGE_UNKNOWN: "error.ruleAudioLanguageUnknown",
 };
 
 /** Compiler-owned diagnostics keep their detail; owned conditions use i18n. */

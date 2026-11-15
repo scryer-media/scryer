@@ -5575,7 +5575,11 @@ const ru: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Медиасерверы и поставщики учётных данных, привязанные к учётной записи",
   "settings.refReqRequesterCreatedAt":
-    "Когда создана учётная запись; отсутствует, потому что Scryer пока это не записывает",
+    "Когда создана учётная запись; отсутствует у записей, созданных до того, как Scryer начал это записывать",
+  "settings.refReqRequesterLastLoginAt":
+    "Когда учётная запись входила в последний раз; отсутствует, если у Scryer нет записи о входе",
+  "settings.refReqRequesterAccountAgeDays":
+    "Целых дней с создания учётной записи; отсутствует, если неизвестно время создания",
   "settings.refReqSectionLibrary": "— Библиотека, в которую направлен запрос",
   "settings.refReqLibraryId": "Идентификатор библиотеки",
   "settings.refReqLibraryName": "Название библиотеки",
@@ -5597,6 +5601,8 @@ const ru: LocaleDictionary = {
     "Отслеживание, которое запросил пользователь (например, ALL_EPISODES)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "Сколько сезонов названо в расширенном выборе отслеживания",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Номера сезонов из расширенного выбора отслеживания, по возрастанию; null, если выбора нет",
   "settings.refReqRequestLeaseForever":
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
@@ -5678,6 +5684,46 @@ const ru: LocaleDictionary = {
     "Сколько дней прошло с прошлого запроса этого пользователя",
   "settings.refReqFactsLibraryTitleCount":
     "Сколько тайтлов в целевой библиотеке",
+  "settings.refReqFactsSeasonCount":
+    "Сколько сезонов у сериала, для сериалов",
+  "settings.refReqFactsEpisodeCount":
+    "Сколько обычных эпизодов у сериала, для сериалов",
+  "settings.refReqFactsAiredEpisodeCount":
+    "Сколько из этих эпизодов вышло к дню оценки",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "Сколько из этих эпизодов ещё не вышло",
+  "settings.refReqFactsNextEpisodeAirDate":
+    "Когда выходит следующий эпизод",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Дата выхода в кинотеатрах, для фильмов",
+  "settings.refReqFactsDigitalReleaseDate":
+    "Дата цифрового выпуска, для фильмов",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Дата выпуска на носителе, для фильмов",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Вышел ли фильм в цифре или на носителе",
+  "settings.refReqFactsDaysUntilRelease":
+    "Дней до первого выхода фильма",
+  "settings.refReqFactsOtherRequesterCount":
+    "Сколько других участников запрашивали этот тайтл",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Ждёт ли запрос другого участника на этот тайтл",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Есть ли тайтл в собственном списке «смотреть позже» пользователя",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "Как давно тайтл в списке «смотреть позже» пользователя",
+  "settings.refReqFactsListExcluded":
+    "Попадает ли тайтл под исключение списка",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "Сколько тайтлов запросы этого пользователя добавили в целевую библиотеку",
+  "settings.refReqFactsStorageRootId":
+    "Корневая папка, в которую попадёт тайтл",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Свободное место в этом корне, в байтах",
+  "settings.refReqFactsStorageTotalBytes":
+    "Полный размер файловой системы корня, в байтах",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Свободное место в этом корне, в процентах",
   "settings.refReqSectionCertifications":
     "— По одной записи на каждый рейтинг в input.facts.certifications",
   "settings.refReqCertCountry": "Страна, в которой выдан рейтинг",
@@ -5759,6 +5805,46 @@ const ru: LocaleDictionary = {
     "Целых дней с прошлого запроса пользователя; absent с причиной no_previous_request, когда это его первый запрос",
   "settings.refReqFactsLibraryTitleCountValue":
     "Число тайтлов в целевой библиотеке",
+  "settings.refReqFactsSeasonCountValue":
+    "Число сезонов; для фильма absent с причиной not_a_series, unknown с причиной metadata_unavailable, если в запросе нет структуры сериала",
+  "settings.refReqFactsEpisodeCountValue":
+    "Число обычных эпизодов; absent и unknown так же, как у season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Эпизоды, вышедшие к моменту запроса, плюс запланированные на день оценки или раньше",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count минус aired_episode_count, не меньше нуля",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD первого эпизода после дня оценки; absent с причиной no_scheduled_episode, если ничего не запланировано",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_theatrical_release_date, если даты нет, с причиной not_a_movie для сериала; unknown с причиной not_yet_collected или metadata_unavailable, если даты не собраны",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_digital_release_date, если даты нет; в остальном как theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_physical_release_date, если даты нет; в остальном как theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True, если цифровая или физическая дата не позже дня оценки",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Целых дней до самой ранней известной даты; absent с причиной already_released после выхода или no_release_date, если дата неизвестна",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Число разных других пользователей; unknown с причиной catalog_unavailable, если Scryer не смог прочитать запросы",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True, если запрос другого участника ещё ждёт решения; unknown как у other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True, если тайтл есть в синхронизированном списке, привязанном пользователем; absent с причиной no_watchlist_linked, если списка нет; unknown с причиной watchlist_not_synced, watchlist_stale или list_store_unreadable, если спискам нельзя доверять",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Целых дней с первого появления там; absent с причиной not_on_a_watchlist, если его там нет; в остальном как on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True, если тайтл назван в исключении для всех списков или для списка этого запроса; unknown с причиной list_exclusions_unavailable, если их не удалось прочитать",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Число тайтлов в целевой библиотеке, созданных по запросам пользователя; unknown с причиной requester_titles_unavailable, если их не удалось посчитать",
+  "settings.refReqFactsStorageRootIdValue":
+    "Идентификатор корня по умолчанию или первого корня библиотеки; unknown с причиной storage_root_unavailable, если корней нет",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Свободные байты при последнем замере корня, не старше десяти минут; observed_at указывает время. Unknown, никогда не ноль, с причиной storage_not_sampled, storage_sample_stale или storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Всего байт из того же замера; unknown как у storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Свободные байты, умноженные на 100 и делённые на общий размер, из того же замера; unknown как у storage_available_bytes",
   "move.dialogTitle": "Переместить тайтлы",
   "move.destinationLibrary": "Целевая библиотека",
   "move.destinationRoot": "Целевой корневой каталог",
@@ -6829,6 +6915,18 @@ const ru: LocaleDictionary = {
     "Это правило читает data вне своего пакета. Используйте input.",
   "error.ruleWithTargetNotAllowed":
     'Это правило не может заменить {{path}} через "with". Его решение должно опираться на то, что наблюдал Scryer.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} имеет значение для Scryer и не может быть функцией. Запишите его как правило.",
+  "error.ruleHeadNameRetired":
+    "Правила запросов больше не читают {{path}}. Помечайте тайтл через add_tags.",
+  "error.ruleQualityProfileUnknown":
+    "Профиля качества с таким именем нет, поэтому правило не может его применить.",
+  "error.ruleQualityProfileAmbiguous":
+    "Это имя носят несколько профилей качества. Переименуйте один, чтобы правило указывало на единственный профиль.",
+  "error.ruleMonitorUnsupported":
+    "Ни одна библиотека, к которой относится правило, не принимает этот тип отслеживания.",
+  "error.ruleAudioLanguageUnknown":
+    "Scryer не знает этот язык аудио.",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
@@ -12475,6 +12573,10 @@ const ru: LocaleDictionary = {
     "Политика списков владельца: auto, approval или none; approval, если значение не сохранено",
   "settings.refReqRequestListRank":
     "Позиция элемента в списке; отсутствует, если список не присваивает ему позицию",
+  "settings.refReqRequestListIsWatchlist":
+    "True, если это собственный список «смотреть позже» владельца в привязанной учётной записи",
+  "settings.refReqRequestListSourceType":
+    "Тип списка у провайдера, в нижнем регистре (например watchlist или user_list)",
   "move.gatheringInfo": "Сбор всех сведений...",
   "move.methodManaged": "Scryer переместит файлы",
   "move.methodManual": "Я перемещу файлы сам",

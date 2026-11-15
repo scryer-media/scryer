@@ -5980,7 +5980,11 @@ const cs: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Mediální servery a poskytovatelé identity, které má účet propojené",
   "settings.refReqRequesterCreatedAt":
-    "Kdy byl účet vytvořen; chybí, protože to Scryer zatím nezaznamenává",
+    "Kdy byl účet vytvořen; chybí u účtu vytvořeného dřív, než to Scryer začal zaznamenávat",
+  "settings.refReqRequesterLastLoginAt":
+    "Kdy se účet naposledy přihlásil; chybí, pokud Scryer o přihlášení nemá záznam",
+  "settings.refReqRequesterAccountAgeDays":
+    "Celé dny od vytvoření účtu; chybí, pokud chybí čas vytvoření",
   "settings.refReqSectionLibrary": "— Knihovna, na kterou žádost míří",
   "settings.refReqLibraryId": "Identifikátor knihovny",
   "settings.refReqLibraryName": "Název knihovny",
@@ -6002,6 +6006,8 @@ const cs: LocaleDictionary = {
     "Sledování, o které žadatel požádal (například ALL_EPISODES)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "Kolik řad jmenoval pokročilý výběr sledování",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Čísla sérií, která pokročilý výběr sledování uvedl, od nejnižšího; null, pokud výběr není",
   "settings.refReqRequestLeaseForever":
     "True, pokud žadatel požádal o trvalé uchování média",
   "settings.refReqRequestLeaseDays":
@@ -6029,6 +6035,10 @@ const cs: LocaleDictionary = {
     "Politika seznamu vlastníka: auto, approval nebo none; approval, pokud není uložena žádná",
   "settings.refReqRequestListRank":
     "Pořadí položky na seznamu; chybí, pokud seznam položky neřadí",
+  "settings.refReqRequestListIsWatchlist":
+    "True, pokud je seznam vlastníkovým seznamem ke zhlédnutí na propojeném účtu",
+  "settings.refReqRequestListSourceType":
+    "Druh seznamu u poskytovatele, malými písmeny (například watchlist nebo user_list)",
   "settings.refReqExternalIdsTmdb":
     "Identifikátor TMDB, pokud ho poskytovatel měl",
   "settings.refReqExternalIdsImdb":
@@ -6098,6 +6108,46 @@ const cs: LocaleDictionary = {
     "Kolik dní uplynulo od poslední žádosti tohoto žadatele",
   "settings.refReqFactsLibraryTitleCount":
     "Kolik titulů cílová knihovna obsahuje",
+  "settings.refReqFactsSeasonCount":
+    "Kolik sérií seriál má, u seriálů",
+  "settings.refReqFactsEpisodeCount":
+    "Kolik běžných epizod seriál má, u seriálů",
+  "settings.refReqFactsAiredEpisodeCount":
+    "Kolik z těchto epizod bylo odvysíláno do dne vyhodnocení",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "Kolik z těchto epizod ještě nebylo odvysíláno",
+  "settings.refReqFactsNextEpisodeAirDate":
+    "Kdy se vysílá další epizoda",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Datum uvedení v kinech, u filmů",
+  "settings.refReqFactsDigitalReleaseDate":
+    "Datum digitálního vydání, u filmů",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Datum vydání na nosiči, u filmů",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Zda film vyšel digitálně nebo na nosiči",
+  "settings.refReqFactsDaysUntilRelease":
+    "Dny do prvního vydání filmu",
+  "settings.refReqFactsOtherRequesterCount":
+    "Kolik dalších členů o tento titul požádalo",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Zda čeká žádost jiného člena o tento titul",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Zda je titul na vlastním seznamu ke zhlédnutí žadatele",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "Jak dlouho je titul na seznamu ke zhlédnutí žadatele",
+  "settings.refReqFactsListExcluded":
+    "Zda se na titul vztahuje vyloučení ze seznamu",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "Kolik titulů přidaly žádosti tohoto žadatele do cílové knihovny",
+  "settings.refReqFactsStorageRootId":
+    "Kořenová složka, do které by se titul uložil",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Volné místo na tomto kořeni, v bajtech",
+  "settings.refReqFactsStorageTotalBytes":
+    "Celková velikost souborového systému kořene, v bajtech",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Volné místo na tomto kořeni, v procentech",
   "settings.refReqSectionCertifications":
     "— Jedna položka na certifikaci v input.facts.certifications",
   "settings.refReqCertCountry": "Země, kde byla certifikace vydána",
@@ -6180,6 +6230,46 @@ const cs: LocaleDictionary = {
     "Celé dny od předchozí žádosti žadatele; chybí s důvodem no_previous_request, pokud je toto jeho první",
   "settings.refReqFactsLibraryTitleCountValue":
     "Počet titulů v cílové knihovně",
+  "settings.refReqFactsSeasonCountValue":
+    "Počet sérií; u filmu chybí s důvodem not_a_series, neznámý s důvodem metadata_unavailable, pokud žádost nenese tvar seriálu",
+  "settings.refReqFactsEpisodeCountValue":
+    "Počet běžných epizod; chybí a je neznámý stejně jako season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Epizody odvysílané v době žádosti a ty naplánované nejpozději na den vyhodnocení",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count minus aired_episode_count, nikdy méně než nula",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD první epizody po dni vyhodnocení; chybí s důvodem no_scheduled_episode, pokud žádná není naplánována",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; chybí s důvodem no_theatrical_release_date, pokud žádné není, s důvodem not_a_movie u seriálu; neznámé s důvodem not_yet_collected nebo metadata_unavailable, pokud data nebyla získána",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; chybí s důvodem no_digital_release_date, pokud žádné není; jinak jako theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; chybí s důvodem no_physical_release_date, pokud žádné není; jinak jako theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True, pokud je digitální nebo fyzické datum nejpozději v den vyhodnocení",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Celé dny do nejbližšího známého data; chybí s důvodem already_released, jakmile vyšel, nebo no_release_date, pokud žádné datum není známo",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Počet různých dalších žadatelů; neznámý s důvodem catalog_unavailable, pokud Scryer nemohl přečíst své žádosti",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True, pokud žádost jiného člena stále čeká na rozhodnutí; neznámé jako u other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True, pokud titul obsahuje synchronizovaný seznam ke zhlédnutí, který žadatel propojil; chybí s důvodem no_watchlist_linked, pokud žádný nepropojil; neznámé s důvodem watchlist_not_synced, watchlist_stale nebo list_store_unreadable, pokud seznamům nelze věřit",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Celé dny od chvíle, kdy se tam poprvé objevil; chybí s důvodem not_on_a_watchlist, pokud na žádném není; jinak jako on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True, pokud titul uvádí vyloučení pro všechny seznamy nebo pro seznam za touto žádostí; neznámé s důvodem list_exclusions_unavailable, pokud je nelze přečíst",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Počet titulů v cílové knihovně vytvořených ze žádostí tohoto žadatele; neznámý s důvodem requester_titles_unavailable, pokud je nelze spočítat",
+  "settings.refReqFactsStorageRootIdValue":
+    "Identifikátor výchozího kořene knihovny, nebo jejího prvního kořene; neznámý s důvodem storage_root_unavailable, pokud knihovna žádný nemá",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Volné bajty při posledním měření kořene, nejvýš před deseti minutami; observed_at uvádí kdy. Neznámé, nikdy nula, s důvodem storage_not_sampled, storage_sample_stale nebo storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Celkové bajty ze stejného měření; neznámé jako u storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Volné bajty krát 100 děleno celkovými bajty, ze stejného měření; neznámé jako u storage_available_bytes",
   "move.dialogTitle": "Přesunout tituly",
   "move.destinationLibrary": "Cílová knihovna",
   "move.destinationRoot": "Cílový kořen",
@@ -7612,6 +7702,18 @@ const cs: LocaleDictionary = {
     "Toto pravidlo čte data mimo svůj balíček. Použijte místo toho input.",
   "error.ruleWithTargetNotAllowed":
     'Toto pravidlo nemůže pomocí "with" nahradit {{path}}. Jeho rozhodnutí musí vycházet z toho, co Scryer zjistil.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} má pro Scryer význam a nemůže být funkcí. Zapište ho jako pravidlo.",
+  "error.ruleHeadNameRetired":
+    "Pravidla žádostí už {{path}} nečtou. Titul označte pomocí add_tags.",
+  "error.ruleQualityProfileUnknown":
+    "Žádný profil kvality nemá tento název, takže ho pravidlo nemůže použít.",
+  "error.ruleQualityProfileAmbiguous":
+    "Tento název má více profilů kvality. Jeden přejmenujte, aby pravidlo určovalo jediný profil.",
+  "error.ruleMonitorUnsupported":
+    "Žádná knihovna, na kterou se pravidlo vztahuje, tento typ sledování nepřijímá.",
+  "error.ruleAudioLanguageUnknown":
+    "Scryer tento jazyk zvuku nezná.",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "Nastavte počet titulů na běh. Potřebují ho tyto akce pravidla: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":

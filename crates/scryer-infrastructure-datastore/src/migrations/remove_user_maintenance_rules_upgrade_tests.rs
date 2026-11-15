@@ -296,8 +296,10 @@ async fn assert_unrelated_rows_intact(pool: &SqlitePool, context: &str) {
     }
 }
 
+/// Upgrades through 0349 and no further: a later migration removes every
+/// request rule set, which is not this upgrade's doing.
 async fn upgrade(pool: &SqlitePool) {
-    crate::migrations::run_migrations(pool, crate::MigrationMode::Apply)
+    crate::migrations::run_upgrade_migrations_through(pool, PRE_UPGRADE_VERSION + 1)
         .await
         .expect("0349 upgrade should apply");
 }

@@ -488,7 +488,18 @@ impl AppUseCase {
                 }
                 let label = health_library_root_label(&root);
 
-                if let Some(space) = filesystem_space(&root.path) {
+                // The sampler keeps every root current; this takes a figure
+                // only before its first pass or after it has fallen behind.
+                let space = self
+                    .runtime
+                    .health
+                    .storage_capacity
+                    .current_or_refresh(
+                        &root.path,
+                        crate::storage_capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
+                    )
+                    .await;
+                if let Some(space) = space {
                     // `root` is the configured root-folder path: a handful of
                     // operator-chosen values, and the only identity under which
                     // a capacity figure means anything. Media paths, titles and

@@ -79,10 +79,15 @@ async fn gate_rows(pool: &sqlx::SqlitePool) -> i64 {
     .unwrap()
 }
 
+/// Stops short of the later upgrade that removes every request rule set, so
+/// this upgrade's effect on the rows stays observable.
 async fn upgrade(pool: &sqlx::SqlitePool) {
-    super::run_migrations(pool, crate::MigrationMode::Apply)
-        .await
-        .expect("upgrade should apply");
+    super::run_upgrade_through(
+        pool,
+        super::request_rule_actions_upgrade_tests::REQUEST_RULE_ACTIONS_VERSION - 1,
+    )
+    .await
+    .expect("upgrade should apply");
 }
 
 #[tokio::test]

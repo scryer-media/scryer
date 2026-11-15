@@ -11,10 +11,13 @@ use scryer_domain::{CanonicalMediaTag, TitleExternalRating, TitleRatingSummary};
 use scryer_rules::request::{RequestDoc, RequestLibraryDoc, RequestRequesterDoc};
 use std::collections::BTreeMap;
 
-use crate::media_requests::snapshot::MediaRequestMetadataSnapshot;
+use crate::media_requests::snapshot::{
+    MediaRequestMetadataSnapshot, SnapshotReleaseDates, SnapshotSeriesShape,
+};
 use crate::request_rules::facts::{
     RequestCatalogContext, RequestInputContext, RequestQualityContext,
-    RequestRequesterHistoryContext, build_request_input,
+    RequestRequesterHistoryContext, RequestStorageContext, RequestStorageFigures,
+    RequestWatchlistContext, build_request_input, fact_reason,
 };
 use crate::types::{ContentCertification, ContentRating, MdblistSummary};
 
@@ -110,7 +113,36 @@ fn full_snapshot() -> MediaRequestMetadataSnapshot {
             claim_side: "nominee".to_string(),
         }],
         is_adult: false,
+        series_shape: None,
+        release_dates: Some(SnapshotReleaseDates {
+            fetched: true,
+            theatrical: Some("2023-11-04".to_string()),
+            digital: Some("2023-11-10T00:00:00Z".to_string()),
+            physical: None,
+        }),
     }
+}
+
+/// A series snapshot: two seasons, five regular episodes, three aired by
+/// capture and two scheduled after it.
+fn series_snapshot() -> MediaRequestMetadataSnapshot {
+    let mut snapshot = full_snapshot();
+    snapshot.release_dates = None;
+    snapshot.release_date = None;
+    snapshot.first_aired = Some("2023-01-10".to_string());
+    snapshot.series_shape = Some(SnapshotSeriesShape {
+        season_count: 2,
+        episode_count: 5,
+        aired_at_capture: 3,
+        upcoming_air_dates: vec!["2023-11-14".to_string(), "2023-11-21".to_string()],
+    });
+    snapshot
+}
+
+fn series_context(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
+    let mut context = context_with(snapshot);
+    context.library.facet = "series".to_string();
+    context
 }
 
 fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
@@ -123,7 +155,9 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             app_permissions: vec!["manage_catalog_settings".to_string()],
             library_permissions: vec!["view".to_string(), "request".to_string()],
             linked_providers: vec!["jellyfin".to_string()],
-            created_at: None,
+            created_at: Some("2022-01-01T00:00:00Z".to_string()),
+            last_login_at: Some("2023-11-13T00:00:00Z".to_string()),
+            account_age_days: Some(682),
         },
         library: RequestLibraryDoc {
             id: "library-1".to_string(),
@@ -140,6 +174,7 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             quality_profile_name: Some("1080P".to_string()),
             monitor_type: None,
             monitor_selection_season_count: None,
+            monitor_selection_seasons: None,
             lease_forever: false,
             lease_days: Some(14),
             required_audio_languages: None,
@@ -156,6 +191,8 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             previous_request_count: 2,
             previously_denied: true,
             previously_approved: false,
+            other_requester_count: 2,
+            pending_by_other_requester: true,
             readable: true,
         },
         history: RequestRequesterHistoryContext {
@@ -168,6 +205,20 @@ fn context_with(snapshot: MediaRequestMetadataSnapshot) -> RequestInputContext {
             readable: true,
         },
         library_title_count: Some(412),
+        watchlist: RequestWatchlistContext::Known {
+            first_seen_at: Some(evaluation_time() - chrono::Duration::days(6)),
+        },
+        list_excluded: Some(false),
+        requester_titles_in_library_count: Some(5),
+        storage: RequestStorageContext {
+            root_id: Some("root-fixture".to_string()),
+            capacity: Ok(RequestStorageFigures {
+                sampled_at: evaluation_time() - chrono::Duration::minutes(3),
+                available_bytes: 500,
+                total_bytes: 2_000,
+                available_percent: 25.0,
+            }),
+        },
     }
 }
 
@@ -192,7 +243,7 @@ fn reason_of(document: &serde_json::Value, fact: &str) -> String {
 
 /// Every fact the contract declares, so a fact added without a builder entry
 /// fails here rather than silently reading unknown forever.
-const EVERY_FACT: [&str; 38] = [
+const EVERY_FACT: [&str; 58] = [
     "age_rating",
     "certifications",
     "certification_label",
@@ -231,15 +282,46 @@ const EVERY_FACT: [&str; 38] = [
     "active_lease_count",
     "days_since_last_request",
     "library_title_count",
+    "season_count",
+    "episode_count",
+    "aired_episode_count",
+    "unaired_episode_count",
+    "next_episode_air_date",
+    "theatrical_release_date",
+    "digital_release_date",
+    "physical_release_date",
+    "home_release_available",
+    "days_until_release",
+    "other_requester_count",
+    "pending_by_other_requester",
+    "on_requester_watchlist",
+    "requester_watchlist_days",
+    "list_excluded",
+    "requester_titles_in_library_count",
+    "storage_root_id",
+    "storage_available_bytes",
+    "storage_total_bytes",
+    "storage_available_percent",
 ];
 
 #[test]
 fn a_full_snapshot_answers_every_group() {
     let document = document(context_with(full_snapshot()));
 
-    // Two facts are legitimately absent from this fixture rather than known:
-    // a movie has no network, and a movie has no first-aired date.
-    let expected_absent = ["network", "first_aired"];
+    // These are legitimately absent from this movie fixture rather than known:
+    // a movie has no network, first-aired date or series shape; this one has
+    // no physical release and is already out.
+    let expected_absent = [
+        "network",
+        "first_aired",
+        "season_count",
+        "episode_count",
+        "aired_episode_count",
+        "unaired_episode_count",
+        "next_episode_air_date",
+        "physical_release_date",
+        "days_until_release",
+    ];
     for fact in EVERY_FACT {
         let status = status_of(&document, fact);
         if expected_absent.contains(&fact) {
@@ -262,6 +344,247 @@ fn a_full_snapshot_answers_every_group() {
     assert_eq!(document["facts"]["library_title_count"], 412);
     assert_eq!(document["facts"]["ratings_by_source"]["imdb"], 0.74);
     assert_eq!(document["now"]["weekday"], "tuesday");
+    assert_eq!(document["facts"]["theatrical_release_date"], "2023-11-04");
+    assert_eq!(document["facts"]["digital_release_date"], "2023-11-10");
+    assert_eq!(document["facts"]["home_release_available"], true);
+    assert_eq!(
+        reason_of(&document, "days_until_release"),
+        fact_reason::ALREADY_RELEASED
+    );
+    assert_eq!(
+        reason_of(&document, "season_count"),
+        fact_reason::NOT_A_SERIES
+    );
+    assert_eq!(document["facts"]["other_requester_count"], 2);
+    assert_eq!(document["facts"]["pending_by_other_requester"], true);
+    assert_eq!(document["facts"]["on_requester_watchlist"], true);
+    assert_eq!(document["facts"]["requester_watchlist_days"], 6);
+    assert_eq!(document["facts"]["list_excluded"], false);
+    assert_eq!(document["facts"]["requester_titles_in_library_count"], 5);
+    assert_eq!(document["facts"]["storage_root_id"], "root-fixture");
+    assert_eq!(document["facts"]["storage_available_bytes"], 500);
+    assert_eq!(document["facts"]["storage_total_bytes"], 2_000);
+    assert_eq!(document["facts"]["storage_available_percent"], 25.0);
+    assert_eq!(
+        document["observations"]["storage_available_bytes"]["observed_at"],
+        (evaluation_time() - chrono::Duration::minutes(3)).to_rfc3339()
+    );
+    assert_eq!(document["requester"]["account_age_days"], 682);
+}
+
+#[test]
+fn a_series_reads_its_shape_on_the_evaluation_day() {
+    let document = document(series_context(series_snapshot()));
+
+    assert_eq!(document["facts"]["season_count"], 2);
+    assert_eq!(document["facts"]["episode_count"], 5);
+    // The episode airing on the evaluation day counts as aired.
+    assert_eq!(document["facts"]["aired_episode_count"], 4);
+    assert_eq!(document["facts"]["unaired_episode_count"], 1);
+    assert_eq!(document["facts"]["next_episode_air_date"], "2023-11-21");
+    for fact in [
+        "theatrical_release_date",
+        "digital_release_date",
+        "physical_release_date",
+        "home_release_available",
+        "days_until_release",
+    ] {
+        assert_eq!(status_of(&document, fact), "absent", "{fact}");
+        assert_eq!(
+            reason_of(&document, fact),
+            fact_reason::NOT_A_MOVIE,
+            "{fact}"
+        );
+    }
+}
+
+#[test]
+fn a_series_with_nothing_scheduled_has_no_next_air_date() {
+    let mut snapshot = series_snapshot();
+    snapshot.series_shape.as_mut().unwrap().upcoming_air_dates = vec!["2023-11-01".to_string()];
+    let document = document(series_context(snapshot));
+    assert_eq!(status_of(&document, "next_episode_air_date"), "absent");
+    assert_eq!(
+        reason_of(&document, "next_episode_air_date"),
+        fact_reason::NO_SCHEDULED_EPISODE
+    );
+    assert_eq!(document["facts"]["unaired_episode_count"], 1);
+}
+
+#[test]
+fn a_snapshot_written_before_the_new_groups_decodes_with_them_unknown() {
+    let mut json = serde_json::to_value(full_snapshot()).expect("snapshot serializes");
+    let object = json.as_object_mut().expect("snapshot object");
+    object.remove("series_shape");
+    object.remove("release_dates");
+    let old: MediaRequestMetadataSnapshot =
+        serde_json::from_value(json).expect("an old snapshot still decodes");
+    assert!(old.series_shape.is_none());
+    assert!(old.release_dates.is_none());
+
+    let movie = document(context_with(old.clone()));
+    for fact in [
+        "theatrical_release_date",
+        "digital_release_date",
+        "physical_release_date",
+        "home_release_available",
+        "days_until_release",
+    ] {
+        assert_eq!(status_of(&movie, fact), "unknown", "{fact}");
+        assert_eq!(
+            reason_of(&movie, fact),
+            fact_reason::METADATA_UNAVAILABLE,
+            "{fact}"
+        );
+    }
+    let series = document(series_context(old));
+    for fact in [
+        "season_count",
+        "episode_count",
+        "aired_episode_count",
+        "unaired_episode_count",
+        "next_episode_air_date",
+    ] {
+        assert_eq!(status_of(&series, fact), "unknown", "{fact}");
+        assert_eq!(
+            reason_of(&series, fact),
+            fact_reason::METADATA_UNAVAILABLE,
+            "{fact}"
+        );
+    }
+}
+
+#[test]
+fn release_dates_smg_has_not_collected_are_unknown_not_missing() {
+    let mut snapshot = full_snapshot();
+    snapshot.release_dates = Some(SnapshotReleaseDates::default());
+    let document = document(context_with(snapshot));
+    for fact in [
+        "theatrical_release_date",
+        "home_release_available",
+        "days_until_release",
+    ] {
+        assert_eq!(status_of(&document, fact), "unknown", "{fact}");
+        assert_eq!(reason_of(&document, fact), fact_reason::NOT_YET_COLLECTED);
+    }
+}
+
+#[test]
+fn an_upcoming_movie_counts_the_days_to_its_first_release() {
+    let mut snapshot = full_snapshot();
+    snapshot.release_dates = Some(SnapshotReleaseDates {
+        fetched: true,
+        theatrical: Some("2023-12-01".to_string()),
+        digital: None,
+        physical: Some("2024-02-01".to_string()),
+    });
+    let document = document(context_with(snapshot));
+    assert_eq!(document["facts"]["days_until_release"], 17);
+    assert_eq!(document["facts"]["home_release_available"], false);
+    assert_eq!(
+        reason_of(&document, "digital_release_date"),
+        fact_reason::NO_DIGITAL_RELEASE_DATE
+    );
+}
+
+#[test]
+fn demand_facts_follow_the_catalog_read() {
+    let mut context = context_with(full_snapshot());
+    context.catalog.readable = false;
+    let document = document(context);
+    for fact in ["other_requester_count", "pending_by_other_requester"] {
+        assert_eq!(status_of(&document, fact), "unknown", "{fact}");
+        assert_eq!(reason_of(&document, fact), fact_reason::CATALOG_UNAVAILABLE);
+    }
+}
+
+#[test]
+fn watchlist_facts_say_why_they_have_no_value() {
+    let mut context = context_with(full_snapshot());
+    context.watchlist = RequestWatchlistContext::NotLinked;
+    let doc = document(context);
+    assert_eq!(status_of(&doc, "on_requester_watchlist"), "absent");
+    assert_eq!(
+        reason_of(&doc, "on_requester_watchlist"),
+        fact_reason::NO_WATCHLIST_LINKED
+    );
+
+    let mut context = context_with(full_snapshot());
+    context.watchlist = RequestWatchlistContext::Unavailable(fact_reason::WATCHLIST_STALE);
+    let doc = document(context);
+    for fact in ["on_requester_watchlist", "requester_watchlist_days"] {
+        assert_eq!(status_of(&doc, fact), "unknown", "{fact}");
+        assert_eq!(reason_of(&doc, fact), fact_reason::WATCHLIST_STALE);
+    }
+
+    let mut context = context_with(full_snapshot());
+    context.watchlist = RequestWatchlistContext::Known {
+        first_seen_at: None,
+    };
+    let doc = document(context);
+    assert_eq!(doc["facts"]["on_requester_watchlist"], false);
+    assert_eq!(
+        reason_of(&doc, "requester_watchlist_days"),
+        fact_reason::NOT_ON_A_WATCHLIST
+    );
+}
+
+#[test]
+fn unreadable_exclusions_and_title_counts_are_unknown_not_false_or_zero() {
+    let mut context = context_with(full_snapshot());
+    context.list_excluded = None;
+    context.requester_titles_in_library_count = None;
+    let document = document(context);
+    assert_eq!(
+        reason_of(&document, "list_excluded"),
+        fact_reason::LIST_EXCLUSIONS_UNAVAILABLE
+    );
+    assert_eq!(
+        reason_of(&document, "requester_titles_in_library_count"),
+        fact_reason::REQUESTER_TITLES_UNAVAILABLE
+    );
+}
+
+#[test]
+fn storage_without_a_current_sample_is_unknown_never_zero() {
+    for reason in [
+        fact_reason::STORAGE_NOT_SAMPLED,
+        fact_reason::STORAGE_SAMPLE_STALE,
+        fact_reason::STORAGE_CAPACITY_UNAVAILABLE,
+    ] {
+        let mut context = context_with(full_snapshot());
+        context.storage.capacity = Err(reason);
+        let document = document(context);
+        assert_eq!(document["facts"]["storage_root_id"], "root-fixture");
+        for fact in [
+            "storage_available_bytes",
+            "storage_total_bytes",
+            "storage_available_percent",
+        ] {
+            assert_eq!(status_of(&document, fact), "unknown", "{fact}");
+            assert_eq!(reason_of(&document, fact), reason, "{fact}");
+        }
+    }
+
+    let mut context = context_with(full_snapshot());
+    context.storage = RequestStorageContext::no_root();
+    let document = document(context);
+    assert_eq!(
+        reason_of(&document, "storage_root_id"),
+        fact_reason::STORAGE_ROOT_UNAVAILABLE
+    );
+}
+
+#[test]
+fn fact_reason_codes_are_distinct() {
+    let mut seen = std::collections::HashSet::new();
+    for code in fact_reason::ALL {
+        assert!(seen.insert(*code), "{code} repeated");
+        assert!(
+            code.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "{code}"
+        );
+    }
 }
 
 #[test]
@@ -570,6 +893,8 @@ async fn a_public_list_request_names_its_list() {
             "owner_is_requester": true,
             "owner_list_policy": "auto",
             "rank": 3,
+            "is_watchlist": false,
+            "source_type": "user_list",
         })
     );
 }
@@ -638,4 +963,169 @@ async fn an_unreadable_list_store_drops_the_section_and_still_evaluates() {
 
     assert_eq!(request["origin"], "public_list");
     assert!(request.get("list").is_none());
+}
+
+/// The whole facts document an assembled draft produces against the harness.
+async fn assembled_document(
+    harness: &super::MediaRequestTestHarness,
+    draft: &crate::request_rules::RequestDraft,
+) -> serde_json::Value {
+    let context = harness
+        .app
+        .assemble_request_input_context(
+            &harness.user,
+            &super::custom_movie_library("library-movies", "Movies"),
+            draft,
+            full_snapshot(),
+            evaluation_time(),
+            None,
+        )
+        .await
+        .expect("the request evaluates");
+    document(context)
+}
+
+#[tokio::test]
+async fn request_evaluation_reads_storage_from_the_sampler_and_never_the_disk() {
+    let harness = super::bootstrap_media_request_app();
+    let capacity = &harness.app.runtime.health.storage_capacity;
+    // The movie library's only root, sampled two minutes before evaluation.
+    capacity.record_for_test(
+        "/data/movies",
+        evaluation_time() - chrono::Duration::minutes(2),
+        Some(crate::helpers::FilesystemSpace {
+            total_bytes: 4_000,
+            available_bytes: 1_000,
+        }),
+    );
+    let calls_before = capacity.disk_calls();
+
+    let document = assembled_document(
+        &harness,
+        &list_draft(scryer_domain::MediaRequestOrigin::Manual),
+    )
+    .await;
+
+    assert_eq!(
+        capacity.disk_calls(),
+        calls_before,
+        "evaluation made a disk call"
+    );
+    assert_eq!(
+        document["facts"]["storage_root_id"],
+        scryer_domain::root_folder_id_for_path("/data/movies")
+    );
+    assert_eq!(document["facts"]["storage_available_bytes"], 1_000);
+    assert_eq!(document["facts"]["storage_total_bytes"], 4_000);
+    assert_eq!(document["facts"]["storage_available_percent"], 25.0);
+}
+
+#[tokio::test]
+async fn a_root_sampled_too_long_ago_reads_stale_and_still_makes_no_call() {
+    let harness = super::bootstrap_media_request_app();
+    let capacity = &harness.app.runtime.health.storage_capacity;
+    capacity.record_for_test(
+        "/data/movies",
+        evaluation_time() - chrono::Duration::hours(1),
+        Some(crate::helpers::FilesystemSpace {
+            total_bytes: 4_000,
+            available_bytes: 1_000,
+        }),
+    );
+    let calls_before = capacity.disk_calls();
+
+    let document = assembled_document(
+        &harness,
+        &list_draft(scryer_domain::MediaRequestOrigin::Manual),
+    )
+    .await;
+
+    assert_eq!(capacity.disk_calls(), calls_before);
+    assert_eq!(status_of(&document, "storage_available_bytes"), "unknown");
+    assert_eq!(
+        reason_of(&document, "storage_available_bytes"),
+        fact_reason::STORAGE_SAMPLE_STALE
+    );
+}
+
+fn linked_watchlist(
+    owner: &str,
+    last_at: chrono::DateTime<chrono::Utc>,
+) -> scryer_domain::ListSubscription {
+    let mut watchlist = crate::lists::test_support::subscription("watchlist-own");
+    watchlist.scope = scryer_domain::ListScope::Personal;
+    watchlist.owner_user_id = owner.to_string();
+    watchlist.source.provider = "tmdb".to_string();
+    watchlist.source.source_type = "watchlist".to_string();
+    watchlist.credential_id = Some("credential-fixture".to_string());
+    watchlist.sync.state = scryer_domain::ListSyncState::Ok;
+    watchlist.sync.last_at = Some(last_at);
+    watchlist
+}
+
+fn watchlisted_draft() -> crate::request_rules::RequestDraft {
+    let mut draft = list_draft(scryer_domain::MediaRequestOrigin::Manual);
+    draft.external_ids = vec![crate::lists::test_support::tmdb("glass-harbor")];
+    draft
+}
+
+#[tokio::test]
+async fn a_title_on_the_requesters_synced_watchlist_counts_its_days() {
+    let harness = super::bootstrap_media_request_app();
+    *harness.lists.subscriptions.lock().unwrap() = vec![linked_watchlist(
+        &harness.user.id,
+        evaluation_time() - chrono::Duration::hours(2),
+    )];
+    let mut row = crate::lists::test_support::membership(
+        "watchlist-own",
+        "glass-harbor",
+        scryer_domain::ListMembershipState::Pending,
+    );
+    row.external_ids = vec![crate::lists::test_support::tmdb("glass-harbor")];
+    row.first_seen_at = evaluation_time() - chrono::Duration::days(9);
+    // The same id on a series row is another title, not this movie.
+    let mut series_row = row.clone();
+    series_row.item_key = "glass-harbor-series".to_string();
+    series_row.kind = scryer_domain::MediaFacet::Series;
+    series_row.first_seen_at = evaluation_time() - chrono::Duration::days(40);
+    harness.lists.insert_rows(vec![row, series_row]);
+
+    let document = assembled_document(&harness, &watchlisted_draft()).await;
+
+    assert_eq!(document["facts"]["on_requester_watchlist"], true);
+    assert_eq!(document["facts"]["requester_watchlist_days"], 9);
+}
+
+#[tokio::test]
+async fn a_watchlist_that_has_not_synced_lately_is_unknown_not_false() {
+    let harness = super::bootstrap_media_request_app();
+    *harness.lists.subscriptions.lock().unwrap() = vec![linked_watchlist(
+        &harness.user.id,
+        evaluation_time() - chrono::Duration::days(5),
+    )];
+
+    let document = assembled_document(&harness, &watchlisted_draft()).await;
+
+    assert_eq!(status_of(&document, "on_requester_watchlist"), "unknown");
+    assert_eq!(
+        reason_of(&document, "on_requester_watchlist"),
+        fact_reason::WATCHLIST_STALE
+    );
+}
+
+#[tokio::test]
+async fn another_members_watchlist_is_not_the_requesters() {
+    let harness = super::bootstrap_media_request_app();
+    *harness.lists.subscriptions.lock().unwrap() = vec![linked_watchlist(
+        "someone-else",
+        evaluation_time() - chrono::Duration::hours(2),
+    )];
+
+    let document = assembled_document(&harness, &watchlisted_draft()).await;
+
+    assert_eq!(status_of(&document, "on_requester_watchlist"), "absent");
+    assert_eq!(
+        reason_of(&document, "on_requester_watchlist"),
+        fact_reason::NO_WATCHLIST_LINKED
+    );
 }

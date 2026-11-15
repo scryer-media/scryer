@@ -26,7 +26,9 @@ pub mod maintenance_actions;
 pub mod policy;
 mod release;
 pub mod request;
+pub mod request_actions;
 pub mod rule_builder_schema;
+pub mod rule_scan;
 pub mod runtime;
 pub mod validation;
 
@@ -46,3 +48,6 @@ mod rego_editor_tests;
 
 #[cfg(test)]
 mod maintenance_action_tests;
+
+#[cfg(test)]
+mod request_action_tests;

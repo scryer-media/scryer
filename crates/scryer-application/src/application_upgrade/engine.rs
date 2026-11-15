@@ -30,7 +30,7 @@ use crate::application_upgrade::shared::{map_updater_error, to_updater_error};
 use crate::domain_events::DomainEventActor;
 use crate::{
     AppError, AppResult, AppUseCase, JobKey, JobRun, JobRunRecord, JobRunStatus, JobTriggerSource,
-    SCRYER_VERSION, filesystem_space_raw,
+    SCRYER_VERSION,
 };
 use scryer_domain::{
     DomainEventPayload, Id, JobRunCompletedEventData, JobRunFailedEventData,
@@ -1428,11 +1428,13 @@ fn staging_space_requirement(artifact: &UpgradeArtifact) -> u64 {
 }
 
 fn ensure_available_space(path: &Path, required_bytes: u64) -> AppResult<()> {
-    let space = filesystem_space_raw(path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to inspect upgrade filesystem space: {error}"
-        ))
-    })?;
+    let space = crate::storage_capacity::StorageCapacity::process()
+        .refresh_blocking(path)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to inspect upgrade filesystem space: {error}"
+            ))
+        })?;
     if space.available_bytes < required_bytes {
         return Err(AppError::validation_refused(
             crate::error_reasons::application_upgrade::INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE,

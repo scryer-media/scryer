@@ -115,7 +115,9 @@ fn destination_directory(dest_path: &Path) -> &Path {
 }
 
 fn available_disk_space(path: &Path) -> std::io::Result<u64> {
-    Ok(crate::filesystem_space_raw(path)?.available_bytes)
+    Ok(crate::storage_capacity::StorageCapacity::process()
+        .refresh_blocking(path)?
+        .available_bytes)
 }
 
 /// Prove a same-sized destination holds the source's bytes with the shared

@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct InMemoryRequestRuleRepo {
     rule_sets: Mutex<Vec<RequestRuleSet>>,
     revisions: Mutex<Vec<RequestRuleRevision>>,
+    builder_models: Mutex<HashMap<String, String>>,
 }
 
 #[async_trait]
@@ -44,9 +45,16 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         &self,
         rule_set: &RequestRuleSet,
         revision: &RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()> {
         self.rule_sets.lock().await.push(rule_set.clone());
         self.revisions.lock().await.push(revision.clone());
+        if let Some(model) = builder_model_json {
+            self.builder_models
+                .lock()
+                .await
+                .insert(rule_set.id.clone(), model.to_string());
+        }
         Ok(())
     }
 
@@ -54,6 +62,7 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         &self,
         revision: &RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
         let rule_set = rule_sets
@@ -75,7 +84,26 @@ impl crate::ports::RequestRuleSetRepository for InMemoryRequestRuleRepo {
         rule_set.current_revision_number = revision.revision_number;
         rule_set.updated_at = updated_at;
         revisions.push(revision.clone());
+        match builder_model_json {
+            None => {}
+            Some(None) => {
+                self.builder_models
+                    .lock()
+                    .await
+                    .remove(&revision.rule_set_id);
+            }
+            Some(Some(model)) => {
+                self.builder_models
+                    .lock()
+                    .await
+                    .insert(revision.rule_set_id.clone(), model.to_string());
+            }
+        }
         Ok(())
+    }
+
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>> {
+        Ok(self.builder_models.lock().await.get(rule_set_id).cloned())
     }
 
     async fn get_revision(

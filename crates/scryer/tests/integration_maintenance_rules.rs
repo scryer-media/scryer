@@ -227,6 +227,10 @@ const VALIDATE_MUTATION: &str = r#"mutation($input: ValidateMaintenanceRuleInput
     }
 }"#;
 
+/// The per-run maximum the tests give every rule; a rule that deletes must
+/// carry one, and this is far above any fixture's title count.
+const TEST_MAX_TITLES_PER_RUN: u32 = 100;
+
 /// Create a rule set and return the whole detail payload.
 async fn create_rule(ctx: &TestContext, name: &str, rego: &str) -> Value {
     let body = gql(
@@ -236,6 +240,7 @@ async fn create_rule(ctx: &TestContext, name: &str, rego: &str) -> Value {
             "input": {
                 "name": name,
                 "regoSource": rego,
+                "maxTitlesPerRun": TEST_MAX_TITLES_PER_RUN,
             }
         }),
     )
@@ -335,6 +340,7 @@ async fn maintenance_rule_create_list_and_get_round_trip() {
                 "regoSource": MONITORED_MATCHER,
                 "graceDays": 14,
                 "libraryIds": [movie_library_id()],
+                "maxTitlesPerRun": TEST_MAX_TITLES_PER_RUN,
             }
         }),
     )
@@ -1740,8 +1746,8 @@ async fn the_evaluation_surface_is_permission_gated() {
 
 // ── Action execution ────────────────────────────────────────────────────────
 
-const RUN_HANDLER_MUTATION: &str = r#"mutation {
-    runMaintenanceActionHandlerNow { started message }
+const RUN_HANDLER_MUTATION: &str = r#"mutation($ruleSetId: ID) {
+    runMaintenanceActionHandlerNow(ruleSetId: $ruleSetId) { started message }
 }"#;
 
 const ACTION_RUNS_QUERY: &str = r#"query($ruleSetId: ID) {
@@ -1947,7 +1953,12 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
     .await;
     assert_eq!(armed["state"], "ENABLED");
 
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    let handled = gql(
+        &ctx,
+        RUN_HANDLER_MUTATION,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&handled);
     assert_eq!(
         handled["data"]["runMaintenanceActionHandlerNow"]["started"],
@@ -1994,7 +2005,12 @@ async fn a_reversible_unmonitor_journey_needs_no_confirmation() {
 
     let started = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
     assert_no_errors(&started);
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    let handled = gql(
+        &ctx,
+        RUN_HANDLER_MUTATION,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&handled);
 
     let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
@@ -2036,7 +2052,12 @@ async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
         .await
         .expect("unmonitor title");
 
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    let handled = gql(
+        &ctx,
+        RUN_HANDLER_MUTATION,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&handled);
 
     let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "CANCELED").await;
@@ -2121,7 +2142,12 @@ async fn a_tag_rule_writes_the_label_through_the_normal_assignment_path() {
     );
 
     run_tag_rule(&ctx, &rule_set_id).await;
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    let handled = gql(
+        &ctx,
+        RUN_HANDLER_MUTATION,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&handled);
 
     let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
@@ -2152,7 +2178,12 @@ async fn a_tag_rule_whose_postcondition_already_holds_reports_already_satisfied(
         .to_string();
 
     run_tag_rule(&ctx, &rule_set_id).await;
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    let handled = gql(
+        &ctx,
+        RUN_HANDLER_MUTATION,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&handled);
 
     // The sequence as a whole succeeds; its one step records that the label
@@ -2202,7 +2233,12 @@ async fn a_tag_rule_holds_when_its_label_was_deleted_after_authoring() {
     let deleted = gql(&ctx, DELETE_TAG_MUTATION, json!({ "id": tag_id })).await;
     assert_no_errors(&deleted);
 
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    let handled = gql(
+        &ctx,
+        RUN_HANDLER_MUTATION,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
     assert_no_errors(&handled);
 
     let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "BLOCKED").await;
@@ -2251,8 +2287,15 @@ async fn two_rules_writing_opposite_tag_patches_hold_both_candidates() {
     run_tag_rule(&ctx, &adder_id).await;
     run_tag_rule(&ctx, &remover_id).await;
 
-    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
-    assert_no_errors(&handled);
+    for rule_set_id in [&adder_id, &remover_id] {
+        let handled = gql(
+            &ctx,
+            RUN_HANDLER_MUTATION,
+            json!({ "ruleSetId": rule_set_id }),
+        )
+        .await;
+        assert_no_errors(&handled);
+    }
 
     for rule_set_id in [&adder_id, &remover_id] {
         let candidate = wait_for_candidate_state(&ctx, rule_set_id, "BLOCKED").await;
