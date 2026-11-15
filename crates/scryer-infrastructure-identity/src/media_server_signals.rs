@@ -1158,6 +1158,7 @@ impl HttpMediaServerSignalSource {
                         return Err(unreadable_items());
                     };
                     plays.push(ProviderItemPlay {
+                        is_favorite: false,
                         external_user_id: plex_history_account(account, Some(owner_id)),
                         played: true,
                         last_played_at: Some(viewed_at),
@@ -1462,6 +1463,7 @@ impl MediaServerSignalReader for UserItemsReader {
                     .get(&(user.to_string(), id.clone()))
                     .cloned()
                     .unwrap_or_else(|| ProviderItemPlay {
+                        is_favorite: false,
                         external_user_id: user.to_string(),
                         played: false,
                         last_played_at: None,
@@ -1503,12 +1505,18 @@ fn user_item_state(body: &Value, external_user_id: &str) -> ReadResult<ProviderI
                 "the item answer did not say whether it was played",
             )
         })?;
+    // Read as the sweep reads it: an answer that leaves the flag out is not
+    // a favourite.
+    let is_favorite = field(user_data, "IsFavorite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(ProviderItemPlay {
         external_user_id: external_user_id.to_string(),
         played,
         last_played_at: field(user_data, "LastPlayedDate")
             .and_then(Value::as_str)
             .and_then(parse_timestamp),
+        is_favorite,
     })
 }
 
@@ -1757,11 +1765,13 @@ impl MediaServerSignalReader for PlexReader {
         for participant in participants {
             let external_user_id = participant_id(participant)?;
             let unplayed = || ProviderItemPlay {
+                is_favorite: false,
                 external_user_id: external_user_id.to_string(),
                 played: false,
                 last_played_at: None,
             };
             let as_state = |item: &ProviderPlayedItem| ProviderItemPlay {
+                is_favorite: false,
                 external_user_id: external_user_id.to_string(),
                 played: item.played,
                 last_played_at: item.last_played_at,
@@ -1800,6 +1810,7 @@ impl MediaServerSignalReader for PlexReader {
                             .filter_map(|play| play.last_played_at)
                             .max();
                         recheck.participants.push(ProviderItemPlay {
+                            is_favorite: false,
                             external_user_id: external_user_id.to_string(),
                             played: last_played_at.is_some(),
                             last_played_at,
@@ -5149,17 +5160,20 @@ mod tests {
             recheck.participants,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_OWNER_ID.into(),
                     played: true,
                     last_played_at: at(1_756_100_000),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_SHARED_ID.into(),
                     played: false,
                     last_played_at: None,
                 },
                 // Read from history: their state is their newest row there.
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "3003".into(),
                     played: true,
                     last_played_at: at(1_756_300_000),
@@ -5258,6 +5272,7 @@ mod tests {
             assert_eq!(
                 recheck.participants,
                 vec![ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: PLEX_SHARED_ID.into(),
                     played: false,
                     last_played_at: None,
@@ -5455,11 +5470,13 @@ mod tests {
             recheck.participants,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-1".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-2".into(),
                     played: false,
                     last_played_at: None,
@@ -5470,17 +5487,63 @@ mod tests {
             recheck.history,
             vec![
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-1".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-30T08:15:00Z"),
                 },
                 ProviderItemPlay {
+                    is_favorite: false,
                     external_user_id: "emby-user-3".into(),
                     played: true,
                     last_played_at: parse_timestamp("2026-10-31T21:00:00Z"),
                 },
             ]
         );
+    }
+
+    /// The favourite flag comes from the same user data the play state does,
+    /// with no extra request; an answer that leaves it out is not a favourite.
+    #[tokio::test]
+    async fn a_jellyfin_recheck_reads_each_participants_favourite_flag() {
+        let server = wiremock::MockServer::start().await;
+        mount_users(&server, "", &["jf-user-1", "jf-user-2"]).await;
+        mount_user_items(
+            &server,
+            "",
+            "jf-user-1",
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": [{
+                "Id": "jf-item-4",
+                "Type": "Episode",
+                "UserData": { "Played": false, "PlayCount": 0, "IsFavorite": true }
+            }]})),
+        )
+        .await;
+        mount_user_items(
+            &server,
+            "",
+            "jf-user-2",
+            ResponseTemplate::new(200).set_body_json(json!({ "Items": [{
+                "Id": "jf-item-4",
+                "Type": "Episode",
+                "UserData": { "Played": false, "PlayCount": 0 }
+            }]})),
+        )
+        .await;
+
+        let recheck = jellyfin_recheck(&server, &["jf-item-4"], &["jf-user-1", "jf-user-2"])
+            .await
+            .expect("the item re-checks")
+            .remove("jf-item-4")
+            .expect("the item is answered");
+
+        let favourites: Vec<(&str, bool)> = recheck
+            .participants
+            .iter()
+            .map(|state| (state.external_user_id.as_str(), state.is_favorite))
+            .collect();
+        assert_eq!(favourites, vec![("jf-user-1", true), ("jf-user-2", false)]);
+        assert!(recheck.history.is_empty(), "a favourite is not a play");
     }
 
     #[tokio::test]

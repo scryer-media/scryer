@@ -223,7 +223,7 @@ pub fn from_maintenance_rule_set(
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         grace_days: to_graphql_int(detail.revision.grace_days),
         declared_actions: from_maintenance_declared_actions(&detail.declared_actions),
-        load_refusal: detail.load_refusal.map(str::to_string),
+        load_refusal: detail.refusal().map(str::to_string),
         schedule: rule_set.schedule.clone().into(),
         max_titles_per_run: rule_set
             .max_titles_per_run

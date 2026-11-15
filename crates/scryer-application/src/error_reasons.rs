@@ -1948,6 +1948,11 @@ pub mod maintenance {
     /// until a revision that declares its actions replaces it.
     pub const RULE_STORED_ACTIONS_NOT_DECLARED: &str =
         "MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED";
+    /// The rule is armed to run an action that deletes but has no most titles
+    /// per run. It still evaluates and previews; its actions do not run until
+    /// a maximum is set or the rule is disarmed.
+    pub const RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN: &str =
+        "MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN";
     /// Another save gave the rule a new revision first; this save wrote
     /// nothing and can be retried against the current revision.
     pub const RULE_REVISION_CONFLICT: &str = "MAINTENANCE_RULE_REVISION_CONFLICT";
@@ -2020,6 +2025,9 @@ pub mod maintenance {
         "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
     /// The most titles a rule acts on in one run is below one.
     pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID";
+    /// A request to act now named no rule. Rules act only through their own
+    /// fires, so acting now needs the rule to act for.
+    pub const ACTION_RUN_RULE_REQUIRED: &str = "MAINTENANCE_ACTION_RUN_RULE_REQUIRED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
@@ -2048,6 +2056,7 @@ pub mod maintenance {
         GRACE_PERIOD_OUT_OF_RANGE,
         ACTION_NOT_STORABLE,
         RULE_STORED_ACTIONS_NOT_DECLARED,
+        RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN,
         RULE_REVISION_CONFLICT,
         PREVIEW_NO_DECISION,
         ACTION_UNSUPPORTED,
@@ -2077,6 +2086,7 @@ pub mod maintenance {
         MOVE_ROOT_NOT_FOUND,
         RULE_MAX_TITLES_PER_RUN_REQUIRED,
         RULE_MAX_TITLES_PER_RUN_INVALID,
+        ACTION_RUN_RULE_REQUIRED,
     ];
 
     /// The deleting action heads that make a rule's per-run maximum required.

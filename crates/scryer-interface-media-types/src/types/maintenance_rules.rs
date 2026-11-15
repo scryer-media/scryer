@@ -193,8 +193,11 @@ pub struct MaintenanceRuleSet {
     /// Stable reason code when the revision in force cannot be evaluated or
     /// run, such as `MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED` for a rule
     /// saved before rules declared their own actions. The rule matches nothing
-    /// and cannot be enabled until its source is saved again. Null when the
-    /// rule is usable.
+    /// and cannot be enabled until its source is saved again. An armed rule
+    /// that deletes with no most titles per run shows
+    /// `MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN`: it still evaluates
+    /// and previews, but its actions do not run until a maximum is set. Null
+    /// when the rule is usable.
     pub load_refusal: Option<String>,
     /// When the rule evaluates and then acts on what it decided. A rule saved
     /// without one runs every eight hours.

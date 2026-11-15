@@ -202,8 +202,9 @@ pub mod unknown_reason {
     pub const AUDIENCE_NOT_READ: &str = "audience_not_read";
 
     /// A member's watchlist subscription has not synced successfully: it has
-    /// never run, or its last run failed. The watchlist facts need every
-    /// watchlist read, so they are unknown for every title.
+    /// never run, its last run failed, or it is switched off, set not to
+    /// sync, or has lost the account it reads through. The watchlist facts
+    /// need every watchlist read, so they are unknown for every title.
     pub const WATCHLIST_NOT_SYNCED: &str = "watchlist_not_synced";
 
     /// A member's watchlist subscription last synced longer ago than its
@@ -230,8 +231,14 @@ pub mod unknown_reason {
     /// day. An *absence* reason.
     pub const NO_SCHEDULED_EPISODE: &str = "no_scheduled_episode";
 
-    /// Every enabled media server is Plex, which has no favourites, so the
-    /// favourite facts do not apply. An *absence* reason.
+    /// The show has no regular episode stored. That is how a show looks
+    /// before its episode list has been read from metadata, and nothing
+    /// stored says it truly has none, so its episode-list shape is unknown.
+    pub const EPISODE_LIST_EMPTY: &str = "episode_list_empty";
+
+    /// Every enabled media server is Plex, which Scryer cannot read favourites
+    /// from, so nobody's favourites are known. An *unknown* reason: a rule
+    /// that reads a favourite fact is held, never told nobody favourited.
     pub const FAVORITES_UNSUPPORTED: &str = "favorites_unsupported";
 
     /// A linked member can only be observed through Plex, which has no
@@ -240,6 +247,12 @@ pub mod unknown_reason {
 
     /// The stored favourites could not be read for this pass.
     pub const FAVORITES_UNREADABLE: &str = "favorites_unreadable";
+
+    /// Favourites are read only for members linked to a media-server account,
+    /// so whether an account nobody linked favourited the subject is not
+    /// known. `favorited_by_anyone` is true when a read favourite covers the
+    /// subject and unknown otherwise, never false.
+    pub const AUDIENCE_FAVORITES_NOT_READ: &str = "audience_favorites_not_read";
 
     /// Every code above. A released code is part of the rule-authoring
     /// contract, so none may be renamed, reused or repurposed.
@@ -284,9 +297,11 @@ pub mod unknown_reason {
         EPISODE_STORE_UNREADABLE,
         NO_AIRED_EPISODE,
         NO_SCHEDULED_EPISODE,
+        EPISODE_LIST_EMPTY,
         FAVORITES_UNSUPPORTED,
         FAVORITE_MEMBER_UNOBSERVABLE,
         FAVORITES_UNREADABLE,
+        AUDIENCE_FAVORITES_NOT_READ,
     ];
 }
 
@@ -1524,6 +1539,23 @@ fn retention_rank_observations(
     }
 }
 
+/// Whether an episode with this stored air date has aired by the evaluation
+/// day: the calendar day the air date is written with, its first ten
+/// characters, is on or before that day. This is the one definition of
+/// "aired" for lifecycle rules; the episode-shape read in the title store
+/// applies the same day comparison in SQL. `None` is a date this cannot read.
+/// An episode with no air date at all is the caller's to place: the shape
+/// facts count it as not aired, and the scoped watch facts hold.
+pub(crate) fn air_date_has_aired(
+    air_date: &str,
+    evaluation_day: chrono::NaiveDate,
+) -> Option<bool> {
+    let day = air_date.trim().get(..10)?;
+    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .ok()
+        .map(|day| day <= evaluation_day)
+}
+
 fn scoped_watch_observations(
     evaluation_time: DateTime<Utc>,
     subject: &super::subjects::MaintenanceSubject,
@@ -1540,11 +1572,7 @@ fn scoped_watch_observations(
             let Some(air_date) = episode.air_date.as_deref() else {
                 return WatchObservations::all_unknown(unknown_reason::EPISODE_AIR_DATE_UNRESOLVED);
             };
-            let aired = if let Some(instant) = parse_timestamp(air_date) {
-                instant <= evaluation_time
-            } else if let Ok(date) = chrono::NaiveDate::parse_from_str(air_date, "%Y-%m-%d") {
-                date <= evaluation_time.date_naive()
-            } else {
+            let Some(aired) = air_date_has_aired(air_date, evaluation_time.date_naive()) else {
                 return WatchObservations::all_unknown(unknown_reason::EPISODE_AIR_DATE_UNRESOLVED);
             };
             if !aired {

@@ -1611,7 +1611,7 @@ async fn maintenance_scope_episode_deletion_preserves_siblings_and_records() {
     assert_eq!(matched.title_id, f.title_id);
     let report = f
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -1676,7 +1676,7 @@ async fn maintenance_scope_season_deletion_preserves_other_seasons_and_unmonitor
             0,
         )
         .await;
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 1, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 4);
     let episodes = setup.shows.episodes.lock().await;
@@ -1723,7 +1723,7 @@ async fn maintenance_scope_specials_zero_and_inherited_exclusions() {
         )
         .await
         .unwrap();
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 4, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 2);
     assert!(
@@ -1750,7 +1750,7 @@ async fn maintenance_scope_shared_episode_file_is_held_before_unmonitoring() {
             0,
         )
         .await;
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 0);
     assert_eq!(report.held, 1, "{report:?}");
     assert!(setup.shows.episodes.lock().await[2].monitored);
@@ -1781,7 +1781,7 @@ async fn maintenance_scope_missing_episode_never_falls_back_to_show() {
         .lock()
         .await
         .retain(|episode| episode.id != setup.episodes[3].id);
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 0);
     assert_eq!(f.remaining_file_ids().await.len(), 6);
     assert!(
@@ -1811,7 +1811,7 @@ async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_t
         )
         .await;
     *setup.shows.fail_monitoring.lock().await = true;
-    let first = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let first = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(first.executed, 0);
     assert_eq!(f.remaining_file_ids().await.len(), 6);
     assert!(setup.shows.episodes.lock().await[3].monitored);
@@ -1824,7 +1824,7 @@ async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_t
             .contains("monitoring failure")
     );
     *setup.shows.fail_monitoring.lock().await = false;
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 1, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 5);
 }
@@ -1844,11 +1844,11 @@ async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
         )
         .await;
     *setup.shows.fail_monitoring.lock().await = true;
-    let first = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let first = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(first.executed, 0);
     assert_eq!(f.remaining_file_ids().await.len(), 6);
     *setup.shows.fail_monitoring.lock().await = false;
-    let held = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let held = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(held.executed, 0, "{held:?}");
     assert_eq!(held.held, 1, "{held:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 6);
@@ -1867,9 +1867,9 @@ async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
         )
         .await;
     *setup.shows.fail_monitoring.lock().await = true;
-    f.app.run_lifecycle_action_handling_job().await.unwrap();
+    f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     *setup.shows.fail_monitoring.lock().await = false;
-    let replayed = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let replayed = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(replayed.executed, 1, "{replayed:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 5);
 }
@@ -1920,7 +1920,7 @@ async fn maintenance_scope_partial_preview_failure_records_each_file_and_preserv
             0,
         )
         .await;
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 0);
     assert!(outside_path.exists());
     assert!(sidecar.exists());
@@ -1956,7 +1956,7 @@ async fn maintenance_scope_crash_after_unmonitor_and_disk_removal_resumes_catalo
     setup.rule(scryer_domain::MaintenanceRuleSubjectKind::Episode,
         format!("match if {{ input.subject.episode_id == {:?}; input.facts.monitored; input.facts.has_file }}", setup.episodes[3].id), 0).await;
     *setup.shows.fail_monitoring.lock().await = true;
-    f.app.run_lifecycle_action_handling_job().await.unwrap();
+    f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     *setup.shows.fail_monitoring.lock().await = false;
     f.app
         .set_episode_monitored(&f.admin, &setup.episodes[3].id, false)
@@ -1972,7 +1972,7 @@ async fn maintenance_scope_crash_after_unmonitor_and_disk_removal_resumes_catalo
         .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(2))
         .await;
     f.app.run_maintenance_rule_evaluation_job().await.unwrap();
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 1, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 5);
     assert_eq!(setup.evaluation.all_candidates().await.len(), 1);
@@ -2090,7 +2090,7 @@ async fn maintenance_scope_anime_specials_and_missing_files_keep_parent_records(
             0,
         )
         .await;
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 1, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 4);
     assert_eq!(setup.shows.episodes.lock().await.len(), 6);
@@ -2124,7 +2124,7 @@ async fn maintenance_scope_season_failed_propagation_preserves_every_file() {
         )
         .await;
     *setup.shows.fail_monitoring.lock().await = true;
-    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 0);
     assert_eq!(f.remaining_file_ids().await.len(), 6);
     assert!(
@@ -2160,7 +2160,7 @@ async fn maintenance_scope_overlapping_episode_and_season_rules_preserve_other_s
             0,
         )
         .await;
-    f.app.run_lifecycle_action_handling_job().await.unwrap();
+    f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(f.remaining_file_ids().await.len(), 4);
     assert!(
         f.root
@@ -2210,7 +2210,7 @@ async fn maintenance_scope_newly_discovered_future_episodes_inherit_unmonitored_
         .await;
     assert_eq!(
         f.app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .unwrap()
             .executed,

@@ -298,7 +298,7 @@ async fn sequence_unmonitor_then_delete_files_removes_only_the_matched_title_fil
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute sequence deletion");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -402,7 +402,7 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("execute selected episode sequence");
     assert_eq!(report.executed, 1, "{report:?}");
@@ -503,7 +503,7 @@ async fn a_fresh_re_monitor_cancels_the_sequence_delete_files_step_and_preserves
 
     let report = fixture
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("refuse stale destructive prerequisite");
     assert_eq!(report.canceled, 1, "{report:?}");
@@ -551,7 +551,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     let first = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("persist storage sequence journal before capacity hold");
     assert_eq!(first.held, 1, "{first:?}");
@@ -632,7 +632,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     let resumed = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("hold an invalidated storage journal");
     assert_eq!(resumed.held, 1, "{resumed:?}");
@@ -773,7 +773,7 @@ async fn storage_sequence_holds_in_action_when_its_root_moves_over_the_subjects_
     let first = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("persist storage sequence journal before capacity hold");
     assert_eq!(first.held, 1, "{first:?}");
@@ -848,7 +848,7 @@ async fn storage_sequence_holds_in_action_when_its_root_moves_over_the_subjects_
         let report = fixture
             .execution
             .app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("hold a storage journal whose root identity changed");
         assert_eq!(report.held, 1, "{pass}: {report:?}");
@@ -947,7 +947,7 @@ async fn completed_storage_sequence_releases_its_exact_marker_after_root_filter_
     let executed = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("complete selected-root deletion");
     assert_eq!(executed.executed, 1, "{executed:?}");
@@ -1266,7 +1266,7 @@ async fn a_deleting_rule_stops_at_its_maximum_and_the_next_fire_continues() {
     let first = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("first fire");
     assert_eq!(first.executed, 2, "{first:?}");
@@ -1302,7 +1302,7 @@ async fn a_deleting_rule_stops_at_its_maximum_and_the_next_fire_continues() {
     let second = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("second fire");
     assert_eq!(second.executed, 2, "{second:?}");
@@ -1311,13 +1311,119 @@ async fn a_deleting_rule_stops_at_its_maximum_and_the_next_fire_continues() {
     let third = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("third fire");
     assert_eq!(third.executed, 1, "{third:?}");
     assert_eq!(third.rules_stopped_at_maximum, 0, "{third:?}");
     assert_eq!(remaining(&paths), 0);
     assert!(stray.exists());
+}
+
+/// The instance-wide job, scheduled or run by hand, never acts for a rule: a
+/// rule's maximum bounds everything done between two of its own fires.
+#[tokio::test]
+async fn the_instance_wide_job_never_acts_and_one_fire_stops_at_the_maximum() {
+    let (fixture, rule_set_id, paths, stray) = deleting_rule_over_five(2).await;
+    let app = &fixture.execution.app;
+
+    for _ in 0..3 {
+        let report = app
+            .run_lifecycle_action_handling_job()
+            .await
+            .expect("instance-wide pass");
+        assert_eq!(report.executed, 0, "{report:?}");
+        app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
+            .await
+            .expect("instance-wide job run by hand");
+    }
+    assert_eq!(
+        remaining(&paths),
+        5,
+        "no instance-wide pass deletes anything"
+    );
+
+    let fire = app
+        .run_lifecycle_action_handling(Some(&rule_set_id))
+        .await
+        .expect("the rule's own fire");
+    assert_eq!(fire.executed, 2, "{fire:?}");
+    assert_eq!(remaining(&paths), 3);
+
+    for _ in 0..3 {
+        app.run_lifecycle_action_handling_job()
+            .await
+            .expect("instance-wide pass after the fire");
+        app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
+            .await
+            .expect("instance-wide job run by hand after the fire");
+    }
+    assert_eq!(
+        remaining(&paths),
+        3,
+        "one fire plus any number of instance-wide passes acts on at most the maximum"
+    );
+    assert!(stray.exists(), "a file no title owns is never touched");
+}
+
+/// A rule on a manual schedule acts only when that rule is run by hand. A
+/// request to act now that names no rule is refused with its code.
+#[tokio::test]
+async fn a_manual_schedule_rule_acts_only_through_its_own_trigger() {
+    let (fixture, rule_set_id, paths, _stray) = deleting_rule_over_five(5).await;
+    let app = &fixture.execution.app;
+    let user = &fixture.execution.user;
+    let rule = app
+        .require_maintenance_rule_set(&rule_set_id)
+        .await
+        .expect("rule");
+    app.update_maintenance_rule_metadata_with_schedule(
+        user,
+        &rule_set_id,
+        rule.name.clone(),
+        rule.description.clone(),
+        rule.library_ids.clone(),
+        Some(scryer_domain::ScriptSchedule::Manual),
+        None,
+    )
+    .await
+    .expect("manual schedule");
+
+    app.run_lifecycle_action_handling_job()
+        .await
+        .expect("instance-wide pass");
+    app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
+        .await
+        .expect("instance-wide job run by hand");
+    assert_eq!(remaining(&paths), 5, "the instance-wide job ran no rule");
+
+    let refused = app
+        .run_maintenance_action_handler_now(user, None)
+        .await
+        .expect_err("a run that names no rule is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::ACTION_RUN_RULE_REQUIRED)
+    );
+    assert_eq!(remaining(&paths), 5);
+
+    // The rule's own trigger acts. It runs under the rule's claim, so a
+    // second trigger while it runs is turned away; the run is awaited here
+    // through the same pass the trigger spawns.
+    let _claim = app
+        .claim_maintenance_rule_run(&rule_set_id)
+        .expect("the rule is idle");
+    let busy = app
+        .run_maintenance_action_handler_now(user, Some(rule_set_id.clone()))
+        .await
+        .expect("trigger while the rule runs");
+    assert!(!busy.started, "{busy:?}");
+    let fired = app
+        .run_lifecycle_action_handling(Some(&rule_set_id))
+        .await
+        .expect("the rule's manual run");
+    assert_eq!(fired.executed, 5, "{fired:?}");
+    assert_eq!(remaining(&paths), 0);
 }
 
 #[tokio::test]
@@ -1327,11 +1433,103 @@ async fn a_very_large_maximum_acts_on_every_due_title() {
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("one fire");
     assert_eq!(report.executed, 5, "{report:?}");
     assert_eq!(report.rules_stopped_at_maximum, 0, "{report:?}");
     assert_eq!(remaining(&paths), 0);
     assert!(stray.exists(), "a file no title owns is never touched");
+}
+
+/// A deleting rule that is armed but somehow stored without a maximum shows
+/// the refusal by code, still evaluates and previews, and acts on nothing.
+#[tokio::test]
+async fn an_armed_deleting_rule_without_a_maximum_shows_its_refusal_and_acts_on_nothing() {
+    use crate::error_reasons::maintenance::RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN;
+    use crate::maintenance_rules::{
+        MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
+    };
+    use crate::ports::MaintenanceRuleSetRepository;
+
+    let (fixture, rule_set_id, paths, stray) = deleting_rule_over_five(2).await;
+    let app = &fixture.execution.app;
+    let user = &fixture.execution.user;
+    let rule = app
+        .require_maintenance_rule_set(&rule_set_id)
+        .await
+        .expect("rule");
+    let armed = app
+        .load_maintenance_rule_detail(rule.clone())
+        .await
+        .expect("detail");
+    assert_eq!(armed.refusal(), None, "a rule with a maximum is usable");
+
+    // Saving refuses this shape, so the row is written beneath the service.
+    fixture
+        .execution
+        .rules
+        .update_rule_set_metadata(
+            &rule_set_id,
+            &rule.name,
+            &rule.description,
+            &rule.library_ids,
+            None,
+            Some(None),
+            false,
+            Utc::now(),
+        )
+        .await
+        .expect("clear the maximum in the store");
+    let rule = app
+        .require_maintenance_rule_set(&rule_set_id)
+        .await
+        .expect("rule");
+    assert_eq!(rule.effect_arming, MaintenanceEffectArming::Destructive);
+    let detail = app
+        .load_maintenance_rule_detail(rule)
+        .await
+        .expect("detail");
+    assert_eq!(detail.load_refusal, None, "evaluation is not refused");
+    assert_eq!(
+        detail.action_refusal,
+        Some(RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN)
+    );
+    assert_eq!(
+        detail.refusal(),
+        Some(RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN)
+    );
+
+    app.run_maintenance_rule_evaluation_job()
+        .await
+        .expect("the rule still evaluates");
+    let preview = app
+        .preview_maintenance_rule(
+            user,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Stored {
+                    rule_set_id: rule_set_id.clone(),
+                },
+                selection: MaintenancePreviewSelection::Titles(vec![fixture.title.id.clone()]),
+            },
+        )
+        .await
+        .expect("the rule still previews");
+    assert_eq!(preview.titles.len(), 1);
+
+    let report = app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("fire");
+    assert_eq!(report.executed, 0, "{report:?}");
+    let refused = app
+        .run_maintenance_action_handler_now(user, Some(rule_set_id.clone()))
+        .await
+        .expect_err("acting now is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN)
+    );
+    assert_eq!(remaining(&paths), 5, "nothing is deleted");
+    assert!(stray.exists());
 }

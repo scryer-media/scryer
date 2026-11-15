@@ -405,7 +405,7 @@ impl JobKey {
                 "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action."
             }
             Self::LifecycleActionHandling => {
-                "Execute due maintenance candidates of armed rules, behind the instance effect gates and full safety rechecks. Each rule acts right after its own scheduled evaluation; running this now acts for every armed rule."
+                "Each maintenance rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule."
             }
             Self::MediaServerSignalSync => {
                 "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."

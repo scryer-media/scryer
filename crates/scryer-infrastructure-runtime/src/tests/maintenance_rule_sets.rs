@@ -594,6 +594,82 @@ async fn a_rule_maximum_rides_in_the_revision_and_metadata_writes() {
     let _ = std::fs::remove_file(db);
 }
 
+/// The check that a deleting rule carries a maximum runs inside each write's
+/// own transaction, against the row as it is then, not as the caller read it:
+/// a save that keeps "the stored maximum" after another save cleared it, and a
+/// clear that lands after another save made the rule delete, are both refused
+/// with the existing reason code and leave nothing written.
+#[tokio::test]
+async fn a_deleting_rule_is_never_stored_without_a_maximum() {
+    let (services, db) = temp_services("scryer_maintenance_rule_maximum_atomic").await;
+    let store = maintenance_rule_set_store(&services).await;
+    store
+        .create_rule_set(&rule_set("bounded", vec![]), &revision("bounded", 1))
+        .await
+        .unwrap();
+    let deleting = |number| {
+        let mut revision = revision("bounded", number);
+        revision.action_spec_json =
+            scryer_application::maintenance_rules::MaintenanceDeclaredActions {
+                destructive: true,
+                ..scryer_application::maintenance_rules::MaintenanceDeclaredActions::none()
+            }
+            .to_persisted_json();
+        revision
+    };
+    let required = scryer_application::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED;
+
+    // The caller thought a maximum was stored; none is, so "keep it" is refused.
+    let refused = store
+        .add_revision(&deleting(2), None, Utc::now())
+        .await
+        .expect_err("a deleting revision without a stored maximum is refused");
+    assert_eq!(refused.validation_reason(), Some(required));
+    let refused = store
+        .add_revision_keeping_arming(
+            &deleting(2),
+            scryer_domain::MaintenanceEffectArming::None,
+            None,
+            Utc::now(),
+        )
+        .await
+        .expect_err("the arming-keeping write refuses it too");
+    assert_eq!(refused.validation_reason(), Some(required));
+    let unchanged = store.get_rule_set("bounded").await.unwrap().unwrap();
+    assert_eq!(unchanged.current_revision_number, 1, "nothing was written");
+    assert!(store.get_revision("bounded", 2).await.unwrap().is_none());
+
+    store
+        .add_revision(&deleting(2), Some(Some(4)), Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(stored_maximum(&store).await, Some(4));
+
+    // A clear checked against an older, non-deleting revision is refused now
+    // that the revision in force deletes.
+    let refused = store
+        .update_rule_set_metadata(
+            "bounded",
+            "Renamed",
+            "",
+            &[],
+            None,
+            Some(None),
+            false,
+            Utc::now(),
+        )
+        .await
+        .expect_err("clearing the maximum of a deleting rule is refused");
+    assert_eq!(refused.validation_reason(), Some(required));
+    let kept = store.get_rule_set("bounded").await.unwrap().unwrap();
+    assert_eq!(kept.max_titles_per_run, Some(4));
+    assert_ne!(
+        kept.name, "Renamed",
+        "the refused write left nothing behind"
+    );
+    let _ = std::fs::remove_file(db);
+}
+
 async fn stored_maximum(store: &crate::MaintenanceRuleSetStore) -> Option<u32> {
     store
         .get_rule_set("bounded")

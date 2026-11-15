@@ -16641,8 +16641,11 @@ type MaintenanceRuleSet {
 	Stable reason code when the revision in force cannot be evaluated or
 	run, such as `MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED` for a rule
 	saved before rules declared their own actions. The rule matches nothing
-	and cannot be enabled until its source is saved again. Null when the
-	rule is usable.
+	and cannot be enabled until its source is saved again. An armed rule
+	that deletes with no most titles per run shows
+	`MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN`: it still evaluates
+	and previews, but its actions do not run until a maximum is set. Null
+	when the rule is usable.
 	"""
 	loadRefusal: String
 	"""
@@ -21785,9 +21788,16 @@ type MutationRoot {
 		confirmation: MaintenanceRuleArmingConfirmationInput
 	): MaintenanceRuleSet!
 	"""
-	Run the maintenance action handler immediately instead of waiting for its schedule.
+	Act on one rule's due titles now instead of waiting for its next fire.
+	Rules act only through their own fires, so a call that names no rule
+	is refused with `MAINTENANCE_ACTION_RUN_RULE_REQUIRED`.
 	"""
-	runMaintenanceActionHandlerNow: MaintenanceEvaluationTriggerPayload!
+	runMaintenanceActionHandlerNow(
+		"""
+		The rule to act for. Required: omitting it is refused with MAINTENANCE_ACTION_RUN_RULE_REQUIRED.
+		"""
+		ruleSetId: ID
+	): MaintenanceEvaluationTriggerPayload!
 	"""
 	Set the instance-wide maintenance switches. Omitted fields keep their stored value.
 	"""

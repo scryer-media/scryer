@@ -169,6 +169,10 @@ pub struct MaintenanceRuleSetDetail {
     /// code. Such a rule declares no action, is never evaluated, never runs
     /// and cannot be enabled; replacing its source is how it recovers.
     pub load_refusal: Option<&'static str>,
+    /// Set when the rule still evaluates and previews but its actions must not
+    /// run, with the reason code: an armed rule that deletes with no most
+    /// titles per run. Re-saving the maximum or disarming the rule clears it.
+    pub action_refusal: Option<&'static str>,
 }
 
 impl MaintenanceRuleSetDetail {
@@ -176,6 +180,26 @@ impl MaintenanceRuleSetDetail {
     pub fn is_actionable(&self) -> bool {
         self.load_refusal.is_none()
     }
+
+    /// The reason this rule cannot be used as it stands, for the operator:
+    /// a load refusal first, then a refusal that only stops its actions.
+    pub fn refusal(&self) -> Option<&'static str> {
+        self.load_refusal.or(self.action_refusal)
+    }
+}
+
+/// The action refusal for a rule armed to run a deleting action with no most
+/// titles per run. Saving and arming refuse that shape; a row that reached it
+/// anyway evaluates and previews as usual and acts on nothing.
+pub(crate) fn action_refusal_for(
+    rule_set: &MaintenanceRuleSet,
+    declared: &MaintenanceDeclaredActions,
+) -> Option<&'static str> {
+    (rule_set.evaluation_mode != MaintenanceEvaluationMode::Disabled
+        && rule_set.effect_arming != scryer_domain::MaintenanceEffectArming::None
+        && declared.destructive
+        && rule_set.max_titles_per_run.is_none())
+    .then_some(crate::error_reasons::maintenance::RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN)
 }
 
 /// What validating a draft source found: the validation result, and the
@@ -415,6 +439,7 @@ impl AppUseCase {
         // until it is enabled.
 
         Ok(MaintenanceRuleSetDetail {
+            action_refusal: action_refusal_for(&rule_set, &prepared.declared),
             rule_set,
             revision,
             declared_actions: prepared.declared,
@@ -512,10 +537,12 @@ impl AppUseCase {
             ));
         }
         // The maximum is judged against the new source together: a save may
-        // add a delete head and its maximum at once.
-        let max_titles_per_run = draft
-            .max_titles_per_run
-            .filter(|max| *max != rule_set.max_titles_per_run);
+        // add a delete head and its maximum at once. This early check reads the
+        // row as it was; the store repeats it inside the write's transaction,
+        // so a maximum cleared by another save in between is refused too. A
+        // given maximum is always written, never dropped for matching a value
+        // that may already be stale.
+        let max_titles_per_run = draft.max_titles_per_run;
         require_max_titles_per_run(
             &prepared.declared,
             max_titles_per_run.unwrap_or(rule_set.max_titles_per_run),
@@ -587,6 +614,7 @@ impl AppUseCase {
         }
         rule_set.updated_at = now;
         Ok(MaintenanceRuleSetDetail {
+            action_refusal: action_refusal_for(&rule_set, &prepared.declared),
             rule_set,
             revision,
             declared_actions: prepared.declared,
@@ -659,8 +687,8 @@ impl AppUseCase {
                 "This rule ships with Scryer and cannot be renamed.",
             ));
         }
-        let max_titles_per_run =
-            max_titles_per_run.filter(|max| *max != rule_set.max_titles_per_run);
+        // An early check against the revision as read; the store repeats it in
+        // the write's transaction against the revision then in force.
         if let Some(max) = max_titles_per_run {
             let declared = self
                 .load_maintenance_rule_detail(rule_set.clone())
@@ -1940,7 +1968,7 @@ fn validated_rule_schedule(schedule: Option<ScriptSchedule>) -> AppResult<Option
 
 /// A rule's per-fire maximum is at least one title, and a rule that can
 /// delete must carry one. There is no upper bound: the operator picks it.
-pub(crate) fn require_max_titles_per_run(
+pub fn require_max_titles_per_run(
     declared: &super::MaintenanceDeclaredActions,
     max_titles_per_run: Option<u32>,
 ) -> AppResult<()> {
@@ -2021,20 +2049,32 @@ fn maintenance_rule_detail(
             Some(crate::error_reasons::maintenance::RULE_STORED_ACTIONS_NOT_DECLARED),
         ),
     };
+    let action_refusal = action_refusal_for(&rule_set, &declared_actions);
     Ok(MaintenanceRuleSetDetail {
         rule_set,
         revision,
         declared_actions,
         load_refusal,
+        action_refusal,
     })
 }
 
-/// The refusal for acting on a rule whose current revision cannot be acted on.
+/// The refusal for acting on a rule that cannot be acted on, with the sentence
+/// chosen by its reason code.
 pub(crate) fn stored_actions_refused(reason: &'static str) -> AppError {
-    AppError::validation_refused(
-        reason,
-        "this rule was saved before rules declared their own actions; save its source again to use it",
-    )
+    use crate::error_reasons::maintenance::{
+        RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN, RULE_STORED_ACTIONS_NOT_DECLARED,
+    };
+    let message = match reason {
+        RULE_STORED_ACTIONS_NOT_DECLARED => {
+            "this rule was saved before rules declared their own actions; save its source again to use it"
+        }
+        RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN => {
+            "this rule deletes but has no most titles per run, so its actions do not run; set one to use it"
+        }
+        _ => "this rule cannot be acted on as it is stored",
+    };
+    AppError::validation_refused(reason, message)
 }
 
 /// Read the stored actions back. `None` is a revision from before rules
