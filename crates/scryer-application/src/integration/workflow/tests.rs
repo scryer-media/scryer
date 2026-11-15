@@ -2546,14 +2546,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_blocklist_refuses_downloads_without_grab_history() {
+        use crate::tracked_downloads::TrackedDownloadCommand;
+        let (app, actor) = crate::lib_tests::bootstrap();
+        for is_scryer_origin in [false, true] {
+            for skip_reacquire in [false, true] {
+                let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+                let mut row = reconcile_row(None, TrackedDownloadState::ImportBlocked);
+                row.client_item.is_scryer_origin = is_scryer_origin;
+                let download_id = tracker.insert_for_tests(row);
+                let before = row_debug(&tracker, download_id);
+                let (work_tx, mut work_rx) = tokio::sync::mpsc::unbounded_channel();
+                let mut in_flight = Default::default();
+                let (reply, response) = tokio::sync::oneshot::channel();
+                super::handle_tracked_download_command(
+                    &app,
+                    &actor,
+                    &mut tracker,
+                    &mut in_flight,
+                    &work_tx,
+                    TrackedDownloadCommand::MarkFailed {
+                        id: SHARED_TORRENT_ID.to_string(),
+                        skip_reacquire,
+                        reply,
+                    },
+                )
+                .await;
+                let error = response
+                    .await
+                    .unwrap()
+                    .expect_err("unowned download must not report success");
+                assert_eq!(
+                    error.validation_reason(),
+                    Some("INTEGRATION_DOWNLOAD_NOT_GRABBED")
+                );
+                assert_eq!(row_debug(&tracker, download_id), before);
+                assert!(in_flight.is_empty());
+                assert!(work_rx.try_recv().is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn operator_commands_act_on_the_live_row_when_a_settled_sibling_shares_its_id_string() {
         use crate::tracked_downloads::TrackedDownloadCommand;
         let (app, actor) = crate::lib_tests::bootstrap();
         for _ in 0..8 {
-            // Mark failed. Nothing grabbed this synthetic torrent, so the arm
-            // warns the row it resolved instead of failing it.
+            // No grab history: refuse without changing either sibling.
             let (mut tracker, settled, live) = settled_and_live_siblings();
             let settled_before = row_debug(&tracker, settled);
+            let live_before = row_debug(&tracker, live);
             let (reply, response) = tokio::sync::oneshot::channel();
             run_tracked_command(
                 &app,
@@ -2566,15 +2608,15 @@ mod tests {
                 },
             )
             .await;
-            response.await.expect("reply").expect("mark failed");
-            let warned = tracker.get_by_download_id(live).expect("live row");
-            assert_eq!(warned.status, TrackedDownloadStatus::Warning);
-            assert!(
-                warned
-                    .status_messages
-                    .iter()
-                    .any(|message| message.text.contains("wasn't grabbed"))
+            let error = response
+                .await
+                .expect("reply")
+                .expect_err("unowned download");
+            assert_eq!(
+                error.validation_reason(),
+                Some(crate::error_reasons::integration::DOWNLOAD_NOT_GRABBED),
             );
+            assert_eq!(row_debug(&tracker, live), live_before);
             assert_eq!(row_debug(&tracker, settled), settled_before);
 
             // Ignore.

@@ -4622,6 +4622,8 @@ pub mod integration {
     pub const PROXY_TIMEOUT_OUT_OF_RANGE: &str = "INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE";
     /// Download already resolved as the selected value; nothing to ignore.
     pub const DOWNLOAD_ALREADY_RESOLVED: &str = "INTEGRATION_DOWNLOAD_ALREADY_RESOLVED";
+    /// Manual failure cleanup requires verified grab history for this download.
+    pub const DOWNLOAD_NOT_GRABBED: &str = "INTEGRATION_DOWNLOAD_NOT_GRABBED";
     /// Only blocked imports can be dismissed, and only dismissed imports can be resumed.
     pub const IMPORT_TRACKING_STATE_NOT_ELIGIBLE: &str =
         "INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE";
@@ -4832,6 +4834,7 @@ pub mod integration {
         REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES,
         PROXY_TIMEOUT_OUT_OF_RANGE,
         DOWNLOAD_ALREADY_RESOLVED,
+        DOWNLOAD_NOT_GRABBED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
         IMPORT_TRACKING_STATE_NOT_ELIGIBLE,

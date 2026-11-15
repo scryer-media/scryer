@@ -2228,6 +2228,8 @@ const ru: LocaleDictionary = {
     "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "У загрузки нет подтверждённой истории добавления Scryer. Релиз не заблокирован, данные не удалены, повторный поиск не запрошен.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":

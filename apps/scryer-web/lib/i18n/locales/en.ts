@@ -6889,6 +6889,8 @@ const en: LocaleDictionary = {
     "Import tracking resumed. Normal import checks still apply.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Only a blocked import can be dismissed, and only a dismissed import can be resumed. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "This client item now belongs to a different download. Refresh the queue and try again.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
