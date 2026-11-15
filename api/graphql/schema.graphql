@@ -25171,6 +25171,10 @@ input QualityProfileCriteriaInput {
 	"""
 	ignoreProperRepack: Boolean
 	"""
+	Omission preserves the stored policy; new profiles default to false.
+	"""
+	allowPackForSingleEpisode: Boolean
+	"""
 	Additional scoring preferences.
 	"""
 	scoringOverrides: ScoringOverridesInput!
@@ -25267,6 +25271,10 @@ type QualityProfileCriteriaPayload {
 	Let scores decide without automatic PROPER/REPACK preference.
 	"""
 	ignoreProperRepack: Boolean!
+	"""
+	Explicit opt-in; other acquisition and import safeguards remain active.
+	"""
+	allowPackForSingleEpisode: Boolean!
 	"""
 	Optional boolean scoring overrides.
 	"""

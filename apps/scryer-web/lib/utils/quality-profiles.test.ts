@@ -49,6 +49,7 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       prefer_remux: false,
       allow_bd_disk: true,
       allow_upgrades: true,
+      allow_pack_for_single_episode: false,
       ignore_proper_repack: false,
       scoring_overrides: {},
       cutoff_tier: null,
@@ -83,6 +84,7 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     prefer_remux: false,
     allow_bd_disk: true,
     allow_upgrades: true,
+    allow_pack_for_single_episode: false,
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
@@ -96,6 +98,40 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     ],
   };
 }
+
+test("single-episode pack opt-in survives profile editing and mutation serialization", () => {
+  const raw = makeEntry("packs", "Explicit packs");
+  const entry = normalizeQualityProfileEntry({
+    ...raw,
+    criteria: { ...raw.criteria, allow_pack_for_single_episode: true },
+  });
+  assert.ok(entry);
+  assert.equal(entry.criteria.allow_pack_for_single_episode, true);
+  const draft = toQualityProfileDraft(entry, "fallback", "Fallback");
+  assert.equal(draft.allow_pack_for_single_episode, true);
+  const committed = commitQualityProfileDraftToEntries([entry], draft);
+  assert.equal(
+    committed.draftEntry.criteria.allow_pack_for_single_episode,
+    true,
+  );
+  assert.equal(
+    qualityProfileEntryToMutationInput(committed.draftEntry).criteria
+      .allowPackForSingleEpisode,
+    true,
+  );
+  assert.equal(
+    normalizeQualityProfileEntry(raw)?.criteria.allow_pack_for_single_episode,
+    false,
+  );
+  for (const enabled of [false, true]) {
+    const hydrated = qualityProfileEntryFromGraph({
+      id: "packs",
+      name: "Explicit packs",
+      criteria: graphCriteria({ allowPackForSingleEpisode: enabled }),
+    });
+    assert.equal(hydrated.criteria.allow_pack_for_single_episode, enabled);
+  }
+});
 
 test("commitQualityProfileDraftToEntries preserves id when renaming an existing profile", () => {
   const entries = [makeEntry("default", "4K")];

@@ -2042,6 +2042,7 @@ pub(super) fn cutoff_projection_test_profile(id: &str, cutoff_tier: &str) -> Qua
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            allow_pack_for_single_episode: false,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),

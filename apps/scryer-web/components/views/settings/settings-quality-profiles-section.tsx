@@ -97,6 +97,7 @@ type QualityProfileCriteriaPayload = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  allow_pack_for_single_episode: boolean;
   ignore_proper_repack: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string | null;
@@ -123,6 +124,7 @@ type QualityProfileDraft = {
   prefer_remux: boolean;
   allow_bd_disk: boolean;
   allow_upgrades: boolean;
+  allow_pack_for_single_episode: boolean;
   scoring_overrides: ScoringOverridesPayload;
   cutoff_tier: string;
   min_score_to_grab: number | null;
@@ -1529,6 +1531,31 @@ export function SettingsQualityProfilesSection({
                         })}
                       </div>
                     </details>
+
+                    <label className="flex items-center gap-3">
+                      <Checkbox
+                        id="quality-profile-single-episode-packs"
+                        checked={
+                          qualityProfileDraft.allow_pack_for_single_episode
+                        }
+                        onCheckedChange={(checked) =>
+                          updateQualityProfileDraft({
+                            allow_pack_for_single_episode: checked === true,
+                          })
+                        }
+                      />
+                      <span className="inline-flex items-center gap-2 text-sm">
+                        {t("qualityProfile.allowPackForSingleEpisode")}
+                        <InfoHelp
+                          ariaLabel={t(
+                            "qualityProfile.allowPackForSingleEpisode",
+                          )}
+                          text={t(
+                            "qualityProfile.allowPackForSingleEpisodeInfo",
+                          )}
+                        />
+                      </span>
+                    </label>
 
                     {/* Upgrade behavior */}
                     <div className="space-y-3">

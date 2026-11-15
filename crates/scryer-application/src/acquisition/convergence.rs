@@ -1966,6 +1966,8 @@ mod tests {
 
         let mut upgrades = base.clone();
         upgrades.allow_upgrades = !base.allow_upgrades;
+        let mut packs = base.clone();
+        packs.allow_pack_for_single_episode = true;
 
         let mut audio = base.clone();
         audio.required_audio_languages.push("ja".to_string());
@@ -1996,6 +1998,7 @@ mod tests {
         for (label, edited) in [
             ("quality_tiers", tiers),
             ("allow_upgrades", upgrades),
+            ("allow_pack_for_single_episode", packs),
             ("required_audio_languages", audio),
             ("cutoff_score", cutoff),
             ("allow_unknown_quality", unknown),
@@ -2047,6 +2050,8 @@ mod tests {
             serialized.get("cutoff_score").is_none(),
             "an unset `cutoff_score` must not appear in the fingerprint input at all"
         );
+        assert!(!base.allow_pack_for_single_episode);
+        assert!(serialized.get("allow_pack_for_single_episode").is_none());
         assert_eq!(base.min_upgrade_score_delta, None);
         assert!(
             serialized.get("min_upgrade_score_delta").is_none(),

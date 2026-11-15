@@ -1396,6 +1396,7 @@ const qualityProfileCriteriaFields = `
       allowBdDisk
       allowUpgrades
       ignoreProperRepack
+      allowPackForSingleEpisode
       scoringOverrides {
         allowX265Non4K
         blockDvWithoutFallback

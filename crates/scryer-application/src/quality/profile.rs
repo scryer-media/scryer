@@ -34,6 +34,9 @@ pub struct QualityProfileCriteria {
     pub allow_upgrades: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ignore_proper_repack: bool,
+    /// Opt in to automatic packs when only one episode is wanted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_pack_for_single_episode: bool,
     pub prefer_dual_audio: bool,
     pub required_audio_languages: Vec<String>,
     pub scoring_persona: ScoringPersona,
@@ -124,6 +127,9 @@ pub(crate) struct AcceptanceCriteria<'a> {
     pub allow_upgrades: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ignore_proper_repack: bool,
+    /// Opt in to automatic packs when only one episode is wanted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_pack_for_single_episode: bool,
     pub required_audio_languages: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff_tier: Option<&'a String>,
@@ -158,6 +164,7 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
             ignore_proper_repack: criteria.ignore_proper_repack,
+            allow_pack_for_single_episode: criteria.allow_pack_for_single_episode,
             required_audio_languages: &criteria.required_audio_languages,
             cutoff_tier: criteria.cutoff_tier.as_ref(),
             min_score_to_grab: criteria.min_score_to_grab,
@@ -174,6 +181,9 @@ impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
 pub struct ScoringConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ignore_proper_repack: bool,
+    /// Opt in to automatic packs when only one episode is wanted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_pack_for_single_episode: bool,
     #[serde(default)]
     pub scoring_persona: ScoringPersona,
     #[serde(default)]
@@ -480,6 +490,8 @@ struct RawQualityProfileCriteria {
     #[serde(default)]
     ignore_proper_repack: bool,
     #[serde(default)]
+    allow_pack_for_single_episode: bool,
+    #[serde(default)]
     prefer_dual_audio: bool,
     #[serde(default)]
     required_audio_languages: Vec<String>,
@@ -558,6 +570,7 @@ pub fn builtin_4k_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            allow_pack_for_single_episode: false,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -598,6 +611,7 @@ pub fn builtin_8k_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            allow_pack_for_single_episode: false,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -633,6 +647,7 @@ pub fn builtin_1080p_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            allow_pack_for_single_episode: false,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -668,6 +683,7 @@ pub fn builtin_anime_profile() -> QualityProfile {
             allow_bd_disk: false,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            allow_pack_for_single_episode: false,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
@@ -724,6 +740,7 @@ fn quality_profile_from_raw(raw: RawQualityProfile) -> Result<QualityProfile, se
             allow_bd_disk: criteria.allow_bd_disk,
             allow_upgrades: criteria.allow_upgrades,
             ignore_proper_repack: criteria.ignore_proper_repack,
+            allow_pack_for_single_episode: criteria.allow_pack_for_single_episode,
             prefer_dual_audio: criteria.prefer_dual_audio,
             required_audio_languages: criteria
                 .required_audio_languages
@@ -770,6 +787,7 @@ impl Default for QualityProfile {
                 allow_bd_disk: false,
                 allow_upgrades: true,
                 ignore_proper_repack: false,
+                allow_pack_for_single_episode: false,
                 prefer_dual_audio: false,
                 required_audio_languages: vec![],
                 scoring_persona: ScoringPersona::default(),
@@ -804,6 +822,7 @@ impl Default for QualityProfileCriteria {
             allow_bd_disk: true,
             allow_upgrades: true,
             ignore_proper_repack: false,
+            allow_pack_for_single_episode: false,
             prefer_dual_audio: false,
             required_audio_languages: vec![],
             scoring_persona: ScoringPersona::default(),
