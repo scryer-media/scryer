@@ -703,12 +703,21 @@ export function MaintenanceRunsPanel({
                 : t("settings.maintenanceRunEvaluationNow")}
             </Button>
           </div>
-          <div className="flex items-end">
+          <div className="flex flex-col justify-end gap-1">
+            {/* Rules act only through their own fires, so acting now is
+                always for the one rule chosen above. */}
             <Button
               id="settings-maintenance-run-actions-now"
               type="button"
               variant="secondary"
-              disabled={actionTriggering}
+              disabled={
+                actionTriggering || runScopeRuleSetId === MAINTENANCE_FILTER_ALL
+              }
+              aria-describedby={
+                runScopeRuleSetId === MAINTENANCE_FILTER_ALL
+                  ? "settings-maintenance-run-actions-needs-rule"
+                  : undefined
+              }
               onClick={runActionHandlerNow}
             >
               <Play className="mr-2 h-4 w-4" />
@@ -716,6 +725,14 @@ export function MaintenanceRunsPanel({
                 ? t("settings.maintenanceRunActionsRunning")
                 : t("settings.maintenanceRunActionsNow")}
             </Button>
+            {runScopeRuleSetId === MAINTENANCE_FILTER_ALL ? (
+              <p
+                id="settings-maintenance-run-actions-needs-rule"
+                className="text-xs text-muted-foreground"
+              >
+                {t("settings.maintenanceRunActionsNeedsRule")}
+              </p>
+            ) : null}
           </div>
           <div className="flex items-end">
             <Button

@@ -28,6 +28,7 @@ import {
   isNonTerminalCandidateState,
   maintenanceCountdown,
   maintenanceFilterArgument,
+  maintenanceLoadRefusalKey,
   maintenancePreviewInput,
   maintenanceSearchHistoryState,
   maintenanceRuleDraftFromDetail,
@@ -1041,4 +1042,20 @@ test("exact subject preview retains its owning title and the draft library scope
   assert.deepEqual(input.subjectIds, ["episode"]);
   assert.deepEqual(input.libraryIds, ["series"]);
   assert.equal(Object.hasOwn(input, "libraryId"), false);
+});
+
+test("a rule's load refusal is said by its code, and an unknown code gets the generic notice", () => {
+  const translations = en as Record<string, string>;
+  for (const code of [
+    "MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED",
+    "MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN",
+  ]) {
+    const key = maintenanceLoadRefusalKey(code);
+    assert.equal(key, `error.reason.${code}`);
+    assert.ok(translations[key], `${key} has English text`);
+  }
+  assert.equal(
+    maintenanceLoadRefusalKey("MAINTENANCE_RULE_SOMETHING_NEW"),
+    "settings.maintenanceRuleLoadRefused",
+  );
 });

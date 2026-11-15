@@ -5011,6 +5011,10 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRunEvaluationRunning": "Probíhá vyhodnocování…",
   "settings.maintenanceRunActionsNow": "Spustit akce nyní",
   "settings.maintenanceRunActionsRunning": "Probíhají akce…",
+  "settings.maintenanceRunActionsNeedsRule":
+    "Vyberte výše jedno pravidlo, které má teď zasáhnout.",
+  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+    "Vyberte pravidlo, které má zasáhnout. Pravidla jednají jen sama za sebe, takže okamžitý zásah potřebuje jedno pravidlo.",
   "settings.maintenanceRunStarted": "Běh spuštěn.",
   "settings.maintenanceRunNotStarted": "Nic se nespustilo: {{message}}",
   "settings.maintenanceEvaluationRunsTitle": "Vyhodnocovací běhy",
@@ -5434,21 +5438,21 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsMaxVideoHeightValue":
     "Výška nejvyšší video stopy mezi soubory v pixelech; chybí, pokud ji žádný soubor neuvádí",
   "settings.refMaintFactsSeasonCountValue":
-    "Řady v celém seznamu epizod seriálu bez speciálů, bez ohledu na subjekt; chybí u filmů, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Série v celém seznamu epizod pořadu bez speciálů, bez ohledu na subjekt; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsAiredEpisodeCountValue":
-    "Běžné epizody s datem vysílání v den vyhodnocení nebo dříve; chybí u filmů, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Běžné epizody s datem vysílání v den vyhodnocení nebo dříve; epizoda bez data vysílání se počítá jako neodvysílaná. U filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsUnairedEpisodeCountValue":
-    "Běžné epizody bez data vysílání nebo s datem po dni vyhodnocení; chybí u filmů, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Běžné epizody bez data vysílání nebo s datem po dni vyhodnocení; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsMissingEpisodeCountValue":
-    "Běžné epizody, které byly odvysílány, jsou sledované a nemají soubor; chybí u filmů, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Běžné epizody, které byly odvysílány, jsou sledované a nemají soubor; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsAiredEpisodeFilePercentValue":
-    "Procento odvysílaných epizod, které mají soubor; chybí s důvodem no_aired_episode, pokud nic nebylo odvysíláno, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Procento odvysílaných epizod, které mají soubor; chybí s důvodem no_aired_episode, když nic nebylo odvysíláno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsLatestSeasonNumberValue":
-    "Nejvyšší číslo běžné řady; chybí u filmů nebo seriálu bez řad, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Nejvyšší číslo běžné série; chybí u filmů nebo pořadu bez sérií, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsLatestAiredEpisodeDateValue":
-    "Datum vysílání (YYYY-MM-DD) naposledy odvysílané běžné epizody; chybí s důvodem no_aired_episode, pokud nic nebylo odvysíláno, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Datum vysílání (YYYY-MM-DD) naposledy odvysílané běžné epizody; chybí s důvodem no_aired_episode, když nic nebylo odvysíláno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsNextEpisodeAirDateValue":
-    "Nejbližší datum vysílání (YYYY-MM-DD) po dni vyhodnocení; chybí s důvodem no_scheduled_episode, pokud žádné není naplánováno, unknown s důvodem episode_store_unreadable, pokud nelze přečíst úložiště epizod",
+    "Nejbližší datum vysílání (YYYY-MM-DD) po dni vyhodnocení; chybí s důvodem no_scheduled_episode, když nic není naplánováno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsGenresValue":
     "Názvy žánrů; unknown s důvodem metadata_unreadable, pokud nelze přečíst uložená metadata",
   "settings.refMaintFactsRatingValue":
@@ -5458,7 +5462,7 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsPlayCountTotalValue":
     "Součet přehrání všemi účty na všech povolených mediálních serverech, ať jsou propojeny s uživatelem Scryeru, nebo ne. Unknown s důvodem audience_not_read, dokud nejsou nedávno přečteny všechny účty, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
   "settings.refMaintFactsWatchlistedByUserIdsValue":
-    "ID uživatelů, jejichž seznamy ke zhlédnutí obsahují titul. Seznamem ke zhlédnutí je vlastní povolený a přihlášený watchlist uživatele v Plexu, Traktu, TMDb nebo MDBList, seznam plan-to-watch v Simkl nebo MyAnimeList, nebo seznam planning v AniList. Unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval.",
+    "ID uživatelů, jejichž seznamy ke zhlédnutí titul obsahují. Seznamem ke zhlédnutí je vlastní zapnutý a přihlášený watchlist uživatele na Plexu, Traktu, TMDb nebo MDBList, seznam plan-to-watch na Simkl nebo MyAnimeList, nebo seznam planning na AniList. Neznámé s důvodem watchlist_not_synced, dokud se některý seznam nikdy nesynchronizoval, naposledy selhal, je vypnutý, nemá se synchronizovat nebo ztratil svůj účet, a s důvodem watchlist_stale, dokud se některý nedávno nesynchronizoval.",
   "settings.refMaintFactsWatchlistedByUsernamesValue":
     "Uživatelská jména uživatelů, jejichž seznamy ke zhlédnutí obsahují titul; unknown s důvodem user_not_found, pokud některý z nich již neexistuje, a s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
   "settings.refMaintFactsWatchlistedByAnyoneValue":
@@ -5470,13 +5474,13 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "Poskytovatelé, jejichž seznamy ke zhlédnutí titul nyní obsahují; unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "ID uživatelů, kteří subjekt označili jako oblíbený na povoleném serveru Jellyfin nebo Emby. U seriálu se počítá oblíbení seriálu nebo kterékoli jeho řady či epizody; řada nebo epizoda počítá vlastní oblíbení a epizoda navíc oblíbení své řady a seriálu. Plex oblíbené nemá: chybí s důvodem favorites_unsupported, pokud jsou všechny povolené servery Plex, unknown s důvodem favorite_member_unobservable, dokud lze propojeného uživatele sledovat jen přes Plex, s důvodem signal_identity_missing, dokud oblíbení patří účtu nepropojenému s uživatelem Scryeru, a s důvodem favorites_unreadable, pokud nelze přečíst uložená oblíbení.",
+    "ID uživatelů, kteří subjekt označili jako oblíbený na zapnutém serveru Jellyfin nebo Emby. Titul počítá každé své oblíbení; oblíbení seriálu nebo série platí pro všechny série a epizody seriálu; oblíbení epizody platí pro tuto epizodu, její sérii a seriál. Scryer neumí číst oblíbené z Plexu: neznámé s důvodem favorites_unsupported, když jsou všechny zapnuté servery Plex, s důvodem favorite_member_unobservable, dokud je propojený uživatel vidět jen přes Plex, s důvodem signal_identity_missing, dokud oblíbení patří účtu nepropojenému s uživatelem Scryeru, a s důvodem favorites_unreadable, když nešlo načíst uložená oblíbení.",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený, počítáno jako u favorited_by_user_ids; unknown s důvodem user_not_found, pokud některý z nich již neexistuje. Plex oblíbené nemá: chybí s důvodem favorites_unsupported, pokud jsou všechny povolené servery Plex, unknown s důvodem favorite_member_unobservable nebo favorites_unreadable.",
+    "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený, počítáno jako u favorited_by_user_ids; neznámé s důvodem user_not_found, když některý z nich už neexistuje, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "True, pokud subjekt kterýkoli uživatel označil jako oblíbený, počítáno jako u favorited_by_user_ids. Plex oblíbené nemá: chybí s důvodem favorites_unsupported, pokud jsou všechny povolené servery Plex, unknown s důvodem favorite_member_unobservable nebo favorites_unreadable.",
+    "Pravda, když subjekt pokrývá oblíbení načtené z Jellyfinu nebo Emby, počítáno jako u favorited_by_user_ids. Nikdy není nepravda: oblíbení se čtou jen pro propojené uživatele, takže když se žádné nenajde, je neznámé s důvodem audience_favorites_not_read, případně s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable.",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "True, pokud subjekt některý žadatel označil jako oblíbený, počítáno jako u favorited_by_user_ids; chybí s důvodem title_not_requested, pokud o titul nikdo nepožádal, unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru. Plex oblíbené nemá: chybí s důvodem favorites_unsupported, pokud jsou všechny povolené servery Plex, unknown s důvodem favorite_member_unobservable nebo favorites_unreadable.",
+    "Pravda, když subjekt označil jako oblíbený některý žadatel, počítáno jako u favorited_by_user_ids; chybí s důvodem title_not_requested, když titul nikdo nevyžádal, neznámé s důvodem requester_not_linked, když žadatel nemá propojený účet mediálního serveru, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Jazyky zvuku přítomné v souboru",
   "settings.refMaintFileSubtitleLanguages": "Jazyky titulků přítomné v souboru",
   "settings.refMaintFileAddedAt":
@@ -7525,6 +7529,10 @@ const cs: LocaleDictionary = {
     "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
+  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "Toto pravidlo maže, ale nemá limit titulů na běh, takže jeho akce se neprovádějí. Dál se vyhodnocuje a lze ho zobrazit v náhledu; nastavte limit, aby mohlo zasáhnout.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+    "Pozdrženo: propojený účet označil tuto položku na mediálním serveru jako oblíbenou od posledního načtení oblíbených.",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "Pozdrženo: před provedením akce bylo pravidlo vypnuto, přepnuto na zkušební běh nebo odjištěno, nebo se zavřela jeho bezpečnostní brána.",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -7573,7 +7581,7 @@ const cs: LocaleDictionary = {
     "Nejvyšší počet titulů, na které toto pravidlo v jednom běhu zasáhne. Pravidlo, které maže soubory nebo tituly, tento limit potřebuje.",
   "settings.maintenanceRuleMaxTitlesPerRunNone": "Bez limitu",
   "settings.maintenanceRuleLoadRefused":
-    "Toto pravidlo nelze načíst a nikdy se nespustí. Nahraďte jeho zdroj, aby se znovu spouštělo.",
+    "Toto pravidlo nelze v uložené podobě spustit.",
   "settings.maintenanceSequenceStepMonitor": "Sledovat",
   "settings.maintenanceSequenceStepFetchSubtitles": "Stáhnout titulky",
   "settings.maintenanceSequenceStepMoveToLibrary": "Přesunout do knihovny",

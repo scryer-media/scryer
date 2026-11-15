@@ -66,6 +66,7 @@ test("the client translates exactly the server's execution reasons", () => {
     "tag_patch_conflict",
     "title_missing",
     "unknown_at_execution",
+    "watch_recheck_newer_favorite",
     "watch_recheck_newer_play",
     "watch_recheck_unavailable",
     "watch_recheck_uncredited_play",

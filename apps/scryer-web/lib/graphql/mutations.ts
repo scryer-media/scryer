@@ -2985,8 +2985,8 @@ export const runMaintenanceEvaluationNowMutation = `mutation RunMaintenanceEvalu
   }
 }`;
 
-export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow {
-  runMaintenanceActionHandlerNow {
+export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow($ruleSetId: ID!) {
+  runMaintenanceActionHandlerNow(ruleSetId: $ruleSetId) {
     started
     message
   }
