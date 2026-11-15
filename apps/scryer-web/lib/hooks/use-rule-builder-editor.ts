@@ -13,8 +13,9 @@ import {
 } from "@/lib/utils/rule-builder";
 import {
   initialRuleEditorMode,
-  withRuleAdvancedEditor,
+  nextRuleEditorMode,
   withRuleBuilderModel,
+  withRuleRegoEditor,
   withRuleSourceEdit,
   type RuleBuilderBinding,
   type RuleBuilderDraft,
@@ -26,8 +27,8 @@ export type RuleBuilderOptionLoaders = Readonly<
   Record<string, () => Promise<string[]>>
 >;
 
-/// The Simple/Advanced state one rule editor keeps, the same for every
-/// family. Picker catalogs load the first time a chosen output needs them
+/// The Simple, Advanced view and Advanced edit state one rule editor keeps,
+/// the same for every family. Picker catalogs load the first time a chosen output needs them
 /// while the builder is shown, and are kept for the page's lifetime.
 export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   binding,
@@ -47,8 +48,7 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   optionLoaders?: RuleBuilderOptionLoaders;
   onLoadError?: (error: unknown) => void;
 }) {
-  const [mode, setModeState] = useState<RuleEditorMode>("advanced");
-  const [detached, setDetached] = useState(false);
+  const [mode, setModeState] = useState<RuleEditorMode>("edit");
   const [loaded, setLoaded] = useState<Record<string, string[]>>({});
   const loading = useRef(new Set<string>());
   const loaders = useRef(optionLoaders);
@@ -59,32 +59,29 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   });
 
   /// Every editor opening goes through here: a draft still made by the
-  /// builder opens in it, anything else opens as Rego.
+  /// builder opens in it, anything else opens in the Rego editor.
   const beginSession = useCallback((next: RuleBuilderDraft) => {
     setModeState(initialRuleEditorMode(next));
-    setDetached(false);
   }, []);
 
   const editSource = useCallback(
-    (source: string) => {
-      setDraft((prev) => {
-        const edit = withRuleSourceEdit(binding, prev, source);
-        // Idempotent, so a replayed updater sets the same notice.
-        if (edit.detached) setDetached(true);
-        return edit.draft;
-      });
-    },
-    [binding, setDraft],
+    (source: string) => setDraft((prev) => withRuleSourceEdit(prev, source)),
+    [setDraft],
   );
 
+  /// Move between the builder and its read-only Rego. Never leaves `edit`.
   const setMode = useCallback(
-    (next: RuleEditorMode) => {
-      if (next === "advanced")
-        setDraft((prev) => withRuleAdvancedEditor(binding, prev));
-      setModeState(next);
-    },
-    [binding, setDraft],
+    (next: "simple" | "view") =>
+      setModeState((current) => nextRuleEditorMode(draft, current, next)),
+    [draft],
   );
+
+  /// Detach the draft and open the Rego editor. Callers confirm first when
+  /// `ruleRegoEditorNeedsConfirmation` says so.
+  const editAsRego = useCallback(() => {
+    setDraft((prev) => withRuleRegoEditor(binding, prev));
+    setModeState("edit");
+  }, [binding, setDraft]);
 
   const setModel = useCallback(
     (model: RuleBuilderModel) =>
@@ -94,6 +91,10 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
 
   const builderShown =
     isEditorOpen && mode === "simple" && draft.builderModel !== null;
+  /// The builder still owns the source, whether shown as the builder or as
+  /// read-only Rego, so a save is held to what the builder can write.
+  const attached =
+    isEditorOpen && mode !== "edit" && draft.builderModel !== null;
   const needed = builderShown
     ? ruleBuilderOptionSources(binding.schema, draft.builderModel)
     : [];
@@ -128,11 +129,12 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   return {
     mode,
     setMode,
-    detached,
+    editAsRego,
     beginSession,
     editSource,
     setModel,
     builderShown,
+    attached,
     options,
   };
 }

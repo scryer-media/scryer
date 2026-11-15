@@ -723,7 +723,7 @@ export function SettingsRulesContainer({
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (
-      builderEditor.builderShown &&
+      builderEditor.attached &&
       isIncompleteRuleBuilderDraft(SCORING_RULE_BUILDER, ruleSetDraft)
     ) {
       setValidationResult({
@@ -845,7 +845,7 @@ export function SettingsRulesContainer({
         setBuilderMode={builderEditor.setMode}
         editRegoSource={builderEditor.editSource}
         setBuilderModel={builderEditor.setModel}
-        builderDetached={builderEditor.detached}
+        editAsRego={builderEditor.editAsRego}
         builderOptions={builderEditor.options}
         submitRuleSet={submitRuleSet}
         mutatingRuleSetId={mutatingRuleSetId}

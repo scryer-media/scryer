@@ -120,13 +120,13 @@ type SettingsMaintenanceRulesSectionProps = {
   /// Which editor the rule form shows. Simple is only offered while the draft
   /// is still the builder's.
   editorMode: RuleEditorMode;
-  setEditorMode: (mode: RuleEditorMode) => void;
+  setEditorMode: (mode: "simple" | "view") => void;
   /// A hand edit of the source; the container decides whether it detaches
   /// the rule from the builder.
   editRegoSource: (source: string) => void;
   setBuilderModel: (model: RuleBuilderModel) => void;
   /// Set once a hand edit in this editor session detached the rule.
-  builderDetached: boolean;
+  editAsRego: () => void;
   builderOptions: RuleBuilderOptions;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
@@ -935,7 +935,7 @@ export function SettingsMaintenanceRulesSection({
   setEditorMode,
   editRegoSource,
   setBuilderModel,
-  builderDetached,
+  editAsRego,
   builderOptions,
   submitRuleSet,
   mutatingRuleSetId,
@@ -1293,18 +1293,18 @@ export function SettingsMaintenanceRulesSection({
                       mode={editorMode}
                       onModeChange={setEditorMode}
                       available={!editingSystemOwned}
-                      detached={builderDetached}
+                      onEditAsRego={editAsRego}
                       model={ruleSetDraft.builderModel}
                       onModelChange={setBuilderModel}
                       options={builderOptions}
                       generatedSource={ruleSetDraft.regoSource}
                       feedback={validationStatus}
-                      editor={
+                      editor={(readOnly) => (
                         <LazyRegoEditor
                           ruleFamily="maintenance"
                           id="settings-maintenance-rule-rego-source"
                           value={ruleSetDraft.regoSource}
-                          readOnly={editingSystemOwned}
+                          readOnly={editingSystemOwned || readOnly}
                           onChange={editRegoSource}
                           diagnostics={regoDiagnostics(
                             ruleSetDraft.regoSource,
@@ -1315,7 +1315,7 @@ export function SettingsMaintenanceRulesSection({
                           minLines={12}
                           maxLines={35}
                         />
-                      }
+                      )}
                     />
 
                     <MaintenanceRuleSourceFindings

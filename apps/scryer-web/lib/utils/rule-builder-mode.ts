@@ -9,11 +9,13 @@ import {
 } from "./rule-builder.ts";
 
 /// Simple and Advanced editing, the same for every rule family. A draft is
-/// attached to the builder while it holds a model; the source is then exactly
-/// what the builder writes. A hand edit that leaves anything else detaches it
-/// for good, and only an attached draft sends its model with a save.
+/// attached to the builder while it holds a model; its source is then exactly
+/// what the builder writes. An attached draft is shown in the builder
+/// (`simple`) or as its generated Rego, read-only (`view`). Choosing to edit
+/// the Rego (`edit`) detaches the draft for good: it drops the model, a save
+/// then clears the stored one, and the rule never offers the builder again.
 
-export type RuleEditorMode = "simple" | "advanced";
+export type RuleEditorMode = "simple" | "view" | "edit";
 
 /// The part of a family's draft the builder reads and writes.
 export type RuleBuilderDraft = {
@@ -30,10 +32,21 @@ export type RuleBuilderBinding<D extends RuleBuilderDraft> = {
   starterSource: string;
 };
 
-/// The mode an editor opens in: the builder for an attached draft, Rego for
-/// anything else.
+/// The mode an editor opens in: the builder for an attached draft, the Rego
+/// editor for anything else.
 export function initialRuleEditorMode(draft: RuleBuilderDraft): RuleEditorMode {
-  return draft.builderModel ? "simple" : "advanced";
+  return draft.builderModel ? "simple" : "edit";
+}
+
+/// The mode an editor can move to from `current` without detaching the draft.
+/// Only an attached draft moves between the builder and its read-only Rego;
+/// `edit` is reached only through `withRuleRegoEditor`.
+export function nextRuleEditorMode(
+  draft: RuleBuilderDraft,
+  current: RuleEditorMode,
+  requested: "simple" | "view",
+): RuleEditorMode {
+  return draft.builderModel !== null && current !== "edit" ? requested : current;
 }
 
 /// Apply a builder change: the source becomes exactly what the builder writes
@@ -70,46 +83,35 @@ export function withRegeneratedRuleSource<D extends RuleBuilderDraft>(
     : draft;
 }
 
-/// Apply a hand edit of the source. An edit that leaves anything other than
-/// the builder's own source detaches the draft from the builder for good.
+/// Apply a hand edit of the source. Only a detached draft takes one: an
+/// attached draft's source is the builder's, and changes only with its model.
 export function withRuleSourceEdit<D extends RuleBuilderDraft>(
-  binding: RuleBuilderBinding<D>,
   draft: D,
   regoSource: string,
-): { draft: D; detached: boolean } {
-  const detached =
-    draft.builderModel !== null &&
-    !isRuleBuilderSource(
-      binding.schema,
-      draft.builderModel,
-      binding.variant(draft),
-      regoSource,
-    );
-  return {
-    draft: {
-      ...draft,
-      regoSource,
-      builderModel: detached ? null : draft.builderModel,
-    },
-    detached,
-  };
+): D {
+  return draft.builderModel === null ? { ...draft, regoSource } : draft;
 }
 
-/// Leaving the builder for the Rego editor keeps the generated source. A
-/// builder nobody has touched yet has nothing to keep, so the editor starts
-/// from the starter source instead and the rule is Rego from then on.
-export function withRuleAdvancedEditor<D extends RuleBuilderDraft>(
+/// True when editing the draft as Rego gives up something the operator chose
+/// in the builder, so they confirm it first. An untouched builder loses
+/// nothing.
+export function ruleRegoEditorNeedsConfirmation(draft: RuleBuilderDraft): boolean {
+  return draft.builderModel !== null && !isBlankRuleBuilderModel(draft.builderModel);
+}
+
+/// Detach the draft for editing as Rego, whatever its source. The generated
+/// source is kept; a builder that has written nothing yet leaves the editor
+/// the family's starter source instead.
+export function withRuleRegoEditor<D extends RuleBuilderDraft>(
   binding: RuleBuilderBinding<D>,
   draft: D,
 ): D {
-  if (
-    draft.builderModel &&
-    draft.regoSource === "" &&
-    isBlankRuleBuilderModel(draft.builderModel)
-  ) {
-    return { ...draft, regoSource: binding.starterSource, builderModel: null };
-  }
-  return draft;
+  if (draft.builderModel === null) return draft;
+  return {
+    ...draft,
+    regoSource: draft.regoSource === "" ? binding.starterSource : draft.regoSource,
+    builderModel: null,
+  };
 }
 
 /// The model to store with a save: only when the saved source is exactly

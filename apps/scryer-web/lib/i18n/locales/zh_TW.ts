@@ -4500,9 +4500,14 @@ const zh_TW: LocaleDictionary = {
   "settings.ruleBuilderModeLabel": "編輯器",
   "settings.ruleBuilderModeSimple": "簡易",
   "settings.ruleBuilderModeHelp":
-    "簡易模式會依條件與結果建立規則，並自動撰寫 Rego。進階模式可直接編輯 Rego。切換到進階模式會保留產生的原始碼，但一旦手動編輯，規則便會一直停留在進階模式。",
+    "簡易模式會依條件與結果建立規則，並自動撰寫 Rego。進階模式會以唯讀方式顯示這段 Rego，您隨時可以切換回簡易模式。若要自行修改 Rego，請選擇「以 Rego 編輯」；之後此規則便無法再以簡易建構器開啟。",
   "settings.ruleBuilderUnavailable": "此規則的原始碼曾經手動編輯，或不是由簡易建構器產生，因此只能以 Rego 編輯。",
-  "settings.ruleBuilderDetached": "您已手動編輯原始碼，因此此規則不再與簡易建構器連結，之後會以進階模式開啟。",
+  "settings.ruleBuilderEditAsRego":
+    "以 Rego 編輯",
+  "settings.ruleBuilderEditAsRegoTitle":
+    "要以 Rego 編輯此規則嗎？",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "一旦以 Rego 編輯此規則，之後便無法再以簡易建構器開啟，儲存後也是如此。目前的 Rego 會保留作為起點。",
   "settings.ruleBuilderIncomplete": "請先完成條件與結果再儲存。",
   "settings.ruleBuilderConditions": "條件",
   "settings.maintenanceBuilderConditionsHelp":

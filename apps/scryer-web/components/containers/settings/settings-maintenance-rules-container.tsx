@@ -678,7 +678,7 @@ export function SettingsMaintenanceRulesContainer({
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (
-      builderEditor.builderShown &&
+      builderEditor.attached &&
       isIncompleteRuleBuilderDraft(MAINTENANCE_RULE_BUILDER, ruleSetDraft)
     ) {
       setValidationResult({
@@ -1054,7 +1054,7 @@ export function SettingsMaintenanceRulesContainer({
         setEditorMode={builderEditor.setMode}
         editRegoSource={builderEditor.editSource}
         setBuilderModel={builderEditor.setModel}
-        builderDetached={builderEditor.detached}
+        editAsRego={builderEditor.editAsRego}
         builderOptions={builderEditor.options}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}

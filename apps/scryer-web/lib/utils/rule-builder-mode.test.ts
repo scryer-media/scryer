@@ -38,10 +38,12 @@ import {
 import {
   initialRuleEditorMode,
   isIncompleteRuleBuilderDraft,
+  nextRuleEditorMode,
   ruleBuilderModelToSave,
+  ruleRegoEditorNeedsConfirmation,
   withRegeneratedRuleSource,
-  withRuleAdvancedEditor,
   withRuleBuilderModel,
+  withRuleRegoEditor,
   withRuleSourceEdit,
   type RuleBuilderBinding,
   type RuleBuilderDraft,
@@ -211,7 +213,7 @@ function modelOf<D extends RuleBuilderDraft>(family: Family<D>, entry: Fixture):
 function suite<D extends RuleBuilderDraft>(family: Family<D>) {
   const [first, second] = family.fixtures;
 
-  test(`${family.name}: a new rule opens in Simple with nothing to save, a hand-written one in Advanced`, () => {
+  test(`${family.name}: a new rule opens in Simple with nothing to save, a hand-written one in Advanced edit`, () => {
     const draft = family.newDraft();
     assert.deepEqual(draft.builderModel, emptyRuleBuilderModel(family.binding.schema));
     assert.equal(draft.regoSource, "");
@@ -222,7 +224,7 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     const handWritten = family.handWrittenDraft();
     assert.equal(handWritten.builderModel, null);
     assert.equal(handWritten.regoSource, family.starter);
-    assert.equal(initialRuleEditorMode(handWritten), "advanced");
+    assert.equal(initialRuleEditorMode(handWritten), "edit");
     assert.equal(isIncompleteRuleBuilderDraft(family.binding, handWritten), false);
   });
 
@@ -241,34 +243,67 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     assert.equal(isIncompleteRuleBuilderDraft(family.binding, unfinished), true);
   });
 
-  test(`${family.name}: a hand edit detaches the rule once and for good`, () => {
+  test(`${family.name}: an attached draft moves between Simple and Advanced view and keeps its model`, () => {
     const model = modelOf(family, first);
     const attached = withRuleBuilderModel(family.binding, family.newDraft(), model);
-
-    const unchanged = withRuleSourceEdit(family.binding, attached, first.source);
-    assert.equal(unchanged.detached, false);
-    assert.deepEqual(unchanged.draft.builderModel, model);
-
-    const edited = withRuleSourceEdit(family.binding, attached, `${first.source}\n# note\n`);
-    assert.equal(edited.detached, true);
-    assert.equal(edited.draft.builderModel, null);
-    assert.equal(initialRuleEditorMode(edited.draft), "advanced");
-    assert.equal(family.createModel(edited.draft), null);
-    assert.equal(family.updateModel(edited.draft), null);
-
-    // Typing the generated source back does not reattach it.
-    const retyped = withRuleSourceEdit(family.binding, edited.draft, first.source);
-    assert.equal(retyped.detached, false);
-    assert.equal(retyped.draft.builderModel, null);
+    assert.equal(nextRuleEditorMode(attached, "simple", "view"), "view");
+    assert.equal(nextRuleEditorMode(attached, "view", "simple"), "simple");
+    // Neither move touches the draft, so the model and source are what Simple left.
+    assert.deepEqual(attached.builderModel, model);
+    assert.equal(attached.regoSource, first.source);
+    assert.deepEqual(family.updateModel(attached), model);
   });
 
-  test(`${family.name}: Advanced keeps the generated source, or starts an untouched rule from the starter`, () => {
+  test(`${family.name}: the Rego of an attached draft cannot be edited`, () => {
     const attached = withRuleBuilderModel(family.binding, family.newDraft(), modelOf(family, first));
-    assert.equal(withRuleAdvancedEditor(family.binding, attached), attached);
+    assert.equal(withRuleSourceEdit(attached, `${first.source}# note\n`), attached);
+  });
 
-    const blank = withRuleAdvancedEditor(family.binding, family.newDraft());
-    assert.equal(blank.regoSource, family.starter);
-    assert.equal(blank.builderModel, null);
+  test(`${family.name}: entering edit detaches the draft even with its source unchanged`, () => {
+    const model = modelOf(family, first);
+    const attached = withRuleBuilderModel(family.binding, family.newDraft(), model);
+    assert.equal(ruleRegoEditorNeedsConfirmation(attached), true);
+
+    const editing = withRuleRegoEditor(family.binding, attached);
+    assert.equal(editing.builderModel, null);
+    assert.equal(editing.regoSource, first.source);
+    assert.equal(ruleBuilderModelToSave(family.binding, editing), null);
+    assert.equal(family.createModel(editing), null);
+    assert.equal(family.updateModel(editing), null);
+
+    // From edit there is no way back to the builder.
+    assert.equal(nextRuleEditorMode(editing, "edit", "simple"), "edit");
+    assert.equal(nextRuleEditorMode(editing, "edit", "view"), "edit");
+    assert.equal(nextRuleEditorMode(attached, "edit", "simple"), "edit");
+
+    const edited = withRuleSourceEdit(editing, `${first.source}# note\n`);
+    assert.equal(edited.regoSource, `${first.source}# note\n`);
+    assert.equal(edited.builderModel, null);
+    // Typing the generated source back does not reattach it.
+    const retyped = withRuleSourceEdit(edited, first.source);
+    assert.equal(retyped.builderModel, null);
+    assert.equal(family.updateModel(retyped), null);
+  });
+
+  test(`${family.name}: an untouched builder enters edit without confirming, from the starter`, () => {
+    const blank = family.newDraft();
+    assert.equal(ruleRegoEditorNeedsConfirmation(blank), false);
+    const editing = withRuleRegoEditor(family.binding, blank);
+    assert.equal(editing.regoSource, family.starter);
+    assert.equal(editing.builderModel, null);
+
+    const handWritten = family.handWrittenDraft();
+    assert.equal(ruleRegoEditorNeedsConfirmation(handWritten), false);
+    assert.equal(withRuleRegoEditor(family.binding, handWritten), handWritten);
+  });
+
+  test(`${family.name}: a rule saved without a model opens in edit even when its source is the builder's`, () => {
+    const reopened = family.fromStored(first.source, null);
+    assert.equal(reopened.builderModel, null);
+    assert.equal(initialRuleEditorMode(reopened), "edit");
+    assert.equal(nextRuleEditorMode(reopened, "edit", "simple"), "edit");
+    assert.equal(nextRuleEditorMode(reopened, "edit", "view"), "edit");
+    assert.equal(family.updateModel(reopened), null);
   });
 
   test(`${family.name}: a stored model opens in Simple only while it regenerates the stored source`, () => {
@@ -287,7 +322,7 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
 
     const handEdited = family.fromStored(`${first.source}\n# note\n`, first.model);
     assert.equal(handEdited.builderModel, null);
-    assert.equal(initialRuleEditorMode(handEdited), "advanced");
+    assert.equal(initialRuleEditorMode(handEdited), "edit");
 
     const stale = family.fromStored(second.source, first.model);
     assert.equal(stale.builderModel, null);
@@ -303,6 +338,7 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     assert.equal(copy.regoSource, first.source);
     assert.deepEqual(family.createModel(copy), modelOf(family, first));
     assert.equal(family.copy(`${first.source}# note\n`, first.model).builderModel, null);
+    assert.equal(family.copy(first.source, null).builderModel, null);
   });
 }
 

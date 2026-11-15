@@ -83,13 +83,13 @@ type SettingsRulesSectionProps = {
   /// Which source editor the form shows. Simple is only offered while the
   /// draft is still the builder's.
   builderMode: RuleEditorMode;
-  setBuilderMode: (mode: RuleEditorMode) => void;
+  setBuilderMode: (mode: "simple" | "view") => void;
   /// A hand edit of the source; the container decides whether it detaches
   /// the rule from the builder.
   editRegoSource: (source: string) => void;
   setBuilderModel: (model: RuleBuilderModel) => void;
   /// Set once a hand edit in this editor session detached the rule.
-  builderDetached: boolean;
+  editAsRego: () => void;
   builderOptions: RuleBuilderOptions;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
@@ -940,7 +940,7 @@ export function SettingsRulesSection({
   setBuilderMode,
   editRegoSource,
   setBuilderModel,
-  builderDetached,
+  editAsRego,
   builderOptions,
   submitRuleSet,
   mutatingRuleSetId,
@@ -1246,26 +1246,27 @@ export function SettingsRulesSection({
                           mode={builderMode}
                           onModeChange={setBuilderMode}
                           available
-                          detached={builderDetached}
+                          onEditAsRego={editAsRego}
                           model={ruleSetDraft.builderModel}
                           onModelChange={setBuilderModel}
                           options={builderOptions}
                           generatedSource={ruleSetDraft.regoSource}
                           feedback={validationStatus}
-                          editor={
+                          editor={(readOnly) => (
                             <LazyRegoEditor
                               ruleFamily="release"
                               id="settings-rule-rego-source"
                               autoFocus={focusEditor}
                               onAutoFocus={onEditorFocused}
                               value={ruleSetDraft.regoSource}
+                              readOnly={readOnly}
                               onChange={editRegoSource}
                               diagnostics={validationDiagnostics}
                               feedback={validationStatus}
                               minLines={10}
                               maxLines={35}
                             />
-                          }
+                          )}
                         />
                       </div>
 
