@@ -1646,6 +1646,14 @@ const en: LocaleDictionary = {
     "Max queries per minute must be at least 1, or empty for no budget.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Max queries per minute is set on each managed indexer, not on the indexer that syncs them.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "This indexer's locally configured monthly request limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "This indexer's locally configured monthly grab limit has been reached.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Monthly indexer usage could not be durably checked; the request was refused.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Monthly request and grab limits must be positive whole numbers, or empty for no limit.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Minimum seeders floor cannot be negative.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
@@ -6903,6 +6911,8 @@ const en: LocaleDictionary = {
     "Import tracking resumed. Normal import checks still apply.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Only a blocked import can be dismissed, and only a dismissed import can be resumed. Refresh the queue and try again.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "This client item now belongs to a different download. Refresh the queue and try again.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
@@ -7798,6 +7808,15 @@ const en: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "No limit",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max queries per minute must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxRequestsPerMonth": "Max requests per month",
+  "form.indexerMaxGrabsPerMonth": "Max grabs per month",
+  "form.indexerMonthlyLimitPlaceholder": "No limit",
+  "form.indexerMonthlyLimitHelp":
+    "Counts traffic observed by this Scryer instance only. A grab is reserved before fetching the release and stays counted if its outcome is uncertain. Limits reset at 00:00 UTC on the first of each month.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Max requests per month must be a whole number of at least 1, or empty for no limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Max grabs per month must be a whole number of at least 1, or empty for no limit.",
   "form.providerTypePlaceholder": "Provider Type",
   "form.subtitleProviderValidation": "Name and provider type are required.",
   "form.subtitleProviderFacetsRequired":

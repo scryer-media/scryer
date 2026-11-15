@@ -608,6 +608,8 @@ impl AppUseCase {
                     rate_limit_seconds: provider.rate_limit_seconds_for_provider(&pt),
                     rate_limit_burst: None,
                     max_queries_per_minute: None,
+                    max_requests_per_month: None,
+                    max_grabs_per_month: None,
                     disabled_until: None,
                     proxy_config_id: None,
                     download_client_id: None,

@@ -96,6 +96,7 @@ fn bucket_query<'a>(
         typo_distance,
         match_term: anchor,
         romanization_keys,
+        romanization_scripts: &[],
         collation_keys,
         limit,
     }
@@ -216,6 +217,36 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         },
     ];
 
+    // Cyrillic-only names: two Russian ones sharing a transliteration, and
+    // one the catalog does not mark as Russian, which therefore has no key.
+    let mut russian = matching_title(
+        "ru-ekhor",
+        "Эхор в Ночи",
+        MediaFacet::Series,
+        Some("ru"),
+        Some(2026),
+        &[],
+    );
+    russian.monitored = false;
+    let mut russian_rival = matching_title(
+        "ru-ekhor-rival",
+        "Ехор в Ночи",
+        MediaFacet::Series,
+        Some("rus"),
+        Some(2019),
+        &[],
+    );
+    russian_rival.monitored = false;
+    let mut untagged_cyrillic = matching_title(
+        "uk-ekhor",
+        "Ехор в Ночи",
+        MediaFacet::Series,
+        Some("uk"),
+        Some(2021),
+        &[],
+    );
+    untagged_cyrillic.monitored = false;
+
     let titles = vec![
         hoehle.clone(),
         rival.clone(),
@@ -224,6 +255,9 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         romaji.clone(),
         particle.clone(),
         movie.clone(),
+        russian.clone(),
+        russian_rival.clone(),
+        untagged_cyrillic.clone(),
     ];
     for title in &titles {
         TitleRepository::create(catalog, title.clone()).await?;
@@ -364,7 +398,11 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
             .any(|(id, _)| id == "anime-romaji"),
         "{candidates:?}"
     );
-    assert_eq!(romanization.len(), 1, "one registered rule set, one key");
+    assert_eq!(
+        romanization.len(),
+        2,
+        "a Latin name has one key per registered rule set that reads it"
+    );
     // With a key per registered rule set, any one of them reaching the alias
     // is enough.
     let keys = ["kagenokanata".to_string(), romanization[0].clone()];
@@ -433,6 +471,70 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         );
         assert_within(&candidates, &name_candidates_in_bucket(&titles, &query));
     }
+
+    // The romanization lane across scripts: a Latin spelling reaches the
+    // Cyrillic names a rule set transliterates to it, by key, and both of two
+    // names sharing that key. A Cyrillic name the catalog does not mark as
+    // Russian carries no key and stays out of reach.
+    let observed = title_spelling::title_lookup_form("Ekhor v Nochi");
+    let romanization = scryer_domain::title_normalization::release_romanization_keys(&observed);
+    let scripts = scryer_domain::title_normalization::release_romanization_scripts(&observed)
+        .into_iter()
+        .map(title_spelling::TitleScript::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(scripts, vec!["latin", "cyrillic"]);
+    let numbers = title_spelling::title_numbers_key("Ekhor v Nochi");
+    let collation = collation_keys_for(&observed);
+    let cross_script = |romanization_scripts| TitleNameBucketQuery {
+        romanization_scripts,
+        ..bucket_query(
+            Some("series"),
+            &observed,
+            &numbers,
+            &collation,
+            &romanization,
+            None,
+            64,
+        )
+    };
+    let candidates =
+        TitleRepository::find_title_name_candidates(catalog, cross_script(&scripts)).await?;
+    assert_eq!(
+        candidate_pairs(&candidates)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>(),
+        vec!["ru-ekhor".to_string(), "ru-ekhor-rival".to_string()],
+        "{candidates:?}"
+    );
+    // The in-memory bucket holds the whole Latin bucket besides; in the
+    // other script it reaches exactly what the store's key lane reaches.
+    let derived = name_candidates_in_bucket(&titles, &cross_script(&scripts));
+    assert_within(&candidates, &derived);
+    let derived_cyrillic = derived
+        .into_iter()
+        .filter(|candidate| {
+            title_spelling::title_script(&candidate.match_term)
+                == title_spelling::TitleScript::Cyrillic
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        candidate_pairs(&candidates),
+        candidate_pairs(&derived_cyrillic),
+        "the SQL lane and the in-memory lane must reach the same Cyrillic names"
+    );
+    // Without the catalog scripts the lane stays in the observed script.
+    let candidates =
+        TitleRepository::find_title_name_candidates(catalog, cross_script(&[])).await?;
+    assert!(candidates.is_empty(), "{candidates:?}");
+    assert!(
+        name_candidates_in_bucket(&titles, &cross_script(&[]))
+            .iter()
+            .all(
+                |candidate| title_spelling::title_script(&candidate.match_term)
+                    == title_spelling::TitleScript::Latin
+            )
+    );
 
     // The typo lane: a misspelling equals nothing, so only the fuzzy index
     // can reach the name.
@@ -967,6 +1069,7 @@ async fn title_name_equality_read_stays_on_key_indexes_and_name_terms() -> AppRe
         );
         let (sql, args) = title_name_equality_statement(&query);
         assert!(sql.contains("t.romanization_key IN ("), "{sql}");
+        assert!(!sql.contains("(t.script || '') IN ("), "{sql}");
         let plan = SqlRuntime::fetch_all(
             services.datastore().read_exec(),
             &format!("EXPLAIN QUERY PLAN {sql}"),
@@ -981,6 +1084,43 @@ async fn title_name_equality_read_stays_on_key_indexes_and_name_terms() -> AppRe
             plan.contains("idx_title_search_terms_facet_romanization"),
             "{plan}"
         );
+
+        // A rule set that reads a catalog name in another script widens only
+        // the romanization lane's script filter; the lane stays on its key
+        // index, and the bucket index stays out of every lane.
+        let query = TitleNameBucketQuery {
+            romanization_scripts: &["latin", "cyrillic"],
+            ..bucket_query(
+                Some("series"),
+                &anchor,
+                &numbers,
+                &collation,
+                &keys,
+                None,
+                64,
+            )
+        };
+        let (sql, args) = title_name_equality_statement(&query);
+        assert_eq!(sql.matches("(t.script || '') IN (").count(), 1, "{sql}");
+        assert_eq!(sql.matches("(t.script || '') = ").count(), 2, "{sql}");
+        let plan = SqlRuntime::fetch_all(
+            services.datastore().read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            &args,
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("detail"))
+        .collect::<AppResult<Vec<_>>>()?
+        .join("\n");
+        for index in [
+            "idx_title_search_terms_facet_match_term",
+            "idx_title_search_terms_facet_romanization",
+            "idx_title_search_collation_keys_profile_key",
+        ] {
+            assert!(plan.contains(index), "the plan must use {index}:\n{plan}");
+        }
+        assert!(!plan.contains("idx_title_search_terms_bucket"), "{plan}");
         Ok(())
     }
     .await;

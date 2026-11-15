@@ -21,6 +21,21 @@ function coded(
   return { graphQLErrors: [{ message, extensions: { code, reason } }] };
 }
 
+test("manual blocklist refusal preserves a localized explanation", async () => {
+  const error = coded("INTEGRATION_DOWNLOAD_NOT_GRABBED");
+  assert.equal(
+    userFacingGraphQlErrorMessage(error, "Failed"),
+    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
+  );
+  await loadLocaleDictionary("rus");
+  assert.equal(
+    userFacingGraphQlErrorMessage(error, "Failed", (key, values) =>
+      t(key, "rus", values),
+    ),
+    "У загрузки нет подтверждённой истории добавления Scryer. Релиз не заблокирован, данные не удалены, повторный поиск не запрошен.",
+  );
+});
+
 test("metadata gateway clock skew uses its translated reason, not server text", async () => {
   const error = coded("METADATA_GATEWAY_CLOCK_SKEW");
   assert.equal(

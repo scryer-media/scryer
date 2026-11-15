@@ -4342,6 +4342,41 @@ pub mod indexer_caps {
     }
 }
 
+pub mod indexer_monthly_quota {
+    /// The configured local monthly request limit has been reached.
+    pub const REQUEST_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED";
+    /// The configured local monthly grab limit has been reached.
+    pub const GRAB_LIMIT_REACHED: &str = "INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED";
+    /// Durable monthly usage could not be checked or recorded.
+    pub const ACCOUNTING_UNAVAILABLE: &str = "INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE";
+    /// A configured monthly request or grab limit is outside the supported range.
+    pub const CONFIGURATION_INVALID: &str = "INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID";
+    /// Every reason owned by local indexer monthly quota admission.
+    pub const ALL: &[&str] = &[
+        REQUEST_LIMIT_REACHED,
+        GRAB_LIMIT_REACHED,
+        ACCOUNTING_UNAVAILABLE,
+        CONFIGURATION_INVALID,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn reasons_are_distinct_prefixed_and_screaming_snake_case() {
+            let mut unique = std::collections::HashSet::new();
+            for reason in super::ALL {
+                assert!(reason.starts_with("INDEXER_MONTHLY_QUOTA_"));
+                assert!(
+                    reason
+                        .bytes()
+                        .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+                );
+                assert!(unique.insert(reason));
+            }
+        }
+    }
+}
+
 /// Why a title search removed an indexer's releases before scoring them.
 pub mod release_search {
     /// No enabled download client accepts Usenet releases (NZB files or links).
@@ -4648,6 +4683,8 @@ pub mod integration {
     pub const PROXY_TIMEOUT_OUT_OF_RANGE: &str = "INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE";
     /// Download already resolved as the selected value; nothing to ignore.
     pub const DOWNLOAD_ALREADY_RESOLVED: &str = "INTEGRATION_DOWNLOAD_ALREADY_RESOLVED";
+    /// Manual failure cleanup requires verified grab history for this download.
+    pub const DOWNLOAD_NOT_GRABBED: &str = "INTEGRATION_DOWNLOAD_NOT_GRABBED";
     /// Only blocked imports can be dismissed, and only dismissed imports can be resumed.
     pub const IMPORT_TRACKING_STATE_NOT_ELIGIBLE: &str =
         "INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE";
@@ -4858,6 +4895,7 @@ pub mod integration {
         REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES,
         PROXY_TIMEOUT_OUT_OF_RANGE,
         DOWNLOAD_ALREADY_RESOLVED,
+        DOWNLOAD_NOT_GRABBED,
         TRACKED_DOWNLOAD_NOT_FOUND,
         TRACKED_DOWNLOAD_BUSY_PROCESSING,
         IMPORT_TRACKING_STATE_NOT_ELIGIBLE,

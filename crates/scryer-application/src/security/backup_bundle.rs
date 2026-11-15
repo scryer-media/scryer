@@ -856,6 +856,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
+        table: "indexer_monthly_usage",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "indexer_search_candidates",
         classification: BackupTableClassification::ResetOnRestore,
     },
@@ -1396,6 +1400,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "user_ui_table_columns",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "user_ui_tours",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {

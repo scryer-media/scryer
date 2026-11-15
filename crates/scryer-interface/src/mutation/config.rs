@@ -20,6 +20,14 @@ fn should_seed_download_client_routing(client_type: &str) -> bool {
     matches!(client_type, "nzbget" | "sabnzbd" | "weaver")
 }
 
+fn optional_long_input(value: MaybeUndefined<Long>) -> Option<Option<i64>> {
+    match value {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(value) => Some(Some(value.into())),
+    }
+}
+
 fn optional_datetime_input(
     value: MaybeUndefined<DateTime<Utc>>,
     _field_name: &str,
@@ -231,6 +239,8 @@ impl ConfigMutations {
                     rate_limit_seconds: input.rate_limit_seconds,
                     rate_limit_burst: input.rate_limit_burst,
                     max_queries_per_minute: input.max_queries_per_minute,
+                    max_requests_per_month: input.max_requests_per_month.map(i64::from),
+                    max_grabs_per_month: input.max_grabs_per_month.map(i64::from),
                     is_enabled: input.is_enabled.unwrap_or(true),
                     enable_interactive_search: input.enable_interactive_search.unwrap_or(true),
                     enable_auto_search: input.enable_auto_search.unwrap_or(true),
@@ -273,6 +283,8 @@ impl ConfigMutations {
                     rate_limit_seconds: input.rate_limit_seconds,
                     rate_limit_burst: input.rate_limit_burst,
                     max_queries_per_minute: optional_scalar_input(input.max_queries_per_minute),
+                    max_requests_per_month: optional_long_input(input.max_requests_per_month),
+                    max_grabs_per_month: optional_long_input(input.max_grabs_per_month),
                     is_enabled: input.is_enabled,
                     enable_interactive_search: input.enable_interactive_search,
                     enable_auto_search: input.enable_auto_search,

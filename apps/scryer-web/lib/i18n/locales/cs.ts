@@ -3,6 +3,16 @@ import type { LocaleDictionary } from "../types";
 const cs: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Tato verze Prowlarru není podporována. Aktualizujte Prowlarr na verzi 2.0 nebo novější.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Místně nastavený měsíční limit požadavků tohoto indexeru byl vyčerpán.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Místně nastavený měsíční limit stažení tohoto indexeru byl vyčerpán.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Měsíční využití indexeru se nepodařilo spolehlivě ověřit; požadavek byl odmítnut.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Měsíční limity požadavků a stažení musí být kladná celá čísla, nebo prázdné pro žádný limit.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "Toto stahování nemá ověřenou historii stažení ze Scryeru. Nebylo přidáno na seznam blokovaných ani smazáno a nebylo požádáno o vyhledání náhrady.",
   "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
@@ -3177,6 +3187,15 @@ const cs: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Bez limitu",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max. počet dotazů za minutu musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
+  "form.indexerMaxRequestsPerMonth": "Max. požadavků za měsíc",
+  "form.indexerMaxGrabsPerMonth": "Max. stažení za měsíc",
+  "form.indexerMonthlyLimitPlaceholder": "Bez limitu",
+  "form.indexerMonthlyLimitHelp":
+    "Počítá se pouze provoz zaznamenaný touto instancí Scryeru. Stažení se započítá před načtením vydání a zůstane započítané, pokud je jeho výsledek nejistý. Limity se obnovují v 00:00 UTC prvního dne každého měsíce.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Měsíční limit požadavků musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Měsíční limit stažení musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
   "form.providerTypePlaceholder": "Typ poskytovatele",
   "form.subtitleProviderValidation": "Název a typ poskytovatele jsou povinné.",
   "form.subtitleProviderFacetsRequired":
