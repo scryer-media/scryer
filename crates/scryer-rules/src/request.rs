@@ -22,18 +22,22 @@
 //! on the bare `input.facts` surface an unknown certification is just a missing
 //! key, which a rule would read as a decisive "not rated above PG-13".
 //!
-//! Rules may also stamp `tags` on the title the request creates. Tags are
-//! collected on every path where the rule actually ran — including an abstain,
-//! because "this is a kids' film" is true whether or not the rule had an opinion
-//! about approving it — and never on a held rule, which by construction did not
-//! run.
+//! Rules may also tag the title the request creates with `add_tags`, shape
+//! what an approval writes with the `set_*` heads, and send a notification
+//! with `notify` (see [`crate::request_actions`]). These are collected on every path where the
+//! rule actually ran — including an abstain, because "this is a kids' film" is
+//! true whether or not the rule had an opinion about approving it — and never on
+//! a held rule, which by construction did not run.
 
 use crate::RulesError;
-use crate::policy::decode::{decode_reasons, decode_tags};
+use crate::policy::decode::decode_reasons;
 use crate::policy::engine::{EvalOutcome, EvalRecord, PolicyEngine, PolicyEvaluator, RuleHandle};
 use crate::policy::observation::serialize_fact_namespaces;
 use crate::policy::wrapper::{WrapperField, object_wrapper_source};
 use crate::policy::{PolicyFamily, PolicyRecord};
+use crate::request_actions::{
+    REQUEST_HEADS, RequestActionHead, RequestShaping, decode_request_actions,
+};
 use crate::runtime::RuntimeLimits;
 use crate::validation;
 use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
@@ -409,10 +413,13 @@ pub enum RequestVote {
 pub struct RequestRuleDecision {
     pub vote: RequestVote,
     pub reason_codes: Vec<String>,
-    /// Tags to stamp on the title the request creates. Collected on every path
-    /// where the rule ran, including an abstain; always empty on a held rule,
-    /// which did not run.
+    /// Tags `add_tags` stamps on the title the request creates. Collected on every path where the rule ran,
+    /// including an abstain; always empty on a held rule, which did not run.
     pub tags: Vec<String>,
+    /// What the rule's shaping heads set; empty on a held rule.
+    pub shaping: RequestShaping,
+    /// The text `notify` produced, if it fired; never on a held rule.
+    pub notify: Option<String>,
     /// True when the host held this rule because a fact it reads was
     /// unobservable, rather than the rule declaring `manual` itself. Both
     /// arbitrate the same way; only the trace tells them apart.
@@ -448,24 +455,24 @@ pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
 
 /// Source for the generated evaluation entry point.
 ///
-/// Five heads, each defaulted with `object.get`, which is what makes every one
-/// of them optional: a rule that only denies leaves `approve`, `manual`, and
-/// `tags` off its package document entirely and the defaults fill in. A head
-/// that *is* defined but has the wrong type survives to the host, which rejects
-/// it rather than coercing it — a `deny := "yes"` must not deny.
+/// Every head in [`REQUEST_HEADS`], each defaulted with `object.get`, which is
+/// what makes every one of them optional: a rule that only denies leaves
+/// `approve`, `manual`, and the rest off its package document entirely and the
+/// defaults fill in. A head that *is* defined but has the wrong type survives
+/// to the host, which rejects it rather than coercing it — a `deny := "yes"`
+/// must not deny.
 pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
+    debug_assert_eq!(RequestActionHead::Manual.rule_name(), HOLD_RULE_NAME);
+    let fields: Vec<WrapperField<'_>> = REQUEST_HEADS
+        .iter()
+        .map(|spec| WrapperField::new(spec.rule_name, spec.rule_name, spec.wrapper_default))
+        .collect();
     object_wrapper_source(
         WRAPPER_PACKAGE_PREFIX,
         USER_PACKAGE_PREFIX,
         rule_id,
         "decision",
-        &[
-            WrapperField::new("approve", "approve", "false"),
-            WrapperField::new("deny", "deny", "false"),
-            WrapperField::new("manual", HOLD_RULE_NAME, "false"),
-            WrapperField::new("reasons", "reasons", "[]"),
-            WrapperField::new("tags", "tags", "[]"),
-        ],
+        &fields,
     )
 }
 
@@ -477,7 +484,7 @@ pub(crate) fn decision_wrapper_policy_path(rule_id: &str) -> String {
     format!("internal/{rule_id}_request_wrapper.rego")
 }
 
-pub(crate) fn user_policy_path(rule_id: &str) -> String {
+pub fn user_policy_path(rule_id: &str) -> String {
     format!("request/{rule_id}.rego")
 }
 
@@ -577,6 +584,8 @@ impl PolicyFamily for RequestFamily {
             vote: RequestVote::Manual,
             reason_codes,
             tags: Vec::new(),
+            shaping: RequestShaping::default(),
+            notify: None,
             held: true,
         }
     }
@@ -656,7 +665,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
         .as_bool()
         .map_err(|_| "'manual' must be a boolean".to_string())?;
     let reason_codes = decode_reasons(&value["reasons"])?;
-    let tags = decode_tags(&value["tags"])?;
+    let actions = decode_request_actions(value)?;
 
     // Most restrictive wins inside one rule, and `manual` is the least
     // committed answer rather than the least permissive one: a rule saying both
@@ -678,7 +687,9 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
     Ok(RequestRuleDecision {
         vote,
         reason_codes,
-        tags,
+        tags: actions.add_tags,
+        shaping: actions.shaping,
+        notify: actions.notify,
         held: false,
     })
 }
@@ -687,7 +698,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
 
 /// The family-rated approval from the plan's worked examples: named requesters,
 /// PG-13 or gentler, tagged `family` when it is gentler still.
-pub const EXAMPLE_NAMED_REQUESTERS_FAMILY_RATED: &str = "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains \"family\" if {\n\tinput.facts.certification_rank <= 1\n}\n";
+pub const EXAMPLE_NAMED_REQUESTERS_FAMILY_RATED: &str = "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := [\"family\"] if {\n\tinput.facts.certification_rank <= 1\n}\n";
 
 /// Short leases only, for one requester. `lease_forever` has to be ruled out
 /// first: a forever lease carries no `lease_days` at all, and a rule that only
@@ -900,7 +911,7 @@ mod tests {
             "classification",
             "approve if {\n  input.facts.certification_rank <= 2\n}\n\
              deny if {\n  input.facts.certification_rank >= 3\n}\n\
-             tags contains \"family\" if {\n  input.facts.certification_rank <= 2\n}\n",
+             add_tags := [\"family\"] if {\n  input.facts.certification_rank <= 2\n}\n",
         )])
         .expect("policy should compile");
         let mut evaluator = engine.evaluator();
@@ -984,24 +995,24 @@ mod tests {
         for (id, body, expected) in [
             (
                 "tagged_approve",
-                "approve := true\n\ntags contains \"kids\"\n",
+                "approve := true\n\nadd_tags := [\"kids\"]\n",
                 RequestVote::Approve,
             ),
             (
                 "tagged_deny",
-                "deny := true\n\ntags contains \"kids\"\n",
+                "deny := true\n\nadd_tags := [\"kids\"]\n",
                 RequestVote::Deny,
             ),
             (
                 "tagged_manual",
-                "manual := true\n\ntags contains \"kids\"\n",
+                "manual := true\n\nadd_tags := [\"kids\"]\n",
                 RequestVote::Manual,
             ),
             (
                 // Abstaining is still running: "this is a kids' film" is true
                 // whether or not the rule had an opinion about approving it.
                 "tagged_abstain",
-                "tags contains \"kids\"\n",
+                "add_tags := [\"kids\"]\n",
                 RequestVote::Abstain,
             ),
         ] {
@@ -1016,7 +1027,7 @@ mod tests {
     fn tags_are_collected_from_an_array_rule_in_order() {
         let result = evaluate(&[policy(
             "array_tags",
-            "approve := true\n\ntags := [\"family\", \"kids\"]\n",
+            "approve := true\n\nadd_tags := [\"family\", \"kids\"]\n",
         )]);
         assert_eq!(
             only_decision(&result).tags,
@@ -1032,7 +1043,7 @@ mod tests {
     fn a_malformed_tag_turns_the_whole_rule_into_an_error() {
         let result = evaluate(&[policy(
             "bad_tag",
-            "approve := true\n\ntags contains \"kids/teens\"\n",
+            "approve := true\n\nadd_tags := [\"kids/teens\"]\n",
         )]);
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert_eq!(result.errors.len(), 1);
@@ -1047,7 +1058,7 @@ mod tests {
     fn a_reserved_tag_prefix_turns_the_whole_rule_into_an_error() {
         let result = evaluate(&[policy(
             "reserved_tag",
-            "approve := true\n\ntags contains \"scryer:managed\"\n",
+            "approve := true\n\nadd_tags := [\"scryer:managed\"]\n",
         )]);
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert!(
@@ -1065,7 +1076,7 @@ mod tests {
             .join(", ");
         let result = evaluate(&[policy(
             "too_many_tags",
-            &format!("approve := true\n\ntags := [{entries}]\n"),
+            &format!("approve := true\n\nadd_tags := [{entries}]\n"),
         )]);
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert!(
@@ -1136,7 +1147,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "family_rated",
-                "approve if {\n  input.facts.certification_rank <= 2\n}\n\ntags contains \"family\"\n",
+                "approve if {\n  input.facts.certification_rank <= 2\n}\n\nadd_tags := [\"family\"]\n",
             )],
             input,
         );
@@ -1441,7 +1452,7 @@ mod tests {
     /// is a contract with the rules in people's databases from the moment this
     /// ships.
     #[test]
-    fn the_generated_wrapper_projects_five_heads_and_the_family_hold_head() {
+    fn the_generated_wrapper_projects_every_head_and_the_family_hold_head() {
         assert_eq!(
             decision_wrapper_source("rule_1"),
             "package scryer.request.wrapper.rule_1\n\
@@ -1450,8 +1461,14 @@ mod tests {
              \t\"approve\": object.get(data.scryer.request.user.rule_1, \"approve\", false),\n\
              \t\"deny\": object.get(data.scryer.request.user.rule_1, \"deny\", false),\n\
              \t\"manual\": object.get(data.scryer.request.user.rule_1, \"manual\", false),\n\
+             \t\"set_quality_profile\": object.get(data.scryer.request.user.rule_1, \"set_quality_profile\", null),\n\
+             \t\"set_lease_days\": object.get(data.scryer.request.user.rule_1, \"set_lease_days\", null),\n\
+             \t\"set_monitor\": object.get(data.scryer.request.user.rule_1, \"set_monitor\", null),\n\
+             \t\"set_required_audio_languages\": object.get(data.scryer.request.user.rule_1, \"set_required_audio_languages\", null),\n\
+             \t\"set_preferred_audio_languages\": object.get(data.scryer.request.user.rule_1, \"set_preferred_audio_languages\", null),\n\
+             \t\"add_tags\": object.get(data.scryer.request.user.rule_1, \"add_tags\", []),\n\
+             \t\"notify\": object.get(data.scryer.request.user.rule_1, \"notify\", null),\n\
              \t\"reasons\": object.get(data.scryer.request.user.rule_1, \"reasons\", []),\n\
-             \t\"tags\": object.get(data.scryer.request.user.rule_1, \"tags\", []),\n\
              }\n"
         );
         assert_eq!(

@@ -28,6 +28,38 @@ fn preview_matcher(input: &mut PreviewRequestRuleInput) -> GqlResult<RequestRule
     }
 }
 
+/// Whether the selection asks for a detail's declared actions, on the detail
+/// or on its rule set. The scan parses the source, so it runs only then.
+fn detail_wants_declared_actions(ctx: &Context<'_>) -> bool {
+    let look_ahead = ctx.look_ahead();
+    look_ahead.field("declaredActions").exists()
+        || look_ahead.field("ruleSet").field("declaredActions").exists()
+}
+
+/// A rule set returned without its revision, with declared actions read only
+/// when the selection asks for them.
+async fn rule_set_payload(
+    ctx: &Context<'_>,
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    rule_set: &scryer_domain::RequestRuleSet,
+) -> GqlResult<RequestRuleSet> {
+    let count = decision_count(app, actor, &rule_set.id).await?;
+    let declared_actions = if ctx.look_ahead().field("declaredActions").exists() {
+        app.request_rule_declared_actions(actor, rule_set)
+            .await
+            .map_err(to_gql_error)?
+            .map(crate::mappers::from_request_declared_actions)
+    } else {
+        None
+    };
+    Ok(crate::mappers::from_request_rule_set(
+        rule_set,
+        count,
+        declared_actions,
+    ))
+}
+
 #[derive(Default)]
 pub(crate) struct RequestRuleMutations;
 
@@ -54,13 +86,18 @@ impl RequestRuleMutations {
                     description: input.description.unwrap_or_default(),
                     rego_source: input.rego_source,
                     library_ids: input.library_ids.unwrap_or_default(),
+                    builder_model: input.builder_model.map(|model| model.0),
                 },
             )
             .await
             .map_err(to_gql_error)?;
 
         // A rule that has just been created has decided nothing.
-        Ok(crate::mappers::from_request_rule_set_detail(detail, 0))
+        Ok(crate::mappers::from_request_rule_set_detail(
+            detail,
+            0,
+            detail_wants_declared_actions(ctx),
+        ))
     }
 
     /// Replace a rule set's matcher by appending revision N+1.
@@ -78,13 +115,23 @@ impl RequestRuleMutations {
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
         let rule_set_id = String::from(input.rule_set_id);
+        // Omitted keeps the stored builder document, null clears it.
+        let builder_model = match input.builder_model {
+            async_graphql::MaybeUndefined::Undefined => None,
+            async_graphql::MaybeUndefined::Null => Some(None),
+            async_graphql::MaybeUndefined::Value(model) => Some(Some(model.0)),
+        };
         let detail = app
-            .update_request_rule_matcher(&actor, &rule_set_id, &input.rego_source)
+            .update_request_rule_matcher(&actor, &rule_set_id, &input.rego_source, builder_model)
             .await
             .map_err(to_gql_error)?;
         let count = decision_count(&app, &actor, &rule_set_id).await?;
 
-        Ok(crate::mappers::from_request_rule_set_detail(detail, count))
+        Ok(crate::mappers::from_request_rule_set_detail(
+            detail,
+            count,
+            detail_wants_declared_actions(ctx),
+        ))
     }
 
     /// Rename and re-scope a rule set without touching its matcher, so no revision is created.
@@ -111,9 +158,8 @@ impl RequestRuleMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        let count = decision_count(&app, &actor, &rule_set_id).await?;
 
-        Ok(crate::mappers::from_request_rule_set(&rule_set, count))
+        rule_set_payload(ctx, &app, &actor, &rule_set).await
     }
 
     /// Enable or disable a request rule set.
@@ -132,9 +178,8 @@ impl RequestRuleMutations {
             .set_request_rule_enabled(&actor, &rule_set_id, enabled)
             .await
             .map_err(to_gql_error)?;
-        let count = decision_count(&app, &actor, &rule_set_id).await?;
 
-        Ok(crate::mappers::from_request_rule_set(&rule_set, count))
+        rule_set_payload(ctx, &app, &actor, &rule_set).await
     }
 
     /// Delete a request rule set and every revision it owns.
@@ -168,25 +213,37 @@ impl RequestRuleMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
-        let result = app
-            .validate_request_rule_source(&actor, &input.rego_source)
+        let validation = app
+            .validate_request_rule_source(
+                &actor,
+                &input.rego_source,
+                &input.library_ids.unwrap_or_default(),
+            )
             .await
             .map_err(to_gql_error)?;
+        let result = validation.result;
+        let diagnostic_payload = |diagnostic: scryer_application::RuleValidationDiagnostic| {
+            RuleValidationDiagnosticPayload {
+                code: diagnostic.code.into(),
+                message: diagnostic.message,
+                line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
+                column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
+                path: diagnostic.path,
+            }
+        };
 
         Ok(RequestRuleValidationPayload {
             diagnostics: result
                 .diagnostics
                 .into_iter()
-                .map(|diagnostic| RuleValidationDiagnosticPayload {
-                    code: diagnostic.code.into(),
-                    message: diagnostic.message,
-                    line: diagnostic.line.and_then(|v| i32::try_from(v).ok()),
-                    column: diagnostic.column.and_then(|v| i32::try_from(v).ok()),
-                    path: diagnostic.path,
-                })
+                .map(diagnostic_payload)
                 .collect(),
             valid: result.valid,
             errors: result.errors,
+            warnings: result.warnings.into_iter().map(diagnostic_payload).collect(),
+            declared_actions: validation
+                .declared_actions
+                .map(crate::mappers::from_request_declared_actions),
         })
     }
 
@@ -228,7 +285,7 @@ impl RequestRuleMutations {
         // enabled, because it is not stored.
         let (rule_set_name, mode) = match stored_rule_set_id {
             Some(rule_set_id) => app
-                .get_request_rule_set(&actor, &rule_set_id)
+                .get_request_rule_set(&actor, &rule_set_id, false)
                 .await
                 .map_err(to_gql_error)?
                 .map(|detail| (detail.rule_set.name, detail.rule_set.evaluation_mode))

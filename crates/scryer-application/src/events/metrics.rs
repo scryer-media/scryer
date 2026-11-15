@@ -1143,6 +1143,7 @@ mod tests {
         vec![
             DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
                 requested_lease_days: None,
+                rule_notifications: Vec::new(),
                 request_id: "req-1".to_string(),
                 library_id: "lib-1".to_string(),
                 facet: MediaFacet::Series,
@@ -1156,6 +1157,7 @@ mod tests {
             }),
             DomainEventPayload::MediaRequestUpdated(MediaRequestSubmittedEventData {
                 requested_lease_days: None,
+                rule_notifications: Vec::new(),
                 request_id: "req-1".to_string(),
                 library_id: "lib-1".to_string(),
                 facet: MediaFacet::Series,

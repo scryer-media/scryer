@@ -506,10 +506,13 @@ pub use plugins::plugins::{
 };
 pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind, RuleSetHistoryChange};
 pub use request_rules::{
-    Arbitration, ArbitrationReason, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION,
-    FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER,
+    ALL_FALLBACKS, ArbitratedShaping, Arbitration, ArbitrationReason, FALLBACK_ERROR,
+    FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL,
+    FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER, ShapedValue,
+    ShapingRefusal,
     PREFLIGHT_REQUEST_ID_PREFIX, REQUEST_MAX_LEASE_DAYS, RecordedVote, RequestDecisionReason,
     RequestDraft, RequestEvaluation, RequestEvaluationPurpose, RequestPreflight, RequestRuleDraft,
+    ResolvedShaping, REQUEST_BUILDER_MODEL_MAX_BYTES, RequestRuleValidation,
     RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRulePreviewResult,
     RequestRuleSample, RequestRuleScope, RequestRuleSetDetail, RequestRulesEngineCache,
     RequestRulesEngineHandle, ScopedError, ScopedVote, arbitrate, validate_lease_days,

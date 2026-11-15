@@ -46,6 +46,9 @@ pub struct RequestPreflight {
     /// or `None` when a rule decided outright. It names the *shape* of the
     /// fallback and never a rule, so it is safe on the requester's surface.
     pub fallback_reason: Option<String>,
+    /// What an approval would be changed to. The requester's surface shows
+    /// the values and the heads the rules disagreed on, never a notification.
+    pub shaping: crate::request_rules::ArbitratedShaping,
 }
 
 impl AppUseCase {
@@ -160,6 +163,7 @@ impl AppUseCase {
             evaluation_mode: evaluation.evaluation_mode,
             policy_outcome: evaluation.policy_outcome,
             fallback_reason: evaluation.fallback_reason,
+            shaping: evaluation.shaping,
         })
     }
 }

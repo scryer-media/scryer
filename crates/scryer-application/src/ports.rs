@@ -11373,20 +11373,29 @@ pub trait RequestRuleSetRepository: Send + Sync {
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>>;
 
-    /// Insert the rule set and its first revision atomically.
+    /// Insert the rule set, its first revision and its builder document
+    /// atomically.
     async fn create_rule_set(
         &self,
         rule_set: &scryer_domain::RequestRuleSet,
         revision: &scryer_domain::RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()>;
 
     /// Append `revision` and repoint the rule set at it, atomically. Existing
-    /// revisions are never rewritten.
+    /// revisions are never rewritten. `builder_model_json` is `None` to keep
+    /// the stored builder document, `Some(None)` to clear it and `Some(doc)`
+    /// to replace it.
     async fn add_revision(
         &self,
         revision: &scryer_domain::RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()>;
+
+    /// The stored builder document of one rule set. Only the single-rule read
+    /// asks for it, so listings never decode it.
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>>;
 
     async fn get_revision(
         &self,

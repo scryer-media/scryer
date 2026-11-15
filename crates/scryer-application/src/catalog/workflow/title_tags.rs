@@ -745,7 +745,7 @@ impl AppUseCase {
     ///
     /// Request rules are matched a little more tightly, on the quoted label
     /// (`"<label>"`) rather than the bare word, because a request matcher's
-    /// only use for a tag is inside a `tags contains "<label>"` head, and the
+    /// only use for a tag is inside an `add_tags := ["<label>"]` head, and the
     /// quotes keep a short label like `hd` from matching every identifier that
     /// happens to contain it. It is still a substring match, not a parse: an
     /// author who builds the string at runtime is not counted.

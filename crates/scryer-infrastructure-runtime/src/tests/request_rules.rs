@@ -24,11 +24,11 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
         "library-2".to_string(),
     ];
     store
-        .create_rule_set(&rule_set("scoped", scope), &revision("scoped", 1))
+        .create_rule_set(&rule_set("scoped", scope), &revision("scoped", 1), None)
         .await
         .unwrap();
     store
-        .create_rule_set(&rule_set("global", vec![]), &revision("global", 1))
+        .create_rule_set(&rule_set("global", vec![]), &revision("global", 1), None)
         .await
         .unwrap();
     let expected = vec!["library-2".to_string(), "library-1".to_string()];
@@ -84,7 +84,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     let bad = rule_set("bad", vec!["library-1".into(), "missing-library".into()]);
     assert!(
         store
-            .create_rule_set(&bad, &revision("bad", 1))
+            .create_rule_set(&bad, &revision("bad", 1), None)
             .await
             .is_err()
     );
@@ -216,6 +216,7 @@ fn decision(
         fallback_reason: None,
         votes_json: r#"[{"ruleSetId":"rule-a","vote":"approve"}]"#.to_string(),
         tags: vec!["family".to_string()],
+        shaping_json: Some(r#"{"set_lease_days":{"value":30}}"#.to_string()),
         input_hash: "input-hash-1".to_string(),
         input_schema_version: 1,
         created_at: now,
@@ -225,8 +226,12 @@ fn decision(
 async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> AppResult<()> {
     let created = rule_set("rule-a", vec!["library-1".to_string()]);
     store
-        .create_rule_set(&created, &revision("rule-a", 1))
+        .create_rule_set(&created, &revision("rule-a", 1), Some(r#"{"rows":[1]}"#))
         .await?;
+    assert_eq!(
+        store.get_builder_model("rule-a").await?.as_deref(),
+        Some(r#"{"rows":[1]}"#)
+    );
 
     let loaded = store
         .get_rule_set("rule-a")
@@ -253,8 +258,13 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
     // Appending a revision repoints the rule set and rewrites nothing.
     let updated_at = Utc::now();
     store
-        .add_revision(&revision("rule-a", 2), updated_at)
+        .add_revision(&revision("rule-a", 2), updated_at, None)
         .await?;
+    // A revision that does not mention the builder document keeps it.
+    assert_eq!(
+        store.get_builder_model("rule-a").await?.as_deref(),
+        Some(r#"{"rows":[1]}"#)
+    );
     let loaded = store
         .get_rule_set("rule-a")
         .await?
@@ -282,10 +292,15 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
 
     // A replayed revision number is refused rather than duplicating history.
     store
-        .add_revision(&revision("rule-a", 2), Utc::now())
+        .add_revision(&revision("rule-a", 2), Utc::now(), None)
         .await
         .expect_err("the unique constraint must reject a replayed revision number");
     assert_eq!(store.list_revisions("rule-a").await?.len(), 2);
+    // A refused revision leaves the builder document alone.
+    assert_eq!(
+        store.get_builder_model("rule-a").await?.as_deref(),
+        Some(r#"{"rows":[1]}"#)
+    );
 
     store
         .update_rule_set_metadata(
@@ -316,6 +331,24 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
         loaded.current_revision_number, 2,
         "metadata and mode edits leave the revision pointer alone"
     );
+    assert_eq!(
+        store.get_builder_model("rule-a").await?.as_deref(),
+        Some(r#"{"rows":[1]}"#),
+        "metadata and mode edits leave the builder document alone"
+    );
+
+    // A revision can replace the builder document, and another can clear it.
+    store
+        .add_revision(&revision("rule-a", 3), Utc::now(), Some(Some(r#"{"rows":[3]}"#)))
+        .await?;
+    assert_eq!(
+        store.get_builder_model("rule-a").await?.as_deref(),
+        Some(r#"{"rows":[3]}"#)
+    );
+    store
+        .add_revision(&revision("rule-a", 4), Utc::now(), Some(None))
+        .await?;
+    assert_eq!(store.get_builder_model("rule-a").await?, None);
 
     // The FK cascade is what keeps a deleted rule from leaving orphan revisions.
     store.delete_rule_set("rule-a").await?;
@@ -444,7 +477,7 @@ async fn assert_decisions_outlive_their_rule_set(
     decisions: &dyn RequestRuleDecisionRepository,
 ) -> AppResult<()> {
     rules
-        .create_rule_set(&rule_set("rule-b", Vec::new()), &revision("rule-b", 1))
+        .create_rule_set(&rule_set("rule-b", Vec::new()), &revision("rule-b", 1), None)
         .await?;
     decisions
         .record(&decision(
@@ -480,11 +513,11 @@ async fn batched_request_revision_reads_match_the_per_key_reads() {
     let store = crate::RequestRuleSetStore::new(services.datastore());
     for id in ["emberfall", "cinderwake"] {
         store
-            .create_rule_set(&rule_set(id, Vec::new()), &revision(id, 1))
+            .create_rule_set(&rule_set(id, Vec::new()), &revision(id, 1), None)
             .await
             .expect("create rule set");
         store
-            .add_revision(&revision(id, 2), Utc::now())
+            .add_revision(&revision(id, 2), Utc::now(), None)
             .await
             .expect("add revision");
     }

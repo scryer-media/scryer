@@ -2926,6 +2926,11 @@ input CreateRequestRuleSetInput {
 	Libraries to confine the rule to. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+	"""
+	The visual builder's document, stored as given: a JSON object of at
+	most 64 KiB. Omitted or null stores none.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -28383,6 +28388,54 @@ type ReorderDownloadClientConfigsPayload {
 }
 
 """
+A head a request rule's source can define. Votes decide the outcome; the
+other heads shape what an approval does or say something to the people who
+are notified about the request.
+"""
+enum RequestActionHead {
+	"""
+	Vote to approve.
+	"""
+	APPROVE
+	"""
+	Vote to refuse. Outranks every other vote.
+	"""
+	DENY
+	"""
+	Vote to leave the request for a person.
+	"""
+	MANUAL
+	"""
+	Approve into the named quality profile.
+	"""
+	SET_QUALITY_PROFILE
+	"""
+	Approve with this lease, in days; `0` keeps the title forever.
+	"""
+	SET_LEASE_DAYS
+	"""
+	Approve with this monitoring policy.
+	"""
+	SET_MONITOR
+	"""
+	Approve with these required audio languages.
+	"""
+	SET_REQUIRED_AUDIO_LANGUAGES
+	"""
+	Approve with these preferred audio languages, in order.
+	"""
+	SET_PREFERRED_AUDIO_LANGUAGES
+	"""
+	Stamp these tags on the title an approval creates.
+	"""
+	ADD_TAGS
+	"""
+	Add this text to the notification sent when the request is submitted.
+	"""
+	NOTIFY
+}
+
+"""
 What a request evaluation concluded.
 """
 enum RequestDecisionOutcomeValue {
@@ -28400,6 +28453,45 @@ enum RequestDecisionOutcomeValue {
 	Refuse the request.
 	"""
 	DENY
+}
+
+"""
+Every head a request rule's source defines, and every literal value each
+valued head can produce.
+"""
+type RequestDeclaredActions {
+	"""
+	The heads the source defines.
+	"""
+	heads: [RequestActionHead!]!
+	"""
+	Quality profile names `set_quality_profile` can set.
+	"""
+	qualityProfiles: [String!]!
+	"""
+	Lease lengths `set_lease_days` can set; `0` is forever.
+	"""
+	leaseDays: [Int!]!
+	"""
+	Monitoring policies `set_monitor` can set.
+	"""
+	monitors: [String!]!
+	"""
+	Audio language codes `set_required_audio_languages` can set.
+	"""
+	requiredAudioLanguages: [String!]!
+	"""
+	Audio language codes `set_preferred_audio_languages` can set.
+	"""
+	preferredAudioLanguages: [String!]!
+	"""
+	Tags `add_tags` can stamp.
+	"""
+	addTags: [String!]!
+	"""
+	Texts `notify` can send.
+	"""
+	notifications: [String!]!
 }
 
 """
@@ -28438,6 +28530,11 @@ type RequestPreflightPayload {
 	rule internals: it names the shape of the fallback, never a vote.
 	"""
 	fallbackReason: String
+	"""
+	What an approval would be changed to, or null when nothing would be.
+	Never carries a notification.
+	"""
+	shaping: RequestShaping
 }
 
 """
@@ -28514,6 +28611,11 @@ type RequestRuleDecision {
 	Schema version of the input document the rules were evaluated against.
 	"""
 	inputSchemaVersion: Int!
+	"""
+	What the rules changed an approval to, or null when they changed
+	nothing.
+	"""
+	shaping: RequestShaping
 }
 
 """
@@ -28695,6 +28797,11 @@ type RequestRuleSet {
 	"""
 	decisionCount: Int!
 	"""
+	What the matcher in force can do, read from its source. Null when the
+	source cannot be read.
+	"""
+	declaredActions: RequestDeclaredActions
+	"""
 	UTC creation time.
 	"""
 	createdAt: DateTime!
@@ -28716,6 +28823,15 @@ type RequestRuleSetDetail {
 	The revision currently in force.
 	"""
 	revision: RequestRuleRevision!
+	"""
+	What the revision in force can do, read from its source.
+	"""
+	declaredActions: RequestDeclaredActions
+	"""
+	The visual builder's stored document, or null when the rule was not
+	written with the builder. Read only by the single rule set query.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -28734,6 +28850,14 @@ type RequestRuleValidationPayload {
 	Validation errors; empty when valid.
 	"""
 	errors: [String!]!
+	"""
+	Findings that never block saving.
+	"""
+	warnings: [RuleValidationDiagnosticPayload!]!
+	"""
+	What the source can do, or null when it could not be read.
+	"""
+	declaredActions: RequestDeclaredActions
 }
 
 """
@@ -28778,6 +28902,95 @@ type RequestRuleVote {
 	Why the rule failed, or null when it did not.
 	"""
 	error: String
+}
+
+"""
+One number and the rule set that set it.
+"""
+type RequestShapedNumber {
+	"""
+	The value.
+	"""
+	value: Int!
+	"""
+	Name of the rule set that set it, as it was when the request was
+	evaluated.
+	"""
+	ruleSetName: String!
+}
+
+"""
+One text value and the rule set that set it.
+"""
+type RequestShapedText {
+	"""
+	The value.
+	"""
+	value: String!
+	"""
+	Name of the rule set that set it, as it was when the request was
+	evaluated.
+	"""
+	ruleSetName: String!
+}
+
+"""
+One list of texts and the rule set that set it.
+"""
+type RequestShapedTextList {
+	"""
+	The value.
+	"""
+	value: [String!]!
+	"""
+	Name of the rule set that set it, as it was when the request was
+	evaluated.
+	"""
+	ruleSetName: String!
+}
+
+"""
+What an approval of a request is changed to by its rules.
+
+Applied on an automatic approval, offered to the approver on manual review,
+and kept in the trace only on a denial. A head two rules set to different
+values is listed in `conflicts`, and a head whose value cannot apply to the
+request in `invalid`; neither carries a value.
+"""
+type RequestShaping {
+	"""
+	Quality profile name.
+	"""
+	qualityProfile: RequestShapedText
+	"""
+	Lease in days; `0` keeps the title forever.
+	"""
+	leaseDays: RequestShapedNumber
+	"""
+	Monitoring policy.
+	"""
+	monitor: RequestShapedText
+	"""
+	Required audio language codes.
+	"""
+	requiredAudioLanguages: RequestShapedTextList
+	"""
+	Preferred audio language codes, in order.
+	"""
+	preferredAudioLanguages: RequestShapedTextList
+	"""
+	Texts the rules added to the submission notification, in evaluation
+	order. Always empty on the requester's own surfaces.
+	"""
+	notifications: [RequestShapedText!]!
+	"""
+	Heads two rules set to different values.
+	"""
+	conflicts: [RequestActionHead!]!
+	"""
+	Heads whose value cannot apply to this request.
+	"""
+	invalid: [RequestActionHead!]!
 }
 
 """
@@ -35592,6 +35805,11 @@ input UpdateRequestRuleMatcherInput {
 	Replacement matcher source as written in the editor.
 	"""
 	regoSource: String!
+	"""
+	The visual builder's document: a JSON object of at most 64 KiB.
+	Omitted keeps the stored one; null clears it.
+	"""
+	builderModel: JSON
 }
 
 """
@@ -36114,6 +36332,11 @@ input ValidateRequestRuleInput {
 	Matcher source to validate, as written in the editor.
 	"""
 	regoSource: String!
+	"""
+	Libraries the rule would be confined to, which decide the monitoring
+	policies it may set. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
 }
 
 """

@@ -20,7 +20,7 @@ pub const RULE_PACKAGE_REQUIRED: &str = "RULE_PACKAGE_REQUIRED";
 pub const RULE_INPUT_IMPORT_UNSUPPORTED: &str = "RULE_INPUT_IMPORT_UNSUPPORTED";
 /// A maintenance matcher must define match.
 pub const RULE_MATCH_REQUIRED: &str = "RULE_MATCH_REQUIRED";
-/// A request matcher must define a vote or tags.
+/// A request matcher must define a vote, a shaping head, or `add_tags`.
 pub const RULE_VOTE_REQUIRED: &str = "RULE_VOTE_REQUIRED";
 /// A maintenance action head that carries a value (`set_quality_profile`,
 /// `add_tags`, `remove_tags`) is given something other than a plain literal.
@@ -33,8 +33,34 @@ pub const RULE_HOST_HELPER_REDEFINED: &str = "RULE_HOST_HELPER_REDEFINED";
 /// A warning: a rule name is not an action head, not part of the contract,
 /// and never used elsewhere in the rule, which usually means a misspelling.
 pub const RULE_UNREFERENCED_RULE: &str = "RULE_UNREFERENCED_RULE";
+/// A rule name the host reads (a vote, an action head, or a contract name
+/// such as `match` or `reasons`) is defined as a function, which never
+/// reaches the decision.
+pub const RULE_HEAD_DEFINED_AS_FUNCTION: &str = "RULE_HEAD_DEFINED_AS_FUNCTION";
+/// The rule reads `data` outside its own package: a bare `data`, a computed
+/// path, another package, or an import of one.
+pub const RULE_FOREIGN_DATA_REFERENCE: &str = "RULE_FOREIGN_DATA_REFERENCE";
+/// The rule defines a name the family no longer reads and refuses, such as
+/// `tags` in a request rule, which tags a title through `add_tags`.
+pub const RULE_HEAD_NAME_RETIRED: &str = "RULE_HEAD_NAME_RETIRED";
+/// `set_quality_profile` names a quality profile that does not exist.
+pub const RULE_QUALITY_PROFILE_UNKNOWN: &str = "RULE_QUALITY_PROFILE_UNKNOWN";
+/// `set_quality_profile` names a quality profile name that more than one
+/// profile carries, so the rule does not say which one it means.
+pub const RULE_QUALITY_PROFILE_AMBIGUOUS: &str = "RULE_QUALITY_PROFILE_AMBIGUOUS";
+/// `set_monitor` names a monitor type no library the rule applies to accepts.
+pub const RULE_MONITOR_UNSUPPORTED: &str = "RULE_MONITOR_UNSUPPORTED";
+/// An audio language head names a language Scryer does not know.
+pub const RULE_AUDIO_LANGUAGE_UNKNOWN: &str = "RULE_AUDIO_LANGUAGE_UNKNOWN";
 /// All supported diagnostic codes.
 pub const ALL: &[&str] = &[
+    RULE_HEAD_DEFINED_AS_FUNCTION,
+    RULE_FOREIGN_DATA_REFERENCE,
+    RULE_HEAD_NAME_RETIRED,
+    RULE_QUALITY_PROFILE_UNKNOWN,
+    RULE_QUALITY_PROFILE_AMBIGUOUS,
+    RULE_MONITOR_UNSUPPORTED,
+    RULE_AUDIO_LANGUAGE_UNKNOWN,
     RULE_ACTION_VALUE_NOT_LITERAL,
     RULE_ACTION_VALUE_INVALID,
     RULE_HOST_HELPER_REDEFINED,

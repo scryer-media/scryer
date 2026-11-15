@@ -24,8 +24,10 @@ use serde::Serialize;
 use crate::helpers::{HashDomain, blake3_identity_hex};
 use crate::media_requests::snapshot::MediaRequestMetadataSnapshot;
 use crate::request_rules::arbitration::{
-    Arbitration, FALLBACK_ERROR, ScopedError, ScopedVote, arbitrate, legacy_outcome,
+    ArbitratedShaping, Arbitration, FALLBACK_ERROR, ScopedError, ScopedVote, arbitrate,
+    legacy_outcome,
 };
+use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, RequestShaping};
 use crate::request_rules::facts::{RequestDraft, build_request_input};
 use crate::{AppResult, AppUseCase};
 
@@ -96,6 +98,26 @@ pub struct RequestEvaluation {
     /// True when the metadata snapshot could not be fully established, so some
     /// facts were unknown.
     pub metadata_partial: bool,
+    /// What the rules set for the approval to write, each value attributed to
+    /// its rule set. On manual review it is what the approver form prefills.
+    pub shaping: ArbitratedShaping,
+    /// [`Self::shaping`] checked against this request and resolved to what an
+    /// approval writes. Applied only on an automatic approval.
+    pub resolved_shaping: ResolvedShaping,
+}
+
+/// Shaping values checked against one request, in the form an approval
+/// writes them. Each `None` keeps what the requester asked for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedShaping {
+    /// The quality profile id and name the rule named.
+    pub quality_profile: Option<(String, String)>,
+    /// `Some(None)` keeps the title forever.
+    pub lease_days: Option<Option<i64>>,
+    /// The normalized monitor type.
+    pub monitor_type: Option<String>,
+    pub required_audio_languages: Option<Vec<String>>,
+    pub preferred_audio_languages: Option<Vec<String>>,
 }
 
 impl RequestEvaluation {
@@ -118,6 +140,8 @@ impl RequestEvaluation {
             reasons: Vec::new(),
             evaluation_mode: RequestRuleEvaluationMode::Disabled,
             metadata_partial,
+            shaping: ArbitratedShaping::default(),
+            resolved_shaping: ResolvedShaping::default(),
         }
     }
 }
@@ -143,6 +167,11 @@ pub struct RecordedVote {
     pub held: bool,
     pub reason_codes: Vec<String>,
     pub tags: Vec<String>,
+    /// What the rule's shaping heads set.
+    #[serde(skip_serializing_if = "RequestShaping::is_empty")]
+    pub shaping: RequestShaping,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -169,6 +198,8 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
             held: vote.decision.held,
             reason_codes: vote.decision.reason_codes.clone(),
             tags: vote.decision.tags.clone(),
+            shaping: vote.decision.shaping.clone(),
+            notify: vote.decision.notify.clone(),
             error: None,
         })
         .collect();
@@ -182,6 +213,8 @@ fn recorded_votes(votes: &[ScopedVote], errors: &[ScopedError]) -> Vec<RecordedV
         held: false,
         reason_codes: Vec::new(),
         tags: Vec::new(),
+        shaping: RequestShaping::default(),
+        notify: None,
         error: Some(error.message.clone()),
     }));
     recorded
@@ -241,6 +274,8 @@ impl AppUseCase {
                 reasons: Vec::new(),
                 evaluation_mode: RequestRuleEvaluationMode::Disabled,
                 metadata_partial,
+                shaping: ArbitratedShaping::default(),
+                resolved_shaping: ResolvedShaping::default(),
             });
         }
 
@@ -341,7 +376,8 @@ impl AppUseCase {
             });
         }
 
-        let arbitration = arbitrate(&votes, &errors, permission);
+        let mut arbitration = arbitrate(&votes, &errors, permission);
+        let resolved_shaping = self.resolve_request_shaping(draft, &mut arbitration).await;
         let mut effective_outcome = arbitration.policy_outcome;
         let mut fallback_reason = arbitration.fallback_reason.map(str::to_string);
         let applicable_tags = match self
@@ -368,11 +404,117 @@ impl AppUseCase {
             reasons: reason_views(&arbitration),
             evaluation_mode: RequestRuleEvaluationMode::Enforce,
             metadata_partial,
+            shaping: arbitration.shaping.clone(),
+            resolved_shaping,
         };
         evaluation.decision_id = self
             .record_request_decision(&purpose, &evaluation, &votes, &errors, &input_hash)
             .await;
         Ok(evaluation)
+    }
+
+    /// Check every agreed shaping value against this request, through the
+    /// same validators an approver's override goes through, and resolve it to
+    /// what an approval writes. A value that cannot apply is refused on the
+    /// arbitration, which turns an approval into manual review.
+    pub(crate) async fn resolve_request_shaping(
+        &self,
+        draft: &RequestDraft,
+        arbitration: &mut Arbitration,
+    ) -> ResolvedShaping {
+        let mut resolved = ResolvedShaping::default();
+        let mut invalid: Vec<RequestActionHead> = Vec::new();
+        let values: Vec<(RequestActionHead, RequestHeadValue)> = arbitration
+            .shaping
+            .values
+            .iter()
+            .map(|(head, shaped)| (*head, shaped.value.clone()))
+            .collect();
+        for (head, value) in values {
+            let applied = match (head, value) {
+                (RequestActionHead::SetQualityProfile, RequestHeadValue::Text(name)) => {
+                    match self.quality_profile_by_name(&name).await {
+                        Some(profile) => {
+                            resolved.quality_profile = Some(profile);
+                            true
+                        }
+                        None => false,
+                    }
+                }
+                (RequestActionHead::SetLeaseDays, RequestHeadValue::Number(days)) => {
+                    let days = (days != 0).then_some(days);
+                    match crate::request_rules::validate_lease_days(days) {
+                        Ok(days) => {
+                            resolved.lease_days = Some(days);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                }
+                (RequestActionHead::SetMonitor, RequestHeadValue::Text(monitor)) => {
+                    match shaped_monitor_type(draft, &monitor) {
+                        Some(monitor) => {
+                            resolved.monitor_type = Some(monitor);
+                            true
+                        }
+                        None => false,
+                    }
+                }
+                (RequestActionHead::SetRequiredAudioLanguages, RequestHeadValue::List(list)) => {
+                    match crate::settings::runtime::validated_preference_languages(
+                        "required audio language",
+                        list,
+                    ) {
+                        Ok(list) => {
+                            resolved.required_audio_languages = Some(list);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                }
+                (RequestActionHead::SetPreferredAudioLanguages, RequestHeadValue::List(list)) => {
+                    match crate::settings::runtime::validated_preference_languages(
+                        "preferred audio language",
+                        list,
+                    ) {
+                        Ok(list) => {
+                            resolved.preferred_audio_languages = Some(list);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                }
+                _ => false,
+            };
+            if !applied {
+                invalid.push(head);
+            }
+        }
+        arbitration.refuse_invalid_shaping(&invalid);
+        resolved
+    }
+
+    /// The id and name of the one quality profile called `name`, or `None`
+    /// when none is, more than one is, or the profiles cannot be read.
+    async fn quality_profile_by_name(&self, name: &str) -> Option<(String, String)> {
+        let settings = match self.load_quality_profile_settings().await {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(%error, "quality profiles unavailable; holding a shaped request");
+                return None;
+            }
+        };
+        let mut matches =
+            crate::request_rules::service::quality_profiles_named(&settings.profiles, name);
+        let profile = matches.next()?;
+        if matches.next().is_some() {
+            tracing::warn!(
+                profile = name,
+                "more than one quality profile has the name a rule set; holding a shaped request"
+            );
+            return None;
+        }
+        Some((profile.id.clone(), profile.name.clone()))
     }
 
     /// The subset of `emitted` the title tag registry defines.
@@ -453,6 +595,9 @@ impl AppUseCase {
             // operator hunting a tag that never appeared has nowhere else to
             // look. What actually lands is `evaluation.tags`.
             tags: evaluation.emitted_tags.clone(),
+            shaping_json: (!evaluation.shaping.is_empty())
+                .then(|| serde_json::to_string(&evaluation.shaping).ok())
+                .flatten(),
             input_hash: input_hash.to_string(),
             input_schema_version: i64::from(REQUEST_INPUT_SCHEMA_VERSION),
             created_at: now,
@@ -516,6 +661,19 @@ impl AppUseCase {
             .await;
         evaluation
     }
+}
+
+/// The normalized monitor type a rule's `set_monitor` value gives this draft,
+/// or `None` when it cannot apply: a value the facet does not have,
+/// `advanced`, which needs a selection a rule cannot write, or any value on a
+/// list movie, whose approval must keep the movie it selected.
+pub(crate) fn shaped_monitor_type(draft: &RequestDraft, monitor: &str) -> Option<String> {
+    if draft.origin.subscription_id().is_some()
+        && draft.identity_fingerprint.starts_with("list-movie:")
+    {
+        return None;
+    }
+    crate::request_rules::service::shaping_monitor_for_facet(&draft.facet, monitor)
 }
 
 /// Reasons, narrowed to what a requester may see. Pre-flight returns exactly

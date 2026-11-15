@@ -39,14 +39,15 @@ pub mod read_model;
 pub mod service;
 
 pub use arbitration::{
-    Arbitration, ArbitrationReason, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION,
-    FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER, ScopedError,
-    ScopedVote, arbitrate, legacy_outcome,
+    ALL_FALLBACKS, ArbitratedShaping, Arbitration, ArbitrationReason, FALLBACK_ERROR,
+    FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL,
+    FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER, ScopedError,
+    ScopedVote, ShapedValue, ShapingRefusal, arbitrate, legacy_outcome,
 };
 pub use engine::{RequestRuleScope, RequestRulesEngineCache, RequestRulesEngineHandle};
 pub use evaluation::{
     PREFLIGHT_REQUEST_ID_PREFIX, RecordedVote, RequestDecisionReason, RequestEvaluation,
-    RequestEvaluationPurpose,
+    RequestEvaluationPurpose, ResolvedShaping,
 };
 pub use facts::{
     RequestCatalogContext, RequestDraft, RequestInputContext, RequestQualityContext,
@@ -58,7 +59,8 @@ pub use read_model::{
     MediaRequestPolicyFacts, MediaRequestPolicySelection, RequestRuleDecisionView,
 };
 pub use service::{
-    REQUEST_MAX_LEASE_DAYS, RequestRuleDraft, RequestRulePreviewMatcher, RequestRulePreviewRequest,
-    RequestRulePreviewResult, RequestRuleSample, RequestRuleSetDetail, validate_lease_days,
+    REQUEST_BUILDER_MODEL_MAX_BYTES, REQUEST_MAX_LEASE_DAYS, RequestRuleDraft,
+    RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRulePreviewResult,
+    RequestRuleSample, RequestRuleSetDetail, RequestRuleValidation, validate_lease_days,
     validate_tag_list,
 };

@@ -3948,8 +3948,14 @@ pub mod request_rules {
     /// Failed to build the request rules engine.
     pub const FAILED_BUILD_REQUEST_RULES_ENGINE: &str =
         "REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE";
+    /// The stored builder document is larger than the server keeps.
+    pub const BUILDER_MODEL_TOO_LARGE: &str = "REQUEST_RULE_BUILDER_MODEL_TOO_LARGE";
+    /// The builder document is not a JSON object.
+    pub const BUILDER_MODEL_NOT_OBJECT: &str = "REQUEST_RULE_BUILDER_MODEL_NOT_OBJECT";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        BUILDER_MODEL_TOO_LARGE,
+        BUILDER_MODEL_NOT_OBJECT,
         RULE_VALIDATION_FAILED,
         SAMPLE_REQUESTER_NOT_FOUND,
         SAMPLE_LIBRARY_NOT_FOUND,

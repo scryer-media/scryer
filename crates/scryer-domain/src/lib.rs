@@ -4537,6 +4537,18 @@ pub struct MediaRequestSubmittedEventData {
     /// leases existed carry no lease at all, which is exactly "forever".
     #[serde(default)]
     pub requested_lease_days: Option<i64>,
+    /// Messages request rules asked to send when this request was submitted.
+    /// Empty for an update and for events written before rules could notify.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_notifications: Vec<RequestRuleNotification>,
+}
+
+/// One `notify` message a request rule set produced for a request.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleNotification {
+    pub rule_set_id: String,
+    pub rule_set_name: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -6755,6 +6767,11 @@ pub struct RequestRuleDecisionRecord {
     pub votes_json: String,
     /// Tags the rules emitted, in the order the arbitration produced them.
     pub tags: Vec<String>,
+    /// Serialized shaping the rules set: each agreed value with its rule set,
+    /// the heads they disagreed on or that could not apply, and the
+    /// notifications. JSON for the same reason as `votes_json`. `None` when
+    /// no rule set any.
+    pub shaping_json: Option<String>,
     /// Hash of the bounded input document, so a decision can be compared
     /// against the data it was made on.
     pub input_hash: String,
