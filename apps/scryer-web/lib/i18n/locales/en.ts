@@ -12260,6 +12260,50 @@ const en: LocaleDictionary = {
     "Held: the media server could not confirm the watch history before acting.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
+  "settings.maintenanceExecutionReason.ruleNotEligible":
+    "Held: before the action ran, the rule was disabled, set to dry run or disarmed, or its safety gate closed.",
+  "settings.maintenanceExecutionReason.noMatchAtExecution":
+    "Not acted on: checked again just before acting, the title no longer matches the rule.",
+  "settings.maintenanceExecutionReason.unknownAtExecution":
+    "Held: checked again just before acting, the rule could not decide. It is checked again on the next run.",
+  "settings.maintenanceExecutionReason.activeAcquisition":
+    "Held: the title has a grab, download or import in progress.",
+  "settings.maintenanceExecutionReason.acquisitionUnknown":
+    "Held: Scryer could not tell whether the title has a grab, download or import in progress.",
+  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+    "Held: a storage-space cleanup is deleting files. The action waits until it finishes.",
+  "settings.maintenanceExecutionReason.actionNotFullySupported":
+    "Held: this action cannot run on this subject, such as a whole-title action on a season or an episode.",
+  "settings.maintenanceExecutionReason.titleMissing":
+    "The title is no longer in the library, so nothing was done.",
+  "settings.maintenanceExecutionReason.locationOperationHold":
+    "Held: the title's files are being moved or renamed. The action runs once that finishes.",
+  "settings.maintenanceExecutionReason.passActionStepBudget":
+    "Held by an earlier run that had used up its action steps. Runs no longer have that limit; the action runs on the next run.",
+  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+    "Held: deletions failed repeatedly in this run, so the remaining deletions wait for the next run.",
+  "settings.maintenanceExecutionReason.actionSucceeded":
+    "The action completed.",
+  "settings.maintenanceExecutionReason.alreadySatisfied":
+    "Nothing to change: the title was already as the action would leave it.",
+  "settings.maintenanceExecutionReason.retryPending":
+    "The action failed for a reason that may pass. It is tried again.",
+  "settings.maintenanceExecutionReason.actionFailed":
+    "The action failed and is not tried again. The action history has the error.",
+  "settings.maintenanceExecutionReason.leaseReclaimed":
+    "The action stopped before it finished, for example when Scryer restarted. It was released to run again.",
+  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+    "Held: some files cannot be placed on this season's or episode's episodes, so deleting them is not safe.",
+  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+    "Held: the quality profile this rule sets no longer names exactly one profile. It was renamed or removed, or two profiles share the name.",
+  "settings.maintenanceExecutionReason.actionsNotRunnable":
+    "Held: the actions decided for this subject cannot run together, such as adding and removing the same tag.",
+  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+    "Held: checked again just before acting, the rule now decides different actions. The next evaluation replaces this candidate.",
+  "settings.maintenanceExecutionReason.actionNotDeclared":
+    "Held: this candidate carries an action the rule's current source no longer declares, so it never runs.",
+  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+    "Held: a storage-root rule cannot run one of these actions.",
   "settings.maintenanceRuleMaxTitlesPerRun": "Titles per run",
   "settings.maintenanceRuleMaxTitlesPerRunHelp":
     "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
@@ -12297,7 +12341,7 @@ const en: LocaleDictionary = {
   "error.ruleWithTargetNotAllowed":
     'This rule cannot replace {{path}} with "with". Its decision must rest on what Scryer observed.',
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
-    "Set titles per run: this rule can {{actions}}.",
+    "Set titles per run. These actions of the rule need it: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
     "The rule defines no action, so it could never do anything.",
   "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":

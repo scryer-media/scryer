@@ -584,8 +584,15 @@ export function userFacingGraphQlErrorMessage(
             )
           : [];
         if (actions.length > 0) {
+          // The names are the served action heads, which the rule builder
+          // already labels; a head the client has no label for stays as sent.
+          const labels = actions.map((action) => {
+            const labelKey = `ruleOutput.maintenance.${action}`;
+            const label = translate(labelKey);
+            return label === labelKey ? action : label;
+          });
           return translate("error.maintenanceMaxTitlesPerRunRequiredNamed", {
-            actions: actions.join(", "),
+            actions: labels.join(", "),
           });
         }
         return translate(key);

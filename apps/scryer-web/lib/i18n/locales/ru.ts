@@ -6740,6 +6740,49 @@ const ru: LocaleDictionary = {
     "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
+  "settings.maintenanceExecutionReason.ruleNotEligible":
+    "Отложено: до выполнения действия правило отключили, перевели в пробный режим или сняли с боевого режима, либо закрылся его защитный шлюз.",
+  "settings.maintenanceExecutionReason.noMatchAtExecution":
+    "Не выполнено: при повторной проверке перед действием тайтл больше не подходит под правило.",
+  "settings.maintenanceExecutionReason.unknownAtExecution":
+    "Отложено: при повторной проверке перед действием правило не смогло принять решение. Проверка повторится при следующем запуске.",
+  "settings.maintenanceExecutionReason.activeAcquisition":
+    "Отложено: для тайтла идёт захват, загрузка или импорт.",
+  "settings.maintenanceExecutionReason.acquisitionUnknown":
+    "Отложено: Scryer не смог определить, идёт ли для тайтла захват, загрузка или импорт.",
+  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+    "Отложено: очистка хранилища сейчас удаляет файлы. Действие подождёт её завершения.",
+  "settings.maintenanceExecutionReason.actionNotFullySupported":
+    "Отложено: это действие нельзя применить к этому объекту, например действие для всего тайтла к сезону или эпизоду.",
+  "settings.maintenanceExecutionReason.titleMissing":
+    "Тайтла больше нет в библиотеке, поэтому ничего не сделано.",
+  "settings.maintenanceExecutionReason.locationOperationHold":
+    "Отложено: файлы тайтла перемещаются или переименовываются. Действие выполнится после завершения.",
+  "settings.maintenanceExecutionReason.passActionStepBudget":
+    "Отложено одним из прошлых запусков, исчерпавшим свои шаги действий. У запусков больше нет такого лимита; действие выполнится при следующем запуске.",
+  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+    "Отложено: удаление в этом запуске несколько раз завершилось ошибкой, поэтому оставшиеся удаления ждут следующего запуска.",
+  "settings.maintenanceExecutionReason.actionSucceeded": "Действие выполнено.",
+  "settings.maintenanceExecutionReason.alreadySatisfied":
+    "Менять нечего: тайтл уже был в том состоянии, в которое его привело бы действие.",
+  "settings.maintenanceExecutionReason.retryPending":
+    "Действие завершилось ошибкой, которая может пройти. Оно будет повторено.",
+  "settings.maintenanceExecutionReason.actionFailed":
+    "Действие завершилось ошибкой и повторяться не будет. Ошибка указана в истории действий.",
+  "settings.maintenanceExecutionReason.leaseReclaimed":
+    "Действие прервалось до завершения, например при перезапуске Scryer. Оно освобождено для повторного запуска.",
+  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+    "Отложено: часть файлов нельзя сопоставить с эпизодами этого сезона или эпизода, поэтому удалять их небезопасно.",
+  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+    "Отложено: профиль качества, который задаёт правило, больше не соответствует ровно одному профилю. Его переименовали или удалили, либо два профиля названы одинаково.",
+  "settings.maintenanceExecutionReason.actionsNotRunnable":
+    "Отложено: действия, выбранные для этого объекта, нельзя выполнить вместе, например добавление и удаление одного и того же тега.",
+  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+    "Отложено: при повторной проверке перед действием правило выбрало другие действия. Следующая оценка заменит этого кандидата.",
+  "settings.maintenanceExecutionReason.actionNotDeclared":
+    "Отложено: у кандидата есть действие, которое текущий исходный код правила больше не объявляет, поэтому оно никогда не выполнится.",
+  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+    "Отложено: правило для корня хранилища не может выполнить одно из этих действий.",
   "settings.maintenanceRuleMaxTitlesPerRun": "Тайтлов за запуск",
   "settings.maintenanceRuleMaxTitlesPerRunHelp":
     "Наибольшее число тайтлов, с которыми правило работает за один запуск. Правилу, удаляющему файлы или тайтлы, этот лимит обязателен.",
@@ -6777,7 +6820,7 @@ const ru: LocaleDictionary = {
   "error.ruleWithTargetNotAllowed":
     'Это правило не может заменить {{path}} через "with". Его решение должно опираться на то, что наблюдал Scryer.',
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
-    "Задайте число тайтлов за запуск: это правило может выполнить {{actions}}.",
+    "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
     "Правило не определяет ни одного действия, поэтому никогда ничего не сделает.",
   "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
