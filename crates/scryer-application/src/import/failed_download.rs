@@ -181,26 +181,29 @@ pub(crate) async fn tracked_download_has_grabbed_submission(
     app: &AppUseCase,
     td: &TrackedDownload,
 ) -> bool {
-    let Some(identity) = tracked_download_failure_submission_identity(td) else {
-        return false;
-    };
-
-    download_submission_exists_for_download(app, td.canonical_download_id(), &identity).await
+    tracked_download_grabbed_submission_lookup(app, td)
+        .await
+        .unwrap_or(false)
 }
 
-pub(crate) async fn download_submission_exists_for_download(
+/// Whether Scryer's own grab is on record for this download, keeping a failed
+/// read apart from "no grab on record" so a caller that reports the answer to
+/// an operator does not state the second when only the first is known.
+pub(crate) async fn tracked_download_grabbed_submission_lookup(
     app: &AppUseCase,
-    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
-    identity: &ClientJobLocator,
-) -> bool {
-    app.services
+    td: &TrackedDownload,
+) -> crate::AppResult<bool> {
+    let Some(identity) = tracked_download_failure_submission_identity(td) else {
+        return Ok(false);
+    };
+
+    Ok(app
+        .services
         .workflow
         .download_submissions
-        .find_by_client_item_id_for_download(canonical_download_id, identity)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
+        .find_by_client_item_id_for_download(td.canonical_download_id(), &identity)
+        .await?
+        .is_some())
 }
 
 pub(crate) fn warn_download_not_grabbed(td: &mut TrackedDownload) {

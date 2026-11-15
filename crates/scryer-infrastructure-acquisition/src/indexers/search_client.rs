@@ -2429,6 +2429,32 @@ fn plain_rate_limit_cooldown(error: &AppError) -> Option<Option<std::time::Durat
         .map(|signal| signal.retry_after)
 }
 
+/// The answer of an indexer whose search or poll was not run because a local
+/// monthly limit refused it. Nothing was sent, so it carries no results and
+/// reports the refusal's code as the indexer's outcome.
+fn local_limit_response(indexer_id: &str, reason: Option<&'static str>) -> IndexerSearchResponse {
+    IndexerSearchResponse {
+        next_cursor: None,
+        results: Vec::new(),
+        indexer_outcomes: reason
+            .map(|reason| IndexerQueryOutcome {
+                page: None,
+                indexer_id: indexer_id.to_string(),
+                outcome: IndexerSearchOutcome::LocalLimit { reason },
+            })
+            .into_iter()
+            .collect(),
+        completion: IndexerSearchCompletion::Partial {
+            reason: None,
+            retry_after: None,
+        },
+        api_current: None,
+        api_max: None,
+        grab_current: None,
+        grab_max: None,
+    }
+}
+
 #[derive(Default)]
 struct StrategyBatchHealth {
     any_success: bool,
@@ -4602,6 +4628,11 @@ struct RssFeedCacheEntry {
         tokio::sync::OnceCell<Result<(Vec<IndexerSearchResult>, IndexerSearchCompletion), String>>,
     initialization_lock: Arc<Mutex<()>>,
     feedback_claimed: AtomicBool,
+    /// Set when the feed was not fetched because a local monthly limit refused
+    /// the request: the stable code of the refusal. The cell then holds an
+    /// error only so waiting callers share the answer; nothing was sent, so it
+    /// is not a failed poll.
+    local_limit: std::sync::OnceLock<&'static str>,
 }
 
 impl RssFeedCacheEntry {
@@ -4610,6 +4641,7 @@ impl RssFeedCacheEntry {
             cell: tokio::sync::OnceCell::new(),
             initialization_lock: Arc::new(Mutex::new(())),
             feedback_claimed: AtomicBool::new(false),
+            local_limit: std::sync::OnceLock::new(),
         }
     }
 
@@ -7558,6 +7590,24 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         if err.is_canceled() {
                                             return Err("RSS indexer search canceled".to_string());
                                         }
+                                        // A local monthly limit refused the
+                                        // request before it left the process.
+                                        // The indexer did not fail: no failed
+                                        // query, backoff or last error.
+                                        if let Some(reason) =
+                                            err.indexer_monthly_limit_refusal_reason()
+                                        {
+                                            info!(
+                                                indexer = indexer_name.as_str(),
+                                                reason,
+                                                "RSS poll not run: local monthly limit"
+                                            );
+                                            let _ = cache_entry.local_limit.set(reason);
+                                            return Err(
+                                                "RSS poll not run because of a local monthly limit"
+                                                    .to_string(),
+                                            );
+                                        }
                                         let cooldown = plain_rate_limit_cooldown(&err);
                                         match cooldown {
                                             Some(retry_after) => info!(
@@ -7639,6 +7689,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             );
                         }
                         let should_record_feedback = cache_entry.claim_feedback();
+                        let local_limit_reason = cache_entry.local_limit.get().copied();
                         // An RSS cycle asks each (indexer, categories) feed
                         // once, so once this caller holds its copy the map
                         // has nothing left to share it with. Callers already
@@ -7661,6 +7712,18 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     result.indexer_id.get_or_insert_with(|| indexer_id.clone());
                                 }
                                 (results, completion)
+                            }
+                            Err(_) if local_limit_reason.is_some() => {
+                                return (
+                                    indexer_id.clone(),
+                                    indexer_name,
+                                    scheduler_lease_for_task.clone(),
+                                    Ok((
+                                        local_limit_response(&indexer_id, local_limit_reason),
+                                        None,
+                                    )),
+                                    false,
+                                );
                             }
                             Err(error) => {
                                 return (
@@ -7984,6 +8047,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                     .or(rss_poll_page_budget);
                 let mut page_chains: HashMap<String, PageChain> = HashMap::new();
                 let mut any_strategy_fired = false;
+                // Set when a local monthly limit refused a strategy's request
+                // before it left the process.
+                let mut local_limit_reason: Option<&'static str> = None;
                 let mut all_strategies_complete = true;
                 let mut only_unattested_incompleteness = true;
                 let mut primary_attempted;
@@ -8152,6 +8218,20 @@ impl IndexerClient for MultiIndexerSearchClient {
                             strategy = outcome.label.as_str(),
                             "skipping strategy: request was not dispatched"
                         );
+                        continue;
+                    }
+                    if let Some(reason) = outcome
+                        .response
+                        .as_ref()
+                        .err()
+                        .and_then(AppError::indexer_monthly_limit_refusal_reason)
+                    {
+                        // Refused locally, so nothing was sent: the strategy
+                        // did not run and the indexer did not fail.
+                        local_limit_reason.get_or_insert(reason);
+                        all_strategies_complete = false;
+                        only_unattested_incompleteness = false;
+                        contained.note_open();
                         continue;
                     }
                     any_strategy_fired = true;
@@ -8424,9 +8504,11 @@ impl IndexerClient for MultiIndexerSearchClient {
                         primary_usable_result_count.saturating_add(probe.take_follower_replayed());
                 }
 
-                // An indexer over its query budget is skipped for the rest of
-                // this search: its fallback would be refused the same way.
+                // An indexer over its query budget or at a local monthly
+                // limit is skipped for the rest of this search: its fallback
+                // would be refused the same way.
                 if query_budget_wait.is_none()
+                    && local_limit_reason.is_none()
                     && !primary_unreplayed_complete
                     && should_run_fallback_tier(
                         mode,
@@ -8581,6 +8663,18 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 strategy = outcome.label.as_str(),
                                 "skipping fallback strategy: request was not dispatched"
                             );
+                            continue;
+                        }
+                        if let Some(reason) = outcome
+                            .response
+                            .as_ref()
+                            .err()
+                            .and_then(AppError::indexer_monthly_limit_refusal_reason)
+                        {
+                            local_limit_reason.get_or_insert(reason);
+                            all_strategies_complete = false;
+                            only_unattested_incompleteness = false;
+                            contained.note_open();
                             continue;
                         }
                         any_strategy_fired = true;
@@ -8907,8 +9001,22 @@ impl IndexerClient for MultiIndexerSearchClient {
                     );
                 }
 
-                let task_indexer_outcomes = scheduler_blocked_outcome
-                    .filter(|_| !all_strategies_complete)
+                // An indexer that answered nothing because a local monthly
+                // limit refused it reports that, not an empty partial answer.
+                let local_limit_outcome = local_limit_reason
+                    .filter(|_| {
+                        !any_strategy_fired && !batch_had_success && collected_results.is_empty()
+                    })
+                    .map(|reason| IndexerSearchOutcome::LocalLimit { reason });
+                if let Some(reason) = local_limit_reason {
+                    info!(
+                        indexer = indexer_name.as_str(),
+                        reason,
+                        "indexer search not run: local monthly limit"
+                    );
+                }
+                let task_indexer_outcomes = local_limit_outcome
+                    .or(scheduler_blocked_outcome.filter(|_| !all_strategies_complete))
                     .map(|outcome| IndexerQueryOutcome {
                         page: None,
                         indexer_id: indexer_id.clone(),
@@ -9371,6 +9479,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 outcome,
                 IndexerSearchOutcome::BackedOff { .. }
                     | IndexerSearchOutcome::ClientUnavailable { .. }
+                    | IndexerSearchOutcome::LocalLimit { .. }
                     | IndexerSearchOutcome::Errored
             );
             let completion = match outcome {
@@ -9394,6 +9503,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 }
                 IndexerSearchOutcome::BackedOff { .. }
                 | IndexerSearchOutcome::ClientUnavailable { .. }
+                | IndexerSearchOutcome::LocalLimit { .. }
                 | IndexerSearchOutcome::Errored => IndexerSearchCompletion::Partial {
                     reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
                     retry_after: None,
@@ -9666,6 +9776,16 @@ impl MultiIndexerSearchClient {
                 (Some(response), outcome)
             }
             Err(error) if error.is_canceled() => return Err(error),
+            // Refused by a local monthly limit before anything was sent: the
+            // indexer did not fail, so its health and stats are left alone.
+            Err(error) if error.is_indexer_monthly_limit_refusal() => {
+                let outcome = match error.indexer_monthly_limit_refusal_reason() {
+                    Some(reason) => IndexerSearchOutcome::LocalLimit { reason },
+                    None => IndexerSearchOutcome::Errored,
+                };
+                debug!(indexer = name, error = %error, "raw text search not run: local monthly limit");
+                return Ok((None, outcome, Some(caps_diagnostic)));
+            }
             Err(error) => {
                 let signal = rate_limit_signal_from_error(&error);
                 let retry_after = strategy_retry_after(&error, signal.as_ref());
@@ -11254,6 +11374,8 @@ mod tests {
             rate_limit_seconds: Some(0),
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -14415,6 +14537,305 @@ mod tests {
             vec![Some("repository: upstream status 503".to_string())]
         );
         assert!(cleared_ids.lock().expect("cleared ids mutex").is_empty());
+    }
+
+    /// Records every write the search client makes for an indexer, by id.
+    struct WriteLoggingIndexerConfigRepository {
+        configs: Vec<IndexerConfig>,
+        writes: StdArc<StdMutex<Vec<(String, &'static str)>>>,
+    }
+
+    impl WriteLoggingIndexerConfigRepository {
+        fn log(&self, id: &str, write: &'static str) {
+            self.writes
+                .lock()
+                .expect("write log mutex")
+                .push((id.to_string(), write));
+        }
+    }
+
+    #[async_trait]
+    impl IndexerConfigRepository for WriteLoggingIndexerConfigRepository {
+        async fn list(&self, _provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>> {
+            Ok(self.configs.clone())
+        }
+
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<IndexerConfig>> {
+            Ok(None)
+        }
+
+        async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig> {
+            Ok(config)
+        }
+
+        async fn touch_last_error(&self, id: &str) -> AppResult<()> {
+            self.log(id, "touch_last_error");
+            Ok(())
+        }
+
+        async fn record_last_error(
+            &self,
+            id: &str,
+            _message: Option<String>,
+            _code: Option<String>,
+        ) -> AppResult<()> {
+            self.log(id, "record_last_error");
+            Ok(())
+        }
+
+        async fn clear_last_error(&self, id: &str) -> AppResult<()> {
+            self.log(id, "clear_last_error");
+            Ok(())
+        }
+
+        async fn set_system_backoff(
+            &self,
+            id: &str,
+            _backoff: IndexerSystemBackoff,
+        ) -> AppResult<()> {
+            self.log(id, "set_system_backoff");
+            Ok(())
+        }
+
+        async fn clear_system_backoff(&self, id: &str) -> AppResult<()> {
+            self.log(id, "clear_system_backoff");
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            _update: scryer_application::IndexerConfigUpdate,
+        ) -> AppResult<IndexerConfig> {
+            Err(AppError::Validation("not implemented in test".into()))
+        }
+
+        async fn delete(&self, _id: &str) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct PerIndexerStatsTracker {
+        queries: StdArc<StdMutex<Vec<(String, bool)>>>,
+    }
+
+    impl IndexerStatsTracker for PerIndexerStatsTracker {
+        fn record_query(&self, indexer_id: &str, _indexer_name: &str, success: bool) {
+            self.queries
+                .lock()
+                .expect("stats log mutex")
+                .push((indexer_id.to_string(), success));
+        }
+
+        fn record_grab(&self, _indexer_id: &str, _indexer_name: &str) {}
+
+        fn record_api_limits(
+            &self,
+            _indexer_id: &str,
+            _api_current: Option<u32>,
+            _api_max: Option<u32>,
+            _grab_current: Option<u32>,
+            _grab_max: Option<u32>,
+        ) {
+        }
+
+        fn all_stats(&self) -> Vec<IndexerQueryStats> {
+            vec![]
+        }
+    }
+
+    struct PerIndexerPluginProvider {
+        clients: HashMap<String, Arc<dyn IndexerClient>>,
+        caps: IndexerProviderCapabilities,
+    }
+
+    impl IndexerPluginProvider for PerIndexerPluginProvider {
+        fn client_for_provider(&self, config: &IndexerConfig) -> Option<Arc<dyn IndexerClient>> {
+            self.clients.get(&config.id).cloned()
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["mock".into()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+
+        fn capabilities_for_provider(&self, _provider_type: &str) -> IndexerProviderCapabilities {
+            self.caps.clone()
+        }
+    }
+
+    struct MonthlyLimitFixture {
+        multi: MultiIndexerSearchClient,
+        writes: StdArc<StdMutex<Vec<(String, &'static str)>>>,
+        queries: StdArc<StdMutex<Vec<(String, bool)>>>,
+        capped_calls: StdArc<StdMutex<Vec<RecordedCall>>>,
+    }
+
+    /// Two indexers: `idx-0` is refused by its monthly request limit before
+    /// anything is sent, `idx-1` answers with `title`.
+    fn monthly_limit_fixture(
+        caps: IndexerProviderCapabilities,
+        title: &'static str,
+    ) -> MonthlyLimitFixture {
+        let writes = StdArc::new(StdMutex::new(Vec::new()));
+        let stats = PerIndexerStatsTracker::default();
+        let queries = stats.queries.clone();
+        let capped_calls = StdArc::new(StdMutex::new(Vec::new()));
+        let capped: Arc<dyn IndexerClient> = Arc::new(ScriptedIndexerClient {
+            calls: capped_calls.clone(),
+            responder: StdArc::new(|_| {
+                Err(AppError::validation_refused(
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                    "the monthly request limit for this indexer is reached",
+                ))
+            }),
+        });
+        let open: Arc<dyn IndexerClient> = Arc::new(ScriptedIndexerClient {
+            calls: StdArc::new(StdMutex::new(Vec::new())),
+            responder: StdArc::new(move |_| response_with_titles(&[title])),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(WriteLoggingIndexerConfigRepository {
+                configs: indexed_mock_configs(2),
+                writes: writes.clone(),
+            }),
+            Arc::new(stats),
+            Arc::new(PerIndexerPluginProvider {
+                clients: HashMap::from([
+                    ("idx-0".to_string(), capped),
+                    ("idx-1".to_string(), open),
+                ]),
+                caps,
+            }),
+        );
+        MonthlyLimitFixture {
+            multi,
+            writes,
+            queries,
+            capped_calls,
+        }
+    }
+
+    async fn assert_monthly_limit_left_no_failure(
+        fixture: &MonthlyLimitFixture,
+        response: &IndexerSearchResponse,
+    ) {
+        assert!(
+            !fixture
+                .capped_calls
+                .lock()
+                .expect("call log mutex")
+                .is_empty(),
+            "the refusal comes from the capped indexer's own call"
+        );
+        assert_eq!(
+            response.results.len(),
+            1,
+            "the other indexer still returns its result"
+        );
+        let capped_outcome = response
+            .indexer_outcomes
+            .iter()
+            .find(|outcome| outcome.indexer_id == "idx-0")
+            .expect("the capped indexer reports an outcome");
+        assert_eq!(
+            capped_outcome.outcome,
+            IndexerSearchOutcome::LocalLimit {
+                reason:
+                    scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+            }
+        );
+        let capped_queries: Vec<bool> = fixture
+            .queries
+            .lock()
+            .expect("stats log mutex")
+            .iter()
+            .filter(|(id, _)| id == "idx-0")
+            .map(|(_, success)| *success)
+            .collect();
+        assert!(
+            capped_queries.is_empty(),
+            "a refused request is not a query: {capped_queries:?}"
+        );
+        assert!(
+            fixture
+                .queries
+                .lock()
+                .expect("stats log mutex")
+                .contains(&("idx-1".to_string(), true)),
+            "the other indexer's query is counted"
+        );
+        assert!(
+            backoff_state(&fixture.multi, "idx-0").await.is_none(),
+            "a refused request starts no backoff"
+        );
+        let capped_writes: Vec<&'static str> = fixture
+            .writes
+            .lock()
+            .expect("write log mutex")
+            .iter()
+            .filter(|(id, _)| id == "idx-0")
+            .map(|(_, write)| *write)
+            .collect();
+        assert!(
+            capped_writes.is_empty(),
+            "a refused request writes nothing for the indexer: {capped_writes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rss_poll_refused_by_a_monthly_limit_records_no_indexer_failure() {
+        let fixture = monthly_limit_fixture(rss_only_caps(), "Lantern.Harbor.S01E02.1080p.WEB-DL");
+
+        let response = fixture
+            .multi
+            .search(
+                String::new(),
+                HashMap::new(),
+                None,
+                Some("series".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a refused indexer does not fail the poll");
+
+        assert_monthly_limit_left_no_failure(&fixture, &response).await;
+    }
+
+    #[tokio::test]
+    async fn title_search_refused_by_a_monthly_limit_records_no_indexer_failure() {
+        let fixture = monthly_limit_fixture(movie_caps(), "12.Lanterns.of.Winter.2013");
+
+        let response = fixture
+            .multi
+            .search(
+                "12 Lanterns of Winter".to_string(),
+                HashMap::from([("imdb_id".to_string(), "tt12004567".to_string())]),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a refused indexer does not fail the search");
+
+        assert_monthly_limit_left_no_failure(&fixture, &response).await;
     }
 
     #[tokio::test]

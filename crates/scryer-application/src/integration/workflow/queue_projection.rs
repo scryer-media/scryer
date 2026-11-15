@@ -253,7 +253,11 @@ pub fn derive_download_queue_import_actions(item: &DownloadQueueItem) -> Downloa
         ignore: !busy
             && (item.tracked_state == Some(TrackedDownloadState::ImportBlocked)
                 || display_state == DownloadDisplayState::ImportFailed),
+        // Failure cleanup blocklists, deletes and searches again, so it is
+        // offered only for a download Scryer's own grab is joined onto; the
+        // mutation refuses the rest.
         mark_failed: !busy
+            && item.is_scryer_origin
             && matches!(
                 item.tracked_state,
                 Some(

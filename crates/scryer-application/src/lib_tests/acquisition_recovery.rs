@@ -14647,6 +14647,37 @@ fn download_submit_retryability_is_decided_by_type_not_text() {
         AppError::download_submit_failover_exhausted("x").into_download_submit_unavailable(),
         AppError::DownloadSubmitFailoverExhausted(_)
     ));
+
+    // A monthly indexer limit is its own class: never "client unavailable",
+    // never source-gone or ambiguous, and it keeps its code through the
+    // downgrade helper. Only the three admission codes belong to it.
+    use crate::error_reasons::indexer_monthly_quota as quota;
+    for refusal in [
+        AppError::validation_refused(quota::REQUEST_LIMIT_REACHED, "any wording"),
+        AppError::validation_refused(quota::GRAB_LIMIT_REACHED, ""),
+        AppError::temporary_unavailable_reason(quota::ACCOUNTING_UNAVAILABLE, "any wording", None),
+    ] {
+        let reason = refusal.reason();
+        assert!(refusal.is_indexer_monthly_limit_refusal(), "{reason:?}");
+        assert!(
+            !is_download_submit_unavailable_error(&refusal),
+            "{reason:?}"
+        );
+        assert!(!refusal.is_download_source_gone(), "{reason:?}");
+        assert!(!refusal.is_download_submit_ambiguous(), "{reason:?}");
+        let downgraded = refusal.into_download_submit_unavailable();
+        assert_eq!(downgraded.reason(), reason);
+        assert!(downgraded.is_indexer_monthly_limit_refusal(), "{reason:?}");
+    }
+    for other in [
+        AppError::validation_refused(quota::CONFIGURATION_INVALID, "out of range"),
+        AppError::Validation(quota::GRAB_LIMIT_REACHED.into()),
+        AppError::Repository(quota::REQUEST_LIMIT_REACHED.into()),
+        AppError::temporary_unavailable("indexer monthly limit reached", None),
+        AppError::download_submit_unavailable(quota::GRAB_LIMIT_REACHED),
+    ] {
+        assert!(!other.is_indexer_monthly_limit_refusal(), "{other:?}");
+    }
 }
 
 #[test]

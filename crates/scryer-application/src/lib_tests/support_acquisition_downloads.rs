@@ -1863,9 +1863,21 @@ pub(super) struct TrackingPendingReleaseRepo {
     /// Status writes attempted, claims included, in order: `(row id, new
     /// status)`. Shared by clones.
     status_writes: Arc<std::sync::Mutex<Vec<(String, PendingReleaseStatus)>>>,
+    /// Release title of every observation written, in order, whether it
+    /// created a row or refreshed one. Shared by clones.
+    observation_writes: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl TrackingPendingReleaseRepo {
+    pub(super) fn observation_writes_for(&self, release_title: &str) -> usize {
+        self.observation_writes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|written| written.as_str() == release_title)
+            .count()
+    }
+
     pub(super) fn status_writes(&self) -> Vec<(String, PendingReleaseStatus)> {
         self.status_writes
             .lock()
@@ -1930,6 +1942,10 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
                 *remaining -= 1;
             }
         }
+        self.observation_writes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(release.release_title.clone());
         let mut store = self.store.lock().await;
         if !observation.release_identity.is_empty()
             && let Some(existing) = store.iter_mut().find(|existing| {

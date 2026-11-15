@@ -485,6 +485,10 @@ pub struct IndexerConfigPayload {
     /// request already released can still wait for a concurrency permit or the
     /// host limiter and go out later.
     pub max_queries_per_minute: Option<i64>,
+    /// Maximum Scryer-observed requests per UTC calendar month; null means unlimited.
+    pub max_requests_per_month: Option<Long>,
+    /// Maximum Scryer-initiated grabs reserved in a UTC calendar month; null means unlimited.
+    pub max_grabs_per_month: Option<Long>,
     /// UTC time until which the indexer is disabled, or null when not disabled.
     pub disabled_until: Option<DateTime<Utc>>,
     /// UTC time until which the indexer is cooling down after asking Scryer to
@@ -1076,6 +1080,10 @@ pub struct CreateIndexerConfigInput {
     /// request already released can still wait for a concurrency permit or the
     /// host limiter and go out later.
     pub max_queries_per_minute: Option<i64>,
+    /// Monthly request limit; at least 1, or null for unlimited.
+    pub max_requests_per_month: Option<Long>,
+    /// Monthly grab limit; at least 1, or null for unlimited.
+    pub max_grabs_per_month: Option<Long>,
     /// Whether the indexer is enabled.
     pub is_enabled: Option<bool>,
     /// Whether interactive searches use this indexer.
@@ -1111,6 +1119,10 @@ pub struct UpdateIndexerConfigInput {
     /// request already released can still wait for a concurrency permit or the
     /// host limiter and go out later.
     pub max_queries_per_minute: MaybeUndefined<i64>,
+    /// Request limit per UTC calendar month: omission preserves it, null clears it.
+    pub max_requests_per_month: MaybeUndefined<Long>,
+    /// Grab limit per UTC calendar month: omission preserves it, null clears it.
+    pub max_grabs_per_month: MaybeUndefined<Long>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
     /// Replacement interactive-search state; omission preserves it.
@@ -1775,6 +1787,9 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     BackedOff,
     /// The indexer takes no text query.
     NoTextSearch,
+    /// A local monthly limit on the indexer refused the search, or its usage
+    /// could not be checked. `failureReasonCode` carries the reason code.
+    MonthlyLimit,
 }
 
 /// How Scryer obtained the capabilities it used to search an indexer.
@@ -1818,7 +1833,9 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub failure_reason: Option<String>,
     /// Stable code for a failure the operator must act on, such as
     /// `ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
-    /// not loaded; null for other failures and when the indexer did not fail.
+    /// not loaded, or the monthly limit reason when `skipReason` is
+    /// `MONTHLY_LIMIT`; null for other failures and when the indexer did not
+    /// fail.
     pub failure_reason_code: Option<String>,
     /// How the capabilities used for this indexer were obtained, or null
     /// before they were resolved.

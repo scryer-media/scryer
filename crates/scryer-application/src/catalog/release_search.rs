@@ -1291,6 +1291,9 @@ pub(crate) fn incomplete_indexer_reason(
         }
         // Never asked: an indexer that cannot serve the facet is not a failure.
         IndexerSearchOutcome::Unsupported | IndexerSearchOutcome::BackedOff { .. } => return None,
+        // Never asked either: a local monthly limit is not a failure of the
+        // indexer. An interactive search reports it as a skip.
+        IndexerSearchOutcome::LocalLimit { .. } => return None,
         IndexerSearchOutcome::ClientUnavailable { .. } => {
             ("indexer client could not be set up", None)
         }
@@ -3873,6 +3876,9 @@ mod structured_dispatch_query_tests {
             IndexerSearchOutcome::Skipped { retry_after: None },
             IndexerSearchOutcome::Unsupported,
             IndexerSearchOutcome::BackedOff { until: None },
+            IndexerSearchOutcome::LocalLimit {
+                reason: "SYNTHETIC_LOCAL_LIMIT",
+            },
             IndexerSearchOutcome::ClientUnavailable {
                 reason: "SYNTHETIC_CLIENT_UNAVAILABLE",
             },
