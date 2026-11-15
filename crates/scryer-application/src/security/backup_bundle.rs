@@ -1162,6 +1162,17 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "media_server_audience_reads",
         classification: BackupTableClassification::ResetOnRestore,
     },
+    // Audience favourites are re-read the same way, with a read state per
+    // account; a restored instance answers the favourite facts only after
+    // its own next read.
+    BackupTableCatalogEntry {
+        table: "media_server_audience_favorites",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "media_server_audience_favorite_reads",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "media_request_external_ids",
         classification: BackupTableClassification::Export,

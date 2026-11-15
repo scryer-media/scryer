@@ -132,8 +132,9 @@ use quick_xml::events::Event;
 use reqwest::StatusCode;
 use scryer_application::media_server_signals::reasons;
 use scryer_application::{
-    MediaServerSignalReader, MediaServerSignalSource, ProviderAudiencePlay, ProviderItemPlay,
-    ProviderItemRecheck, ProviderPlayedItem, SignalReadFailure,
+    MediaServerSignalReader, MediaServerSignalSource, ProviderAccountFavorites,
+    ProviderAudiencePlay, ProviderItemPlay, ProviderItemRecheck, ProviderPlayedItem,
+    SignalReadFailure,
 };
 use scryer_domain::{MediaServerConnection, MediaServerProvider, MediaServerSignalKind};
 use scryer_outbound_http::generic_reqwest_client;
@@ -1368,6 +1369,36 @@ impl MediaServerSignalReader for UserItemsReader {
             }));
         }
         Ok(plays)
+    }
+
+    /// Every user the admin key can list (`GET /Users`), each one's
+    /// favourites read exactly as [`Self::fetch_favorite_items`] reads them:
+    /// one listing per user, paged, plus the batched series lookup when
+    /// favourite seasons or episodes name series. A user whose read fails
+    /// carries that failure; the others' reads stand.
+    async fn fetch_audience_favorites(
+        &self,
+    ) -> Result<Vec<ProviderAccountFavorites>, SignalReadFailure> {
+        let (auth, fields) = self.auth_and_fields();
+        let mut accounts = Vec::new();
+        for user_id in self.list_user_ids().await? {
+            let favorites = self
+                .source
+                .fetch_user_items(
+                    &self.connection,
+                    &self.base,
+                    auth,
+                    fields,
+                    &user_id,
+                    UserItemListing::Favorites,
+                )
+                .await;
+            accounts.push(ProviderAccountFavorites {
+                external_account_id: user_id,
+                favorites,
+            });
+        }
+        Ok(accounts)
     }
 
     /// Each item's user data for every user the admin key can list
@@ -4306,6 +4337,61 @@ mod tests {
         assert_eq!(plays[0].external_account_id, "jf-user-a");
         assert_eq!(plays[0].item.provider_item_id, "jf-movie-1");
         assert_eq!(plays[0].item.play_count, 3);
+    }
+
+    /// Every listed user's favourites are read with the same admin key and
+    /// user list as the audience plays: one `GET /Users`, then one favourites
+    /// listing per user. A user whose listing fails carries that failure;
+    /// the others' reads stand.
+    #[tokio::test]
+    async fn jellyfin_audience_favourites_read_every_listed_user_and_fail_per_user() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                { "Id": "jf-user-a", "Name": "Example Viewer A" },
+                { "Id": "jf-user-b", "Name": "Example Viewer B" }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Users/jf-user-a/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "Items": [movie_item()], "TotalRecordCount": 1 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Users/jf-user-b/Items"))
+            .and(query_param("Filters", "IsFavorite"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        let accounts = HttpMediaServerSignalSource::new()
+            .open(&connection)
+            .await
+            .expect("open")
+            .fetch_audience_favorites()
+            .await
+            .expect("the account list reads");
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].external_account_id, "jf-user-a");
+        let favourites = accounts[0].favorites.as_ref().expect("user a reads");
+        assert_eq!(favourites.len(), 1);
+        assert_eq!(favourites[0].provider_item_id, "jf-movie-1");
+        assert_eq!(accounts[1].external_account_id, "jf-user-b");
+        assert!(accounts[1].favorites.is_err(), "user b's failure is theirs");
     }
 
     /// Emby may wrap the user list in `Items`; the admin key travels in

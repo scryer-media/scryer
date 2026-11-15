@@ -28,7 +28,7 @@ use scryer_domain::{
 use super::action_execution::execution_reason;
 use super::facts::{MaintenanceWatchContext, WatchSignalFreshness};
 use crate::AppUseCase;
-use crate::ports::{AudiencePlay, ProviderItemRecheck};
+use crate::ports::{AudienceFavorite, AudiencePlay, ProviderItemRecheck};
 
 /// What a live re-check found, as the hold it causes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,14 +72,14 @@ impl WatchRecheck {
 /// Only the item itself is compared. A favourite on the item's series or
 /// season is on another server item, compared by [`fold_parent_favorites`].
 pub(crate) fn fold_item_favorites(
-    stored_favorites: &[&UserMediaSignal],
+    stored_favorites: &[&AudienceFavorite],
     recheck: &ProviderItemRecheck,
 ) -> WatchRecheck {
     let newer = recheck.participants.iter().any(|live| {
         live.is_favorite
             && !stored_favorites
                 .iter()
-                .any(|row| row.is_favorite && row.external_user_id == live.external_user_id)
+                .any(|row| row.external_account_id == live.external_user_id)
     });
     if newer {
         WatchRecheck::NewerFavorite
@@ -261,7 +261,7 @@ impl AppUseCase {
         audience: &[AudiencePlay],
         episode_ids: Option<&HashSet<String>>,
         entities: Option<&[(MediaServerPlaybackEntityKind, String)]>,
-        favorites: Option<&[UserMediaSignal]>,
+        favorites: Option<&[AudienceFavorite]>,
     ) -> WatchRecheck {
         // The anonymous facts can be open while the per-user ones are not
         // (no linked user yet); either open gate is a picture to re-check.
@@ -383,8 +383,8 @@ impl AppUseCase {
 
         // Connection and item → that item's stored favourite rows, built once.
         let favorites_by_item = favorites.map(|favorites| {
-            let mut by_item: HashMap<(&str, &str), Vec<&UserMediaSignal>> = HashMap::new();
-            for row in favorites.iter().filter(|row| row.is_favorite) {
+            let mut by_item: HashMap<(&str, &str), Vec<&AudienceFavorite>> = HashMap::new();
+            for row in favorites {
                 by_item
                     .entry((row.connection_id.as_str(), row.provider_item_id.trim()))
                     .or_default()
@@ -488,7 +488,7 @@ impl AppUseCase {
 /// since the sweep never holds.
 pub(crate) fn fold_parent_favorites(
     connection_id: &str,
-    stored: &HashMap<(&str, &str), Vec<&UserMediaSignal>>,
+    stored: &HashMap<(&str, &str), Vec<&AudienceFavorite>>,
     live: &BTreeMap<String, Vec<String>>,
 ) -> WatchRecheck {
     let newer = live.iter().any(|(item_id, accounts)| {
@@ -498,7 +498,7 @@ pub(crate) fn fold_parent_favorites(
             .unwrap_or_default();
         accounts
             .iter()
-            .any(|account| !rows.iter().any(|row| row.external_user_id == *account))
+            .any(|account| !rows.iter().any(|row| row.external_account_id == *account))
     });
     if newer {
         WatchRecheck::NewerFavorite
@@ -559,6 +559,18 @@ mod tests {
         ids.iter().map(|id| id.to_string()).collect()
     }
 
+    fn favourite(account: &str, item: &str, kind: MediaServerSignalKind) -> AudienceFavorite {
+        AudienceFavorite {
+            connection_id: "conn-example".to_string(),
+            external_account_id: account.to_string(),
+            provider_item_id: item.to_string(),
+            kind,
+            scryer_title_id: Some("title-1".to_string()),
+            scryer_episode_id: None,
+            season_number: None,
+        }
+    }
+
     fn favourited(account: &str) -> ProviderItemPlay {
         ProviderItemPlay {
             is_favorite: true,
@@ -578,10 +590,7 @@ mod tests {
             WatchRecheck::NewerFavorite
         );
         // A stored favourite by someone else does not account for it.
-        let other = UserMediaSignal {
-            is_favorite: true,
-            ..stored("200", None)
-        };
+        let other = favourite("200", "item-1", MediaServerSignalKind::Movie);
         assert_eq!(
             fold_item_favorites(&[&other], &recheck),
             WatchRecheck::NewerFavorite
@@ -590,13 +599,8 @@ mod tests {
 
     #[test]
     fn a_parent_favourite_is_newer_only_without_a_stored_row_for_that_account() {
-        let series = UserMediaSignal {
-            provider_item_id: "series-1".to_string(),
-            kind: MediaServerSignalKind::Series,
-            is_favorite: true,
-            ..stored("100", None)
-        };
-        let mut by_item: HashMap<(&str, &str), Vec<&UserMediaSignal>> = HashMap::new();
+        let series = favourite("100", "series-1", MediaServerSignalKind::Series);
+        let mut by_item: HashMap<(&str, &str), Vec<&AudienceFavorite>> = HashMap::new();
         by_item
             .entry(("conn-example", "series-1"))
             .or_default()
@@ -634,10 +638,7 @@ mod tests {
 
     #[test]
     fn a_stored_favourite_or_one_removed_since_the_sweep_is_clear() {
-        let row = UserMediaSignal {
-            is_favorite: true,
-            ..stored("100", None)
-        };
+        let row = favourite("100", "item-1", MediaServerSignalKind::Movie);
         let still = ProviderItemRecheck {
             parent_item_ids: Vec::new(),
             participants: vec![favourited("100")],

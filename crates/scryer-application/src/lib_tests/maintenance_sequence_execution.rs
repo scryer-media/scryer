@@ -9,7 +9,7 @@ use crate::lib_tests::maintenance_execution::{execution_app, seed_title};
 use crate::lib_tests::maintenance_sequence_deletion::{
     add_catalog_movie_file_without_physical_path, selected_root_sequence_deletion_draft,
 };
-use crate::lib_tests::maintenance_title_completion::title_fixture;
+use crate::lib_tests::maintenance_title_completion::{TitleFixture, title_fixture};
 use crate::maintenance_rules::sequence_execution::{
     TestCompletedSequenceJobMap, TestCompletedSequenceJobState,
     install_test_completed_sequence_job_adapter, set_test_completed_sequence_job_state,
@@ -1513,6 +1513,7 @@ async fn high_risk_sequence_failures_trip_the_per_pass_breaker_before_a_fourth_d
         .await;
     }
     let draft = selected_root_sequence_deletion_draft(&fixture).await;
+    sample_fixture_root(&fixture);
     let (rule_set_id, candidates) = arm_and_evaluate_all(&fixture.execution, draft).await;
     assert_eq!(candidates.len(), 4, "{candidates:?}");
     super::maintenance_rules::arm_rule(
@@ -2171,6 +2172,7 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     draft.rego_source = "match := true\n\nunmonitor if {\n\tinput.facts.monitored\n}\n\n\
                          delete_files if {\n\tmatch\n}\n"
         .to_string();
+    sample_fixture_root(&fixture);
     let (rule_set_id, candidates) = arm_and_evaluate_all(&fixture.execution, draft).await;
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     super::maintenance_rules::arm_rule(
@@ -2957,4 +2959,24 @@ async fn a_rule_runs_on_the_default_schedule_until_one_is_chosen() {
         .await
         .expect("rename");
     assert_eq!(kept.schedule, daily);
+}
+
+/// A scheduled evaluation reads free space from the capacity owner's cache,
+/// never the disk: record a fresh sample of the fixture root, as the sampler
+/// would have.
+fn sample_fixture_root(fixture: &TitleFixture) {
+    fixture
+        .execution
+        .app
+        .runtime
+        .health
+        .storage_capacity
+        .record_for_test(
+            &fixture.root.to_string_lossy(),
+            Utc::now(),
+            Some(crate::helpers::FilesystemSpace {
+                total_bytes: 1_000,
+                available_bytes: 100,
+            }),
+        );
 }

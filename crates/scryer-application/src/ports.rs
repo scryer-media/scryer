@@ -14641,6 +14641,84 @@ pub trait MediaServerSignalReader: Send + Sync {
             "this media server cannot list plays for every account",
         ))
     }
+
+    /// Every account's favourites, linked to a Scryer user or not: movies,
+    /// series, seasons and episodes, read with the connection's own
+    /// credential for every account it can list.
+    ///
+    /// The outer `Err` is the account list's failure: no account was read.
+    /// Each account's own read succeeds or fails on its own, so one
+    /// unreadable account leaves every other account's answer standing.
+    async fn fetch_audience_favorites(
+        &self,
+    ) -> Result<Vec<ProviderAccountFavorites>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot list favourites for every account",
+        ))
+    }
+}
+
+/// One account's favourites, from the audience favourites read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderAccountFavorites {
+    pub external_account_id: String,
+    pub favorites: Result<Vec<ProviderPlayedItem>, SignalReadFailure>,
+}
+
+/// One stored favourite: an account's favourite item, placed on Scryer media
+/// where mapping succeeded. A series or season favourite carries its title
+/// and no episode; a season one also the provider's season number. An
+/// episode favourite carries the Scryer episode when it resolved, and the
+/// title alone when only its series did.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AudienceFavorite {
+    pub connection_id: String,
+    pub external_account_id: String,
+    pub provider_item_id: String,
+    pub kind: scryer_domain::MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub season_number: Option<i64>,
+}
+
+/// What one sweep learned of one account's favourites.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AudienceFavoriteAccountRead {
+    /// The account's favourites were read in full. `unplaced` is the reason
+    /// code when one of them could not be placed on Scryer media and nothing
+    /// proves it is outside the libraries: the rows are stored, and the
+    /// account's favourites are not counted as known until a read places
+    /// them all.
+    Read {
+        favorites: Vec<AudienceFavorite>,
+        unplaced: Option<String>,
+    },
+    /// The account's read failed, for this reason code. Its stored rows are
+    /// kept, and its favourites are not known until a read succeeds.
+    Failed { reason: String },
+}
+
+/// One account's favourites as the sweep read them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudienceFavoriteAccount {
+    pub external_account_id: String,
+    pub read: AudienceFavoriteAccountRead,
+}
+
+/// The stored state of one account's favourites read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudienceFavoriteRead {
+    pub connection_id: String,
+    pub external_account_id: String,
+    /// The sweep that last listed the account.
+    pub sweep_started_at: DateTime<Utc>,
+    /// When the account's favourites were last read in full and every one
+    /// placed. `None` while the last read failed, left one unplaced, or the
+    /// account list itself could not be read.
+    pub read_at: Option<DateTime<Utc>>,
+    /// Why the last read did not count, as a reason code.
+    pub failure_reason: Option<String>,
 }
 
 /// One account's play of one item, from the audience read.
@@ -14811,6 +14889,53 @@ pub trait MediaServerSignalRepository: Send + Sync {
     async fn audience_reads(&self) -> AppResult<Vec<AudienceRead>> {
         Err(AppError::Repository(
             "audience plays are not configured".into(),
+        ))
+    }
+
+    /// Store one sweep's favourites read of a connection's accounts, in one
+    /// transaction. `accounts` is every account the sweep listed: an account
+    /// it no longer lists loses its rows and its read state. A read account's
+    /// rows are replaced only when they changed; a failed one keeps its rows.
+    /// Returns the favourite rows the connection now has.
+    async fn replace_audience_favorites(
+        &self,
+        _connection_id: &str,
+        _accounts: &[AudienceFavoriteAccount],
+        _sweep_started_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
+        ))
+    }
+
+    /// The account list itself could not be read: every account of the
+    /// connection keeps its rows, and none counts as read until a sweep
+    /// lists it again.
+    async fn clear_audience_favorite_reads(
+        &self,
+        _connection_id: &str,
+        _reason: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
+        ))
+    }
+
+    /// Every account's favourites read state.
+    async fn audience_favorite_reads(&self) -> AppResult<Vec<AudienceFavoriteRead>> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
+        ))
+    }
+
+    /// Stored favourites (every kind) grouped by the owning title id. A
+    /// title nobody favourited is absent from the map.
+    async fn audience_favorites_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<AudienceFavorite>>> {
+        Err(AppError::Repository(
+            "audience favourites are not configured".into(),
         ))
     }
 

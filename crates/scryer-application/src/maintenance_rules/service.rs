@@ -1256,6 +1256,7 @@ impl AppUseCase {
                     &mut input,
                     storage_root_id.as_deref(),
                     &mut storage_facts,
+                    crate::maintenance_rules::storage::MaintenanceStorageRead::Refresh,
                 )
                 .await?;
 

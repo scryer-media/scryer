@@ -1212,7 +1212,7 @@ impl AppUseCase {
         // before any of them acts, so both sides hold rather than the later one
         // silently undoing the earlier one.
         let tag_conflicts = self
-            .maintenance_tag_patch_conflicts(&eligible_rules, &held_after, now)
+            .maintenance_tag_patch_conflicts(&eligible_rules, now)
             .await;
         // Which way each eligible rule can turn monitoring, from its
         // declared heads alone.
@@ -1444,7 +1444,6 @@ impl AppUseCase {
     async fn maintenance_tag_patch_conflicts(
         &self,
         eligible_rules: &[(MaintenanceRuleSetDetail, EligibleRuleAction, bool)],
-        held_after: &HashMap<String, chrono::DateTime<Utc>>,
         now: chrono::DateTime<Utc>,
     ) -> Option<HashSet<String>> {
         let mut added: HashMap<String, HashSet<String>> = HashMap::new();
@@ -1466,9 +1465,10 @@ impl AppUseCase {
                         &detail.rule_set.id,
                         now,
                         stale_before,
-                        // The same selection the walk makes: a candidate it
-                        // leaves out patches nothing this pass.
-                        held_after.get(&detail.rule_set.id).copied(),
+                        // Held rows included: a candidate held earlier and
+                        // waiting for its rule's next evaluation still means
+                        // to patch, so the other side must not act around it.
+                        None,
                         cursor.as_ref(),
                         MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
                     )
@@ -2022,6 +2022,7 @@ impl AppUseCase {
             .populate_maintenance_storage_facts(
                 &mut input,
                 detail.revision.storage_root_id.as_deref(),
+                super::storage::MaintenanceStorageRead::Refresh,
             )
             .await
             .is_err()
@@ -2352,7 +2353,7 @@ impl AppUseCase {
                     .services
                     .integrations
                     .media_server_signals
-                    .favorite_signals_for_titles(std::slice::from_ref(&title.id))
+                    .audience_favorites_for_titles(std::slice::from_ref(&title.id))
                     .await
                 {
                     Ok(mut stored) => Some(stored.remove(&title.id).unwrap_or_default()),

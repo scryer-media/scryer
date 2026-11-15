@@ -248,11 +248,23 @@ pub mod unknown_reason {
     /// The stored favourites could not be read for this pass.
     pub const FAVORITES_UNREADABLE: &str = "favorites_unreadable";
 
-    /// Favourites are read only for members linked to a media-server account,
-    /// so whether an account nobody linked favourited the subject is not
-    /// known. `favorited_by_anyone` is true when a read favourite covers the
-    /// subject and unknown otherwise, never false.
+    /// `favorited_by_anyone` needs every account's favourites on every
+    /// enabled Jellyfin and Emby server, and at least one account has no
+    /// recent read of them in full: no sweep has read them yet, the last read
+    /// failed or left a favourite Scryer could not place, or it is older than
+    /// the freshness window.
     pub const AUDIENCE_FAVORITES_NOT_READ: &str = "audience_favorites_not_read";
+
+    /// A member's favourites on a Jellyfin or Emby account they linked have
+    /// no recent read in full: no sweep has read them yet, the last read
+    /// failed or left a favourite Scryer could not place, or it is older than
+    /// the freshness window. Only that member's answer is unknown.
+    pub const FAVORITES_MEMBER_NOT_READ: &str = "favorites_member_not_read";
+
+    /// An enabled Plex server's accounts could have favourited the subject if
+    /// Plex had favourites, so `favorited_by_anyone` cannot be false while
+    /// one is enabled beside Jellyfin or Emby.
+    pub const AUDIENCE_FAVORITES_UNSUPPORTED: &str = "audience_favorites_unsupported";
 
     /// Every code above. A released code is part of the rule-authoring
     /// contract, so none may be renamed, reused or repurposed.
@@ -302,6 +314,8 @@ pub mod unknown_reason {
         FAVORITE_MEMBER_UNOBSERVABLE,
         FAVORITES_UNREADABLE,
         AUDIENCE_FAVORITES_NOT_READ,
+        FAVORITES_MEMBER_NOT_READ,
+        AUDIENCE_FAVORITES_UNSUPPORTED,
     ];
 }
 
@@ -397,6 +411,21 @@ pub struct MaintenanceWatchContext {
     /// [`Self::favorite_connection_ids`]. A linked user outside it can only be
     /// observed through Plex, so whether they favourited anything is unknown.
     pub favorite_user_ids: HashSet<String>,
+    /// The Scryer users behind each account a read link reaches on one of
+    /// [`Self::favorite_connection_ids`], keyed by connection and the
+    /// server's account id. The audience favourites are attributed through
+    /// it.
+    pub favorite_accounts: HashMap<(String, String), BTreeSet<String>>,
+    /// Users in [`Self::favorite_user_ids`] with a linked account whose
+    /// favourites have no recent read in full. Their favourites are unknown.
+    pub favorite_unread_user_ids: HashSet<String>,
+    /// Whether every account on every favourite connection had its
+    /// favourites read in full recently. `favorited_by_anyone` is false only
+    /// then.
+    pub audience_favorites: WatchSignalFreshness,
+    /// Whether an enabled Plex connection is part of the picture: its
+    /// accounts' favourites cannot be read.
+    pub plex_connected: bool,
 }
 
 impl MaintenanceWatchContext {
@@ -1837,6 +1866,7 @@ pub(crate) mod tests {
             audience: WatchSignalFreshness::Fresh,
             favorite_connection_ids: HashSet::new(),
             favorite_user_ids: HashSet::new(),
+            ..MaintenanceWatchContext::default()
         }
     }
 

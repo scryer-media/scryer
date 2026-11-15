@@ -3,7 +3,8 @@
 //! Three tables: the normalized per-user observations, the roster of links a
 //! sweep read them through, and one sync-state row per connection. Two more
 //! hold the audience read: every account's plays, linked or not, and when
-//! each connection's audience was last read in full.
+//! each connection's audience was last read in full. Two more hold every
+//! account's favourites and, per account, whether its last read counts.
 //!
 //! # The generation swap
 //!
@@ -34,7 +35,8 @@
 
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, AudiencePlay, AudienceRead, MediaServerSignalRepository,
+    AppError, AppResult, AudienceFavorite, AudienceFavoriteAccount, AudienceFavoriteAccountRead,
+    AudienceFavoriteRead, AudiencePlay, AudienceRead, MediaServerSignalRepository,
     SignalRosterEntry, SignalRosterLink,
 };
 use scryer_domain::{
@@ -507,20 +509,22 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
         if title_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = title_ids
-            .iter()
-            .map(|_| "{}")
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT connection_id, external_account_id, provider_item_id, kind, scryer_title_id,
-                    scryer_episode_id, play_count, last_played_at
-               FROM media_server_audience_plays
-              WHERE scryer_title_id IN ({placeholders})
-              ORDER BY scryer_title_id, connection_id, external_account_id, provider_item_id"
-        );
-        let args: Vec<SqlArg> = title_ids.iter().cloned().map(SqlArg::Text).collect();
-        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) =
+            id_list_statements(title_ids, 1, 0, max_binds(&exec), SIGNAL_TITLE_ID_CHUNK);
+        let mut rows = Vec::new();
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = chunk.iter().map(|_| "{}").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT connection_id, external_account_id, provider_item_id, kind,
+                        scryer_title_id, scryer_episode_id, play_count, last_played_at
+                   FROM media_server_audience_plays
+                  WHERE scryer_title_id IN ({placeholders})
+                  ORDER BY scryer_title_id, connection_id, external_account_id, provider_item_id"
+            );
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            rows.extend(SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?);
+        }
         let mut grouped: HashMap<String, Vec<AudiencePlay>> = HashMap::new();
         for row in rows.iter() {
             let kind = MediaServerSignalKind::parse_storage(&row.text("kind")?)
@@ -537,6 +541,278 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
             };
             if let Some(title_id) = play.scryer_title_id.clone() {
                 grouped.entry(title_id).or_default().push(play);
+            }
+        }
+        Ok(grouped)
+    }
+
+    async fn replace_audience_favorites(
+        &self,
+        connection_id: &str,
+        accounts: &[AudienceFavoriteAccount],
+        sweep_started_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<u64> {
+        // One entry per account, the last one listed winning, and one row per
+        // account and item.
+        let mut listed: Vec<AudienceFavoriteAccount> = Vec::with_capacity(accounts.len());
+        let mut seen_accounts = HashSet::new();
+        for account in accounts.iter().rev() {
+            if seen_accounts.insert(account.external_account_id.clone()) {
+                listed.push(account.clone());
+            }
+        }
+        listed.reverse();
+        let connection_id = connection_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_media_server_audience_favorites",
+            move |tx| {
+                let connection_id = connection_id.clone();
+                let listed = listed.clone();
+                let seen_accounts = seen_accounts.clone();
+                Box::pin(async move {
+                    let connection_args = vec![SqlArg::Text(connection_id.clone())];
+                    let mut stored: HashMap<String, HashSet<AudienceFavorite>> = HashMap::new();
+                    for row in SqlRuntime::fetch_all(
+                        SqlExec::Tx(tx),
+                        "SELECT connection_id, external_account_id, provider_item_id, kind,
+                                scryer_title_id, scryer_episode_id, season_number
+                           FROM media_server_audience_favorites
+                          WHERE connection_id = {}",
+                        &connection_args,
+                    )
+                    .await?
+                    .iter()
+                    {
+                        let favorite = row_to_audience_favorite(row)?;
+                        stored
+                            .entry(favorite.external_account_id.clone())
+                            .or_default()
+                            .insert(favorite);
+                    }
+                    let mut known_accounts: HashSet<String> = stored.keys().cloned().collect();
+                    for row in SqlRuntime::fetch_all(
+                        SqlExec::Tx(tx),
+                        "SELECT external_account_id
+                           FROM media_server_audience_favorite_reads
+                          WHERE connection_id = {}",
+                        &connection_args,
+                    )
+                    .await?
+                    .iter()
+                    {
+                        known_accounts.insert(row.text("external_account_id")?);
+                    }
+
+                    // An account the server no longer lists was removed
+                    // there: its favourites and read state go with it.
+                    let gone: Vec<String> = known_accounts
+                        .into_iter()
+                        .filter(|account| !seen_accounts.contains(account))
+                        .collect();
+                    if !gone.is_empty() {
+                        let limit = max_binds(&SqlExec::Tx(tx));
+                        let (ids, per_statement) =
+                            id_list_statements(&gone, 1, 1, limit, SIGNAL_TITLE_ID_CHUNK);
+                        for chunk in ids.chunks(per_statement) {
+                            let placeholders =
+                                chunk.iter().map(|_| "{}").collect::<Vec<_>>().join(", ");
+                            let mut args = connection_args.clone();
+                            args.extend(chunk.iter().cloned().map(SqlArg::Text));
+                            for table in [
+                                "media_server_audience_favorites",
+                                "media_server_audience_favorite_reads",
+                            ] {
+                                SqlRuntime::execute(
+                                    SqlExec::Tx(tx),
+                                    &format!(
+                                        "DELETE FROM {table}
+                                          WHERE connection_id = {{}}
+                                            AND external_account_id IN ({placeholders})"
+                                    ),
+                                    &args,
+                                )
+                                .await?;
+                            }
+                        }
+                    }
+
+                    // A read account's rows are swapped only when they
+                    // changed; a failed account keeps the rows it had.
+                    let now = chrono::Utc::now();
+                    let mut total = 0_u64;
+                    let mut inserts: Vec<Vec<SqlArg>> = Vec::new();
+                    let mut reads: Vec<Vec<SqlArg>> = Vec::with_capacity(listed.len());
+                    for account in &listed {
+                        let account_id = account.external_account_id.clone();
+                        let previous = stored.remove(&account_id).unwrap_or_default();
+                        let (read_at, failure_reason) = match &account.read {
+                            AudienceFavoriteAccountRead::Read {
+                                favorites,
+                                unplaced,
+                            } => {
+                                let mut items = HashSet::new();
+                                let mut current: Vec<AudienceFavorite> = Vec::new();
+                                for favorite in favorites.iter().rev() {
+                                    if items.insert(favorite.provider_item_id.clone()) {
+                                        current.push(AudienceFavorite {
+                                            connection_id: connection_id.clone(),
+                                            external_account_id: account_id.clone(),
+                                            ..favorite.clone()
+                                        });
+                                    }
+                                }
+                                total += current.len() as u64;
+                                let unchanged = current.len() == previous.len()
+                                    && current.iter().all(|favorite| previous.contains(favorite));
+                                if !unchanged {
+                                    if !previous.is_empty() {
+                                        SqlRuntime::execute(
+                                            SqlExec::Tx(tx),
+                                            "DELETE FROM media_server_audience_favorites
+                                              WHERE connection_id = {} AND external_account_id = {}",
+                                            &[
+                                                SqlArg::Text(connection_id.clone()),
+                                                SqlArg::Text(account_id.clone()),
+                                            ],
+                                        )
+                                        .await?;
+                                    }
+                                    inserts.extend(current.iter().map(audience_favorite_args));
+                                }
+                                match unplaced {
+                                    None => (Some(now), None),
+                                    Some(reason) => (None, Some(reason.clone())),
+                                }
+                            }
+                            AudienceFavoriteAccountRead::Failed { reason } => {
+                                total += previous.len() as u64;
+                                (None, Some(reason.clone()))
+                            }
+                        };
+                        reads.push(vec![
+                            SqlArg::Text(connection_id.clone()),
+                            SqlArg::Text(account_id),
+                            SqlArg::Timestamp(sweep_started_at),
+                            SqlArg::OptTimestamp(read_at),
+                            SqlArg::OptText(failure_reason),
+                        ]);
+                    }
+                    SqlRuntime::execute_batch_insert(
+                        tx,
+                        "INSERT INTO media_server_audience_favorites
+                             (connection_id, external_account_id, provider_item_id, kind,
+                              scryer_title_id, scryer_episode_id, season_number)",
+                        7,
+                        inserts,
+                        "",
+                    )
+                    .await?;
+                    SqlRuntime::execute_batch_insert(
+                        tx,
+                        "INSERT INTO media_server_audience_favorite_reads
+                             (connection_id, external_account_id, sweep_started_at, read_at,
+                              failure_reason)",
+                        5,
+                        reads,
+                        "ON CONFLICT (connection_id, external_account_id) DO UPDATE SET
+                             sweep_started_at = excluded.sweep_started_at,
+                             read_at = excluded.read_at,
+                             failure_reason = excluded.failure_reason",
+                    )
+                    .await?;
+                    Ok(total)
+                })
+            },
+        )
+        .await
+    }
+
+    async fn clear_audience_favorite_reads(
+        &self,
+        connection_id: &str,
+        reason: &str,
+    ) -> AppResult<()> {
+        let args = vec![
+            SqlArg::Text(reason.to_string()),
+            SqlArg::Text(connection_id.to_string()),
+            SqlArg::Text(reason.to_string()),
+        ];
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "clear_media_server_audience_favorite_reads",
+            move |tx| {
+                let args = args.clone();
+                Box::pin(async move {
+                    // Only accounts whose state this changes are written.
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE media_server_audience_favorite_reads
+                            SET read_at = NULL, failure_reason = {}
+                          WHERE connection_id = {}
+                            AND (read_at IS NOT NULL OR failure_reason IS NULL
+                                 OR failure_reason <> {})",
+                        &args,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn audience_favorite_reads(&self) -> AppResult<Vec<AudienceFavoriteRead>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT connection_id, external_account_id, sweep_started_at, read_at, failure_reason
+               FROM media_server_audience_favorite_reads
+              ORDER BY connection_id, external_account_id",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            Ok(AudienceFavoriteRead {
+                connection_id: row.text("connection_id")?,
+                external_account_id: row.text("external_account_id")?,
+                sweep_started_at: row.timestamp("sweep_started_at")?,
+                read_at: row.opt_timestamp("read_at")?,
+                failure_reason: row.opt_text("failure_reason")?,
+            })
+        })
+        .collect()
+    }
+
+    async fn audience_favorites_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<AudienceFavorite>>> {
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) =
+            id_list_statements(title_ids, 1, 0, max_binds(&exec), SIGNAL_TITLE_ID_CHUNK);
+        let mut grouped: HashMap<String, Vec<AudienceFavorite>> = HashMap::new();
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = chunk.iter().map(|_| "{}").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT connection_id, external_account_id, provider_item_id, kind,
+                        scryer_title_id, scryer_episode_id, season_number
+                   FROM media_server_audience_favorites
+                  WHERE scryer_title_id IN ({placeholders})
+                  ORDER BY scryer_title_id, connection_id, external_account_id, provider_item_id"
+            );
+            let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+                .await?
+                .iter()
+            {
+                let favorite = row_to_audience_favorite(row)?;
+                if let Some(title_id) = favorite.scryer_title_id.clone() {
+                    grouped.entry(title_id).or_default().push(favorite);
+                }
             }
         }
         Ok(grouped)
@@ -796,6 +1072,32 @@ fn signal_args(
         SqlArg::Timestamp(now),
         SqlArg::Timestamp(now),
     ]
+}
+
+fn audience_favorite_args(favorite: &AudienceFavorite) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(favorite.connection_id.clone()),
+        SqlArg::Text(favorite.external_account_id.clone()),
+        SqlArg::Text(favorite.provider_item_id.clone()),
+        SqlArg::Text(favorite.kind.as_storage_str().to_string()),
+        SqlArg::OptText(favorite.scryer_title_id.clone()),
+        SqlArg::OptText(favorite.scryer_episode_id.clone()),
+        SqlArg::OptI64(favorite.season_number),
+    ]
+}
+
+fn row_to_audience_favorite(row: &SqlRow) -> AppResult<AudienceFavorite> {
+    let kind = MediaServerSignalKind::parse_storage(&row.text("kind")?)
+        .ok_or_else(|| AppError::Repository("invalid audience favourite kind".into()))?;
+    Ok(AudienceFavorite {
+        connection_id: row.text("connection_id")?,
+        external_account_id: row.text("external_account_id")?,
+        provider_item_id: row.text("provider_item_id")?,
+        kind,
+        scryer_title_id: row.opt_text("scryer_title_id")?,
+        scryer_episode_id: row.opt_text("scryer_episode_id")?,
+        season_number: row.opt_i64("season_number")?,
+    })
 }
 
 fn row_to_signal(row: &SqlRow) -> AppResult<UserMediaSignal> {

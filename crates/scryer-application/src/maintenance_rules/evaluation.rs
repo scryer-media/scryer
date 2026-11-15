@@ -23,7 +23,7 @@
 //! cancels one. That is the RFC 9.8 rule ("transient rule-evaluation failure
 //! preserves membership and holds action") expressed as code.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
@@ -1703,7 +1703,10 @@ impl AppUseCase {
         evaluation_time: DateTime<Utc>,
     ) -> AppResult<()> {
         match self
-            .maintenance_storage_capacity_is_available(Some(storage_root_id))
+            .maintenance_storage_capacity_is_available(
+                Some(storage_root_id),
+                super::storage::MaintenanceStorageRead::Sampled(evaluation_time),
+            )
             .await
         {
             Ok(true) => {
@@ -1923,6 +1926,7 @@ impl AppUseCase {
             &mut input,
             detail.revision.storage_root_id.as_deref(),
             storage_facts,
+            super::storage::MaintenanceStorageRead::Sampled(evaluation_time),
         )
         .await?;
         if let Some(checkpoint) = deletion_checkpoint.as_ref() {
@@ -2357,6 +2361,9 @@ impl AppUseCase {
             .filter(|connection| connection.provider.has_favorites())
             .map(|connection| connection.id.clone())
             .collect();
+        let plex_connected = connections
+            .iter()
+            .any(|connection| !connection.provider.has_favorites());
         if connections.is_empty() {
             return Ok(MaintenanceWatchContext {
                 freshness: WatchSignalFreshness::Unavailable(
@@ -2368,6 +2375,12 @@ impl AppUseCase {
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
                 favorite_connection_ids: HashSet::new(),
                 favorite_user_ids: HashSet::new(),
+                favorite_accounts: HashMap::new(),
+                favorite_unread_user_ids: HashSet::new(),
+                audience_favorites: WatchSignalFreshness::Unavailable(
+                    unknown_reason::AUDIENCE_FAVORITES_NOT_READ,
+                ),
+                plex_connected,
             });
         }
 
@@ -2393,6 +2406,12 @@ impl AppUseCase {
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
                 favorite_connection_ids: favorite_connection_ids.clone(),
                 favorite_user_ids: HashSet::new(),
+                favorite_accounts: HashMap::new(),
+                favorite_unread_user_ids: HashSet::new(),
+                audience_favorites: WatchSignalFreshness::Unavailable(
+                    unknown_reason::AUDIENCE_FAVORITES_NOT_READ,
+                ),
+                plex_connected,
             });
         }
         // The stored `enabled` is the connection's state *as of that sweep*, so
@@ -2424,6 +2443,12 @@ impl AppUseCase {
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
                 favorite_connection_ids: favorite_connection_ids.clone(),
                 favorite_user_ids: HashSet::new(),
+                favorite_accounts: HashMap::new(),
+                favorite_unread_user_ids: HashSet::new(),
+                audience_favorites: WatchSignalFreshness::Unavailable(
+                    unknown_reason::AUDIENCE_FAVORITES_NOT_READ,
+                ),
+                plex_connected,
             });
         }
         let now = Utc::now();
@@ -2440,6 +2465,12 @@ impl AppUseCase {
                 audience: WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ),
                 favorite_connection_ids: favorite_connection_ids.clone(),
                 favorite_user_ids: HashSet::new(),
+                favorite_accounts: HashMap::new(),
+                favorite_unread_user_ids: HashSet::new(),
+                audience_favorites: WatchSignalFreshness::Unavailable(
+                    unknown_reason::AUDIENCE_FAVORITES_NOT_READ,
+                ),
+                plex_connected,
             });
         }
 
@@ -2474,6 +2505,7 @@ impl AppUseCase {
         let mut linked_user_ids = HashSet::new();
         let mut unswept_user_ids = HashSet::new();
         let mut favorite_user_ids = HashSet::new();
+        let mut favorite_accounts: HashMap<(String, String), BTreeSet<String>> = HashMap::new();
         for connection in &connections {
             let Some(provider) = connection.provider.external_account_provider() else {
                 continue;
@@ -2485,22 +2517,31 @@ impl AppUseCase {
                 .list_verified_by_connection(provider, &connection.id)
                 .await?
             {
-                let read = account
-                    .external_user_id
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|external_user_id| {
-                        read_links.contains(&(
-                            connection.id.clone(),
-                            account.id.clone(),
-                            external_user_id.to_string(),
-                            account.user_id.clone(),
-                        ))
-                    });
-                if !read {
-                    unswept_user_ids.insert(account.user_id.clone());
-                } else if favorite_connection_ids.contains(&connection.id) {
-                    favorite_user_ids.insert(account.user_id.clone());
+                let read_account =
+                    account
+                        .external_user_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|external_user_id| {
+                            read_links.contains(&(
+                                connection.id.clone(),
+                                account.id.clone(),
+                                (*external_user_id).to_string(),
+                                account.user_id.clone(),
+                            ))
+                        });
+                match read_account {
+                    None => {
+                        unswept_user_ids.insert(account.user_id.clone());
+                    }
+                    Some(external_user_id) if favorite_connection_ids.contains(&connection.id) => {
+                        favorite_user_ids.insert(account.user_id.clone());
+                        favorite_accounts
+                            .entry((connection.id.clone(), external_user_id.to_string()))
+                            .or_default()
+                            .insert(account.user_id.clone());
+                    }
+                    Some(_) => {}
                 }
                 linked_user_ids.insert(account.user_id);
             }
@@ -2512,6 +2553,16 @@ impl AppUseCase {
         // The audience read is every account's, linked or not, so it is
         // judged on its own and stands whatever the links' state.
         let audience = self.maintenance_audience_freshness(&connections, now).await;
+        let (audience_favorites, fresh_favorite_accounts) = self
+            .maintenance_audience_favorite_freshness(&favorite_connection_ids, now)
+            .await;
+        // A member's favourites are known only while every account they
+        // linked on a favourite server had its favourites read in full.
+        let favorite_unread_user_ids: HashSet<String> = favorite_accounts
+            .iter()
+            .filter(|(account, _)| !fresh_favorite_accounts.contains(*account))
+            .flat_map(|(_, user_ids)| user_ids.iter().cloned())
+            .collect();
 
         // A fresh sweep over nobody is not a watch picture. With no verified
         // link on any enabled connection, every subject would come back "no
@@ -2537,6 +2588,10 @@ impl AppUseCase {
                 audience,
                 favorite_connection_ids,
                 favorite_user_ids,
+                favorite_accounts,
+                favorite_unread_user_ids,
+                audience_favorites,
+                plex_connected,
             });
         }
 
@@ -2548,6 +2603,10 @@ impl AppUseCase {
             audience,
             favorite_connection_ids,
             favorite_user_ids,
+            favorite_accounts,
+            favorite_unread_user_ids,
+            audience_favorites,
+            plex_connected,
         })
     }
 
@@ -2647,6 +2706,64 @@ impl AppUseCase {
         } else {
             WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_NOT_READ)
         }
+    }
+
+    /// Whether every account on every favourite connection had its
+    /// favourites read in full recently, and which accounts did. One read
+    /// of the stored read states, nothing when no enabled server has
+    /// favourites.
+    ///
+    /// A connection with no account row has not had its favourites read, so
+    /// it holds the anonymous fact unknown rather than reading as nobody's.
+    async fn maintenance_audience_favorite_freshness(
+        &self,
+        favorite_connection_ids: &HashSet<String>,
+        now: DateTime<Utc>,
+    ) -> (WatchSignalFreshness, HashSet<(String, String)>) {
+        let not_read =
+            WatchSignalFreshness::Unavailable(unknown_reason::AUDIENCE_FAVORITES_NOT_READ);
+        if favorite_connection_ids.is_empty() {
+            return (not_read, HashSet::new());
+        }
+        let reads = match self
+            .services
+            .integrations
+            .media_server_signals
+            .audience_favorite_reads()
+            .await
+        {
+            Ok(reads) => reads,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "audience favourite reads could not be loaded; the favourite facts are unknown"
+                );
+                return (not_read, HashSet::new());
+            }
+        };
+        let mut listed: HashSet<&str> = HashSet::new();
+        let mut every_account_read = true;
+        let mut fresh = HashSet::new();
+        for read in reads
+            .iter()
+            .filter(|read| favorite_connection_ids.contains(&read.connection_id))
+        {
+            listed.insert(read.connection_id.as_str());
+            if read
+                .read_at
+                .is_some_and(|read_at| watch_signal_sweep_is_fresh(read_at, now))
+            {
+                fresh.insert((read.connection_id.clone(), read.external_account_id.clone()));
+            } else {
+                every_account_read = false;
+            }
+        }
+        let freshness = if every_account_read && listed.len() == favorite_connection_ids.len() {
+            WatchSignalFreshness::Fresh
+        } else {
+            not_read
+        };
+        (freshness, fresh)
     }
 
     /// One batched audience load per chunk, keyed by owning title. Skipped

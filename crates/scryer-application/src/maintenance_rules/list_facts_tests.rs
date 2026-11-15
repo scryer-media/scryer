@@ -1147,33 +1147,34 @@ fn favourite(
     kind: MediaServerSignalKind,
     season: Option<i64>,
     episode: Option<&str>,
-) -> UserMediaSignal {
-    UserMediaSignal {
-        id: format!("row-{item}"),
+) -> AudienceFavorite {
+    AudienceFavorite {
         connection_id: "connection-jellyfin".to_string(),
-        provider: scryer_domain::MediaServerProvider::Jellyfin,
-        external_user_id: format!("external-{}", user.unwrap_or("nobody")),
-        scryer_user_id: user.map(str::to_string),
+        external_account_id: format!("external-{}", user.unwrap_or("nobody")),
         provider_item_id: item.to_string(),
         kind,
         scryer_title_id: Some("title-1".to_string()),
         scryer_episode_id: episode.map(str::to_string),
         season_number: season,
-        played: false,
-        play_count: 0,
-        last_played_at: None,
-        is_favorite: true,
-        observed_at: at(0),
-        sync_generation: 1,
-        created_at: at(0),
-        updated_at: at(0),
     }
 }
 
+/// Every account read in full; each observable member reached through the
+/// account `external-<user>`.
 fn favourite_rows(
-    rows: Vec<UserMediaSignal>,
+    rows: Vec<AudienceFavorite>,
     linked: &[&str],
     observable: &[&str],
+) -> FavoriteLoad {
+    favourite_rows_with(rows, linked, observable, &[], None)
+}
+
+fn favourite_rows_with(
+    rows: Vec<AudienceFavorite>,
+    linked: &[&str],
+    observable: &[&str],
+    unread: &[&str],
+    audience_gate: Option<&'static str>,
 ) -> FavoriteLoad {
     FavoriteLoad::Loaded(FavoriteRows {
         by_title: if rows.is_empty() {
@@ -1183,6 +1184,18 @@ fn favourite_rows(
         },
         linked_user_ids: linked.iter().map(|id| (*id).to_string()).collect(),
         favorite_user_ids: observable.iter().map(|id| (*id).to_string()).collect(),
+        favorite_accounts: observable
+            .iter()
+            .map(|id| {
+                (
+                    ("connection-jellyfin".to_string(), format!("external-{id}")),
+                    BTreeSet::from([(*id).to_string()]),
+                )
+            })
+            .collect(),
+        favorite_unread_user_ids: unread.iter().map(|id| (*id).to_string()).collect(),
+        member_gate: None,
+        audience_gate,
     })
 }
 
@@ -1249,9 +1262,8 @@ fn an_unplayed_favourite_becomes_a_fact() {
         known(false.into())
     );
 
-    // Nobody's favourite, every member observable: a decisive no for the
-    // members, but an account nobody linked was never read, so "anyone"
-    // stays unknown and a rule that reads "not favourited by anyone" holds.
+    // Nobody's favourite, every account read in full: a decisive no for
+    // the members and for anyone.
     let observations = favourite_observations(
         built_input(),
         favourite_rows(Vec::new(), &["user-anna"], &["user-anna"]),
@@ -1261,14 +1273,116 @@ fn an_unplayed_favourite_becomes_a_fact() {
         observations["favorited_by_user_ids"],
         known(serde_json::json!([]))
     );
+    assert_eq!(observations["favorited_by_anyone"], known(false.into()));
+    assert_eq!(
+        observations["favorited_by_any_requester"],
+        absent("title_not_requested")
+    );
+
+    // One account somewhere was not read in full: "anyone" cannot be false,
+    // and a rule that reads "not favourited by anyone" holds.
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows_with(
+            Vec::new(),
+            &["user-anna"],
+            &["user-anna"],
+            &[],
+            Some("audience_favorites_not_read"),
+        ),
+        None,
+    );
     assert_eq!(
         observations["favorited_by_anyone"],
         unknown("audience_favorites_not_read")
     );
     assert_eq!(
-        observations["favorited_by_any_requester"],
-        absent("title_not_requested")
+        observations["favorited_by_user_ids"],
+        known(serde_json::json!([]))
     );
+}
+
+/// A favourite from an account nobody linked counts for "anyone" and names
+/// nobody.
+#[test]
+fn an_unlinked_accounts_favourite_counts_only_for_anyone() {
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows(
+            vec![favourite(
+                "movie",
+                Some("stranger"),
+                MediaServerSignalKind::Movie,
+                None,
+                None,
+            )],
+            &["user-anna"],
+            &["user-anna"],
+        ),
+        None,
+    );
+    assert_eq!(observations["favorited_by_anyone"], known(true.into()));
+    assert_eq!(
+        observations["favorited_by_user_ids"],
+        known(serde_json::json!([]))
+    );
+}
+
+/// A member whose favourites read failed, or left a favourite Scryer could
+/// not place, is unknown; a favourite another member holds is still a yes.
+#[test]
+fn a_member_whose_favourites_were_not_read_is_unknown_for_that_member() {
+    let requesters = vec!["user-boris".to_string()];
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows_with(
+            Vec::new(),
+            &["user-anna", "user-boris"],
+            &["user-anna", "user-boris"],
+            &["user-boris"],
+            Some("audience_favorites_not_read"),
+        ),
+        Some(&requesters),
+    );
+    for fact in [
+        "favorited_by_user_ids",
+        "favorited_by_usernames",
+        "favorited_by_any_requester",
+    ] {
+        assert_eq!(
+            observations[fact],
+            unknown("favorites_member_not_read"),
+            "{fact}"
+        );
+    }
+    assert_eq!(
+        observations["favorited_by_anyone"],
+        unknown("audience_favorites_not_read")
+    );
+
+    // The requester's own favourite still answers yes.
+    let observations = favourite_observations(
+        built_input(),
+        favourite_rows_with(
+            vec![favourite(
+                "movie",
+                Some("user-anna"),
+                MediaServerSignalKind::Movie,
+                None,
+                None,
+            )],
+            &["user-anna", "user-boris"],
+            &["user-anna", "user-boris"],
+            &["user-boris"],
+            Some("audience_favorites_not_read"),
+        ),
+        Some(&["user-anna".to_string()]),
+    );
+    assert_eq!(
+        observations["favorited_by_any_requester"],
+        known(true.into())
+    );
+    assert_eq!(observations["favorited_by_anyone"], known(true.into()));
 }
 
 /// A provider's seasons need not be numbered like Scryer's. A series or
@@ -1514,9 +1628,39 @@ fn a_plex_only_instance_holds_a_not_favourited_rule() {
     );
     let open = MaintenanceWatchContext {
         freshness: WatchSignalFreshness::Fresh,
-        ..stale
+        ..stale.clone()
     };
     assert_eq!(favorite_gate(&open), None);
+
+    // Nobody linked yet: the per-user facts wait, but the audience read
+    // still answers for anyone.
+    let nobody_linked = MaintenanceWatchContext {
+        freshness: WatchSignalFreshness::Unavailable("no_linked_participants"),
+        audience: WatchSignalFreshness::Fresh,
+        audience_favorites: WatchSignalFreshness::Fresh,
+        ..stale.clone()
+    };
+    assert_eq!(favorite_gate(&nobody_linked), None);
+    assert_eq!(audience_favorite_gate(&nobody_linked), None);
+
+    // Plex beside Jellyfin: its accounts' favourites cannot be read, so
+    // "anyone" is never false.
+    let mixed = MaintenanceWatchContext {
+        plex_connected: true,
+        ..nobody_linked.clone()
+    };
+    assert_eq!(
+        audience_favorite_gate(&mixed),
+        Some("audience_favorites_unsupported")
+    );
+    let unread = MaintenanceWatchContext {
+        audience_favorites: WatchSignalFreshness::Unavailable("audience_favorites_not_read"),
+        ..nobody_linked
+    };
+    assert_eq!(
+        audience_favorite_gate(&unread),
+        Some("audience_favorites_not_read")
+    );
 }
 
 /// A rule that names no favourite fact does not load the group, and its facts

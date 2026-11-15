@@ -1357,3 +1357,104 @@ async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video
     assert_eq!(held_steps[0].state, MaintenanceActionStepState::Held);
     assert_eq!(held_steps[0].attempt, 1);
 }
+
+/// Scheduled evaluation over a storage rule, with no scripted figure: the
+/// root's free space comes from the capacity owner's cache. Returns the
+/// disk calls the pass made and the rule's active candidate count.
+async fn scheduled_storage_pass_from_sampler(
+    fixture: &TitleFixture,
+    sampled_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> (u64, usize) {
+    add_movie_file(fixture, "Sampled/movie.mkv").await;
+    let storage_root_id = selected_root_id(fixture).await;
+    let app = &fixture.execution.app;
+    let capacity = &app.runtime.health.storage_capacity;
+    if let Some(sampled_at) = sampled_at {
+        capacity.record_for_test(
+            &fixture.root.to_string_lossy(),
+            sampled_at,
+            Some(capacity_figure(100)),
+        );
+    }
+    let created = app
+        .create_maintenance_rule_set(
+            &fixture.execution.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
+                subject_kind: MaintenanceRuleSubjectKind::Title,
+                name: "Storage pressure".into(),
+                description: String::new(),
+                rego_source: crate::lib_tests::legacy_source(
+                    format!(
+                        "match if {{ input.subject.title_id == {:?}; input.facts.storage_available_bytes < 200 }}",
+                        fixture.title.id
+                    ),
+                    crate::maintenance_rules::MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
+                ),
+                grace_days: 0,
+                storage_root_id: Some(storage_root_id),
+                library_ids: vec![],
+            },
+        )
+        .await
+        .expect("create storage rule");
+    super::maintenance_rules::set_rule_state(
+        app,
+        &fixture.execution.user,
+        &created.rule_set.id,
+        scryer_domain::MaintenanceRuleState::DryRun,
+        None,
+    )
+    .await;
+    super::maintenance_rules::open_maintenance_gates(app, false, true).await;
+
+    let calls_before = capacity.disk_calls();
+    app.run_maintenance_rule_evaluation_job()
+        .await
+        .expect("evaluate storage rule");
+    let calls = capacity.disk_calls() - calls_before;
+    let candidates = fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .into_iter()
+        .filter(|candidate| {
+            candidate.rule_set_id == created.rule_set.id && !candidate.state.is_terminal()
+        })
+        .count();
+    (calls, candidates)
+}
+
+fn capacity_figure(available_bytes: u64) -> crate::helpers::FilesystemSpace {
+    crate::helpers::FilesystemSpace {
+        total_bytes: 1_000,
+        available_bytes,
+    }
+}
+
+#[tokio::test]
+async fn scheduled_evaluation_reads_free_space_from_the_sampler_and_never_the_disk() {
+    let fixture = title_fixture("Sampled Root Movie", MediaFacet::Movie).await;
+    let (calls, candidates) =
+        scheduled_storage_pass_from_sampler(&fixture, Some(chrono::Utc::now())).await;
+    assert_eq!(calls, 0, "scheduled evaluation made a disk call");
+    assert_eq!(candidates, 1, "the sampled figure matched the rule");
+}
+
+#[tokio::test]
+async fn scheduled_evaluation_holds_an_unsampled_or_stale_root_unknown_without_a_disk_call() {
+    let unsampled = title_fixture("Unsampled Root Movie", MediaFacet::Movie).await;
+    let (calls, candidates) = scheduled_storage_pass_from_sampler(&unsampled, None).await;
+    assert_eq!(calls, 0, "an unsampled root was called");
+    assert_eq!(candidates, 0, "an unsampled root is unknown, not a match");
+
+    let stale = title_fixture("Stale Root Movie", MediaFacet::Movie).await;
+    let (calls, candidates) = scheduled_storage_pass_from_sampler(
+        &stale,
+        Some(chrono::Utc::now() - chrono::Duration::hours(1)),
+    )
+    .await;
+    assert_eq!(calls, 0, "a stale root was called");
+    assert_eq!(candidates, 0, "a stale root is unknown, not a match");
+}

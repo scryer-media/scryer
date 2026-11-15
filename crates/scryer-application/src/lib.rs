@@ -747,9 +747,11 @@ pub use ports::{
     WorkflowOperationRepository,
 };
 pub use ports::{
+    AudienceFavorite, AudienceFavoriteAccount, AudienceFavoriteAccountRead, AudienceFavoriteRead,
     AudiencePlay, AudienceRead, MediaServerSignalReader, MediaServerSignalRepository,
-    MediaServerSignalSource, ProviderAudiencePlay, ProviderItemPlay, ProviderItemRecheck,
-    ProviderPlayedItem, SignalReadFailure, SignalRosterEntry, SignalRosterLink,
+    MediaServerSignalSource, ProviderAccountFavorites, ProviderAudiencePlay, ProviderItemPlay,
+    ProviderItemRecheck, ProviderPlayedItem, SignalReadFailure, SignalRosterEntry,
+    SignalRosterLink,
 };
 pub use ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,

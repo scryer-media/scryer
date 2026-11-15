@@ -74,7 +74,21 @@ pub(crate) async fn install_maintenance_storage_capacity_probe_for_test(
 }
 
 pub(crate) const STORAGE_ROOT_UNAVAILABLE: &str = "storage_root_unavailable";
-pub(crate) const STORAGE_CAPACITY_UNAVAILABLE: &str = "storage_capacity_unavailable";
+pub(crate) const STORAGE_CAPACITY_UNAVAILABLE: &str =
+    crate::storage_capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
+
+/// How a pass reads a root's free space.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MaintenanceStorageRead {
+    /// A figure taken now through the capacity owner, bounded by a timeout.
+    /// Preview and the guards that act on free space use it.
+    Refresh,
+    /// The capacity owner's last sample as of this instant, with no disk
+    /// call. Scheduled evaluation uses it: the sampler keeps every library
+    /// root current, so a pass over thousands of subjects never touches a
+    /// share. A root never sampled, or sampled too long ago, is unknown.
+    Sampled(chrono::DateTime<chrono::Utc>),
+}
 
 /// A configured root proven from the current library configuration.
 #[derive(Clone, Debug)]
@@ -157,12 +171,15 @@ impl AppUseCase {
     pub(crate) async fn maintenance_storage_capacity_is_available(
         &self,
         storage_root_id: Option<&str>,
+        read: MaintenanceStorageRead,
     ) -> AppResult<bool> {
         let Some(root) = self.maintenance_storage_root(storage_root_id).await? else {
             return Ok(false);
         };
-        let capacity = self.maintenance_storage_capacity_now(root.path).await;
-        Ok(storage_capacity_values(capacity).is_some())
+        Ok(self
+            .maintenance_storage_capacity(root.path, read)
+            .await
+            .is_ok())
     }
 
     /// Populate only the root-scoped facts. Callers deliberately build all
@@ -172,6 +189,7 @@ impl AppUseCase {
         &self,
         input: &mut MaintenanceInput,
         storage_root_id: Option<&str>,
+        read: MaintenanceStorageRead,
     ) -> AppResult<()> {
         let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
         else {
@@ -184,16 +202,16 @@ impl AppUseCase {
 
         input.facts.storage_root_id = Observation::known(root.id.clone());
         let capacity = self
-            .maintenance_storage_capacity_now(root.path.clone())
+            .maintenance_storage_capacity(root.path.clone(), read)
             .await;
-        let capacity = storage_capacity_values(capacity);
-        let Some((available, total)) = capacity else {
-            input.facts.storage_available_bytes =
-                Observation::unknown(STORAGE_CAPACITY_UNAVAILABLE);
-            input.facts.storage_total_bytes = Observation::unknown(STORAGE_CAPACITY_UNAVAILABLE);
-            input.facts.storage_available_percent =
-                Observation::unknown(STORAGE_CAPACITY_UNAVAILABLE);
-            return Ok(());
+        let (available, total) = match capacity {
+            Ok(figures) => figures,
+            Err(reason) => {
+                input.facts.storage_available_bytes = Observation::unknown(reason);
+                input.facts.storage_total_bytes = Observation::unknown(reason);
+                input.facts.storage_available_percent = Observation::unknown(reason);
+                return Ok(());
+            }
         };
         input.facts.storage_available_bytes = Observation::known(available);
         input.facts.storage_total_bytes = Observation::known(total);
@@ -210,6 +228,7 @@ impl AppUseCase {
         input: &mut MaintenanceInput,
         storage_root_id: Option<&str>,
         cache: &mut MaintenanceStorageFactCache,
+        read: MaintenanceStorageRead,
     ) -> AppResult<()> {
         let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
         else {
@@ -219,7 +238,7 @@ impl AppUseCase {
             apply_storage_snapshot(input, snapshot);
             return Ok(());
         }
-        self.populate_maintenance_storage_facts(input, Some(storage_root_id))
+        self.populate_maintenance_storage_facts(input, Some(storage_root_id), read)
             .await?;
         cache.insert(storage_root_id.to_string(), storage_snapshot(input));
         Ok(())
@@ -361,14 +380,18 @@ fn storage_capacity_values(space: Option<crate::helpers::FilesystemSpace>) -> Op
 }
 
 impl AppUseCase {
-    /// A current figure for a root, through the canonical capacity owner:
-    /// preview and execution act on it, so it is a refreshing read, bounded
-    /// by [`ROOT_STAT_TIMEOUT`] and single-flighted with every other caller
-    /// asking about the same root.
-    async fn maintenance_storage_capacity_now(
+    /// A root's figures as `(available, total)` through the canonical
+    /// capacity owner, or the unknown reason. [`MaintenanceStorageRead::Refresh`]
+    /// is bounded by [`ROOT_STAT_TIMEOUT`] and single-flighted with every other
+    /// caller asking about the same root; [`MaintenanceStorageRead::Sampled`]
+    /// reads the cache and never calls the disk.
+    async fn maintenance_storage_capacity(
         &self,
         path: String,
-    ) -> Option<crate::helpers::FilesystemSpace> {
+        read: MaintenanceStorageRead,
+    ) -> Result<(i64, i64), &'static str> {
+        // A scripted figure stands in for the capacity owner in either mode,
+        // as the sampler's last reading or as a fresh one.
         #[cfg(test)]
         let scripted = test_capacity_probe_slot()
             .lock()
@@ -376,7 +399,7 @@ impl AppUseCase {
             .clone();
         #[cfg(test)]
         if let Some(probe) = scripted {
-            return tokio::time::timeout(
+            let space = tokio::time::timeout(
                 ROOT_STAT_TIMEOUT,
                 tokio::task::spawn_blocking(move || probe(&path)),
             )
@@ -384,13 +407,28 @@ impl AppUseCase {
             .ok()
             .and_then(Result::ok)
             .flatten();
+            return storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE);
         }
-        self.runtime
-            .health
-            .storage_capacity
-            .refresh(std::path::PathBuf::from(path), ROOT_STAT_TIMEOUT)
-            .await
-            .ok()
+        let capacity = &self.runtime.health.storage_capacity;
+        match read {
+            MaintenanceStorageRead::Refresh => {
+                let space = capacity
+                    .refresh(std::path::PathBuf::from(path), ROOT_STAT_TIMEOUT)
+                    .await
+                    .ok();
+                storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE)
+            }
+            MaintenanceStorageRead::Sampled(now) => match capacity.reading(&path, now) {
+                crate::storage_capacity::StorageCapacityReading::Known {
+                    available_bytes,
+                    total_bytes,
+                    ..
+                } => Ok((available_bytes, total_bytes)),
+                other => Err(other
+                    .unknown_reason()
+                    .unwrap_or(STORAGE_CAPACITY_UNAVAILABLE)),
+            },
+        }
     }
 }
 

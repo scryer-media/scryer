@@ -308,6 +308,27 @@ impl RecheckFixture {
             })
             .await
             .expect("record sync state");
+        // The same sweep read every swept account's favourites in full, and
+        // found none.
+        let accounts: Vec<crate::ports::AudienceFavoriteAccount> = self
+            .signals
+            .signal_roster()
+            .await
+            .expect("read roster")
+            .into_iter()
+            .filter(|entry| entry.connection_id == connection_id)
+            .map(|entry| crate::ports::AudienceFavoriteAccount {
+                external_account_id: entry.external_user_id,
+                read: crate::ports::AudienceFavoriteAccountRead::Read {
+                    favorites: Vec::new(),
+                    unplaced: None,
+                },
+            })
+            .collect();
+        self.signals
+            .replace_audience_favorites(connection_id, &accounts, Utc::now())
+            .await
+            .expect("record favourite reads");
     }
 
     /// A clean, current sweep that stored one play of `title_id` by the

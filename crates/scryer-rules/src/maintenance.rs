@@ -263,6 +263,14 @@ pub struct MaintenanceFactsDoc {
     /// Storage capacity is exposed only after the host applies a selected
     /// configured root. Without that root these remain absent; a storage-aware
     /// rule must be validated with an explicit root selection before it runs.
+    ///
+    /// Scheduled evaluation reads the capacity sampler's last figure for the
+    /// root and never calls the disk: a root not yet sampled is unknown with
+    /// `storage_not_sampled`, one sampled more than two sampling intervals ago
+    /// with `storage_sample_stale`, and one whose last sample failed with
+    /// `storage_capacity_unavailable`. Preview and the execution-time guard
+    /// take a figure now, which is unknown only with
+    /// `storage_capacity_unavailable`.
     pub storage_root_id: Observation<String>,
     pub storage_available_bytes: Observation<i64>,
     pub storage_total_bytes: Observation<i64>,
