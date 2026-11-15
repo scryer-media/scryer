@@ -44,6 +44,9 @@ pub(crate) enum WatchRecheck {
     /// An observed connection has no mapped item for the subject, so no
     /// read was attempted there.
     Unmapped,
+    /// A counted account made an item a favourite since the stored
+    /// favourites were read.
+    NewerFavorite,
 }
 
 impl WatchRecheck {
@@ -55,7 +58,33 @@ impl WatchRecheck {
             Self::UncreditedPlay => Some(execution_reason::WATCH_RECHECK_UNCREDITED_PLAY),
             Self::Unavailable => Some(execution_reason::WATCH_RECHECK_UNAVAILABLE),
             Self::Unmapped => Some(execution_reason::WATCH_RECHECK_UNMAPPED),
+            Self::NewerFavorite => Some(execution_reason::WATCH_RECHECK_NEWER_FAVORITE),
         }
+    }
+}
+
+/// Compare one item's live favourite flags with the favourites stored for it
+/// on its connection. `stored_favorites` holds this item's stored favourite
+/// rows there. A counted account that has the item as a favourite now, with
+/// no stored favourite row for it, is a newer favourite. A favourite removed
+/// since the sweep never holds: that is the next sweep's to record.
+///
+/// Only the item itself is compared. A favourite on the item's series or
+/// season is on another server item, which this read does not fetch.
+pub(crate) fn fold_item_favorites(
+    stored_favorites: &[&UserMediaSignal],
+    recheck: &ProviderItemRecheck,
+) -> WatchRecheck {
+    let newer = recheck.participants.iter().any(|live| {
+        live.is_favorite
+            && !stored_favorites
+                .iter()
+                .any(|row| row.is_favorite && row.external_user_id == live.external_user_id)
+    });
+    if newer {
+        WatchRecheck::NewerFavorite
+    } else {
+        WatchRecheck::Clear
     }
 }
 
@@ -64,6 +93,17 @@ impl WatchRecheck {
 pub(crate) fn rule_reads_watch_facts(rego_source: &str, rule_set_id: &str) -> bool {
     match scryer_rules::validation::maintenance_referenced_facts(rego_source, rule_set_id) {
         Ok(facts) => scryer_rules::maintenance::WATCH_MAINTENANCE_FACTS
+            .iter()
+            .any(|fact| facts.contains(*fact)),
+        Err(_) => true,
+    }
+}
+
+/// Whether a matcher reads any favourite fact. A source whose facts cannot be
+/// listed counts as reading one, as for [`rule_reads_watch_facts`].
+pub(crate) fn rule_reads_favorite_facts(rego_source: &str, rule_set_id: &str) -> bool {
+    match scryer_rules::validation::maintenance_referenced_facts(rego_source, rule_set_id) {
+        Ok(facts) => scryer_rules::maintenance::FAVORITE_MAINTENANCE_FACTS
             .iter()
             .any(|fact| facts.contains(*fact)),
         Err(_) => true,
@@ -205,6 +245,12 @@ impl AppUseCase {
     /// a gate that is not open are [`WatchRecheck::Unavailable`]. An entity
     /// an observed connection has no mapped item for is
     /// [`WatchRecheck::Unmapped`], decided before any read.
+    ///
+    /// `favorites`, given only for a rule that reads a favourite fact, are
+    /// the title's stored favourite rows. The same answers then also carry
+    /// each counted account's favourite flag for every item read, and an item
+    /// favourited since those rows were stored is
+    /// [`WatchRecheck::NewerFavorite`]. No extra request is made for it.
     pub(crate) async fn maintenance_watch_recheck(
         &self,
         context: &MaintenanceWatchContext,
@@ -212,6 +258,7 @@ impl AppUseCase {
         audience: &[AudiencePlay],
         episode_ids: Option<&HashSet<String>>,
         entities: Option<&[(MediaServerPlaybackEntityKind, String)]>,
+        favorites: Option<&[UserMediaSignal]>,
     ) -> WatchRecheck {
         // The anonymous facts can be open while the per-user ones are not
         // (no linked user yet); either open gate is a picture to re-check.
@@ -331,6 +378,18 @@ impl AppUseCase {
             }
         }
 
+        // Connection and item → that item's stored favourite rows, built once.
+        let favorites_by_item = favorites.map(|favorites| {
+            let mut by_item: HashMap<(&str, &str), Vec<&UserMediaSignal>> = HashMap::new();
+            for row in favorites.iter().filter(|row| row.is_favorite) {
+                by_item
+                    .entry((row.connection_id.as_str(), row.provider_item_id.trim()))
+                    .or_default()
+                    .push(row);
+            }
+            by_item
+        });
+
         for (connection_id, connection_items) in items {
             let connection = match self
                 .services
@@ -368,6 +427,16 @@ impl AppUseCase {
                 let outcome = fold_item_recheck(&stored, &audience, &participants, recheck);
                 if outcome != WatchRecheck::Clear {
                     return outcome;
+                }
+                if let Some(favorites_by_item) = &favorites_by_item {
+                    let stored_favorites = favorites_by_item
+                        .get(&(connection_id, item_id))
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    let outcome = fold_item_favorites(stored_favorites, recheck);
+                    if outcome != WatchRecheck::Clear {
+                        return outcome;
+                    }
                 }
             }
         }
@@ -416,6 +485,7 @@ mod tests {
         last_played_at: Option<DateTime<Utc>>,
     ) -> ProviderItemPlay {
         ProviderItemPlay {
+            is_favorite: false,
             external_user_id: account.to_string(),
             played,
             last_played_at,
@@ -424,6 +494,60 @@ mod tests {
 
     fn accounts(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    fn favourited(account: &str) -> ProviderItemPlay {
+        ProviderItemPlay {
+            is_favorite: true,
+            ..live(account, false, None)
+        }
+    }
+
+    #[test]
+    fn a_favourite_set_since_the_sweep_is_a_newer_favourite() {
+        let recheck = ProviderItemRecheck {
+            participants: vec![favourited("100"), live("200", false, None)],
+            history: Vec::new(),
+        };
+        assert_eq!(
+            fold_item_favorites(&[], &recheck),
+            WatchRecheck::NewerFavorite
+        );
+        // A stored favourite by someone else does not account for it.
+        let other = UserMediaSignal {
+            is_favorite: true,
+            ..stored("200", None)
+        };
+        assert_eq!(
+            fold_item_favorites(&[&other], &recheck),
+            WatchRecheck::NewerFavorite
+        );
+    }
+
+    #[test]
+    fn a_stored_favourite_or_one_removed_since_the_sweep_is_clear() {
+        let row = UserMediaSignal {
+            is_favorite: true,
+            ..stored("100", None)
+        };
+        let still = ProviderItemRecheck {
+            participants: vec![favourited("100")],
+            history: Vec::new(),
+        };
+        assert_eq!(fold_item_favorites(&[&row], &still), WatchRecheck::Clear);
+        let removed = ProviderItemRecheck {
+            participants: vec![live("100", false, None)],
+            history: Vec::new(),
+        };
+        assert_eq!(fold_item_favorites(&[&row], &removed), WatchRecheck::Clear);
+    }
+
+    #[test]
+    fn a_rule_reads_favourite_facts_only_through_a_favourite_fact() {
+        let favourite = "package whatever\nimport rego.v1\n\nmatch if {\n\tnot input.facts.favorited_by_any_requester\n}\n";
+        let watch = "package whatever\nimport rego.v1\n\nmatch if {\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n";
+        assert!(rule_reads_favorite_facts(favourite, "rule-a"));
+        assert!(!rule_reads_favorite_facts(watch, "rule-a"));
     }
 
     #[test]
@@ -630,6 +754,8 @@ mod tests {
             WatchRecheck::NewerPlay,
             WatchRecheck::UncreditedPlay,
             WatchRecheck::Unavailable,
+            WatchRecheck::Unmapped,
+            WatchRecheck::NewerFavorite,
         ]
         .map(|outcome| outcome.hold_reason().expect("a hold has a reason"));
         let distinct = reasons.iter().collect::<HashSet<_>>();

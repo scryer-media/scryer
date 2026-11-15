@@ -93,7 +93,7 @@ impl ClaimFixture {
 
     async fn handle(&self) -> crate::maintenance_rules::MaintenanceActionHandlingReport {
         self.app
-            .run_lifecycle_action_handling_job()
+            .run_every_rule_action_pass_for_tests()
             .await
             .expect("handler pass")
     }

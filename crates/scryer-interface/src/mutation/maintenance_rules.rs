@@ -397,17 +397,23 @@ impl MaintenanceRuleMutations {
         ))
     }
 
-    /// Run the maintenance action handler immediately instead of waiting for its schedule.
+    /// Act on one rule's due titles now instead of waiting for its next fire.
+    /// Rules act only through their own fires, so a call that names no rule
+    /// is refused with `MAINTENANCE_ACTION_RUN_RULE_REQUIRED`.
     async fn run_maintenance_action_handler_now(
         &self,
         ctx: &Context<'_>,
+        #[graphql(
+            desc = "The rule to act for. Required: omitting it is refused with MAINTENANCE_ACTION_RUN_RULE_REQUIRED."
+        )]
+        rule_set_id: Option<ID>,
     ) -> GqlResult<MaintenanceEvaluationTriggerPayload> {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
         let trigger = app
-            .run_maintenance_action_handler_now(&actor)
+            .run_maintenance_action_handler_now(&actor, rule_set_id.map(String::from))
             .await
             .map_err(to_gql_error)?;
 

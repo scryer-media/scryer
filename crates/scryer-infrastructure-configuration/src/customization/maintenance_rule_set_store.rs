@@ -80,6 +80,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         // revision this one follows, as in `add_revision_keeping_arming`.
         // A new maximum rides in the same statement, so a source that gains a
         // delete head is never stored without the maximum it was saved with.
+        let rule_set_id = revision.rule_set_id.clone();
         let mut pointer_args = vec![SqlArg::I64(revision.revision_number)];
         pointer_args.extend(disarm_args());
         let max_set = max_titles_per_run_set(max_titles_per_run, &mut pointer_args);
@@ -101,6 +102,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                 let revision_args = revision_args.clone();
                 let pointer_args = pointer_args.clone();
                 let pointer_sql = pointer_sql.clone();
+                let rule_set_id = rule_set_id.clone();
                 Box::pin(async move {
                     let moved =
                         SqlRuntime::execute(SqlExec::Tx(tx), &pointer_sql, &pointer_args).await?;
@@ -109,7 +111,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                     }
                     SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
                         .await?;
-                    Ok(())
+                    require_stored_maximum(tx, &rule_set_id).await
                 })
             },
         )
@@ -140,6 +142,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         .into_iter()
         .take_while(|level| *level != effect_arming)
         .collect();
+        let rule_set_id = revision.rule_set_id.clone();
         let mut pointer_args = vec![SqlArg::I64(revision.revision_number)];
         let arming_set = if below.is_empty() {
             pointer_args.push(SqlArg::Text(effect_arming.as_storage_str().to_string()));
@@ -175,6 +178,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                 let revision_args = revision_args.clone();
                 let pointer_args = pointer_args.clone();
                 let pointer_sql = pointer_sql.clone();
+                let rule_set_id = rule_set_id.clone();
                 Box::pin(async move {
                     let moved =
                         SqlRuntime::execute(SqlExec::Tx(tx), &pointer_sql, &pointer_args).await?;
@@ -183,7 +187,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                     }
                     SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args)
                         .await?;
-                    Ok(())
+                    require_stored_maximum(tx, &rule_set_id).await
                 })
             },
         )
@@ -313,6 +317,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                 let sql = sql.clone();
                 Box::pin(async move {
                     SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
+                    require_stored_maximum(tx, &id).await?;
                     replace_library_scope(tx, &id, &library_ids).await
                 })
             },
@@ -456,6 +461,47 @@ fn revision_conflict() -> AppError {
         scryer_application::error_reasons::maintenance::RULE_REVISION_CONFLICT,
         "the rule was changed by another save; reload it and save again".to_string(),
     )
+}
+
+/// Refuse, inside the write's own transaction, a rule whose revision in force
+/// deletes while it carries no per-fire maximum.
+///
+/// Runs after the write's UPDATE of the rule-set row, so the row is already
+/// write-locked (PostgreSQL) or the writer is exclusive (SQLite): a concurrent
+/// save that clears the maximum or adds a delete head is ordered strictly
+/// before or after this check, never between it and the write. A refusal rolls
+/// the whole write back.
+async fn require_stored_maximum(tx: &mut SqlTx<'_>, rule_set_id: &str) -> AppResult<()> {
+    let row = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT s.max_titles_per_run, r.action_spec
+           FROM maintenance_rule_sets s
+           JOIN maintenance_rule_revisions r
+             ON r.rule_set_id = s.id AND r.revision_number = s.current_revision_number
+          WHERE s.id = {}",
+        &[SqlArg::Text(rule_set_id.to_string())],
+    )
+    .await?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let max = row
+        .opt_i64("max_titles_per_run")?
+        .map(|max| u32::try_from(max).unwrap_or(u32::MAX));
+    let declared =
+        scryer_application::maintenance_rules::MaintenanceDeclaredActions::from_persisted_json(
+            &row.text("action_spec")?,
+        )
+        .ok()
+        .flatten();
+    match declared {
+        Some(declared) => {
+            scryer_application::maintenance_rules::service::require_max_titles_per_run(
+                &declared, max,
+            )
+        }
+        None => Ok(()),
+    }
 }
 
 /// The `, max_titles_per_run = {}` assignment a write adds when it replaces

@@ -779,7 +779,7 @@ async fn storage_recovery_stops_before_the_next_file() {
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("run storage deletion");
     assert_eq!(
@@ -818,7 +818,7 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
     let held = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("hold while capacity is unavailable");
     assert_eq!(held.held, 1);
@@ -892,7 +892,7 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
     let resumed = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("resume after fresh capacity returns");
     assert_eq!(
@@ -945,7 +945,7 @@ async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanu
     let held = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("persist manifest before the interrupted unlink");
     assert_eq!(held.held, 1);
@@ -974,7 +974,7 @@ async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanu
     let resumed = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("reconcile missing journal path");
     assert_eq!(resumed.executed, 1, "root summary does not cancel recovery");
@@ -1036,7 +1036,7 @@ async fn a_file_replaced_after_its_deletion_was_planned_is_preserved_on_retry() 
     let held = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("persist the plan before the interrupted unlink");
     assert_eq!(held.held, 1);
@@ -1052,7 +1052,7 @@ async fn a_file_replaced_after_its_deletion_was_planned_is_preserved_on_retry() 
     let retried = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("retry the planned deletion");
     assert_eq!(retried.executed, 0);
@@ -1129,7 +1129,7 @@ async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_root
     let held = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("hold selected-root journal before unlink");
     assert_eq!(held.held, 1);
@@ -1156,7 +1156,7 @@ async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_root
     let resumed = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("resume selected-root journal");
     assert_eq!(resumed.executed, 1);
@@ -1223,7 +1223,7 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
     let held = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("hold before mutation starts");
     assert_eq!(held.held, 1);
@@ -1255,7 +1255,7 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
     let retried = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("retry with live monitoring state");
     assert_eq!(retried.executed, 0);
@@ -1326,7 +1326,7 @@ async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video
     let report = fixture
         .execution
         .app
-        .run_lifecycle_action_handling_job()
+        .run_every_rule_action_pass_for_tests()
         .await
         .expect("hold cross-root manifest");
     assert_eq!(report.held, 1);

@@ -14490,6 +14490,10 @@ pub struct ProviderItemPlay {
     pub external_user_id: String,
     pub played: bool,
     pub last_played_at: Option<DateTime<Utc>>,
+    /// Whether this account has the item itself as a favourite. Jellyfin and
+    /// Emby report it in the same user data the play state comes from; Plex
+    /// has no favourites and always reads false.
+    pub is_favorite: bool,
 }
 
 /// What a live re-check of one item found.
