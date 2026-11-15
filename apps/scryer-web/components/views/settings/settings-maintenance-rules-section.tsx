@@ -73,21 +73,26 @@ import type {
   MaintenanceValidationResult,
 } from "@/lib/types/maintenance-rule-sets";
 import {
-  MAINTENANCE_ACTION_HEAD_ORDER,
-  MAINTENANCE_ACTION_HEAD_RULE_NAMES,
   MAINTENANCE_PREVIEW_LIMIT_MAX,
-  actionHeadLabelKey,
-  isDestructiveActionHead,
   previewOutcomeBadgeTone,
   previewOutcomeLabelKey,
   ruleStateLabelKey,
   ruleStateOptionsFor,
-  templateActionHeads,
-  MAINTENANCE_RULE_BUILDER,
+  maintenanceRuleBuilder,
 } from "@/lib/utils/maintenance-rule-sets";
+import { useRuleOutputDescriptors } from "@/lib/hooks/use-rule-builder-schema";
+import {
+  ruleOutputHeadHelp,
+  ruleOutputHeadLabel,
+  ruleOutputHeadNames,
+  ruleOutputSyntax,
+  templateRuleOutputs,
+} from "@/lib/utils/rule-output-vocabulary";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
 import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
 import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
 import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
 import {
@@ -128,6 +133,9 @@ type SettingsMaintenanceRulesSectionProps = {
   /// Set once a hand edit in this editor session detached the rule.
   editAsRego: () => void;
   builderOptions: RuleBuilderOptions;
+  /// Null until the served outputs are read, and after a failed read.
+  builderSchema: RuleBuilderSchema | null;
+  builderStatus: RuleBuilderSchemaStatus;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -176,24 +184,6 @@ type SettingsMaintenanceRulesSectionProps = {
 
 type RefField = { field: string; type: string; descKey: string };
 
-/// How each action head is written in source, shown in the reference table.
-const MAINTENANCE_ACTION_HEAD_SYNTAX: Record<
-  (typeof MAINTENANCE_ACTION_HEAD_ORDER)[number],
-  string
-> = {
-  ADD_TAGS: 'add_tags := ["tag"] if { ... }',
-  REMOVE_TAGS: 'remove_tags := ["tag"] if { ... }',
-  SET_QUALITY_PROFILE: 'set_quality_profile := "Profile name" if { ... }',
-  MONITOR: "monitor if { ... }",
-  SEARCH: "search if { ... }",
-  FETCH_SUBTITLES: "fetch_subtitles if { ... }",
-  MOVE_TO_LIBRARY: 'move_to_library := "Library name" if { ... }',
-  MOVE_TO_ROOT: 'move_to_root := "/path/of/root" if { ... }',
-  UNMONITOR: "unmonitor if { ... }",
-  DELETE_FILES: "delete_files if { ... }",
-  DELETE_TITLE: "delete_title if { ... }",
-  NOTIFY: 'notify := "message text" if { ... }',
-};
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = maintenanceInputContract.sections as RefSectionDef[];
 
@@ -253,6 +243,7 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
 function MaintenanceContextReference() {
   const t = useTranslate();
   const [open, setOpen] = React.useState(false);
+  const descriptors = useRuleOutputDescriptors("maintenance");
 
   return (
     <Card>
@@ -297,9 +288,7 @@ function MaintenanceContextReference() {
               <HelpLabel
                 label={t("settings.refMaintActionsTitle")}
                 help={t("settings.refMaintActionsOrder", {
-                  order: MAINTENANCE_ACTION_HEAD_ORDER.map(
-                    (head) => MAINTENANCE_ACTION_HEAD_RULE_NAMES[head],
-                  ).join(", "),
+                  order: ruleOutputHeadNames(descriptors),
                 })}
               />
             </h4>
@@ -313,18 +302,28 @@ function MaintenanceContextReference() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {MAINTENANCE_ACTION_HEAD_ORDER.map((head) => {
-                  const key = actionHeadLabelKey(head);
+                {descriptors.map((descriptor) => {
+                  const help = ruleOutputHeadHelp(t, descriptor);
                   return (
-                    <TableRow key={head} data-ui="settings-table-row">
+                    <TableRow
+                      key={descriptor.id}
+                      id={selectorId(
+                        "settings-maintenance-rules-reference-action",
+                        descriptor.id,
+                      )}
+                      data-ui="settings-table-row"
+                    >
                       <TableCell>
                         <code data-code-font className="text-xs">
-                          {MAINTENANCE_ACTION_HEAD_SYNTAX[head]}
+                          {ruleOutputSyntax(descriptor)}
                         </code>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {key ? t(key) : head}
-                        {isDestructiveActionHead(head) ? (
+                        {ruleOutputHeadLabel(t, descriptors, descriptor.id)}
+                        {help ? (
+                          <span className="block text-xs">{help}</span>
+                        ) : null}
+                        {descriptor.destructive ? (
                           <Badge tone="negative" className="ml-2 text-[10px]">
                             {t("settings.maintenanceTemplateDestructiveBadge")}
                           </Badge>
@@ -372,7 +371,8 @@ function MaintenanceTemplateCard({
   onApply: (template: MaintenanceRuleTemplate) => void;
 }) {
   const t = useTranslate();
-  const heads = templateActionHeads(template.regoSource);
+  const descriptors = useRuleOutputDescriptors("maintenance");
+  const heads = templateRuleOutputs(template.regoSource, descriptors);
   return (
     <button
       id={selectorId("settings-maintenance-template", template.id)}
@@ -391,14 +391,11 @@ function MaintenanceTemplateCard({
         {t(template.descriptionKey)}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {heads.map((head) => {
-          const key = actionHeadLabelKey(head);
-          return (
-            <Badge key={head} tone="neutral" className="text-[10px]">
-              {key ? t(key) : head}
-            </Badge>
-          );
-        })}
+        {heads.map((head) => (
+          <Badge key={head} tone="neutral" className="text-[10px]">
+            {ruleOutputHeadLabel(t, descriptors, head)}
+          </Badge>
+        ))}
         {template.subjectKind ? (
           <Badge tone="info" className="text-[10px]">
             {t(
@@ -937,6 +934,8 @@ export function SettingsMaintenanceRulesSection({
   setBuilderModel,
   editAsRego,
   builderOptions,
+  builderSchema,
+  builderStatus,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -1288,7 +1287,8 @@ export function SettingsMaintenanceRulesSection({
 
                     <RuleEditorSurface
                       idPrefix="settings-maintenance-rule"
-                      schema={MAINTENANCE_RULE_BUILDER.schema}
+                      schema={builderSchema}
+                      builderStatus={builderStatus}
                       variant={ruleSetDraft.subjectKind}
                       mode={editorMode}
                       onModeChange={setEditorMode}
@@ -1302,6 +1302,7 @@ export function SettingsMaintenanceRulesSection({
                       editor={(readOnly) => (
                         <LazyRegoEditor
                           ruleFamily="maintenance"
+                          ruleVariant={ruleSetDraft.subjectKind}
                           id="settings-maintenance-rule-rego-source"
                           value={ruleSetDraft.regoSource}
                           readOnly={editingSystemOwned || readOnly}
@@ -1422,7 +1423,7 @@ export function SettingsMaintenanceRulesSection({
                           // The builder writes for one scope, so a builder
                           // rule regenerates for the new one.
                           setRuleSetDraft((prev) =>
-                            withRegeneratedRuleSource(MAINTENANCE_RULE_BUILDER, {
+                            withRegeneratedRuleSource(maintenanceRuleBuilder(builderSchema), {
                               ...prev,
                               subjectKind:
                                 value as MaintenanceRuleSetDraft["subjectKind"],

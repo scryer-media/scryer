@@ -2,11 +2,17 @@ import type {
   LifecycleClaimState,
   MediaRequestLeaseRecord,
   RequestDecisionOutcome,
+  RequestDeclaredActions,
   RequestRuleSetDetail,
   RequestRuleSetDraft,
+  RequestShaping,
   RequestVote,
 } from "@/lib/types/request-rule-sets";
-import { REQUEST_RULE_BUILDER_SCHEMA } from "./request-rule-builder-schema.ts";
+import {
+  MONITOR_TYPE_LABEL_KEYS,
+  defaultMonitorTypesForFacet,
+} from "./default-monitor-type.ts";
+import type { RuleBuilderSchema } from "./rule-builder.ts";
 import {
   attachedRuleBuilderModel,
   ruleBuilderModelToSave,
@@ -29,8 +35,17 @@ export const REQUEST_LEASE_DAYS_MAX = 3650;
 /// Starter matcher for a new rule. No `package` or `import` line: the API
 /// generates both and strips them back off when it hands the source to the
 /// editor, so a template carrying them would vanish on the first round trip.
-export const REQUEST_STARTER_SOURCE = `# Request matcher. Define at least one of \`approve\`, \`deny\`, \`manual\` or
-# \`tags\`; a rule that can never vote is refused when you save it.
+export const REQUEST_STARTER_SOURCE = `# Request rule. Vote with \`approve\`, \`deny\` or \`manual\` as
+# \`name if { ... }\`. Shape the approval with plain literals:
+# set_quality_profile := "Profile name", set_lease_days := 30 (0 is forever),
+# set_monitor := "FUTURE_EPISODES", set_required_audio_languages := ["eng"] and
+# set_preferred_audio_languages := ["jpn", "eng"]. add_tags := ["tag"] tags
+# the title and notify := "text" sends a notification. A rule needs a vote, a
+# shaping value or add_tags; \`reasons\` explains the choice.
+#
+# An auto-approved request gets the shaped values; one held for review shows
+# them to the approver as suggestions. Two rules setting different values for
+# the same thing send the request to review.
 #
 # Facts are plain values: \`input.facts.is_adult\` is the boolean itself. A fact
 # Scryer could not observe is simply missing, so a rule that reads it holds the
@@ -43,14 +58,210 @@ approve if {
 manual if {
 	input.facts.is_adult
 }
+
+set_lease_days := 30 if {
+	input.facts.is_adult
+}
 `;
 
-/// How request drafts meet the builder. A request rule has no variant.
-export const REQUEST_RULE_BUILDER: RuleBuilderBinding<RequestRuleSetDraft> = {
-  schema: REQUEST_RULE_BUILDER_SCHEMA,
-  variant: () => null,
-  starterSource: REQUEST_STARTER_SOURCE,
+// ── Action heads ─────────────────────────────────────────────────────────
+// A head's label, order and help come from the served output descriptors.
+
+/// A monitoring value a rule may set. ADVANCED is a per-title season choice,
+/// so no rule can set it.
+export const REQUEST_SHAPING_MONITOR_TYPES = [
+  ...defaultMonitorTypesForFacet("MOVIE"),
+  ...defaultMonitorTypesForFacet("SERIES"),
+] as const;
+
+/// Translation key for a monitoring value, or null for one this build does
+/// not know.
+export function requestMonitorTypeLabelKey(value: string): string | null {
+  return (
+    MONITOR_TYPE_LABEL_KEYS[value as keyof typeof MONITOR_TYPE_LABEL_KEYS] ??
+    null
+  );
+}
+
+/// One head as a summary shows it: the head and the values it carries, already
+/// formatted for display. Vote heads carry no value.
+export type RequestActionEntry = {
+  head: string;
+  values: string[];
 };
+
+/// How a summary formats the values it cannot show raw.
+export type RequestActionValueFormat = {
+  /// `0` is forever.
+  leaseDays: (days: number) => string;
+  monitor: (value: string) => string;
+  languages: (codes: string[]) => string;
+};
+
+/// Everything a rule's source can do, as the server lists it, with every
+/// literal each valued head can produce. Only the heads the API carries values
+/// for in a field of their own get values; any other head is listed bare.
+export function requestDeclaredActionEntries(
+  declared: RequestDeclaredActions | null | undefined,
+  format: RequestActionValueFormat,
+): RequestActionEntry[] {
+  if (!declared) return [];
+  const languages = (codes: string[]) =>
+    codes.length > 0 ? [format.languages(codes)] : [];
+  const values: Record<string, string[]> = {
+    SET_QUALITY_PROFILE: declared.qualityProfiles,
+    SET_LEASE_DAYS: declared.leaseDays.map(format.leaseDays),
+    SET_MONITOR: declared.monitors.map(format.monitor),
+    SET_REQUIRED_AUDIO_LANGUAGES: languages(declared.requiredAudioLanguages),
+    SET_PREFERRED_AUDIO_LANGUAGES: languages(declared.preferredAudioLanguages),
+    ADD_TAGS: declared.addTags,
+    NOTIFY: declared.notifications,
+  };
+  return [...new Set(declared.heads)].map((head) => ({
+    head,
+    values: [...(values[head] ?? [])],
+  }));
+}
+
+/// One shaped value as a decision shows it: the head, the formatted value and
+/// the rule that set it.
+export type RequestShapingEntry = {
+  head: string;
+  value: string;
+  /// Null where the rule's name was not selected.
+  ruleSetName: string | null;
+};
+
+/// What an approval would be changed to. Conflicting heads are not here;
+/// `shaping.conflicts` lists them.
+export function requestShapingEntries(
+  shaping: RequestShaping | null | undefined,
+  format: RequestActionValueFormat,
+): RequestShapingEntry[] {
+  if (!shaping) return [];
+  const entries: RequestShapingEntry[] = [];
+  const push = (
+    head: string,
+    shaped: { value: unknown; ruleSetName?: string } | null | undefined,
+    value: (shaped: never) => string,
+  ) => {
+    if (shaped)
+      entries.push({
+        head,
+        value: value(shaped.value as never),
+        ruleSetName: shaped.ruleSetName ?? null,
+      });
+  };
+  push("SET_QUALITY_PROFILE", shaping.qualityProfile, (value: string) => value);
+  push("SET_LEASE_DAYS", shaping.leaseDays, format.leaseDays);
+  push("SET_MONITOR", shaping.monitor, format.monitor);
+  push(
+    "SET_REQUIRED_AUDIO_LANGUAGES",
+    shaping.requiredAudioLanguages,
+    format.languages,
+  );
+  push(
+    "SET_PREFERRED_AUDIO_LANGUAGES",
+    shaping.preferredAudioLanguages,
+    format.languages,
+  );
+  for (const notification of shaping.notifications ?? [])
+    push("NOTIFY", notification, (value: string) => value);
+  return entries;
+}
+
+/// The conflicting heads, each once, as the server listed them.
+export function requestShapingConflicts(
+  shaping: RequestShaping | null | undefined,
+): string[] {
+  if (!shaping) return [];
+  return [...new Set(shaping.conflicts)];
+}
+
+/// What the approver's form starts from when rules suggested values for a
+/// request held for review. Only fields a rule set are present; `suggested`
+/// maps each head the form marks as suggested to the rule that suggested it.
+export type RequestApprovalPrefill = {
+  qualityProfileId?: string;
+  monitorType?: string;
+  /// `forever` for a lease of 0 days.
+  lease?: { forever: true } | { forever: false; days: number };
+  requiredAudioLanguages?: string[];
+  preferredAudioLanguages?: string[];
+  suggested: Partial<Record<string, string>>;
+};
+
+/// Read a decision's shaping into the approver's form. Applies only to a
+/// request held for review: an auto-approved request already got the values,
+/// and a denied one shows them in its trace only. A profile name that matches
+/// no offered profile, or a monitoring value the request's facet does not
+/// offer, is left out rather than guessed. Each suggested head maps to the
+/// rule set that suggested it.
+export function requestApprovalPrefill(
+  decision:
+    | { effectiveOutcome: string; shaping?: RequestShaping | null }
+    | null
+    | undefined,
+  facet: string,
+  qualityProfiles: readonly { id: string; name: string }[],
+): RequestApprovalPrefill {
+  const prefill: RequestApprovalPrefill = { suggested: {} };
+  const shaping = decision?.shaping;
+  if (!shaping || decision.effectiveOutcome !== "MANUAL_REVIEW") return prefill;
+  if (shaping.qualityProfile) {
+    const profile = qualityProfiles.find(
+      (candidate) => candidate.name === shaping.qualityProfile?.value,
+    );
+    if (profile) {
+      prefill.qualityProfileId = profile.id;
+      prefill.suggested.SET_QUALITY_PROFILE = shaping.qualityProfile.ruleSetName ?? "";
+    }
+  }
+  if (
+    shaping.monitor &&
+    (defaultMonitorTypesForFacet(facet) as readonly string[]).includes(
+      shaping.monitor.value,
+    )
+  ) {
+    prefill.monitorType = shaping.monitor.value;
+    prefill.suggested.SET_MONITOR = shaping.monitor.ruleSetName ?? "";
+  }
+  if (shaping.leaseDays) {
+    const days = shaping.leaseDays.value;
+    if (days === 0) prefill.lease = { forever: true };
+    else if (
+      Number.isInteger(days) &&
+      days >= REQUEST_LEASE_DAYS_MIN &&
+      days <= REQUEST_LEASE_DAYS_MAX
+    )
+      prefill.lease = { forever: false, days };
+    if (prefill.lease)
+      prefill.suggested.SET_LEASE_DAYS = shaping.leaseDays.ruleSetName ?? "";
+  }
+  if (shaping.requiredAudioLanguages) {
+    prefill.requiredAudioLanguages = [...shaping.requiredAudioLanguages.value];
+    prefill.suggested.SET_REQUIRED_AUDIO_LANGUAGES =
+      shaping.requiredAudioLanguages.ruleSetName ?? "";
+  }
+  if (shaping.preferredAudioLanguages) {
+    prefill.preferredAudioLanguages = [
+      ...shaping.preferredAudioLanguages.value,
+    ];
+    prefill.suggested.SET_PREFERRED_AUDIO_LANGUAGES =
+      shaping.preferredAudioLanguages.ruleSetName ?? "";
+  }
+  return prefill;
+}
+
+/// How request drafts meet the builder. A request rule has no variant.
+export type RequestRuleBuilderBinding = RuleBuilderBinding<RequestRuleSetDraft>;
+
+/// `schema` is null until the served outputs are read.
+export function requestRuleBuilder(
+  schema: RuleBuilderSchema | null,
+): RequestRuleBuilderBinding {
+  return { schema, variant: () => null, starterSource: REQUEST_STARTER_SOURCE };
+}
 
 /// A draft written by hand: the starter source and no builder model.
 export function initialRequestRuleDraft(): RequestRuleSetDraft {
@@ -64,14 +275,17 @@ export function initialRequestRuleDraft(): RequestRuleSetDraft {
 }
 
 /// A new rule opens in the builder with nothing chosen yet.
-export function newRequestRuleBuilderDraft(): RequestRuleSetDraft {
-  return withNewRuleBuilderModel(REQUEST_RULE_BUILDER, initialRequestRuleDraft());
+export function newRequestRuleBuilderDraft(
+  binding: RequestRuleBuilderBinding,
+): RequestRuleSetDraft {
+  return withNewRuleBuilderModel(binding, initialRequestRuleDraft());
 }
 
 /// The editor draft for a saved rule. Its stored builder model counts only
 /// while it still regenerates the stored source.
 export function requestRuleDraftFromDetail(
   detail: RequestRuleSetDetail,
+  binding: RequestRuleBuilderBinding,
 ): RequestRuleSetDraft {
   return {
     name: detail.ruleSet.name,
@@ -79,7 +293,7 @@ export function requestRuleDraftFromDetail(
     regoSource: detail.revision.regoSource,
     libraryIds: [...detail.ruleSet.libraryIds],
     builderModel: attachedRuleBuilderModel(
-      REQUEST_RULE_BUILDER_SCHEMA,
+      binding.schema,
       detail.builderModel,
       null,
       detail.revision.regoSource,
@@ -92,29 +306,38 @@ export function requestRuleDraftFromDetail(
 /// of copying one, and a rule still made by the builder stays in it.
 export function copyRequestRuleDraft(
   detail: RequestRuleSetDetail,
+  binding: RequestRuleBuilderBinding,
 ): RequestRuleSetDraft {
-  const base = requestRuleDraftFromDetail(detail);
+  const base = requestRuleDraftFromDetail(detail, binding);
   return { ...base, name: `${base.name}_copy` };
 }
 
-export function createRequestRuleSetInput(draft: RequestRuleSetDraft) {
+export function createRequestRuleSetInput(
+  draft: RequestRuleSetDraft,
+  binding: RequestRuleBuilderBinding,
+) {
   return {
     name: draft.name.trim(),
     description: draft.description.trim() || null,
     regoSource: draft.regoSource,
     libraryIds: draft.libraryIds,
-    builderModel: ruleBuilderModelToSave(REQUEST_RULE_BUILDER, draft),
+    builderModel: ruleBuilderModelToSave(binding, draft),
   };
 }
 
+/// Without a schema nothing could be checked, so `builderModel` is left out
+/// and the stored model stays as it is.
 export function updateRequestRuleMatcherInput(
   ruleSetId: string,
   draft: RequestRuleSetDraft,
+  binding: RequestRuleBuilderBinding,
 ) {
   return {
     ruleSetId,
     regoSource: draft.regoSource,
-    builderModel: ruleBuilderModelToSave(REQUEST_RULE_BUILDER, draft),
+    ...(binding.schema
+      ? { builderModel: ruleBuilderModelToSave(binding, draft) }
+      : {}),
   };
 }
 
@@ -255,6 +478,7 @@ const FALLBACK_REASON_LABEL_KEYS: Record<string, string> = {
   error: "requests.fallbackError",
   no_rule_matched: "requests.fallbackNoRuleMatched",
   library_permission: "requests.fallbackLibraryPermission",
+  shaping_conflict: "requests.fallbackShapingConflict",
 };
 
 export function requestFallbackReasonLabelKey(reason: string): string | null {

@@ -4958,10 +4958,6 @@ const ru: LocaleDictionary = {
     "Есть ли у этого привязанного фильма файл на диске",
   "settings.refMaintSeriesMovieTags":
     "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
-  "settings.maintenanceActionHeadMoveToLibrary": "Переместить в библиотеку",
-  "settings.maintenanceActionHeadMoveToRoot": "Переместить в корневую папку",
-  "settings.maintenanceActionHeadNotify": "Уведомить",
-  "settings.maintenanceActionHeadFetchSubtitles": "Загрузить субтитры",
   "settings.ruleBuilderTitle": "Правило",
   "settings.ruleBuilderModeLabel": "Редактор",
   "settings.ruleBuilderModeSimple": "Простой",
@@ -4998,7 +4994,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceBuilderRootPlaceholder": "Выберите корневую папку",
   "settings.ruleBuilderTagsPlaceholder": "Выберите теги",
   "settings.ruleBuilderNoTags": "Теги ещё не созданы.",
-  "settings.maintenanceBuilderNotifyPlaceholder": "Текст уведомления",
   "settings.ruleBuilderGeneratedSource": "Сгенерированный Rego",
   "settings.ruleBuilderGeneratedSourceHelp":
     "Код, который конструктор пишет по вашему выбору. Именно он проверяется, используется в предпросмотре и сохраняется.",
@@ -5055,6 +5050,12 @@ const ru: LocaleDictionary = {
     "Правило содержит вариант, неизвестный этой версии.",
   "settings.ruleBuilderProblemOutputNeedsOther":
     "Для этого варианта также нужно: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Больше не предлагается: {{values}}. Правило сохранит значение, пока вы не выберете другое.",
+  "settings.ruleBuilderSchemaLoading":
+    "Загружается простой редактор. Редактор Rego тем временем работает.",
+  "settings.ruleBuilderSchemaFailed":
+    "Не удалось загрузить простой редактор. Измените правило в Rego или откройте страницу заново.",
   "settings.scoringBuilderOutputs": "Оценка",
   "settings.scoringBuilderOutputsHelp":
     "Выберите одно: добавить баллы к оценке релиза или заблокировать релиз. Код называет запись оценки в трассировке решений.",
@@ -5065,18 +5066,21 @@ const ru: LocaleDictionary = {
   "settings.scoringBuilderCode": "Код",
   "settings.scoringBuilderCodePlaceholder": "example_code",
   "settings.scoringBuilderPoints": "Баллы",
-  "settings.requestBuilderOutputs": "Решение",
+  "settings.requestBuilderOutputs": "Решение и изменения",
   "settings.requestBuilderOutputsHelp":
-    "Выберите не более одного голоса: одобрить, отклонить или оставить на рассмотрение. Теги и причины можно добавить к голосу, а теги могут стоять и отдельно.",
+    "Выберите не более одного голоса: одобрить, отклонить или оставить на рассмотрение. Правило также может изменить то, что запишет одобрение, добавить теги или отправить уведомление — с голосом или без него. Коды причин можно добавить к любому из этих вариантов.",
+  "settings.requestBuilderMonitorPlaceholder": "Выберите отслеживание",
+  "settings.requestBuilderLanguagesPlaceholder": "Выберите языки",
+  "settings.requestDeclaredActionsTitle": "Что может это правило",
+  "settings.requestDeclaredActionsHelp":
+    "Голоса и значения, которые определяет исходный код правила, в этом порядке: {{order}}. Автоматически одобренный запрос получает значения, условия которых выполняются; для запроса на рассмотрении они показываются одобряющему как предложения.",
+  "settings.requestDeclaredActionsNone": "Ничего не объявлено",
+  "settings.requestDeclaredActionsUnavailable":
+    "Исправьте ошибки, чтобы увидеть, что может это правило.",
+  "settings.requestRuleWarningsTitle": "Предупреждения",
+  "settings.requestRuleWarningLocation": "Строка {{line}}, столбец {{column}}:",
   "settings.requestBuilderConditionsHelp":
     "Каждое условие проверяет один факт о запросе, тайтле, библиотеке или времени. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилось решение.",
-  "settings.requestBuilderApprove": "Одобрить",
-  "settings.requestBuilderDeny": "Отклонить",
-  "settings.requestBuilderManual": "Оставить на рассмотрение",
-  "settings.requestBuilderTags": "Теги",
-  "settings.requestBuilderReasons": "Коды причин",
-  "settings.requestBuilderReasonsPlaceholder":
-    "По одному коду причины в строке",
   "settings.requestBuilderOriginManual": "Запрошено вручную",
   "settings.requestBuilderOriginPublicList": "Из публичного списка",
   "settings.requestBuilderOriginPersonalList": "Из личного списка",
@@ -5278,7 +5282,7 @@ const ru: LocaleDictionary = {
     "Правило запроса читает один документ, описывающий запрос, того, кто его сделал, целевую библиотеку и то, что Scryer знает о медиа. Факты — это обычные значения. Факт, который Scryer не смог наблюдать, просто отсутствует, и правило, читающее отсутствующий факт, удерживает запрос для человека, а не гадает — эту защиту вы никогда не пишете сами.",
   "settings.refReqOutputTitle": "Что определяет правило запроса",
   "settings.refReqOutputIntro":
-    "Должно быть определено хотя бы одно из них, иначе правило никогда не сможет проголосовать и Scryer откажется его сохранить.",
+    "Правило должно определять голос, значение, меняющее одобрение, или add_tags; правило без всего этого отклоняется при сохранении. Головы со значением присваивают простой литерал через :=.",
   "settings.refReqOutputApprove":
     "approve — запрос можно удовлетворить без участия человека.",
   "settings.refReqOutputDeny":
@@ -5286,7 +5290,20 @@ const ru: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual — запрос уходит к человеку, что бы ни решили остальные.",
   "settings.refReqOutputTags":
-    'tags contains "…" — метки для медиа, применяются только при одобрении.',
+    "add_tags := [\"…\"] — теги для тайтла, применяются только при одобрении.",
+  "settings.refReqOutputSetQualityProfile":
+    "set_quality_profile := \"Имя профиля\" — одобрить с этим профилем качества вместо запрошенного.",
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — одобрить с этим сроком хранения. 0 — хранить вечно; иначе от 1 до 3650 дней.",
+  "settings.refReqOutputSetMonitor":
+    "set_monitor := \"FUTURE_EPISODES\" — одобрить с этим отслеживанием: MONITORED или UNMONITORED для фильмов; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES или NONE для сериалов и аниме.",
+  "settings.refReqOutputSetAudioLanguages":
+    "set_required_audio_languages := [\"eng\"] и set_preferred_audio_languages := [\"jpn\", \"eng\"] — заменяют запрошенные списки языков аудио.",
+  "settings.refReqOutputNotify": "notify := \"…\" — отправить это уведомление.",
+  "settings.refReqOutputShapingOutcome":
+    "Автоматически одобренный запрос получает эти значения. Для запроса на рассмотрении они показываются одобряющему как предложения, а у отклонённого остаются только в трассировке. Если два правила задают разные значения одного и того же, запрос уходит на рассмотрение.",
+  "settings.refReqOutputNoSchedule":
+    "У правил запросов нет расписания: они выполняются для каждого запроса и при предварительной проверке запрашивающего.",
   "settings.refReqOutputReasons":
     'reasons contains "…" — устойчивые коды, которые видит запросивший.',
   "settings.refReqOutputNoPackage":
@@ -5302,6 +5319,15 @@ const ru: LocaleDictionary = {
   "requests.preflightManualReview": "Это требует одобрения",
   "requests.preflightDeny": "Это было бы отклонено: {{reasons}}",
   "requests.preflightTags": "Будут добавлены метки: {{tags}}.",
+  "requests.preflightShaping": "При одобрении будет изменено на: {{changes}}.",
+  "requests.shapingTitle": "Одобрение было бы изменено на",
+  "requests.shapingSetBy": "задано правилом {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: правила задали разные значения, решает человек",
+  "requests.shapingSuggested": "Предложено правилом {{rule}}",
+  "requests.shapingLeaseDays": "Дней: {{count}}",
+  "requests.fallbackShapingConflict":
+    "Правила задали разные значения одного и того же, поэтому решает человек.",
   "requests.preflightReason": "Причина: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer не смог прочитать всё об этом тайтле, поэтому решение примет человек.",
@@ -10462,9 +10488,17 @@ const ru: LocaleDictionary = {
   "error.ruleInputImportUnsupported":
     "Обращайтесь к входным данным правила напрямую, а не импортируйте их под другим именем.",
   "error.ruleActionValueNotLiteral":
-    "Присвойте этому действию простой литерал: строку в кавычках для set_quality_profile, move_to_library, move_to_root и notify или список строк в кавычках для add_tags и remove_tags.",
+    "Присвойте этой голове простой литерал: строку в кавычках, целое число для set_lease_days или список строк в кавычках для голов тегов и языков аудио.",
   "error.ruleActionValueInvalid":
-    "Значение этого действия недопустимо: имя профиля не может быть пустым, а каждый тег должен быть допустимой меткой тега.",
+    "Значение этой головы недопустимо: имя не может быть пустым, теги должны быть допустимыми метками, срок хранения — от 0 до 3650 дней, а значения отслеживания и языков — из тех, что предлагает Scryer.",
+  "error.ruleActionUnknownQualityProfile":
+    "Профиля качества с таким именем нет, поэтому правило не может его применить.",
+  "error.ruleActionUndefinedTag":
+    "Этот тег не определён в Настройки › Теги, поэтому при применении правила он отбрасывается.",
+  "settings.regoSnippet.shapeRequest":
+    "Задать срок хранения, который запишет одобрение, если факт выполняется.",
+  "settings.regoSnippet.tagRequest":
+    "Пометить запрошенный тайтл тегом, если факт выполняется.",
   "error.ruleHostHelperRedefined":
     "days_since предоставляется Scryer и не может быть переопределён. Дайте своему помощнику другое имя.",
   "error.ruleUnreferencedRule":
@@ -10472,7 +10506,7 @@ const ru: LocaleDictionary = {
   "error.ruleMatchRequired":
     "Определите логическое правило match для этого условия обслуживания.",
   "error.ruleVoteRequired":
-    "Определите approve, deny, manual или tags для этого условия запросов.",
+    "Определите для этого правила запросов голос (approve, deny или manual), значение, меняющее одобрение, или add_tags.",
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
     "Выберите действие или последовательность действий, но не оба варианта.",
   "error.reason.INTERFACE_ACTION_DEFINITION_REQUIRED":
@@ -13675,6 +13709,35 @@ const ru: LocaleDictionary = {
     "Перетащите, чтобы изменить порядок {{value}}",
   "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
   "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
+  "ruleOutput.maintenance.add_tags": "Добавить теги",
+  "ruleOutput.maintenance.remove_tags": "Удалить теги",
+  "ruleOutput.maintenance.set_quality_profile": "Изменить профиль качества",
+  "ruleOutput.maintenance.monitor": "Отслеживать",
+  "ruleOutput.maintenance.search": "Поиск",
+  "ruleOutput.maintenance.fetch_subtitles": "Загрузить субтитры",
+  "ruleOutput.maintenance.move_to_library": "Переместить в библиотеку",
+  "ruleOutput.maintenance.move_to_root": "Переместить в корневую папку",
+  "ruleOutput.maintenance.unmonitor": "Отключить отслеживание",
+  "ruleOutput.maintenance.delete_files": "Удалить файлы",
+  "ruleOutput.maintenance.delete_title": "Удалить тайтл и файлы",
+  "ruleOutput.maintenance.notify": "Уведомить",
+  "ruleOutput.maintenance.notify.placeholder": "Текст уведомления",
+  "ruleOutput.request.approve": "Одобрить",
+  "ruleOutput.request.deny": "Отклонить",
+  "ruleOutput.request.manual": "Оставить на рассмотрение",
+  "ruleOutput.request.set_quality_profile": "Профиль качества",
+  "ruleOutput.request.set_lease_days": "Срок хранения",
+  "ruleOutput.request.set_lease_days.placeholder":
+    "Дни, или 0, чтобы хранить вечно",
+  "ruleOutput.request.set_monitor": "Отслеживание",
+  "ruleOutput.request.set_required_audio_languages": "Обязательные языки аудио",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Предпочитаемые языки аудио",
+  "ruleOutput.request.add_tags": "Добавить теги",
+  "ruleOutput.request.notify": "Уведомить",
+  "ruleOutput.request.notify.placeholder": "Текст уведомления",
+  "ruleOutput.request.reasons": "Коды причин",
+  "ruleOutput.request.reasons.placeholder": "По одному коду причины в строке",
 };
 
 export default ru;

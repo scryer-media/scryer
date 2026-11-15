@@ -121,32 +121,22 @@ export type RuleBuilderOutputPart =
       max: number;
     };
 
+/// One value a page supplies for an output's catalog: the literal the rule
+/// writes, shown as itself, or with a label when the literal is a code.
+export type RuleBuilderOptionValue = string | { value: string; label: string };
+
 /// What an output carries. `options` names a catalog the page supplies, which
-/// the builder loads only once an output that needs it is chosen.
+/// the builder loads only once an output that needs it is chosen. A catalog
+/// the page does not supply is typed in as free text instead; the value is
+/// written the same way either way.
 export type RuleBuilderOutputValueSpec =
   | { kind: "flag" }
-  | ({
-      kind: "text";
-      placeholderKey?: string;
-    } & RuleBuilderTextConstraints)
-  | ({
-      kind: "choice";
-      options: string;
-      placeholderKey?: string;
-      display?: "text" | "path";
-    } & RuleBuilderTextConstraints)
-  | {
-      kind: "number";
-      placeholderKey?: string;
-      min: number;
-      max: number;
-    }
+  | ({ kind: "text" } & RuleBuilderTextConstraints)
+  | ({ kind: "choice"; options: string } & RuleBuilderTextConstraints)
+  | { kind: "number"; min: number; max: number }
   | ({
       kind: "text_list";
       options?: string;
-      placeholderKey?: string;
-      /// Shown when the catalog lists nothing to choose.
-      emptyKey?: string;
       maxItems?: number;
     } & RuleBuilderTextConstraints)
   | { kind: "structured"; parts: readonly RuleBuilderOutputPart[] };
@@ -159,7 +149,11 @@ export type RuleBuilderOutputValueSpec =
 export type RuleBuilderOutput = {
   id: string;
   head: string;
+  /// Translated through the normal i18n path. Without a translation the
+  /// output is shown by its head.
   labelKey: string;
+  /// Help without a translation is left out.
+  helpKey?: string | null;
   value: RuleBuilderOutputValueSpec;
   template: string;
   perItem?: boolean;
@@ -193,16 +187,8 @@ export type RuleBuilderContract = {
   }[];
 };
 
-/// A stored document from before the generic model. Version 1 named a field
-/// by its name under one section and kept the outputs under another key.
-export type RuleBuilderLegacyModel = {
-  version: 1;
-  fieldKey: string;
-  fieldSection: string;
-  outputsKey: string;
-};
-
 export type RuleBuilderSchema = {
+  /// Also the family the server's `ruleBuilderSchema` query is asked for.
   family: string;
   /// Prefix of every element id the builder renders.
   idPrefix: string;
@@ -226,8 +212,195 @@ export type RuleBuilderSchema = {
     /// Badge on a destructive output.
     destructive?: string;
   };
-  legacy?: RuleBuilderLegacyModel;
 };
+
+/// Everything about a family that is not its outputs. The outputs come from
+/// the server, so a new action needs no change here.
+export type RuleBuilderBaseSchema = Omit<RuleBuilderSchema, "outputs" | "outputRules">;
+
+// ── Served outputs ────────────────────────────────────────────────────
+
+/// The value kinds the server describes an output with. A kind this build
+/// does not know is left out of the builder.
+export type RuleBuilderServedValueKind =
+  | "FLAG"
+  | "TEXT"
+  | "CHOICE"
+  | "NUMBER"
+  | "TEXT_LIST";
+
+/// One output as the `ruleBuilderSchema` query describes it.
+export type RuleBuilderOutputDescriptor = {
+  id: string;
+  head: string;
+  /// A translation tag, `ruleOutput.<family>.<head>`.
+  labelKey: string;
+  /// `ruleOutput.<family>.<head>.help`, when the output has help.
+  helpKey?: string | null;
+  valueKind: string;
+  options?: string | null;
+  min?: number | null;
+  max?: number | null;
+  maxItems?: number | null;
+  maxBytes?: number | null;
+  pattern?: string | null;
+  template: string;
+  perItem: boolean;
+  destructive: boolean;
+  /// Null means every variant.
+  variants?: readonly string[] | null;
+  conflictsWith: readonly string[];
+};
+
+export type RuleBuilderServedOutputRule = {
+  rule: string;
+  /// Null means every output.
+  of?: readonly string[] | null;
+};
+
+/// What the `ruleBuilderSchema` query returns for one family.
+export type RuleBuilderSchemaPayload = {
+  family: string;
+  outputs: readonly RuleBuilderOutputDescriptor[];
+  outputRules: readonly RuleBuilderServedOutputRule[];
+};
+
+function constraints(descriptor: RuleBuilderOutputDescriptor) {
+  return {
+    ...(descriptor.maxBytes != null ? { maxBytes: descriptor.maxBytes } : {}),
+    ...(descriptor.pattern != null ? { pattern: descriptor.pattern } : {}),
+  };
+}
+
+function servedValue(
+  descriptor: RuleBuilderOutputDescriptor,
+): RuleBuilderOutputValueSpec | null {
+  switch (descriptor.valueKind) {
+    case "FLAG":
+      return { kind: "flag" };
+    case "TEXT":
+      return { kind: "text", ...constraints(descriptor) };
+    case "CHOICE":
+      // A choice without a catalog can only be typed in.
+      return descriptor.options
+        ? { kind: "choice", options: descriptor.options, ...constraints(descriptor) }
+        : { kind: "text", ...constraints(descriptor) };
+    case "NUMBER":
+      return {
+        kind: "number",
+        min: descriptor.min ?? Number.MIN_SAFE_INTEGER,
+        max: descriptor.max ?? Number.MAX_SAFE_INTEGER,
+      };
+    case "TEXT_LIST":
+      return {
+        kind: "text_list",
+        ...(descriptor.options ? { options: descriptor.options } : {}),
+        ...(descriptor.maxItems != null ? { maxItems: descriptor.maxItems } : {}),
+        ...constraints(descriptor),
+      };
+    default:
+      return null;
+  }
+}
+
+/// The builder outputs a served schema describes, in the order it lists them.
+/// An output whose value kind this build does not know is left out, so a rule
+/// that chooses it opens as Rego; `skipped` names those outputs.
+export function ruleBuilderOutputsFromPayload(
+  payload: RuleBuilderSchemaPayload,
+): {
+  outputs: RuleBuilderOutput[];
+  outputRules: RuleBuilderOutputRule[];
+  skipped: string[];
+} {
+  const outputs: RuleBuilderOutput[] = [];
+  const skipped: string[] = [];
+  for (const descriptor of payload.outputs) {
+    const value = servedValue(descriptor);
+    if (!value) {
+      skipped.push(descriptor.id);
+      continue;
+    }
+    outputs.push({
+      id: descriptor.id,
+      head: descriptor.head,
+      labelKey: descriptor.labelKey,
+      ...(descriptor.helpKey ? { helpKey: descriptor.helpKey } : {}),
+      value,
+      template: descriptor.template,
+      ...(descriptor.perItem ? { perItem: true } : {}),
+      ...(descriptor.destructive ? { destructive: true } : {}),
+      ...(descriptor.variants ? { variants: [...descriptor.variants] } : {}),
+      ...(descriptor.conflictsWith.length > 0
+        ? { conflictsWith: [...descriptor.conflictsWith] }
+        : {}),
+    });
+  }
+  const ids = outputs.map((output) => output.id);
+  const outputRules: RuleBuilderOutputRule[] = [];
+  for (const served of payload.outputRules) {
+    const of = served.of ? [...served.of] : null;
+    switch (served.rule) {
+      case "AT_LEAST_ONE":
+        outputRules.push(of ? { rule: "at_least_one", of } : { rule: "at_least_one" });
+        break;
+      case "AT_MOST_ONE":
+        outputRules.push({ rule: "at_most_one", of: of ?? ids });
+        break;
+      case "EXACTLY_ONE":
+        outputRules.push({ rule: "exactly_one", of: of ?? ids });
+        break;
+    }
+  }
+  return { outputs, outputRules, skipped };
+}
+
+/// A family's whole schema: its own base and the outputs the server serves.
+export function ruleBuilderSchemaFromPayload(
+  base: RuleBuilderBaseSchema,
+  payload: RuleBuilderSchemaPayload,
+): RuleBuilderSchema {
+  const { outputs, outputRules } = ruleBuilderOutputsFromPayload(payload);
+  return { ...base, outputs, outputRules };
+}
+
+/// A translation, or `fallback` when the locale and the fallback locale have
+/// none. The translate helper hands a missing key back as itself.
+export function translatedOr(
+  t: (key: string) => string,
+  key: string,
+  fallback: string,
+): string {
+  const text = t(key);
+  return text === key ? fallback : text;
+}
+
+/// An output's label in the UI language, or its head when the tag has no
+/// translation yet, so an output the server just added is still usable.
+export function ruleBuilderOutputLabel(
+  t: (key: string) => string,
+  output: Pick<RuleBuilderOutput, "labelKey" | "head">,
+): string {
+  return translatedOr(t, output.labelKey, output.head);
+}
+
+/// An output's help in the UI language; null when it has none translated.
+export function ruleBuilderOutputHelp(
+  t: (key: string) => string,
+  output: Pick<RuleBuilderOutput, "helpKey">,
+): string | null {
+  if (!output.helpKey) return null;
+  return translatedOr(t, output.helpKey, "") || null;
+}
+
+/// The placeholder of an output typed in rather than picked, when the locale
+/// has one: `<labelKey>.placeholder`.
+export function ruleBuilderOutputPlaceholder(
+  t: (key: string) => string,
+  output: Pick<RuleBuilderOutput, "labelKey">,
+): string | undefined {
+  return translatedOr(t, `${output.labelKey}.placeholder`, "") || undefined;
+}
 
 // ── Shared vocabulary ─────────────────────────────────────────────────
 
@@ -493,6 +666,9 @@ export const RULE_BUILDER_PROBLEM_CODES = [
   "BUILDER_OUTPUTS_CONFLICT",
   /// An output needs another output that is not chosen.
   "BUILDER_OUTPUT_NEEDS_OTHER",
+  /// A picked value is not in its catalog as loaded. Shown, never blocking:
+  /// the rule keeps the value.
+  "BUILDER_VALUE_NOT_IN_CATALOG",
 ] as const;
 
 export type RuleBuilderProblemCode = (typeof RULE_BUILDER_PROBLEM_CODES)[number];
@@ -533,6 +709,7 @@ export const RULE_BUILDER_PROBLEM_KEYS: Record<RuleBuilderProblemCode, string> =
     BUILDER_OUTPUT_NOT_IN_SCOPE: "settings.ruleBuilderProblemOutputNotInScope",
     BUILDER_OUTPUTS_CONFLICT: "settings.ruleBuilderProblemOutputsConflict",
     BUILDER_OUTPUT_NEEDS_OTHER: "settings.ruleBuilderProblemOutputNeedsOther",
+    BUILDER_VALUE_NOT_IN_CATALOG: "settings.ruleBuilderProblemValueNotInCatalog",
   };
 
 export type RuleBuilderResult =
@@ -925,51 +1102,20 @@ function parseOutputValue(
   }
 }
 
-/// Read a version 1 document into the generic shape.
-function upgradeLegacy(
-  legacy: RuleBuilderLegacyModel,
-  value: Record<string, unknown>,
-): Record<string, unknown> | null {
-  if (!Array.isArray(value.conditions)) return null;
-  const conditions: unknown[] = [];
-  for (const entry of value.conditions) {
-    if (!isRecord(entry)) return null;
-    const name = entry[legacy.fieldKey];
-    if (typeof name !== "string") return null;
-    conditions.push({
-      field: name === "" ? "" : `${legacy.fieldSection}.${name}`,
-      operator: entry.operator,
-      value: entry.value,
-    });
-  }
-  return {
-    join: value.join,
-    conditions,
-    outputs: value[legacy.outputsKey],
-  };
-}
-
-/// Read a stored model document for this schema. A version 1 document the
-/// schema knows how to read is upgraded in memory. Anything else this build
-/// does not recognise, including another family's or a later version, is
+/// Read a stored model document for this schema. Anything that is not the
+/// current version of this family, or that this build does not recognise, is
 /// null: the rule then opens as Rego.
 export function parseRuleBuilderModel(
   schema: RuleBuilderSchema,
   document: unknown,
 ): RuleBuilderModel | null {
   if (!isRecord(document)) return null;
-  let value: Record<string, unknown> | null;
-  if (document.version === 1 && schema.legacy) {
-    value = upgradeLegacy(schema.legacy, document);
-  } else if (
-    document.version === RULE_BUILDER_MODEL_VERSION &&
-    document.family === schema.family
-  ) {
-    value = document;
-  } else {
+  if (
+    document.version !== RULE_BUILDER_MODEL_VERSION ||
+    document.family !== schema.family
+  )
     return null;
-  }
-  if (!value) return null;
+  const value = document;
   if (value.join !== "ALL" && value.join !== "ANY") return null;
   if (!Array.isArray(value.conditions)) return null;
 

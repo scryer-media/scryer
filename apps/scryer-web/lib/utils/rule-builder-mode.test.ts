@@ -11,8 +11,13 @@ import type {
 import type { RequestRuleSetDetail } from "../types/request-rule-sets.ts";
 import type { RuleSetRecord } from "../types/rule-sets.ts";
 import {
-  MAINTENANCE_RULE_BUILDER,
+  MAINTENANCE_CONTRACT_SCHEMA,
+  REQUEST_CONTRACT_SCHEMA,
+  SCORING_CONTRACT_SCHEMA,
+} from "./rule-builder-contract-fixture.ts";
+import {
   MAINTENANCE_STARTER_SOURCE,
+  maintenanceRuleBuilder,
   copyMaintenanceRuleDraft,
   createMaintenanceRuleSetInput,
   initialMaintenanceRuleDraft,
@@ -21,8 +26,8 @@ import {
   updateMaintenanceRuleMatcherInput,
 } from "./maintenance-rule-sets.ts";
 import {
-  REQUEST_RULE_BUILDER,
   REQUEST_STARTER_SOURCE,
+  requestRuleBuilder,
   copyRequestRuleDraft,
   createRequestRuleSetInput,
   initialRequestRuleDraft,
@@ -50,8 +55,8 @@ import {
 } from "./rule-builder-mode.ts";
 import {
   RULE_SET_INITIAL_DRAFT,
-  SCORING_RULE_BUILDER,
   SCORING_STARTER_SOURCE,
+  scoringRuleBuilder,
   copyRuleSetDraft,
   createRuleSetInput,
   newScoringRuleBuilderDraft,
@@ -165,46 +170,57 @@ function requestDetail(regoSource: string, builderModel: unknown): RequestRuleSe
   } as unknown as RequestRuleSetDetail;
 }
 
+const MAINTENANCE_BUILDER = maintenanceRuleBuilder(MAINTENANCE_CONTRACT_SCHEMA);
+const SCORING_BUILDER = scoringRuleBuilder(SCORING_CONTRACT_SCHEMA);
+const REQUEST_BUILDER = requestRuleBuilder(REQUEST_CONTRACT_SCHEMA);
+
 const maintenance: Family<ReturnType<typeof initialMaintenanceRuleDraft>> = {
   name: "maintenance",
-  binding: MAINTENANCE_RULE_BUILDER,
+  binding: MAINTENANCE_BUILDER,
   starter: MAINTENANCE_STARTER_SOURCE,
   fixtures: (maintenanceFixtures as Fixture[]).filter((entry) => entry.scope === "TITLE"),
-  newDraft: newMaintenanceRuleBuilderDraft,
+  newDraft: () => newMaintenanceRuleBuilderDraft(MAINTENANCE_BUILDER),
   handWrittenDraft: initialMaintenanceRuleDraft,
-  fromStored: (source, model) => maintenanceRuleDraftFromDetail(maintenanceDetail(source, model)),
-  copy: (source, model) => copyMaintenanceRuleDraft(maintenanceDetail(source, model)),
-  createModel: (draft) => createMaintenanceRuleSetInput(draft).builderModel,
-  updateModel: (draft) => updateMaintenanceRuleMatcherInput("rule-sample", draft).builderModel,
+  fromStored: (source, model) =>
+    maintenanceRuleDraftFromDetail(maintenanceDetail(source, model), MAINTENANCE_BUILDER),
+  copy: (source, model) =>
+    copyMaintenanceRuleDraft(maintenanceDetail(source, model), MAINTENANCE_BUILDER),
+  createModel: (draft) => createMaintenanceRuleSetInput(draft, MAINTENANCE_BUILDER).builderModel,
+  updateModel: (draft) =>
+    updateMaintenanceRuleMatcherInput("rule-sample", draft, MAINTENANCE_BUILDER).builderModel,
 };
 
 const scoring: Family<typeof RULE_SET_INITIAL_DRAFT> = {
   name: "scoring",
-  binding: SCORING_RULE_BUILDER,
+  binding: SCORING_BUILDER,
   starter: SCORING_STARTER_SOURCE,
   fixtures: scoringFixtures as Fixture[],
-  newDraft: newScoringRuleBuilderDraft,
+  newDraft: () => newScoringRuleBuilderDraft(SCORING_BUILDER),
   handWrittenDraft: () => ({ ...RULE_SET_INITIAL_DRAFT }),
-  fromStored: (source, model) => ruleSetDraftFromRecord(scoringRecord(source, model)),
-  copy: (source, model) => copyRuleSetDraft(scoringRecord(source, model)),
-  createModel: (draft) => createRuleSetInput(draft).builderModel,
-  updateModel: (draft) => updateRuleSetInput("rule-sample", draft).builderModel,
+  fromStored: (source, model) =>
+    ruleSetDraftFromRecord(scoringRecord(source, model), SCORING_BUILDER),
+  copy: (source, model) => copyRuleSetDraft(scoringRecord(source, model), SCORING_BUILDER),
+  createModel: (draft) => createRuleSetInput(draft, SCORING_BUILDER).builderModel,
+  updateModel: (draft) => updateRuleSetInput("rule-sample", draft, SCORING_BUILDER).builderModel,
 };
 
 const request: Family<ReturnType<typeof initialRequestRuleDraft>> = {
   name: "request",
-  binding: REQUEST_RULE_BUILDER,
+  binding: REQUEST_BUILDER,
   starter: REQUEST_STARTER_SOURCE,
   fixtures: requestFixtures as Fixture[],
-  newDraft: newRequestRuleBuilderDraft,
+  newDraft: () => newRequestRuleBuilderDraft(REQUEST_BUILDER),
   handWrittenDraft: initialRequestRuleDraft,
-  fromStored: (source, model) => requestRuleDraftFromDetail(requestDetail(source, model)),
-  copy: (source, model) => copyRequestRuleDraft(requestDetail(source, model)),
-  createModel: (draft) => createRequestRuleSetInput(draft).builderModel,
-  updateModel: (draft) => updateRequestRuleMatcherInput("rule-sample", draft).builderModel,
+  fromStored: (source, model) =>
+    requestRuleDraftFromDetail(requestDetail(source, model), REQUEST_BUILDER),
+  copy: (source, model) => copyRequestRuleDraft(requestDetail(source, model), REQUEST_BUILDER),
+  createModel: (draft) => createRequestRuleSetInput(draft, REQUEST_BUILDER).builderModel,
+  updateModel: (draft) =>
+    updateRequestRuleMatcherInput("rule-sample", draft, REQUEST_BUILDER).builderModel,
 };
 
 function modelOf<D extends RuleBuilderDraft>(family: Family<D>, entry: Fixture): RuleBuilderModel {
+  assert.ok(family.binding.schema);
   const model = parseRuleBuilderModel(family.binding.schema, entry.model);
   assert.ok(model, entry.id);
   return model;
@@ -215,6 +231,7 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
 
   test(`${family.name}: a new rule opens in Simple with nothing to save, a hand-written one in Advanced edit`, () => {
     const draft = family.newDraft();
+    assert.ok(family.binding.schema);
     assert.deepEqual(draft.builderModel, emptyRuleBuilderModel(family.binding.schema));
     assert.equal(draft.regoSource, "");
     assert.equal(initialRuleEditorMode(draft), "simple");
@@ -353,27 +370,42 @@ test("maintenance: a scope change rewrites an attached rule for the new scope", 
   assert.ok(entry);
   const model = modelOf(maintenance, entry);
   const attached = withRuleBuilderModel(
-    MAINTENANCE_RULE_BUILDER,
-    newMaintenanceRuleBuilderDraft(),
+    MAINTENANCE_BUILDER,
+    newMaintenanceRuleBuilderDraft(MAINTENANCE_BUILDER),
     model,
   );
   assert.equal(attached.regoSource, entry.source);
 
-  const episode = withRegeneratedRuleSource(MAINTENANCE_RULE_BUILDER, {
+  const episode = withRegeneratedRuleSource(MAINTENANCE_BUILDER, {
     ...attached,
     subjectKind: "EPISODE",
   });
   assert.equal(episode.regoSource, "");
   assert.deepEqual(episode.builderModel, model);
-  assert.equal(isIncompleteRuleBuilderDraft(MAINTENANCE_RULE_BUILDER, episode), true);
+  assert.equal(isIncompleteRuleBuilderDraft(MAINTENANCE_BUILDER, episode), true);
 
   // A rule stored for one scope does not open in the builder under another.
   assert.equal(
-    maintenanceRuleDraftFromDetail(maintenanceDetail(entry.source, entry.model, "EPISODE"))
-      .builderModel,
+    maintenanceRuleDraftFromDetail(
+      maintenanceDetail(entry.source, entry.model, "EPISODE"),
+      MAINTENANCE_BUILDER,
+    ).builderModel,
     null,
   );
 
   const detached = { ...attached, builderModel: null };
-  assert.equal(withRegeneratedRuleSource(MAINTENANCE_RULE_BUILDER, detached), detached);
+  assert.equal(withRegeneratedRuleSource(MAINTENANCE_BUILDER, detached), detached);
+});
+
+test("without the served schema a stored builder rule opens as Rego and an update keeps its model", () => {
+  const entry = (requestFixtures as Fixture[])[0];
+  const unserved = requestRuleBuilder(null);
+  const draft = requestRuleDraftFromDetail(requestDetail(entry.source, entry.model), unserved);
+  assert.equal(draft.builderModel, null);
+  assert.equal(initialRuleEditorMode(draft), "edit");
+  assert.equal(isIncompleteRuleBuilderDraft(unserved, draft), false);
+  // The update leaves `builderModel` out, so the server keeps the stored one.
+  const input = updateRequestRuleMatcherInput("rule-sample", draft, unserved);
+  assert.equal(Object.hasOwn(input, "builderModel"), false);
+  assert.equal(newRequestRuleBuilderDraft(unserved).builderModel, null);
 });

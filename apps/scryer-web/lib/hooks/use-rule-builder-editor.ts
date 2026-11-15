@@ -10,6 +10,7 @@ import {
 import {
   ruleBuilderOptionSources,
   type RuleBuilderModel,
+  type RuleBuilderOptionValue,
 } from "@/lib/utils/rule-builder";
 import {
   initialRuleEditorMode,
@@ -44,7 +45,7 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   setDraft: Dispatch<SetStateAction<D>>;
   isEditorOpen: boolean;
   /// Catalogs the page already holds.
-  staticOptions?: Readonly<Record<string, readonly string[]>>;
+  staticOptions?: Readonly<Record<string, readonly RuleBuilderOptionValue[]>>;
   optionLoaders?: RuleBuilderOptionLoaders;
   onLoadError?: (error: unknown) => void;
 }) {
@@ -95,9 +96,10 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
   /// read-only Rego, so a save is held to what the builder can write.
   const attached =
     isEditorOpen && mode !== "edit" && draft.builderModel !== null;
-  const needed = builderShown
-    ? ruleBuilderOptionSources(binding.schema, draft.builderModel)
-    : [];
+  const needed =
+    builderShown && binding.schema
+      ? ruleBuilderOptionSources(binding.schema, draft.builderModel)
+      : [];
   const neededKey = needed.join("\n");
 
   useEffect(() => {
@@ -118,13 +120,17 @@ export function useRuleBuilderEditor<D extends RuleBuilderDraft>({
     }
   }, [neededKey, staticOptions]);
 
+  /// Only catalogs the page can supply are listed; the builder types a value
+  /// for any other catalog in as free text.
   const options = useMemo(() => {
-    const all: Record<string, readonly string[] | null> = {};
+    const all: Record<string, readonly RuleBuilderOptionValue[] | null> = {};
     for (const source of neededKey ? neededKey.split("\n") : []) {
-      all[source] = staticOptions?.[source] ?? loaded[source] ?? null;
+      const known = staticOptions?.[source];
+      if (known) all[source] = known;
+      else if (optionLoaders?.[source]) all[source] = loaded[source] ?? null;
     }
     return all;
-  }, [loaded, neededKey, staticOptions]);
+  }, [loaded, neededKey, optionLoaders, staticOptions]);
 
   return {
     mode,

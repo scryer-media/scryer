@@ -1,5 +1,5 @@
 import { graphQlErrorNumberExtension } from "../graphql/error-message.ts";
-import { MAINTENANCE_RULE_BUILDER_SCHEMA } from "./maintenance-rule-builder-schema.ts";
+import type { RuleBuilderSchema } from "./rule-builder.ts";
 import {
   attachedRuleBuilderModel,
   ruleBuilderModelToSave,
@@ -13,7 +13,6 @@ import {
 } from "./script-schedule.ts";
 import type { ScriptSchedule } from "../types/scripts.ts";
 import type {
-  MaintenanceActionHead,
   MaintenanceActionKind,
   MaintenanceActionStepKind,
   MaintenanceActionStepProgress,
@@ -57,93 +56,23 @@ add_tags := ["needs-review"] if unmonitored_with_files
 reasons contains "unmonitored_with_files" if unmonitored_with_files
 `;
 
-/// The order the server applies a subject's decided actions in. Declared
-/// actions are listed in the same order so a rule reads the way it runs.
-export const MAINTENANCE_ACTION_HEAD_ORDER: readonly MaintenanceActionHead[] = [
-  "ADD_TAGS",
-  "REMOVE_TAGS",
-  "SET_QUALITY_PROFILE",
-  "MONITOR",
-  "SEARCH",
-  "FETCH_SUBTITLES",
-  "MOVE_TO_LIBRARY",
-  "MOVE_TO_ROOT",
-  "UNMONITOR",
-  "DELETE_FILES",
-  "DELETE_TITLE",
-  "NOTIFY",
-];
-
-/// The rule name an author writes in source to declare each action.
-export const MAINTENANCE_ACTION_HEAD_RULE_NAMES: Record<
-  MaintenanceActionHead,
-  string
-> = {
-  UNMONITOR: "unmonitor",
-  DELETE_FILES: "delete_files",
-  DELETE_TITLE: "delete_title",
-  SEARCH: "search",
-  SET_QUALITY_PROFILE: "set_quality_profile",
-  ADD_TAGS: "add_tags",
-  REMOVE_TAGS: "remove_tags",
-  MONITOR: "monitor",
-  MOVE_TO_LIBRARY: "move_to_library",
-  MOVE_TO_ROOT: "move_to_root",
-  NOTIFY: "notify",
-  FETCH_SUBTITLES: "fetch_subtitles",
-};
-
-const ACTION_HEAD_LABEL_KEYS: Record<MaintenanceActionHead, string> = {
-  UNMONITOR: "settings.maintenanceSequenceStepUnmonitor",
-  DELETE_FILES: "settings.maintenanceSequenceStepDeleteFiles",
-  DELETE_TITLE: "settings.maintenanceSequenceStepDeleteTitleAndFiles",
-  SEARCH: "settings.maintenanceSequenceStepSearch",
-  SET_QUALITY_PROFILE: "settings.maintenanceSequenceStepChangeQualityProfile",
-  ADD_TAGS: "settings.maintenanceSequenceStepAddTags",
-  REMOVE_TAGS: "settings.maintenanceSequenceStepRemoveTags",
-  MONITOR: "title.monitorAction",
-  MOVE_TO_LIBRARY: "settings.maintenanceActionHeadMoveToLibrary",
-  MOVE_TO_ROOT: "settings.maintenanceActionHeadMoveToRoot",
-  NOTIFY: "settings.maintenanceActionHeadNotify",
-  FETCH_SUBTITLES: "settings.maintenanceActionHeadFetchSubtitles",
-};
-
-/// Translation key for an action head, or null for a head this build does not
-/// know. Callers render the raw head rather than an empty cell.
-export function actionHeadLabelKey(head: string): string | null {
-  return ACTION_HEAD_LABEL_KEYS[head as MaintenanceActionHead] ?? null;
-}
-
-const DESTRUCTIVE_ACTION_HEADS: ReadonlySet<string> = new Set([
-  "DELETE_FILES",
-  "DELETE_TITLE",
-]);
-
-export function isDestructiveActionHead(head: string): boolean {
-  return DESTRUCTIVE_ACTION_HEADS.has(head);
-}
-
 /// One action as a row shows it: the head plus the values it carries. Heads
-/// without a value (unmonitor, search, ...) carry an empty list.
+/// without a value (unmonitor, search, ...) carry an empty list. The label,
+/// order and destructive mark come from the served output descriptors.
 export type MaintenanceActionEntry = {
-  head: MaintenanceActionHead;
+  head: string;
   values: string[];
 };
 
-function headOrderIndex(head: string): number {
-  const index = MAINTENANCE_ACTION_HEAD_ORDER.indexOf(
-    head as MaintenanceActionHead,
-  );
-  return index === -1 ? MAINTENANCE_ACTION_HEAD_ORDER.length : index;
-}
-
-/// Everything a rule's source can do, in execution order, with every literal
-/// each valued head can produce.
+/// Everything a rule's source can do, as the server lists it, with every
+/// literal each valued head can produce. The API carries a valued head's
+/// literals in a field of its own, so only those fields are read here; a head
+/// added later is listed without values until the API carries them.
 export function declaredActionEntries(
   declared: MaintenanceDeclaredActions | null | undefined,
 ): MaintenanceActionEntry[] {
   if (!declared) return [];
-  const values: Partial<Record<MaintenanceActionHead, string[]>> = {
+  const values: Record<string, string[]> = {
     SET_QUALITY_PROFILE: declared.qualityProfiles,
     ADD_TAGS: declared.addTags,
     REMOVE_TAGS: declared.removeTags,
@@ -151,9 +80,10 @@ export function declaredActionEntries(
     MOVE_TO_ROOT: declared.roots,
     NOTIFY: declared.notifications,
   };
-  return [...new Set(declared.heads)]
-    .sort((left, right) => headOrderIndex(left) - headOrderIndex(right))
-    .map((head) => ({ head, values: [...(values[head] ?? [])] }));
+  return [...new Set(declared.heads)].map((head) => ({
+    head,
+    values: [...(values[head] ?? [])],
+  }));
 }
 
 /// What a rule decided for one subject. The server already lists heads in the
@@ -163,7 +93,7 @@ export function decidedActionEntries(
 ): MaintenanceActionEntry[] {
   if (!decided) return [];
   const single = (value: string | null) => (value ? [value] : []);
-  const values: Partial<Record<MaintenanceActionHead, string[]>> = {
+  const values: Record<string, string[]> = {
     SET_QUALITY_PROFILE: single(decided.qualityProfile),
     ADD_TAGS: decided.addTags,
     REMOVE_TAGS: decided.removeTags,
@@ -175,27 +105,6 @@ export function decidedActionEntries(
     head,
     values: [...(values[head] ?? [])],
   }));
-}
-
-const RULE_NAME_TO_HEAD = new Map(
-  Object.entries(MAINTENANCE_ACTION_HEAD_RULE_NAMES).map(([head, name]) => [
-    name,
-    head as MaintenanceActionHead,
-  ]),
-);
-
-/// The action heads a shipped template's source defines, in execution order.
-/// Only for the templates this build ships, whose rule heads start a line; a
-/// rule the operator wrote is read by the server's validation instead.
-export function templateActionHeads(source: string): MaintenanceActionHead[] {
-  const heads = new Set<MaintenanceActionHead>();
-  for (const match of source.matchAll(/^([a-z_]+)\b/gm)) {
-    const head = RULE_NAME_TO_HEAD.get(match[1]);
-    if (head) heads.add(head);
-  }
-  return [...heads].sort(
-    (left, right) => headOrderIndex(left) - headOrderIndex(right),
-  );
 }
 
 /// How often a new rule runs until the operator picks otherwise. The server
@@ -225,28 +134,34 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
   };
 }
 
+export type MaintenanceRuleBuilderBinding =
+  RuleBuilderBinding<MaintenanceRuleSetDraft>;
+
 /// How maintenance drafts meet the simple builder: a rule is written for its
-/// scope.
-export const MAINTENANCE_RULE_BUILDER: RuleBuilderBinding<MaintenanceRuleSetDraft> =
-  {
-    schema: MAINTENANCE_RULE_BUILDER_SCHEMA,
+/// scope. `schema` is null until the served outputs are read.
+export function maintenanceRuleBuilder(
+  schema: RuleBuilderSchema | null,
+): MaintenanceRuleBuilderBinding {
+  return {
+    schema,
     variant: (draft) => draft.subjectKind,
     starterSource: MAINTENANCE_STARTER_SOURCE,
   };
+}
 
 /// A new rule starts in the simple builder with nothing chosen, so it has no
-/// source until the builder can write one.
-export function newMaintenanceRuleBuilderDraft(): MaintenanceRuleSetDraft {
-  return withNewRuleBuilderModel(
-    MAINTENANCE_RULE_BUILDER,
-    initialMaintenanceRuleDraft(),
-  );
+/// source until the builder can write one. Without a schema it starts as Rego.
+export function newMaintenanceRuleBuilderDraft(
+  binding: MaintenanceRuleBuilderBinding,
+): MaintenanceRuleSetDraft {
+  return withNewRuleBuilderModel(binding, initialMaintenanceRuleDraft());
 }
 
 /// A stored model opens in the builder only while it still regenerates the
 /// stored source.
 export function maintenanceRuleDraftFromDetail(
   detail: MaintenanceRuleSetDetail,
+  binding: MaintenanceRuleBuilderBinding,
 ): MaintenanceRuleSetDraft {
   return {
     subjectKind: detail.ruleSet.subjectKind,
@@ -260,7 +175,7 @@ export function maintenanceRuleDraftFromDetail(
       normalizeScriptSchedule(detail.ruleSet.schedule) ??
       defaultMaintenanceRuleSchedule(),
     builderModel: attachedRuleBuilderModel(
-      MAINTENANCE_RULE_BUILDER_SCHEMA,
+      binding.schema,
       detail.builderModel,
       detail.ruleSet.subjectKind,
       detail.revision.regoSource,
@@ -270,15 +185,19 @@ export function maintenanceRuleDraftFromDetail(
 
 export function copyMaintenanceRuleDraft(
   detail: MaintenanceRuleSetDetail,
+  binding: MaintenanceRuleBuilderBinding,
 ): MaintenanceRuleSetDraft {
   return {
-    ...maintenanceRuleDraftFromDetail(detail),
+    ...maintenanceRuleDraftFromDetail(detail, binding),
     name: `Copy of ${detail.ruleSet.name}`,
   };
 }
 
 /// The source declares the actions, so create carries no separate action.
-export function createMaintenanceRuleSetInput(draft: MaintenanceRuleSetDraft) {
+export function createMaintenanceRuleSetInput(
+  draft: MaintenanceRuleSetDraft,
+  binding: MaintenanceRuleBuilderBinding,
+) {
   return {
     subjectKind: draft.subjectKind,
     name: draft.name.trim(),
@@ -288,13 +207,14 @@ export function createMaintenanceRuleSetInput(draft: MaintenanceRuleSetDraft) {
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
     schedule: toScriptScheduleInput(draft.schedule),
-    builderModel: ruleBuilderModelToSave(MAINTENANCE_RULE_BUILDER, draft),
+    builderModel: ruleBuilderModelToSave(binding, draft),
   };
 }
 
 export function updateMaintenanceRuleMatcherInput(
   id: string,
   draft: MaintenanceRuleSetDraft,
+  binding: MaintenanceRuleBuilderBinding,
 ) {
   return {
     id,
@@ -304,7 +224,11 @@ export function updateMaintenanceRuleMatcherInput(
     // preserve a root they cannot render; this client may intentionally clear it.
     storageRootId: draft.storageRootId || null,
     // Null clears a stored model, so a hand-edited rule stops claiming one.
-    builderModel: ruleBuilderModelToSave(MAINTENANCE_RULE_BUILDER, draft),
+    // Without a schema nothing could be checked, so the field is left out and
+    // the stored model stays as it is.
+    ...(binding.schema
+      ? { builderModel: ruleBuilderModelToSave(binding, draft) }
+      : {}),
   };
 }
 
@@ -329,13 +253,14 @@ export function maintenanceRuleUpdatePlan(
   id: string,
   baseline: MaintenanceRuleSetDraft,
   draft: MaintenanceRuleSetDraft,
+  binding: MaintenanceRuleBuilderBinding,
 ) {
-  const matcher = updateMaintenanceRuleMatcherInput(id, draft);
+  const matcher = updateMaintenanceRuleMatcherInput(id, draft, binding);
   const metadata = updateMaintenanceRuleMetadataInput(id, draft);
   const same = (left: unknown, right: unknown) =>
     JSON.stringify(left) === JSON.stringify(right);
   return {
-    matcher: same(matcher, updateMaintenanceRuleMatcherInput(id, baseline))
+    matcher: same(matcher, updateMaintenanceRuleMatcherInput(id, baseline, binding))
       ? null
       : matcher,
     metadata: same(metadata, updateMaintenanceRuleMetadataInput(id, baseline))

@@ -5330,10 +5330,6 @@ const cs: LocaleDictionary = {
     "Zda má tento propojený film soubor na disku",
   "settings.refMaintSeriesMovieTags":
     "Uživatelsky definované štítky tohoto propojeného filmu ze stejného registru jako štítky titulů. Propojený film nese vlastní štítky; nededí je od seriálu.",
-  "settings.maintenanceActionHeadMoveToLibrary": "Přesunout do knihovny",
-  "settings.maintenanceActionHeadMoveToRoot": "Přesunout do kořenové složky",
-  "settings.maintenanceActionHeadNotify": "Upozornit",
-  "settings.maintenanceActionHeadFetchSubtitles": "Stáhnout titulky",
   "settings.ruleBuilderTitle": "Pravidlo",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Jednoduchý",
@@ -5370,7 +5366,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceBuilderRootPlaceholder": "Vyberte kořenovou složku",
   "settings.ruleBuilderTagsPlaceholder": "Vyberte štítky",
   "settings.ruleBuilderNoTags": "Zatím nejsou vytvořeny žádné štítky.",
-  "settings.maintenanceBuilderNotifyPlaceholder": "Text oznámení",
   "settings.ruleBuilderGeneratedSource": "Vygenerované Rego",
   "settings.ruleBuilderGeneratedSourceHelp":
     "Kód, který editor napíše podle vašich voleb. Právě ten se ověřuje, zobrazuje v náhledu a ukládá.",
@@ -5427,6 +5422,12 @@ const cs: LocaleDictionary = {
     "Pravidlo obsahuje volbu, kterou tato verze nezná.",
   "settings.ruleBuilderProblemOutputNeedsOther":
     "Tato volba vyžaduje také: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Už se nenabízí: {{values}}. Pravidlo si hodnotu ponechá, dokud nevyberete jinou.",
+  "settings.ruleBuilderSchemaLoading":
+    "Načítá se jednoduchý editor. Editor Rego mezitím funguje.",
+  "settings.ruleBuilderSchemaFailed":
+    "Jednoduchý editor se nepodařilo načíst. Upravte pravidlo v Rego, nebo stránku otevřete znovu.",
   "settings.scoringBuilderOutputs": "Skóre",
   "settings.scoringBuilderOutputsHelp":
     "Vyberte jednu možnost: přičíst body ke skóre vydání, nebo vydání zablokovat. Kód pojmenovává položku skóre v záznamech rozhodnutí.",
@@ -5437,17 +5438,21 @@ const cs: LocaleDictionary = {
   "settings.scoringBuilderCode": "Kód",
   "settings.scoringBuilderCodePlaceholder": "example_code",
   "settings.scoringBuilderPoints": "Body",
-  "settings.requestBuilderOutputs": "Rozhodnutí",
+  "settings.requestBuilderOutputs": "Rozhodnutí a změny",
   "settings.requestBuilderOutputsHelp":
-    "Vyberte nejvýše jeden hlas: schválit, zamítnout, nebo ponechat k posouzení. Štítky a důvody lze přidat k hlasu a štítky mohou stát i samostatně.",
+    "Vyberte nejvýše jeden hlas: schválit, zamítnout, nebo ponechat k posouzení. Pravidlo může také změnit, co schválení zapíše, přidat štítky nebo odeslat oznámení, s hlasem i bez něj. Kódy důvodů lze přidat ke kterékoli z těchto možností.",
+  "settings.requestBuilderMonitorPlaceholder": "Vyberte sledování",
+  "settings.requestBuilderLanguagesPlaceholder": "Vyberte jazyky",
+  "settings.requestDeclaredActionsTitle": "Co toto pravidlo umí",
+  "settings.requestDeclaredActionsHelp":
+    "Hlasy a hodnoty, které zdroj tohoto pravidla definuje, v tomto pořadí: {{order}}. Automaticky schválený požadavek dostane hodnoty, jejichž podmínky platí; u požadavku čekajícího na posouzení je schvalovatel uvidí jako návrhy.",
+  "settings.requestDeclaredActionsNone": "Nic není deklarováno",
+  "settings.requestDeclaredActionsUnavailable":
+    "Opravte chyby, abyste viděli, co toto pravidlo umí.",
+  "settings.requestRuleWarningsTitle": "Upozornění",
+  "settings.requestRuleWarningLocation": "Řádek {{line}}, sloupec {{column}}:",
   "settings.requestBuilderConditionsHelp":
     "Každá podmínka ověřuje jeden údaj o žádosti, titulu, knihovně nebo čase. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se rozhodnutí použilo.",
-  "settings.requestBuilderApprove": "Schválit",
-  "settings.requestBuilderDeny": "Zamítnout",
-  "settings.requestBuilderManual": "Ponechat k posouzení",
-  "settings.requestBuilderTags": "Štítky",
-  "settings.requestBuilderReasons": "Kódy důvodů",
-  "settings.requestBuilderReasonsPlaceholder": "Jeden kód důvodu na řádek",
   "settings.requestBuilderOriginManual": "Zadáno ručně",
   "settings.requestBuilderOriginPublicList": "Z veřejného seznamu",
   "settings.requestBuilderOriginPersonalList": "Z osobního seznamu",
@@ -5652,7 +5657,7 @@ const cs: LocaleDictionary = {
     "Pravidlo žádosti čte jeden dokument popisující žádost, osobu, která ji podala, knihovnu, na kterou míří, a co o médiu Scryer ví. Fakta jsou obyčejné hodnoty. Fakt, který Scryer nedokázal zjistit, jednoduše chybí, a pravidlo, které čte chybějící fakt, pozdrží žádost pro člověka místo hádání – tuto pojistku sami nepíšete.",
   "settings.refReqOutputTitle": "Co pravidlo žádosti definuje",
   "settings.refReqOutputIntro":
-    "Alespoň jedno z toho musí být definováno, jinak pravidlo nemůže nikdy hlasovat a Scryer odmítne ho uložit.",
+    "Pravidlo musí definovat hlas, hodnotu upravující schválení, nebo add_tags; pravidlo bez žádné z nich je při uložení odmítnuto. Hlavy s hodnotou přiřazují prostý literál pomocí :=.",
   "settings.refReqOutputApprove":
     "approve – žádost může být schválena bez toho, aby ji viděl člověk.",
   "settings.refReqOutputDeny":
@@ -5660,7 +5665,20 @@ const cs: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual – žádost jde k člověku bez ohledu na to, co jinak hlasovalo.",
   "settings.refReqOutputTags":
-    'tags contains "…" – štítky pro médium, uplatní se jen při schválení.',
+    "add_tags := [\"…\"] – štítky pro titul, uplatní se jen při schválení.",
+  "settings.refReqOutputSetQualityProfile":
+    "set_quality_profile := \"Název profilu\" – schválit s tímto profilem kvality místo požadovaného.",
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 – schválit s touto výpůjčkou. 0 uchová titul navždy, jinak 1 až 3650 dní.",
+  "settings.refReqOutputSetMonitor":
+    "set_monitor := \"FUTURE_EPISODES\" – schválit s tímto sledováním: MONITORED nebo UNMONITORED pro filmy; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES nebo NONE pro seriály a anime.",
+  "settings.refReqOutputSetAudioLanguages":
+    "set_required_audio_languages := [\"eng\"] a set_preferred_audio_languages := [\"jpn\", \"eng\"] – nahradí požadované seznamy jazyků zvuku.",
+  "settings.refReqOutputNotify": "notify := \"…\" – odešle toto oznámení.",
+  "settings.refReqOutputShapingOutcome":
+    "Automaticky schválený požadavek tyto hodnoty dostane. U požadavku čekajícího na posouzení je schvalovatel uvidí jako návrhy a u zamítnutého jsou jen v jeho záznamu. Když dvě pravidla nastaví pro totéž různé hodnoty, požadavek čeká na posouzení.",
+  "settings.refReqOutputNoSchedule":
+    "Pravidla požadavků nemají plán: spouštějí se u každého požadavku a při předběžné kontrole žadatele.",
   "settings.refReqOutputReasons":
     'reasons contains "…" – stabilní kódy, které se zobrazí žadateli.',
   "settings.refReqOutputNoPackage":
@@ -5676,6 +5694,29 @@ const cs: LocaleDictionary = {
   "requests.preflightManualReview": "Toto vyžaduje schválení",
   "requests.preflightDeny": "Toto by bylo zamítnuto: {{reasons}}",
   "requests.preflightTags": "Bude označeno štítky {{tags}}.",
+  "error.ruleVoteRequired":
+    "Definujte pro toto pravidlo požadavků hlas (approve, deny nebo manual), hodnotu upravující schválení, nebo add_tags.",
+  "error.ruleActionValueNotLiteral":
+    "Přiřaďte této hlavě prostý literál: řetězec v uvozovkách, celé číslo pro set_lease_days nebo seznam řetězců v uvozovkách pro hlavy štítků a jazyků zvuku.",
+  "error.ruleActionValueInvalid":
+    "Hodnota této hlavy není platná: název nesmí být prázdný, štítky musí být platné, výpůjčka je 0 až 3650 dní a hodnoty sledování a jazyků musí být z nabídky Scryeru.",
+  "error.ruleActionUnknownQualityProfile":
+    "Žádný profil kvality nemá tento název, takže ho pravidlo nemůže použít.",
+  "error.ruleActionUndefinedTag":
+    "Tento štítek není definován v Nastavení › Štítky, takže se při použití pravidla zahodí.",
+  "settings.regoSnippet.shapeRequest":
+    "Nastavit výpůjčku, kterou schválení zapíše, když fakt platí.",
+  "settings.regoSnippet.tagRequest":
+    "Označit požadovaný titul štítkem, když fakt platí.",
+  "requests.preflightShaping": "Při schválení se změní na: {{changes}}.",
+  "requests.shapingTitle": "Schválení by se změnilo na",
+  "requests.shapingSetBy": "nastavilo {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: pravidla nastavila různé hodnoty, rozhodne člověk",
+  "requests.shapingSuggested": "Navrženo pravidlem {{rule}}",
+  "requests.shapingLeaseDays": "Dní: {{count}}",
+  "requests.fallbackShapingConflict":
+    "Pravidla nastavila pro totéž různé hodnoty, takže rozhodne člověk.",
   "requests.preflightReason": "Důvod: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryeru se nepodařilo zjistit vše o tomto titulu, takže rozhodne člověk.",
@@ -7407,6 +7448,35 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
   "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
   "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
+  "ruleOutput.maintenance.add_tags": "Přidat štítky",
+  "ruleOutput.maintenance.remove_tags": "Odebrat štítky",
+  "ruleOutput.maintenance.set_quality_profile": "Změnit profil kvality",
+  "ruleOutput.maintenance.monitor": "Sledovat",
+  "ruleOutput.maintenance.search": "Vyhledat",
+  "ruleOutput.maintenance.fetch_subtitles": "Stáhnout titulky",
+  "ruleOutput.maintenance.move_to_library": "Přesunout do knihovny",
+  "ruleOutput.maintenance.move_to_root": "Přesunout do kořenové složky",
+  "ruleOutput.maintenance.unmonitor": "Zrušit sledování",
+  "ruleOutput.maintenance.delete_files": "Smazat soubory",
+  "ruleOutput.maintenance.delete_title": "Smazat titul a soubory",
+  "ruleOutput.maintenance.notify": "Upozornit",
+  "ruleOutput.maintenance.notify.placeholder": "Text oznámení",
+  "ruleOutput.request.approve": "Schválit",
+  "ruleOutput.request.deny": "Zamítnout",
+  "ruleOutput.request.manual": "Ponechat k posouzení",
+  "ruleOutput.request.set_quality_profile": "Profil kvality",
+  "ruleOutput.request.set_lease_days": "Výpůjčka",
+  "ruleOutput.request.set_lease_days.placeholder":
+    "Počet dní, nebo 0 pro uchování navždy",
+  "ruleOutput.request.set_monitor": "Sledování",
+  "ruleOutput.request.set_required_audio_languages": "Požadované jazyky zvuku",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Preferované jazyky zvuku",
+  "ruleOutput.request.add_tags": "Přidat štítky",
+  "ruleOutput.request.notify": "Oznámit",
+  "ruleOutput.request.notify.placeholder": "Text oznámení",
+  "ruleOutput.request.reasons": "Kódy důvodů",
+  "ruleOutput.request.reasons.placeholder": "Jeden kód důvodu na řádek",
 };
 
 export default cs;

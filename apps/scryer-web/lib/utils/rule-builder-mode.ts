@@ -25,7 +25,9 @@ export type RuleBuilderDraft = {
 
 /// How one family's drafts meet the builder.
 export type RuleBuilderBinding<D extends RuleBuilderDraft> = {
-  schema: RuleBuilderSchema;
+  /// Null until the family's outputs are read from the server, and after a
+  /// failed read: a draft then can only be edited as Rego.
+  schema: RuleBuilderSchema | null;
   /// The variant a draft is written for, such as a maintenance rule's scope.
   variant: (draft: D) => string | null;
   /// Where the Rego editor starts when an untouched builder is left.
@@ -56,6 +58,7 @@ export function withRuleBuilderModel<D extends RuleBuilderDraft>(
   draft: D,
   model: RuleBuilderModel,
 ): D {
+  if (!binding.schema) return draft;
   const result = generateRuleSource(binding.schema, model, binding.variant(draft));
   return {
     ...draft,
@@ -64,11 +67,13 @@ export function withRuleBuilderModel<D extends RuleBuilderDraft>(
   };
 }
 
-/// A new rule in the builder with nothing chosen, so no source yet.
+/// A new rule in the builder with nothing chosen, so no source yet. Without a
+/// schema the draft is left as written, for the Rego editor.
 export function withNewRuleBuilderModel<D extends RuleBuilderDraft>(
   binding: RuleBuilderBinding<D>,
   draft: D,
 ): D {
+  if (!binding.schema) return draft;
   return withRuleBuilderModel(binding, draft, emptyRuleBuilderModel(binding.schema));
 }
 
@@ -121,6 +126,7 @@ export function ruleBuilderModelToSave<D extends RuleBuilderDraft>(
   draft: D,
 ): RuleBuilderModel | null {
   return draft.builderModel &&
+    binding.schema &&
     isRuleBuilderSource(
       binding.schema,
       draft.builderModel,
@@ -137,8 +143,9 @@ export function isIncompleteRuleBuilderDraft<D extends RuleBuilderDraft>(
   binding: RuleBuilderBinding<D>,
   draft: D,
 ): boolean {
+  if (draft.builderModel === null) return false;
   return (
-    draft.builderModel !== null &&
+    !binding.schema ||
     !generateRuleSource(binding.schema, draft.builderModel, binding.variant(draft))
       .ok
   );
@@ -148,11 +155,12 @@ export function isIncompleteRuleBuilderDraft<D extends RuleBuilderDraft>(
 /// source; otherwise the rule opens as Rego and the stored model is left
 /// alone until the next save.
 export function attachedRuleBuilderModel(
-  schema: RuleBuilderSchema,
+  schema: RuleBuilderSchema | null,
   stored: unknown,
   variant: string | null,
   regoSource: string,
 ): RuleBuilderModel | null {
+  if (!schema) return null;
   const model = parseRuleBuilderModel(schema, stored);
   return model !== null && isRuleBuilderSource(schema, model, variant, regoSource)
     ? model

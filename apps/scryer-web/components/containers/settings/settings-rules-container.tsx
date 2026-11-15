@@ -30,16 +30,21 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { RuleSetRecord, RuleSetDraft } from "@/lib/types/rule-sets";
 import {
   RULE_SET_INITIAL_DRAFT,
-  SCORING_RULE_BUILDER,
   copyRuleSetDraft,
   createRuleSetInput,
   newScoringRuleBuilderDraft,
   ruleSetDraftFromRecord,
+  scoringRuleBuilder,
   updateRuleSetInput,
 } from "@/lib/utils/rule-sets";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
 import { loadQualityProfileNames } from "@/lib/utils/rule-builder-catalogs";
 import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
+import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
+import {
+  SCORING_RULE_BUILDER_BASE,
+  SCORING_RULE_BUILDER_SCHEMA,
+} from "@/lib/utils/scoring-rule-builder-schema";
 import { conflictingFrenchPack } from "@/lib/utils/trash-packs";
 import { resolveRuleDetailRequest } from "@/lib/utils/rule-detail-request";
 import {
@@ -141,8 +146,17 @@ export function SettingsRulesContainer({
     () => ({ qualityProfiles: () => loadQualityProfileNames(client) }),
     [client],
   );
+  const servedSchema = useRuleBuilderSchema(
+    SCORING_RULE_BUILDER_BASE,
+    SCORING_RULE_BUILDER_SCHEMA,
+  );
+  const builderBinding = useMemo(
+    () => scoringRuleBuilder(servedSchema.schema),
+    [servedSchema.schema],
+  );
+  const whenSchemaReady = servedSchema.whenReady;
   const builderEditor = useRuleBuilderEditor({
-    binding: SCORING_RULE_BUILDER,
+    binding: builderBinding,
     draft: ruleSetDraft,
     setDraft: setRuleSetDraft,
     isEditorOpen,
@@ -177,9 +191,11 @@ export function SettingsRulesContainer({
     };
   }, [isEditorOpen, isRuleDraftDirty]);
 
-  const openCreateRuleEditor = useCallback(() => {
-    detailRequestRef.current += 1;
-    const nextDraft = newScoringRuleBuilderDraft();
+  const openCreateRuleEditor = useCallback(async () => {
+    const request = (detailRequestRef.current += 1);
+    const binding = scoringRuleBuilder(await whenSchemaReady());
+    if (request !== detailRequestRef.current) return;
+    const nextDraft = newScoringRuleBuilderDraft(binding);
     setEditingRuleSetId(null);
     setCopyingTrackedRuleSetId(null);
     setRuleSetDraft(nextDraft);
@@ -189,12 +205,14 @@ export function SettingsRulesContainer({
     setTranslationDiagnostics([]);
     setFocusImportedEditor(false);
     setIsEditorOpen(true);
-  }, [beginBuilderSession, setValidationResult]);
+  }, [beginBuilderSession, setValidationResult, whenSchemaReady]);
 
   const openEditRuleEditor = useCallback(
-    (record: RuleSetRecord) => {
-      detailRequestRef.current += 1;
-      const nextDraft = ruleSetDraftFromRecord(record);
+    async (record: RuleSetRecord) => {
+      const request = (detailRequestRef.current += 1);
+      const binding = scoringRuleBuilder(await whenSchemaReady());
+      if (request !== detailRequestRef.current) return;
+      const nextDraft = ruleSetDraftFromRecord(record, binding);
       setEditingRuleSetId(record.id);
       setCopyingTrackedRuleSetId(null);
       setRuleSetDraft(nextDraft);
@@ -206,13 +224,15 @@ export function SettingsRulesContainer({
       setIsEditorOpen(true);
       setGlobalStatus(t("status.editingRule", { name: record.name }));
     },
-    [beginBuilderSession, setValidationResult, setGlobalStatus, t],
+    [beginBuilderSession, setValidationResult, setGlobalStatus, t, whenSchemaReady],
   );
 
   const openCopyRuleEditor = useCallback(
-    (record: RuleSetRecord) => {
-      detailRequestRef.current += 1;
-      const nextDraft = copyRuleSetDraft(record);
+    async (record: RuleSetRecord) => {
+      const request = (detailRequestRef.current += 1);
+      const binding = scoringRuleBuilder(await whenSchemaReady());
+      if (request !== detailRequestRef.current) return;
+      const nextDraft = copyRuleSetDraft(record, binding);
       setEditingRuleSetId(null);
       setCopyingTrackedRuleSetId(null);
       setRuleSetDraft(nextDraft);
@@ -223,13 +243,15 @@ export function SettingsRulesContainer({
       setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
-    [beginBuilderSession, setValidationResult],
+    [beginBuilderSession, setValidationResult, whenSchemaReady],
   );
 
   const openTrackedRuleCopyEditor = useCallback(
-    (record: RuleSetRecord) => {
-      detailRequestRef.current += 1;
-      const nextDraft = copyRuleSetDraft(record);
+    async (record: RuleSetRecord) => {
+      const request = (detailRequestRef.current += 1);
+      const binding = scoringRuleBuilder(await whenSchemaReady());
+      if (request !== detailRequestRef.current) return;
+      const nextDraft = copyRuleSetDraft(record, binding);
       setEditingRuleSetId(null);
       setCopyingTrackedRuleSetId(record.id);
       setRuleSetDraft(nextDraft);
@@ -240,7 +262,7 @@ export function SettingsRulesContainer({
       setFocusImportedEditor(false);
       setIsEditorOpen(true);
     },
-    [beginBuilderSession, setValidationResult],
+    [beginBuilderSession, setValidationResult, whenSchemaReady],
   );
 
   const openTemplateRuleEditor = useCallback(
@@ -724,7 +746,7 @@ export function SettingsRulesContainer({
     event.preventDefault();
     if (
       builderEditor.attached &&
-      isIncompleteRuleBuilderDraft(SCORING_RULE_BUILDER, ruleSetDraft)
+      isIncompleteRuleBuilderDraft(builderBinding, ruleSetDraft)
     ) {
       setValidationResult({
         valid: false,
@@ -760,7 +782,7 @@ export function SettingsRulesContainer({
       if (editingRuleSetId) {
         const { error } = await client
           .mutation(updateRuleSetMutation, {
-            input: updateRuleSetInput(editingRuleSetId, payload),
+            input: updateRuleSetInput(editingRuleSetId, payload, builderBinding),
           })
           .toPromise();
         if (error) throw error;
@@ -789,7 +811,7 @@ export function SettingsRulesContainer({
       } else {
         const { error } = await client
           .mutation(createRuleSetMutation, {
-            input: createRuleSetInput(payload),
+            input: createRuleSetInput(payload, builderBinding),
           })
           .toPromise();
         if (error) throw error;
@@ -847,6 +869,8 @@ export function SettingsRulesContainer({
         setBuilderModel={builderEditor.setModel}
         editAsRego={builderEditor.editAsRego}
         builderOptions={builderEditor.options}
+        builderSchema={servedSchema.schema}
+        builderStatus={servedSchema.status}
         submitRuleSet={submitRuleSet}
         mutatingRuleSetId={mutatingRuleSetId}
         resetRuleSetDraft={requestCloseRuleEditor}

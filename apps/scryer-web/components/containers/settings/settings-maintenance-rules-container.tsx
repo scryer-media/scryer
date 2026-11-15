@@ -33,6 +33,8 @@ import {
   loadTitleTagLabels,
 } from "@/lib/utils/rule-builder-catalogs";
 import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
+import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
+import { MAINTENANCE_RULE_BUILDER_BASE } from "@/lib/utils/maintenance-rule-builder-schema";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
@@ -57,7 +59,7 @@ import type {
 import {
   MAINTENANCE_FILTER_ALL,
   MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
-  MAINTENANCE_RULE_BUILDER,
+  maintenanceRuleBuilder,
   clampMaintenancePreviewLimit,
   copyMaintenanceRuleDraft,
   createMaintenanceRuleSetInput,
@@ -229,7 +231,7 @@ export function SettingsMaintenanceRulesContainer({
   const staticBuilderOptions = useMemo(
     () => ({
       libraries: libraries.map((library) => library.name),
-      storageRoots: [...new Set(storageRoots.map((root) => root.path))],
+      roots: [...new Set(storageRoots.map((root) => root.path))],
     }),
     [libraries, storageRoots],
   );
@@ -240,8 +242,14 @@ export function SettingsMaintenanceRulesContainer({
     }),
     [client],
   );
+  const servedSchema = useRuleBuilderSchema(MAINTENANCE_RULE_BUILDER_BASE);
+  const builderBinding = useMemo(
+    () => maintenanceRuleBuilder(servedSchema.schema),
+    [servedSchema.schema],
+  );
+  const whenSchemaReady = servedSchema.whenReady;
   const builderEditor = useRuleBuilderEditor({
-    binding: MAINTENANCE_RULE_BUILDER,
+    binding: builderBinding,
     draft: ruleSetDraft,
     setDraft: setRuleSetDraft,
     isEditorOpen,
@@ -271,12 +279,13 @@ export function SettingsMaintenanceRulesContainer({
     startEditorSession(next, next);
   }, [startEditorSession]);
 
-  const openCreateEditor = useCallback(() => {
-    const next = newMaintenanceRuleBuilderDraft();
+  const openCreateEditor = useCallback(async () => {
+    const binding = maintenanceRuleBuilder(await whenSchemaReady());
+    const next = newMaintenanceRuleBuilderDraft(binding);
     setEditingRuleSetId(null);
     startEditorSession(next, next);
     setIsEditorOpen(true);
-  }, [startEditorSession]);
+  }, [startEditorSession, whenSchemaReady]);
 
   /// Load the source and declared actions for one rule set, surfacing failure
   /// instead of silently refusing to open the editor.
@@ -306,26 +315,35 @@ export function SettingsMaintenanceRulesContainer({
 
   const openEditEditor = useCallback(
     async (record: MaintenanceRuleSetRecord) => {
-      const detail = await fetchRuleSetDetail(record.id);
+      const [detail, schema] = await Promise.all([
+        fetchRuleSetDetail(record.id),
+        whenSchemaReady(),
+      ]);
       if (!detail) return;
-      const next = maintenanceRuleDraftFromDetail(detail);
+      const next = maintenanceRuleDraftFromDetail(
+        detail,
+        maintenanceRuleBuilder(schema),
+      );
       setEditingRuleSetId(record.id);
       startEditorSession(next, next);
       setIsEditorOpen(true);
     },
-    [startEditorSession, fetchRuleSetDetail],
+    [startEditorSession, fetchRuleSetDetail, whenSchemaReady],
   );
 
   const openCopyEditor = useCallback(
     async (record: MaintenanceRuleSetRecord) => {
-      const detail = await fetchRuleSetDetail(record.id);
+      const [detail, schema] = await Promise.all([
+        fetchRuleSetDetail(record.id),
+        whenSchemaReady(),
+      ]);
       if (!detail) return;
-      const next = copyMaintenanceRuleDraft(detail);
+      const next = copyMaintenanceRuleDraft(detail, maintenanceRuleBuilder(schema));
       setEditingRuleSetId(null);
       startEditorSession(next, next);
       setIsEditorOpen(true);
     },
-    [startEditorSession, fetchRuleSetDetail],
+    [startEditorSession, fetchRuleSetDetail, whenSchemaReady],
   );
 
   /// Load a starter template into the create-rule editor. A template prefills
@@ -679,7 +697,7 @@ export function SettingsMaintenanceRulesContainer({
     event.preventDefault();
     if (
       builderEditor.attached &&
-      isIncompleteRuleBuilderDraft(MAINTENANCE_RULE_BUILDER, ruleSetDraft)
+      isIncompleteRuleBuilderDraft(builderBinding, ruleSetDraft)
     ) {
       setValidationResult({
         valid: false,
@@ -706,6 +724,7 @@ export function SettingsMaintenanceRulesContainer({
           editingRuleSetId,
           ruleSetDraftBaseline,
           ruleSetDraft,
+          builderBinding,
         );
         if (plan.matcher) {
           const matcher = await client
@@ -729,7 +748,7 @@ export function SettingsMaintenanceRulesContainer({
       } else {
         const { error } = await client
           .mutation(createMaintenanceRuleSetMutation, {
-            input: createMaintenanceRuleSetInput(ruleSetDraft),
+            input: createMaintenanceRuleSetInput(ruleSetDraft, builderBinding),
           })
           .toPromise();
         if (error) throw error;
@@ -1056,6 +1075,8 @@ export function SettingsMaintenanceRulesContainer({
         setBuilderModel={builderEditor.setModel}
         editAsRego={builderEditor.editAsRego}
         builderOptions={builderEditor.options}
+        builderSchema={servedSchema.schema}
+        builderStatus={servedSchema.status}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={deleteRuleSet}

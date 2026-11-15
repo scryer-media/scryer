@@ -4484,10 +4484,6 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintSeriesMovieHasFile": "此連結電影在硬碟上是否有文件",
   "settings.refMaintSeriesMovieTags":
     "此連結電影上的用戶自訂標籤，來自與作品標籤相同的註冊表。系列電影自帶標籤；它不會繼承節目的標籤。",
-  "settings.maintenanceActionHeadMoveToLibrary": "移至媒體庫",
-  "settings.maintenanceActionHeadMoveToRoot": "移至根目錄",
-  "settings.maintenanceActionHeadNotify": "通知",
-  "settings.maintenanceActionHeadFetchSubtitles": "取得字幕",
   "settings.ruleBuilderTitle": "規則",
   "settings.ruleBuilderModeLabel": "編輯器",
   "settings.ruleBuilderModeSimple": "簡易",
@@ -4522,7 +4518,6 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceBuilderRootPlaceholder": "揀選根資料夾",
   "settings.ruleBuilderTagsPlaceholder": "揀選標籤",
   "settings.ruleBuilderNoTags": "仲未建立任何標籤。",
-  "settings.maintenanceBuilderNotifyPlaceholder": "通知內容",
   "settings.ruleBuilderGeneratedSource": "產生嘅 Rego",
   "settings.ruleBuilderGeneratedSourceHelp": "建構器按你嘅選擇寫出嘅原始碼。驗證、預覽同儲存嘅都係呢份原始碼。",
   "settings.ruleBuilderGeneratedSourceEmpty": "條件同結果完成之前唔會產生任何內容。",
@@ -4563,6 +4558,10 @@ const zh_HK: LocaleDictionary = {
   "settings.ruleBuilderProblemValueTooMany": "呢個清單嘅項目太多。",
   "settings.ruleBuilderProblemOutputUnknown": "呢條規則包含呢個版本唔認識嘅選項。",
   "settings.ruleBuilderProblemOutputNeedsOther": "呢個選項亦需要：{{outputs}}。",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "已經唔再提供：{{values}}。揀另一個之前，規則會保留呢個值。",
+  "settings.ruleBuilderSchemaLoading": "簡易編輯器載入緊，期間可以用 Rego 編輯器。",
+  "settings.ruleBuilderSchemaFailed": "載入唔到簡易編輯器。請用 Rego 編輯規則，或者重新開過頁面再試。",
   "settings.scoringBuilderOutputs": "分數",
   "settings.scoringBuilderOutputsHelp": "揀一個：為發佈加分，或者封鎖呢個發佈。代碼會喺決策記錄入面標示呢項分數。",
   "settings.scoringBuilderConditionsHelp":
@@ -4572,17 +4571,20 @@ const zh_HK: LocaleDictionary = {
   "settings.scoringBuilderCode": "代碼",
   "settings.scoringBuilderCodePlaceholder": "example_code",
   "settings.scoringBuilderPoints": "點數",
-  "settings.requestBuilderOutputs": "決定",
+  "settings.requestBuilderOutputs": "決定與變更",
   "settings.requestBuilderOutputsHelp":
-    "最多揀一個投票：批准、拒絕，或者留待審批。標籤同原因可以配合投票，標籤亦可以單獨使用。",
+    "最多揀一個投票：批准、拒絕，或者留待審批。規則亦可以變更批准時寫入嘅內容、新增標籤或者發送通知，有冇投票都可以。原因代碼可以配合以上任何一項。",
+  "settings.requestBuilderMonitorPlaceholder": "揀選監控方式",
+  "settings.requestBuilderLanguagesPlaceholder": "揀選語言",
+  "settings.requestDeclaredActionsTitle": "呢條規則可以做乜",
+  "settings.requestDeclaredActionsHelp":
+    "呢條規則原始碼定義嘅投票同數值，順序如下：{{order}}。自動批准嘅請求會得到條件成立嘅數值；留待審批嘅請求會將佢哋作為建議顯示畀審批人。",
+  "settings.requestDeclaredActionsNone": "冇宣告任何內容",
+  "settings.requestDeclaredActionsUnavailable": "修正錯誤之後先睇到呢條規則可以做乜。",
+  "settings.requestRuleWarningsTitle": "警告",
+  "settings.requestRuleWarningLocation": "第 {{line}} 行，第 {{column}} 欄：",
   "settings.requestBuilderConditionsHelp":
     "每個條件檢查請求、作品、媒體庫或者時間嘅一項事實。請揀要符合所有條件，定係符合任何一個條件，決定先會套用。",
-  "settings.requestBuilderApprove": "批准",
-  "settings.requestBuilderDeny": "拒絕",
-  "settings.requestBuilderManual": "留待審批",
-  "settings.requestBuilderTags": "標籤",
-  "settings.requestBuilderReasons": "原因代碼",
-  "settings.requestBuilderReasonsPlaceholder": "每行一個原因代碼",
   "settings.requestBuilderOriginManual": "手動請求",
   "settings.requestBuilderOriginPublicList": "來自公開清單",
   "settings.requestBuilderOriginPersonalList": "來自個人清單",
@@ -4756,13 +4758,25 @@ const zh_HK: LocaleDictionary = {
     "請求規則讀取一份說明該請求、發起請求者、目標媒體庫以及 Scryer 對該媒體了解程度的文檔。事實是純值。Scryer 無法觀察到的事實會直接缺失，而讀取缺失事實的規則會將請求暫緩交由人員處理而非隨意猜測 — 您永遠不必自行撰寫該防護代碼。",
   "settings.refReqOutputTitle": "請求規則所定義的內容",
   "settings.refReqOutputIntro":
-    "必須定義其中至少一項，否則規則永遠無法投票，且 Scryer 會拒絕儲存它。",
+    "規則必須定義一個投票、一個調整批准內容嘅數值，或者 add_tags；三樣都冇定義嘅規則會喺儲存時被拒絕。帶值嘅項目以 := 指派純字面值。",
   "settings.refReqOutputApprove":
     "approve — 該請求可以在無人員審核的情況下獲准。",
   "settings.refReqOutputDeny": "deny — 該請求被拒絕。拒絕票優先於任何其他票。",
   "settings.refReqOutputManual":
     "manual — 無論其他規則如何投票，該請求都會轉交由人員處理。",
-  "settings.refReqOutputTags": 'tags 包含 "…" — 媒體的標籤，僅在獲准時套用。',
+  "settings.refReqOutputTags": "add_tags := [\"…\"] — 作品嘅標籤，僅在獲准時套用。",
+  "settings.refReqOutputSetQualityProfile":
+    "set_quality_profile := \"設定檔名稱\" — 以呢個質素設定檔批准，取代請求嘅設定檔。",
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — 以呢個保留期批准。0 代表永久保留；否則為 1 至 3650 日。",
+  "settings.refReqOutputSetMonitor":
+    "set_monitor := \"FUTURE_EPISODES\" — 以呢個監控方式批准：電影用 MONITORED 或 UNMONITORED；劇集同動畫用 FUTURE_EPISODES、MISSING_AND_FUTURE_EPISODES、ALL_EPISODES 或 NONE。",
+  "settings.refReqOutputSetAudioLanguages":
+    "set_required_audio_languages := [\"eng\"] 同 set_preferred_audio_languages := [\"jpn\", \"eng\"] — 取代請求嘅音訊語言清單。",
+  "settings.refReqOutputNotify": "notify := \"…\" — 發送呢個通知。",
+  "settings.refReqOutputShapingOutcome":
+    "自動批准嘅請求會得到呢啲數值。留待審批嘅請求會將佢哋作為建議顯示畀審批人，被拒絕嘅請求只會喺追蹤記錄列出。兩條規則為同一樣嘢設定唔同數值時，請求會留待審批。",
+  "settings.refReqOutputNoSchedule": "請求規則冇排程：每個請求同請求者嘅預檢都會執行。",
   "settings.refReqOutputReasons": 'reasons 包含 "…" — 顯示給請求者的穩定代碼。',
   "settings.refReqOutputNoPackage":
     "請勿撰寫 package 或 import 行。Scryer 會產生這兩者，並在將匹配器交給此編輯器時將其去除。",
@@ -4777,6 +4791,23 @@ const zh_HK: LocaleDictionary = {
   "requests.preflightManualReview": "這需要人工審核",
   "requests.preflightDeny": "這將被拒絕：{{reasons}}",
   "requests.preflightTags": "將標記為 {{tags}}。",
+  "error.ruleVoteRequired":
+    "為呢條請求規則定義一個投票（approve、deny 或 manual）、一個調整批准內容嘅數值，或者 add_tags。",
+  "error.ruleActionValueNotLiteral":
+    "為呢個項目指派純字面值：帶引號嘅字串、set_lease_days 用整數，或者標籤同音訊語言項目用帶引號字串嘅清單。",
+  "error.ruleActionValueInvalid":
+    "呢個項目嘅數值無效：名稱唔可以留空，標籤必須係有效標籤，保留期為 0 至 3650 日，監控方式同語言必須係 Scryer 提供嘅選項。",
+  "error.ruleActionUnknownQualityProfile": "冇質素設定檔叫呢個名，所以規則無法套用。",
+  "error.ruleActionUndefinedTag": "呢個標籤未喺「設定 › 標籤」定義，所以規則套用時會被略過。",
+  "settings.regoSnippet.shapeRequest": "條件成立時設定批准寫入嘅保留期。",
+  "settings.regoSnippet.tagRequest": "條件成立時為請求嘅作品加標籤。",
+  "requests.preflightShaping": "如獲批准，將會變更為：{{changes}}。",
+  "requests.shapingTitle": "批准時會變更為",
+  "requests.shapingSetBy": "由 {{rule}} 設定",
+  "requests.shapingConflict": "{{head}}：規則設定咗唔同數值，由人決定",
+  "requests.shapingSuggested": "由規則 {{rule}} 建議",
+  "requests.shapingLeaseDays": "{{count}} 日",
+  "requests.fallbackShapingConflict": "規則為同一樣嘢設定咗唔同數值，所以由人決定。",
   "requests.preflightReason": "原因：{{reason}}。",
   "requests.preflightMetadataPartial":
     "Scryer 無法讀取此作品的完整中繼資料，因此將由人工決定。",
@@ -5817,6 +5848,33 @@ const zh_HK: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖曳以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "將 {{value}} 上移",
   "qualityProfile.decisionStepMoveDown": "將 {{value}} 下移",
+  "ruleOutput.maintenance.add_tags": "新增標籤",
+  "ruleOutput.maintenance.remove_tags": "移除標籤",
+  "ruleOutput.maintenance.set_quality_profile": "變更質素設定檔",
+  "ruleOutput.maintenance.monitor": "監控",
+  "ruleOutput.maintenance.search": "搜尋",
+  "ruleOutput.maintenance.fetch_subtitles": "取得字幕",
+  "ruleOutput.maintenance.move_to_library": "移至媒體庫",
+  "ruleOutput.maintenance.move_to_root": "移至根目錄",
+  "ruleOutput.maintenance.unmonitor": "取消監控",
+  "ruleOutput.maintenance.delete_files": "刪除文件",
+  "ruleOutput.maintenance.delete_title": "刪除作品與文件",
+  "ruleOutput.maintenance.notify": "通知",
+  "ruleOutput.maintenance.notify.placeholder": "通知內容",
+  "ruleOutput.request.approve": "批准",
+  "ruleOutput.request.deny": "拒絕",
+  "ruleOutput.request.manual": "留待審批",
+  "ruleOutput.request.set_quality_profile": "質素設定檔",
+  "ruleOutput.request.set_lease_days": "保留期",
+  "ruleOutput.request.set_lease_days.placeholder": "日數，或者 0 代表永久保留",
+  "ruleOutput.request.set_monitor": "監控方式",
+  "ruleOutput.request.set_required_audio_languages": "必需音訊語言",
+  "ruleOutput.request.set_preferred_audio_languages": "首選音訊語言",
+  "ruleOutput.request.add_tags": "新增標籤",
+  "ruleOutput.request.notify": "通知",
+  "ruleOutput.request.notify.placeholder": "通知內容",
+  "ruleOutput.request.reasons": "原因代碼",
+  "ruleOutput.request.reasons.placeholder": "每行一個原因代碼",
 };
 
 export default zh_HK;

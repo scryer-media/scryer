@@ -509,34 +509,22 @@ export function MaintenanceCandidatesPanel({
                       <div className="flex flex-col">
                         <span>{candidate.ruleName}</span>
                         {candidate.actions ? (
-                          <>
-                            <div className="mt-0.5">
-                              <MaintenanceDecidedActionsSummary
-                                actions={candidate.actions}
-                                idPrefix={selectorId(
-                                  "settings-maintenance-candidate-action",
-                                  candidate.id,
-                                )}
-                              />
-                            </div>
-                            {candidate.actionSequence?.steps.length ? (
-                              <MaintenanceSequenceProgress
-                                sequence={candidate.actionSequence}
-                                progress={candidate.sequenceSteps}
-                              />
-                            ) : null}
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-xs">
-                              <ActionKindLabel kind={candidate.actionKind} />
-                            </span>
-                            <MaintenanceSequenceProgress
-                              sequence={candidate.actionSequence}
-                              progress={candidate.sequenceSteps}
+                          <div className="mt-0.5">
+                            <MaintenanceDecidedActionsSummary
+                              actions={candidate.actions}
+                              idPrefix={selectorId(
+                                "settings-maintenance-candidate-action",
+                                candidate.id,
+                              )}
                             />
-                          </>
-                        )}
+                          </div>
+                        ) : null}
+                        {candidate.actionSequence?.steps.length ? (
+                          <MaintenanceSequenceProgress
+                            sequence={candidate.actionSequence}
+                            progress={candidate.sequenceSteps}
+                          />
+                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell>

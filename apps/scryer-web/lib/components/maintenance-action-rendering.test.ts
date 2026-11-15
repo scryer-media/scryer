@@ -3,6 +3,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createElement, type ComponentType, type Context } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Provider, type Client } from "urql";
 import { createServer } from "vite";
 import type { Translate } from "@/components/root/types";
 import type { MaintenanceCandidatesPanelProps } from "@/components/views/settings/settings-maintenance-operations-panel";
@@ -11,6 +12,14 @@ import type {
   MaintenanceDeclaredActions,
 } from "../types/maintenance-rule-sets.ts";
 import type { RuleValidationDiagnostic } from "../utils/rego-diagnostics.ts";
+import type {
+  RequestDeclaredActions,
+  RequestShaping,
+} from "../types/request-rule-sets.ts";
+import {
+  MAINTENANCE_SERVED_PAYLOAD,
+  REQUEST_SERVED_PAYLOAD,
+} from "../utils/rule-builder-contract-fixture.ts";
 
 type Views = {
   CandidatesPanel: ComponentType<MaintenanceCandidatesPanelProps>;
@@ -23,6 +32,14 @@ type Views = {
     declared: MaintenanceDeclaredActions | null | undefined;
     warnings: readonly RuleValidationDiagnostic[];
     checked: boolean;
+  }>;
+  RequestDeclared: ComponentType<{
+    declared: RequestDeclaredActions;
+    idPrefix: string;
+  }>;
+  RequestShaping: ComponentType<{
+    shaping: RequestShaping | null | undefined;
+    idPrefix: string;
   }>;
   render: (element: ReturnType<typeof createElement>) => string;
 };
@@ -46,7 +63,7 @@ async function withMaintenanceViews(run: (views: Views) => void) {
     ],
   });
   try {
-    const [panel, summary, translation] = await Promise.all([
+    const [panel, summary, translation, served] = await Promise.all([
       server.ssrLoadModule(
         "/components/views/settings/settings-maintenance-operations-panel.tsx",
       ),
@@ -54,19 +71,33 @@ async function withMaintenanceViews(run: (views: Views) => void) {
         "/components/views/settings/maintenance-action-summary.tsx",
       ),
       server.ssrLoadModule("/lib/context/translate-context.tsx"),
+      server.ssrLoadModule("/lib/utils/rule-builder-served.ts"),
     ]);
+    // The served descriptors label and order the heads, as the page's one
+    // read per family would.
+    await served.loadServedRuleBuilder(
+      "maintenance",
+      async () => MAINTENANCE_SERVED_PAYLOAD,
+    );
+    await served.loadServedRuleBuilder("request", async () => REQUEST_SERVED_PAYLOAD);
     const TranslateContext =
       translation.TranslateContext as Context<Translate | null>;
     run({
       CandidatesPanel: panel.MaintenanceCandidatesPanel,
       DeclaredSummary: summary.MaintenanceDeclaredActionsSummary,
       SourceFindings: summary.MaintenanceRuleSourceFindings,
+      RequestDeclared: summary.RequestDeclaredActionsSummary,
+      RequestShaping: summary.RequestShapingSummary,
       render: (element) =>
         renderToStaticMarkup(
           createElement(
-            TranslateContext.Provider,
-            { value: (key) => key },
-            element,
+            Provider,
+            { value: {} as Client },
+            createElement(
+              TranslateContext.Provider,
+              { value: (key) => key },
+              element,
+            ),
           ),
         ),
     });
@@ -114,7 +145,6 @@ function candidate(
     stateReason: "",
     reasonCodes: [],
     actions: null,
-    actionKind: "DO_NOTHING",
     actionSequence: null,
     sequenceSteps: [],
     graceDays: 0,
@@ -149,7 +179,7 @@ function panelProps(
   };
 }
 
-test("a candidate shows the actions its rule decided, and a historical one its recorded kind", async () => {
+test("a candidate shows the actions its rule decided", async () => {
   await withMaintenanceViews(({ CandidatesPanel, render }) => {
     const markup = render(
       createElement(
@@ -166,11 +196,6 @@ test("a candidate shows the actions its rule decided, and a historical one its r
               root: null,
               notification: "Moved to a smaller profile",
             },
-          }),
-          candidate({
-            id: "historical",
-            actions: null,
-            actionKind: "UNMONITOR_SCOPE_KEEP_FILES",
           }),
         ]),
       ),
@@ -189,12 +214,6 @@ test("a candidate shows the actions its rule decided, and a historical one its r
       markup,
       /id="settings-maintenance-candidate-action-decided-delete/,
     );
-    // The historical row renders from its recorded kind, not from actions.
-    assert.doesNotMatch(
-      markup,
-      /id="settings-maintenance-candidate-action-historical/,
-    );
-    assert.match(markup, /settings\.maintenanceActionUnmonitorScopeKeepFiles/);
   });
 });
 
@@ -232,6 +251,21 @@ test("the destructive marker follows declaredActions.destructive", async () => {
       reversible.indexOf('id="rule-fetch-subtitles"') <
         reversible.indexOf('id="rule-move-to-root"'),
     );
+
+    // A head the served descriptors do not list renders by its id, last.
+    const unseen = render(
+      createElement(DeclaredSummary, {
+        declared: declared({ heads: ["ARCHIVE", "UNMONITOR"] }),
+        idPrefix: "rule",
+      }),
+    );
+    assert.match(
+      unseen,
+      /id="rule-archive"[^>]*data-maintenance-action-head="ARCHIVE"[^>]*>(<[^>]*>)*ARCHIVE</,
+    );
+    // This render translates nothing, so a served head shows by its Rego name.
+    assert.match(unseen, /id="rule-unmonitor"[^>]*>(<[^>]*>)*unmonitor</);
+    assert.ok(unseen.indexOf('id="rule-unmonitor"') < unseen.indexOf('id="rule-archive"'));
   });
 });
 
@@ -288,6 +322,69 @@ test("warnings render apart from errors with their line, and an unparseable sour
           checked: false,
         }),
       ),
+      "",
+    );
+  });
+});
+
+test("a request rule's declared heads render in served order with their values", async () => {
+  await withMaintenanceViews(({ RequestDeclared, render }) => {
+    const markup = render(
+      createElement(RequestDeclared, {
+        declared: {
+          heads: ["ADD_TAGS", "SET_LEASE_DAYS", "APPROVE"],
+          qualityProfiles: [],
+          leaseDays: [0],
+          monitors: [],
+          requiredAudioLanguages: [],
+          preferredAudioLanguages: [],
+          addTags: ["sample-tag"],
+          notifications: [],
+        },
+        idPrefix: "request-rule",
+      }),
+    );
+    assert.match(markup, /id="request-rule-approve"[^>]*data-request-action-head="APPROVE"/);
+    assert.match(markup, /requests\.leaseForever/);
+    assert.match(markup, /sample-tag/);
+    assert.ok(
+      markup.indexOf('id="request-rule-approve"') <
+        markup.indexOf('id="request-rule-set-lease-days"'),
+    );
+    assert.ok(
+      markup.indexOf('id="request-rule-set-lease-days"') <
+        markup.indexOf('id="request-rule-add-tags"'),
+    );
+  });
+});
+
+test("shaping renders each value with its rule and each conflict once, and nothing when empty", async () => {
+  await withMaintenanceViews(({ RequestShaping, render }) => {
+    const markup = render(
+      createElement(RequestShaping, {
+        shaping: {
+          qualityProfile: { value: "Sample Profile", ruleSetName: "Sample rule" },
+          leaseDays: null,
+          monitor: null,
+          requiredAudioLanguages: null,
+          preferredAudioLanguages: null,
+          notifications: [],
+          conflicts: ["SET_MONITOR", "SET_MONITOR"],
+        },
+        idPrefix: "decision-shaping",
+      }),
+    );
+    assert.match(
+      markup,
+      /id="decision-shaping-set-quality-profile-0"[^>]*data-request-shaping-head="SET_QUALITY_PROFILE"/,
+    );
+    assert.match(markup, /Sample Profile/);
+    assert.match(markup, /requests\.shapingSetBy/);
+    assert.equal(markup.match(/data-request-shaping-conflict="SET_MONITOR"/g)?.length, 1);
+    assert.match(markup, /id="decision-shaping-conflict-set-monitor"/);
+
+    assert.equal(
+      render(createElement(RequestShaping, { shaping: null, idPrefix: "decision-shaping" })),
       "",
     );
   });

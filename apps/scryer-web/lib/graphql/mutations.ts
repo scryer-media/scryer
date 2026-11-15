@@ -12,9 +12,11 @@ import {
   POST_PROCESSING_SCRIPT_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
+  REQUEST_DECLARED_ACTIONS_FIELDS,
   REQUEST_RULE_DECISION_FIELDS,
   REQUEST_RULE_SET_DETAIL_FIELDS,
   REQUEST_RULE_SET_FIELDS,
+  REQUEST_SHAPING_FIELDS,
   SCRIPT_INTERPRETER_SETTINGS_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
@@ -3000,7 +3002,10 @@ export const validateRequestRuleMutation = `mutation ValidateRequestRule($input:
   validateRequestRule(input: $input) {
     valid
     diagnostics { code message line column path }
+    warnings { code message line column path }
     errors
+    declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
+    }
   }
 }`;
 
@@ -3016,6 +3021,8 @@ export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: P
     undefinedTags
     inputDocument
     decision {${REQUEST_RULE_DECISION_FIELDS}
+      shaping {${REQUEST_SHAPING_FIELDS}
+      }
     }
   }
 }`;

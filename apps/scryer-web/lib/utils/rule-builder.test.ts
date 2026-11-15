@@ -491,30 +491,16 @@ test("documents this build does not recognise do not parse", () => {
     assert.equal(parseRuleBuilderModel(SCHEMA, document), null, JSON.stringify(document));
 });
 
-test("a version 1 document is upgraded only by a schema that reads it", () => {
-  const legacy = {
+test("a document from an earlier version does not attach", () => {
+  const earlier = {
     version: 1,
     join: "ALL",
-    conditions: [
-      { name: "flag", operator: "IS_TRUE", value: "" },
-      { name: "", operator: "", value: "" },
-    ],
+    conditions: [{ name: "flag", operator: "IS_TRUE", value: "" }],
     picked: { KEEP: true },
   };
-  const reading: RuleBuilderSchema = {
-    ...SCHEMA,
-    legacy: { version: 1, fieldKey: "name", fieldSection: "input.item", outputsKey: "picked" },
-  };
-  assert.deepEqual(parseRuleBuilderModel(reading, legacy), {
-    version: RULE_BUILDER_MODEL_VERSION,
-    family: "sample",
-    join: "ALL",
-    conditions: [
-      { field: "input.item.flag", operator: "IS_TRUE", value: "" },
-      { field: "", operator: "", value: "" },
-    ],
-    outputs: { KEEP: true },
-  });
-  assert.equal(parseRuleBuilderModel(SCHEMA, legacy), null);
-  assert.equal(parseRuleBuilderModel(reading, { ...legacy, conditions: [{ name: 1 }] }), null);
+  assert.equal(parseRuleBuilderModel(SCHEMA, earlier), null);
+  assert.equal(
+    parseRuleBuilderModel(SCHEMA, { ...earlier, family: "sample" }),
+    null,
+  );
 });

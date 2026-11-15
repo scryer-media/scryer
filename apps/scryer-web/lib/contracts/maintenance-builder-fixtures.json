@@ -3,62 +3,109 @@
     "id": "all-bool-and-days",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "monitored",
+          "field": "input.facts.monitored",
           "operator": "IS_TRUE",
           "value": ""
         },
         {
-          "fact": "added_at",
+          "field": "input.facts.added_at",
           "operator": "MORE_THAN_DAYS_AGO",
           "value": "90"
         },
         {
-          "fact": "has_file",
+          "field": "input.facts.has_file",
           "operator": "IS_FALSE",
           "value": ""
         }
       ],
-      "actions": {
+      "outputs": {
         "NOTIFY": "Removed an old title",
         "DELETE_FILES": true,
         "UNMONITOR": true
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored\n\tdays_since(input.facts.added_at) > 90\n\tnot input.facts.has_file\n}\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n\nnotify := \"Removed an old title\" if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored == true\n\tdays_since(input.facts.added_at) > 90\n\tinput.facts.has_file == false\n}\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n\nnotify := \"Removed an old title\" if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true,
+            "added_at": "2025-06-05T00:00:00Z",
+            "has_file": false
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true,
+            "added_at": "2025-06-05T00:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": false,
+            "added_at": "2025-06-05T00:00:00Z",
+            "has_file": false
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true,
+            "added_at": "2026-01-21T00:00:00Z",
+            "has_file": false
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "any-string-lists",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ANY",
       "conditions": [
         {
-          "fact": "tags",
+          "field": "input.facts.tags",
           "operator": "CONTAINS",
           "value": "sample-keep"
         },
         {
-          "fact": "tags",
+          "field": "input.facts.tags",
           "operator": "NOT_CONTAINS",
           "value": "sample-archive"
         },
         {
-          "fact": "lists_names",
+          "field": "input.facts.lists_names",
           "operator": "IS_EMPTY",
           "value": ""
         },
         {
-          "fact": "requested_by_usernames",
+          "field": "input.facts.requested_by_usernames",
           "operator": "IS_NOT_EMPTY",
           "value": ""
         }
       ],
-      "actions": {
+      "outputs": {
         "REMOVE_TAGS": [
           "sample-fresh"
         ],
@@ -68,245 +115,649 @@
         ]
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\t\"sample-keep\" in input.facts.tags\n}\n\nrule_applies if {\n\tnot \"sample-archive\" in input.facts.tags\n}\n\nrule_applies if {\n\tcount(input.facts.lists_names) == 0\n}\n\nrule_applies if {\n\tcount(input.facts.requested_by_usernames) > 0\n}\n\nadd_tags := [\"sample-review\", \"sample-stale\"] if rule_applies\n\nremove_tags := [\"sample-fresh\"] if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\t\"sample-keep\" in input.facts.tags\n}\n\nrule_applies if {\n\tis_array(input.facts.tags)\n\tnot \"sample-archive\" in input.facts.tags\n}\n\nrule_applies if {\n\tcount(input.facts.lists_names) == 0\n}\n\nrule_applies if {\n\tcount(input.facts.requested_by_usernames) > 0\n}\n\nadd_tags := [\"sample-review\", \"sample-stale\"] if rule_applies\n\nremove_tags := [\"sample-fresh\"] if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "tags": [
+              "sample-archive"
+            ],
+            "lists_names": [
+              "Sample List"
+            ],
+            "requested_by_usernames": []
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "tags": [
+              "sample-other"
+            ],
+            "lists_names": [
+              "Sample List"
+            ],
+            "requested_by_usernames": []
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "tags": [
+              "sample-archive",
+              "sample-keep"
+            ],
+            "lists_names": [
+              "Sample List"
+            ],
+            "requested_by_usernames": []
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "lists_names": [
+              "Sample List"
+            ],
+            "requested_by_usernames": []
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "tags": [
+              "sample-archive"
+            ],
+            "lists_names": [],
+            "requested_by_usernames": []
+          }
+        },
+        "expected": true
+      }
+    ]
   },
   {
     "id": "all-number-comparisons",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "file_count",
+          "field": "input.facts.file_count",
           "operator": "EQUALS",
           "value": "0"
         },
         {
-          "fact": "episode_count",
+          "field": "input.facts.episode_count",
           "operator": "NOT_EQUALS",
           "value": "3"
         },
         {
-          "fact": "total_file_size_bytes",
+          "field": "input.facts.total_file_size_bytes",
           "operator": "GREATER_THAN",
           "value": "1073741824"
         },
         {
-          "fact": "storage_available_percent",
+          "field": "input.facts.storage_available_percent",
           "operator": "GREATER_OR_EQUAL",
           "value": "1.5"
         },
         {
-          "fact": "lists_best_rank",
+          "field": "input.facts.lists_best_rank",
           "operator": "LESS_THAN",
           "value": "-2"
         },
         {
-          "fact": "lists_days_on_list",
+          "field": "input.facts.lists_days_on_list",
           "operator": "LESS_OR_EQUAL",
           "value": "10"
         },
         {
-          "fact": "active_retention_claims",
+          "field": "input.facts.active_retention_claims",
           "operator": "HAS_NO_VALUE",
           "value": ""
         },
         {
-          "fact": "storage_total_bytes",
+          "field": "input.facts.storage_total_bytes",
           "operator": "HAS_VALUE",
           "value": ""
         }
       ],
-      "actions": {
+      "outputs": {
         "FETCH_SUBTITLES": true,
         "SEARCH": true,
         "SET_QUALITY_PROFILE": "Sample Profile"
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.file_count == 0\n\tinput.facts.episode_count != 3\n\tinput.facts.total_file_size_bytes > 1073741824\n\tinput.facts.storage_available_percent >= 1.5\n\tinput.facts.lists_best_rank < -2\n\tinput.facts.lists_days_on_list <= 10\n\tnot input.facts.active_retention_claims\n\tinput.facts.storage_total_bytes\n}\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.file_count == 0\n\tis_number(input.facts.episode_count)\n\tinput.facts.episode_count != 3\n\tis_number(input.facts.total_file_size_bytes)\n\tinput.facts.total_file_size_bytes > 1073741824\n\tis_number(input.facts.storage_available_percent)\n\tinput.facts.storage_available_percent >= 1.5\n\tis_number(input.facts.lists_best_rank)\n\tinput.facts.lists_best_rank < -2\n\tis_number(input.facts.lists_days_on_list)\n\tinput.facts.lists_days_on_list <= 10\n\tnot input.facts.active_retention_claims != null\n\tinput.facts.storage_total_bytes != null\n}\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "file_count": 0,
+            "episode_count": 4,
+            "total_file_size_bytes": 2147483648,
+            "storage_available_percent": 1.5,
+            "lists_best_rank": -3,
+            "lists_days_on_list": 10,
+            "storage_total_bytes": 1000
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "file_count": 0,
+            "total_file_size_bytes": 2147483648,
+            "storage_available_percent": 1.5,
+            "lists_best_rank": -3,
+            "lists_days_on_list": 10,
+            "storage_total_bytes": 1000
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "file_count": 0,
+            "episode_count": 3,
+            "total_file_size_bytes": 2147483648,
+            "storage_available_percent": 1.5,
+            "lists_best_rank": -3,
+            "lists_days_on_list": 10,
+            "storage_total_bytes": 1000
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "file_count": 0,
+            "episode_count": 4,
+            "total_file_size_bytes": 2147483648,
+            "storage_available_percent": 1.5,
+            "lists_best_rank": -3,
+            "lists_days_on_list": 10,
+            "storage_total_bytes": 1000,
+            "active_retention_claims": 2
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "file_count": 0,
+            "episode_count": 4,
+            "total_file_size_bytes": 2147483648,
+            "storage_available_percent": 1.5,
+            "lists_best_rank": -3,
+            "lists_days_on_list": 10
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "all-strings-and-timestamps",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "request_origin",
+          "field": "input.facts.request_origin",
           "operator": "EQUALS",
           "value": "list"
         },
         {
-          "fact": "added_by_username",
+          "field": "input.facts.added_by_username",
           "operator": "NOT_EQUALS",
           "value": "sample-user"
         },
         {
-          "fact": "request_list_name",
+          "field": "input.facts.request_list_name",
           "operator": "HAS_VALUE",
           "value": ""
         },
         {
-          "fact": "quality_profile_id",
+          "field": "input.facts.quality_profile_id",
           "operator": "HAS_NO_VALUE",
           "value": ""
         },
         {
-          "fact": "last_watched_at",
+          "field": "input.facts.last_watched_at",
           "operator": "LESS_THAN_DAYS_AGO",
           "value": "30"
         },
         {
-          "fact": "lists_left_at",
+          "field": "input.facts.lists_left_at",
           "operator": "HAS_VALUE",
           "value": ""
         },
         {
-          "fact": "first_imported_at",
+          "field": "input.facts.first_imported_at",
           "operator": "HAS_NO_VALUE",
           "value": ""
         }
       ],
-      "actions": {
+      "outputs": {
         "SEARCH": true,
         "MONITOR": true
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.request_origin == \"list\"\n\tinput.facts.added_by_username != \"sample-user\"\n\tinput.facts.request_list_name\n\tnot input.facts.quality_profile_id\n\tdays_since(input.facts.last_watched_at) < 30\n\tinput.facts.lists_left_at\n\tnot input.facts.first_imported_at\n}\n\nmonitor if rule_applies\n\nsearch if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.request_origin == \"list\"\n\tis_string(input.facts.added_by_username)\n\tinput.facts.added_by_username != \"sample-user\"\n\tinput.facts.request_list_name != null\n\tnot input.facts.quality_profile_id != null\n\tdays_since(input.facts.last_watched_at) >= 0\n\tdays_since(input.facts.last_watched_at) < 30\n\tinput.facts.lists_left_at != null\n\tnot input.facts.first_imported_at != null\n}\n\nmonitor if rule_applies\n\nsearch if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_origin": "list",
+            "added_by_username": "sample-other-user",
+            "request_list_name": "Sample List",
+            "last_watched_at": "2026-01-21T00:00:00Z",
+            "lists_left_at": "2026-01-01T00:00:00Z"
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_origin": "list",
+            "added_by_username": "sample-other-user",
+            "request_list_name": "Sample List",
+            "last_watched_at": "2026-02-10T00:00:00Z",
+            "lists_left_at": "2026-01-01T00:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_origin": "list",
+            "added_by_username": "sample-other-user",
+            "request_list_name": "Sample List",
+            "last_watched_at": "2025-12-01T00:00:00Z",
+            "lists_left_at": "2026-01-01T00:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_origin": "list",
+            "added_by_username": "sample-other-user",
+            "request_list_name": "Sample List",
+            "lists_left_at": "2026-01-01T00:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_origin": "list",
+            "request_list_name": "Sample List",
+            "last_watched_at": "2026-01-21T00:00:00Z",
+            "lists_left_at": "2026-01-01T00:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_origin": "list",
+            "added_by_username": "sample-other-user",
+            "request_list_name": "Sample List",
+            "last_watched_at": "2026-01-21T00:00:00Z",
+            "lists_left_at": "2026-01-01T00:00:00Z",
+            "quality_profile_id": "sample-profile"
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "title-move-to-library",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "lists_left_all",
+          "field": "input.facts.lists_left_all",
           "operator": "IS_TRUE",
           "value": ""
         }
       ],
-      "actions": {
+      "outputs": {
         "MOVE_TO_LIBRARY": "Sample Library"
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.lists_left_all\n}\n\nmove_to_library := \"Sample Library\" if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.lists_left_all == true\n}\n\nmove_to_library := \"Sample Library\" if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "lists_left_all": true
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "lists_left_all": false
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z"
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "title-move-to-root",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ANY",
       "conditions": [
         {
-          "fact": "watched_by_anyone",
+          "field": "input.facts.watched_by_anyone",
           "operator": "IS_TRUE",
           "value": ""
         },
         {
-          "fact": "storage_root_id",
+          "field": "input.facts.storage_root_id",
           "operator": "EQUALS",
           "value": "sample-root"
         }
       ],
-      "actions": {
+      "outputs": {
         "MOVE_TO_ROOT": "/data/sample root",
         "UNMONITOR": true
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.watched_by_anyone\n}\n\nrule_applies if {\n\tinput.facts.storage_root_id == \"sample-root\"\n}\n\nmove_to_root := \"/data/sample root\" if rule_applies\n\nunmonitor if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.watched_by_anyone == true\n}\n\nrule_applies if {\n\tinput.facts.storage_root_id == \"sample-root\"\n}\n\nmove_to_root := \"/data/sample root\" if rule_applies\n\nunmonitor if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "watched_by_anyone": false,
+            "storage_root_id": "sample-root"
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "watched_by_anyone": true,
+            "storage_root_id": "sample-other-root"
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "watched_by_anyone": false,
+            "storage_root_id": "sample-other-root"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z"
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "title-delete-title",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "request_lease_expires_at",
+          "field": "input.facts.request_lease_expires_at",
           "operator": "MORE_THAN_DAYS_AGO",
           "value": "0"
         }
       ],
-      "actions": {
+      "outputs": {
         "DELETE_TITLE": true,
         "UNMONITOR": true
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tdays_since(input.facts.request_lease_expires_at) > 0\n}\n\nunmonitor if rule_applies\n\ndelete_title if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tdays_since(input.facts.request_lease_expires_at) > 0\n}\n\nunmonitor if rule_applies\n\ndelete_title if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_lease_expires_at": "2026-01-29T00:00:00Z"
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_lease_expires_at": "2026-01-30T12:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "request_lease_expires_at": "2026-02-05T00:00:00Z"
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z"
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "escaping",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "added_by_username",
+          "field": "input.facts.added_by_username",
           "operator": "EQUALS",
           "value": "sample \"quoted\" \\ user"
         },
         {
-          "fact": "tags",
+          "field": "input.facts.tags",
           "operator": "CONTAINS",
           "value": "Ünïcødé 標籤 😀"
         }
       ],
-      "actions": {
+      "outputs": {
         "NOTIFY": "Say \"hi\" to C:\\sample\\path",
         "ADD_TAGS": [
-          "tag \"one\"",
-          "tag\\two"
+          "sample.tag one",
+          "sample-tag_2"
         ]
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.added_by_username == \"sample \\\"quoted\\\" \\\\ user\"\n\t\"Ünïcødé 標籤 😀\" in input.facts.tags\n}\n\nadd_tags := [\"tag \\\"one\\\"\", \"tag\\\\two\"] if rule_applies\n\nnotify := \"Say \\\"hi\\\" to C:\\\\sample\\\\path\" if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.added_by_username == \"sample \\\"quoted\\\" \\\\ user\"\n\t\"Ünïcødé 標籤 😀\" in input.facts.tags\n}\n\nadd_tags := [\"sample.tag one\", \"sample-tag_2\"] if rule_applies\n\nnotify := \"Say \\\"hi\\\" to C:\\\\sample\\\\path\" if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "sample \"quoted\" \\ user",
+            "tags": [
+              "Ünïcødé 標籤 😀"
+            ]
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "sample quoted user",
+            "tags": [
+              "Ünïcødé 標籤 😀"
+            ]
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "added_by_username": "sample \"quoted\" \\ user",
+            "tags": [
+              "Unicode"
+            ]
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "episode-scope",
     "scope": "EPISODE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "monitored",
+          "field": "input.facts.monitored",
           "operator": "IS_TRUE",
           "value": ""
         },
         {
-          "fact": "episode_position_by_air_date",
+          "field": "input.facts.episode_position_by_air_date",
           "operator": "LESS_OR_EQUAL",
           "value": "2"
         }
       ],
-      "actions": {
+      "outputs": {
         "DELETE_FILES": true,
         "UNMONITOR": true
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored\n\tinput.facts.episode_position_by_air_date <= 2\n}\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored == true\n\tis_number(input.facts.episode_position_by_air_date)\n\tinput.facts.episode_position_by_air_date <= 2\n}\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true,
+            "episode_position_by_air_date": 2
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true,
+            "episode_position_by_air_date": 3
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "every-title-action-in-order",
     "scope": "TITLE",
     "model": {
-      "version": 1,
+      "version": 2,
+      "family": "maintenance",
       "join": "ALL",
       "conditions": [
         {
-          "fact": "requested",
+          "field": "input.facts.requested",
           "operator": "IS_FALSE",
           "value": ""
         }
       ],
-      "actions": {
+      "outputs": {
         "NOTIFY": "Sample notice",
         "DELETE_FILES": true,
         "UNMONITOR": true,
@@ -321,6 +772,32 @@
         ]
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tnot input.facts.requested\n}\n\nadd_tags := [\"sample-new\"] if rule_applies\n\nremove_tags := [\"sample-old\"] if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n\nnotify := \"Sample notice\" if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.requested == false\n}\n\nadd_tags := [\"sample-new\"] if rule_applies\n\nremove_tags := [\"sample-old\"] if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n\nnotify := \"Sample notice\" if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "requested": false
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "requested": true
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z"
+        },
+        "expected": false
+      }
+    ]
   }
 ]

@@ -27,7 +27,10 @@ import type {
   MaintenanceRuleState,
 } from "@/lib/types/maintenance-rule-sets";
 import type { ScriptSchedule } from "@/lib/types/scripts";
+import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
+import { MAINTENANCE_RULE_BUILDER_BASE } from "@/lib/utils/maintenance-rule-builder-schema";
 import {
+  maintenanceRuleBuilder,
   maintenanceRuleDraftFromDetail,
   maintenanceRuleUpdatePlan,
   ruleStateLabelKey,
@@ -50,6 +53,9 @@ export function ExpiredRequestLeasesControl() {
   const [graceDays, setGraceDays] = useState(0);
   const [schedule, setSchedule] = useState<ScriptSchedule | null>(null);
   const [busyRuleSetId, setBusyRuleSetId] = useState<string | null>(null);
+  const { whenReady: whenSchemaReady } = useRuleBuilderSchema(
+    MAINTENANCE_RULE_BUILDER_BASE,
+  );
 
   const refresh = useCallback(async () => {
     const { data } = await client
@@ -92,14 +98,18 @@ export function ExpiredRequestLeasesControl() {
         )
         .toPromise();
       if (detail.error) throw detail.error;
+      // Without the served schema the stored builder model is left as it is.
+      const binding = maintenanceRuleBuilder(await whenSchemaReady());
       const draft = maintenanceRuleDraftFromDetail(
         detail.data.maintenanceRuleSet as MaintenanceRuleSetDetail,
+        binding,
       );
-      const plan = maintenanceRuleUpdatePlan(record.id, draft, {
-        ...draft,
-        graceDays,
-        schedule,
-      });
+      const plan = maintenanceRuleUpdatePlan(
+        record.id,
+        draft,
+        { ...draft, graceDays, schedule },
+        binding,
+      );
       if (plan.matcher) {
         const { error } = await client
           .mutation(updateMaintenanceRuleMatcherMutation, {

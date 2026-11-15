@@ -14,21 +14,11 @@ export type MaintenanceEffectArming = "NONE" | "REVERSIBLE" | "DESTRUCTIVE";
 /// Rule scope is distinct from an action's movie/show/season/episode vocabulary.
 export type MaintenanceRuleScope = "TITLE" | "SEASON" | "EPISODE";
 
-/// An action a rule declares by defining a rule of that name in its source.
-/// Any other rule name in the source is the author's own helper.
-export type MaintenanceActionHead =
-  | "UNMONITOR"
-  | "DELETE_FILES"
-  | "DELETE_TITLE"
-  | "SEARCH"
-  | "SET_QUALITY_PROFILE"
-  | "ADD_TAGS"
-  | "REMOVE_TAGS"
-  | "MONITOR"
-  | "MOVE_TO_LIBRARY"
-  | "MOVE_TO_ROOT"
-  | "NOTIFY"
-  | "FETCH_SUBTITLES";
+/// An action a rule declares by defining a rule of that name in its source,
+/// as the API names it (`DELETE_FILES`). Any other rule name in the source is
+/// the author's own helper. The heads a build knows come from the served
+/// output descriptors, so this is any string the server sends.
+export type MaintenanceActionHead = string;
 
 /// What a rule's source can do, read from the source itself. The value lists
 /// hold every literal the source can produce for that head, so a rule with an
@@ -301,11 +291,8 @@ export type MaintenanceCandidate = {
   state: MaintenanceCandidateState;
   stateReason: string;
   reasonCodes: string[];
-  /// What the rule decided for this subject. Null on candidates recorded before
-  /// rules declared their actions in source; those render from `actionKind`
-  /// and `actionSequence`.
+  /// What the rule decided for this subject.
   actions: MaintenanceDecidedActions | null;
-  actionKind: MaintenanceActionKind;
   actionSequence: MaintenanceActionSequence | null;
   sequenceSteps: MaintenanceActionStepProgress[];
   graceDays: number;

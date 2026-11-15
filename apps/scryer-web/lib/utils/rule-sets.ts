@@ -1,6 +1,6 @@
 import type { RuleSetDraft, RuleSetRecord } from "@/lib/types/rule-sets";
 import { formatRegoCopy } from "./format-rego-copy.ts";
-import { SCORING_RULE_BUILDER_SCHEMA } from "./scoring-rule-builder-schema.ts";
+import type { RuleBuilderSchema } from "./rule-builder.ts";
 import {
   attachedRuleBuilderModel,
   ruleBuilderModelToSave,
@@ -12,12 +12,14 @@ import {
 export const SCORING_STARTER_SOURCE =
   'import rego.v1\n\nscore_entry["size_guard"] := scryer.block_score() if {\n    scryer.size_gib(input.release.size_bytes) > 100\n}\n';
 
+export type ScoringRuleBuilderBinding = RuleBuilderBinding<RuleSetDraft>;
+
 /// How scoring drafts meet the builder. A scoring rule has no variant.
-export const SCORING_RULE_BUILDER: RuleBuilderBinding<RuleSetDraft> = {
-  schema: SCORING_RULE_BUILDER_SCHEMA,
-  variant: () => null,
-  starterSource: SCORING_STARTER_SOURCE,
-};
+export function scoringRuleBuilder(
+  schema: RuleBuilderSchema | null,
+): ScoringRuleBuilderBinding {
+  return { schema, variant: () => null, starterSource: SCORING_STARTER_SOURCE };
+}
 
 /// A draft written by hand: the starter source and no builder model.
 export const RULE_SET_INITIAL_DRAFT: RuleSetDraft = {
@@ -31,15 +33,20 @@ export const RULE_SET_INITIAL_DRAFT: RuleSetDraft = {
 };
 
 /// A new rule opens in the builder with nothing chosen yet.
-export function newScoringRuleBuilderDraft(): RuleSetDraft {
-  return withNewRuleBuilderModel(SCORING_RULE_BUILDER, {
+export function newScoringRuleBuilderDraft(
+  binding: ScoringRuleBuilderBinding,
+): RuleSetDraft {
+  return withNewRuleBuilderModel(binding, {
     ...RULE_SET_INITIAL_DRAFT,
   });
 }
 
 /// The editor draft for a saved rule. Its stored builder model counts only
 /// while it still regenerates the stored source.
-export function ruleSetDraftFromRecord(record: RuleSetRecord): RuleSetDraft {
+export function ruleSetDraftFromRecord(
+  record: RuleSetRecord,
+  binding: ScoringRuleBuilderBinding,
+): RuleSetDraft {
   return {
     name: record.name,
     description: record.description,
@@ -48,7 +55,7 @@ export function ruleSetDraftFromRecord(record: RuleSetRecord): RuleSetDraft {
     priority: record.priority,
     appliedFacets: [...record.appliedFacets],
     builderModel: attachedRuleBuilderModel(
-      SCORING_RULE_BUILDER_SCHEMA,
+      binding.schema,
       record.builderModel,
       null,
       record.regoSource,
@@ -58,9 +65,12 @@ export function ruleSetDraftFromRecord(record: RuleSetRecord): RuleSetDraft {
 
 /// A copy is a new rule. A rule still made by the builder stays in it with its
 /// source as written; any other source is tidied for editing.
-export function copyRuleSetDraft(record: RuleSetRecord): RuleSetDraft {
+export function copyRuleSetDraft(
+  record: RuleSetRecord,
+  binding: ScoringRuleBuilderBinding,
+): RuleSetDraft {
   const builderModel = attachedRuleBuilderModel(
-    SCORING_RULE_BUILDER_SCHEMA,
+    binding.schema,
     record.builderModel,
     null,
     record.regoSource,
@@ -78,7 +88,10 @@ export function copyRuleSetDraft(record: RuleSetRecord): RuleSetDraft {
   };
 }
 
-export function createRuleSetInput(draft: RuleSetDraft) {
+export function createRuleSetInput(
+  draft: RuleSetDraft,
+  binding: ScoringRuleBuilderBinding,
+) {
   return {
     name: draft.name.trim(),
     description: draft.description.trim() || undefined,
@@ -87,11 +100,17 @@ export function createRuleSetInput(draft: RuleSetDraft) {
     priority: draft.priority,
     appliedFacets:
       draft.appliedFacets.length > 0 ? [...draft.appliedFacets] : undefined,
-    builderModel: ruleBuilderModelToSave(SCORING_RULE_BUILDER, draft),
+    builderModel: ruleBuilderModelToSave(binding, draft),
   };
 }
 
-export function updateRuleSetInput(id: string, draft: RuleSetDraft) {
+/// Without a schema nothing could be checked, so `builderModel` is left out
+/// and the stored model stays as it is.
+export function updateRuleSetInput(
+  id: string,
+  draft: RuleSetDraft,
+  binding: ScoringRuleBuilderBinding,
+) {
   return {
     id,
     name: draft.name.trim(),
@@ -99,7 +118,9 @@ export function updateRuleSetInput(id: string, draft: RuleSetDraft) {
     regoSource: draft.regoSource,
     priority: draft.priority,
     appliedFacets: draft.appliedFacets,
-    builderModel: ruleBuilderModelToSave(SCORING_RULE_BUILDER, draft),
+    ...(binding.schema
+      ? { builderModel: ruleBuilderModelToSave(binding, draft) }
+      : {}),
   };
 }
 

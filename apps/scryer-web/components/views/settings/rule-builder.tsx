@@ -21,37 +21,63 @@ import {
   initialRuleBuilderOutputValue,
   isRuleBuilderOutputInVariant,
   ruleBuilderConflicts,
+  ruleBuilderOutputHelp,
+  ruleBuilderOutputLabel,
+  ruleBuilderOutputPlaceholder,
   ruleBuilderFields,
   ruleBuilderOperators,
   type RuleBuilderCondition,
   type RuleBuilderModel,
   type RuleBuilderOutput,
   type RuleBuilderOutputValue,
+  type RuleBuilderOptionValue,
   type RuleBuilderProblem,
   type RuleBuilderSchema,
 } from "@/lib/utils/rule-builder";
+import {
+  RULE_BUILDER_CATALOGS,
+  ruleBuilderCatalogMisses,
+} from "@/lib/utils/rule-builder-catalog-presentation";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
 
 /// Values for the builder's pickers, by the option source a schema names.
 /// Null while a catalog is still loading.
 export type RuleBuilderOptions = Readonly<
-  Record<string, readonly string[] | null>
+  Record<string, readonly RuleBuilderOptionValue[] | null>
 >;
 
 type Translate = ReturnType<typeof useTranslate>;
 
 function outputLabel(schema: RuleBuilderSchema, id: string, t: Translate) {
   const output = schema.outputs.find((entry) => entry.id === id);
-  return output ? t(output.labelKey) : id;
+  return output ? ruleBuilderOutputLabel(t, output) : id;
 }
 
 /// Options for a picker, keeping a stored value that the catalog no longer
 /// lists so the operator still sees what the rule holds.
-function pickerOptions(names: readonly string[], kept: readonly string[]) {
-  const all = [...names];
-  for (const value of kept) if (value && !all.includes(value)) all.push(value);
-  return all.map((name) => ({ value: name, label: name }));
+function pickerOptions(
+  names: readonly RuleBuilderOptionValue[],
+  kept: readonly string[],
+) {
+  const all = names.map((name) =>
+    typeof name === "string" ? { value: name, label: name } : name,
+  );
+  for (const value of kept)
+    if (value && !all.some((option) => option.value === value))
+      all.push({ value, label: value });
+  return all;
+}
+
+/// The label a picker shows for each selected literal.
+function pickerLabels(
+  names: readonly RuleBuilderOptionValue[],
+  selected: readonly string[],
+): string {
+  const options = pickerOptions(names, selected);
+  return selected
+    .map((value) => options.find((option) => option.value === value)?.label)
+    .join(", ");
 }
 
 function ProblemText({
@@ -234,10 +260,35 @@ function OutputValuePicker({
   const t = useTranslate();
   const id = selectorId(`${schema.idPrefix}-action-value`, output.id);
   const spec = output.value;
-  const placeholder =
-    "placeholderKey" in spec && spec.placeholderKey
-      ? t(spec.placeholderKey)
+  const catalog =
+    spec.kind === "choice" || spec.kind === "text_list"
+      ? spec.options
       : undefined;
+  // A catalog the page cannot supply is typed in, as is one this build does
+  // not know how to present.
+  const presentation =
+    catalog && Object.hasOwn(options, catalog)
+      ? RULE_BUILDER_CATALOGS[catalog]
+      : undefined;
+  const names = catalog && presentation ? (options[catalog] ?? null) : null;
+  const placeholder = presentation
+    ? t(presentation.placeholderKey)
+    : ruleBuilderOutputPlaceholder(t, output);
+  const stored =
+    typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+  const misses = presentation ? ruleBuilderCatalogMisses(names, stored) : [];
+  const missing =
+    misses.length > 0 ? (
+      <p
+        id={selectorId(`${schema.idPrefix}-action-catalog-missing`, output.id)}
+        data-problem-code="BUILDER_VALUE_NOT_IN_CATALOG"
+        className="mt-1 text-xs text-[var(--scry-warning-text)]"
+      >
+        {t(RULE_BUILDER_PROBLEM_KEYS.BUILDER_VALUE_NOT_IN_CATALOG, {
+          values: misses.join(", "),
+        })}
+      </p>
+    ) : null;
 
   switch (spec.kind) {
     case "flag":
@@ -255,24 +306,37 @@ function OutputValuePicker({
         />
       );
     case "choice": {
-      const names = options[spec.options] ?? null;
-      if (names === null) return <Loading />;
       const text = typeof value === "string" ? value : "";
+      if (!presentation) {
+        return (
+          <Input
+            id={id}
+            value={text}
+            readOnly={readOnly}
+            placeholder={placeholder}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        );
+      }
+      if (names === null) return <Loading />;
       return (
-        <SingleSelectField
-          id={id}
-          value={text}
-          disabled={readOnly}
-          valueKind={spec.display ?? "text"}
-          placeholder={placeholder}
-          onValueChange={onChange}
-          options={pickerOptions(names, [text])}
-        />
+        <>
+          <SingleSelectField
+            id={id}
+            value={text}
+            disabled={readOnly}
+            valueKind={presentation.display ?? "text"}
+            placeholder={placeholder}
+            onValueChange={onChange}
+            options={pickerOptions(names, [text])}
+          />
+          {missing}
+        </>
       );
     }
     case "text_list": {
       const selected = Array.isArray(value) ? value : [];
-      if (!spec.options) {
+      if (!presentation) {
         // One entry per line; the text is split exactly as typed so it
         // round-trips while the operator is still typing.
         return (
@@ -289,28 +353,30 @@ function OutputValuePicker({
           />
         );
       }
-      const names = options[spec.options] ?? null;
       if (names === null) return <Loading />;
       if (names.length === 0 && selected.length === 0) {
         return (
           <p id={id} className="text-xs text-muted-foreground">
-            {spec.emptyKey ? t(spec.emptyKey) : null}
+            {presentation.emptyKey ? t(presentation.emptyKey) : null}
           </p>
         );
       }
       return (
-        <MultiSelectDropdown
-          id={id}
-          optionIdPrefix={id}
-          disabled={readOnly}
-          triggerLabel={
-            selected.length > 0 ? selected.join(", ") : (placeholder ?? "")
-          }
-          ariaLabel={placeholder ?? t(output.labelKey)}
-          options={pickerOptions(names, selected)}
-          selectedValues={selected}
-          onSelectedValuesChange={onChange}
-        />
+        <>
+          <MultiSelectDropdown
+            id={id}
+            optionIdPrefix={id}
+            disabled={readOnly}
+            triggerLabel={
+              selected.length > 0 ? pickerLabels(names, selected) : placeholder
+            }
+            ariaLabel={placeholder}
+            options={pickerOptions(names, selected)}
+            selectedValues={selected}
+            onSelectedValuesChange={onChange}
+          />
+          {missing}
+        </>
       );
     }
     case "structured": {
@@ -369,6 +435,8 @@ function OutputRow({
   const chosen = Object.hasOwn(outputs, output.id);
   const inVariant = isRuleBuilderOutputInVariant(output, variant);
   const conflicts = ruleBuilderConflicts(schema, output.id, outputs);
+  const label = ruleBuilderOutputLabel(t, output);
+  const help = ruleBuilderOutputHelp(t, output);
   // A chosen output can always be cleared, even once it no longer fits.
   const blocked = !chosen && (!inVariant || conflicts.length > 0);
 
@@ -393,7 +461,13 @@ function OutputRow({
           disabled={readOnly || blocked}
           onCheckedChange={(value) => toggle(value === true)}
         />
-        <span className="text-sm">{t(output.labelKey)}</span>
+        <span className="text-sm">
+          {help ? (
+            <HelpLabel label={label} help={help} />
+          ) : (
+            label
+          )}
+        </span>
         {output.destructive && schema.labels.destructive ? (
           <Badge tone="negative" className="text-[10px]">
             {t(schema.labels.destructive)}

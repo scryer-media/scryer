@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import cs from "../i18n/locales/cs.ts";
 import en from "../i18n/locales/en.ts";
 import ru from "../i18n/locales/ru.ts";
-import {
-  actionHeadLabelKey,
-  templateActionHeads,
-} from "../utils/maintenance-rule-sets.ts";
+import zhHK from "../i18n/locales/zh_HK.ts";
+import zhTW from "../i18n/locales/zh_TW.ts";
+import { MAINTENANCE_SERVED_PAYLOAD } from "../utils/rule-builder-contract-fixture.ts";
+import { templateRuleOutputs } from "../utils/rule-output-vocabulary.ts";
 import {
   MAINTENANCE_RULE_TEMPLATES,
   maintenanceTemplateFacetLabelKey,
 } from "./maintenance-rule-templates.ts";
+
+const DESCRIPTORS = MAINTENANCE_SERVED_PAYLOAD.outputs;
+const templateActionHeads = (source: string) => templateRuleOutputs(source, DESCRIPTORS);
 
 test("the gallery ships every starter template exactly once", () => {
   assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 17);
@@ -57,15 +61,21 @@ test("every template carries a matcher the API can accept", () => {
   }
 });
 
-test("every template declares at least one known action and a non-negative grace period", () => {
+test("every template declares at least one served action and a non-negative grace period", () => {
+  const labelled: [string, Record<string, string>][] = [
+    ["en", en], ["cs", cs], ["ru", ru], ["zh_HK", zhHK], ["zh_TW", zhTW],
+  ];
   for (const template of MAINTENANCE_RULE_TEMPLATES) {
     const heads = templateActionHeads(template.regoSource);
     assert.ok(heads.length > 0, `${template.id} declares no action`);
     for (const head of heads) {
-      assert.ok(
-        actionHeadLabelKey(head),
-        `${template.id} declares ${head}, which has no label`,
-      );
+      const descriptor = DESCRIPTORS.find((entry) => entry.id === head);
+      assert.ok(descriptor, `${template.id} declares ${head}, which is not served`);
+      for (const [name, strings] of labelled)
+        assert.ok(
+          strings[descriptor.labelKey],
+          `${template.id} declares ${head}, which has no ${name} label`,
+        );
     }
     assert.ok(
       Number.isInteger(template.graceDays) && template.graceDays >= 0,

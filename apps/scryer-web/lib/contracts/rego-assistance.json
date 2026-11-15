@@ -8,55 +8,77 @@
     },
     {
       "name": "scryer.size_gib",
-      "args": ["bytes"],
+      "args": [
+        "bytes"
+      ],
       "returns": "number",
       "descKey": "settings.regoHelper.sizeGib"
     },
     {
       "name": "scryer.lang_matches",
-      "args": ["code", "pattern"],
+      "args": [
+        "code",
+        "pattern"
+      ],
       "returns": "bool",
       "descKey": "settings.regoHelper.langMatches"
     },
     {
       "name": "scryer.normalize_source",
-      "args": ["source"],
+      "args": [
+        "source"
+      ],
       "returns": "string",
       "descKey": "settings.regoHelper.normalizeSource"
     },
     {
       "name": "scryer.normalize_codec",
-      "args": ["codec"],
+      "args": [
+        "codec"
+      ],
       "returns": "string",
       "descKey": "settings.regoHelper.normalizeCodec"
     },
     {
       "name": "lower",
-      "args": ["value"],
+      "args": [
+        "value"
+      ],
       "returns": "string",
       "descKey": "settings.regoHelper.lower"
     },
     {
       "name": "upper",
-      "args": ["value"],
+      "args": [
+        "value"
+      ],
       "returns": "string",
       "descKey": "settings.regoHelper.upper"
     },
     {
       "name": "count",
-      "args": ["value"],
+      "args": [
+        "value"
+      ],
       "returns": "number",
       "descKey": "settings.regoHelper.count"
     },
     {
       "name": "object.get",
-      "args": ["object", "key", "default"],
+      "args": [
+        "object",
+        "key",
+        "default"
+      ],
       "returns": "any",
       "descKey": "settings.regoHelper.objectGet"
     },
     {
       "name": "startswith",
-      "args": ["value", "prefix"],
+      "args": [
+        "value",
+        "prefix"
+      ],
       "returns": "bool",
       "descKey": "settings.regoHelper.startsWith"
     }
@@ -91,6 +113,18 @@
       "label": "manual-request",
       "descKey": "settings.regoSnippet.manualRequest",
       "source": "manual if {\n    input.facts.approved_last_30d >= ${1:5}\n}"
+    },
+    {
+      "family": "request",
+      "label": "shape-request",
+      "descKey": "settings.regoSnippet.shapeRequest",
+      "source": "set_lease_days := ${1:30} if {\n    input.facts.is_adult\n}"
+    },
+    {
+      "family": "request",
+      "label": "tag-request",
+      "descKey": "settings.regoSnippet.tagRequest",
+      "source": "add_tags := [\"${1:family}\"] if {\n    input.facts.certification_rank <= ${2:1}\n}"
     },
     {
       "family": "maintenance",

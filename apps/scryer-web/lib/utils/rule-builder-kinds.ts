@@ -1,10 +1,12 @@
 import { ruleBuilderOperator as op, type RuleBuilderKind } from "./rule-builder.ts";
 
-/// Kinds for rule families whose input sends an unknown value as `null`
-/// rather than leaving the field out. A bare `{path}` is true for `null` in
-/// Rego, so presence is asked with `!= null`, and an ordering or a negative
-/// comparison first checks the value has the type it compares, so an unknown
-/// value never satisfies one.
+/// The comparisons every family builds its kinds from. No comparison is
+/// satisfied by a field that is missing or `null` unless its label asks about
+/// that ("has no value"): presence is asked with `!= null`, because a bare
+/// `{path}` is true for `null` in Rego, and an ordering or a negative
+/// comparison first checks the value has the type it compares, because Rego
+/// orders `null` below every number and a negation is true of a missing
+/// value.
 export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
   Record<string, RuleBuilderKind>
 > = {
@@ -59,8 +61,18 @@ export const NULL_AWARE_RULE_BUILDER_KINDS: Readonly<
   string_list: {
     operators: [
       op("CONTAINS", "text", "{value} in {path}"),
-      op("NOT_CONTAINS", "text", "not {value} in {path}"),
+      op("NOT_CONTAINS", "text", "is_array({path})\nnot {value} in {path}"),
       op("IS_EMPTY", "none", "count({path}) == 0"),
+      op("IS_NOT_EMPTY", "none", "count({path}) > 0"),
+    ],
+  },
+  /// A list the input leaves out when it is empty, so a missing list is an
+  /// empty one: it contains nothing and is empty.
+  omitted_when_empty_string_list: {
+    operators: [
+      op("CONTAINS", "text", "{value} in {path}"),
+      op("NOT_CONTAINS", "text", "not {value} in {path}"),
+      op("IS_EMPTY", "none", "not count({path}) > 0"),
       op("IS_NOT_EMPTY", "none", "count({path}) > 0"),
     ],
   },

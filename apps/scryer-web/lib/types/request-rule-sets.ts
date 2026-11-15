@@ -28,6 +28,48 @@ export type LifecycleClaimKind = "RETAIN_UNTIL";
 export type LifecycleClaimState =
   "DORMANT" | "ACTIVE" | "EXPIRED" | "RELEASED" | "CONVERTED";
 
+/// A head a request rule's source can define, as the API names it
+/// (`SET_LEASE_DAYS`). The heads a build knows come from the served output
+/// descriptors, so this is any string the server sends.
+export type RequestActionHead = string;
+
+/// What a request rule's source can do, read from the source by the server:
+/// the heads it defines and every literal each valued head can produce.
+export type RequestDeclaredActions = {
+  heads: RequestActionHead[];
+  qualityProfiles: string[];
+  /// `0` is forever.
+  leaseDays: number[];
+  monitors: string[];
+  requiredAudioLanguages: string[];
+  preferredAudioLanguages: string[];
+  addTags: string[];
+  notifications: string[];
+};
+
+/// One shaped value and the name of the rule set that set it. The requester's
+/// own pre-flight selects only the value.
+export type RequestShapedValue<T> = {
+  value: T;
+  ruleSetName?: string;
+};
+
+/// What an approval of this request would be changed to. Applied on
+/// auto-approve, offered to the approver as suggestions on manual review, and
+/// trace only on deny. A head two rules disagreed on is in `conflicts` and
+/// carries no value.
+export type RequestShaping = {
+  qualityProfile: RequestShapedValue<string> | null;
+  /// `0` is forever.
+  leaseDays: RequestShapedValue<number> | null;
+  monitor: RequestShapedValue<string> | null;
+  requiredAudioLanguages: RequestShapedValue<string[]> | null;
+  preferredAudioLanguages: RequestShapedValue<string[]> | null;
+  /// Not selected on the requester's pre-flight.
+  notifications?: RequestShapedValue<string>[];
+  conflicts: RequestActionHead[];
+};
+
 export type RequestRuleSetRecord = {
   id: string;
   name: string;
@@ -38,6 +80,8 @@ export type RequestRuleSetRecord = {
   /// How many stored decisions name this rule set. Read per rule set rather
   /// than batched, so the number on a row is the number the API holds.
   decisionCount: number;
+  /// Absent on payloads that do not select it.
+  declaredActions?: RequestDeclaredActions;
   createdAt: string;
   updatedAt: string;
 };
@@ -57,6 +101,7 @@ export type RequestRuleRevision = {
 export type RequestRuleSetDetail = {
   ruleSet: RequestRuleSetRecord;
   revision: RequestRuleRevision;
+  declaredActions?: RequestDeclaredActions;
   /// The stored builder document, read only by the single-rule query. Opaque
   /// until `parseRuleBuilderModel` reads it.
   builderModel?: unknown;
@@ -66,6 +111,11 @@ export type RequestRuleValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
+  /// Findings that never block saving.
+  warnings?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
+  /// Null when the source could not be read.
+  declaredActions?: RequestDeclaredActions | null;
+  unavailable?: boolean;
 };
 
 /// The whole vocabulary a requester is permitted to see about why a rule
@@ -105,6 +155,8 @@ export type RequestRuleDecisionRecord = {
   votes: RequestRuleVoteRecord[];
   reasons: RequestPreflightReason[];
   tags: string[];
+  /// Absent where a view does not select it.
+  shaping?: RequestShaping | null;
   inputSchemaVersion: number;
 };
 
@@ -132,9 +184,11 @@ export type RequestPreflightResult = {
   metadataPartial: boolean;
   evaluationMode: RequestEvaluationMode;
   /// Why the verdict fell back to needing approval, when it did. It names the
-  /// shape of the fallback (`rule_manual`, `held`, `error`, `no_rule_matched`)
-  /// and never a rule, so it is safe on the requester's surface.
+  /// shape of the fallback (`rule_manual`, `held`, `error`, `no_rule_matched`,
+  /// `shaping_conflict`) and never a rule, so it is safe on the requester's
+  /// surface.
   fallbackReason: string | null;
+  shaping: RequestShaping | null;
 };
 
 export type TitleClaimRecord = {

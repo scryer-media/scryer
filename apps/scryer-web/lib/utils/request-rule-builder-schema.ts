@@ -1,6 +1,6 @@
 import requestContract from "../contracts/request-input-contract.json" with { type: "json" };
 import { NULL_AWARE_RULE_BUILDER_KINDS } from "./rule-builder-kinds.ts";
-import type { RuleBuilderContract, RuleBuilderSchema } from "./rule-builder.ts";
+import type { RuleBuilderBaseSchema, RuleBuilderContract } from "./rule-builder.ts";
 
 const WEEKDAYS = [
   "monday",
@@ -14,17 +14,29 @@ const WEEKDAYS = [
 
 /// Request rules: conditions read the title's facts, the request itself, the
 /// target library and the clock. Requester fields are left to Advanced,
-/// because reading them makes a rule person-targeted. An unknown value is
-/// `null`. A rule votes approve, deny or manual review, and may add tags and
-/// reason codes.
-export const REQUEST_RULE_BUILDER_SCHEMA: RuleBuilderSchema = {
+/// because reading them makes a rule person-targeted. A fact the host does not
+/// have is left out of `input.facts`, never sent as `null`; a rule reading a
+/// fact the host could not look up is held before it runs, so a missing fact
+/// is one the source confirmed has no value. The request's own optional
+/// fields are `null` when not set. What a rule can do comes from the server.
+export const REQUEST_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   family: "request",
   idPrefix: "settings-request-builder",
   preamble: "package rules\nimport rego.v1\n\n",
   helperRule: "rule_applies",
   contract: requestContract as RuleBuilderContract,
   conditionSources: [
-    { section: "input.facts", label: "path" },
+    {
+      section: "input.facts",
+      label: "path",
+      // The host leaves these out when the title has none.
+      fields: {
+        genres: { kind: "omitted_when_empty_string_list" },
+        canonical_tag_keys: { kind: "omitted_when_empty_string_list" },
+        themes: { kind: "omitted_when_empty_string_list" },
+        quality_profile_tiers: { kind: "omitted_when_empty_string_list" },
+      },
+    },
     {
       section: "input.request",
       label: "path",
@@ -80,70 +92,6 @@ export const REQUEST_RULE_BUILDER_SCHEMA: RuleBuilderSchema = {
     { type: "string[]?", kind: "nullable_string_list" },
   ],
   kinds: NULL_AWARE_RULE_BUILDER_KINDS,
-  outputs: [
-    {
-      id: "APPROVE",
-      head: "approve",
-      labelKey: "settings.requestBuilderApprove",
-      value: { kind: "flag" },
-      template: "{head} if {helper}",
-    },
-    {
-      id: "DENY",
-      head: "deny",
-      labelKey: "settings.requestBuilderDeny",
-      value: { kind: "flag" },
-      template: "{head} if {helper}",
-    },
-    {
-      id: "MANUAL",
-      head: "manual",
-      labelKey: "settings.requestBuilderManual",
-      value: { kind: "flag" },
-      template: "{head} if {helper}",
-    },
-    {
-      // Tags land on real titles, so they keep the shape the server accepts
-      // from a rule: at most 16, each 1 to 64 letters, digits, '.', '_', '-'
-      // or spaces.
-      id: "TAGS",
-      head: "tags",
-      labelKey: "settings.requestBuilderTags",
-      value: {
-        kind: "text_list",
-        options: "titleTags",
-        placeholderKey: "settings.ruleBuilderTagsPlaceholder",
-        emptyKey: "settings.ruleBuilderNoTags",
-        maxItems: 16,
-        maxBytes: 64,
-        pattern: "[A-Za-z0-9._ -]+",
-      },
-      template: "{head} contains {item} if {helper}",
-      perItem: true,
-    },
-    {
-      // The server keeps at most 32 reason codes of up to 120 bytes each.
-      id: "REASONS",
-      head: "reasons",
-      labelKey: "settings.requestBuilderReasons",
-      value: {
-        kind: "text_list",
-        placeholderKey: "settings.requestBuilderReasonsPlaceholder",
-        maxItems: 32,
-        maxBytes: 120,
-      },
-      template: "{head} contains {item} if {helper}",
-      perItem: true,
-    },
-  ],
-  outputRules: [
-    // A rule that writes only reasons never contributes to a decision, so
-    // the server refuses it.
-    { rule: "at_least_one", of: ["APPROVE", "DENY", "MANUAL", "TAGS"] },
-    // Manual beats deny beats approve within one rule, so a second vote
-    // would never count.
-    { rule: "at_most_one", of: ["APPROVE", "DENY", "MANUAL"] },
-  ],
   labels: {
     outputs: "settings.requestBuilderOutputs",
     outputsHelp: "settings.requestBuilderOutputsHelp",

@@ -34,8 +34,10 @@ import type {
 import {
   REQUEST_DECISION_LIMIT,
   REQUEST_FILTER_ALL,
-  REQUEST_RULE_BUILDER,
+  requestRuleBuilder,
+  REQUEST_SHAPING_MONITOR_TYPES,
   applyRequestersToSource,
+  requestMonitorTypeLabelKey,
   clampRequestLeaseDays,
   copyRequestRuleDraft,
   createRequestRuleSetInput,
@@ -48,8 +50,17 @@ import {
 } from "@/lib/utils/request-rule-sets";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
-import { loadTitleTagLabels } from "@/lib/utils/rule-builder-catalogs";
-import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
+import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
+import { REQUEST_RULE_BUILDER_BASE } from "@/lib/utils/request-rule-builder-schema";
+import {
+  loadQualityProfileNames,
+  loadTitleTagLabels,
+} from "@/lib/utils/rule-builder-catalogs";
+import {
+  isIncompleteRuleBuilderDraft,
+  withRuleSourceEdit,
+} from "@/lib/utils/rule-builder-mode";
+import { audioLanguageOptions } from "@/lib/constants/audio-languages";
 import {
   librariesQuery,
   qualityProfileOptionsQuery,
@@ -162,15 +173,39 @@ export function SettingsRequestRulesContainer() {
     [setGlobalStatus, t],
   );
   const builderOptionLoaders = useMemo(
-    () => ({ titleTags: () => loadTitleTagLabels(client) }),
+    () => ({
+      titleTags: () => loadTitleTagLabels(client),
+      qualityProfiles: () => loadQualityProfileNames(client),
+    }),
     [client],
   );
+  /// Monitoring and audio languages are fixed vocabularies, written as their
+  /// codes and shown by their labels.
+  const builderStaticOptions = useMemo(
+    () => ({
+      monitorTypes: REQUEST_SHAPING_MONITOR_TYPES.map((value) => {
+        const key = requestMonitorTypeLabelKey(value);
+        return { value, label: key ? t(key) : value };
+      }),
+      audioLanguages: audioLanguageOptions(
+        t("title.originalAudioLanguagePerTitle"),
+      ).map((language) => ({ value: language.code, label: language.name })),
+    }),
+    [t],
+  );
+  const servedSchema = useRuleBuilderSchema(REQUEST_RULE_BUILDER_BASE);
+  const builderBinding = useMemo(
+    () => requestRuleBuilder(servedSchema.schema),
+    [servedSchema.schema],
+  );
+  const whenSchemaReady = servedSchema.whenReady;
   const builderEditor = useRuleBuilderEditor({
-    binding: REQUEST_RULE_BUILDER,
+    binding: builderBinding,
     draft: ruleSetDraft,
     setDraft: setRuleSetDraft,
     isEditorOpen,
     optionLoaders: builderOptionLoaders,
+    staticOptions: builderStaticOptions,
     onLoadError: reportLoadError,
   });
   const beginBuilderSession = builderEditor.beginSession;
@@ -184,15 +219,17 @@ export function SettingsRequestRulesContainer() {
     setValidationResult(null);
   }, [setValidationResult]);
 
-  const openCreateEditor = useCallback(() => {
-    const next = newRequestRuleBuilderDraft();
+  const openCreateEditor = useCallback(async () => {
+    const next = newRequestRuleBuilderDraft(
+      requestRuleBuilder(await whenSchemaReady()),
+    );
     setEditingRuleSetId(null);
     setRuleSetDraft(next);
     setRuleSetDraftBaseline(next);
     beginBuilderSession(next);
     setValidationResult(null);
     setIsEditorOpen(true);
-  }, [beginBuilderSession, setValidationResult]);
+  }, [beginBuilderSession, setValidationResult, whenSchemaReady]);
 
   const fetchRuleSetDetail = useCallback(
     async (id: string): Promise<RequestRuleSetDetail | null> => {
@@ -220,9 +257,12 @@ export function SettingsRequestRulesContainer() {
 
   const openEditEditor = useCallback(
     async (record: RequestRuleSetRecord) => {
-      const detail = await fetchRuleSetDetail(record.id);
+      const [detail, schema] = await Promise.all([
+        fetchRuleSetDetail(record.id),
+        whenSchemaReady(),
+      ]);
       if (!detail) return;
-      const next = requestRuleDraftFromDetail(detail);
+      const next = requestRuleDraftFromDetail(detail, requestRuleBuilder(schema));
       setEditingRuleSetId(record.id);
       setRuleSetDraft(next);
       setRuleSetDraftBaseline(next);
@@ -230,14 +270,17 @@ export function SettingsRequestRulesContainer() {
       setValidationResult(null);
       setIsEditorOpen(true);
     },
-    [beginBuilderSession, setValidationResult, fetchRuleSetDetail],
+    [beginBuilderSession, setValidationResult, fetchRuleSetDetail, whenSchemaReady],
   );
 
   const openCopyEditor = useCallback(
     async (record: RequestRuleSetRecord) => {
-      const detail = await fetchRuleSetDetail(record.id);
+      const [detail, schema] = await Promise.all([
+        fetchRuleSetDetail(record.id),
+        whenSchemaReady(),
+      ]);
       if (!detail) return;
-      const next = copyRequestRuleDraft(detail);
+      const next = copyRequestRuleDraft(detail, requestRuleBuilder(schema));
       setEditingRuleSetId(null);
       setRuleSetDraft(next);
       setRuleSetDraftBaseline(next);
@@ -245,7 +288,7 @@ export function SettingsRequestRulesContainer() {
       setValidationResult(null);
       setIsEditorOpen(true);
     },
-    [beginBuilderSession, setValidationResult, fetchRuleSetDetail],
+    [beginBuilderSession, setValidationResult, fetchRuleSetDetail, whenSchemaReady],
   );
 
   /// Load a starter template into the create-rule editor. A template prefills
@@ -445,7 +488,8 @@ export function SettingsRequestRulesContainer() {
     (usernames: string[]) => {
       setRuleSetDraft((prev) => {
         const next = applyRequestersToSource(prev.regoSource, usernames);
-        return next === null ? prev : { ...prev, regoSource: next };
+        // Only a draft the builder no longer holds takes a source edit.
+        return next === null ? prev : withRuleSourceEdit(prev, next);
       });
       setValidationResult(null);
     },
@@ -499,7 +543,7 @@ export function SettingsRequestRulesContainer() {
     event.preventDefault();
     if (
       builderEditor.attached &&
-      isIncompleteRuleBuilderDraft(REQUEST_RULE_BUILDER, ruleSetDraft)
+      isIncompleteRuleBuilderDraft(builderBinding, ruleSetDraft)
     ) {
       setValidationResult({
         valid: false,
@@ -528,6 +572,7 @@ export function SettingsRequestRulesContainer() {
             input: updateRequestRuleMatcherInput(
               editingRuleSetId,
               ruleSetDraft,
+              builderBinding,
             ),
           })
           .toPromise();
@@ -545,7 +590,7 @@ export function SettingsRequestRulesContainer() {
       } else {
         const { error } = await client
           .mutation(createRequestRuleSetMutation, {
-            input: createRequestRuleSetInput(ruleSetDraft),
+            input: createRequestRuleSetInput(ruleSetDraft, builderBinding),
           })
           .toPromise();
         if (error) throw error;
@@ -674,6 +719,8 @@ export function SettingsRequestRulesContainer() {
         setBuilderModel={builderEditor.setModel}
         editAsRego={builderEditor.editAsRego}
         builderOptions={builderEditor.options}
+        builderSchema={servedSchema.schema}
+        builderStatus={servedSchema.status}
         submitRuleSet={submitRuleSet}
         mutatingRuleSetId={mutatingRuleSetId}
         resetRuleSetDraft={requestCloseEditor}

@@ -1,6 +1,10 @@
 import scoringContract from "../contracts/rule-input-contract.json" with { type: "json" };
 import { NULL_AWARE_RULE_BUILDER_KINDS } from "./rule-builder-kinds.ts";
-import type { RuleBuilderContract, RuleBuilderSchema } from "./rule-builder.ts";
+import type {
+  RuleBuilderBaseSchema,
+  RuleBuilderContract,
+  RuleBuilderSchema,
+} from "./rule-builder.ts";
 
 /// The server keeps a score entry's points in a 32-bit integer.
 const SCORE_POINTS_MIN = -2_147_483_648;
@@ -21,7 +25,7 @@ const SCORE_CODE = {
 /// title's context, the built-in score and, after download, the file. An
 /// unknown value is `null`. A rule adds one score entry under a code, or
 /// blocks the release.
-export const SCORING_RULE_BUILDER_SCHEMA: RuleBuilderSchema = {
+export const SCORING_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   family: "scoring",
   idPrefix: "settings-scoring-builder",
   preamble: "package rules\nimport rego.v1\n\n",
@@ -48,6 +52,18 @@ export const SCORING_RULE_BUILDER_SCHEMA: RuleBuilderSchema = {
     { type: "string[]", kind: "string_list" },
   ],
   kinds: NULL_AWARE_RULE_BUILDER_KINDS,
+  labels: {
+    outputs: "settings.scoringBuilderOutputs",
+    outputsHelp: "settings.scoringBuilderOutputsHelp",
+    conditionsHelp: "settings.scoringBuilderConditionsHelp",
+  },
+};
+
+/// Scoring's own outputs, used while the server serves none for scoring: a
+/// score entry is written under a code with two typed parts, which a served
+/// output cannot describe yet.
+export const SCORING_RULE_BUILDER_SCHEMA: RuleBuilderSchema = {
+  ...SCORING_RULE_BUILDER_BASE,
   outputs: [
     {
       id: "ADJUST_SCORE",
@@ -77,9 +93,4 @@ export const SCORING_RULE_BUILDER_SCHEMA: RuleBuilderSchema = {
     },
   ],
   outputRules: [{ rule: "exactly_one", of: ["ADJUST_SCORE", "BLOCK"] }],
-  labels: {
-    outputs: "settings.scoringBuilderOutputs",
-    outputsHelp: "settings.scoringBuilderOutputsHelp",
-    conditionsHelp: "settings.scoringBuilderConditionsHelp",
-  },
 };

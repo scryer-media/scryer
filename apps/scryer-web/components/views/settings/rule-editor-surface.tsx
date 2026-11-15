@@ -19,6 +19,7 @@ import {
   ruleRegoEditorNeedsConfirmation,
   type RuleEditorMode,
 } from "@/lib/utils/rule-builder-mode";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
 
 /// A rule's source editor, the same for every rule family. A rule still made
 /// by the builder is shown in the builder (Simple) or as its generated Rego,
@@ -27,6 +28,7 @@ import {
 export function RuleEditorSurface({
   idPrefix,
   schema,
+  builderStatus = "ready",
   variant,
   mode,
   onModeChange,
@@ -41,7 +43,10 @@ export function RuleEditorSurface({
 }: {
   /// Prefix of the surface's own element ids.
   idPrefix: string;
-  schema: RuleBuilderSchema;
+  /// Null until the family's outputs are read; only the Rego editor is shown
+  /// meanwhile, and after a failed read.
+  schema: RuleBuilderSchema | null;
+  builderStatus?: RuleBuilderSchemaStatus;
   variant: string | null;
   mode: RuleEditorMode;
   onModeChange: (mode: "simple" | "view") => void;
@@ -60,10 +65,11 @@ export function RuleEditorSurface({
 }) {
   const t = useTranslate();
   const [confirming, setConfirming] = React.useState(false);
-  const builderModel = available && mode !== "edit" ? model : null;
+  const builderModel =
+    available && mode !== "edit" && schema !== null ? model : null;
   const showBuilder = builderModel !== null && mode === "simple";
   const result =
-    showBuilder && builderModel
+    showBuilder && builderModel && schema
       ? generateRuleSource(schema, builderModel, variant)
       : null;
 
@@ -140,7 +146,18 @@ export function RuleEditorSurface({
           />
         </div>
       </div>
-      {showBuilder && builderModel ? (
+      {builderStatus !== "ready" ? (
+        <p
+          id={selectorId(idPrefix, "editor-builder-status")}
+          data-builder-status={builderStatus}
+          className="mb-2 text-xs text-muted-foreground"
+        >
+          {builderStatus === "loading"
+            ? t("settings.ruleBuilderSchemaLoading")
+            : t("settings.ruleBuilderSchemaFailed")}
+        </p>
+      ) : null}
+      {showBuilder && builderModel && schema ? (
         <RuleBuilder
           schema={schema}
           model={builderModel}

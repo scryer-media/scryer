@@ -4212,6 +4212,35 @@ export const ruleBuilderTagLabelsQuery = `query RuleBuilderTagLabels {
   }
 }`;
 
+/// The outputs one rule family's builder offers, read once per page.
+export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!) {
+  ruleBuilderSchema(family: $family) {
+    family
+    outputs {
+      id
+      head
+      labelKey
+      helpKey
+      valueKind
+      options
+      min
+      max
+      maxItems
+      maxBytes
+      pattern
+      template
+      perItem
+      destructive
+      variants
+      conflictsWith
+    }
+    outputRules {
+      rule
+      of
+    }
+  }
+}`;
+
 export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
   maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
   }
@@ -4241,7 +4270,6 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     reasonCodes
     actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
     }
-    actionKind
     actionSequence {
       schemaVersion
       steps {
@@ -4424,6 +4452,17 @@ export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetI
 // Request rules are saved disabled. An enabled rule covering the library
 // decides a request; with none, the requester's library permission does.
 
+/// Every head a request rule's source defines and the literals they carry.
+export const REQUEST_DECLARED_ACTIONS_FIELDS = `
+      heads
+      qualityProfiles
+      leaseDays
+      monitors
+      requiredAudioLanguages
+      preferredAudioLanguages
+      addTags
+      notifications`;
+
 export const REQUEST_RULE_SET_FIELDS = `
     id
     name
@@ -4432,8 +4471,22 @@ export const REQUEST_RULE_SET_FIELDS = `
     libraryIds
     currentRevisionNumber
     decisionCount
+    declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
+    }
     createdAt
     updatedAt`;
+
+/// What an approval would be changed to, with the rule set that set each
+/// value, for the surfaces that show it to a manager: the author preview and
+/// the approver's queue.
+export const REQUEST_SHAPING_FIELDS = `
+      qualityProfile { value ruleSetName }
+      leaseDays { value ruleSetName }
+      monitor { value ruleSetName }
+      requiredAudioLanguages { value ruleSetName }
+      preferredAudioLanguages { value ruleSetName }
+      notifications { value ruleSetName }
+      conflicts`;
 
 const requestRuleRevisionFieldSelection = `
     id
@@ -4516,6 +4569,14 @@ export const previewMyRequestDecisionQuery = `query PreviewMyRequestDecision($in
     reasons {
       code
       ruleName
+    }
+    shaping {
+      qualityProfile { value }
+      leaseDays { value }
+      monitor { value }
+      requiredAudioLanguages { value }
+      preferredAudioLanguages { value }
+      conflicts
     }
   }
 }`;
@@ -5181,6 +5242,8 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
       expiresAt
     }
     decision {${REQUEST_RULE_DECISION_FIELDS}
+      shaping {${REQUEST_SHAPING_FIELDS}
+      }
     }
   }
 }`;

@@ -3968,9 +3968,17 @@ const en: LocaleDictionary = {
   "error.ruleInputImportUnsupported":
     "Reference rule input directly instead of importing it under another name.",
   "error.ruleActionValueNotLiteral":
-    "Assign this action a plain literal: a quoted string for set_quality_profile, move_to_library, move_to_root and notify, or a list of quoted strings for add_tags and remove_tags.",
+    "Assign this head a plain literal: a quoted string, a whole number for set_lease_days, or a list of quoted strings for tag and audio language heads.",
   "error.ruleActionValueInvalid":
-    "This action's value is not valid: a profile name cannot be empty, and each tag has to be a valid tag label.",
+    "This head's value is not valid: a name cannot be empty, tags have to be valid tag labels, a lease is 0 to 3650 days, and monitoring and language values have to be ones Scryer offers.",
+  "error.ruleActionUnknownQualityProfile":
+    "No quality profile has this name, so the rule cannot apply it.",
+  "error.ruleActionUndefinedTag":
+    "This tag is not defined in Settings › Tags, so it is dropped when the rule applies.",
+  "settings.regoSnippet.shapeRequest":
+    "Set the lease an approval writes when a fact holds.",
+  "settings.regoSnippet.tagRequest":
+    "Tag the requested title when a fact holds.",
   "error.ruleHostHelperRedefined":
     "days_since is provided by Scryer and cannot be redefined. Give your own helper another name.",
   "error.ruleUnreferencedRule":
@@ -3978,7 +3986,7 @@ const en: LocaleDictionary = {
   "error.ruleMatchRequired":
     "Define a boolean match rule for this maintenance matcher.",
   "error.ruleVoteRequired":
-    "Define approve, deny, manual, or tags for this request matcher.",
+    "Define a vote (approve, deny or manual), a value that shapes the approval, or add_tags for this request rule.",
 
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
     "Choose an action or an action sequence, not both.",
@@ -10051,10 +10059,6 @@ const en: LocaleDictionary = {
     "Whether this linked movie has a file on disk",
   "settings.refMaintSeriesMovieTags":
     "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
-  "settings.maintenanceActionHeadMoveToLibrary": "Move to library",
-  "settings.maintenanceActionHeadMoveToRoot": "Move to root folder",
-  "settings.maintenanceActionHeadNotify": "Notify",
-  "settings.maintenanceActionHeadFetchSubtitles": "Fetch subtitles",
   "settings.ruleBuilderTitle": "Rule",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Simple",
@@ -10090,7 +10094,6 @@ const en: LocaleDictionary = {
   "settings.maintenanceBuilderRootPlaceholder": "Choose a root folder",
   "settings.ruleBuilderTagsPlaceholder": "Choose tags",
   "settings.ruleBuilderNoTags": "No tags have been created yet.",
-  "settings.maintenanceBuilderNotifyPlaceholder": "Notification text",
   "settings.ruleBuilderGeneratedSource": "Generated Rego",
   "settings.ruleBuilderGeneratedSourceHelp":
     "The source the builder writes from your choices. This is what is validated, previewed and saved.",
@@ -10145,6 +10148,12 @@ const en: LocaleDictionary = {
     "This rule names an option this version does not know.",
   "settings.ruleBuilderProblemOutputNeedsOther":
     "This option also needs {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Not offered any more: {{values}}. The rule keeps it until you pick another.",
+  "settings.ruleBuilderSchemaLoading":
+    "Loading the simple editor. The Rego editor works in the meantime.",
+  "settings.ruleBuilderSchemaFailed":
+    "The simple editor could not be loaded. Edit the rule as Rego, or reopen the page to try again.",
   "settings.scoringBuilderOutputs": "Score",
   "settings.scoringBuilderOutputsHelp":
     "Choose one: add points to the release's score, or block the release. The code names the score entry in decision traces.",
@@ -10155,17 +10164,21 @@ const en: LocaleDictionary = {
   "settings.scoringBuilderCode": "Code",
   "settings.scoringBuilderCodePlaceholder": "example_code",
   "settings.scoringBuilderPoints": "Points",
-  "settings.requestBuilderOutputs": "Decision",
+  "settings.requestBuilderOutputs": "Decision and changes",
   "settings.requestBuilderOutputsHelp":
-    "Choose at most one vote: approve, deny or hold for review. Tags and reasons can go with a vote, and tags can also stand alone.",
+    "Choose at most one vote: approve, deny or hold for review. A rule can also change what an approval writes, add tags or send a notification, with or without a vote. Reason codes can go with any of these.",
+  "settings.requestBuilderMonitorPlaceholder": "Choose monitoring",
+  "settings.requestBuilderLanguagesPlaceholder": "Choose languages",
+  "settings.requestDeclaredActionsTitle": "What this rule can do",
+  "settings.requestDeclaredActionsHelp":
+    "The votes and values this rule's source defines, in this order: {{order}}. An automatically approved request gets the values whose conditions hold; a request held for review shows them to the approver as suggestions.",
+  "settings.requestDeclaredActionsNone": "Nothing declared",
+  "settings.requestDeclaredActionsUnavailable":
+    "Fix the errors to see what this rule can do.",
+  "settings.requestRuleWarningsTitle": "Warnings",
+  "settings.requestRuleWarningLocation": "Line {{line}}, column {{column}}:",
   "settings.requestBuilderConditionsHelp":
     "Each condition checks one fact about the request, the title, the library or the time. Choose whether every condition or any one of them must hold for the decision to apply.",
-  "settings.requestBuilderApprove": "Approve",
-  "settings.requestBuilderDeny": "Deny",
-  "settings.requestBuilderManual": "Hold for review",
-  "settings.requestBuilderTags": "Tags",
-  "settings.requestBuilderReasons": "Reason codes",
-  "settings.requestBuilderReasonsPlaceholder": "One reason code per line",
   "settings.requestBuilderOriginManual": "Requested by hand",
   "settings.requestBuilderOriginPublicList": "From a public list",
   "settings.requestBuilderOriginPersonalList": "From a personal list",
@@ -10373,7 +10386,7 @@ const en: LocaleDictionary = {
     "A request rule reads one document describing the request, the person who made it, the library it targets, and what Scryer knows about the media. Facts are plain values. A fact Scryer could not observe is simply missing, and a rule that reads a missing fact holds the request for a person instead of guessing — you never write that guard yourself.",
   "settings.refReqOutputTitle": "What a request rule defines",
   "settings.refReqOutputIntro":
-    "At least one of these has to be defined, or the rule can never vote and Scryer refuses to save it.",
+    "A rule has to define a vote, a value that shapes the approval, or add_tags; one that defines none of these is refused when you save it. Valued heads take plain literals with :=.",
   "settings.refReqOutputApprove":
     "approve — the request may be granted without a person seeing it.",
   "settings.refReqOutputDeny":
@@ -10381,7 +10394,20 @@ const en: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual — the request goes to a person, whatever else voted.",
   "settings.refReqOutputTags":
-    'tags contains "…" — labels for the media, applied only on an approval.',
+    "add_tags := [\"…\"] — tags for the title, applied only on an approval.",
+  "settings.refReqOutputSetQualityProfile":
+    "set_quality_profile := \"Profile name\" — approve with this quality profile instead of the requested one.",
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — approve with this lease. 0 keeps the title forever; otherwise 1 to 3650 days.",
+  "settings.refReqOutputSetMonitor":
+    "set_monitor := \"FUTURE_EPISODES\" — approve with this monitoring: MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime.",
+  "settings.refReqOutputSetAudioLanguages":
+    "set_required_audio_languages := [\"eng\"] and set_preferred_audio_languages := [\"jpn\", \"eng\"] — replace the requested audio language lists.",
+  "settings.refReqOutputNotify": "notify := \"…\" — send this notification.",
+  "settings.refReqOutputShapingOutcome":
+    "An automatically approved request gets these values. A request held for review shows them to the approver as suggestions, and a denied one lists them in its trace only. When two rules set different values for the same thing, the request is held for review.",
+  "settings.refReqOutputNoSchedule":
+    "Request rules have no schedule: they run on every request and on the requester's pre-flight check.",
   "settings.refReqOutputReasons":
     'reasons contains "…" — stable codes the requester is shown.',
   "settings.refReqOutputNoPackage":
@@ -10400,6 +10426,16 @@ const en: LocaleDictionary = {
   "requests.preflightManualReview": "This needs approval",
   "requests.preflightDeny": "This would be denied: {{reasons}}",
   "requests.preflightTags": "It will be tagged {{tags}}.",
+  "requests.preflightShaping":
+    "If approved, it will be changed to: {{changes}}.",
+  "requests.shapingTitle": "An approval would be changed to",
+  "requests.shapingSetBy": "set by {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: rules set different values, so a person decides",
+  "requests.shapingSuggested": "Suggested by rule {{rule}}",
+  "requests.shapingLeaseDays": "{{count}} days",
+  "requests.fallbackShapingConflict":
+    "Rules set different values for the same thing, so a person decides.",
   "requests.preflightReason": "Reason: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer could not read everything about this title, so a person will decide.",
@@ -12742,6 +12778,34 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
   "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
   "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
+  "ruleOutput.maintenance.add_tags": "Add tags",
+  "ruleOutput.maintenance.remove_tags": "Remove tags",
+  "ruleOutput.maintenance.set_quality_profile": "Change quality profile",
+  "ruleOutput.maintenance.monitor": "Monitor",
+  "ruleOutput.maintenance.search": "Search",
+  "ruleOutput.maintenance.fetch_subtitles": "Fetch subtitles",
+  "ruleOutput.maintenance.move_to_library": "Move to library",
+  "ruleOutput.maintenance.move_to_root": "Move to root folder",
+  "ruleOutput.maintenance.unmonitor": "Unmonitor",
+  "ruleOutput.maintenance.delete_files": "Delete files",
+  "ruleOutput.maintenance.delete_title": "Delete title and files",
+  "ruleOutput.maintenance.notify": "Notify",
+  "ruleOutput.maintenance.notify.placeholder": "Notification text",
+  "ruleOutput.request.approve": "Approve",
+  "ruleOutput.request.deny": "Deny",
+  "ruleOutput.request.manual": "Hold for review",
+  "ruleOutput.request.set_quality_profile": "Quality profile",
+  "ruleOutput.request.set_lease_days": "Lease",
+  "ruleOutput.request.set_lease_days.placeholder": "Days, or 0 to keep forever",
+  "ruleOutput.request.set_monitor": "Monitoring",
+  "ruleOutput.request.set_required_audio_languages": "Required audio languages",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Preferred audio languages",
+  "ruleOutput.request.add_tags": "Add tags",
+  "ruleOutput.request.notify": "Notify",
+  "ruleOutput.request.notify.placeholder": "Notification text",
+  "ruleOutput.request.reasons": "Reason codes",
+  "ruleOutput.request.reasons.placeholder": "One reason code per line",
 };
 
 export default en;

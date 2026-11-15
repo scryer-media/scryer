@@ -63,11 +63,10 @@ import type {
 } from "@/lib/types/rule-sets";
 import ruleInputContract from "@/lib/contracts/rule-input-contract.json";
 import { selectorId } from "@/lib/utils/dom-ids";
-import {
-  SCORING_RULE_BUILDER,
-  isUserOwnedRuleSet,
-} from "@/lib/utils/rule-sets";
+import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
 import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
 import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
 import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
 import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
@@ -91,6 +90,9 @@ type SettingsRulesSectionProps = {
   /// Set once a hand edit in this editor session detached the rule.
   editAsRego: () => void;
   builderOptions: RuleBuilderOptions;
+  /// Null until the served outputs are read, and after a failed read.
+  builderSchema: RuleBuilderSchema | null;
+  builderStatus: RuleBuilderSchemaStatus;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -942,6 +944,8 @@ export function SettingsRulesSection({
   setBuilderModel,
   editAsRego,
   builderOptions,
+  builderSchema,
+  builderStatus,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -1241,7 +1245,8 @@ export function SettingsRulesSection({
                         ) : null}
                         <RuleEditorSurface
                           idPrefix="settings-rule"
-                          schema={SCORING_RULE_BUILDER.schema}
+                          schema={builderSchema}
+                          builderStatus={builderStatus}
                           variant={null}
                           mode={builderMode}
                           onModeChange={setBuilderMode}

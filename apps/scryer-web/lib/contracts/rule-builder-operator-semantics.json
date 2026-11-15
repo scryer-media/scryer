@@ -1,0 +1,1715 @@
+{
+  "scoring": {
+    "variant": null,
+    "rows": [
+      {
+        "field": "input.release.is_remux",
+        "operator": "IS_TRUE",
+        "value": "",
+        "lines": [
+          "input.release.is_remux == true"
+        ],
+        "present": [
+          {
+            "value": true,
+            "expected": true
+          },
+          {
+            "value": false,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.is_remux",
+        "operator": "IS_FALSE",
+        "value": "",
+        "lines": [
+          "input.release.is_remux == false"
+        ],
+        "present": [
+          {
+            "value": false,
+            "expected": true
+          },
+          {
+            "value": true,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.revision",
+        "operator": "EQUALS",
+        "value": "2",
+        "lines": [
+          "input.release.revision == 2"
+        ],
+        "present": [
+          {
+            "value": 2,
+            "expected": true
+          },
+          {
+            "value": 3,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.revision",
+        "operator": "NOT_EQUALS",
+        "value": "2",
+        "lines": [
+          "input.release.revision != 2"
+        ],
+        "present": [
+          {
+            "value": 3,
+            "expected": true
+          },
+          {
+            "value": 2,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.revision",
+        "operator": "GREATER_THAN",
+        "value": "2",
+        "lines": [
+          "input.release.revision > 2"
+        ],
+        "present": [
+          {
+            "value": 3,
+            "expected": true
+          },
+          {
+            "value": 2,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.revision",
+        "operator": "GREATER_OR_EQUAL",
+        "value": "2",
+        "lines": [
+          "input.release.revision >= 2"
+        ],
+        "present": [
+          {
+            "value": 2,
+            "expected": true
+          },
+          {
+            "value": 1,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.revision",
+        "operator": "LESS_THAN",
+        "value": "2",
+        "lines": [
+          "input.release.revision < 2"
+        ],
+        "present": [
+          {
+            "value": 1,
+            "expected": true
+          },
+          {
+            "value": 2,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.revision",
+        "operator": "LESS_OR_EQUAL",
+        "value": "2",
+        "lines": [
+          "input.release.revision <= 2"
+        ],
+        "present": [
+          {
+            "value": 2,
+            "expected": true
+          },
+          {
+            "value": 3,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "EQUALS",
+        "value": "2020",
+        "lines": [
+          "input.release.year == 2020"
+        ],
+        "present": [
+          {
+            "value": 2020,
+            "expected": true
+          },
+          {
+            "value": 2021,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "NOT_EQUALS",
+        "value": "2020",
+        "lines": [
+          "is_number(input.release.year)",
+          "input.release.year != 2020"
+        ],
+        "present": [
+          {
+            "value": 2021,
+            "expected": true
+          },
+          {
+            "value": 2020,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "GREATER_THAN",
+        "value": "2020",
+        "lines": [
+          "is_number(input.release.year)",
+          "input.release.year > 2020"
+        ],
+        "present": [
+          {
+            "value": 2021,
+            "expected": true
+          },
+          {
+            "value": 2020,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "GREATER_OR_EQUAL",
+        "value": "2020",
+        "lines": [
+          "is_number(input.release.year)",
+          "input.release.year >= 2020"
+        ],
+        "present": [
+          {
+            "value": 2020,
+            "expected": true
+          },
+          {
+            "value": 2019,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "LESS_THAN",
+        "value": "2020",
+        "lines": [
+          "is_number(input.release.year)",
+          "input.release.year < 2020"
+        ],
+        "present": [
+          {
+            "value": 2019,
+            "expected": true
+          },
+          {
+            "value": 2020,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "LESS_OR_EQUAL",
+        "value": "2020",
+        "lines": [
+          "is_number(input.release.year)",
+          "input.release.year <= 2020"
+        ],
+        "present": [
+          {
+            "value": 2020,
+            "expected": true
+          },
+          {
+            "value": 2021,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.release.year != null"
+        ],
+        "present": [
+          {
+            "value": 0,
+            "expected": true
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.year",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.release.year != null"
+        ],
+        "present": [
+          {
+            "value": 0,
+            "expected": false
+          }
+        ],
+        "null": true,
+        "absent": true
+      },
+      {
+        "field": "input.release.raw_title",
+        "operator": "EQUALS",
+        "value": "Sample",
+        "lines": [
+          "input.release.raw_title == \"Sample\""
+        ],
+        "present": [
+          {
+            "value": "Sample",
+            "expected": true
+          },
+          {
+            "value": "Other",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.raw_title",
+        "operator": "NOT_EQUALS",
+        "value": "Sample",
+        "lines": [
+          "input.release.raw_title != \"Sample\""
+        ],
+        "present": [
+          {
+            "value": "Other",
+            "expected": true
+          },
+          {
+            "value": "Sample",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.edition",
+        "operator": "EQUALS",
+        "value": "Sample",
+        "lines": [
+          "input.release.edition == \"Sample\""
+        ],
+        "present": [
+          {
+            "value": "Sample",
+            "expected": true
+          },
+          {
+            "value": "Other",
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.edition",
+        "operator": "NOT_EQUALS",
+        "value": "Sample",
+        "lines": [
+          "is_string(input.release.edition)",
+          "input.release.edition != \"Sample\""
+        ],
+        "present": [
+          {
+            "value": "Other",
+            "expected": true
+          },
+          {
+            "value": "Sample",
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.edition",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.release.edition != null"
+        ],
+        "present": [
+          {
+            "value": "",
+            "expected": true
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.release.edition",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.release.edition != null"
+        ],
+        "present": [
+          {
+            "value": "",
+            "expected": false
+          }
+        ],
+        "null": true,
+        "absent": true
+      },
+      {
+        "field": "input.release.languages_audio",
+        "operator": "CONTAINS",
+        "value": "en",
+        "lines": [
+          "\"en\" in input.release.languages_audio"
+        ],
+        "present": [
+          {
+            "value": [
+              "en"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "ja"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.languages_audio",
+        "operator": "NOT_CONTAINS",
+        "value": "en",
+        "lines": [
+          "is_array(input.release.languages_audio)",
+          "not \"en\" in input.release.languages_audio"
+        ],
+        "present": [
+          {
+            "value": [
+              "ja"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "en"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.languages_audio",
+        "operator": "IS_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.release.languages_audio) == 0"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": true
+          },
+          {
+            "value": [
+              "en"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.release.languages_audio",
+        "operator": "IS_NOT_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.release.languages_audio) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "en"
+            ],
+            "expected": true
+          },
+          {
+            "value": [],
+            "expected": false
+          }
+        ],
+        "absent": false
+      }
+    ]
+  },
+  "request": {
+    "variant": null,
+    "rows": [
+      {
+        "field": "input.facts.is_adult",
+        "operator": "IS_TRUE",
+        "value": "",
+        "lines": [
+          "input.facts.is_adult == true"
+        ],
+        "present": [
+          {
+            "value": true,
+            "expected": true
+          },
+          {
+            "value": false,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.is_adult",
+        "operator": "IS_FALSE",
+        "value": "",
+        "lines": [
+          "input.facts.is_adult == false"
+        ],
+        "present": [
+          {
+            "value": false,
+            "expected": true
+          },
+          {
+            "value": true,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.runtime_minutes",
+        "operator": "EQUALS",
+        "value": "90",
+        "lines": [
+          "input.facts.runtime_minutes == 90"
+        ],
+        "present": [
+          {
+            "value": 90,
+            "expected": true
+          },
+          {
+            "value": 91,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.runtime_minutes",
+        "operator": "NOT_EQUALS",
+        "value": "90",
+        "lines": [
+          "input.facts.runtime_minutes != 90"
+        ],
+        "present": [
+          {
+            "value": 91,
+            "expected": true
+          },
+          {
+            "value": 90,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.runtime_minutes",
+        "operator": "GREATER_THAN",
+        "value": "90",
+        "lines": [
+          "input.facts.runtime_minutes > 90"
+        ],
+        "present": [
+          {
+            "value": 91,
+            "expected": true
+          },
+          {
+            "value": 90,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.runtime_minutes",
+        "operator": "GREATER_OR_EQUAL",
+        "value": "90",
+        "lines": [
+          "input.facts.runtime_minutes >= 90"
+        ],
+        "present": [
+          {
+            "value": 90,
+            "expected": true
+          },
+          {
+            "value": 89,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.runtime_minutes",
+        "operator": "LESS_THAN",
+        "value": "90",
+        "lines": [
+          "input.facts.runtime_minutes < 90"
+        ],
+        "present": [
+          {
+            "value": 89,
+            "expected": true
+          },
+          {
+            "value": 90,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.runtime_minutes",
+        "operator": "LESS_OR_EQUAL",
+        "value": "90",
+        "lines": [
+          "input.facts.runtime_minutes <= 90"
+        ],
+        "present": [
+          {
+            "value": 90,
+            "expected": true
+          },
+          {
+            "value": 91,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "EQUALS",
+        "value": "2020",
+        "lines": [
+          "input.request.year == 2020"
+        ],
+        "present": [
+          {
+            "value": 2020,
+            "expected": true
+          },
+          {
+            "value": 2021,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "NOT_EQUALS",
+        "value": "2020",
+        "lines": [
+          "is_number(input.request.year)",
+          "input.request.year != 2020"
+        ],
+        "present": [
+          {
+            "value": 2021,
+            "expected": true
+          },
+          {
+            "value": 2020,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "GREATER_THAN",
+        "value": "2020",
+        "lines": [
+          "is_number(input.request.year)",
+          "input.request.year > 2020"
+        ],
+        "present": [
+          {
+            "value": 2021,
+            "expected": true
+          },
+          {
+            "value": 2020,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "GREATER_OR_EQUAL",
+        "value": "2020",
+        "lines": [
+          "is_number(input.request.year)",
+          "input.request.year >= 2020"
+        ],
+        "present": [
+          {
+            "value": 2020,
+            "expected": true
+          },
+          {
+            "value": 2019,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "LESS_THAN",
+        "value": "2020",
+        "lines": [
+          "is_number(input.request.year)",
+          "input.request.year < 2020"
+        ],
+        "present": [
+          {
+            "value": 2019,
+            "expected": true
+          },
+          {
+            "value": 2020,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "LESS_OR_EQUAL",
+        "value": "2020",
+        "lines": [
+          "is_number(input.request.year)",
+          "input.request.year <= 2020"
+        ],
+        "present": [
+          {
+            "value": 2020,
+            "expected": true
+          },
+          {
+            "value": 2021,
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.request.year != null"
+        ],
+        "present": [
+          {
+            "value": 0,
+            "expected": true
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.year",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.request.year != null"
+        ],
+        "present": [
+          {
+            "value": 0,
+            "expected": false
+          }
+        ],
+        "null": true,
+        "absent": true
+      },
+      {
+        "field": "input.facts.country",
+        "operator": "EQUALS",
+        "value": "US",
+        "lines": [
+          "input.facts.country == \"US\""
+        ],
+        "present": [
+          {
+            "value": "US",
+            "expected": true
+          },
+          {
+            "value": "GB",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.country",
+        "operator": "NOT_EQUALS",
+        "value": "US",
+        "lines": [
+          "input.facts.country != \"US\""
+        ],
+        "present": [
+          {
+            "value": "GB",
+            "expected": true
+          },
+          {
+            "value": "US",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.request.monitor_type",
+        "operator": "EQUALS",
+        "value": "ALL",
+        "lines": [
+          "input.request.monitor_type == \"ALL\""
+        ],
+        "present": [
+          {
+            "value": "ALL",
+            "expected": true
+          },
+          {
+            "value": "NONE",
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.monitor_type",
+        "operator": "NOT_EQUALS",
+        "value": "ALL",
+        "lines": [
+          "is_string(input.request.monitor_type)",
+          "input.request.monitor_type != \"ALL\""
+        ],
+        "present": [
+          {
+            "value": "NONE",
+            "expected": true
+          },
+          {
+            "value": "ALL",
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.monitor_type",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.request.monitor_type != null"
+        ],
+        "present": [
+          {
+            "value": "",
+            "expected": true
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.monitor_type",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.request.monitor_type != null"
+        ],
+        "present": [
+          {
+            "value": "",
+            "expected": false
+          }
+        ],
+        "null": true,
+        "absent": true
+      },
+      {
+        "field": "input.request.origin",
+        "operator": "EQUALS",
+        "value": "manual",
+        "lines": [
+          "input.request.origin == \"manual\""
+        ],
+        "present": [
+          {
+            "value": "manual",
+            "expected": true
+          },
+          {
+            "value": "public_list",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.request.origin",
+        "operator": "NOT_EQUALS",
+        "value": "manual",
+        "lines": [
+          "input.request.origin != \"manual\""
+        ],
+        "present": [
+          {
+            "value": "public_list",
+            "expected": true
+          },
+          {
+            "value": "manual",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.exists_in_library_ids",
+        "operator": "CONTAINS",
+        "value": "sample",
+        "lines": [
+          "\"sample\" in input.facts.exists_in_library_ids"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "other"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.exists_in_library_ids",
+        "operator": "NOT_CONTAINS",
+        "value": "sample",
+        "lines": [
+          "is_array(input.facts.exists_in_library_ids)",
+          "not \"sample\" in input.facts.exists_in_library_ids"
+        ],
+        "present": [
+          {
+            "value": [
+              "other"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.exists_in_library_ids",
+        "operator": "IS_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.facts.exists_in_library_ids) == 0"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": true
+          },
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.exists_in_library_ids",
+        "operator": "IS_NOT_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.facts.exists_in_library_ids) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.genres",
+        "operator": "CONTAINS",
+        "value": "Sample",
+        "lines": [
+          "\"Sample\" in input.facts.genres"
+        ],
+        "present": [
+          {
+            "value": [
+              "Sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Other"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.genres",
+        "operator": "NOT_CONTAINS",
+        "value": "Sample",
+        "lines": [
+          "not \"Sample\" in input.facts.genres"
+        ],
+        "present": [
+          {
+            "value": [
+              "Other"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "Sample"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": true
+      },
+      {
+        "field": "input.facts.genres",
+        "operator": "IS_EMPTY",
+        "value": "",
+        "lines": [
+          "not count(input.facts.genres) > 0"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": true
+          },
+          {
+            "value": [
+              "Sample"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": true
+      },
+      {
+        "field": "input.facts.genres",
+        "operator": "IS_NOT_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.facts.genres) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "Sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "CONTAINS",
+        "value": "eng",
+        "lines": [
+          "is_array(input.request.required_audio_languages)",
+          "\"eng\" in input.request.required_audio_languages"
+        ],
+        "present": [
+          {
+            "value": [
+              "eng"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "jpn"
+            ],
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "NOT_CONTAINS",
+        "value": "eng",
+        "lines": [
+          "is_array(input.request.required_audio_languages)",
+          "not \"eng\" in input.request.required_audio_languages"
+        ],
+        "present": [
+          {
+            "value": [
+              "jpn"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "eng"
+            ],
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "IS_EMPTY",
+        "value": "",
+        "lines": [
+          "input.request.required_audio_languages == []"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": true
+          },
+          {
+            "value": [
+              "eng"
+            ],
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "IS_NOT_EMPTY",
+        "value": "",
+        "lines": [
+          "is_array(input.request.required_audio_languages)",
+          "count(input.request.required_audio_languages) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "eng"
+            ],
+            "expected": true
+          },
+          {
+            "value": [],
+            "expected": false
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.request.required_audio_languages != null"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": true
+          }
+        ],
+        "null": false,
+        "absent": false
+      },
+      {
+        "field": "input.request.required_audio_languages",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.request.required_audio_languages != null"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": false
+          }
+        ],
+        "null": true,
+        "absent": true
+      }
+    ]
+  },
+  "maintenance": {
+    "variant": "TITLE",
+    "evaluationTime": "2026-01-31T00:00:00Z",
+    "rows": [
+      {
+        "field": "input.facts.monitored",
+        "operator": "IS_TRUE",
+        "value": "",
+        "lines": [
+          "input.facts.monitored == true"
+        ],
+        "present": [
+          {
+            "value": true,
+            "expected": true
+          },
+          {
+            "value": false,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.monitored",
+        "operator": "IS_FALSE",
+        "value": "",
+        "lines": [
+          "input.facts.monitored == false"
+        ],
+        "present": [
+          {
+            "value": false,
+            "expected": true
+          },
+          {
+            "value": true,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "EQUALS",
+        "value": "2",
+        "lines": [
+          "input.facts.file_count == 2"
+        ],
+        "present": [
+          {
+            "value": 2,
+            "expected": true
+          },
+          {
+            "value": 3,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "NOT_EQUALS",
+        "value": "2",
+        "lines": [
+          "is_number(input.facts.file_count)",
+          "input.facts.file_count != 2"
+        ],
+        "present": [
+          {
+            "value": 3,
+            "expected": true
+          },
+          {
+            "value": 2,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "GREATER_THAN",
+        "value": "2",
+        "lines": [
+          "is_number(input.facts.file_count)",
+          "input.facts.file_count > 2"
+        ],
+        "present": [
+          {
+            "value": 3,
+            "expected": true
+          },
+          {
+            "value": 2,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "GREATER_OR_EQUAL",
+        "value": "2",
+        "lines": [
+          "is_number(input.facts.file_count)",
+          "input.facts.file_count >= 2"
+        ],
+        "present": [
+          {
+            "value": 2,
+            "expected": true
+          },
+          {
+            "value": 1,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "LESS_THAN",
+        "value": "2",
+        "lines": [
+          "is_number(input.facts.file_count)",
+          "input.facts.file_count < 2"
+        ],
+        "present": [
+          {
+            "value": 1,
+            "expected": true
+          },
+          {
+            "value": 2,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "LESS_OR_EQUAL",
+        "value": "2",
+        "lines": [
+          "is_number(input.facts.file_count)",
+          "input.facts.file_count <= 2"
+        ],
+        "present": [
+          {
+            "value": 2,
+            "expected": true
+          },
+          {
+            "value": 3,
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.facts.file_count != null"
+        ],
+        "present": [
+          {
+            "value": 0,
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.file_count",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.facts.file_count != null"
+        ],
+        "present": [
+          {
+            "value": 0,
+            "expected": false
+          }
+        ],
+        "absent": true
+      },
+      {
+        "field": "input.facts.added_by_username",
+        "operator": "EQUALS",
+        "value": "sample",
+        "lines": [
+          "input.facts.added_by_username == \"sample\""
+        ],
+        "present": [
+          {
+            "value": "sample",
+            "expected": true
+          },
+          {
+            "value": "other",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_by_username",
+        "operator": "NOT_EQUALS",
+        "value": "sample",
+        "lines": [
+          "is_string(input.facts.added_by_username)",
+          "input.facts.added_by_username != \"sample\""
+        ],
+        "present": [
+          {
+            "value": "other",
+            "expected": true
+          },
+          {
+            "value": "sample",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_by_username",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.facts.added_by_username != null"
+        ],
+        "present": [
+          {
+            "value": "",
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_by_username",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.facts.added_by_username != null"
+        ],
+        "present": [
+          {
+            "value": "",
+            "expected": false
+          }
+        ],
+        "absent": true
+      },
+      {
+        "field": "input.facts.tags",
+        "operator": "CONTAINS",
+        "value": "sample",
+        "lines": [
+          "\"sample\" in input.facts.tags"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "other"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.tags",
+        "operator": "NOT_CONTAINS",
+        "value": "sample",
+        "lines": [
+          "is_array(input.facts.tags)",
+          "not \"sample\" in input.facts.tags"
+        ],
+        "present": [
+          {
+            "value": [
+              "other"
+            ],
+            "expected": true
+          },
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.tags",
+        "operator": "IS_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.facts.tags) == 0"
+        ],
+        "present": [
+          {
+            "value": [],
+            "expected": true
+          },
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.tags",
+        "operator": "IS_NOT_EMPTY",
+        "value": "",
+        "lines": [
+          "count(input.facts.tags) > 0"
+        ],
+        "present": [
+          {
+            "value": [
+              "sample"
+            ],
+            "expected": true
+          },
+          {
+            "value": [],
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_at",
+        "operator": "MORE_THAN_DAYS_AGO",
+        "value": "30",
+        "lines": [
+          "days_since(input.facts.added_at) > 30"
+        ],
+        "present": [
+          {
+            "value": "2025-12-31T00:00:00Z",
+            "expected": true
+          },
+          {
+            "value": "2026-01-01T00:00:00Z",
+            "expected": false
+          },
+          {
+            "value": "2026-03-03T00:00:00Z",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_at",
+        "operator": "LESS_THAN_DAYS_AGO",
+        "value": "30",
+        "lines": [
+          "days_since(input.facts.added_at) >= 0",
+          "days_since(input.facts.added_at) < 30"
+        ],
+        "present": [
+          {
+            "value": "2026-01-02T00:00:00Z",
+            "expected": true
+          },
+          {
+            "value": "2026-01-31T00:00:00Z",
+            "expected": true
+          },
+          {
+            "value": "2026-01-01T00:00:00Z",
+            "expected": false
+          },
+          {
+            "value": "2026-02-01T00:00:00Z",
+            "expected": false
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_at",
+        "operator": "HAS_VALUE",
+        "value": "",
+        "lines": [
+          "input.facts.added_at != null"
+        ],
+        "present": [
+          {
+            "value": "2026-01-30T00:00:00Z",
+            "expected": true
+          }
+        ],
+        "absent": false
+      },
+      {
+        "field": "input.facts.added_at",
+        "operator": "HAS_NO_VALUE",
+        "value": "",
+        "lines": [
+          "not input.facts.added_at != null"
+        ],
+        "present": [
+          {
+            "value": "2026-01-30T00:00:00Z",
+            "expected": false
+          }
+        ],
+        "absent": true
+      }
+    ]
+  }
+}

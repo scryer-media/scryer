@@ -23,7 +23,8 @@ export type RegoValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: RuleValidationDiagnostic[];
-  /// Findings that never block saving. Only maintenance validation sends them.
+  /// Findings that never block saving. Maintenance and request validation
+  /// send them.
   warnings?: RuleValidationDiagnostic[];
   unavailable?: boolean;
 };
@@ -39,6 +40,8 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_TARGETS_PERSON: "error.ruleTargetsPerson",
   RULE_ACTION_VALUE_NOT_LITERAL: "error.ruleActionValueNotLiteral",
   RULE_ACTION_VALUE_INVALID: "error.ruleActionValueInvalid",
+  RULE_ACTION_UNKNOWN_QUALITY_PROFILE: "error.ruleActionUnknownQualityProfile",
+  RULE_ACTION_UNDEFINED_TAG: "error.ruleActionUndefinedTag",
   RULE_HOST_HELPER_REDEFINED: "error.ruleHostHelperRedefined",
   RULE_UNREFERENCED_RULE: "error.ruleUnreferencedRule",
 };

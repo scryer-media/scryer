@@ -40,7 +40,57 @@
         }
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.is_remux == true\n\tinput.release.is_hardcoded_subs == false\n\tinput.release.revision >= 2\n\tinput.builtin_score.total <= 500.5\n\tinput.context.has_existing_file == false\n}\n\nscore_entry[\"sample_remux_bonus\"] := 250 if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.is_remux == true\n\tinput.release.is_hardcoded_subs == false\n\tinput.release.revision >= 2\n\tinput.builtin_score.total <= 500.5\n\tinput.context.has_existing_file == false\n}\n\nscore_entry[\"sample_remux_bonus\"] := 250 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "is_remux": true,
+            "is_hardcoded_subs": false,
+            "revision": 2
+          },
+          "builtin_score": {
+            "total": 500.5
+          },
+          "context": {
+            "has_existing_file": false
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "is_remux": true,
+            "is_hardcoded_subs": null,
+            "revision": 2
+          },
+          "builtin_score": {
+            "total": 500.5
+          },
+          "context": {
+            "has_existing_file": false
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "is_remux": true,
+            "is_hardcoded_subs": false,
+            "revision": 1
+          },
+          "builtin_score": {
+            "total": 500.5
+          },
+          "context": {
+            "has_existing_file": false
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "block-any-nullable-values",
@@ -97,7 +147,123 @@
         }
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.release.size_bytes)\n\tinput.release.size_bytes > 100000000000\n}\n\nrule_applies if {\n\tis_number(input.release.year)\n\tinput.release.year < 1950\n}\n\nrule_applies if {\n\tis_number(input.release.age_days)\n\tinput.release.age_days != 0\n}\n\nrule_applies if {\n\tinput.file.video_height == 480\n}\n\nrule_applies if {\n\tis_number(input.release.thumbs_down)\n\tinput.release.thumbs_down >= 5\n}\n\nrule_applies if {\n\tis_number(input.release.thumbs_up)\n\tinput.release.thumbs_up <= 1\n}\n\nrule_applies if {\n\tinput.context.existing_score != null\n}\n\nrule_applies if {\n\tnot input.file.duration_seconds != null\n}\n\nscore_entry[\"sample_size_guard\"] := scryer.block_score() if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.release.size_bytes)\n\tinput.release.size_bytes > 100000000000\n}\n\nrule_applies if {\n\tis_number(input.release.year)\n\tinput.release.year < 1950\n}\n\nrule_applies if {\n\tis_number(input.release.age_days)\n\tinput.release.age_days != 0\n}\n\nrule_applies if {\n\tinput.file.video_height == 480\n}\n\nrule_applies if {\n\tis_number(input.release.thumbs_down)\n\tinput.release.thumbs_down >= 5\n}\n\nrule_applies if {\n\tis_number(input.release.thumbs_up)\n\tinput.release.thumbs_up <= 1\n}\n\nrule_applies if {\n\tinput.context.existing_score != null\n}\n\nrule_applies if {\n\tnot input.file.duration_seconds != null\n}\n\nscore_entry[\"sample_size_guard\"] := scryer.block_score() if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": null,
+            "year": null,
+            "age_days": null,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": null,
+            "thumbs_up": null
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 1949,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": null
+          },
+          "context": {
+            "existing_score": null
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "size_bytes": 1000000000,
+            "year": 2000,
+            "age_days": 0,
+            "thumbs_down": 0,
+            "thumbs_up": 10
+          },
+          "file": {
+            "video_height": 1080,
+            "duration_seconds": 3600
+          },
+          "context": {
+            "existing_score": 0
+          }
+        },
+        "expected": true
+      }
+    ]
   },
   {
     "id": "adjust-strings-and-lists",
@@ -195,7 +361,179 @@
         }
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.release_group == \"SampleGroup\"\n\tis_string(input.release.streaming_service)\n\tinput.release.streaming_service != \"sample-service\"\n\tinput.release.edition != null\n\tnot input.release.protocol != null\n\tinput.context.media_type == \"movie\"\n\tinput.profile.name != \"Sample Profile\"\n\t\"en\" in input.release.languages_audio\n\tnot \"sample-keep\" in input.context.tags\n\tcount(input.release.languages_subtitles) == 0\n\tcount(input.builtin_score.codes) > 0\n\tinput.release.parse_confidence == 0.75\n\tinput.release.parse_confidence != -1\n\tis_number(input.context.coverage_member_count)\n\tinput.context.coverage_member_count > 1\n\tis_number(input.release.anime_version)\n\tinput.release.anime_version < 3\n\tinput.release.revision > 0\n\tinput.builtin_score.total < 1000\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.release_group == \"SampleGroup\"\n\tis_string(input.release.streaming_service)\n\tinput.release.streaming_service != \"sample-service\"\n\tinput.release.edition != null\n\tnot input.release.protocol != null\n\tinput.context.media_type == \"movie\"\n\tinput.profile.name != \"Sample Profile\"\n\t\"en\" in input.release.languages_audio\n\tis_array(input.context.tags)\n\tnot \"sample-keep\" in input.context.tags\n\tcount(input.release.languages_subtitles) == 0\n\tcount(input.builtin_score.codes) > 0\n\tinput.release.parse_confidence == 0.75\n\tinput.release.parse_confidence != -1\n\tis_number(input.context.coverage_member_count)\n\tinput.context.coverage_member_count > 1\n\tis_number(input.release.anime_version)\n\tinput.release.anime_version < 3\n\tinput.release.revision > 0\n\tinput.builtin_score.total < 1000\n}\n\nscore_entry[\"sample_penalty\"] := -75 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": [
+              "en"
+            ],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": [
+              "sample-other"
+            ],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": [
+              "sample_code"
+            ],
+            "total": 999
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": [
+              "en"
+            ],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": [
+              "sample-keep"
+            ],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": [
+              "sample_code"
+            ],
+            "total": 999
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": null,
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": [
+              "en"
+            ],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": [
+              "sample-other"
+            ],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": [
+              "sample_code"
+            ],
+            "total": 999
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": [
+              "en"
+            ],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": null,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": [
+              "sample-other"
+            ],
+            "coverage_member_count": 2
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": [
+              "sample_code"
+            ],
+            "total": 999
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "release_group": "SampleGroup",
+            "streaming_service": "sample-other-service",
+            "edition": "Sample Edition",
+            "protocol": null,
+            "languages_audio": [
+              "en"
+            ],
+            "languages_subtitles": [],
+            "parse_confidence": 0.75,
+            "anime_version": 2,
+            "revision": 1
+          },
+          "context": {
+            "media_type": "movie",
+            "tags": [
+              "sample-other"
+            ],
+            "coverage_member_count": null
+          },
+          "profile": {
+            "name": "Sample Other Profile"
+          },
+          "builtin_score": {
+            "codes": [
+              "sample_code"
+            ],
+            "total": 999
+          }
+        },
+        "expected": false
+      }
+    ]
   },
   {
     "id": "escaping",
@@ -222,7 +560,38 @@
         }
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.raw_title == \"Sample \\\"quoted\\\" \\\\ title\"\n}\n\nrule_applies if {\n\t\"Ünïcødé 標籤 😀\" in input.release.normalized_tokens\n}\n\nscore_entry[\"sample_escape_check\"] := scryer.block_score() if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.release.raw_title == \"Sample \\\"quoted\\\" \\\\ title\"\n}\n\nrule_applies if {\n\t\"Ünïcødé 標籤 😀\" in input.release.normalized_tokens\n}\n\nscore_entry[\"sample_escape_check\"] := scryer.block_score() if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample Other Title",
+            "normalized_tokens": []
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample \"quoted\" \\ title",
+            "normalized_tokens": []
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "release": {
+            "raw_title": "Sample Other Title",
+            "normalized_tokens": [
+              "Ünïcødé 標籤 😀"
+            ]
+          }
+        },
+        "expected": true
+      }
+    ]
   },
   {
     "id": "extreme-points",
@@ -260,6 +629,59 @@
         }
       }
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.profile.scoring_overrides.block_upscaled == true\n\tinput.release.stereoscopy.presentation == \"full\"\n\tis_string(input.release.stereoscopy.layout)\n\tinput.release.stereoscopy.layout != \"sample\"\n\tinput.release.stereoscopy.sampling != null\n}\n\nscore_entry[\"sample_floor\"] := -2147483648 if rule_applies\n"
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.profile.scoring_overrides.block_upscaled == true\n\tinput.release.stereoscopy.presentation == \"full\"\n\tis_string(input.release.stereoscopy.layout)\n\tinput.release.stereoscopy.layout != \"sample\"\n\tinput.release.stereoscopy.sampling != null\n}\n\nscore_entry[\"sample_floor\"] := -2147483648 if rule_applies\n",
+    "cases": [
+      {
+        "input": {
+          "profile": {
+            "scoring_overrides": {
+              "block_upscaled": true
+            }
+          },
+          "release": {
+            "stereoscopy": {
+              "presentation": "full",
+              "layout": "sample-other",
+              "sampling": "half"
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "input": {
+          "profile": {
+            "scoring_overrides": {
+              "block_upscaled": true
+            }
+          },
+          "release": {
+            "stereoscopy": {
+              "presentation": "full",
+              "layout": "sample-other",
+              "sampling": null
+            }
+          }
+        },
+        "expected": false
+      },
+      {
+        "input": {
+          "profile": {
+            "scoring_overrides": {
+              "block_upscaled": true
+            }
+          },
+          "release": {
+            "stereoscopy": {
+              "presentation": "full",
+              "layout": "sample",
+              "sampling": "half"
+            }
+          }
+        },
+        "expected": false
+      }
+    ]
   }
 ]
