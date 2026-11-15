@@ -168,6 +168,7 @@ pub mod scripts;
 mod security;
 mod services;
 mod settings;
+pub(crate) mod storage_capacity;
 pub mod stored_paths;
 pub mod subtitles;
 pub mod testing;
@@ -511,14 +512,15 @@ pub use plugins::plugins::{
 };
 pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind, RuleSetHistoryChange};
 pub use request_rules::{
-    Arbitration, ArbitrationReason, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION,
-    FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER,
+    ALL_FALLBACKS, ArbitratedShaping, Arbitration, ArbitrationReason, FALLBACK_ERROR,
+    FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL,
+    FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER,
     PREFLIGHT_REQUEST_ID_PREFIX, REQUEST_MAX_LEASE_DAYS, RecordedVote, RequestDecisionReason,
     RequestDraft, RequestEvaluation, RequestEvaluationPurpose, RequestPreflight, RequestRuleDraft,
     RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRulePreviewResult,
-    RequestRuleSample, RequestRuleScope, RequestRuleSetDetail, RequestRulesEngineCache,
-    RequestRulesEngineHandle, ScopedError, ScopedVote, arbitrate, validate_lease_days,
-    validate_tag_list,
+    RequestRuleSample, RequestRuleScope, RequestRuleSetDetail, RequestRuleValidation,
+    RequestRulesEngineCache, RequestRulesEngineHandle, ResolvedShaping, ScopedError, ScopedVote,
+    ShapedValue, ShapingRefusal, arbitrate, validate_lease_days, validate_tag_list,
 };
 pub use security::backup::{AutoBackupRunOutcome, start_background_auto_backup_scheduler};
 pub use security::backup_bundle::{
@@ -558,6 +560,7 @@ pub use settings::settings::{
     UpdateSecuritySettings, UpdateServiceSettings, UpdateSubtitleSettings,
     validated_title_audio_overrides, validated_title_audio_patch,
 };
+pub use storage_capacity::start_storage_capacity_sampler;
 pub use subtitles::orchestration::{
     DownloadSubtitleForMediaFileRequest, SubtitleSearchOutcome, SubtitleSearchStatus,
     spawn_subtitle_search_for_file, start_background_subtitle_poller,
@@ -583,7 +586,6 @@ pub(crate) use helpers::{
     normalize_release_selection_signature, normalize_show_text_opt, normalize_tags,
     parsed_episode_lookup_season, sanitize_ids, to_hex,
 };
-pub(crate) use helpers::{filesystem_space, filesystem_space_raw};
 pub use image_proxy::{image_proxy_source_token, image_upstream_variant_url};
 pub use indexer_errors::{
     CONNECTION_TEST_INDEXER_ID, ClassifiedIndexerError, IndexerErrorRecorder,
@@ -717,14 +719,14 @@ pub use ports::{
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
     MaintenanceRuleScheduleAnchor, MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
     MaintenanceSequenceCompletionRepository, MaintenanceStepAct, MediaAnalyzer,
-    MediaFileHashCandidate, MediaFileRepository, MediaRequestOrder, MediaRequestQuery,
-    MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
-    MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
-    NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
-    NotificationApplicationUpdatePayload, NotificationChannelRepository, NotificationClient,
-    NotificationDownloadPayload, NotificationEpisodePayload, NotificationExternalIdsPayload,
-    NotificationFilePayload, NotificationHealthPayload, NotificationImportPayload,
-    NotificationManualInteractionPayload, NotificationMediaFilePayload,
+    MediaFileHashCandidate, MediaFileRepository, MediaRequestFingerprintSummary, MediaRequestOrder,
+    MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
+    MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
+    NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,
+    NotificationAppPayload, NotificationApplicationUpdatePayload, NotificationChannelRepository,
+    NotificationClient, NotificationDownloadPayload, NotificationEpisodePayload,
+    NotificationExternalIdsPayload, NotificationFilePayload, NotificationHealthPayload,
+    NotificationImportPayload, NotificationManualInteractionPayload, NotificationMediaFilePayload,
     NotificationMediaUpdatePayload, NotificationMediaUpdateTypePayload, NotificationPayload,
     NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
     NotificationSubscriptionRepository, NotificationTitleMovePayload, NotificationTitlePayload,
@@ -891,10 +893,10 @@ pub use types::{
     UiDashboardLayout, UiDashboardLayoutItem, UiDateTimeFormat, UiDefaultLandingView, UiDensity,
     UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
     UiTableColumnSetting, UiTableViewMode, UiTheme, UiTourOutcome, UiTourProgress,
-    UpdateRecycleBinSettings, UpdateVerificationSettings, UpdatedLibrary, UserAuthFactorStatus,
-    UserLoginSnapshot, VerificationSettings, VerifiedLocalCredentials, WantedKind,
-    WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
-    WebauthnChallengeType, WebauthnCredentialRecord,
+    UpdateRecycleBinSettings, UpdateVerificationSettings, UpdatedLibrary, UserAccountTimestamps,
+    UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings, VerifiedLocalCredentials,
+    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
+    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_PAGE_CURSOR_MAX_BYTES,
@@ -1453,6 +1455,9 @@ impl AppError {
             | Self::DownloadSubmitAmbiguousWithClient { .. }
             | Self::DownloadSubmitRejected(_)
             | Self::DownloadSourceGone(_) => self,
+            // A capped indexer says nothing about the download client, so the
+            // refusal keeps its own code.
+            _ if self.is_indexer_monthly_limit_refusal() => self,
             _ => Self::DownloadSubmitUnavailable(self.to_string()),
         }
     }
@@ -1475,6 +1480,28 @@ impl AppError {
             self,
             Self::DownloadSubmitUnavailable(_) | Self::DownloadSubmitFailoverExhausted(_)
         )
+    }
+
+    /// A local monthly indexer limit refused the request or grab, or its
+    /// usage could not be checked. Nothing was sent to the indexer, so this is
+    /// neither a verdict on a release nor a failure of the indexer or of a
+    /// download client. Decided by reason code alone.
+    pub fn is_indexer_monthly_limit_refusal(&self) -> bool {
+        self.indexer_monthly_limit_refusal_reason().is_some()
+    }
+
+    /// The stable code of a local monthly indexer limit refusal, when this
+    /// error is one. See [`Self::is_indexer_monthly_limit_refusal`].
+    pub fn indexer_monthly_limit_refusal_reason(&self) -> Option<&'static str> {
+        use error_reasons::indexer_monthly_quota as quota;
+        let reason = self.reason()?;
+        [
+            quota::REQUEST_LIMIT_REACHED,
+            quota::GRAB_LIMIT_REACHED,
+            quota::ACCOUNTING_UNAVAILABLE,
+        ]
+        .into_iter()
+        .find(|code| *code == reason)
     }
 
     pub fn is_download_submit_ambiguous(&self) -> bool {

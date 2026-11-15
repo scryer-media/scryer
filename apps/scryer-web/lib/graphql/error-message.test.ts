@@ -21,6 +21,21 @@ function coded(
   return { graphQLErrors: [{ message, extensions: { code, reason } }] };
 }
 
+test("manual blocklist refusal preserves a localized explanation", async () => {
+  const error = coded("INTEGRATION_DOWNLOAD_NOT_GRABBED");
+  assert.equal(
+    userFacingGraphQlErrorMessage(error, "Failed"),
+    "This download has no verified Scryer grab history. It was not blocklisted or deleted, and no replacement search was requested.",
+  );
+  await loadLocaleDictionary("rus");
+  assert.equal(
+    userFacingGraphQlErrorMessage(error, "Failed", (key, values) =>
+      t(key, "rus", values),
+    ),
+    "У загрузки нет подтверждённой истории добавления Scryer. Релиз не заблокирован, данные не удалены, повторный поиск не запрошен.",
+  );
+});
+
 test("metadata gateway clock skew uses its translated reason, not server text", async () => {
   const error = coded("METADATA_GATEWAY_CLOCK_SKEW");
   assert.equal(
@@ -573,5 +588,33 @@ test("media review conditions translate in every supported language without pars
         "This sentence was reworded",
       );
     }
+  }
+});
+
+test("a missing per-run maximum names the delete actions that need it", () => {
+  const refusal = (destructiveActions: unknown) => ({
+    graphQLErrors: [
+      {
+        message: "server sentence",
+        extensions: {
+          code: "VALIDATION_ERROR",
+          reason: "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED",
+          destructiveActions,
+        },
+      },
+    ],
+  });
+  assert.equal(
+    userFacingGraphQlErrorMessage(
+      refusal(["delete_files", "delete_title", "delete_shelf"]),
+      "Failed",
+    ),
+    "Set titles per run. These actions of the rule need it: Delete files, Delete title and files, delete_shelf.",
+  );
+  for (const destructiveActions of [undefined, [], [3], "delete_files"]) {
+    assert.equal(
+      userFacingGraphQlErrorMessage(refusal(destructiveActions), "Failed"),
+      "Set titles per run: this rule can delete.",
+    );
   }
 });

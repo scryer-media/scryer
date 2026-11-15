@@ -49,7 +49,87 @@ const GROUP_AWARDS: &str = "awards";
 /// Reason code used for every fact derived from a snapshot group enrichment
 /// could not establish. It is the code a held rule reports, so an approver sees
 /// "Scryer could not read the metadata", not "the film is not rated".
-pub const REASON_METADATA_UNAVAILABLE: &str = "metadata_unavailable";
+pub const REASON_METADATA_UNAVAILABLE: &str = fact_reason::METADATA_UNAVAILABLE;
+
+/// Why a request fact is unknown or absent. Stable API: these codes reach rule
+/// authors through `input.observations`, and an approver sees them on a held
+/// rule. Reword nothing here; add new codes instead.
+pub mod fact_reason {
+    /// A snapshot group the enrichment could not establish.
+    pub const METADATA_UNAVAILABLE: &str = "metadata_unavailable";
+    /// The source has not been read for this title yet.
+    pub const NOT_YET_COLLECTED: &str = "not_yet_collected";
+    /// A series-shape fact asked of a movie.
+    pub const NOT_A_SERIES: &str = "not_a_series";
+    /// A release-date fact asked of a series.
+    pub const NOT_A_MOVIE: &str = "not_a_movie";
+    /// No dated episode airs after the evaluation day.
+    pub const NO_SCHEDULED_EPISODE: &str = "no_scheduled_episode";
+    pub const NO_THEATRICAL_RELEASE_DATE: &str = "no_theatrical_release_date";
+    pub const NO_DIGITAL_RELEASE_DATE: &str = "no_digital_release_date";
+    pub const NO_PHYSICAL_RELEASE_DATE: &str = "no_physical_release_date";
+    /// The movie has no release date of any kind.
+    pub const NO_RELEASE_DATE: &str = "no_release_date";
+    /// The movie has a release on or before the evaluation day.
+    pub const ALREADY_RELEASED: &str = "already_released";
+    /// A catalog or request-history read failed.
+    pub const CATALOG_UNAVAILABLE: &str = "catalog_unavailable";
+    /// The requester has no linked watch-later list.
+    pub const NO_WATCHLIST_LINKED: &str = "no_watchlist_linked";
+    /// The title is not on any of the requester's watch-later lists.
+    pub const NOT_ON_A_WATCHLIST: &str = "not_on_a_watchlist";
+    /// A watch-later list has not completed a sync, or its last one failed.
+    pub const WATCHLIST_NOT_SYNCED: &str = "watchlist_not_synced";
+    /// A watch-later list's last sync is older than its freshness window.
+    pub const WATCHLIST_STALE: &str = "watchlist_stale";
+    /// The list store could not be read.
+    pub const LIST_STORE_UNREADABLE: &str = "list_store_unreadable";
+    /// The list exclusion store could not be read.
+    pub const LIST_EXCLUSIONS_UNAVAILABLE: &str = "list_exclusions_unavailable";
+    /// The requester's created titles could not be counted.
+    pub const REQUESTER_TITLES_UNAVAILABLE: &str = "requester_titles_unavailable";
+    /// The target library has no usable root.
+    pub const STORAGE_ROOT_UNAVAILABLE: &str = "storage_root_unavailable";
+    /// No capacity sample of the root since startup.
+    pub const STORAGE_NOT_SAMPLED: &str = crate::storage_capacity::reason::STORAGE_NOT_SAMPLED;
+    /// The root's capacity sample is older than two sampling intervals.
+    pub const STORAGE_SAMPLE_STALE: &str = crate::storage_capacity::reason::STORAGE_SAMPLE_STALE;
+    /// The root's newest capacity sample could not read the filesystem.
+    pub const STORAGE_CAPACITY_UNAVAILABLE: &str =
+        crate::storage_capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
+
+    pub const ALL: &[&str] = &[
+        METADATA_UNAVAILABLE,
+        NOT_YET_COLLECTED,
+        NOT_A_SERIES,
+        NOT_A_MOVIE,
+        NO_SCHEDULED_EPISODE,
+        NO_THEATRICAL_RELEASE_DATE,
+        NO_DIGITAL_RELEASE_DATE,
+        NO_PHYSICAL_RELEASE_DATE,
+        NO_RELEASE_DATE,
+        ALREADY_RELEASED,
+        CATALOG_UNAVAILABLE,
+        NO_WATCHLIST_LINKED,
+        NOT_ON_A_WATCHLIST,
+        WATCHLIST_NOT_SYNCED,
+        WATCHLIST_STALE,
+        LIST_STORE_UNREADABLE,
+        LIST_EXCLUSIONS_UNAVAILABLE,
+        REQUESTER_TITLES_UNAVAILABLE,
+        STORAGE_ROOT_UNAVAILABLE,
+        STORAGE_NOT_SAMPLED,
+        STORAGE_SAMPLE_STALE,
+        STORAGE_CAPACITY_UNAVAILABLE,
+    ];
+}
+
+/// A watch-later list is fresh for eight of its sync intervals, and never
+/// less than two days: the same window lifecycle watchlist facts use.
+fn watchlist_freshness_window(interval_seconds: i64) -> chrono::Duration {
+    chrono::Duration::seconds(interval_seconds.max(0).saturating_mul(8))
+        .max(chrono::Duration::hours(48))
+}
 
 /// Country codes that count as the United States certification. The rank ladder
 /// [`certification_rank_for_label`] implements is the US one, so ranking a
@@ -97,8 +177,54 @@ pub struct RequestCatalogContext {
     pub previous_request_count: i64,
     pub previously_denied: bool,
     pub previously_approved: bool,
+    /// Distinct people other than the requester who created or joined a
+    /// request for this identity.
+    pub other_requester_count: i64,
+    /// Someone other than the requester has a pending request for it.
+    pub pending_by_other_requester: bool,
     /// False when a read failed; every catalog fact then reads unknown.
     pub readable: bool,
+}
+
+/// The requester's own watch-later lists, as they bear on this title.
+#[derive(Clone, Debug)]
+pub enum RequestWatchlistContext {
+    /// The requester has no linked watch-later list.
+    NotLinked,
+    /// A list exists but cannot be trusted or read; the code says why.
+    Unavailable(&'static str),
+    /// The lists are current. `first_seen_at` is when the title first
+    /// appeared on any of them, `None` when it is on none.
+    Known {
+        first_seen_at: Option<DateTime<Utc>>,
+    },
+}
+
+/// The capacity of the target library's root, from the capacity sampler.
+#[derive(Clone, Debug)]
+pub struct RequestStorageContext {
+    /// The root a new title would land on, `None` when the library has none.
+    pub root_id: Option<String>,
+    /// The figures, or the reason code they are unknown.
+    pub capacity: Result<RequestStorageFigures, &'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RequestStorageFigures {
+    pub sampled_at: DateTime<Utc>,
+    pub available_bytes: i64,
+    pub total_bytes: i64,
+    pub available_percent: f64,
+}
+
+impl RequestStorageContext {
+    /// A library with no root to sample.
+    pub fn no_root() -> Self {
+        Self {
+            root_id: None,
+            capacity: Err(fact_reason::STORAGE_ROOT_UNAVAILABLE),
+        }
+    }
 }
 
 /// What the instance knows about this requester's own history.
@@ -131,6 +257,12 @@ pub struct RequestInputContext {
     pub history: RequestRequesterHistoryContext,
     /// `None` when no count is available; the fact reads unknown.
     pub library_title_count: Option<i64>,
+    pub watchlist: RequestWatchlistContext,
+    /// `None` when the exclusion store could not be read.
+    pub list_excluded: Option<bool>,
+    /// `None` when the count could not be read.
+    pub requester_titles_in_library_count: Option<i64>,
+    pub storage: RequestStorageContext,
 }
 
 // ── The pure builder ────────────────────────────────────────────────────────
@@ -393,6 +525,251 @@ fn build_facts(context: &RequestInputContext) -> RequestFactsDoc {
             None => Observation::unknown("not_yet_collected"),
             Some(count) => Observation::known(count),
         },
+        ..series_shape_facts(context)
+    }
+}
+
+/// The facts added after the first contract, built together so each group's
+/// unknown and absent rules sit in one place.
+fn series_shape_facts(context: &RequestInputContext) -> RequestFactsDoc {
+    let today = context.evaluation_time.date_naive();
+    let is_movie = context.request_facet_is_movie();
+    let mut facts = empty_facts();
+
+    // ── series shape ──
+    if is_movie {
+        facts.season_count = Observation::absent_because(fact_reason::NOT_A_SERIES);
+        facts.episode_count = Observation::absent_because(fact_reason::NOT_A_SERIES);
+        facts.aired_episode_count = Observation::absent_because(fact_reason::NOT_A_SERIES);
+        facts.unaired_episode_count = Observation::absent_because(fact_reason::NOT_A_SERIES);
+        facts.next_episode_air_date = Observation::absent_because(fact_reason::NOT_A_SERIES);
+    } else {
+        match context
+            .snapshot
+            .series_shape
+            .as_ref()
+            .filter(|_| !context.snapshot.is_missing(SNAPSHOT_GROUP_ALL))
+        {
+            None => {
+                let unknown = fact_reason::METADATA_UNAVAILABLE;
+                facts.season_count = Observation::unknown(unknown);
+                facts.episode_count = Observation::unknown(unknown);
+                facts.aired_episode_count = Observation::unknown(unknown);
+                facts.unaired_episode_count = Observation::unknown(unknown);
+                facts.next_episode_air_date = Observation::unknown(unknown);
+            }
+            Some(shape) => {
+                let aired = shape.aired_on_or_before(today);
+                facts.season_count = Observation::known(shape.season_count);
+                facts.episode_count = Observation::known(shape.episode_count);
+                facts.aired_episode_count = Observation::known(aired);
+                facts.unaired_episode_count =
+                    Observation::known((shape.episode_count - aired).max(0));
+                facts.next_episode_air_date = match shape.next_air_date_after(today) {
+                    Some(day) => Observation::known(day),
+                    None => Observation::absent_because(fact_reason::NO_SCHEDULED_EPISODE),
+                };
+            }
+        }
+    }
+
+    // ── release dates ──
+    if !is_movie {
+        facts.theatrical_release_date = Observation::absent_because(fact_reason::NOT_A_MOVIE);
+        facts.digital_release_date = Observation::absent_because(fact_reason::NOT_A_MOVIE);
+        facts.physical_release_date = Observation::absent_because(fact_reason::NOT_A_MOVIE);
+        facts.home_release_available = Observation::absent_because(fact_reason::NOT_A_MOVIE);
+        facts.days_until_release = Observation::absent_because(fact_reason::NOT_A_MOVIE);
+    } else {
+        let dates = context.snapshot.release_dates.as_ref();
+        let unknown = match dates {
+            _ if context.snapshot.is_missing(SNAPSHOT_GROUP_ALL) => {
+                Some(fact_reason::METADATA_UNAVAILABLE)
+            }
+            None => Some(fact_reason::METADATA_UNAVAILABLE),
+            Some(dates) if !dates.fetched => Some(fact_reason::NOT_YET_COLLECTED),
+            Some(_) => None,
+        };
+        match (unknown, dates) {
+            (None, Some(dates)) => {
+                let day = |value: &Option<String>| {
+                    value
+                        .as_deref()
+                        .and_then(crate::media_requests::snapshot::parse_metadata_day)
+                };
+                let date_fact = |value: &Option<String>, absent: &'static str| match day(value) {
+                    Some(date) => Observation::known(date.format("%Y-%m-%d").to_string()),
+                    None => Observation::absent_because(absent),
+                };
+                facts.theatrical_release_date =
+                    date_fact(&dates.theatrical, fact_reason::NO_THEATRICAL_RELEASE_DATE);
+                facts.digital_release_date =
+                    date_fact(&dates.digital, fact_reason::NO_DIGITAL_RELEASE_DATE);
+                facts.physical_release_date =
+                    date_fact(&dates.physical, fact_reason::NO_PHYSICAL_RELEASE_DATE);
+                let home = [day(&dates.digital), day(&dates.physical)];
+                facts.home_release_available =
+                    Observation::known(home.iter().flatten().any(|released| *released <= today));
+                let all: Vec<NaiveDate> = [day(&dates.theatrical), home[0], home[1]]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                facts.days_until_release = match all.iter().min() {
+                    None => Observation::absent_because(fact_reason::NO_RELEASE_DATE),
+                    Some(earliest) if *earliest <= today => {
+                        Observation::absent_because(fact_reason::ALREADY_RELEASED)
+                    }
+                    Some(earliest) => Observation::known((*earliest - today).num_days()),
+                };
+            }
+            (reason, _) => {
+                let reason = reason.unwrap_or(fact_reason::METADATA_UNAVAILABLE);
+                facts.theatrical_release_date = Observation::unknown(reason);
+                facts.digital_release_date = Observation::unknown(reason);
+                facts.physical_release_date = Observation::unknown(reason);
+                facts.home_release_available = Observation::unknown(reason);
+                facts.days_until_release = Observation::unknown(reason);
+            }
+        }
+    }
+
+    // ── demand ──
+    facts.other_requester_count =
+        catalog_fact(&context.catalog, || context.catalog.other_requester_count);
+    facts.pending_by_other_requester = catalog_fact(&context.catalog, || {
+        context.catalog.pending_by_other_requester
+    });
+
+    // ── the requester's watch-later lists ──
+    match &context.watchlist {
+        RequestWatchlistContext::NotLinked => {
+            facts.on_requester_watchlist =
+                Observation::absent_because(fact_reason::NO_WATCHLIST_LINKED);
+            facts.requester_watchlist_days =
+                Observation::absent_because(fact_reason::NO_WATCHLIST_LINKED);
+        }
+        RequestWatchlistContext::Unavailable(reason) => {
+            facts.on_requester_watchlist = Observation::unknown(*reason);
+            facts.requester_watchlist_days = Observation::unknown(*reason);
+        }
+        RequestWatchlistContext::Known { first_seen_at } => {
+            facts.on_requester_watchlist = Observation::known(first_seen_at.is_some());
+            facts.requester_watchlist_days = match first_seen_at {
+                None => Observation::absent_because(fact_reason::NOT_ON_A_WATCHLIST),
+                Some(first) => Observation::known((today - first.date_naive()).num_days().max(0)),
+            };
+        }
+    }
+
+    // ── list exclusions and the requester's library footprint ──
+    facts.list_excluded = match context.list_excluded {
+        None => Observation::unknown(fact_reason::LIST_EXCLUSIONS_UNAVAILABLE),
+        Some(excluded) => Observation::known(excluded),
+    };
+    facts.requester_titles_in_library_count = match context.requester_titles_in_library_count {
+        None => Observation::unknown(fact_reason::REQUESTER_TITLES_UNAVAILABLE),
+        Some(count) => Observation::known(count),
+    };
+
+    // ── storage ──
+    facts.storage_root_id = match &context.storage.root_id {
+        None => Observation::unknown(fact_reason::STORAGE_ROOT_UNAVAILABLE),
+        Some(root_id) => Observation::known(root_id.clone()),
+    };
+    match context.storage.capacity {
+        Err(reason) => {
+            facts.storage_available_bytes = Observation::unknown(reason);
+            facts.storage_total_bytes = Observation::unknown(reason);
+            facts.storage_available_percent = Observation::unknown(reason);
+        }
+        Ok(figures) => {
+            let sampled_at = figures.sampled_at.to_rfc3339();
+            facts.storage_available_bytes =
+                Observation::known_at(figures.available_bytes, sampled_at.clone());
+            facts.storage_total_bytes =
+                Observation::known_at(figures.total_bytes, sampled_at.clone());
+            facts.storage_available_percent =
+                Observation::known_at(figures.available_percent, sampled_at);
+        }
+    }
+
+    facts
+}
+
+/// A fact document whose every field is unknown, for [`series_shape_facts`] to
+/// fill; [`build_facts`] overrides every field it owns.
+fn empty_facts() -> RequestFactsDoc {
+    let unset = || fact_reason::NOT_YET_COLLECTED;
+    macro_rules! unset_facts {
+        ($($field:ident),* $(,)?) => {
+            RequestFactsDoc { $($field: Observation::unknown(unset()),)* }
+        };
+    }
+    unset_facts!(
+        age_rating,
+        certifications,
+        certification_label,
+        certification_rank,
+        commonsense_recommended,
+        genres,
+        canonical_tag_keys,
+        themes,
+        is_adult,
+        rating,
+        ratings_by_source,
+        tmdb_vote_average,
+        tmdb_vote_count,
+        popularity,
+        runtime_minutes,
+        original_language,
+        country,
+        network,
+        studio,
+        content_status,
+        release_date,
+        first_aired,
+        release_age_days,
+        award_count,
+        quality_profile_tiers,
+        quality_profile_max_resolution,
+        quality_profile_allows_upgrades,
+        exists_in_library_ids,
+        previous_request_count,
+        previously_denied,
+        previously_approved,
+        pending_request_count,
+        approved_last_30d,
+        denied_last_30d,
+        total_approved,
+        active_lease_count,
+        days_since_last_request,
+        library_title_count,
+        season_count,
+        episode_count,
+        aired_episode_count,
+        unaired_episode_count,
+        next_episode_air_date,
+        theatrical_release_date,
+        digital_release_date,
+        physical_release_date,
+        home_release_available,
+        days_until_release,
+        other_requester_count,
+        pending_by_other_requester,
+        on_requester_watchlist,
+        requester_watchlist_days,
+        list_excluded,
+        requester_titles_in_library_count,
+        storage_root_id,
+        storage_available_bytes,
+        storage_total_bytes,
+        storage_available_percent,
+    )
+}
+
+impl RequestInputContext {
+    fn request_facet_is_movie(&self) -> bool {
+        self.library.facet == MediaFacet::Movie.as_str()
     }
 }
 
@@ -542,17 +919,27 @@ impl AppUseCase {
         evaluation_time: DateTime<Utc>,
         excluding_request_id: Option<&str>,
     ) -> AppResult<RequestInputContext> {
-        let requester = self.request_requester_doc(actor, &library.id).await?;
+        let requester = self
+            .request_requester_doc(actor, &library.id, evaluation_time)
+            .await?;
         let list = self.request_list_doc(actor, draft).await;
         let request = request_doc(draft, list);
         let quality = self.request_quality_context(draft).await;
         let catalog = self
-            .request_catalog_context(library, draft, excluding_request_id)
+            .request_catalog_context(actor, library, draft, excluding_request_id)
             .await;
         let history = self
             .request_history_context(actor, evaluation_time, excluding_request_id)
             .await;
         let library_title_count = self.request_library_title_count(&library.id).await;
+        let watchlist = self
+            .request_watchlist_context(actor, draft, evaluation_time)
+            .await;
+        let list_excluded = self.request_list_excluded(draft).await;
+        let requester_titles_in_library_count = self
+            .request_requester_titles_in_library_count(actor, &library.id)
+            .await;
+        let storage = self.request_storage_context(library, evaluation_time);
 
         Ok(RequestInputContext {
             evaluation_time,
@@ -569,7 +956,174 @@ impl AppUseCase {
             catalog,
             history,
             library_title_count,
+            watchlist,
+            list_excluded,
+            requester_titles_in_library_count,
+            storage,
         })
+    }
+
+    /// The requester's own watch-later lists: one read of their enabled
+    /// personal subscriptions, then, when any is a current watch-later list,
+    /// one read of those lists' active rows. Nobody else's lists are read and
+    /// no list is synced or previewed.
+    async fn request_watchlist_context(
+        &self,
+        actor: &User,
+        draft: &RequestDraft,
+        evaluation_time: DateTime<Utc>,
+    ) -> RequestWatchlistContext {
+        let lists = &self.services.lists;
+        let subscriptions = match lists
+            .subscriptions
+            .list(crate::lists::ListSubscriptionQuery {
+                enabled: Some(true),
+                ..crate::lists::ListSubscriptionQuery::personal_for(actor.id.clone())
+            })
+            .await
+        {
+            Ok(subscriptions) => subscriptions,
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read the requester's lists; watchlist facts are unknown");
+                return RequestWatchlistContext::Unavailable(fact_reason::LIST_STORE_UNREADABLE);
+            }
+        };
+        let watchlists: Vec<_> = subscriptions
+            .into_iter()
+            .filter(|subscription| {
+                subscription.owner_user_id == actor.id
+                    && subscription.scope == ListScope::Personal
+                    && subscription.enabled
+                    && subscription.sync.state != scryer_domain::ListSyncState::Off
+                    && subscription.credential_id.is_some()
+                    && crate::discovery::discovery_watchlist_source_matches(subscription)
+            })
+            .collect();
+        if watchlists.is_empty() {
+            return RequestWatchlistContext::NotLinked;
+        }
+        for watchlist in &watchlists {
+            let Some(last_at) = watchlist.sync.last_at else {
+                return RequestWatchlistContext::Unavailable(fact_reason::WATCHLIST_NOT_SYNCED);
+            };
+            if matches!(
+                watchlist.sync.state,
+                scryer_domain::ListSyncState::New | scryer_domain::ListSyncState::Fail
+            ) {
+                return RequestWatchlistContext::Unavailable(fact_reason::WATCHLIST_NOT_SYNCED);
+            }
+            if evaluation_time - last_at > watchlist_freshness_window(watchlist.interval_seconds) {
+                return RequestWatchlistContext::Unavailable(fact_reason::WATCHLIST_STALE);
+            }
+        }
+        let ids: Vec<String> = watchlists
+            .iter()
+            .map(|subscription| subscription.id.clone())
+            .collect();
+        let rows = match lists
+            .memberships
+            .list_active_identities_by_subscriptions(&ids)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read the requester's watchlist rows; watchlist facts are unknown");
+                return RequestWatchlistContext::Unavailable(fact_reason::LIST_STORE_UNREADABLE);
+            }
+        };
+        let draft_is_movie = draft.facet == MediaFacet::Movie;
+        let first_seen_at = rows
+            .iter()
+            .filter(|row| (row.kind == MediaFacet::Movie) == draft_is_movie)
+            .filter(|row| {
+                row.external_ids.iter().any(|listed| {
+                    draft
+                        .external_ids
+                        .iter()
+                        .any(|wanted| listed.same_entity_as(wanted))
+                })
+            })
+            .map(|row| row.first_seen_at)
+            .min();
+        RequestWatchlistContext::Known { first_seen_at }
+    }
+
+    /// Whether a list exclusion covers this title, for the draft's own list
+    /// when it came from one: one indexed existence check.
+    async fn request_list_excluded(&self, draft: &RequestDraft) -> Option<bool> {
+        match self
+            .services
+            .lists
+            .exclusions
+            .any_matching(
+                draft.facet.clone(),
+                &draft.external_ids,
+                draft.origin.subscription_id(),
+            )
+            .await
+        {
+            Ok(excluded) => Some(excluded),
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read list exclusions; the fact is unknown");
+                None
+            }
+        }
+    }
+
+    async fn request_requester_titles_in_library_count(
+        &self,
+        actor: &User,
+        library_id: &str,
+    ) -> Option<i64> {
+        match self
+            .services
+            .catalog
+            .media_requests
+            .count_created_titles_in_library_for_requester(&actor.id, library_id)
+            .await
+        {
+            Ok(count) => Some(i64::try_from(count).unwrap_or(i64::MAX)),
+            Err(error) => {
+                tracing::warn!(
+                    library_id,
+                    error = %error,
+                    "could not count the requester's titles in the library; the fact is unknown"
+                );
+                None
+            }
+        }
+    }
+
+    /// The target root's capacity from the capacity sampler's cache. Never
+    /// calls the filesystem. A library with several roots reports the one a
+    /// new title lands on: the default root, else the first configured.
+    fn request_storage_context(
+        &self,
+        library: &Library,
+        evaluation_time: DateTime<Utc>,
+    ) -> RequestStorageContext {
+        let Some(root) = library
+            .roots
+            .iter()
+            .find(|root| root.is_default && !root.path.trim().is_empty())
+            .or_else(|| {
+                library
+                    .roots
+                    .iter()
+                    .find(|root| !root.path.trim().is_empty())
+            })
+        else {
+            return RequestStorageContext::no_root();
+        };
+        let reading = self
+            .runtime
+            .health
+            .storage_capacity
+            .reading(root.path.trim(), evaluation_time);
+        RequestStorageContext {
+            root_id: Some(root.id.clone()),
+            capacity: storage_figures(reading),
+        }
     }
 
     /// The list section for a list-sourced draft: one read of the
@@ -595,6 +1149,9 @@ impl AppUseCase {
                 return None;
             }
         };
+        let is_watchlist = subscription.scope == ListScope::Personal
+            && crate::discovery::discovery_watchlist_source_matches(&subscription);
+        let source_type = subscription.source.source_type.trim().to_ascii_lowercase();
         Some(RequestListDoc {
             subscription_id: subscription.id,
             name: (subscription.scope == ListScope::Public).then_some(subscription.name),
@@ -608,6 +1165,8 @@ impl AppUseCase {
                 .as_str()
                 .to_string(),
             rank: draft.list_rank,
+            is_watchlist,
+            source_type,
         })
     }
 
@@ -622,6 +1181,7 @@ impl AppUseCase {
         &self,
         actor: &User,
         library_id: &str,
+        evaluation_time: DateTime<Utc>,
     ) -> AppResult<RequestRequesterDoc> {
         let mut app_permissions = Vec::new();
         for permission in [
@@ -656,6 +1216,22 @@ impl AppUseCase {
         // Verified links only: a pending claim is an assertion nobody has
         // confirmed, and a rule that trusted it would let anyone grant
         // themselves a provider identity by typing a username.
+        // One primary-key read. A failure, or a row written before account
+        // creation times were stored, leaves the three fields absent.
+        let timestamps = match self
+            .services
+            .identity
+            .users
+            .account_timestamps(&actor.id)
+            .await
+        {
+            Ok(timestamps) => timestamps.unwrap_or_default(),
+            Err(error) => {
+                tracing::warn!(error = %error, "could not read the requester's account times; they are absent");
+                crate::UserAccountTimestamps::default()
+            }
+        };
+
         let linked_providers = self
             .services
             .identity
@@ -681,11 +1257,17 @@ impl AppUseCase {
             app_permissions,
             library_permissions,
             linked_providers,
-            // `User` carries no creation timestamp today, so the contract's
-            // optional field is always absent rather than invented. Wiring it
-            // means widening the user row's projection, which is not this
-            // change.
-            created_at: None,
+            created_at: timestamps
+                .created_at
+                .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            last_login_at: timestamps
+                .last_login_at
+                .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            account_age_days: timestamps.created_at.map(|created| {
+                (evaluation_time.date_naive() - created.date_naive())
+                    .num_days()
+                    .max(0)
+            }),
         })
     }
 
@@ -716,6 +1298,7 @@ impl AppUseCase {
 
     async fn request_catalog_context(
         &self,
+        actor: &User,
         library: &Library,
         draft: &crate::request_rules::facts::RequestDraft,
         excluding_request_id: Option<&str>,
@@ -767,25 +1350,26 @@ impl AppUseCase {
         }
         context.exists_in_library_ids = library_ids;
 
+        // One aggregate statement: counts and flags, no request rows decoded.
         match self
             .services
             .catalog
             .media_requests
-            .history_for_fingerprint(&draft.identity_fingerprint)
+            .fingerprint_history_summary(
+                &draft.identity_fingerprint,
+                &actor.id,
+                excluding_request_id,
+            )
             .await
         {
-            Ok(history) => {
-                let history = history
-                    .into_iter()
-                    .filter(|request| excluding_request_id != Some(request.id.as_str()))
-                    .collect::<Vec<_>>();
-                context.previous_request_count = history.len() as i64;
-                context.previously_denied = history
-                    .iter()
-                    .any(|request| request.status == scryer_domain::MediaRequestStatus::Rejected);
-                context.previously_approved = history
-                    .iter()
-                    .any(|request| request.status == scryer_domain::MediaRequestStatus::Approved);
+            Ok(summary) => {
+                context.previous_request_count =
+                    i64::try_from(summary.request_count).unwrap_or(i64::MAX);
+                context.previously_denied = summary.any_rejected;
+                context.previously_approved = summary.any_approved;
+                context.other_requester_count =
+                    i64::try_from(summary.other_requester_count).unwrap_or(i64::MAX);
+                context.pending_by_other_requester = summary.pending_by_other_requester;
             }
             Err(error) => {
                 tracing::warn!(
@@ -916,6 +1500,26 @@ impl AppUseCase {
     }
 }
 
+fn storage_figures(
+    reading: crate::storage_capacity::StorageCapacityReading,
+) -> Result<RequestStorageFigures, &'static str> {
+    match reading {
+        crate::storage_capacity::StorageCapacityReading::Known {
+            sampled_at,
+            available_bytes,
+            total_bytes,
+        } => Ok(RequestStorageFigures {
+            sampled_at,
+            available_bytes,
+            total_bytes,
+            available_percent: reading.available_percent().unwrap_or_default(),
+        }),
+        other => Err(other
+            .unknown_reason()
+            .unwrap_or(fact_reason::STORAGE_CAPACITY_UNAVAILABLE)),
+    }
+}
+
 /// The draft half of the input document. Always known: it is what the requester
 /// is looking at.
 fn request_doc(draft: &RequestDraft, list: Option<RequestListDoc>) -> RequestDoc {
@@ -940,6 +1544,15 @@ fn request_doc(draft: &RequestDraft, list: Option<RequestListDoc>) -> RequestDoc
             .monitor_selection
             .as_ref()
             .map(|selection| selection.seasons.len() as i64),
+        monitor_selection_seasons: draft.monitor_selection.as_ref().map(|selection| {
+            selection
+                .seasons
+                .iter()
+                .map(|season| i64::from(*season))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        }),
         lease_forever: draft.requested_lease_days.is_none(),
         lease_days: draft.requested_lease_days,
         required_audio_languages: draft.requested_required_audio_languages.clone(),

@@ -40,7 +40,7 @@ import {
   type ScriptEditorLanguage,
 } from "./script-editor-assistance";
 import type { ScriptTriggerValue } from "@/lib/types/scripts";
-import type { RegoFamily } from "@/lib/utils/rego-assistance";
+import type { RegoFamily, RegoHeadAssist } from "@/lib/utils/rego-assistance";
 import { useTheme } from "next-themes";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
@@ -73,6 +73,9 @@ export type CodeEditorProps = {
   language?: CodeEditorLanguage;
   regoFamily?: RegoFamily;
   regoTranslate?: (key: string) => string;
+  /// Rule heads the editor completes and explains; keep the array stable
+  /// between renders, since a new one reconfigures the assistance.
+  regoHeads?: readonly RegoHeadAssist[];
   scriptTrigger?: ScriptTriggerValue;
   scriptTranslate?: (key: string) => string;
   copyable?: boolean;
@@ -457,6 +460,7 @@ export default function CodeEditor({
   language = "plain",
   regoFamily,
   regoTranslate,
+  regoHeads,
   scriptTrigger,
   scriptTranslate,
   copyable = false,
@@ -570,7 +574,7 @@ export default function CodeEditor({
       effects: [
         assistance.reconfigure(
           language === "rego" && regoFamily && regoTranslate
-            ? regoAssistance(regoFamily, regoTranslate, readOnly)
+            ? regoAssistance(regoFamily, regoTranslate, readOnly, regoHeads)
             : scriptTrigger &&
                 scriptTranslate &&
                 ["shell", "python", "powershell", "batch", "go"].includes(
@@ -605,6 +609,7 @@ export default function CodeEditor({
     language,
     regoFamily,
     regoTranslate,
+    regoHeads,
     scriptTrigger,
     scriptTranslate,
     readOnly,

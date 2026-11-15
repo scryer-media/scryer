@@ -31,7 +31,9 @@ use scryer_plugin_sdk::{
 };
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -1582,6 +1584,12 @@ pub struct TitleNameBucketQuery<'a> {
     /// that reads its script; a release name carries no language tag to pick
     /// one. Empty when none applies.
     pub romanization_keys: &'a [String],
+    /// The scripts of the catalog names those keys can answer to, when a rule
+    /// set reads a catalog name in another script than the observed name's (a
+    /// Cyrillic name against its Latin transliteration). Only the
+    /// romanization lane reads them, and only by key; every other lane stays
+    /// in `script`. Empty keeps that lane in `script` too.
+    pub romanization_scripts: &'a [&'static str],
     pub collation_keys: &'a [(&'static str, Vec<u8>)],
     /// Guard on how many index hits are hydrated, so a pathological bucket
     /// cannot turn one release into a catalog-sized read. The equality lanes
@@ -1745,7 +1753,19 @@ pub fn name_candidates_in_bucket(
             let script =
                 scryer_domain::title_spelling::title_script(&candidate.match_term).as_str();
             let numbers_key = scryer_domain::title_spelling::title_numbers_key(&candidate.raw_term);
-            if script != query.script || numbers_key != query.numbers_key {
+            if numbers_key != query.numbers_key {
+                continue;
+            }
+            // A name in another script is in reach only by its romanization
+            // key, which is how the persisted index reads it.
+            if script != query.script
+                && !(query.romanization_scripts.contains(&script)
+                    && scryer_domain::title_normalization::romanization_key(
+                        &candidate.match_term,
+                        candidate.language_tag.as_deref(),
+                    )
+                    .is_some_and(|key| query.romanization_keys.contains(&key)))
+            {
                 continue;
             }
             candidates.push(candidate);
@@ -3691,6 +3711,57 @@ pub struct MediaRequestQualityProfileReferenceCounts {
     pub pending_requested: u64,
 }
 
+/// What has been asked for one identity before, aggregated in the store so
+/// the request facts never decode a request row to count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaRequestFingerprintSummary {
+    /// Requests for the identity, any requester, any status.
+    pub request_count: u64,
+    pub any_rejected: bool,
+    pub any_approved: bool,
+    /// Distinct members other than the requester who asked for the identity,
+    /// as a submitter or a joined co-requester.
+    pub other_requester_count: u64,
+    /// A request submitted by another member is still pending.
+    pub pending_by_other_requester: bool,
+}
+
+impl MediaRequestFingerprintSummary {
+    /// The summary of an already loaded history, for stores that only have
+    /// [`MediaRequestRepository::history_for_fingerprint`].
+    pub fn from_history(
+        history: &[MediaRequest],
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> Self {
+        use scryer_domain::MediaRequestStatus;
+        let mut summary = Self::default();
+        let mut others = std::collections::HashSet::new();
+        for request in history
+            .iter()
+            .filter(|request| excluding_request_id != Some(request.id.as_str()))
+        {
+            summary.request_count += 1;
+            summary.any_rejected |= request.status == MediaRequestStatus::Rejected;
+            summary.any_approved |= request.status == MediaRequestStatus::Approved;
+            summary.pending_by_other_requester |= request.status == MediaRequestStatus::Pending
+                && request.created_by_user_id != requester_user_id;
+            for user_id in std::iter::once(request.created_by_user_id.as_str()).chain(
+                request
+                    .requesters
+                    .iter()
+                    .map(|requester| requester.user_id.as_str()),
+            ) {
+                if user_id != requester_user_id {
+                    others.insert(user_id.to_string());
+                }
+            }
+        }
+        summary.other_requester_count = others.len() as u64;
+        summary
+    }
+}
+
 #[async_trait]
 pub trait MediaRequestRepository: Send + Sync {
     async fn submit(
@@ -3895,6 +3966,36 @@ pub trait MediaRequestRepository: Send + Sync {
         &self,
         identity_fingerprint: &str,
     ) -> AppResult<Vec<MediaRequest>>;
+
+    /// [`Self::history_for_fingerprint`] reduced to the counts the request
+    /// facts read, seen from `requester_user_id`, without the request being
+    /// edited. A store answers it in one aggregate statement.
+    async fn fingerprint_history_summary(
+        &self,
+        identity_fingerprint: &str,
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestFingerprintSummary> {
+        let history = self.history_for_fingerprint(identity_fingerprint).await?;
+        Ok(MediaRequestFingerprintSummary::from_history(
+            &history,
+            requester_user_id,
+            excluding_request_id,
+        ))
+    }
+
+    /// Titles in `library_id` that requests submitted by `user_id` created.
+    /// Only a store that holds both requests and titles can answer; the
+    /// default says so rather than reporting zero.
+    async fn count_created_titles_in_library_for_requester(
+        &self,
+        _user_id: &str,
+        _library_id: &str,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "this request store cannot count the titles a requester's requests created".into(),
+        ))
+    }
 
     /// When `user_id` last submitted anything, for `days_since_last_request`.
     /// Excludes the request currently being edited when its id is provided.
@@ -4456,6 +4557,15 @@ pub trait UserRepository: Send + Sync {
         Ok(None)
     }
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
+    /// The account's creation and last sign-in times, read by primary key.
+    /// `None` when no account has the id. A store that keeps neither column
+    /// reports both as unstored.
+    async fn account_timestamps(
+        &self,
+        _user_id: &str,
+    ) -> AppResult<Option<crate::types::UserAccountTimestamps>> {
+        Ok(Some(crate::types::UserAccountTimestamps::default()))
+    }
     async fn get_login_snapshot_by_username(
         &self,
         username: &str,
@@ -6295,6 +6405,49 @@ pub trait IndexerStatsTracker: Send + Sync {
         _dispatched_at: DateTime<Utc>,
     ) {
         self.record_api_request_sent(indexer_id, indexer_name);
+    }
+
+    /// Atomically checks and consumes one locally configured monthly request
+    /// slot. An indexer without a monthly request limit is always admitted
+    /// and costs no database work; trackers without durable quota
+    /// configuration are unlimited.
+    fn admit_monthly_request<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Blocking counterpart for plugin HTTP workers running on dedicated OS
+    /// threads. Never call this from an async runtime thread: an
+    /// implementation that would have to wait on the database there refuses
+    /// the request instead.
+    fn admit_monthly_request_blocking(
+        &self,
+        _indexer_id: &str,
+        _at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Atomically checks and consumes one locally configured monthly grab
+    /// slot. The admission is retained when downstream outcome is uncertain.
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Whether a grab from this indexer is already known to be refused by a
+    /// monthly limit: its grab limit, or its request limit, is remembered as
+    /// reached for the current month and the current limit. Answered from
+    /// memory; it counts nothing and runs no statement. `false` means "not
+    /// known to be refused", so the real admission still decides.
+    fn monthly_grab_refusal_remembered(&self, _indexer_id: &str, _at: DateTime<Utc>) -> bool {
+        false
     }
 
     fn all_stats(&self) -> Vec<IndexerQueryStats>;
@@ -11587,20 +11740,29 @@ pub trait RequestRuleSetRepository: Send + Sync {
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>>;
 
-    /// Insert the rule set and its first revision atomically.
+    /// Insert the rule set, its first revision and its builder document
+    /// atomically.
     async fn create_rule_set(
         &self,
         rule_set: &scryer_domain::RequestRuleSet,
         revision: &scryer_domain::RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()>;
 
     /// Append `revision` and repoint the rule set at it, atomically. Existing
-    /// revisions are never rewritten.
+    /// revisions are never rewritten. `builder_model_json` is `None` to keep
+    /// the stored builder document, `Some(None)` to clear it and `Some(doc)`
+    /// to replace it.
     async fn add_revision(
         &self,
         revision: &scryer_domain::RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()>;
+
+    /// The stored builder document of one rule set. Only the single-rule read
+    /// asks for it, so listings never decode it.
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>>;
 
     async fn get_revision(
         &self,

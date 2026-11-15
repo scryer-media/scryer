@@ -20,6 +20,10 @@ pub const MAX_TAG_LEN: usize = 64;
 /// than silently rewritten.
 pub const RESERVED_TAG_PREFIX: &str = "scryer:";
 
+/// The characters [`check_tag`] accepts, as a regular expression a client
+/// can check a tag against before it saves one.
+pub const TAG_PATTERN: &str = "[A-Za-z0-9._ -]+";
+
 /// Collect the string items of an array or set rule, failing on anything else.
 fn string_items<'a>(value: &'a Value, field: &str) -> Result<Vec<&'a Value>, String> {
     if let Ok(array) = value.as_array() {

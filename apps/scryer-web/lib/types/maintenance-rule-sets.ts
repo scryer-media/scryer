@@ -7,17 +7,48 @@
 /// without changing anything.
 export type MaintenanceRuleState = "DISABLED" | "DRY_RUN" | "ENABLED";
 
-/// The class of effects a rule's action can have. `DESTRUCTIVE` actions delete
-/// files, so enabling such a rule needs a confirmation.
+/// The class of effects a rule's actions can have. `DESTRUCTIVE` rules delete
+/// files or titles, so enabling such a rule needs a confirmation.
 export type MaintenanceEffectArming = "NONE" | "REVERSIBLE" | "DESTRUCTIVE";
 
 /// Rule scope is distinct from an action's movie/show/season/episode vocabulary.
 export type MaintenanceRuleScope = "TITLE" | "SEASON" | "EPISODE";
 
-export type MaintenanceSubjectScope = "MOVIE" | "SHOW" | "SEASON" | "EPISODE";
+/// An action a rule declares by defining a rule of that name in its source,
+/// as the API names it (`DELETE_FILES`). Any other rule name in the source is
+/// the author's own helper. The heads a build knows come from the served
+/// output descriptors, so this is any string the server sends.
+export type MaintenanceActionHead = string;
 
-export type MaintenanceRiskClass = "NONE" | "LOW" | "MEDIUM" | "HIGH";
+/// What a rule's source can do, read from the source itself. The value lists
+/// hold every literal the source can produce for that head, so a rule with an
+/// `else` chain lists each branch.
+export type MaintenanceDeclaredActions = {
+  heads: MaintenanceActionHead[];
+  /// The rule defines `delete_files` or `delete_title`.
+  destructive: boolean;
+  qualityProfiles: string[];
+  addTags: string[];
+  removeTags: string[];
+  libraries: string[];
+  roots: string[];
+  notifications: string[];
+};
 
+/// What a rule decided for one subject, with heads in the order the server
+/// applies them.
+export type MaintenanceDecidedActions = {
+  heads: MaintenanceActionHead[];
+  qualityProfile: string | null;
+  addTags: string[];
+  removeTags: string[];
+  library: string | null;
+  root: string | null;
+  notification: string | null;
+};
+
+/// Action kinds recorded on candidates and action runs written before rules
+/// declared their actions in source. Kept so history stays readable.
 export type MaintenanceActionKind =
   | "ACTION_SEQUENCE"
   | "DO_NOTHING"
@@ -39,13 +70,21 @@ export type MaintenanceActionStepKind =
   | "SEARCH"
   | "ADD_TAGS"
   | "REMOVE_TAGS"
-  | "DELETE_TITLE_AND_FILES";
+  | "DELETE_TITLE_AND_FILES"
+  | "MONITOR"
+  | "FETCH_SUBTITLES"
+  | "MOVE_TO_LIBRARY"
+  | "MOVE_TO_ROOT";
 
 export type MaintenanceActionStepParameters = {
   includeDescendants: boolean | null;
   targetQualityProfileId: string | null;
   searchCondition: MaintenanceSearchCondition | null;
   tags: string[];
+  /// The library a move step names, as the rule wrote it.
+  targetLibrary?: string | null;
+  /// The library root a move step names, as the rule wrote it.
+  targetRoot?: string | null;
 };
 
 export type MaintenanceSearchCondition =
@@ -69,26 +108,35 @@ export type MaintenanceRuleSetRecord = {
   name: string;
   description: string | null;
   state: MaintenanceRuleState;
-  /// What `ENABLED` would allow for this rule's action. `NONE` means the rule
+  /// What `ENABLED` would allow for this rule's actions. `NONE` means the rule
   /// can only run as a dry run.
   enabledArming: MaintenanceEffectArming;
-  /// The rule was enabled, then its matcher, action or scope changed, so it
+  /// The rule was enabled, then its source or scope changed, so it
   /// dropped back to a dry run until it is enabled again.
   editedSinceEnabled: boolean;
-  /// Shipped with Scryer: name, matcher and action are fixed and it cannot be
+  /// Shipped with Scryer: name and source are fixed and it cannot be
   /// deleted. State, grace period and libraries stay editable.
   systemOwned: boolean;
   libraryIds: string[];
   /// Immutable granularity, separate from an action's supported subjects.
   subjectKind: MaintenanceRuleScope;
   currentRevisionNumber: number;
-  /// Action and grace period of the revision in force, carried on the list
-  /// payload so rendering badges never needs a per-rule detail fetch.
+  /// Grace period and declared actions of the revision in force, carried on
+  /// the list payload so rendering badges never needs a per-rule detail fetch.
   graceDays: number;
-  actionSpec: MaintenanceActionSpec;
-  /// Present for schema-2 revisions. The legacy action spec stays in place so
-  /// old revisions remain readable without being silently converted.
-  actionSequence?: MaintenanceActionSequence | null;
+  declaredActions: MaintenanceDeclaredActions;
+  /// When the rule runs. One run evaluates the rule, then applies its
+  /// candidates whose grace period has ended. A rule setting like its
+  /// libraries: changing it makes no new revision.
+  schedule: import("./scripts").ScriptSchedule;
+  /// Null for a manual schedule and for a disabled rule.
+  nextRunAt: string | null;
+  /// The most titles one run acts on. Required while the source deletes
+  /// files or titles; null means no limit.
+  maxTitlesPerRun: number | null;
+  /// Set when the stored rule could not be loaded for evaluation, as a
+  /// reason code; the rule does not run until it is saved again.
+  loadRefusal: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -108,81 +156,45 @@ export type MaintenanceRuleRevision = {
   createdAt: string;
 };
 
-export type MaintenanceActionSpec = {
-  kind: MaintenanceActionKind;
-  schemaVersion: number;
-  targetQualityProfileId: string | null;
-  /// Labels the tag actions write. Empty for every other kind, so a caller can
-  /// render "what would this rule do" without branching on the kind first.
-  tags: string[];
-};
-
 export type MaintenanceRuleSetDetail = {
   ruleSet: MaintenanceRuleSetRecord;
   revision: MaintenanceRuleRevision;
-  actionSpec: MaintenanceActionSpec;
-  actionSequence: MaintenanceActionSequence | null;
-};
-
-/// The sequence catalog is owned by the API. The editor only uses these
-/// advertised capabilities to offer steps and fields; it never recreates the
-/// effect or dependency matrix locally.
-export type MaintenanceActionStepDescriptor = {
-  id: string;
-  kind: MaintenanceActionStepKind;
-  label: string;
-  supportedSubjects: MaintenanceSubjectScope[];
-  riskClass: MaintenanceRiskClass;
-  effectClasses: string[];
-  parameterSchema:
-    "none" | "unmonitor" | "change_quality_profile" | "search" | "tags";
-  requires: string[];
-  terminal: boolean;
-  completionPolicy: "accepted" | "completed";
-  storageRootAllowed: boolean;
-};
-
-export type MaintenanceActionDescriptor = {
-  supportedRuleScopes: MaintenanceRuleScope[];
-  kind: MaintenanceActionKind;
-  supportedSubjects: MaintenanceSubjectScope[];
-  riskClass: MaintenanceRiskClass;
-  effectClasses: string[];
-  timingMode: string;
-  allowedRepeatModes: string[];
-  requiresTargetQualityProfile: boolean;
-  /// True for the tag actions, which need at least one registry-defined label
-  /// before the rule can be saved.
-  requiresTags: boolean;
-  /// The server permits this action when a configured storage root scopes the
-  /// rule. This remains API-owned so the editor cannot drift from execution.
-  supportsStorageScope: boolean;
+  declaredActions: MaintenanceDeclaredActions;
+  /// The simple builder's model, stored opaquely next to the rule. Null when
+  /// the rule was never built with it or was detached from it. Read through
+  /// `parseRuleBuilderModel`; only the detail query selects it.
+  builderModel?: unknown;
 };
 
 export type MaintenanceRuleSetDraft = {
   subjectKind: MaintenanceRuleScope;
   name: string;
   description: string;
+  /// Declares both which subjects match and what happens to them.
   regoSource: string;
-  actionKind: MaintenanceActionKind;
-  targetQualityProfileId: string;
-  /// Labels a tag action writes. Held on the draft even while another action is
-  /// selected, so switching back and forth does not lose what was picked; the
-  /// input builder drops them for kinds that take none.
-  tags: string[];
-  /// Schema-2 action definition. An empty list is intentionally observe-only;
-  /// the editor does not synthesize a do-nothing step.
-  actionSequence: MaintenanceActionSequence;
   graceDays: number;
   /// Empty when storage capacity and root-filtered deletion do not apply.
   storageRootId: string;
   libraryIds: string[];
+  schedule: import("./scripts").ScriptSchedule;
+  /// Null for no limit; required while the source deletes files or titles.
+  maxTitlesPerRun: number | null;
+  /// Set while the rule is still the simple builder's: `regoSource` is then
+  /// what the builder generated from this model. Null once the source is
+  /// edited by hand, and for every rule the builder did not make.
+  builderModel: import("../utils/rule-builder").RuleBuilderModel | null;
 };
 
 export type MaintenanceValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
+  /// Findings that do not block saving, such as a rule nothing references.
+  warnings?: import("../utils/rego-diagnostics").RuleValidationDiagnostic[];
+  /// Null when the source could not be parsed.
+  declaredActions?: MaintenanceDeclaredActions | null;
+  /// Validation could not be reached, so nothing above describes the source.
+  unavailable?: boolean;
 };
 
 export type MaintenanceTestSubject = { titleId: string; subjectId: string };
@@ -208,6 +220,10 @@ export type MaintenancePreviewTitle = {
   outcome: MaintenancePreviewOutcome | null;
   reasonCodes: string[];
   error: string | null;
+  /// Stable code for `error`; null exactly when `error` is null.
+  errorCode?: string | null;
+  /// What the rule decided for this subject. Null when it did not match.
+  actions?: MaintenanceDecidedActions | null;
   /// The input document the rule evaluated for this subject. Null unless the
   /// caller may manage permissions, because it names who watched and who
   /// requested the subject.
@@ -293,7 +309,8 @@ export type MaintenanceCandidate = {
   state: MaintenanceCandidateState;
   stateReason: string;
   reasonCodes: string[];
-  actionKind: MaintenanceActionKind;
+  /// What the rule decided for this subject.
+  actions: MaintenanceDecidedActions | null;
   actionSequence: MaintenanceActionSequence | null;
   sequenceSteps: MaintenanceActionStepProgress[];
   graceDays: number;

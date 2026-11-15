@@ -214,6 +214,10 @@ pub(crate) struct RequestDecisionProvenance {
     /// list the rules asked for stays in the decision trace.
     pub(crate) policy_tags: Vec<String>,
     pub(crate) reason_codes: Vec<String>,
+    /// What the rules set for the approval, already checked against the
+    /// request. Applied only by an automatic approval; the decision trace
+    /// records which rule set set each value.
+    pub(crate) shaping: crate::request_rules::ResolvedShaping,
 }
 
 impl RequestDecisionProvenance {
@@ -222,6 +226,7 @@ impl RequestDecisionProvenance {
             decision_id: evaluation.decision_id.clone(),
             decided_by_rule_set_ids: evaluation.deciding_rule_set_ids.clone(),
             policy_tags: evaluation.tags.clone(),
+            shaping: evaluation.resolved_shaping.clone(),
             reason_codes: evaluation
                 .reasons
                 .iter()
@@ -431,22 +436,6 @@ impl AppUseCase {
             created_by_user_id: actor.id.clone(),
             origin: input.origin,
         };
-        let submitted_event = new_global_domain_event(
-            actor,
-            DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
-                request_id: request.id.clone(),
-                library_id: request.library_id.clone(),
-                facet: request.facet.clone(),
-                title_name: request.title.clone(),
-                external_ids: request.external_ids.clone(),
-                poster_url: request.poster_url.clone(),
-                year: request.year,
-                requested_quality_profile_id: request.requested_quality_profile_id.clone(),
-                requested_quality_profile_name: request.requested_quality_profile_name.clone(),
-                requested_monitor_type: request.requested_monitor_type.clone(),
-                requested_lease_days: request.requested_lease_days,
-            }),
-        );
 
         let request_id = request.id.clone();
         // Evaluate the draft before adding its row to the repositories that
@@ -471,6 +460,25 @@ impl AppUseCase {
             &mut evaluation.tags,
         )
         .await;
+        // Rule `notify` messages ride on the submitted event, so they reach the
+        // notification channels exactly once, and only for a real request.
+        let submitted_event = new_global_domain_event(
+            actor,
+            DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
+                request_id: request.id.clone(),
+                library_id: request.library_id.clone(),
+                facet: request.facet.clone(),
+                title_name: request.title.clone(),
+                external_ids: request.external_ids.clone(),
+                poster_url: request.poster_url.clone(),
+                year: request.year,
+                requested_quality_profile_id: request.requested_quality_profile_id.clone(),
+                requested_quality_profile_name: request.requested_quality_profile_name.clone(),
+                requested_monitor_type: request.requested_monitor_type.clone(),
+                requested_lease_days: request.requested_lease_days,
+                rule_notifications: evaluation.shaping.rule_notifications(),
+            }),
+        );
 
         let submission = self
             .services
@@ -786,6 +794,8 @@ impl AppUseCase {
             decided_by_rule_set_ids: request.decided_by_rule_set_ids.clone(),
             policy_tags: approved_tags.clone(),
             reason_codes: Vec::new(),
+            // The approver's own picks are already applied above.
+            shaping: crate::request_rules::ResolvedShaping::default(),
         };
         let mut event_data = media_request_resolved_event_data(
             &request,
@@ -1233,41 +1243,38 @@ impl AppUseCase {
         // labels when the evaluation produced it, so a rule naming a tag nobody
         // defined cannot fail the approval it just granted, and the row, the
         // event and the title all carry the same list.
-
-        let approved_quality_profile_id =
-            request
-                .requested_quality_profile_id
-                .clone()
-                .ok_or_else(|| {
-                    AppError::validation_refused(
-                        crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_REQUIRED,
-                        "approved quality profile is required",
-                    )
-                })?;
-        let approved_quality_profile_name = request
-            .requested_quality_profile_name
-            .clone()
-            .ok_or_else(|| {
-                AppError::validation_refused(
-                    crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_NAME_REQUIRED,
-                    "approved quality profile name is required",
-                )
-            })?;
+        //
+        // A value the rules set takes the place of the requester's, through
+        // the same validators an approver's override goes through. Without one
+        // the requester's own pick is what the approval grants.
+        let shaping = &provenance.shaping;
         let approved_monitor_type = normalize_requested_monitor_type(
             &request.facet,
-            request.requested_monitor_type.clone(),
+            shaping
+                .monitor_type
+                .clone()
+                .or_else(|| request.requested_monitor_type.clone()),
         )?;
+        // A shaped monitor type is never `advanced`, so the requester's season
+        // or movie picks only survive when the rules left monitoring alone.
         let approved_monitor_selection = normalize_requested_monitor_selection(
             approved_monitor_type.as_deref(),
             request.requested_monitor_selection.clone(),
         )?;
-        // The requester's own lease is what a policy approval grants: nobody
-        // overrode it, so `approved` and `requested` are the same window.
-        let approved_lease_days = request.requested_lease_days;
+        let approved_lease_days = match shaping.lease_days {
+            Some(days) => crate::request_rules::validate_lease_days(days)?,
+            None => request.requested_lease_days,
+        };
         let (approved_required_audio_languages, approved_preferred_audio_languages) =
             crate::validated_title_audio_overrides(
-                request.requested_required_audio_languages.clone(),
-                request.requested_preferred_audio_languages.clone(),
+                shaping
+                    .required_audio_languages
+                    .clone()
+                    .or_else(|| request.requested_required_audio_languages.clone()),
+                shaping
+                    .preferred_audio_languages
+                    .clone()
+                    .or_else(|| request.requested_preferred_audio_languages.clone()),
             )?;
         let profile_reference_guard = self
             .runtime
@@ -1275,6 +1282,30 @@ impl AppUseCase {
             .quality_profile_reference_lock
             .lock()
             .await;
+        let (approved_quality_profile_id, approved_quality_profile_name) =
+            match &shaping.quality_profile {
+                Some((profile_id, _)) => self.quality_profile_snapshot(profile_id).await?,
+                None => (
+                    request
+                        .requested_quality_profile_id
+                        .clone()
+                        .ok_or_else(|| {
+                            AppError::validation_refused(
+                                crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_REQUIRED,
+                                "approved quality profile is required",
+                            )
+                        })?,
+                    request
+                        .requested_quality_profile_name
+                        .clone()
+                        .ok_or_else(|| {
+                            AppError::validation_refused(
+                                crate::error_reasons::media_requests::APPROVED_QUALITY_PROFILE_NAME_REQUIRED,
+                                "approved quality profile name is required",
+                            )
+                        })?,
+                ),
+            };
         let mut new_title = media_request_to_new_title(
             &request,
             Some(&approved_quality_profile_id),
@@ -2580,6 +2611,7 @@ fn media_request_submitted_event_data(
         requested_quality_profile_name,
         requested_monitor_type,
         requested_lease_days: request.requested_lease_days,
+        rule_notifications: Vec::new(),
     }
 }
 

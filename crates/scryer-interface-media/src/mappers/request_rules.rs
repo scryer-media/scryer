@@ -31,6 +31,7 @@ use scryer_domain::{
 use scryer_rules::request::{
     REQUEST_INPUT_SCHEMA_VERSION, RequestVote, certification_rank_for_label,
 };
+use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue};
 
 /// Revision numbers, lease windows, and counts are stored as `i64` but are small
 /// by construction; saturating keeps a corrupt row from panicking a read.
@@ -78,6 +79,25 @@ pub fn request_vote_value(vote: RequestVote) -> RequestVoteValue {
     }
 }
 
+pub fn request_action_head_value(head: RequestActionHead) -> RequestActionHeadValue {
+    match head {
+        RequestActionHead::Approve => RequestActionHeadValue::Approve,
+        RequestActionHead::Deny => RequestActionHeadValue::Deny,
+        RequestActionHead::Manual => RequestActionHeadValue::Manual,
+        RequestActionHead::SetQualityProfile => RequestActionHeadValue::SetQualityProfile,
+        RequestActionHead::SetLeaseDays => RequestActionHeadValue::SetLeaseDays,
+        RequestActionHead::SetMonitor => RequestActionHeadValue::SetMonitor,
+        RequestActionHead::SetRequiredAudioLanguages => {
+            RequestActionHeadValue::SetRequiredAudioLanguages
+        }
+        RequestActionHead::SetPreferredAudioLanguages => {
+            RequestActionHeadValue::SetPreferredAudioLanguages
+        }
+        RequestActionHead::AddTags => RequestActionHeadValue::AddTags,
+        RequestActionHead::Notify => RequestActionHeadValue::Notify,
+    }
+}
+
 fn lifecycle_claim_producer_value(producer: LifecycleClaimProducer) -> LifecycleClaimProducerValue {
     match producer {
         LifecycleClaimProducer::RequestLease => LifecycleClaimProducerValue::RequestLease,
@@ -107,8 +127,10 @@ fn lifecycle_claim_state_value(state: LifecycleClaimState) -> LifecycleClaimStat
 pub fn from_request_rule_set(
     rule_set: &scryer_domain::RequestRuleSet,
     decision_count: u64,
+    declared_actions: Option<RequestDeclaredActions>,
 ) -> RequestRuleSet {
     RequestRuleSet {
+        declared_actions,
         id: ID::from(rule_set.id.clone()),
         name: rule_set.name.clone(),
         description: rule_set.description.clone(),
@@ -138,14 +160,151 @@ pub fn from_request_rule_revision(
     }
 }
 
+/// What a source can do, projected. Lease days saturate like every other
+/// small stored integer.
+pub fn from_request_declared_actions(
+    declared: scryer_rules::request_actions::RequestDeclaredActions,
+) -> RequestDeclaredActions {
+    RequestDeclaredActions {
+        heads: declared
+            .heads
+            .into_iter()
+            .map(request_action_head_value)
+            .collect(),
+        quality_profiles: declared.quality_profiles,
+        lease_days: declared
+            .lease_days
+            .into_iter()
+            .map(to_graphql_int)
+            .collect(),
+        monitors: declared.monitors,
+        required_audio_languages: declared.required_audio_languages,
+        preferred_audio_languages: declared.preferred_audio_languages,
+        add_tags: declared.add_tags,
+        notifications: declared.notifications,
+    }
+}
+
+/// `with_declared_actions` is the caller's look-ahead: the scan parses the
+/// source, so it runs only when a selection asks for it. The one scan feeds
+/// both the detail and its rule set.
 pub fn from_request_rule_set_detail(
     detail: AppRuleSetDetail,
     decision_count: u64,
+    with_declared_actions: bool,
 ) -> RequestRuleSetDetail {
+    let declared_actions = with_declared_actions
+        .then(|| detail.declared_actions())
+        .flatten()
+        .map(from_request_declared_actions);
     RequestRuleSetDetail {
-        rule_set: from_request_rule_set(&detail.rule_set, decision_count),
+        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions.clone()),
         revision: from_request_rule_revision(detail.revision),
+        declared_actions,
+        builder_model: detail.builder_model.map(async_graphql::Json),
     }
+}
+
+// ── Shaping ─────────────────────────────────────────────────────────────────
+
+fn shaped_text(shaped: &scryer_application::ShapedValue) -> Option<RequestShapedText> {
+    match &shaped.value {
+        RequestHeadValue::Text(value) => Some(RequestShapedText {
+            value: value.clone(),
+            rule_set_name: shaped.rule_set_name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn shaped_number(shaped: &scryer_application::ShapedValue) -> Option<RequestShapedNumber> {
+    match &shaped.value {
+        RequestHeadValue::Number(value) => Some(RequestShapedNumber {
+            value: to_graphql_int(*value),
+            rule_set_name: shaped.rule_set_name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn shaped_text_list(shaped: &scryer_application::ShapedValue) -> Option<RequestShapedTextList> {
+    match &shaped.value {
+        RequestHeadValue::List(value) => Some(RequestShapedTextList {
+            value: value.clone(),
+            rule_set_name: shaped.rule_set_name.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// Project arbitrated shaping, or `None` when the rules changed nothing.
+///
+/// `with_notifications` is false on every requester surface: a notification
+/// is written for the people told about the request, not the requester.
+pub fn from_arbitrated_shaping(
+    shaping: &scryer_application::ArbitratedShaping,
+    with_notifications: bool,
+) -> Option<RequestShaping> {
+    let value = |head| shaping.value(head);
+    let projected = RequestShaping {
+        quality_profile: value(RequestActionHead::SetQualityProfile).and_then(shaped_text),
+        lease_days: value(RequestActionHead::SetLeaseDays).and_then(shaped_number),
+        monitor: value(RequestActionHead::SetMonitor).and_then(shaped_text),
+        required_audio_languages: value(RequestActionHead::SetRequiredAudioLanguages)
+            .and_then(shaped_text_list),
+        preferred_audio_languages: value(RequestActionHead::SetPreferredAudioLanguages)
+            .and_then(shaped_text_list),
+        notifications: if with_notifications {
+            shaping
+                .notifications
+                .iter()
+                .filter_map(shaped_text)
+                .collect()
+        } else {
+            Vec::new()
+        },
+        conflicts: shaping
+            .conflicts
+            .iter()
+            .map(|refusal| request_action_head_value(refusal.head))
+            .collect(),
+        invalid: shaping
+            .invalid
+            .iter()
+            .map(|refusal| request_action_head_value(refusal.head))
+            .collect(),
+    };
+    (projected != RequestShaping::default()).then_some(projected)
+}
+
+/// The shaping a stored trace recorded. An unreadable document reads as no
+/// shaping, like an unreadable vote table: the outcome columns stay true.
+fn stored_shaping(shaping_json: Option<&str>) -> Option<scryer_application::ArbitratedShaping> {
+    shaping_json.and_then(|json| serde_json::from_str(json).ok())
+}
+
+/// One rule's shaping, attributed to that rule, as a preview shows it.
+fn preview_shaping(
+    result: &AppPreviewResult,
+    rule_set_name: &str,
+) -> scryer_application::ArbitratedShaping {
+    let attributed = |value: RequestHeadValue| scryer_application::ShapedValue {
+        value,
+        rule_set_id: result.rule_set_id.clone(),
+        rule_set_name: rule_set_name.to_string(),
+    };
+    let mut shaping = scryer_application::ArbitratedShaping::default();
+    for head in RequestActionHead::shaping() {
+        if let Some(value) = result.shaping.get(head) {
+            shaping.values.insert(head, attributed(value));
+        }
+    }
+    if let Some(text) = &result.notify {
+        shaping
+            .notifications
+            .push(attributed(RequestHeadValue::Text(text.clone())));
+    }
+    shaping
 }
 
 // ── Decision traces ─────────────────────────────────────────────────────────
@@ -228,7 +387,10 @@ pub fn from_request_rule_decision(
 ) -> RequestRuleDecision {
     let votes = stored_votes(&record.votes_json);
     let reasons = reasons_from_votes(&votes);
+    let shaping = stored_shaping(record.shaping_json.as_deref())
+        .and_then(|shaping| from_arbitrated_shaping(&shaping, !redacted));
     RequestRuleDecision {
+        shaping,
         id: Some(ID::from(record.id)),
         request_id: Some(ID::from(record.request_id)),
         evaluated_at: record.evaluated_at,
@@ -290,6 +452,7 @@ pub fn from_request_rule_preview_result(
 ) -> RequestRulePreviewPayload {
     let outcome = request_decision_outcome_value(preview_outcome(result.vote));
     let fallback_reason = preview_fallback_reason(&result);
+    let shaping = from_arbitrated_shaping(&preview_shaping(&result, &rule_set_name), true);
     let reasons: Vec<RequestPreflightReason> = result
         .reasons
         .iter()
@@ -331,6 +494,7 @@ pub fn from_request_rule_preview_result(
             reasons,
             tags: result.tags,
             input_schema_version: to_graphql_int(i64::from(REQUEST_INPUT_SCHEMA_VERSION)),
+            shaping,
         },
         metadata_partial: result.metadata_partial,
         undefined_tags: result.undefined_tags,
@@ -357,6 +521,9 @@ pub fn from_request_preflight(preflight: RequestPreflight) -> RequestPreflightPa
         metadata_partial: preflight.metadata_partial,
         evaluation_mode: request_rule_evaluation_mode_value(preflight.evaluation_mode),
         fallback_reason: preflight.fallback_reason,
+        // The requester's own surface: values and conflicts, never a
+        // notification.
+        shaping: from_arbitrated_shaping(&preflight.shaping, false),
     }
 }
 
@@ -598,6 +765,7 @@ mod tests {
             fallback_reason: None,
             votes_json: votes_json.to_string(),
             tags: vec!["kids".to_string()],
+            shaping_json: None,
             input_hash: "hash".to_string(),
             input_schema_version: 1,
             created_at: Utc::now(),
@@ -677,6 +845,95 @@ mod tests {
         assert!(
             reference.0.get("sections").is_some(),
             "the request contract should expose its sections"
+        );
+    }
+
+    /// The API names every head exactly as the head table does, so the web
+    /// can key its builder descriptors and its translations on either.
+    #[test]
+    fn every_head_is_named_as_the_head_table_names_it() {
+        use async_graphql::resolver_utils::EnumType;
+        for head in RequestActionHead::ALL {
+            let value = request_action_head_value(head);
+            let item = RequestActionHeadValue::items()
+                .iter()
+                .find(|item| item.value == value)
+                .expect("every head has an API value");
+            assert_eq!(item.name, head.spec().id, "{head:?}");
+        }
+        assert_eq!(
+            RequestActionHeadValue::items().len(),
+            RequestActionHead::ALL.len()
+        );
+    }
+
+    fn arbitrated() -> scryer_application::ArbitratedShaping {
+        let mut shaping = scryer_application::ArbitratedShaping::default();
+        shaping.values.insert(
+            RequestActionHead::SetLeaseDays,
+            scryer_application::ShapedValue {
+                value: RequestHeadValue::Number(30),
+                rule_set_id: "a".to_string(),
+                rule_set_name: "Short leases".to_string(),
+            },
+        );
+        shaping.conflicts.push(scryer_application::ShapingRefusal {
+            head: RequestActionHead::SetQualityProfile,
+            rule_set_ids: vec!["a".to_string(), "b".to_string()],
+        });
+        shaping.notifications.push(scryer_application::ShapedValue {
+            value: RequestHeadValue::Text("Kids' library request".to_string()),
+            rule_set_id: "a".to_string(),
+            rule_set_name: "Short leases".to_string(),
+        });
+        shaping
+    }
+
+    #[test]
+    fn a_stored_shaping_reads_back_and_a_requester_never_sees_a_notification() {
+        let mut stored = record(VOTES);
+        stored.shaping_json = Some(serde_json::to_string(&arbitrated()).unwrap());
+
+        let full = from_request_rule_decision(stored.clone(), false)
+            .shaping
+            .expect("shaping recorded");
+        assert_eq!(
+            full.lease_days,
+            Some(RequestShapedNumber {
+                value: 30,
+                rule_set_name: "Short leases".to_string(),
+            })
+        );
+        assert_eq!(
+            full.conflicts,
+            vec![RequestActionHeadValue::SetQualityProfile]
+        );
+        assert_eq!(full.notifications.len(), 1);
+
+        let redacted = from_request_rule_decision(stored, true)
+            .shaping
+            .expect("values survive redaction");
+        assert!(redacted.notifications.is_empty());
+        assert!(redacted.lease_days.is_some());
+    }
+
+    #[test]
+    fn no_shaping_and_unreadable_shaping_both_read_as_null() {
+        assert!(
+            from_request_rule_decision(record(VOTES), false)
+                .shaping
+                .is_none()
+        );
+        let mut unreadable = record(VOTES);
+        unreadable.shaping_json = Some("{not json".to_string());
+        assert!(
+            from_request_rule_decision(unreadable, false)
+                .shaping
+                .is_none()
+        );
+        assert!(
+            from_arbitrated_shaping(&scryer_application::ArbitratedShaping::default(), true)
+                .is_none()
         );
     }
 }

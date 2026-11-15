@@ -42,8 +42,10 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         &self,
         rule_set: &RequestRuleSet,
         revision: &RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()> {
-        let rule_set_args = rule_set_args(rule_set);
+        let mut rule_set_args = rule_set_args(rule_set);
+        rule_set_args.push(SqlArg::OptText(builder_model_json.map(str::to_string)));
         let revision_args = revision_args(revision);
         let rule_set_id = rule_set.id.clone();
         let library_ids = rule_set.library_ids.clone();
@@ -70,31 +72,53 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         &self,
         revision: &RequestRuleRevision,
         updated_at: DateTime<Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
-        let pointer_args = vec![
+        let mut pointer_args = vec![
             SqlArg::I64(revision.revision_number),
             SqlArg::Timestamp(updated_at),
-            SqlArg::Text(revision.rule_set_id.clone()),
         ];
+        // One statement either way: the pointer and the builder document move
+        // together, and a kept document is simply not written.
+        let pointer_sql = match builder_model_json {
+            Some(model) => {
+                pointer_args.push(SqlArg::OptText(model.map(str::to_string)));
+                "UPDATE request_rule_sets
+                    SET current_revision_number = {}, updated_at = {}, builder_model_json = {}
+                  WHERE id = {}"
+            }
+            None => {
+                "UPDATE request_rule_sets
+                    SET current_revision_number = {}, updated_at = {}
+                  WHERE id = {}"
+            }
+        };
+        pointer_args.push(SqlArg::Text(revision.rule_set_id.clone()));
 
         SqlRuntime::run_in_transaction(&self.datastore, "add_request_rule_revision", move |tx| {
             let revision_args = revision_args.clone();
             let pointer_args = pointer_args.clone();
             Box::pin(async move {
                 SqlRuntime::execute(SqlExec::Tx(tx), INSERT_REVISION_SQL, &revision_args).await?;
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE request_rule_sets
-                        SET current_revision_number = {}, updated_at = {}
-                      WHERE id = {}",
-                    &pointer_args,
-                )
-                .await?;
+                SqlRuntime::execute(SqlExec::Tx(tx), pointer_sql, &pointer_args).await?;
                 Ok(())
             })
         })
         .await
+    }
+
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT builder_model_json FROM request_rule_sets WHERE id = {}",
+            &[SqlArg::Text(rule_set_id.to_string())],
+        )
+        .await?;
+        match row {
+            Some(row) => row.opt_text("builder_model_json"),
+            None => Ok(None),
+        }
     }
 
     async fn get_revision(
@@ -251,8 +275,8 @@ const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO request_rule_sets
         (id, name, description, enabled, evaluation_mode,
-         current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {})";
+         current_revision_number, created_at, updated_at, builder_model_json)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO request_rule_revisions
         (id, rule_set_id, revision_number, rego_source, matcher_content_hash,

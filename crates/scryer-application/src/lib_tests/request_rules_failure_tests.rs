@@ -45,7 +45,7 @@ async fn unbuildable_persisted_rules_hold_only_their_enforcing_scope() {
             revision.rego_source = "not valid rego {".into();
             harness
                 .request_rules
-                .add_revision(&revision, Utc::now())
+                .add_revision(&revision, Utc::now(), None)
                 .await
                 .unwrap();
             harness.app.rebuild_request_rules_engine().await.unwrap();
@@ -443,16 +443,26 @@ impl crate::ports::RequestRuleSetRepository for ReadFailingRequestRuleStore {
         &self,
         rule_set: &scryer_domain::RequestRuleSet,
         revision: &scryer_domain::RequestRuleRevision,
+        builder_model_json: Option<&str>,
     ) -> AppResult<()> {
-        self.inner.create_rule_set(rule_set, revision).await
+        self.inner
+            .create_rule_set(rule_set, revision, builder_model_json)
+            .await
     }
 
     async fn add_revision(
         &self,
         revision: &scryer_domain::RequestRuleRevision,
         updated_at: chrono::DateTime<chrono::Utc>,
+        builder_model_json: Option<Option<&str>>,
     ) -> AppResult<()> {
-        self.inner.add_revision(revision, updated_at).await
+        self.inner
+            .add_revision(revision, updated_at, builder_model_json)
+            .await
+    }
+
+    async fn get_builder_model(&self, rule_set_id: &str) -> AppResult<Option<String>> {
+        self.inner.get_builder_model(rule_set_id).await
     }
 
     async fn get_revision(

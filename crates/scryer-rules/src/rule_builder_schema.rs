@@ -16,9 +16,15 @@ use crate::policy::decode::{MAX_TAG_LEN, MAX_TAGS};
 pub const MAINTENANCE_RULE_FAMILY: &str = "maintenance";
 /// The family name of scoring rules.
 pub const SCORING_RULE_FAMILY: &str = "scoring";
+/// The family name of request rules.
+pub use crate::request_actions::REQUEST_RULE_FAMILY;
 
 /// Every family [`rule_builder_schema`] serves.
-pub const RULE_BUILDER_FAMILIES: [&str; 2] = [MAINTENANCE_RULE_FAMILY, SCORING_RULE_FAMILY];
+pub const RULE_BUILDER_FAMILIES: [&str; 3] = [
+    MAINTENANCE_RULE_FAMILY,
+    SCORING_RULE_FAMILY,
+    REQUEST_RULE_FAMILY,
+];
 
 /// How the builder enters one output's value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -98,6 +104,7 @@ pub fn rule_builder_schema(family: &str) -> Option<RuleBuilderSchema> {
     match family {
         MAINTENANCE_RULE_FAMILY => Some(maintenance_builder_schema()),
         SCORING_RULE_FAMILY => Some(scoring_builder_schema()),
+        REQUEST_RULE_FAMILY => Some(crate::request_actions::request_builder_schema()),
         _ => None,
     }
 }
@@ -221,6 +228,7 @@ mod tests {
 
     const MAINTENANCE_FILE: &str = include_str!("../maintenance-builder-schema.json");
     const SCORING_FILE: &str = include_str!("../scoring-builder-schema.json");
+    const REQUEST_FILE: &str = include_str!("../request-builder-schema.json");
 
     #[test]
     fn checked_in_builder_schemas_match_the_tables() {
@@ -233,6 +241,11 @@ mod tests {
             SCORING_FILE,
             rule_builder_schema_json(&scoring_builder_schema()),
             "regenerate scoring-builder-schema.json from scoring_builder_schema()"
+        );
+        assert_eq!(
+            REQUEST_FILE,
+            rule_builder_schema_json(&crate::request_actions::request_builder_schema()),
+            "regenerate request-builder-schema.json from request_builder_schema()"
         );
     }
 

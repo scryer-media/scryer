@@ -156,13 +156,14 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
 const LATEST_DECISION_REQUEST_CHUNK: usize = 10_000;
 
 const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, mode, effective_outcome,
-    policy_outcome, fallback_reason, votes_json, tags_json, input_hash,
+    policy_outcome, fallback_reason, votes_json, tags_json, shaping_json, input_hash,
     input_schema_version, created_at";
 
 const INSERT_DECISION_SQL: &str = "INSERT INTO request_rule_decisions
         (id, request_id, evaluated_at, mode, effective_outcome, policy_outcome,
-         fallback_reason, votes_json, tags_json, input_hash, input_schema_version, created_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         fallback_reason, votes_json, tags_json, shaping_json, input_hash, input_schema_version,
+         created_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 fn decision_args(decision: &RequestRuleDecisionRecord) -> AppResult<Vec<SqlArg>> {
     Ok(vec![
@@ -175,6 +176,7 @@ fn decision_args(decision: &RequestRuleDecisionRecord) -> AppResult<Vec<SqlArg>>
         SqlArg::OptText(decision.fallback_reason.clone()),
         SqlArg::Text(decision.votes_json.clone()),
         SqlArg::Text(canonical_json_text(&decision.tags)?),
+        SqlArg::OptText(decision.shaping_json.clone()),
         SqlArg::Text(decision.input_hash.clone()),
         SqlArg::I64(decision.input_schema_version),
         SqlArg::Timestamp(decision.created_at),
@@ -197,6 +199,7 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
         fallback_reason: row.opt_text("fallback_reason")?,
         votes_json: json_text_or(row, "votes_json", "[]")?,
         tags: serde_json::from_str(&json_text_or(row, "tags_json", "[]")?).unwrap_or_default(),
+        shaping_json: row.opt_text("shaping_json")?,
         input_hash: row.text("input_hash")?,
         input_schema_version: row.i64("input_schema_version")?,
         created_at: timestamp_or_now(row, "created_at")?,

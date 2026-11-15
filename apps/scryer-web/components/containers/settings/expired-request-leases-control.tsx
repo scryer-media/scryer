@@ -17,28 +17,45 @@ import {
   maintenanceRuleSetQuery,
   maintenanceRuleSetsQuery,
 } from "@/lib/graphql/queries";
-import { updateMaintenanceRuleMatcherMutation } from "@/lib/graphql/mutations";
+import {
+  updateMaintenanceRuleMatcherMutation,
+  updateMaintenanceRuleMetadataMutation,
+} from "@/lib/graphql/mutations";
 import type {
   MaintenanceRuleSetDetail,
   MaintenanceRuleSetRecord,
   MaintenanceRuleState,
 } from "@/lib/types/maintenance-rule-sets";
+import type { ScriptSchedule } from "@/lib/types/scripts";
+import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
+import { MAINTENANCE_RULE_BUILDER_BASE } from "@/lib/utils/maintenance-rule-builder-schema";
 import {
+  maintenanceRuleBuilder,
   maintenanceRuleDraftFromDetail,
+  maintenanceRuleUpdatePlan,
   ruleStateLabelKey,
   ruleStateOptionsFor,
-  updateMaintenanceRuleMatcherInput,
 } from "@/lib/utils/maintenance-rule-sets";
+import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
+import { MaintenanceRuleScheduleField } from "@/components/views/settings/maintenance-rule-schedule";
 
-/// State and grace period of the built-in rule that deletes titles whose
-/// request lease expired. Everything else about it is fixed.
+const sameSchedule = (left: ScriptSchedule, right: ScriptSchedule) =>
+  JSON.stringify(toScriptScheduleInput(left)) ===
+  JSON.stringify(toScriptScheduleInput(right));
+
+/// State, grace period and schedule of the built-in rule that deletes titles
+/// whose request lease expired. Everything else about it is fixed.
 export function ExpiredRequestLeasesControl() {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const [record, setRecord] = useState<MaintenanceRuleSetRecord | null>(null);
   const [graceDays, setGraceDays] = useState(0);
+  const [schedule, setSchedule] = useState<ScriptSchedule | null>(null);
   const [busyRuleSetId, setBusyRuleSetId] = useState<string | null>(null);
+  const { whenReady: whenSchemaReady } = useRuleBuilderSchema(
+    MAINTENANCE_RULE_BUILDER_BASE,
+  );
 
   const refresh = useCallback(async () => {
     const { data } = await client
@@ -49,7 +66,10 @@ export function ExpiredRequestLeasesControl() {
         (rule) => rule.systemOwned,
       ) ?? null;
     setRecord(shipped);
-    if (shipped) setGraceDays(shipped.graceDays);
+    if (shipped) {
+      setGraceDays(shipped.graceDays);
+      setSchedule(shipped.schedule);
+    }
   }, [client]);
 
   useEffect(() => {
@@ -61,9 +81,13 @@ export function ExpiredRequestLeasesControl() {
     setBusyRuleSetId,
   });
 
-  if (!record) return null;
+  if (!record || !schedule) return null;
 
-  const saveGraceDays = async () => {
+  const scheduleChanged = !sameSchedule(schedule, record.schedule);
+
+  /// The grace period is part of the matcher revision and the schedule is a
+  /// rule setting, so each goes on its own mutation and only when changed.
+  const saveSettings = async () => {
     setBusyRuleSetId(record.id);
     try {
       const detail = await client
@@ -74,18 +98,34 @@ export function ExpiredRequestLeasesControl() {
         )
         .toPromise();
       if (detail.error) throw detail.error;
+      // Without the served schema the stored builder model is left as it is.
+      const binding = maintenanceRuleBuilder(await whenSchemaReady());
       const draft = maintenanceRuleDraftFromDetail(
         detail.data.maintenanceRuleSet as MaintenanceRuleSetDetail,
+        binding,
       );
-      const { error } = await client
-        .mutation(updateMaintenanceRuleMatcherMutation, {
-          input: updateMaintenanceRuleMatcherInput(record.id, {
-            ...draft,
-            graceDays,
-          }),
-        })
-        .toPromise();
-      if (error) throw error;
+      const plan = maintenanceRuleUpdatePlan(
+        record.id,
+        draft,
+        { ...draft, graceDays, schedule },
+        binding,
+      );
+      if (plan.matcher) {
+        const { error } = await client
+          .mutation(updateMaintenanceRuleMatcherMutation, {
+            input: plan.matcher,
+          })
+          .toPromise();
+        if (error) throw error;
+      }
+      if (plan.metadata) {
+        const { error } = await client
+          .mutation(updateMaintenanceRuleMetadataMutation, {
+            input: plan.metadata,
+          })
+          .toPromise();
+        if (error) throw error;
+      }
       setGlobalStatus(t("settings.maintenanceRuleUpdated"), {
         level: "SUCCESS",
       });
@@ -112,6 +152,14 @@ export function ExpiredRequestLeasesControl() {
           help={t("settings.expiredRequestLeasesHelp")}
         />
       </p>
+      <MaintenanceRuleScheduleField
+        key={record.updatedAt}
+        idPrefix="settings-expired-request-leases-schedule"
+        value={schedule}
+        onChange={setSchedule}
+        disabled={busy}
+        nextRunAt={scheduleChanged ? null : record.nextRunAt}
+      />
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-48">
           <SingleSelectField
@@ -151,8 +199,10 @@ export function ExpiredRequestLeasesControl() {
           id="settings-expired-request-leases-save"
           type="button"
           size="sm"
-          disabled={busy || graceDays === record.graceDays}
-          onClick={() => void saveGraceDays()}
+          disabled={
+            busy || (graceDays === record.graceDays && !scheduleChanged)
+          }
+          onClick={() => void saveSettings()}
         >
           {t("label.save")}
         </Button>

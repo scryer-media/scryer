@@ -12,6 +12,7 @@ import {
   regoFields,
   regoFieldCompletions,
   regoCompletionContext,
+  regoHelpers,
   normalizeRegoPath,
   REGO_INDEX_SOURCE,
   type RegoFamily,
@@ -182,7 +183,11 @@ test("every field and catalog item has a localized description", () => {
     for (const field of regoFields(family))
       assert.ok(english.includes(`"${field.descKey}"`), field.descKey);
   }
-  for (const item of [...regoCatalog.helpers, ...regoCatalog.snippets])
+  for (const family of ["release", "request", "maintenance"] as RegoFamily[]) {
+    for (const helper of regoHelpers(family))
+      assert.ok(english.includes(`"${helper.descKey}"`), helper.descKey);
+  }
+  for (const item of regoCatalog.snippets)
     assert.ok(english.includes(`"${item.descKey}"`), item.descKey);
 });
 

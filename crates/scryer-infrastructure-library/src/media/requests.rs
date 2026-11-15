@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaRequestCounts,
-    MediaRequestOrder, MediaRequestQualityProfileReferenceCounts, MediaRequestQuery,
-    MediaRequestRepository, MediaRequestResolution, MediaRequestResolutionResult,
-    MediaRequestSubmissionResult, MediaRequestUpdateResult, NewMediaRequest,
+    MediaRequestFingerprintSummary, MediaRequestOrder, MediaRequestQualityProfileReferenceCounts,
+    MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
+    MediaRequestResolutionResult, MediaRequestSubmissionResult, MediaRequestUpdateResult,
+    NewMediaRequest,
 };
 use scryer_domain::{
     ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
@@ -703,6 +704,101 @@ impl MediaRequestRepository for MediaRequestStore {
             request.external_ids = external_ids.remove(&request.id).unwrap_or_default();
         }
         Ok(requests)
+    }
+
+    /// One statement. The outer aggregate walks the identity's requests through
+    /// `idx_media_requests_fingerprint_created`; the people subquery adds the
+    /// joined co-requesters through the `media_request_requesters` primary key.
+    async fn fingerprint_history_summary(
+        &self,
+        identity_fingerprint: &str,
+        requester_user_id: &str,
+        excluding_request_id: Option<&str>,
+    ) -> AppResult<MediaRequestFingerprintSummary> {
+        let excluding_outer = if excluding_request_id.is_some() {
+            " AND id <> {}"
+        } else {
+            ""
+        };
+        let excluding_inner = if excluding_request_id.is_some() {
+            " AND r.id <> {}"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT COUNT(*) AS request_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS rejected_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} THEN 1 ELSE 0 END), 0) AS approved_count,
+                    COALESCE(SUM(CASE WHEN status = {{}} AND created_by_user_id <> {{}}
+                                      THEN 1 ELSE 0 END), 0) AS other_pending_count,
+                    (SELECT COUNT(*) FROM (
+                        SELECT r.created_by_user_id AS user_id
+                          FROM media_requests r
+                         WHERE r.identity_fingerprint = {{}}{excluding_inner}
+                        UNION
+                        SELECT q.user_id AS user_id
+                          FROM media_requests r
+                          JOIN media_request_requesters q ON q.request_id = r.id
+                         WHERE r.identity_fingerprint = {{}}{excluding_inner}
+                    ) people WHERE people.user_id <> {{}}) AS other_requester_count
+               FROM media_requests
+              WHERE identity_fingerprint = {{}}{excluding_outer}"
+        );
+        let fingerprint = SqlArg::Text(identity_fingerprint.to_string());
+        let requester = SqlArg::Text(requester_user_id.to_string());
+        let excluding = excluding_request_id.map(|id| SqlArg::Text(id.to_string()));
+        let mut args = vec![
+            SqlArg::Text(MediaRequestStatus::Rejected.as_str().to_string()),
+            SqlArg::Text(MediaRequestStatus::Approved.as_str().to_string()),
+            SqlArg::Text(MediaRequestStatus::Pending.as_str().to_string()),
+            requester.clone(),
+        ];
+        for _ in 0..2 {
+            args.push(fingerprint.clone());
+            args.extend(excluding.clone());
+        }
+        args.push(requester);
+        args.push(fingerprint);
+        args.extend(excluding);
+        let Some(row) = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?
+        else {
+            return Ok(MediaRequestFingerprintSummary::default());
+        };
+        let count = |column: &str| row.i64(column).map(|value| value.max(0) as u64);
+        Ok(MediaRequestFingerprintSummary {
+            request_count: count("request_count")?,
+            any_rejected: count("rejected_count")? > 0,
+            any_approved: count("approved_count")? > 0,
+            other_requester_count: count("other_requester_count")?,
+            pending_by_other_requester: count("other_pending_count")? > 0,
+        })
+    }
+
+    /// Served by `idx_media_requests_requester_created` on the request side
+    /// and the titles primary key on the join.
+    async fn count_created_titles_in_library_for_requester(
+        &self,
+        user_id: &str,
+        library_id: &str,
+    ) -> AppResult<u64> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(DISTINCT t.id) AS title_count
+               FROM media_requests r
+               JOIN titles t ON t.id = r.created_title_id
+              WHERE r.created_by_user_id = {}
+                AND t.library_id = {}",
+            &[
+                SqlArg::Text(user_id.to_string()),
+                SqlArg::Text(library_id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(row
+            .map(|row| row.i64("title_count"))
+            .transpose()?
+            .unwrap_or(0)
+            .max(0) as u64)
     }
 
     async fn latest_request_at_for_user(

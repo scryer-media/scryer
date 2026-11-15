@@ -88,6 +88,8 @@ import {
   REQUEST_LEASE_DAYS_MIN,
   REQUEST_LEASE_DAY_CHOICES,
   clampRequestLeaseDays,
+  requestApprovalPrefill,
+  type RequestApprovalPrefill,
   requestDecisionOutcomeBadgeTone,
   requestDecisionOutcomeLabelKey,
   requestFallbackReasonLabelKey,
@@ -116,6 +118,7 @@ import {
   TITLE_CLAIM_EXTEND_DATE_ID,
   TITLE_CLAIM_RELEASE_REASON_ID,
   approveMediaRequestLeaseOptionId,
+  approveMediaRequestSuggestedId,
   mediaRequestApproveId,
   mediaRequestCancelId,
   mediaRequestClaimsPanelId,
@@ -518,6 +521,30 @@ function RequestLeaseBadge({
   );
 }
 
+/// Marks an approve-dialog field whose starting value a rule's shaping
+/// suggested. The approver can still change it; the marker only says where
+/// the value came from.
+function ShapingSuggestedMarker({
+  suggested,
+  head,
+}: {
+  suggested: RequestApprovalPrefill["suggested"];
+  head: string;
+}) {
+  const t = useTranslate();
+  const ruleSetName = suggested[head];
+  if (ruleSetName === undefined) return null;
+  return (
+    <span
+      id={approveMediaRequestSuggestedId(head)}
+      data-shaping-suggested={head}
+      className="block text-xs text-[var(--scry-info-text)]"
+    >
+      {t("requests.shapingSuggested", { rule: ruleSetName })}
+    </span>
+  );
+}
+
 /// The decision, and behind a click the whole of what the reader is permitted
 /// to see of it.
 ///
@@ -823,6 +850,9 @@ export function RequestsView({
   const [approvalTags, setApprovalTags] = React.useState<string[]>([]);
   const [approvalAudioLanguages, setApprovalAudioLanguages] =
     React.useState<CatalogAudioLanguageDraft>(INHERIT_CATALOG_AUDIO_LANGUAGES);
+  const [approvalSuggested, setApprovalSuggested] = React.useState<
+    RequestApprovalPrefill["suggested"]
+  >({});
   const [openClaimsRequestId, setOpenClaimsRequestId] = React.useState<
     string | null
   >(null);
@@ -899,6 +929,47 @@ export function RequestsView({
         approvalRequest.requestedPreferredAudioLanguages,
       ),
     );
+    /// A request held for review starts from what its rules' shaping
+    /// suggested, over what the requester asked for. Each prefilled field is
+    /// marked with the rule set that suggested it.
+    const prefill = requestApprovalPrefill(
+      approvalRequest.decision,
+      approvalRequest.facet,
+      qualityProfileOptions,
+    );
+    if (prefill.qualityProfileId) setApprovalProfileId(prefill.qualityProfileId);
+    if (prefill.monitorType && approvalRequest.facet !== "MOVIE") {
+      setApprovalMonitorType(prefill.monitorType as RequestMonitorType);
+      setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
+    }
+    if (prefill.lease) {
+      if (prefill.lease.forever) setApprovalLeaseChoice("forever");
+      else if (
+        (REQUEST_LEASE_DAY_CHOICES as readonly number[]).includes(
+          prefill.lease.days,
+        )
+      )
+        setApprovalLeaseChoice(`${prefill.lease.days}`);
+      else {
+        setApprovalLeaseChoice("custom");
+        setApprovalCustomLeaseDays(prefill.lease.days);
+      }
+    }
+    if (prefill.requiredAudioLanguages || prefill.preferredAudioLanguages) {
+      setApprovalAudioLanguages((current) =>
+        catalogAudioLanguageDraftFrom(
+          prefill.requiredAudioLanguages ??
+            (current.requiredMode === "inherit"
+              ? null
+              : current.requiredMode === "none"
+                ? []
+                : current.required),
+          prefill.preferredAudioLanguages ??
+            (current.preferredMode === "inherit" ? null : current.preferred),
+        ),
+      );
+    }
+    setApprovalSuggested(prefill.suggested);
   }, [approvalRequest, libraries, qualityProfileOptions]);
 
   React.useEffect(() => {
@@ -981,6 +1052,7 @@ export function RequestsView({
     setApprovalLeaseChoice("requested");
     setApprovalTags([]);
     setApprovalAudioLanguages(INHERIT_CATALOG_AUDIO_LANGUAGES);
+    setApprovalSuggested({});
   };
 
   const confirmApproval = () => {
@@ -1687,6 +1759,10 @@ export function RequestsView({
                 ))}
               </SelectContent>
             </Select>
+            <ShapingSuggestedMarker
+              suggested={approvalSuggested}
+              head="SET_QUALITY_PROFILE"
+            />
           </label>
           {approvalRequest && approvalRequest.facet !== "MOVIE" ? (
             <label className="space-y-2">
@@ -1722,6 +1798,10 @@ export function RequestsView({
                   ))}
                 </SelectContent>
               </Select>
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_MONITOR"
+              />
             </label>
           ) : null}
           {approvalRequest && approvalAdvancedSelected ? (
@@ -1805,6 +1885,10 @@ export function RequestsView({
                   }
                 />
               ) : null}
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_LEASE_DAYS"
+              />
             </label>
           ) : null}
           {approvalRequest ? (
@@ -1823,6 +1907,14 @@ export function RequestsView({
                   approvalLibrary?.inheritedPreferredAudioLanguages ?? null
                 }
                 disabled={actionRequestId !== null}
+              />
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_REQUIRED_AUDIO_LANGUAGES"
+              />
+              <ShapingSuggestedMarker
+                suggested={approvalSuggested}
+                head="SET_PREFERRED_AUDIO_LANGUAGES"
               />
             </div>
           ) : null}

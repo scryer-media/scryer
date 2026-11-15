@@ -240,6 +240,8 @@ impl AppUseCase {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,

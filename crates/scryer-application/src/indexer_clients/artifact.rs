@@ -168,6 +168,7 @@ impl AppUseCase {
             if !source.is_enabled {
                 return Err(invalid());
             }
+            self.admit_indexer_monthly_grab(Some(&source.id)).await?;
             let artifact = self
                 .services
                 .integrations

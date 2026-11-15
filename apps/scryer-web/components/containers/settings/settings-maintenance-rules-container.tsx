@@ -5,6 +5,7 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -24,10 +25,16 @@ import {
 import {
   SettingsMaintenanceRulesSection,
   type MaintenanceLibraryOption,
-  type MaintenanceQualityProfileOption,
   type MaintenanceStorageRootOption,
 } from "@/components/views/settings/settings-maintenance-rules-section";
-import { sequenceHasUnresolvedSteps } from "@/components/views/settings/maintenance-action-sequence-editor";
+import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
+import {
+  loadQualityProfileNames,
+  loadTitleTagLabels,
+} from "@/lib/utils/rule-builder-catalogs";
+import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
+import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
+import { MAINTENANCE_RULE_BUILDER_BASE } from "@/lib/utils/maintenance-rule-builder-schema";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
@@ -35,8 +42,6 @@ import type { MaintenanceRuleTemplate } from "@/lib/constants/maintenance-rule-t
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
-  MaintenanceActionDescriptor,
-  MaintenanceActionStepDescriptor,
   MaintenanceActionRun,
   MaintenanceCandidate,
   MaintenanceEvaluationRun,
@@ -50,26 +55,25 @@ import type {
   MaintenanceRuleSetDraft,
   MaintenanceRuleSetRecord,
   MaintenanceTriggerResult,
+  MaintenanceValidationResult,
 } from "@/lib/types/maintenance-rule-sets";
 import {
   MAINTENANCE_FILTER_ALL,
   MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
+  maintenanceRuleBuilder,
   clampMaintenancePreviewLimit,
   copyMaintenanceRuleDraft,
   createMaintenanceRuleSetInput,
   excludeMaintenanceSubjectInput,
   initialMaintenanceRuleDraft,
   maintenanceFilterArgument,
-  maintenanceActionSequenceFromLegacySpec,
   maintenancePreviewInput,
   maintenanceRuleDraftFromDetail,
-  updateMaintenanceRuleMatcherInput,
-  updateMaintenanceRuleMetadataInput,
+  maintenanceRuleUpdatePlan,
+  newMaintenanceRuleBuilderDraft,
 } from "@/lib/utils/maintenance-rule-sets";
 import {
   librariesQuery,
-  maintenanceActionDescriptorsQuery,
-  maintenanceActionStepDescriptorsQuery,
   maintenanceActionRunsQuery,
   maintenanceCandidatesQuery,
   maintenanceEvaluationRunsQuery,
@@ -77,7 +81,6 @@ import {
   maintenanceInstanceGatesQuery,
   maintenanceRuleSetQuery,
   maintenanceRuleSetsQuery,
-  qualityProfileOptionsQuery,
 } from "@/lib/graphql/queries";
 import {
   createMaintenanceRuleSetMutation,
@@ -124,20 +127,9 @@ export function SettingsMaintenanceRulesContainer({
   const [ruleSetRecords, setRuleSetRecords] = useState<
     MaintenanceRuleSetRecord[]
   >([]);
-  const [actionDescriptors, setActionDescriptors] = useState<
-    MaintenanceActionDescriptor[]
-  >([]);
-  const [actionStepDescriptors, setActionStepDescriptors] = useState<
-    MaintenanceActionStepDescriptor[]
-  >([]);
-  const [actionStepDescriptorsLoaded, setActionStepDescriptorsLoaded] =
-    useState(false);
   const [libraries, setLibraries] = useState<MaintenanceLibraryOption[]>([]);
   const [storageRoots, setStorageRoots] = useState<
     MaintenanceStorageRootOption[]
-  >([]);
-  const [qualityProfiles, setQualityProfiles] = useState<
-    MaintenanceQualityProfileOption[]
   >([]);
 
   const [mutatingRuleSetId, setMutatingRuleSetId] = useState<string | null>(
@@ -154,6 +146,9 @@ export function SettingsMaintenanceRulesContainer({
   );
   const [ruleSetDraftBaseline, setRuleSetDraftBaseline] =
     useState<MaintenanceRuleSetDraft>(initialMaintenanceRuleDraft);
+  /// Changes with every editor opening, so controls that keep their own
+  /// typing state start again from the new draft.
+  const [editorSessionKey, setEditorSessionKey] = useState(0);
   const { validating, validationResult, setValidationResult, validateDraft } =
     useRegoValidation(
       "maintenance",
@@ -223,32 +218,77 @@ export function SettingsMaintenanceRulesContainer({
 
   const isDraftDirty =
     JSON.stringify(ruleSetDraft) !== JSON.stringify(ruleSetDraftBaseline);
-  const sequenceCatalogResolved =
-    actionStepDescriptorsLoaded &&
-    !sequenceHasUnresolvedSteps(
-      ruleSetDraft.actionSequence,
-      actionStepDescriptors,
-    );
+
+  const reportLoadError = useCallback(
+    (error: unknown) =>
+      setGlobalStatus(
+        userFacingGraphQlErrorMessage(error, t("status.failedToLoad"), t),
+        { level: "ERROR" },
+      ),
+    [setGlobalStatus, t],
+  );
+  /// The builder's pickers: libraries and roots are already on the page, the
+  /// other catalogs load the first time a chosen action needs them.
+  const staticBuilderOptions = useMemo(
+    () => ({
+      libraries: libraries.map((library) => library.name),
+      roots: [...new Set(storageRoots.map((root) => root.path))],
+    }),
+    [libraries, storageRoots],
+  );
+  const builderOptionLoaders = useMemo(
+    () => ({
+      qualityProfiles: () => loadQualityProfileNames(client),
+      titleTags: () => loadTitleTagLabels(client),
+    }),
+    [client],
+  );
+  const servedSchema = useRuleBuilderSchema(MAINTENANCE_RULE_BUILDER_BASE);
+  const builderBinding = useMemo(
+    () => maintenanceRuleBuilder(servedSchema.schema),
+    [servedSchema.schema],
+  );
+  const whenSchemaReady = servedSchema.whenReady;
+  const builderEditor = useRuleBuilderEditor({
+    binding: builderBinding,
+    draft: ruleSetDraft,
+    setDraft: setRuleSetDraft,
+    isEditorOpen,
+    staticOptions: staticBuilderOptions,
+    optionLoaders: builderOptionLoaders,
+    onLoadError: reportLoadError,
+  });
+  const beginBuilderSession = builderEditor.beginSession;
+
+  /// Every editor opening goes through here: a rule still made by the builder
+  /// opens in it, anything else opens as Rego.
+  const startEditorSession = useCallback(
+    (next: MaintenanceRuleSetDraft, baseline: MaintenanceRuleSetDraft) => {
+      setRuleSetDraft(next);
+      setRuleSetDraftBaseline(baseline);
+      setEditorSessionKey((key) => key + 1);
+      beginBuilderSession(next);
+      setValidationResult(null);
+    },
+    [beginBuilderSession, setValidationResult],
+  );
 
   const closeEditor = useCallback(() => {
     const next = initialMaintenanceRuleDraft();
     setIsEditorOpen(false);
     setEditingRuleSetId(null);
-    setRuleSetDraft(next);
-    setRuleSetDraftBaseline(next);
-    setValidationResult(null);
-  }, [setValidationResult]);
+    startEditorSession(next, next);
+  }, [startEditorSession]);
 
-  const openCreateEditor = useCallback(() => {
-    const next = initialMaintenanceRuleDraft();
+  const openCreateEditor = useCallback(async () => {
+    const binding = maintenanceRuleBuilder(await whenSchemaReady());
+    const next = newMaintenanceRuleBuilderDraft(binding);
     setEditingRuleSetId(null);
-    setRuleSetDraft(next);
-    setRuleSetDraftBaseline(next);
-    setValidationResult(null);
+    startEditorSession(next, next);
     setIsEditorOpen(true);
-  }, [setValidationResult]);
+  }, [startEditorSession, whenSchemaReady]);
 
-  /// Load the matcher source and action for one rule set, surfacing failure
+  /// Load the source and declared actions for one rule set, surfacing failure
   /// instead of silently refusing to open the editor.
   const fetchRuleSetDetail = useCallback(
     async (id: string): Promise<MaintenanceRuleSetDetail | null> => {
@@ -276,35 +316,43 @@ export function SettingsMaintenanceRulesContainer({
 
   const openEditEditor = useCallback(
     async (record: MaintenanceRuleSetRecord) => {
-      const detail = await fetchRuleSetDetail(record.id);
+      const [detail, schema] = await Promise.all([
+        fetchRuleSetDetail(record.id),
+        whenSchemaReady(),
+      ]);
       if (!detail) return;
-      const next = maintenanceRuleDraftFromDetail(detail);
+      const next = maintenanceRuleDraftFromDetail(
+        detail,
+        maintenanceRuleBuilder(schema),
+      );
       setEditingRuleSetId(record.id);
-      setRuleSetDraft(next);
-      setRuleSetDraftBaseline(next);
-      setValidationResult(null);
+      startEditorSession(next, next);
       setIsEditorOpen(true);
     },
-    [setValidationResult, fetchRuleSetDetail],
+    [startEditorSession, fetchRuleSetDetail, whenSchemaReady],
   );
 
   const openCopyEditor = useCallback(
     async (record: MaintenanceRuleSetRecord) => {
-      const detail = await fetchRuleSetDetail(record.id);
+      const [detail, schema] = await Promise.all([
+        fetchRuleSetDetail(record.id),
+        whenSchemaReady(),
+      ]);
       if (!detail) return;
-      const next = copyMaintenanceRuleDraft(detail);
+      const next = copyMaintenanceRuleDraft(
+        detail,
+        maintenanceRuleBuilder(schema),
+      );
       setEditingRuleSetId(null);
-      setRuleSetDraft(next);
-      setRuleSetDraftBaseline(next);
-      setValidationResult(null);
+      startEditorSession(next, next);
       setIsEditorOpen(true);
     },
-    [setValidationResult, fetchRuleSetDetail],
+    [startEditorSession, fetchRuleSetDetail, whenSchemaReady],
   );
 
   /// Load a starter template into the create-rule editor. A template prefills
-  /// every field the editor owns — name, description, matcher, action, target
-  /// profile, grace period — and then stops: it never creates a rule, and the
+  /// every field the editor owns — name, description, source, scope, grace
+  /// period — and then stops: it never creates a rule, and the
   /// draft it leaves behind is dirty, so the operator has to read it and press
   /// create themselves. `libraryIds` stays empty because which libraries a rule
   /// covers is an instance-specific decision no template can make.
@@ -315,30 +363,17 @@ export function SettingsMaintenanceRulesContainer({
         name: template.name,
         description: t(template.descriptionKey),
         regoSource: template.regoSource,
-        actionKind: template.actionKind,
         subjectKind: template.subjectKind ?? "TITLE",
-        targetQualityProfileId: template.targetQualityProfileId ?? "",
-        tags: [...(template.tags ?? [])],
-        actionSequence: maintenanceActionSequenceFromLegacySpec(
-          {
-            kind: template.actionKind,
-            schemaVersion: 1,
-            targetQualityProfileId: template.targetQualityProfileId ?? null,
-            tags: [...(template.tags ?? [])],
-          },
-          template.subjectKind ?? "TITLE",
-        ),
         graceDays: template.graceDays,
+        maxTitlesPerRun: template.maxTitlesPerRun ?? null,
       };
       setEditingRuleSetId(null);
-      setRuleSetDraft(next);
       /// Baseline stays at the empty draft on purpose: a freshly applied
       /// template counts as unsaved work, so navigating away from it asks.
-      setRuleSetDraftBaseline(initialMaintenanceRuleDraft());
-      setValidationResult(null);
+      startEditorSession(next, initialMaintenanceRuleDraft());
       setIsEditorOpen(true);
     },
-    [setValidationResult, t],
+    [startEditorSession, t],
   );
 
   const requestCreateEditor = useCallback(() => {
@@ -391,7 +426,7 @@ export function SettingsMaintenanceRulesContainer({
     setPendingEditorAction({ type: "close" });
   }, [closeEditor, isDraftDirty, isEditorOpen]);
 
-  /// The list payload carries the action and grace period of each rule's
+  /// The list payload carries the declared actions and grace period of each rule's
   /// current revision, so the table renders from one query; the full detail
   /// (matcher source) is fetched only when an editor opens.
   const refreshRuleSets = useCallback(async () => {
@@ -411,26 +446,7 @@ export function SettingsMaintenanceRulesContainer({
 
   const refreshCatalogs = useCallback(async () => {
     try {
-      const [descriptors, stepDescriptors, libraryList, profiles] =
-        await Promise.all([
-          client.query(maintenanceActionDescriptorsQuery, {}).toPromise(),
-          client.query(maintenanceActionStepDescriptorsQuery, {}).toPromise(),
-          client.query(librariesQuery, {}).toPromise(),
-          client.query(qualityProfileOptionsQuery, {}).toPromise(),
-        ]);
-      if (!descriptors.error) {
-        setActionDescriptors(
-          descriptors.data?.maintenanceActionDescriptors ?? [],
-        );
-      }
-      if (!stepDescriptors.error) {
-        setActionStepDescriptors(
-          stepDescriptors.data?.maintenanceActionStepDescriptors ?? [],
-        );
-        setActionStepDescriptorsLoaded(true);
-      } else {
-        setActionStepDescriptorsLoaded(false);
-      }
+      const libraryList = await client.query(librariesQuery, {}).toPromise();
       if (!libraryList.error) {
         const catalogLibraries = libraryList.data?.libraries ?? [];
         setLibraries(
@@ -452,11 +468,6 @@ export function SettingsMaintenanceRulesContainer({
                 libraryName: library.name,
               })),
           ),
-        );
-      }
-      if (!profiles.error) {
-        setQualityProfiles(
-          profiles.data?.qualityProfileSettings?.profiles ?? [],
         );
       }
     } catch (error) {
@@ -683,11 +694,22 @@ export function SettingsMaintenanceRulesContainer({
     }
   };
 
-  /// Editing a saved rule writes both halves: the matcher (a new immutable
-  /// revision) and the metadata (name, description, library scope), which the
-  /// API keeps on separate mutations because only one of them versions.
+  /// Editing a saved rule writes up to two halves: the matcher (a new
+  /// immutable revision) and the metadata (name, description, library scope,
+  /// schedule), which the API keeps on separate mutations because only one of
+  /// them versions. A half the editor did not change is not sent.
   const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (
+      builderEditor.attached &&
+      isIncompleteRuleBuilderDraft(builderBinding, ruleSetDraft)
+    ) {
+      setValidationResult({
+        valid: false,
+        errors: [t("settings.ruleBuilderIncomplete")],
+      });
+      return;
+    }
     if (!ruleSetDraft.name.trim() || !ruleSetDraft.regoSource.trim()) {
       setValidationResult({
         valid: false,
@@ -695,51 +717,57 @@ export function SettingsMaintenanceRulesContainer({
       });
       return;
     }
-    if (!sequenceCatalogResolved) {
-      setValidationResult({
-        valid: false,
-        errors: [t("settings.maintenanceSequenceCatalogUnavailable")],
-      });
-      return;
-    }
-
     const validation = await validateDraft();
     if (!validation?.valid) {
+      return;
+    }
+    if (
+      (validation as MaintenanceValidationResult).declaredActions
+        ?.destructive &&
+      ruleSetDraft.maxTitlesPerRun === null
+    ) {
+      setValidationResult({
+        ...validation,
+        valid: false,
+        errors: [
+          t("error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED"),
+        ],
+      });
       return;
     }
 
     setMutatingRuleSetId(editingRuleSetId || "new");
     try {
       if (editingRuleSetId) {
-        const matcher = await client
-          .mutation(updateMaintenanceRuleMatcherMutation, {
-            input: updateMaintenanceRuleMatcherInput(
-              editingRuleSetId,
-              ruleSetDraft,
-              actionDescriptors,
-            ),
-          })
-          .toPromise();
-        if (matcher.error) throw matcher.error;
-        const metadata = await client
-          .mutation(updateMaintenanceRuleMetadataMutation, {
-            input: updateMaintenanceRuleMetadataInput(
-              editingRuleSetId,
-              ruleSetDraft,
-            ),
-          })
-          .toPromise();
-        if (metadata.error) throw metadata.error;
+        const plan = maintenanceRuleUpdatePlan(
+          editingRuleSetId,
+          ruleSetDraftBaseline,
+          ruleSetDraft,
+          builderBinding,
+        );
+        if (plan.matcher) {
+          const matcher = await client
+            .mutation(updateMaintenanceRuleMatcherMutation, {
+              input: plan.matcher,
+            })
+            .toPromise();
+          if (matcher.error) throw matcher.error;
+        }
+        if (plan.metadata) {
+          const metadata = await client
+            .mutation(updateMaintenanceRuleMetadataMutation, {
+              input: plan.metadata,
+            })
+            .toPromise();
+          if (metadata.error) throw metadata.error;
+        }
         setGlobalStatus(t("settings.maintenanceRuleUpdated"), {
           level: "SUCCESS",
         });
       } else {
         const { error } = await client
           .mutation(createMaintenanceRuleSetMutation, {
-            input: createMaintenanceRuleSetInput(
-              ruleSetDraft,
-              actionDescriptors,
-            ),
+            input: createMaintenanceRuleSetInput(ruleSetDraft, builderBinding),
           })
           .toPromise();
         if (error) throw error;
@@ -763,11 +791,6 @@ export function SettingsMaintenanceRulesContainer({
 
   const runPreview = useCallback(
     async (subject?: MaintenanceTestSubject) => {
-      if (previewSource === "draft" && !sequenceCatalogResolved) {
-        setPreviewResult(null);
-        setPreviewError(t("settings.maintenanceSequenceCatalogUnavailable"));
-        return;
-      }
       const request = ++previewRequest.current;
       setPreviewing(true);
       setPreviewError(null);
@@ -777,7 +800,6 @@ export function SettingsMaintenanceRulesContainer({
             input: maintenancePreviewInput({
               ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
               draft: previewSource === "draft" ? ruleSetDraft : undefined,
-              descriptors: actionDescriptors,
               titleIds: subject ? [subject.titleId] : undefined,
               subjectIds: subject ? [subject.subjectId] : undefined,
               libraryId: previewLibraryId,
@@ -801,8 +823,6 @@ export function SettingsMaintenanceRulesContainer({
       }
     },
     [
-      actionDescriptors,
-      sequenceCatalogResolved,
       client,
       previewLibraryId,
       previewLimit,
@@ -927,11 +947,15 @@ export function SettingsMaintenanceRulesContainer({
     t,
   ]);
 
+  /// Acting now is always for one rule: rules act only through their own
+  /// fires, so the server refuses a call that names none.
   const runActionHandlerNow = useCallback(async () => {
+    const ruleSetId = maintenanceFilterArgument(runScopeRuleSetId);
+    if (!ruleSetId) return;
     setActionTriggering(true);
     try {
       const { data, error } = await client
-        .mutation(runMaintenanceActionHandlerNowMutation, {})
+        .mutation(runMaintenanceActionHandlerNowMutation, { ruleSetId })
         .toPromise();
       if (error) throw error;
       announceTrigger(
@@ -953,6 +977,7 @@ export function SettingsMaintenanceRulesContainer({
     client,
     refreshCandidates,
     refreshRuns,
+    runScopeRuleSetId,
     setGlobalStatus,
     t,
   ]);
@@ -1059,17 +1084,23 @@ export function SettingsMaintenanceRulesContainer({
         editingRuleSetId={editingRuleSetId}
         ruleSetDraft={ruleSetDraft}
         setRuleSetDraft={setRuleSetDraft}
+        editorSessionKey={editorSessionKey}
         submitRuleSet={submitRuleSet}
         mutatingRuleSetId={mutatingRuleSetId}
         resetRuleSetDraft={requestCloseEditor}
         startCreateRuleSet={requestCreateEditor}
         applyTemplate={requestApplyTemplate}
         ruleSetRecords={ruleSetRecords}
-        actionStepDescriptors={actionStepDescriptors}
-        actionStepDescriptorsLoaded={actionStepDescriptorsLoaded}
         libraries={libraries}
         storageRoots={storageRoots}
-        qualityProfiles={qualityProfiles}
+        editorMode={builderEditor.mode}
+        setEditorMode={builderEditor.setMode}
+        editRegoSource={builderEditor.editSource}
+        setBuilderModel={builderEditor.setModel}
+        editAsRego={builderEditor.editAsRego}
+        builderOptions={builderEditor.options}
+        builderSchema={servedSchema.schema}
+        builderStatus={servedSchema.status}
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         deleteRuleSet={deleteRuleSet}

@@ -69,6 +69,7 @@ pub(super) fn request_event(request_id: &str) -> NewDomainEvent {
         payload: DomainEventPayload::MediaRequestSubmitted(
             scryer_domain::MediaRequestSubmittedEventData {
                 requested_lease_days: None,
+                rule_notifications: Vec::new(),
                 request_id: request_id.to_string(),
                 library_id: "library-1".to_string(),
                 facet: MediaFacet::Movie,

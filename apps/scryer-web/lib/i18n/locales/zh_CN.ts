@@ -2326,9 +2326,6 @@ const zh_CN: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "宽限天数",
   "settings.maintenanceRuleGraceDaysHelp":
     "规则首次匹配后、操作执行前的天数（目前不会执行任何操作）。",
-  "settings.maintenanceRuleTargetProfile": "目标质量配置",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "此操作会将匹配的标题切换到的配置。",
   "settings.maintenanceRuleLibraries": "媒体库范围",
   "settings.maintenanceRuleLibrariesHelp":
     "不勾选任何媒体库时，规则将作用于整个收藏。",
@@ -2397,9 +2394,6 @@ const zh_CN: LocaleDictionary = {
   // ── 维护规则 — 实例闸门 ──
 
   // ── 维护规则 — 模式与武装 ──
-  "settings.maintenanceArmingNone": "无效果",
-  "settings.maintenanceArmingReversible": "可逆",
-  "settings.maintenanceArmingDestructive": "破坏性",
   "settings.maintenanceArmDestructiveLoading": "正在统计该规则已持有的候选项…",
   "settings.maintenanceArmDestructiveCount":
     "有 {{count}} 个候选项可能被处理。",
@@ -3064,12 +3058,8 @@ const zh_CN: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "剧集电影",
   "settings.maintenanceActionAddTags": "添加标签",
   "settings.maintenanceActionRemoveTags": "移除标签",
-  "settings.maintenanceRuleTags": "标签",
-  "settings.maintenanceRuleTagsNone": "尚未选择标签",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "添加 {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "移除 {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "标记为待删除",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

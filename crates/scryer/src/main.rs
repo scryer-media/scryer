@@ -124,7 +124,7 @@ use scryer_application::{
     start_background_media_server_playback_reconciliation_loop, start_background_subtitle_poller,
     start_background_title_hydration_loop, start_background_title_image_loop,
     start_download_queue_poller_with_options, start_navigation_badge_facts_refresh,
-    start_notification_dispatcher,
+    start_notification_dispatcher, start_storage_capacity_sampler,
     tracked_downloads::{
         BridgedClientTypesHandle, TrackedDownloadHandle, TrackedDownloadSnapshotIngestHandle,
     },
@@ -2456,6 +2456,10 @@ async fn bootstrap_application(
         restore_workers.shutdown_workers.child_token(),
     ));
     restore_workers.spawn_worker(start_background_auto_backup_scheduler(
+        app_use_case.clone(),
+        restore_workers.shutdown_workers.child_token(),
+    ));
+    restore_workers.spawn_worker(start_storage_capacity_sampler(
         app_use_case.clone(),
         restore_workers.shutdown_workers.child_token(),
     ));

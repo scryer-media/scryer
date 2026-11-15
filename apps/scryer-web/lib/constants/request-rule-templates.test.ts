@@ -17,7 +17,7 @@ import { REQUEST_RULE_TEMPLATES } from "./request-rule-templates.ts";
 /// and a template that diverges from them is a template that will not save.
 const PINNED_SOURCES: Record<string, string> = {
   "named-requesters-family-rated":
-    'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains "family" if {\n\tinput.facts.certification_rank <= 1\n}\n',
+    'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := ["family"] if {\n\tinput.facts.certification_rank <= 1\n}\n',
   "short-lease-approval":
     'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "bob"\n\tnot input.request.lease_forever\n\tinput.request.lease_days <= 14\n}\n',
   "low-resolution-approval":

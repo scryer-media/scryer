@@ -3,6 +3,16 @@ import type { LocaleDictionary } from "../types";
 const cs: LocaleDictionary = {
   "error.reason.ACQUISITION_PROWLARR_VERSION_UNSUPPORTED":
     "Tato verze Prowlarru není podporována. Aktualizujte Prowlarr na verzi 2.0 nebo novější.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Místně nastavený měsíční limit požadavků tohoto indexeru byl vyčerpán.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Místně nastavený měsíční limit stažení tohoto indexeru byl vyčerpán.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Měsíční využití indexeru se nepodařilo spolehlivě ověřit; požadavek byl odmítnut.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Měsíční limity požadavků a stažení musí být kladná celá čísla, nebo prázdné pro žádný limit.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "Toto stahování nemá ověřenou historii stažení ze Scryeru. Nebylo přidáno na seznam blokovaných ani smazáno a nebylo požádáno o vyhledání náhrady.",
   "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",
@@ -216,8 +226,14 @@ const cs: LocaleDictionary = {
     "Zamítne žádost, pokud je její fakt o obsahu pro dospělé true.",
   "settings.regoSnippet.manualRequest":
     "Vyžádá ruční kontrolu, jakmile počet nedávných schválení dosáhne prahu.",
-  "settings.regoSnippet.matchTag":
-    "Shoduje subjekt údržby podle štítku. Tento matcher nedefinuje žádnou akci.",
+  "settings.regoHelper.daysSince":
+    "Celé dny mezi časovým razítkem RFC3339 a časem vyhodnocení. Jen pro pravidla údržby.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Zruší sledování subjektu se štítkem.",
+  "settings.regoSnippet.tagAfterDays":
+    "Označí štítkem subjekt přidaný před více než zadaným počtem dní.",
+  "settings.regoSnippet.setProfile":
+    "Přesune velké tituly na pojmenovaný profil kvality.",
   "settings.trustedProxiesTitle":
     "Důvěryhodné proxy servery pro omezení četnosti požadavků",
   "settings.trustedProxiesHelp":
@@ -3171,6 +3187,15 @@ const cs: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Bez limitu",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Max. počet dotazů za minutu musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
+  "form.indexerMaxRequestsPerMonth": "Max. požadavků za měsíc",
+  "form.indexerMaxGrabsPerMonth": "Max. stažení za měsíc",
+  "form.indexerMonthlyLimitPlaceholder": "Bez limitu",
+  "form.indexerMonthlyLimitHelp":
+    "Počítá se pouze provoz zaznamenaný touto instancí Scryeru. Stažení se započítá před načtením vydání a zůstane započítané, pokud je jeho výsledek nejistý. Limity se obnovují v 00:00 UTC prvního dne každého měsíce.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Měsíční limit požadavků musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Měsíční limit stažení musí být celé číslo alespoň 1, nebo prázdné pro žádný limit.",
   "form.providerTypePlaceholder": "Typ poskytovatele",
   "form.subtitleProviderValidation": "Název a typ poskytovatele jsou povinné.",
   "form.subtitleProviderFacetsRequired":
@@ -4806,49 +4831,11 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleNoActions":
     "Nejsou k dispozici žádné akce vázané na titul.",
   "settings.maintenanceActionSequence": "Posloupnost akcí",
-  "settings.maintenanceSequenceTitle": "Posloupnost akcí",
-  "settings.maintenanceSequenceHelp":
-    "Tyto kroky se spustí v daném pořadí poté, co subjektu uplyne ochranná doba. Prázdná posloupnost zaznamenává shody, aniž by na nich cokoli provedla.",
-  "settings.maintenanceSequenceEmpty":
-    "Pouze zkušební běh — nejsou nastaveny žádné kroky akce.",
   "settings.maintenanceSequenceObserveOnly": "Pouze zkušební běh",
-  "settings.maintenanceSequenceSummary": "Souhrn posloupnosti",
-  "settings.maintenanceSequenceSummaryTarget": "Cíle: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "Po zapnutí: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Účinky: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "odpovídající titul",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "odpovídající titul, řady a epizody",
-  "settings.maintenanceSequenceTargetSeason": "odpovídající řada",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "odpovídající řada a epizody",
-  "settings.maintenanceSequenceTargetEpisode": "odpovídající epizoda",
-  "settings.maintenanceSequencePreviewPlan": "Seřazené účinky tohoto náhledu",
-  "settings.maintenanceSequencePreviewDescendants": "včetně potomků",
-  "settings.maintenanceSequencePreviewMatchedScope":
-    "pouze odpovídající rozsah",
-  "settings.maintenanceSequenceAdd": "Přidat krok",
-  "settings.maintenanceSequencePreset": "Přednastavená posloupnost",
-  "settings.maintenanceSequencePresetApply": "Nahradit přednastavením",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Změnit profil a poté vyhledat, pokud se změnil",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Zrušit sledování potomků a poté smazat soubory",
-  "settings.maintenanceSequenceTerminal": "Koncový",
-  "settings.maintenanceSequenceDependencies": "Vyžaduje: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "Zahrnout řady a epizody",
-  "settings.maintenanceSequenceSearchCondition": "Podmínka vyhledávání",
-  "settings.maintenanceSequenceSearchUnconditional": "Vždy vyžádat vyhledávání",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Pouze po změně profilu",
   "settings.maintenanceSequenceHistoryWaiting": "čeká na dřívější krok",
   "settings.maintenanceSequenceHistorySearchRequested": "vyhledávání vyžádáno",
   "settings.maintenanceSequenceHistorySearchAccepted": "přijato",
   "settings.maintenanceSequenceHistoryJob": "úloha {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "Tento uložený krok není v aktuálním katalogu k dispozici. Před uložením nebo náhledem jej odeberte, nebo obnovte kompatibilní katalog.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "Katalog kroků akcí není k dispozici. Uložené kroky zůstávají viditelné, ale ukládání i náhledy neuložených kroků jsou pozastaveny, dokud se nenačte.",
   "settings.maintenanceSequenceStepUnmonitor": "Zrušit sledování",
   "settings.maintenanceSequenceStepDeleteFiles": "Smazat soubory",
   "settings.maintenanceSequenceStepChangeQualityProfile":
@@ -4861,9 +4848,10 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Dny ochranné doby",
   "settings.maintenanceRuleGraceDaysHelp":
     "Počet dní od první shody každého subjektu, než se jeho akce stane splatnou.",
-  "settings.maintenanceRuleTargetProfile": "Cílový profil kvality",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Profil, do kterého by tato akce přesunula odpovídající tituly.",
+  "settings.maintenanceRuleScheduleHelp":
+    "Každé pravidlo běží podle vlastního plánu. Běh pravidlo vyhodnotí a poté provede akce u kandidátů, jejichž ochranná doba uplynula. Změna plánu stav pravidla nemění. Denní, týdenní a cron časy používají místní čas serveru.",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "Toto pravidlo se samo nikdy nespustí. Spusťte ho z části Běhy a historie.",
   "settings.maintenanceRuleLibraries": "Rozsah knihoven",
   "settings.maintenanceRuleLibrariesHelp":
     "Ponecháním všech knihoven nezaškrtnutých rozšíříte rozsah pravidla na celou kolekci.",
@@ -4934,9 +4922,6 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRuleCreated":
     "Pravidlo údržby vytvořeno a uloženo jako vypnuté.",
   "settings.maintenanceRuleDeleted": "Pravidlo údržby {{name}} smazáno.",
-  "settings.maintenanceArmingNone": "Žádné účinky",
-  "settings.maintenanceArmingReversible": "Aktualizace knihovny",
-  "settings.maintenanceArmingDestructive": "Mazání souborů",
   "settings.maintenanceRuleState": "Stav",
   "settings.maintenanceRuleStateHelp":
     "Vypnutá pravidla se nikdy nevyhodnocují. Zkušební běh zaznamenává kandidáty, aniž by na nich cokoli prováděl. Zapnutá pravidla jednají na svých kandidátech po uplynutí každé ochranné doby.",
@@ -5026,6 +5011,10 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRunEvaluationRunning": "Probíhá vyhodnocování…",
   "settings.maintenanceRunActionsNow": "Spustit akce nyní",
   "settings.maintenanceRunActionsRunning": "Probíhají akce…",
+  "settings.maintenanceRunActionsNeedsRule":
+    "Vyberte výše jedno pravidlo, které má teď zasáhnout.",
+  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+    "Vyberte pravidlo, které má zasáhnout. Pravidla jednají jen sama za sebe, takže okamžitý zásah potřebuje jedno pravidlo.",
   "settings.maintenanceRunStarted": "Běh spuštěn.",
   "settings.maintenanceRunNotStarted": "Nic se nespustilo: {{message}}",
   "settings.maintenanceEvaluationRunsTitle": "Vyhodnocovací běhy",
@@ -5077,9 +5066,7 @@ const cs: LocaleDictionary = {
     "Každé pravidlo údržby dostane jeden vstupní objekt na subjekt: input.subject určuje, co se vyhodnocuje, input.library udává, kde to žije, input.facts nese snímek faktů a obálka vyhodnocení sedí přímo na input. Fakt je obyčejná hodnota a klíč jednoduše chybí, když není co hlásit — pište tedy input.facts.monitored, ne kontrolu stavu. Pokud pravidlo čte fakt, který Scryer pro daný subjekt nedokázal zjistit, Scryer za vás subjekt pozdrží; tuto pojistku nikdy nemusíte psát sami.",
   "settings.refMaintOutputTitle": "Výstup pravidla",
   "settings.refMaintOutputIntro":
-    "Porovnávání definuje až tři názvy. Cokoli dalšího v balíčku je ignorováno a rozhodnutí, které nemá přesně tento tvar, je odmítnuto, ne převedeno.",
-  "settings.refMaintOutputMatch":
-    "match — boolean. Pokud jej ponecháte nedefinovaný, znamená to, že subjekt neodpovídal.",
+    "Pravidlo určuje, co udělat, definováním akcí a volitelných unknown a reasons. Subjekt odpovídá, když pro něj platí alespoň jedna akce. Rozhodnutí, které nemá přesně tento tvar, je odmítnuto, ne převedeno.",
   "settings.refMaintOutputUnknown":
     "unknown — boolean. Nastavte jej, když samotné pravidlo nevidí dost na rozhodnutí; unknown má vždy přednost před shodou. Fakty, které Scryer nedokázal zjistit, jsou za vás už vyřešeny, takže tohle slouží jen pro vaše vlastní úsudky.",
   "settings.refMaintOutputReasons":
@@ -5344,6 +5331,156 @@ const cs: LocaleDictionary = {
     "True, když mediální metadata deklarují video 3D. False znamená nezjištěno, včetně souborů dosud neanalyzovaných.",
   "settings.refMaintFileVideoWidth": "Šířka videa v pixelech",
   "settings.refMaintFileVideoHeight": "Výška videa v pixelech",
+  "settings.refMaintFactsRuntimeMinutes":
+    "Délka v minutách podle poskytovatele metadat",
+  "settings.refMaintFactsOriginalLanguage": "Původní jazyk titulu",
+  "settings.refMaintFactsSeriesStatus":
+    "Stav seriálu podle poskytovatele metadat, například pokračuje nebo skončil",
+  "settings.refMaintFactsFirstAired":
+    "Datum první premiéry seriálu (YYYY-MM-DD)",
+  "settings.refMaintFactsNetwork": "Stanice, která seriál vysílá",
+  "settings.refMaintFactsStudio": "Studio, které titul natočilo",
+  "settings.refMaintFactsCountry": "Země původu",
+  "settings.refMaintFactsPopularity":
+    "Skóre popularity od poskytovatele metadat",
+  "settings.refMaintFactsTheatricalReleaseDate":
+    "Datum uvedení filmu v kinech (YYYY-MM-DD)",
+  "settings.refMaintFactsDigitalReleaseDate":
+    "Datum digitálního vydání filmu (YYYY-MM-DD)",
+  "settings.refMaintFactsPhysicalReleaseDate":
+    "Datum fyzického vydání filmu (YYYY-MM-DD)",
+  "settings.refMaintFactsDaysSinceAdded": "Celé dny od přidání subjektu",
+  "settings.refMaintFactsMaxVideoHeight":
+    "Nejvyšší video stopa mezi soubory subjektu, v pixelech",
+  "settings.refMaintFactsSeasonCount": "Počet řad seriálu bez speciálů",
+  "settings.refMaintFactsAiredEpisodeCount":
+    "Počet běžných epizod seriálu, které již byly odvysílány",
+  "settings.refMaintFactsUnairedEpisodeCount":
+    "Počet běžných epizod seriálu, které ještě nebyly odvysílány",
+  "settings.refMaintFactsMissingEpisodeCount":
+    "Počet odvysílaných sledovaných epizod seriálu bez souboru",
+  "settings.refMaintFactsAiredEpisodeFilePercent":
+    "Odvysílané epizody se souborem jako procento odvysílaných epizod",
+  "settings.refMaintFactsLatestSeasonNumber": "Číslo poslední řady seriálu",
+  "settings.refMaintFactsLatestAiredEpisodeDate":
+    "Datum vysílání naposledy odvysílané epizody seriálu (YYYY-MM-DD)",
+  "settings.refMaintFactsNextEpisodeAirDate":
+    "Datum vysílání příští naplánované epizody seriálu (YYYY-MM-DD)",
+  "settings.refMaintFactsGenres": "Názvy žánrů z uložených metadat titulu",
+  "settings.refMaintFactsRating": "Uložené souhrnné hodnocení titulu",
+  "settings.refMaintFactsRatings":
+    "Všechna externí hodnocení, ze kterých souhrn vychází",
+  "settings.refMaintFactsPlayCountTotal":
+    "Součet přehrání subjektu všemi účty na všech povolených mediálních serverech; nikoho nejmenuje",
+  "settings.refMaintFactsWatchlistedByUserIds":
+    "Uživatelé, jejichž seznamy ke zhlédnutí obsahují titul",
+  "settings.refMaintFactsWatchlistedByUsernames":
+    "Uživatelská jména uživatelů, jejichž seznamy ke zhlédnutí obsahují titul",
+  "settings.refMaintFactsWatchlistedByAnyone":
+    "Zda titul obsahuje seznam ke zhlédnutí kteréhokoli uživatele",
+  "settings.refMaintFactsWatchlistedByAnyRequester":
+    "Zda titul obsahuje seznam ke zhlédnutí některého z jeho žadatelů",
+  "settings.refMaintFactsWatchlistAddedAt":
+    "Kdy Scryer poprvé viděl titul na některém seznamu ke zhlédnutí",
+  "settings.refMaintFactsWatchlistOrigins":
+    "Poskytovatelé, jejichž seznamy ke zhlédnutí titul nyní obsahují",
+  "settings.refMaintFactsFavoritedByUserIds":
+    "Uživatelé, kteří subjekt označili jako oblíbený v Jellyfinu nebo Emby",
+  "settings.refMaintFactsFavoritedByUsernames":
+    "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený v Jellyfinu nebo Emby",
+  "settings.refMaintFactsFavoritedByAnyone":
+    "Zda subjekt kterýkoli uživatel označil jako oblíbený v Jellyfinu nebo Emby",
+  "settings.refMaintFactsFavoritedByAnyRequester":
+    "Zda subjekt některý z žadatelů titulu označil jako oblíbený v Jellyfinu nebo Emby",
+  "settings.refMaintFileAudioCodec":
+    "Zvukový kodek hlavní zvukové stopy souboru",
+  "settings.refMaintFileAudioChannels": "Počet zvukových kanálů",
+  "settings.refMaintFileAudioBitrateKbps": "Datový tok zvuku v kb/s",
+  "settings.refMaintFileVideoBitrateKbps": "Datový tok videa v kb/s",
+  "settings.refMaintFileVideoBitDepth": "Bitová hloubka videa",
+  "settings.refMaintFileVideoHdrFormat":
+    "Formát HDR videa, například HDR10 nebo Dolby Vision",
+  "settings.refMaintSectionRatings":
+    "— Jedna položka na každé externí hodnocení v input.facts.ratings",
+  "settings.refMaintSectionObsRatings":
+    "— Jedna položka na každé externí hodnocení v input.observations.ratings.value",
+  "settings.refMaintRatingSource": "Zdroj hodnocení",
+  "settings.refMaintRatingValue":
+    "Hodnocení na vlastní stupnici zdroje, pokud ji zdroj uvádí",
+  "settings.refMaintRatingNormalized":
+    "Hodnocení na společné stupnici Scryeru, srovnatelné mezi zdroji",
+  "settings.refMaintRatingVotes":
+    "Počet hlasů za hodnocením, pokud jej zdroj uvádí",
+  "settings.refMaintFactsRuntimeMinutesValue":
+    "Délka v minutách; chybí, pokud poskytovatel metadat hodnotu neuvedl",
+  "settings.refMaintFactsOriginalLanguageValue":
+    "Původní jazyk; chybí, pokud poskytovatel metadat hodnotu neuvedl",
+  "settings.refMaintFactsSeriesStatusValue":
+    "Stav seriálu podle poskytovatele; chybí, pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsFirstAiredValue":
+    "Datum první premiéry (YYYY-MM-DD), datum, nikoli časové razítko; chybí, pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsNetworkValue":
+    "Název stanice; chybí, pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsStudioValue":
+    "Název studia; chybí, pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsCountryValue":
+    "Země původu; chybí, pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsPopularityValue":
+    "Skóre popularity; chybí, pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsTheatricalReleaseDateValue":
+    "Datum uvedení v kinech (YYYY-MM-DD); chybí u seriálu nebo pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsDigitalReleaseDateValue":
+    "Datum digitálního vydání (YYYY-MM-DD); chybí u seriálu nebo pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsPhysicalReleaseDateValue":
+    "Datum fyzického vydání (YYYY-MM-DD); chybí u seriálu nebo pokud poskytovatel hodnotu neuvedl",
+  "settings.refMaintFactsDaysSinceAddedValue":
+    "Celé dny od přidání subjektu, počítané podle hodin vyhodnocení",
+  "settings.refMaintFactsMaxVideoHeightValue":
+    "Výška nejvyšší video stopy mezi soubory v pixelech; chybí, pokud ji žádný soubor neuvádí",
+  "settings.refMaintFactsSeasonCountValue":
+    "Série v celém seznamu epizod pořadu bez speciálů, bez ohledu na subjekt; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsAiredEpisodeCountValue":
+    "Běžné epizody s datem vysílání v den vyhodnocení nebo dříve; epizoda bez data vysílání se počítá jako neodvysílaná. U filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsUnairedEpisodeCountValue":
+    "Běžné epizody bez data vysílání nebo s datem po dni vyhodnocení; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsMissingEpisodeCountValue":
+    "Běžné epizody, které byly odvysílány, jsou sledované a nemají soubor; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+    "Procento odvysílaných epizod, které mají soubor; chybí s důvodem no_aired_episode, když nic nebylo odvysíláno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsLatestSeasonNumberValue":
+    "Nejvyšší číslo běžné série; chybí u filmů nebo pořadu bez sérií, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+    "Datum vysílání (YYYY-MM-DD) naposledy odvysílané běžné epizody; chybí s důvodem no_aired_episode, když nic nebylo odvysíláno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsNextEpisodeAirDateValue":
+    "Nejbližší datum vysílání (YYYY-MM-DD) po dni vyhodnocení; chybí s důvodem no_scheduled_episode, když nic není naplánováno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
+  "settings.refMaintFactsGenresValue":
+    "Názvy žánrů; unknown s důvodem metadata_unreadable, pokud nelze přečíst uložená metadata",
+  "settings.refMaintFactsRatingValue":
+    "Souhrnné hodnocení; chybí, pokud titul žádný zdroj nehodnotil, unknown s důvodem metadata_unreadable, pokud nelze přečíst úložiště hodnocení",
+  "settings.refMaintFactsRatingsValue":
+    "Jedna položka na každé externí hodnocení; unknown s důvodem metadata_unreadable, pokud nelze přečíst úložiště hodnocení",
+  "settings.refMaintFactsPlayCountTotalValue":
+    "Součet přehrání všemi účty na všech povolených mediálních serverech, ať jsou propojeny s uživatelem Scryeru, nebo ne. Unknown s důvodem audience_not_read, dokud nejsou nedávno přečteny všechny účty, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
+  "settings.refMaintFactsWatchlistedByUserIdsValue":
+    "ID uživatelů, jejichž seznamy ke zhlédnutí titul obsahují. Seznamem ke zhlédnutí je vlastní zapnutý a přihlášený watchlist uživatele na Plexu, Traktu, TMDb nebo MDBList, seznam plan-to-watch na Simkl nebo MyAnimeList, nebo seznam planning na AniList. Neznámé s důvodem watchlist_not_synced, dokud se některý seznam nikdy nesynchronizoval, naposledy selhal, je vypnutý, nemá se synchronizovat nebo ztratil svůj účet, a s důvodem watchlist_stale, dokud se některý nedávno nesynchronizoval.",
+  "settings.refMaintFactsWatchlistedByUsernamesValue":
+    "Uživatelská jména uživatelů, jejichž seznamy ke zhlédnutí obsahují titul; unknown s důvodem user_not_found, pokud některý z nich již neexistuje, a s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
+  "settings.refMaintFactsWatchlistedByAnyoneValue":
+    "True, pokud titul obsahuje seznam ke zhlédnutí kteréhokoli uživatele; unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
+  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+    "True, pokud titul obsahuje seznam ke zhlédnutí některého žadatele; chybí s důvodem title_not_requested, pokud o něj nikdo nepožádal, unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
+  "settings.refMaintFactsWatchlistAddedAtValue":
+    "Časové razítko RFC3339, kdy Scryer poprvé viděl titul na některém seznamu ke zhlédnutí; chybí s důvodem not_on_a_watchlist, pokud jej žádný seznam neobsahuje, unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
+  "settings.refMaintFactsWatchlistOriginsValue":
+    "Poskytovatelé, jejichž seznamy ke zhlédnutí titul nyní obsahují; unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
+  "settings.refMaintFactsFavoritedByUserIdsValue":
+    "ID uživatelů, kteří subjekt označili jako oblíbený na zapnutém serveru Jellyfin nebo Emby. Titul počítá každé své oblíbení; oblíbení seriálu nebo série platí pro všechny série a epizody seriálu; oblíbení epizody platí pro tuto epizodu, její sérii a seriál. Scryer neumí číst oblíbené z Plexu: neznámé s důvodem favorites_unsupported, když jsou všechny zapnuté servery Plex, s důvodem favorite_member_unobservable, dokud je propojený uživatel vidět jen přes Plex, s důvodem signal_identity_missing, dokud oblíbení patří účtu nepropojenému s uživatelem Scryeru, a s důvodem favorites_unreadable, když nešlo načíst uložená oblíbení.",
+  "settings.refMaintFactsFavoritedByUsernamesValue":
+    "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený, počítáno jako u favorited_by_user_ids; neznámé s důvodem user_not_found, když některý z nich už neexistuje, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
+  "settings.refMaintFactsFavoritedByAnyoneValue":
+    "Pravda, když subjekt pokrývá oblíbení načtené z Jellyfinu nebo Emby, počítáno jako u favorited_by_user_ids. Nikdy není nepravda: oblíbení se čtou jen pro propojené uživatele, takže když se žádné nenajde, je neznámé s důvodem audience_favorites_not_read, případně s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable.",
+  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+    "Pravda, když subjekt označil jako oblíbený některý žadatel, počítáno jako u favorited_by_user_ids; chybí s důvodem title_not_requested, když titul nikdo nevyžádal, neznámé s důvodem requester_not_linked, když žadatel nemá propojený účet mediálního serveru, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Jazyky zvuku přítomné v souboru",
   "settings.refMaintFileSubtitleLanguages": "Jazyky titulků přítomné v souboru",
   "settings.refMaintFileAddedAt":
@@ -5366,6 +5503,155 @@ const cs: LocaleDictionary = {
     "Zda má tento propojený film soubor na disku",
   "settings.refMaintSeriesMovieTags":
     "Uživatelsky definované štítky tohoto propojeného filmu ze stejného registru jako štítky titulů. Propojený film nese vlastní štítky; nededí je od seriálu.",
+  "settings.ruleBuilderTitle": "Pravidlo",
+  "settings.ruleBuilderModeLabel": "Editor",
+  "settings.ruleBuilderModeSimple": "Jednoduchý",
+  "settings.ruleBuilderModeHelp":
+    "Jednoduchý režim sestaví pravidlo z podmínek a výsledků a napíše Rego za vás. Pokročilý režim zobrazí toto Rego jen pro čtení a do jednoduchého režimu se můžete kdykoli vrátit. Chcete-li Rego měnit sami, zvolte Upravit jako Rego; poté už pravidlo nepůjde otevřít v jednoduchém editoru.",
+  "settings.ruleBuilderUnavailable":
+    "Kód tohoto pravidla byl upraven ručně nebo nevznikl v jednoduchém editoru, takže jej lze upravovat jen jako Rego.",
+  "settings.ruleBuilderEditAsRego": "Upravit jako Rego",
+  "settings.ruleBuilderEditAsRegoTitle": "Upravit toto pravidlo jako Rego?",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "Jakmile toto pravidlo upravíte jako Rego, už ho nebude možné otevřít v jednoduchém editoru, ani po uložení. Současný kód Rego zůstane zachován jako výchozí bod.",
+  "settings.ruleBuilderIncomplete":
+    "Před uložením dokončete podmínky a výsledky.",
+  "settings.ruleBuilderConditions": "Podmínky",
+  "settings.maintenanceBuilderConditionsHelp":
+    "Každá podmínka ověřuje jeden údaj o položce. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se akce použily.",
+  "settings.ruleBuilderJoinAll": "Platí všechny podmínky",
+  "settings.ruleBuilderJoinAny": "Platí kterákoli podmínka",
+  "settings.ruleBuilderAddCondition": "Přidat podmínku",
+  "settings.ruleBuilderFact": "Údaj",
+  "settings.ruleBuilderFactPlaceholder": "Vyberte údaj",
+  "settings.ruleBuilderOperator": "Porovnání",
+  "settings.ruleBuilderValue": "Hodnota",
+  "settings.ruleBuilderDays": "Dny",
+  "settings.maintenanceBuilderActionsHelp":
+    "Akce proběhnou v uvedeném pořadí. Akce, které nelze kombinovat, se po výběru konfliktní akce zakážou.",
+  "settings.maintenanceBuilderActionTitleOnly":
+    "Dostupné jen pro pravidla titulů.",
+  "settings.ruleBuilderOutputConflict": "Nelze kombinovat s: {{outputs}}.",
+  "settings.ruleBuilderQualityProfilePlaceholder": "Vyberte profil kvality",
+  "settings.maintenanceBuilderLibraryPlaceholder": "Vyberte knihovnu",
+  "settings.maintenanceBuilderRootPlaceholder": "Vyberte kořenovou složku",
+  "settings.ruleBuilderTagsPlaceholder": "Vyberte štítky",
+  "settings.ruleBuilderNoTags": "Zatím nejsou vytvořeny žádné štítky.",
+  "settings.ruleBuilderGeneratedSource": "Vygenerované Rego",
+  "settings.ruleBuilderGeneratedSourceHelp":
+    "Kód, který editor napíše podle vašich voleb. Právě ten se ověřuje, zobrazuje v náhledu a ukládá.",
+  "settings.ruleBuilderGeneratedSourceEmpty":
+    "Dokud nejsou podmínky a výsledky dokončeny, nic se negeneruje.",
+  "settings.ruleBuilderOpIsTrue": "je pravda",
+  "settings.ruleBuilderOpIsFalse": "není pravda",
+  "settings.ruleBuilderOpEquals": "se rovná",
+  "settings.ruleBuilderOpNotEquals": "se nerovná",
+  "settings.ruleBuilderOpGreaterThan": "je větší než",
+  "settings.ruleBuilderOpGreaterOrEqual": "je alespoň",
+  "settings.ruleBuilderOpLessThan": "je menší než",
+  "settings.ruleBuilderOpLessOrEqual": "je nejvýše",
+  "settings.ruleBuilderOpContains": "obsahuje",
+  "settings.ruleBuilderOpNotContains": "neobsahuje",
+  "settings.ruleBuilderOpIsEmpty": "je prázdné",
+  "settings.ruleBuilderOpIsNotEmpty": "není prázdné",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "je před více než N dny",
+  "settings.ruleBuilderOpLessThanDaysAgo": "je před méně než N dny",
+  "settings.ruleBuilderOpHasValue": "má hodnotu",
+  "settings.ruleBuilderOpHasNoValue": "nemá hodnotu",
+  "settings.ruleBuilderProblemNoConditions": "Přidejte alespoň jednu podmínku.",
+  "settings.ruleBuilderProblemNoOutputs": "Vyberte alespoň jeden výsledek.",
+  "settings.ruleBuilderProblemFactRequired": "Vyberte údaj.",
+  "settings.ruleBuilderProblemFactUnknown":
+    "Tento údaj není pro toto pravidlo dostupný.",
+  "settings.ruleBuilderProblemOperatorInvalid":
+    "Vyberte porovnání pro tento údaj.",
+  "settings.ruleBuilderProblemValueRequired": "Zadejte hodnotu.",
+  "settings.ruleBuilderProblemValueNotNumber": "Zadejte číslo.",
+  "settings.ruleBuilderProblemValueNotDays":
+    "Zadejte celý počet dní, nejvýše 100000.",
+  "settings.ruleBuilderProblemValueUnrepresentable":
+    "Tato hodnota obsahuje znaky, které pravidlo nemůže obsahovat.",
+  "settings.ruleBuilderProblemValueDuplicate":
+    "Každou položku lze uvést jen jednou.",
+  "settings.ruleBuilderProblemOutputNotInScope":
+    "Tato volba není pro toto pravidlo dostupná.",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "Tuto volbu nelze kombinovat s jinou vybranou volbou.",
+  "settings.ruleBuilderProblemOutputRequired":
+    "Vyberte jednu z možností: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotWhole": "Zadejte celé číslo.",
+  "settings.ruleBuilderProblemValueOutOfRange":
+    "Toto číslo je mimo povolený rozsah.",
+  "settings.ruleBuilderProblemValueNotOffered":
+    "Vyberte jednu z nabízených hodnot.",
+  "settings.ruleBuilderProblemValueInvalid":
+    "Tato hodnota obsahuje znaky, které zde nejsou povoleny.",
+  "settings.ruleBuilderProblemValueTooLong": "Tato hodnota je příliš dlouhá.",
+  "settings.ruleBuilderProblemValueTooMany":
+    "Tento seznam má příliš mnoho položek.",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "Pravidlo obsahuje volbu, kterou tato verze nezná.",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "Tato volba vyžaduje také: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Už se nenabízí: {{values}}. Pravidlo si hodnotu ponechá, dokud nevyberete jinou.",
+  "settings.ruleBuilderSchemaLoading":
+    "Načítá se jednoduchý editor. Editor Rego mezitím funguje.",
+  "settings.ruleBuilderSchemaFailed":
+    "Jednoduchý editor se nepodařilo načíst. Upravte pravidlo v Rego, nebo stránku otevřete znovu.",
+  "settings.scoringBuilderOutputs": "Skóre",
+  "settings.scoringBuilderOutputsHelp":
+    "Vyberte jednu možnost: přičíst body ke skóre vydání, nebo vydání zablokovat. Kód pojmenovává položku skóre v záznamech rozhodnutí.",
+  "settings.scoringBuilderConditionsHelp":
+    "Každá podmínka ověřuje jeden údaj o vydání, profilu nebo souboru. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se skóre použilo.",
+  "settings.scoringBuilderAdjustScore": "Upravit skóre",
+  "settings.scoringBuilderBlock": "Zablokovat vydání",
+  "settings.scoringBuilderCode": "Kód",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "Body",
+  "settings.requestBuilderOutputs": "Rozhodnutí a změny",
+  "settings.requestBuilderOutputsHelp":
+    "Vyberte nejvýše jeden hlas: schválit, zamítnout, nebo ponechat k posouzení. Pravidlo může také změnit, co schválení zapíše, přidat štítky nebo odeslat oznámení, s hlasem i bez něj. Kódy důvodů lze přidat ke kterékoli z těchto možností.",
+  "settings.requestBuilderMonitorPlaceholder": "Vyberte sledování",
+  "settings.requestBuilderLanguagesPlaceholder": "Vyberte jazyky",
+  "settings.requestDeclaredActionsTitle": "Co toto pravidlo umí",
+  "settings.requestDeclaredActionsHelp":
+    "Hlasy a hodnoty, které zdroj tohoto pravidla definuje, v tomto pořadí: {{order}}. Automaticky schválený požadavek dostane hodnoty, jejichž podmínky platí; u požadavku čekajícího na posouzení je schvalovatel uvidí jako návrhy.",
+  "settings.requestDeclaredActionsNone": "Nic není deklarováno",
+  "settings.requestDeclaredActionsUnavailable":
+    "Opravte chyby, abyste viděli, co toto pravidlo umí.",
+  "settings.requestRuleWarningsTitle": "Upozornění",
+  "settings.requestRuleWarningLocation": "Řádek {{line}}, sloupec {{column}}:",
+  "settings.requestBuilderConditionsHelp":
+    "Každá podmínka ověřuje jeden údaj o žádosti, titulu, knihovně nebo čase. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se rozhodnutí použilo.",
+  "settings.requestBuilderOriginManual": "Zadáno ručně",
+  "settings.requestBuilderOriginPublicList": "Z veřejného seznamu",
+  "settings.requestBuilderOriginPersonalList": "Z osobního seznamu",
+  "settings.maintenanceDeclaredActionsTitle": "Deklarované akce",
+  "settings.maintenanceDeclaredActionsHelp":
+    "Akce, které definuje zdroj pravidla. Odpovídající subjekt dostane jen ty, jejichž podmínky pro něj platí, a to v tomto pořadí: {{order}}.",
+  "settings.maintenanceDeclaredActionsNone": "Žádné akce",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "Opravte chyby, abyste viděli, co toto pravidlo dělá.",
+  "settings.maintenanceDecidedActionsNone": "Žádné akce",
+  "settings.maintenanceRuleWarningsTitle": "Upozornění",
+  "settings.maintenanceRuleWarningLocation":
+    "Řádek {{line}}, sloupec {{column}}:",
+  "settings.refMaintOutputFlagHeads":
+    "Akce bez hodnoty (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) jsou logické hodnoty: definujte je pomocí if a akce se použije, když tělo platí.",
+  "settings.refMaintOutputValueHeads":
+    "Akce s hodnotou (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) přiřazují pomocí := prostý literál. Řetězec else může vybírat mezi literály; vypočtená hodnota je odmítnuta.",
+  "settings.refMaintOutputHelpers":
+    "Jakýkoli jiný název pravidla je váš vlastní pomocník. Projeví se jen tehdy, když ho použije akce, unknown nebo reasons.",
+  "settings.refMaintActionsTitle": "Akce",
+  "settings.refMaintActionsOrder":
+    "Scryer použije akce subjektu v tomto pořadí bez ohledu na pořadí ve zdroji: {{order}}.",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) vrací počet celých dní mezi časovým razítkem RFC3339 a časem vyhodnocení, takže days_since(input.facts.added_at) > 180 znamená přidáno před více než 180 dny.",
+  "settings.refMaintActionsNotify":
+    "notify odešle zprávu jednou, když se akce použijí. Náhledy a zkušební běhy ji nikdy neodešlou.",
+  "settings.refMaintActionsConflicts":
+    "Protichůdné akce pro jeden subjekt, například monitor spolu s unmonitor nebo tentýž štítek přidaný i odebraný, subjekt podrží s důvodem, místo aby se použila kterákoli z nich.",
   "settings.refMaintTagActionsTitle": "Akce se štítky",
   "settings.refMaintTagActionsNote":
     "add_tags a remove_tags zapisují uživatelské štítky na odpovídající titul. Každý název musí existovat v registru štítků, který spravuje administrátor v Nastavení, a štítky se ukládají malými písmeny — pravidlo odkazující na štítek, který byl mezitím smazán, se pozdrží s tag_not_defined místo zápisu.",
@@ -5378,7 +5664,7 @@ const cs: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "{{count}}denní ochranná doba",
   "settings.maintenanceTemplateNoGraceBadge": "Bez ochranné doby",
   "settings.maintenanceTemplateDestructiveBadge": "Maže soubory",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Vyberte cílový profil",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Pojmenujte cílový profil",
   "settings.maintenanceTemplateDeadWantedTitle": "Mrtvé požadované položky",
   "settings.maintenanceTemplateDeadWantedDescription":
     "Tituly, které stále sledujete, ale žádný soubor pro ně nikdy nedorazil. Fakty jsou obyčejné hodnoty, takže titul, jehož stav sledování nebo souboru Scryer nevidí, se pozdrží místo shody. Po 30denní ochranné době se rozsah přestane sledovat a cokoli už je na disku, zůstane beze změny.",
@@ -5388,13 +5674,13 @@ const cs: LocaleDictionary = {
   "settings.maintenanceTemplateAddedLongAgoTitle":
     "Přidáno před více než 180 dny",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Skutečný výpočet s daty: porovnávání odečte added_at titulu od času vyhodnocení a shoduje se po 180 dnech. Rozsah se přestane sledovat a soubory zůstanou. Titul bez hodnoty added_at se pozdrží místo shody.",
+    "Skutečná práce s daty: days_since porovná added_at titulu s časem vyhodnocení a odpovídá po 180 dnech. Sledování se zruší a soubory zůstanou. Titul bez hodnoty added_at se podrží, místo aby odpovídal.",
   "settings.maintenanceTemplateOversizedTitle": "Předimenzovaná vydání",
   "settings.maintenanceTemplateOversizedDescription":
-    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na vámi zvolený profil kvality a znovu vyhledá, jen pokud se profil skutečně změnil — vyberte tento cílový profil v editoru před uložením.",
+    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na pojmenovaný profil kvality a znovu vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
   "settings.maintenanceTemplateFourKPurgeTitle": "Čištění 4K",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "Jakýkoli titul obsahující soubor 2160p. Po 7denní ochranné době se přesune na vámi zvolený profil kvality a znovu vyhledá, pokud se profil změnil. Vyberte tento cílový profil v editoru před uložením.",
+    "Jakýkoli titul se souborem 2160p. Po 7denní lhůtě se přesune na pojmenovaný profil kvality a znovu se vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
   "settings.maintenanceTemplateRequestedExpiryTitle":
     "Vypršení požadovaných médií",
   "settings.maintenanceTemplateRequestedExpiryDescription":
@@ -5414,7 +5700,7 @@ const cs: LocaleDictionary = {
     "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům, jejichž všechny nároky žádostí vypršely, po 7denní ochranné době. Nárok, který ještě nezačal — titul nebyl importován — se ponechá beze změny, stejně jako titul, který nikdy nárok neměl.",
   "settings.maintenanceTemplateNoProfileTitle": "Bez profilu kvality",
   "settings.maintenanceTemplateNoProfileDescription":
-    "Tituly bez přiřazeného profilu kvality. Neprovádí vůbec žádnou akci: slouží jen k sestavení seznamu k prohlédnutí, než se rozhodne, co s ním udělat.",
+    "Tituly bez přiřazeného profilu kvality. Přidá štítek needs-review, aby profil mohl vybrat člověk; nic jiného se nemění.",
   "settings.maintenanceTemplateNewestEpisodesTitle":
     "Ponechat 3 nejnovější stažené epizody",
   "settings.maintenanceTemplateNewestEpisodesDescription":
@@ -5542,7 +5828,7 @@ const cs: LocaleDictionary = {
     "Pravidlo žádosti čte jeden dokument popisující žádost, osobu, která ji podala, knihovnu, na kterou míří, a co o médiu Scryer ví. Fakta jsou obyčejné hodnoty. Fakt, který Scryer nedokázal zjistit, jednoduše chybí, a pravidlo, které čte chybějící fakt, pozdrží žádost pro člověka místo hádání – tuto pojistku sami nepíšete.",
   "settings.refReqOutputTitle": "Co pravidlo žádosti definuje",
   "settings.refReqOutputIntro":
-    "Alespoň jedno z toho musí být definováno, jinak pravidlo nemůže nikdy hlasovat a Scryer odmítne ho uložit.",
+    "Pravidlo musí definovat hlas, hodnotu upravující schválení, nebo add_tags; pravidlo bez žádné z nich je při uložení odmítnuto. Hlavy s hodnotou přiřazují prostý literál pomocí :=.",
   "settings.refReqOutputApprove":
     "approve – žádost může být schválena bez toho, aby ji viděl člověk.",
   "settings.refReqOutputDeny":
@@ -5550,7 +5836,20 @@ const cs: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual – žádost jde k člověku bez ohledu na to, co jinak hlasovalo.",
   "settings.refReqOutputTags":
-    'tags contains "…" – štítky pro médium, uplatní se jen při schválení.',
+    'add_tags := ["…"] – štítky pro titul, uplatní se jen při schválení.',
+  "settings.refReqOutputSetQualityProfile":
+    'set_quality_profile := "Název profilu" – schválit s tímto profilem kvality místo požadovaného.',
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 – schválit s touto výpůjčkou. 0 uchová titul navždy, jinak 1 až 3650 dní.",
+  "settings.refReqOutputSetMonitor":
+    'set_monitor := "FUTURE_EPISODES" – schválit s tímto sledováním: MONITORED nebo UNMONITORED pro filmy; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES nebo NONE pro seriály a anime.',
+  "settings.refReqOutputSetAudioLanguages":
+    'set_required_audio_languages := ["eng"] a set_preferred_audio_languages := ["jpn", "eng"] – nahradí požadované seznamy jazyků zvuku.',
+  "settings.refReqOutputNotify": 'notify := "…" – odešle toto oznámení.',
+  "settings.refReqOutputShapingOutcome":
+    "Automaticky schválený požadavek tyto hodnoty dostane. U požadavku čekajícího na posouzení je schvalovatel uvidí jako návrhy a u zamítnutého jsou jen v jeho záznamu. Když dvě pravidla nastaví pro totéž různé hodnoty, požadavek čeká na posouzení.",
+  "settings.refReqOutputNoSchedule":
+    "Pravidla požadavků nemají plán: spouštějí se u každého požadavku a při předběžné kontrole žadatele.",
   "settings.refReqOutputReasons":
     'reasons contains "…" – stabilní kódy, které se zobrazí žadateli.',
   "settings.refReqOutputNoPackage":
@@ -5566,6 +5865,29 @@ const cs: LocaleDictionary = {
   "requests.preflightManualReview": "Toto vyžaduje schválení",
   "requests.preflightDeny": "Toto by bylo zamítnuto: {{reasons}}",
   "requests.preflightTags": "Bude označeno štítky {{tags}}.",
+  "error.ruleVoteRequired":
+    "Definujte pro toto pravidlo požadavků hlas (approve, deny nebo manual), hodnotu upravující schválení, nebo add_tags.",
+  "error.ruleActionValueNotLiteral":
+    "Přiřaďte této hlavě prostý literál: řetězec v uvozovkách, celé číslo pro set_lease_days nebo seznam řetězců v uvozovkách pro hlavy štítků a jazyků zvuku.",
+  "error.ruleActionValueInvalid":
+    "Hodnota této hlavy není platná: název nesmí být prázdný, štítky musí být platné, výpůjčka je 0 až 3650 dní a hodnoty sledování a jazyků musí být z nabídky Scryeru.",
+  "error.ruleActionUnknownQualityProfile":
+    "Žádný profil kvality nemá tento název, takže ho pravidlo nemůže použít.",
+  "error.ruleActionUndefinedTag":
+    "Tento štítek není definován v Nastavení › Štítky, takže se při použití pravidla zahodí.",
+  "settings.regoSnippet.shapeRequest":
+    "Nastavit výpůjčku, kterou schválení zapíše, když fakt platí.",
+  "settings.regoSnippet.tagRequest":
+    "Označit požadovaný titul štítkem, když fakt platí.",
+  "requests.preflightShaping": "Při schválení se změní na: {{changes}}.",
+  "requests.shapingTitle": "Schválení by se změnilo na",
+  "requests.shapingSetBy": "nastavilo {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: pravidla nastavila různé hodnoty, rozhodne člověk",
+  "requests.shapingSuggested": "Navrženo pravidlem {{rule}}",
+  "requests.shapingLeaseDays": "Dní: {{count}}",
+  "requests.fallbackShapingConflict":
+    "Pravidla nastavila pro totéž různé hodnoty, takže rozhodne člověk.",
   "requests.preflightReason": "Důvod: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryeru se nepodařilo zjistit vše o tomto titulu, takže rozhodne člověk.",
@@ -5658,7 +5980,11 @@ const cs: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Mediální servery a poskytovatelé identity, které má účet propojené",
   "settings.refReqRequesterCreatedAt":
-    "Kdy byl účet vytvořen; chybí, protože to Scryer zatím nezaznamenává",
+    "Kdy byl účet vytvořen; chybí u účtu vytvořeného dřív, než to Scryer začal zaznamenávat",
+  "settings.refReqRequesterLastLoginAt":
+    "Kdy se účet naposledy přihlásil; chybí, pokud Scryer o přihlášení nemá záznam",
+  "settings.refReqRequesterAccountAgeDays":
+    "Celé dny od vytvoření účtu; chybí, pokud chybí čas vytvoření",
   "settings.refReqSectionLibrary": "— Knihovna, na kterou žádost míří",
   "settings.refReqLibraryId": "Identifikátor knihovny",
   "settings.refReqLibraryName": "Název knihovny",
@@ -5680,6 +6006,8 @@ const cs: LocaleDictionary = {
     "Sledování, o které žadatel požádal (například ALL_EPISODES)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "Kolik řad jmenoval pokročilý výběr sledování",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Čísla sérií, která pokročilý výběr sledování uvedl, od nejnižšího; null, pokud výběr není",
   "settings.refReqRequestLeaseForever":
     "True, pokud žadatel požádal o trvalé uchování média",
   "settings.refReqRequestLeaseDays":
@@ -5707,6 +6035,10 @@ const cs: LocaleDictionary = {
     "Politika seznamu vlastníka: auto, approval nebo none; approval, pokud není uložena žádná",
   "settings.refReqRequestListRank":
     "Pořadí položky na seznamu; chybí, pokud seznam položky neřadí",
+  "settings.refReqRequestListIsWatchlist":
+    "True, pokud je seznam vlastníkovým seznamem ke zhlédnutí na propojeném účtu",
+  "settings.refReqRequestListSourceType":
+    "Druh seznamu u poskytovatele, malými písmeny (například watchlist nebo user_list)",
   "settings.refReqExternalIdsTmdb":
     "Identifikátor TMDB, pokud ho poskytovatel měl",
   "settings.refReqExternalIdsImdb":
@@ -5776,6 +6108,46 @@ const cs: LocaleDictionary = {
     "Kolik dní uplynulo od poslední žádosti tohoto žadatele",
   "settings.refReqFactsLibraryTitleCount":
     "Kolik titulů cílová knihovna obsahuje",
+  "settings.refReqFactsSeasonCount":
+    "Kolik sérií seriál má, u seriálů",
+  "settings.refReqFactsEpisodeCount":
+    "Kolik běžných epizod seriál má, u seriálů",
+  "settings.refReqFactsAiredEpisodeCount":
+    "Kolik z těchto epizod bylo odvysíláno do dne vyhodnocení",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "Kolik z těchto epizod ještě nebylo odvysíláno",
+  "settings.refReqFactsNextEpisodeAirDate":
+    "Kdy se vysílá další epizoda",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Datum uvedení v kinech, u filmů",
+  "settings.refReqFactsDigitalReleaseDate":
+    "Datum digitálního vydání, u filmů",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Datum vydání na nosiči, u filmů",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Zda film vyšel digitálně nebo na nosiči",
+  "settings.refReqFactsDaysUntilRelease":
+    "Dny do prvního vydání filmu",
+  "settings.refReqFactsOtherRequesterCount":
+    "Kolik dalších členů o tento titul požádalo",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Zda čeká žádost jiného člena o tento titul",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Zda je titul na vlastním seznamu ke zhlédnutí žadatele",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "Jak dlouho je titul na seznamu ke zhlédnutí žadatele",
+  "settings.refReqFactsListExcluded":
+    "Zda se na titul vztahuje vyloučení ze seznamu",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "Kolik titulů přidaly žádosti tohoto žadatele do cílové knihovny",
+  "settings.refReqFactsStorageRootId":
+    "Kořenová složka, do které by se titul uložil",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Volné místo na tomto kořeni, v bajtech",
+  "settings.refReqFactsStorageTotalBytes":
+    "Celková velikost souborového systému kořene, v bajtech",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Volné místo na tomto kořeni, v procentech",
   "settings.refReqSectionCertifications":
     "— Jedna položka na certifikaci v input.facts.certifications",
   "settings.refReqCertCountry": "Země, kde byla certifikace vydána",
@@ -5858,6 +6230,46 @@ const cs: LocaleDictionary = {
     "Celé dny od předchozí žádosti žadatele; chybí s důvodem no_previous_request, pokud je toto jeho první",
   "settings.refReqFactsLibraryTitleCountValue":
     "Počet titulů v cílové knihovně",
+  "settings.refReqFactsSeasonCountValue":
+    "Počet sérií; u filmu chybí s důvodem not_a_series, neznámý s důvodem metadata_unavailable, pokud žádost nenese tvar seriálu",
+  "settings.refReqFactsEpisodeCountValue":
+    "Počet běžných epizod; chybí a je neznámý stejně jako season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Epizody odvysílané v době žádosti a ty naplánované nejpozději na den vyhodnocení",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count minus aired_episode_count, nikdy méně než nula",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD první epizody po dni vyhodnocení; chybí s důvodem no_scheduled_episode, pokud žádná není naplánována",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; chybí s důvodem no_theatrical_release_date, pokud žádné není, s důvodem not_a_movie u seriálu; neznámé s důvodem not_yet_collected nebo metadata_unavailable, pokud data nebyla získána",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; chybí s důvodem no_digital_release_date, pokud žádné není; jinak jako theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; chybí s důvodem no_physical_release_date, pokud žádné není; jinak jako theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True, pokud je digitální nebo fyzické datum nejpozději v den vyhodnocení",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Celé dny do nejbližšího známého data; chybí s důvodem already_released, jakmile vyšel, nebo no_release_date, pokud žádné datum není známo",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Počet různých dalších žadatelů; neznámý s důvodem catalog_unavailable, pokud Scryer nemohl přečíst své žádosti",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True, pokud žádost jiného člena stále čeká na rozhodnutí; neznámé jako u other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True, pokud titul obsahuje synchronizovaný seznam ke zhlédnutí, který žadatel propojil; chybí s důvodem no_watchlist_linked, pokud žádný nepropojil; neznámé s důvodem watchlist_not_synced, watchlist_stale nebo list_store_unreadable, pokud seznamům nelze věřit",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Celé dny od chvíle, kdy se tam poprvé objevil; chybí s důvodem not_on_a_watchlist, pokud na žádném není; jinak jako on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True, pokud titul uvádí vyloučení pro všechny seznamy nebo pro seznam za touto žádostí; neznámé s důvodem list_exclusions_unavailable, pokud je nelze přečíst",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Počet titulů v cílové knihovně vytvořených ze žádostí tohoto žadatele; neznámý s důvodem requester_titles_unavailable, pokud je nelze spočítat",
+  "settings.refReqFactsStorageRootIdValue":
+    "Identifikátor výchozího kořene knihovny, nebo jejího prvního kořene; neznámý s důvodem storage_root_unavailable, pokud knihovna žádný nemá",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Volné bajty při posledním měření kořene, nejvýš před deseti minutami; observed_at uvádí kdy. Neznámé, nikdy nula, s důvodem storage_not_sampled, storage_sample_stale nebo storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Celkové bajty ze stejného měření; neznámé jako u storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Volné bajty krát 100 děleno celkovými bajty, ze stejného měření; neznámé jako u storage_available_bytes",
   "move.dialogTitle": "Přesunout tituly",
   "move.destinationLibrary": "Cílová knihovna",
   "move.destinationRoot": "Cílový kořen",
@@ -6509,12 +6921,8 @@ const cs: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Seriálové filmy",
   "settings.maintenanceActionAddTags": "Přidat štítky",
   "settings.maintenanceActionRemoveTags": "Odebrat štítky",
-  "settings.maintenanceRuleTags": "Štítky",
-  "settings.maintenanceRuleTagsNone": "Zatím nevybrány žádné štítky",
   "settings.maintenanceRuleTagsHelp":
     "Pravidlo zapíše tyto štítky na každý titul, kterému odpovídá. Vybrat lze jen štítky, které administrátor definoval v Nastavení > Štítky.",
-  "settings.maintenanceCandidatesTagPatchAdd": "přidá {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "odebere {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Označeno k odstranění",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     "Pozor: tato šablona smaže titul i jeho soubory. Odpovídá všemu, co nese štítek „remove“, po týdenní odkladné lhůtě, takže ruční označení titulu je celým spouštěčem a odebrání štítku v rámci týdne odstranění zruší. Nejprve definujte štítek „remove“ v Nastavení > Štítky.",
@@ -7133,6 +7541,19 @@ const cs: LocaleDictionary = {
   "script.schedule.cronUnreadable": "Tento výraz nelze popsat.",
   "script.schedule.invalid": "Neplatný plán",
   "script.schedule.nextRuns": "Příští spuštění",
+  "script.schedule.describe.everySeconds": "Každých {{count}} sekund",
+  "script.schedule.describe.everySeconds.few": "Každé {{count}} sekundy",
+  "script.schedule.describe.everyMinute": "Každou minutu",
+  "script.schedule.describe.everyMinutes": "Každých {{count}} minut",
+  "script.schedule.describe.everyMinutes.few": "Každé {{count}} minuty",
+  "script.schedule.describe.everyHour": "Každou hodinu",
+  "script.schedule.describe.everyHours": "Každých {{count}} hodin",
+  "script.schedule.describe.everyHours.few": "Každé {{count}} hodiny",
+  "script.schedule.describe.everyDay": "Každý den",
+  "script.schedule.describe.everyDays": "Každých {{count}} dní",
+  "script.schedule.describe.everyDays.few": "Každé {{count}} dny",
+  "script.schedule.describe.daily": "Každý den v {{time}}",
+  "script.schedule.describe.weekly": "{{days}} v {{time}}",
   "settings.scriptInterpreters.title": "Interprety skriptů",
   "settings.scriptInterpreters.description":
     "Programy, kterými Scryer spouští skripty napsané v jednotlivých jazycích. Ponechte pole prázdné pro použití programu nalezeného v PATH.",
@@ -7198,6 +7619,125 @@ const cs: LocaleDictionary = {
     "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
+  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "Toto pravidlo maže, ale nemá limit titulů na běh, takže jeho akce se neprovádějí. Dál se vyhodnocuje a lze ho zobrazit v náhledu; nastavte limit, aby mohlo zasáhnout.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+    "Pozdrženo: propojený účet označil tuto položku na mediálním serveru jako oblíbenou od posledního načtení oblíbených.",
+  "settings.maintenanceExecutionReason.ruleNotEligible":
+    "Pozdrženo: před provedením akce bylo pravidlo vypnuto, přepnuto na zkušební běh nebo odjištěno, nebo se zavřela jeho bezpečnostní brána.",
+  "settings.maintenanceExecutionReason.noMatchAtExecution":
+    "Neprovedeno: při kontrole těsně před akcí už titul pravidlu neodpovídá.",
+  "settings.maintenanceExecutionReason.unknownAtExecution":
+    "Pozdrženo: při kontrole těsně před akcí pravidlo nedokázalo rozhodnout. Znovu se zkontroluje při příštím běhu.",
+  "settings.maintenanceExecutionReason.activeAcquisition":
+    "Pozdrženo: u titulu probíhá stahování, získávání nebo import.",
+  "settings.maintenanceExecutionReason.acquisitionUnknown":
+    "Pozdrženo: Scryer nedokázal zjistit, zda u titulu probíhá stahování, získávání nebo import.",
+  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+    "Pozdrženo: úklid úložiště právě maže soubory. Akce počká, až skončí.",
+  "settings.maintenanceExecutionReason.actionNotFullySupported":
+    "Pozdrženo: tuto akci nelze na tento subjekt použít, například akci pro celý titul na sérii nebo epizodu.",
+  "settings.maintenanceExecutionReason.titleMissing":
+    "Titul už v knihovně není, takže se nic neprovedlo.",
+  "settings.maintenanceExecutionReason.locationOperationHold":
+    "Pozdrženo: soubory titulu se přesouvají nebo přejmenovávají. Akce proběhne, až to skončí.",
+  "settings.maintenanceExecutionReason.passActionStepBudget":
+    "Pozdrženo dřívějším během, který vyčerpal své kroky akcí. Běhy už tento limit nemají; akce proběhne při příštím běhu.",
+  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+    "Pozdrženo: mazání v tomto běhu opakovaně selhalo, takže zbývající mazání počkají na příští běh.",
+  "settings.maintenanceExecutionReason.actionSucceeded": "Akce byla dokončena.",
+  "settings.maintenanceExecutionReason.alreadySatisfied":
+    "Není co měnit: titul už byl ve stavu, do kterého by ho akce uvedla.",
+  "settings.maintenanceExecutionReason.retryPending":
+    "Akce selhala z důvodu, který může pominout. Zkusí se znovu.",
+  "settings.maintenanceExecutionReason.actionFailed":
+    "Akce selhala a znovu se nezkusí. Chybu najdete v historii akcí.",
+  "settings.maintenanceExecutionReason.leaseReclaimed":
+    "Akce skončila dřív, než doběhla, například při restartu Scryeru. Byla uvolněna k novému spuštění.",
+  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+    "Pozdrženo: některé soubory nelze přiřadit k epizodám této série nebo epizody, takže jejich smazání není bezpečné.",
+  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+    "Pozdrženo: profil kvality, který pravidlo nastavuje, už neoznačuje právě jeden profil. Byl přejmenován nebo odstraněn, nebo dva profily mají stejný název.",
+  "settings.maintenanceExecutionReason.actionsNotRunnable":
+    "Pozdrženo: akce rozhodnuté pro tento subjekt nelze provést společně, například přidání a odebrání stejného štítku.",
+  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+    "Pozdrženo: při kontrole těsně před akcí pravidlo rozhodlo o jiných akcích. Příští vyhodnocení tohoto kandidáta nahradí.",
+  "settings.maintenanceExecutionReason.actionNotDeclared":
+    "Pozdrženo: kandidát nese akci, kterou aktuální zdroj pravidla už nedeklaruje, takže se nikdy neprovede.",
+  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+    "Pozdrženo: pravidlo pro kořen úložiště nemůže provést jednu z těchto akcí.",
+  "settings.maintenanceRuleMaxTitlesPerRun": "Titulů na běh",
+  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+    "Nejvyšší počet titulů, na které toto pravidlo v jednom běhu zasáhne. Pravidlo, které maže soubory nebo tituly, tento limit potřebuje.",
+  "settings.maintenanceRuleMaxTitlesPerRunNone": "Bez limitu",
+  "settings.maintenanceRuleLoadRefused":
+    "Toto pravidlo nelze v uložené podobě spustit.",
+  "settings.maintenanceSequenceStepMonitor": "Sledovat",
+  "settings.maintenanceSequenceStepFetchSubtitles": "Stáhnout titulky",
+  "settings.maintenanceSequenceStepMoveToLibrary": "Přesunout do knihovny",
+  "settings.maintenanceSequenceStepMoveToRoot": "Přesunout do kořenové složky",
+  "settings.notificationEvent.maintenanceRuleNotified":
+    "Oznámení pravidla údržby",
+  "settings.maintenanceExecutionReason.tagNotDefined":
+    "Pozdrženo: štítek, který toto pravidlo zapisuje, už není definován v Nastavení › Štítky.",
+  "settings.maintenanceExecutionReason.tagPatchConflict":
+    "Pozdrženo: jiné pravidlo by přidalo štítek, který toto pravidlo odebírá, nebo odebralo štítek, který přidává.",
+  "settings.maintenanceExecutionReason.monitoringConflict":
+    "Pozdrženo: jiné pravidlo nedávno udělalo se sledováním tohoto titulu opak.",
+  "settings.maintenanceExecutionReason.actionsConflict":
+    "Pozdrženo: pravidlo rozhodlo o akcích, které nelze provést společně, takže se nic neprovedlo.",
+  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+    "Pozdrženo: knihovna, kterou tento přesun uvádí, už neodpovídá právě jedné knihovně.",
+  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+    "Pozdrženo: knihovna, kterou tento přesun uvádí, obsahuje jiný druh titulů.",
+  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+    "Pozdrženo: kořenová složka, kterou tento přesun uvádí, nepatří do knihovny titulu.",
+  "settings.maintenanceExecutionReason.moveRefused":
+    "Pozdrženo: přesun byl odmítnut nebo jeho plán zastaral. Soubory zůstávají na místě a přesun se zopakuje.",
+  "error.ruleActionRequired":
+    "Definujte alespoň jednu akci, například unmonitor, delete_files nebo add_tags, aby pravidlo mohlo něco udělat.",
+  "error.ruleActionHeadFunction":
+    "Akci nelze zapsat jako funkci. Zapište ji jako pravidlo.",
+  "error.ruleForeignDataReference":
+    "Toto pravidlo čte data mimo svůj balíček. Použijte místo toho input.",
+  "error.ruleWithTargetNotAllowed":
+    'Toto pravidlo nemůže pomocí "with" nahradit {{path}}. Jeho rozhodnutí musí vycházet z toho, co Scryer zjistil.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} má pro Scryer význam a nemůže být funkcí. Zapište ho jako pravidlo.",
+  "error.ruleHeadNameRetired":
+    "Pravidla žádostí už {{path}} nečtou. Titul označte pomocí add_tags.",
+  "error.ruleQualityProfileUnknown":
+    "Žádný profil kvality nemá tento název, takže ho pravidlo nemůže použít.",
+  "error.ruleQualityProfileAmbiguous":
+    "Tento název má více profilů kvality. Jeden přejmenujte, aby pravidlo určovalo jediný profil.",
+  "error.ruleMonitorUnsupported":
+    "Žádná knihovna, na kterou se pravidlo vztahuje, tento typ sledování nepřijímá.",
+  "error.ruleAudioLanguageUnknown":
+    "Scryer tento jazyk zvuku nezná.",
+  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+    "Nastavte počet titulů na běh. Potřebují ho tyto akce pravidla: {{actions}}.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+    "Pravidlo nedefinuje žádnou akci, takže by nikdy nic neudělalo.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
+    "Pravidlo definuje akci, kterou jeho rozsah nemůže provést.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+    "Knihovna, kterou tento přesun uvádí, obsahuje jiný druh titulů než knihovny pravidla.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+    "Knihovna, kterou tento přesun uvádí, neexistuje.",
+  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+    "Kořenová složka, kterou tento přesun uvádí, není nastaveným kořenem knihovny.",
+  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+    "Pravidlo pro tento subjekt nevrátilo rozhodnutí ani chybu.",
+  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+    "Profil kvality, který toto pravidlo nastavuje, neexistuje.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "Počet titulů na běh musí být alespoň 1.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "Nastavte počet titulů na běh: toto pravidlo může mazat.",
+  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+    "Pravidlo mezitím změnilo jiné uložení. Nic nebylo uloženo; načtěte pravidlo znovu a zkuste to znovu.",
+  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+    "Toto pravidlo bylo uloženo dříve, než pravidla deklarovala vlastní akce, a proto se nikdy nespustí. Nahraďte jeho zdroj, aby se znovu spouštělo.",
   "settings.refMaintFactsWatchedByAnyone":
     "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
   "settings.refMaintFactsLastWatchedByAnyoneAt":
@@ -7288,6 +7828,35 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
   "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
   "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
+  "ruleOutput.maintenance.add_tags": "Přidat štítky",
+  "ruleOutput.maintenance.remove_tags": "Odebrat štítky",
+  "ruleOutput.maintenance.set_quality_profile": "Změnit profil kvality",
+  "ruleOutput.maintenance.monitor": "Sledovat",
+  "ruleOutput.maintenance.search": "Vyhledat",
+  "ruleOutput.maintenance.fetch_subtitles": "Stáhnout titulky",
+  "ruleOutput.maintenance.move_to_library": "Přesunout do knihovny",
+  "ruleOutput.maintenance.move_to_root": "Přesunout do kořenové složky",
+  "ruleOutput.maintenance.unmonitor": "Zrušit sledování",
+  "ruleOutput.maintenance.delete_files": "Smazat soubory",
+  "ruleOutput.maintenance.delete_title": "Smazat titul a soubory",
+  "ruleOutput.maintenance.notify": "Upozornit",
+  "ruleOutput.maintenance.notify.placeholder": "Text oznámení",
+  "ruleOutput.request.approve": "Schválit",
+  "ruleOutput.request.deny": "Zamítnout",
+  "ruleOutput.request.manual": "Ponechat k posouzení",
+  "ruleOutput.request.set_quality_profile": "Profil kvality",
+  "ruleOutput.request.set_lease_days": "Výpůjčka",
+  "ruleOutput.request.set_lease_days.placeholder":
+    "Počet dní, nebo 0 pro uchování navždy",
+  "ruleOutput.request.set_monitor": "Sledování",
+  "ruleOutput.request.set_required_audio_languages": "Požadované jazyky zvuku",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Preferované jazyky zvuku",
+  "ruleOutput.request.add_tags": "Přidat štítky",
+  "ruleOutput.request.notify": "Oznámit",
+  "ruleOutput.request.notify.placeholder": "Text oznámení",
+  "ruleOutput.request.reasons": "Kódy důvodů",
+  "ruleOutput.request.reasons.placeholder": "Jeden kód důvodu na řádek",
   "settings.proxyReachThrough": "Připojit přes",
   "settings.proxyReachThroughHelp":
     "Scryer posílá požadavky na tento řešitel přes zvolenou transportní proxy nebo tunel. Přímo znamená připojení z vlastní sítě Scryeru.",

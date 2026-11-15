@@ -837,8 +837,18 @@ pub fn compare_title_spelling(
         return Some(SpellingEquivalence::Exact);
     }
     let script = title_script(right);
-    if title_script(left) != script || script == TitleScript::Other {
+    let left_script = title_script(left);
+    if script == TitleScript::Other {
         return None;
+    }
+    if left_script != script {
+        // Two scripts are comparable only through a rule set that reads the
+        // catalog name in one and the observed name in the other.
+        let rules = title_normalization::rules_for(language)
+            .filter(|rules| rules.observed_script() == left_script)?;
+        let right_key = romanization_key(right, language)?;
+        return (rules.fold_observed(left) == right_key)
+            .then(|| SpellingEquivalence::Locale(rules.equivalence_tag()));
     }
     let profiles = title_spelling_profiles(right, language);
     if profiles.is_empty() {
@@ -850,8 +860,9 @@ pub fn compare_title_spelling(
         }
     }
     if let Some(rules) = title_normalization::rules_for(language)
+        && rules.observed_script() == script
         && let Some(right_key) = romanization_key(right, language)
-        && rules.fold(left) == right_key
+        && rules.fold_observed(left) == right_key
     {
         return Some(SpellingEquivalence::Locale(rules.equivalence_tag()));
     }
@@ -1057,6 +1068,68 @@ mod tests {
         assert_eq!(
             compare_title_spelling("hikari no uta", "kage no uta", Some("x-jat")),
             Some(SpellingEquivalence::Different)
+        );
+    }
+
+    #[test]
+    fn a_latin_spelling_agrees_with_a_russian_name_only_through_its_rule_set() {
+        let russian = Some(SpellingEquivalence::Locale(
+            title_normalization::RUSSIAN_ROMANIZATION_TAG,
+        ));
+        // Observed name on the left, catalog name on the right.
+        for language in ["ru", "rus", "ru-RU"] {
+            assert_eq!(
+                compare_title_spelling("iiskra v nochi", "иискра в ночи", Some(language)),
+                russian,
+                "{language}"
+            );
+        }
+        assert_eq!(
+            compare_title_spelling_for_resolution("zhukhar 7", "жухарь 7", Some("ru")),
+            russian
+        );
+        // Another transliteration of the same letters is not folded.
+        for observed in ["zhuhar", "zhuxar", "juhar", "zhukharr"] {
+            assert_eq!(
+                compare_title_spelling(observed, "жухарь", Some("ru")),
+                None,
+                "{observed}"
+            );
+        }
+        // A different name, an extra word, a missing word.
+        for observed in ["iskra", "iiskra", "iiskra v nochi dva", "tikhiy"] {
+            assert_eq!(
+                compare_title_spelling(observed, "иискра в ночи", Some("ru")),
+                None,
+                "{observed}"
+            );
+        }
+        // Only a Russian catalog name is read this way, and only in this
+        // direction.
+        for language in [None, Some("uk"), Some("bg"), Some("eng"), Some("ja")] {
+            assert_eq!(
+                compare_title_spelling("iiskra", "иискра", language),
+                None,
+                "{language:?}"
+            );
+        }
+        assert_eq!(compare_title_spelling("иискра", "iiskra", Some("ru")), None);
+        // A catalog name the rule set refuses has no key to agree with.
+        assert_eq!(compare_title_spelling("gabur", "ґабур", Some("ru")), None);
+        // Two Cyrillic spellings are still compared as Cyrillic.
+        assert_eq!(
+            compare_title_spelling("искра", "иискра", Some("ru")),
+            Some(SpellingEquivalence::Different)
+        );
+        // And two Latin spellings of a Russian-tagged name gain nothing.
+        assert_eq!(
+            compare_title_spelling("iiskra", "iskra", Some("ru")),
+            Some(SpellingEquivalence::Different)
+        );
+        // The Japanese rule set still reads only Latin against Latin.
+        assert_eq!(
+            compare_title_spelling("hoshikage", "ほしかげ", Some("ja")),
+            None
         );
     }
 

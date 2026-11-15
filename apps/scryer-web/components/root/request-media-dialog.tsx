@@ -65,6 +65,7 @@ import {
   sanitizeDigits,
 } from "@/components/ui/input";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { RequestShapingSummary } from "@/components/views/settings/maintenance-action-summary";
 import { InfoHelp } from "@/components/common/info-help";
 
 /// How long the dialog waits after the requester stops changing the request
@@ -156,6 +157,13 @@ function RequestPreflightBanner({
       <div className="space-y-1">
         <p className="font-semibold">{title}</p>
         {body ? <p className="text-[13px] leading-5">{body}</p> : null}
+        {/* What an approval would change. A denial applies none of it. */}
+        {preflight.outcome !== "DENY" ? (
+          <RequestShapingSummary
+            shaping={preflight.shaping}
+            idPrefix={selectorId(REQUEST_PREFLIGHT_BANNER_ID, "shaping")}
+          />
+        ) : null}
       </div>
     </div>
   );

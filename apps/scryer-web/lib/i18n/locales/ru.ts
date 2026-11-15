@@ -2228,6 +2228,8 @@ const ru: LocaleDictionary = {
     "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "У загрузки нет подтверждённой истории добавления Scryer. Релиз не заблокирован, данные не удалены, повторный поиск не запрошен.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
@@ -4617,7 +4619,7 @@ const ru: LocaleDictionary = {
   "settings.rulesScoring": "Правила оценки",
   "settings.maintenanceNavRules": "Правила",
   "settings.maintenanceNavHistory": "История",
-  "settings.maintenanceRuleAction": "Действие",
+  "settings.maintenanceRuleAction": "Действия",
   "settings.maintenanceRuleActionHelp":
     "Что сделало бы это правило, когда действия обслуживания будут включены.",
   "settings.maintenanceRuleActionPlaceholder": "Выберите действие",
@@ -4625,9 +4627,10 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Дни отсрочки",
   "settings.maintenanceRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
-  "settings.maintenanceRuleTargetProfile": "Целевой профиль качества",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Профиль, на который это действие перевело бы совпавшие тайтлы.",
+  "settings.maintenanceRuleScheduleHelp":
+    "Каждое правило выполняется по собственному расписанию. При запуске правило проверяется, а затем выполняются действия над кандидатами, у которых закончился период отсрочки. Изменение расписания не меняет состояние правила. Для ежедневного, еженедельного и cron-расписания используется местное время сервера.",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "Это правило никогда не запускается само. Запустите его в разделе «Запуски и история».",
   "settings.maintenanceRuleLibraries": "Область библиотек",
   "settings.maintenanceRuleLibrariesHelp":
     "Не отмечайте ни одной библиотеки, чтобы правило действовало на всю коллекцию.",
@@ -4693,9 +4696,6 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRuleCreated":
     "Правило обслуживания создано и сохранено отключённым.",
   "settings.maintenanceRuleDeleted": "Правило обслуживания {{name}} удалено.",
-  "settings.maintenanceArmingNone": "Без эффектов",
-  "settings.maintenanceArmingReversible": "Обратимое",
-  "settings.maintenanceArmingDestructive": "Разрушительное",
   "settings.maintenanceArmDestructiveLoading":
     "Подсчёт кандидатов, которые уже удерживает это правило…",
   "settings.maintenanceArmDestructiveCount":
@@ -4743,6 +4743,10 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRunEvaluationRunning": "Идёт оценка…",
   "settings.maintenanceRunActionsNow": "Выполнить действия сейчас",
   "settings.maintenanceRunActionsRunning": "Выполняются действия…",
+  "settings.maintenanceRunActionsNeedsRule":
+    "Выберите выше одно правило, чтобы выполнить его действия сейчас.",
+  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+    "Выберите правило для выполнения действий. Правила действуют только за себя, поэтому для запуска сейчас нужно одно правило.",
   "settings.maintenanceRunStarted": "Запуск начат.",
   "settings.maintenanceRunNotStarted": "Ничего не запущено: {{message}}",
   "settings.maintenanceEvaluationRunsTitle": "Запуски оценки",
@@ -4793,9 +4797,7 @@ const ru: LocaleDictionary = {
     "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
   "settings.refMaintOutputTitle": "Результат правила",
   "settings.refMaintOutputIntro":
-    "Правило определяет не более трёх имён. Всё остальное в пакете игнорируется, а решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
-  "settings.refMaintOutputMatch":
-    "match — логическое значение. Если оно не определено, субъект не совпал.",
+    "Правило указывает, что делать, определяя действия и необязательные unknown и reasons. Объект подходит, когда для него выполняется хотя бы одно действие. Решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
   "settings.refMaintOutputUnknown":
     "unknown — логическое значение. Устанавливайте его, когда само правило не может принять решение; unknown всегда имеет приоритет над совпадением. Факты, которые Scryer не смог наблюдать, уже обрабатываются автоматически.",
   "settings.refMaintOutputReasons":
@@ -4941,6 +4943,158 @@ const ru: LocaleDictionary = {
     "Видеокодек файла (например, H.265, H.264)",
   "settings.refMaintFileVideoWidth": "Ширина видео в пикселях",
   "settings.refMaintFileVideoHeight": "Высота видео в пикселях",
+  "settings.refMaintFactsRuntimeMinutes":
+    "Продолжительность в минутах по данным поставщика метаданных",
+  "settings.refMaintFactsOriginalLanguage": "Язык оригинала",
+  "settings.refMaintFactsSeriesStatus":
+    "Статус сериала по данным поставщика метаданных, например продолжается или завершён",
+  "settings.refMaintFactsFirstAired": "Дата премьеры сериала (YYYY-MM-DD)",
+  "settings.refMaintFactsNetwork": "Телеканал, показывающий сериал",
+  "settings.refMaintFactsStudio": "Студия, снявшая тайтл",
+  "settings.refMaintFactsCountry": "Страна производства",
+  "settings.refMaintFactsPopularity":
+    "Оценка популярности от поставщика метаданных",
+  "settings.refMaintFactsTheatricalReleaseDate":
+    "Дата выхода фильма в кинотеатрах (YYYY-MM-DD)",
+  "settings.refMaintFactsDigitalReleaseDate":
+    "Дата цифрового релиза фильма (YYYY-MM-DD)",
+  "settings.refMaintFactsPhysicalReleaseDate":
+    "Дата выхода фильма на физических носителях (YYYY-MM-DD)",
+  "settings.refMaintFactsDaysSinceAdded":
+    "Полных дней с момента добавления субъекта",
+  "settings.refMaintFactsMaxVideoHeight":
+    "Наибольшая высота видеопотока среди файлов субъекта, в пикселях",
+  "settings.refMaintFactsSeasonCount":
+    "Количество сезонов сериала без спецвыпусков",
+  "settings.refMaintFactsAiredEpisodeCount":
+    "Количество вышедших обычных эпизодов сериала",
+  "settings.refMaintFactsUnairedEpisodeCount":
+    "Количество ещё не вышедших обычных эпизодов сериала",
+  "settings.refMaintFactsMissingEpisodeCount":
+    "Количество вышедших отслеживаемых эпизодов сериала без файла",
+  "settings.refMaintFactsAiredEpisodeFilePercent":
+    "Доля вышедших эпизодов с файлом, в процентах от вышедших эпизодов",
+  "settings.refMaintFactsLatestSeasonNumber": "Номер последнего сезона сериала",
+  "settings.refMaintFactsLatestAiredEpisodeDate":
+    "Дата выхода последнего вышедшего эпизода сериала (YYYY-MM-DD)",
+  "settings.refMaintFactsNextEpisodeAirDate":
+    "Дата выхода следующего запланированного эпизода сериала (YYYY-MM-DD)",
+  "settings.refMaintFactsGenres":
+    "Названия жанров из сохранённых метаданных тайтла",
+  "settings.refMaintFactsRating": "Сохранённый сводный рейтинг тайтла",
+  "settings.refMaintFactsRatings":
+    "Все внешние рейтинги, на которых основан сводный рейтинг",
+  "settings.refMaintFactsPlayCountTotal":
+    "Сумма воспроизведений субъекта всеми учётными записями на всех включённых медиасерверах; никого не называет",
+  "settings.refMaintFactsWatchlistedByUserIds":
+    "Пользователи, в чьих списках к просмотру есть тайтл",
+  "settings.refMaintFactsWatchlistedByUsernames":
+    "Имена пользователей, в чьих списках к просмотру есть тайтл",
+  "settings.refMaintFactsWatchlistedByAnyone":
+    "Есть ли тайтл в списке к просмотру какого-либо пользователя",
+  "settings.refMaintFactsWatchlistedByAnyRequester":
+    "Есть ли тайтл в списке к просмотру одного из его запросивших",
+  "settings.refMaintFactsWatchlistAddedAt":
+    "Когда Scryer впервые увидел тайтл в каком-либо списке к просмотру",
+  "settings.refMaintFactsWatchlistOrigins":
+    "Поставщики, в чьих списках к просмотру тайтл есть сейчас",
+  "settings.refMaintFactsFavoritedByUserIds":
+    "Пользователи, отметившие субъект как избранное в Jellyfin или Emby",
+  "settings.refMaintFactsFavoritedByUsernames":
+    "Имена пользователей, отметивших субъект как избранное в Jellyfin или Emby",
+  "settings.refMaintFactsFavoritedByAnyone":
+    "Отметил ли какой-либо пользователь субъект как избранное в Jellyfin или Emby",
+  "settings.refMaintFactsFavoritedByAnyRequester":
+    "Отметил ли один из запросивших тайтл субъект как избранное в Jellyfin или Emby",
+  "settings.refMaintFileAudioCodec":
+    "Аудиокодек основной звуковой дорожки файла",
+  "settings.refMaintFileAudioChannels": "Количество аудиоканалов",
+  "settings.refMaintFileAudioBitrateKbps": "Битрейт аудио в кбит/с",
+  "settings.refMaintFileVideoBitrateKbps": "Битрейт видео в кбит/с",
+  "settings.refMaintFileVideoBitDepth": "Глубина цвета видео в битах",
+  "settings.refMaintFileVideoHdrFormat":
+    "Формат HDR видео, например HDR10 или Dolby Vision",
+  "settings.refMaintSectionRatings":
+    "— Одна запись на каждый внешний рейтинг в input.facts.ratings",
+  "settings.refMaintSectionObsRatings":
+    "— Одна запись на каждый внешний рейтинг в input.observations.ratings.value",
+  "settings.refMaintRatingSource": "Источник рейтинга",
+  "settings.refMaintRatingValue":
+    "Рейтинг по собственной шкале источника, если источник её даёт",
+  "settings.refMaintRatingNormalized":
+    "Рейтинг по общей шкале Scryer, сопоставимый между источниками",
+  "settings.refMaintRatingVotes":
+    "Количество голосов за рейтингом, если источник его даёт",
+  "settings.refMaintFactsRuntimeMinutesValue":
+    "Продолжительность в минутах; отсутствует, если поставщик метаданных не дал значения",
+  "settings.refMaintFactsOriginalLanguageValue":
+    "Язык оригинала; отсутствует, если поставщик метаданных не дал значения",
+  "settings.refMaintFactsSeriesStatusValue":
+    "Статус сериала по данным поставщика; отсутствует, если поставщик не дал значения",
+  "settings.refMaintFactsFirstAiredValue":
+    "Дата премьеры (YYYY-MM-DD) — дата, а не метка времени; отсутствует, если поставщик не дал значения",
+  "settings.refMaintFactsNetworkValue":
+    "Название телеканала; отсутствует, если поставщик не дал значения",
+  "settings.refMaintFactsStudioValue":
+    "Название студии; отсутствует, если поставщик не дал значения",
+  "settings.refMaintFactsCountryValue":
+    "Страна производства; отсутствует, если поставщик не дал значения",
+  "settings.refMaintFactsPopularityValue":
+    "Оценка популярности; отсутствует, если поставщик не дал значения",
+  "settings.refMaintFactsTheatricalReleaseDateValue":
+    "Дата выхода в кинотеатрах (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
+  "settings.refMaintFactsDigitalReleaseDateValue":
+    "Дата цифрового релиза (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
+  "settings.refMaintFactsPhysicalReleaseDateValue":
+    "Дата выхода на физических носителях (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
+  "settings.refMaintFactsDaysSinceAddedValue":
+    "Полных дней с момента добавления субъекта по часам оценки",
+  "settings.refMaintFactsMaxVideoHeightValue":
+    "Высота в пикселях самого высокого видеопотока среди файлов; отсутствует, если ни один файл её не сообщает",
+  "settings.refMaintFactsSeasonCountValue":
+    "Сезоны во всём списке эпизодов шоу без спецвыпусков, независимо от объекта; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsAiredEpisodeCountValue":
+    "Обычные эпизоды с датой выхода не позже дня оценки; эпизод без даты выхода считается не вышедшим. Отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsUnairedEpisodeCountValue":
+    "Обычные эпизоды без даты выхода или с датой после дня оценки; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsMissingEpisodeCountValue":
+    "Обычные эпизоды, которые вышли, отслеживаются и не имеют файла; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+    "Доля вышедших эпизодов с файлом в процентах; отсутствует с причиной no_aired_episode, если ничего не вышло, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsLatestSeasonNumberValue":
+    "Наибольший номер обычного сезона; отсутствует для фильмов или шоу без сезонов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+    "Дата выхода (YYYY-MM-DD) последнего вышедшего обычного эпизода; отсутствует с причиной no_aired_episode, если ничего не вышло, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsNextEpisodeAirDateValue":
+    "Ближайшая дата выхода (YYYY-MM-DD) после дня оценки; отсутствует с причиной no_scheduled_episode, если ничего не запланировано, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
+  "settings.refMaintFactsGenresValue":
+    "Названия жанров; неизвестно с причиной metadata_unreadable, если сохранённые метаданные не удалось прочитать",
+  "settings.refMaintFactsRatingValue":
+    "Сводный рейтинг; отсутствует, если ни один источник не оценил тайтл, неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
+  "settings.refMaintFactsRatingsValue":
+    "Одна запись на каждый внешний рейтинг; неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
+  "settings.refMaintFactsPlayCountTotalValue":
+    "Сумма воспроизведений всеми учётными записями на всех включённых медиасерверах, связанными с пользователем Scryer или нет. Неизвестно с причиной audience_not_read, пока все учётные записи не прочитаны недавно, и с обычными причинами, когда факты просмотра неизвестны.",
+  "settings.refMaintFactsWatchlistedByUserIdsValue":
+    "ID пользователей, в чьих списках к просмотру есть тайтл. Список к просмотру — это собственный включённый и авторизованный watchlist пользователя в Plex, Trakt, TMDb или MDBList, список plan-to-watch в Simkl или MyAnimeList или список planning в AniList. Неизвестно с причиной watchlist_not_synced, пока какой-либо список ни разу не синхронизировался, завершился ошибкой в последний раз, выключен, настроен не синхронизироваться или потерял свою учётную запись, и с причиной watchlist_stale, пока какой-либо давно не синхронизировался.",
+  "settings.refMaintFactsWatchlistedByUsernamesValue":
+    "Имена пользователей, в чьих списках к просмотру есть тайтл; неизвестно с причиной user_not_found, если кого-то из них больше нет, и с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refMaintFactsWatchlistedByAnyoneValue":
+    "True, если тайтл есть в списке к просмотру какого-либо пользователя; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+    "True, если тайтл есть в списке к просмотру запросившего; отсутствует с причиной title_not_requested, если его никто не запрашивал, неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refMaintFactsWatchlistAddedAtValue":
+    "Метка времени RFC3339, когда Scryer впервые увидел тайтл в каком-либо списке к просмотру; отсутствует с причиной not_on_a_watchlist, если его нет ни в одном списке, неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refMaintFactsWatchlistOriginsValue":
+    "Поставщики, в чьих списках к просмотру тайтл есть сейчас; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
+  "settings.refMaintFactsFavoritedByUserIdsValue":
+    "ID пользователей, отметивших объект как избранное на включённом сервере Jellyfin или Emby. Тайтл учитывает каждое своё избранное; избранное сериала или сезона учитывается для каждого сезона и эпизода сериала; избранное эпизода учитывается для этого эпизода, его сезона и сериала. Scryer не может читать избранное Plex: неизвестно с причиной favorites_unsupported, если все включённые серверы — Plex, с причиной favorite_member_unobservable, пока связанный пользователь виден только через Plex, с причиной signal_identity_missing, пока избранное принадлежит учётной записи, не связанной с пользователем Scryer, и с причиной favorites_unreadable, если сохранённое избранное не удалось прочитать.",
+  "settings.refMaintFactsFavoritedByUsernamesValue":
+    "Имена пользователей, отметивших объект как избранное, с подсчётом как для favorited_by_user_ids; неизвестно с причиной user_not_found, если кого-то из них больше нет, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
+  "settings.refMaintFactsFavoritedByAnyoneValue":
+    "Истина, когда объект покрывает избранное, прочитанное из Jellyfin или Emby, с подсчётом как для favorited_by_user_ids. Никогда не бывает ложью: избранное читается только для связанных пользователей, поэтому, если ничего не найдено, значение неизвестно с причиной audience_favorites_not_read или с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable.",
+  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+    "Истина, когда объект отметил как избранное кто-то из запросивших, с подсчётом как для favorited_by_user_ids; отсутствует с причиной title_not_requested, если тайтл никто не запрашивал, неизвестно с причиной requester_not_linked, если у запросившего нет связанной учётной записи медиасервера, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Языки аудиодорожек в файле",
   "settings.refMaintFileSubtitleLanguages": "Языки субтитров в файле",
   "settings.refMaintFileAddedAt": "Метка времени RFC3339 добавления файла",
@@ -4962,6 +5116,155 @@ const ru: LocaleDictionary = {
     "Есть ли у этого привязанного фильма файл на диске",
   "settings.refMaintSeriesMovieTags":
     "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
+  "settings.ruleBuilderTitle": "Правило",
+  "settings.ruleBuilderModeLabel": "Редактор",
+  "settings.ruleBuilderModeSimple": "Простой",
+  "settings.ruleBuilderModeHelp":
+    "Простой режим собирает правило из условий и результатов и сам пишет Rego. Расширенный режим показывает этот Rego только для чтения, и в простой режим можно вернуться в любой момент. Чтобы изменить Rego самостоятельно, выберите «Редактировать как Rego»; после этого правило больше нельзя будет открыть в простом конструкторе.",
+  "settings.ruleBuilderUnavailable":
+    "Код этого правила был изменён вручную или создан не простым конструктором, поэтому его можно редактировать только как Rego.",
+  "settings.ruleBuilderEditAsRego": "Редактировать как Rego",
+  "settings.ruleBuilderEditAsRegoTitle": "Редактировать это правило как Rego?",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "После перехода к редактированию Rego это правило больше нельзя будет открыть в простом конструкторе, даже после сохранения. Текущий код Rego сохранится как отправная точка.",
+  "settings.ruleBuilderIncomplete":
+    "Перед сохранением заполните условия и результаты.",
+  "settings.ruleBuilderConditions": "Условия",
+  "settings.maintenanceBuilderConditionsHelp":
+    "Каждое условие проверяет один факт об объекте. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применились действия.",
+  "settings.ruleBuilderJoinAll": "Выполняются все условия",
+  "settings.ruleBuilderJoinAny": "Выполняется любое условие",
+  "settings.ruleBuilderAddCondition": "Добавить условие",
+  "settings.ruleBuilderFact": "Факт",
+  "settings.ruleBuilderFactPlaceholder": "Выберите факт",
+  "settings.ruleBuilderOperator": "Сравнение",
+  "settings.ruleBuilderValue": "Значение",
+  "settings.ruleBuilderDays": "Дней",
+  "settings.maintenanceBuilderActionsHelp":
+    "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
+  "settings.maintenanceBuilderActionTitleOnly":
+    "Доступно только для правил тайтлов.",
+  "settings.ruleBuilderOutputConflict": "Нельзя сочетать с: {{outputs}}.",
+  "settings.ruleBuilderQualityProfilePlaceholder": "Выберите профиль качества",
+  "settings.maintenanceBuilderLibraryPlaceholder": "Выберите библиотеку",
+  "settings.maintenanceBuilderRootPlaceholder": "Выберите корневую папку",
+  "settings.ruleBuilderTagsPlaceholder": "Выберите теги",
+  "settings.ruleBuilderNoTags": "Теги ещё не созданы.",
+  "settings.ruleBuilderGeneratedSource": "Сгенерированный Rego",
+  "settings.ruleBuilderGeneratedSourceHelp":
+    "Код, который конструктор пишет по вашему выбору. Именно он проверяется, используется в предпросмотре и сохраняется.",
+  "settings.ruleBuilderGeneratedSourceEmpty":
+    "Код не создаётся, пока условия и результаты не заполнены.",
+  "settings.ruleBuilderOpIsTrue": "истинно",
+  "settings.ruleBuilderOpIsFalse": "ложно",
+  "settings.ruleBuilderOpEquals": "равно",
+  "settings.ruleBuilderOpNotEquals": "не равно",
+  "settings.ruleBuilderOpGreaterThan": "больше",
+  "settings.ruleBuilderOpGreaterOrEqual": "не меньше",
+  "settings.ruleBuilderOpLessThan": "меньше",
+  "settings.ruleBuilderOpLessOrEqual": "не больше",
+  "settings.ruleBuilderOpContains": "содержит",
+  "settings.ruleBuilderOpNotContains": "не содержит",
+  "settings.ruleBuilderOpIsEmpty": "пусто",
+  "settings.ruleBuilderOpIsNotEmpty": "не пусто",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "более N дней назад",
+  "settings.ruleBuilderOpLessThanDaysAgo": "менее N дней назад",
+  "settings.ruleBuilderOpHasValue": "задано",
+  "settings.ruleBuilderOpHasNoValue": "не задано",
+  "settings.ruleBuilderProblemNoConditions": "Добавьте хотя бы одно условие.",
+  "settings.ruleBuilderProblemNoOutputs": "Выберите хотя бы один результат.",
+  "settings.ruleBuilderProblemFactRequired": "Выберите факт.",
+  "settings.ruleBuilderProblemFactUnknown":
+    "Этот факт недоступен для этого правила.",
+  "settings.ruleBuilderProblemOperatorInvalid":
+    "Выберите сравнение для этого факта.",
+  "settings.ruleBuilderProblemValueRequired": "Введите значение.",
+  "settings.ruleBuilderProblemValueNotNumber": "Введите число.",
+  "settings.ruleBuilderProblemValueNotDays":
+    "Введите целое число дней, не больше 100000.",
+  "settings.ruleBuilderProblemValueUnrepresentable":
+    "Это значение содержит символы, которые нельзя записать в правило.",
+  "settings.ruleBuilderProblemValueDuplicate":
+    "Каждый элемент можно указать только один раз.",
+  "settings.ruleBuilderProblemOutputNotInScope":
+    "Этот вариант недоступен для этого правила.",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "Этот вариант нельзя сочетать с другим выбранным вариантом.",
+  "settings.ruleBuilderProblemOutputRequired":
+    "Выберите один из вариантов: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotWhole": "Введите целое число.",
+  "settings.ruleBuilderProblemValueOutOfRange":
+    "Это число вне допустимого диапазона.",
+  "settings.ruleBuilderProblemValueNotOffered":
+    "Выберите одно из предложенных значений.",
+  "settings.ruleBuilderProblemValueInvalid":
+    "Это значение содержит недопустимые здесь символы.",
+  "settings.ruleBuilderProblemValueTooLong": "Это значение слишком длинное.",
+  "settings.ruleBuilderProblemValueTooMany":
+    "В этом списке слишком много элементов.",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "Правило содержит вариант, неизвестный этой версии.",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "Для этого варианта также нужно: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Больше не предлагается: {{values}}. Правило сохранит значение, пока вы не выберете другое.",
+  "settings.ruleBuilderSchemaLoading":
+    "Загружается простой редактор. Редактор Rego тем временем работает.",
+  "settings.ruleBuilderSchemaFailed":
+    "Не удалось загрузить простой редактор. Измените правило в Rego или откройте страницу заново.",
+  "settings.scoringBuilderOutputs": "Оценка",
+  "settings.scoringBuilderOutputsHelp":
+    "Выберите одно: добавить баллы к оценке релиза или заблокировать релиз. Код называет запись оценки в трассировке решений.",
+  "settings.scoringBuilderConditionsHelp":
+    "Каждое условие проверяет один факт о релизе, профиле или файле. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилась оценка.",
+  "settings.scoringBuilderAdjustScore": "Изменить оценку",
+  "settings.scoringBuilderBlock": "Заблокировать релиз",
+  "settings.scoringBuilderCode": "Код",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "Баллы",
+  "settings.requestBuilderOutputs": "Решение и изменения",
+  "settings.requestBuilderOutputsHelp":
+    "Выберите не более одного голоса: одобрить, отклонить или оставить на рассмотрение. Правило также может изменить то, что запишет одобрение, добавить теги или отправить уведомление — с голосом или без него. Коды причин можно добавить к любому из этих вариантов.",
+  "settings.requestBuilderMonitorPlaceholder": "Выберите отслеживание",
+  "settings.requestBuilderLanguagesPlaceholder": "Выберите языки",
+  "settings.requestDeclaredActionsTitle": "Что может это правило",
+  "settings.requestDeclaredActionsHelp":
+    "Голоса и значения, которые определяет исходный код правила, в этом порядке: {{order}}. Автоматически одобренный запрос получает значения, условия которых выполняются; для запроса на рассмотрении они показываются одобряющему как предложения.",
+  "settings.requestDeclaredActionsNone": "Ничего не объявлено",
+  "settings.requestDeclaredActionsUnavailable":
+    "Исправьте ошибки, чтобы увидеть, что может это правило.",
+  "settings.requestRuleWarningsTitle": "Предупреждения",
+  "settings.requestRuleWarningLocation": "Строка {{line}}, столбец {{column}}:",
+  "settings.requestBuilderConditionsHelp":
+    "Каждое условие проверяет один факт о запросе, тайтле, библиотеке или времени. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применилось решение.",
+  "settings.requestBuilderOriginManual": "Запрошено вручную",
+  "settings.requestBuilderOriginPublicList": "Из публичного списка",
+  "settings.requestBuilderOriginPersonalList": "Из личного списка",
+  "settings.maintenanceDeclaredActionsTitle": "Объявленные действия",
+  "settings.maintenanceDeclaredActionsHelp":
+    "Действия, которые определяет исходный код правила. Подходящий объект получает только те, чьи условия для него выполняются, в таком порядке: {{order}}.",
+  "settings.maintenanceDeclaredActionsNone": "Нет действий",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "Исправьте ошибки, чтобы увидеть, что делает это правило.",
+  "settings.maintenanceDecidedActionsNone": "Нет действий",
+  "settings.maintenanceRuleWarningsTitle": "Предупреждения",
+  "settings.maintenanceRuleWarningLocation":
+    "Строка {{line}}, столбец {{column}}:",
+  "settings.refMaintOutputFlagHeads":
+    "Действия без значения (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) логические: определите их через if, и действие применяется, когда тело выполняется.",
+  "settings.refMaintOutputValueHeads":
+    "Действия со значением (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) присваивают простой литерал через :=. Цепочка else может выбирать между литералами; вычисляемое значение отклоняется.",
+  "settings.refMaintOutputHelpers":
+    "Любое другое имя правила — ваш собственный помощник. Он влияет на результат, только если его использует действие, unknown или reasons.",
+  "settings.refMaintActionsTitle": "Действия",
+  "settings.refMaintActionsOrder":
+    "Scryer применяет действия объекта в таком порядке, независимо от порядка в исходном коде: {{order}}.",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) возвращает число полных дней между меткой времени RFC3339 и временем вычисления, поэтому days_since(input.facts.added_at) > 180 означает «добавлено более 180 дней назад».",
+  "settings.refMaintActionsNotify":
+    "notify отправляет сообщение один раз, когда действия применяются. Предпросмотр и пробные запуски его не отправляют.",
+  "settings.refMaintActionsConflicts":
+    "Противоречащие действия для одного объекта, например monitor вместе с unmonitor или один и тот же тег, который и добавляется, и удаляется, удерживают объект с указанием причины вместо применения любого из них.",
   "settings.refMaintTagActionsTitle": "Действия с тегами",
   "settings.refMaintTagActionsNote":
     "add_tags и remove_tags записывают пользовательские теги на совпавший тайтл. Каждая метка должна существовать в реестре тегов, который администратор ведёт в настройках, и хранится в нижнем регистре: правило, называющее удалённый тег, удерживается с причиной tag_not_defined вместо записи.",
@@ -4974,7 +5277,7 @@ const ru: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "Отсрочка {{count}} дн.",
   "settings.maintenanceTemplateNoGraceBadge": "Без отсрочки",
   "settings.maintenanceTemplateDestructiveBadge": "Удаляет файлы",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Выберите целевой профиль",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Укажите целевой профиль",
   "settings.maintenanceTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
   "settings.maintenanceTemplateDeadWantedDescription":
     "Отслеживаемые тайтлы, для которых так и не появился ни один файл. Факты — это обычные значения, поэтому тайтл, у которого Scryer не видит состояние отслеживания или наличия файла, удерживается, а не совпадает. После отсрочки в 30 дней область снимается с отслеживания, а всё, что уже есть на диске, остаётся нетронутым.",
@@ -4984,13 +5287,13 @@ const ru: LocaleDictionary = {
   "settings.maintenanceTemplateAddedLongAgoTitle":
     "Добавлено более 180 дней назад",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Настоящая арифметика дат: матчер вычитает added_at тайтла из времени вычисления и совпадает после 180 дней. Область снимается с отслеживания, файлы остаются. Тайтл без значения added_at удерживается, а не совпадает.",
+    "Настоящая работа с датами: days_since сравнивает added_at тайтла со временем вычисления и срабатывает после 180 дней. Отслеживание отключается, файлы остаются. Тайтл без значения added_at удерживается, а не подходит.",
   "settings.maintenanceTemplateOversizedTitle": "Слишком большие релизы",
   "settings.maintenanceTemplateOversizedDescription":
-    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на выбранный вами профиль качества и запускает поиск заново, только если профиль действительно изменился — выберите целевой профиль в редакторе до сохранения.",
+    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на указанный профиль качества и снова запускает поиск. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
   "settings.maintenanceTemplateFourKPurgeTitle": "Очистка 4K",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "Любой тайтл, у которого есть файл 2160p. После отсрочки в 7 дней он переводится на выбранный вами профиль качества, и поиск запускается заново, если профиль изменился. Выберите целевой профиль в редакторе до сохранения.",
+    "Любой тайтл с файлом 2160p. После 7-дневной отсрочки он переводится на указанный профиль качества, и поиск запускается снова. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
   "settings.maintenanceTemplateRequestedExpiryTitle":
     "Истечение срока запрошенного",
   "settings.maintenanceTemplateRequestedExpiryDescription":
@@ -5012,7 +5315,7 @@ const ru: LocaleDictionary = {
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, у которых истекли все сроки хранения по запросам, после отсрочки в 7 дней. Хранение, которое ещё не началось — тайтл не импортирован, — остаётся нетронутым, как и тайтл, у которого срока хранения никогда не было.",
   "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
   "settings.maintenanceTemplateNoProfileDescription":
-    "Тайтлы, которым не назначен профиль качества. Не выполняет никаких действий: этот шаблон нужен, чтобы собрать список и посмотреть на него, прежде чем решать, что с ним делать.",
+    "Тайтлы без назначенного профиля качества. Добавляет тег needs-review, чтобы человек выбрал профиль; больше ничего не меняется.",
   "settings.maintenanceTemplateNewestEpisodesTitle":
     "Оставить 3 новейших загруженных эпизода",
   "settings.maintenanceTemplateNewestEpisodesDescription":
@@ -5135,7 +5438,7 @@ const ru: LocaleDictionary = {
     "Правило запроса читает один документ, описывающий запрос, того, кто его сделал, целевую библиотеку и то, что Scryer знает о медиа. Факты — это обычные значения. Факт, который Scryer не смог наблюдать, просто отсутствует, и правило, читающее отсутствующий факт, удерживает запрос для человека, а не гадает — эту защиту вы никогда не пишете сами.",
   "settings.refReqOutputTitle": "Что определяет правило запроса",
   "settings.refReqOutputIntro":
-    "Должно быть определено хотя бы одно из них, иначе правило никогда не сможет проголосовать и Scryer откажется его сохранить.",
+    "Правило должно определять голос, значение, меняющее одобрение, или add_tags; правило без всего этого отклоняется при сохранении. Головы со значением присваивают простой литерал через :=.",
   "settings.refReqOutputApprove":
     "approve — запрос можно удовлетворить без участия человека.",
   "settings.refReqOutputDeny":
@@ -5143,7 +5446,20 @@ const ru: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual — запрос уходит к человеку, что бы ни решили остальные.",
   "settings.refReqOutputTags":
-    'tags contains "…" — метки для медиа, применяются только при одобрении.',
+    'add_tags := ["…"] — теги для тайтла, применяются только при одобрении.',
+  "settings.refReqOutputSetQualityProfile":
+    'set_quality_profile := "Имя профиля" — одобрить с этим профилем качества вместо запрошенного.',
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — одобрить с этим сроком хранения. 0 — хранить вечно; иначе от 1 до 3650 дней.",
+  "settings.refReqOutputSetMonitor":
+    'set_monitor := "FUTURE_EPISODES" — одобрить с этим отслеживанием: MONITORED или UNMONITORED для фильмов; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES или NONE для сериалов и аниме.',
+  "settings.refReqOutputSetAudioLanguages":
+    'set_required_audio_languages := ["eng"] и set_preferred_audio_languages := ["jpn", "eng"] — заменяют запрошенные списки языков аудио.',
+  "settings.refReqOutputNotify": 'notify := "…" — отправить это уведомление.',
+  "settings.refReqOutputShapingOutcome":
+    "Автоматически одобренный запрос получает эти значения. Для запроса на рассмотрении они показываются одобряющему как предложения, а у отклонённого остаются только в трассировке. Если два правила задают разные значения одного и того же, запрос уходит на рассмотрение.",
+  "settings.refReqOutputNoSchedule":
+    "У правил запросов нет расписания: они выполняются для каждого запроса и при предварительной проверке запрашивающего.",
   "settings.refReqOutputReasons":
     'reasons contains "…" — устойчивые коды, которые видит запросивший.',
   "settings.refReqOutputNoPackage":
@@ -5159,6 +5475,15 @@ const ru: LocaleDictionary = {
   "requests.preflightManualReview": "Это требует одобрения",
   "requests.preflightDeny": "Это было бы отклонено: {{reasons}}",
   "requests.preflightTags": "Будут добавлены метки: {{tags}}.",
+  "requests.preflightShaping": "При одобрении будет изменено на: {{changes}}.",
+  "requests.shapingTitle": "Одобрение было бы изменено на",
+  "requests.shapingSetBy": "задано правилом {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: правила задали разные значения, решает человек",
+  "requests.shapingSuggested": "Предложено правилом {{rule}}",
+  "requests.shapingLeaseDays": "Дней: {{count}}",
+  "requests.fallbackShapingConflict":
+    "Правила задали разные значения одного и того же, поэтому решает человек.",
   "requests.preflightReason": "Причина: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer не смог прочитать всё об этом тайтле, поэтому решение примет человек.",
@@ -5250,7 +5575,11 @@ const ru: LocaleDictionary = {
   "settings.refReqRequesterLinkedProviders":
     "Медиасерверы и поставщики учётных данных, привязанные к учётной записи",
   "settings.refReqRequesterCreatedAt":
-    "Когда создана учётная запись; отсутствует, потому что Scryer пока это не записывает",
+    "Когда создана учётная запись; отсутствует у записей, созданных до того, как Scryer начал это записывать",
+  "settings.refReqRequesterLastLoginAt":
+    "Когда учётная запись входила в последний раз; отсутствует, если у Scryer нет записи о входе",
+  "settings.refReqRequesterAccountAgeDays":
+    "Целых дней с создания учётной записи; отсутствует, если неизвестно время создания",
   "settings.refReqSectionLibrary": "— Библиотека, в которую направлен запрос",
   "settings.refReqLibraryId": "Идентификатор библиотеки",
   "settings.refReqLibraryName": "Название библиотеки",
@@ -5272,6 +5601,8 @@ const ru: LocaleDictionary = {
     "Отслеживание, которое запросил пользователь (например, ALL_EPISODES)",
   "settings.refReqRequestMonitorSelectionSeasonCount":
     "Сколько сезонов названо в расширенном выборе отслеживания",
+  "settings.refReqRequestMonitorSelectionSeasons":
+    "Номера сезонов из расширенного выбора отслеживания, по возрастанию; null, если выбора нет",
   "settings.refReqRequestLeaseForever":
     "Истина, когда запросивший попросил хранить медиа вечно",
   "settings.refReqRequestLeaseDays":
@@ -5353,6 +5684,46 @@ const ru: LocaleDictionary = {
     "Сколько дней прошло с прошлого запроса этого пользователя",
   "settings.refReqFactsLibraryTitleCount":
     "Сколько тайтлов в целевой библиотеке",
+  "settings.refReqFactsSeasonCount":
+    "Сколько сезонов у сериала, для сериалов",
+  "settings.refReqFactsEpisodeCount":
+    "Сколько обычных эпизодов у сериала, для сериалов",
+  "settings.refReqFactsAiredEpisodeCount":
+    "Сколько из этих эпизодов вышло к дню оценки",
+  "settings.refReqFactsUnairedEpisodeCount":
+    "Сколько из этих эпизодов ещё не вышло",
+  "settings.refReqFactsNextEpisodeAirDate":
+    "Когда выходит следующий эпизод",
+  "settings.refReqFactsTheatricalReleaseDate":
+    "Дата выхода в кинотеатрах, для фильмов",
+  "settings.refReqFactsDigitalReleaseDate":
+    "Дата цифрового выпуска, для фильмов",
+  "settings.refReqFactsPhysicalReleaseDate":
+    "Дата выпуска на носителе, для фильмов",
+  "settings.refReqFactsHomeReleaseAvailable":
+    "Вышел ли фильм в цифре или на носителе",
+  "settings.refReqFactsDaysUntilRelease":
+    "Дней до первого выхода фильма",
+  "settings.refReqFactsOtherRequesterCount":
+    "Сколько других участников запрашивали этот тайтл",
+  "settings.refReqFactsPendingByOtherRequester":
+    "Ждёт ли запрос другого участника на этот тайтл",
+  "settings.refReqFactsOnRequesterWatchlist":
+    "Есть ли тайтл в собственном списке «смотреть позже» пользователя",
+  "settings.refReqFactsRequesterWatchlistDays":
+    "Как давно тайтл в списке «смотреть позже» пользователя",
+  "settings.refReqFactsListExcluded":
+    "Попадает ли тайтл под исключение списка",
+  "settings.refReqFactsRequesterTitlesInLibraryCount":
+    "Сколько тайтлов запросы этого пользователя добавили в целевую библиотеку",
+  "settings.refReqFactsStorageRootId":
+    "Корневая папка, в которую попадёт тайтл",
+  "settings.refReqFactsStorageAvailableBytes":
+    "Свободное место в этом корне, в байтах",
+  "settings.refReqFactsStorageTotalBytes":
+    "Полный размер файловой системы корня, в байтах",
+  "settings.refReqFactsStorageAvailablePercent":
+    "Свободное место в этом корне, в процентах",
   "settings.refReqSectionCertifications":
     "— По одной записи на каждый рейтинг в input.facts.certifications",
   "settings.refReqCertCountry": "Страна, в которой выдан рейтинг",
@@ -5434,6 +5805,46 @@ const ru: LocaleDictionary = {
     "Целых дней с прошлого запроса пользователя; absent с причиной no_previous_request, когда это его первый запрос",
   "settings.refReqFactsLibraryTitleCountValue":
     "Число тайтлов в целевой библиотеке",
+  "settings.refReqFactsSeasonCountValue":
+    "Число сезонов; для фильма absent с причиной not_a_series, unknown с причиной metadata_unavailable, если в запросе нет структуры сериала",
+  "settings.refReqFactsEpisodeCountValue":
+    "Число обычных эпизодов; absent и unknown так же, как у season_count",
+  "settings.refReqFactsAiredEpisodeCountValue":
+    "Эпизоды, вышедшие к моменту запроса, плюс запланированные на день оценки или раньше",
+  "settings.refReqFactsUnairedEpisodeCountValue":
+    "episode_count минус aired_episode_count, не меньше нуля",
+  "settings.refReqFactsNextEpisodeAirDateValue":
+    "YYYY-MM-DD первого эпизода после дня оценки; absent с причиной no_scheduled_episode, если ничего не запланировано",
+  "settings.refReqFactsTheatricalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_theatrical_release_date, если даты нет, с причиной not_a_movie для сериала; unknown с причиной not_yet_collected или metadata_unavailable, если даты не собраны",
+  "settings.refReqFactsDigitalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_digital_release_date, если даты нет; в остальном как theatrical_release_date",
+  "settings.refReqFactsPhysicalReleaseDateValue":
+    "YYYY-MM-DD; absent с причиной no_physical_release_date, если даты нет; в остальном как theatrical_release_date",
+  "settings.refReqFactsHomeReleaseAvailableValue":
+    "True, если цифровая или физическая дата не позже дня оценки",
+  "settings.refReqFactsDaysUntilReleaseValue":
+    "Целых дней до самой ранней известной даты; absent с причиной already_released после выхода или no_release_date, если дата неизвестна",
+  "settings.refReqFactsOtherRequesterCountValue":
+    "Число разных других пользователей; unknown с причиной catalog_unavailable, если Scryer не смог прочитать запросы",
+  "settings.refReqFactsPendingByOtherRequesterValue":
+    "True, если запрос другого участника ещё ждёт решения; unknown как у other_requester_count",
+  "settings.refReqFactsOnRequesterWatchlistValue":
+    "True, если тайтл есть в синхронизированном списке, привязанном пользователем; absent с причиной no_watchlist_linked, если списка нет; unknown с причиной watchlist_not_synced, watchlist_stale или list_store_unreadable, если спискам нельзя доверять",
+  "settings.refReqFactsRequesterWatchlistDaysValue":
+    "Целых дней с первого появления там; absent с причиной not_on_a_watchlist, если его там нет; в остальном как on_requester_watchlist",
+  "settings.refReqFactsListExcludedValue":
+    "True, если тайтл назван в исключении для всех списков или для списка этого запроса; unknown с причиной list_exclusions_unavailable, если их не удалось прочитать",
+  "settings.refReqFactsRequesterTitlesInLibraryCountValue":
+    "Число тайтлов в целевой библиотеке, созданных по запросам пользователя; unknown с причиной requester_titles_unavailable, если их не удалось посчитать",
+  "settings.refReqFactsStorageRootIdValue":
+    "Идентификатор корня по умолчанию или первого корня библиотеки; unknown с причиной storage_root_unavailable, если корней нет",
+  "settings.refReqFactsStorageAvailableBytesValue":
+    "Свободные байты при последнем замере корня, не старше десяти минут; observed_at указывает время. Unknown, никогда не ноль, с причиной storage_not_sampled, storage_sample_stale или storage_capacity_unavailable",
+  "settings.refReqFactsStorageTotalBytesValue":
+    "Всего байт из того же замера; unknown как у storage_available_bytes",
+  "settings.refReqFactsStorageAvailablePercentValue":
+    "Свободные байты, умноженные на 100 и делённые на общий размер, из того же замера; unknown как у storage_available_bytes",
   "move.dialogTitle": "Переместить тайтлы",
   "move.destinationLibrary": "Целевая библиотека",
   "move.destinationRoot": "Целевой корневой каталог",
@@ -5972,12 +6383,8 @@ const ru: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Фильмы сериала",
   "settings.maintenanceActionAddTags": "Добавить теги",
   "settings.maintenanceActionRemoveTags": "Удалить теги",
-  "settings.maintenanceRuleTags": "Теги",
-  "settings.maintenanceRuleTagsNone": "Теги ещё не выбраны",
   "settings.maintenanceRuleTagsHelp":
     "Правило назначает эти теги каждому подходящему тайтлу. Можно выбрать только теги, заданные администратором в разделе «Настройки → Теги».",
-  "settings.maintenanceCandidatesTagPatchAdd": "добавляет {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "удаляет {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Помечено к удалению",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     "Внимание: этот шаблон удаляет тайтл и его файлы. Он применяется ко всем тайтлам с тегом «remove» после недели ожидания. Достаточно назначить тег вручную, чтобы запустить отсчёт; снятие тега в течение недели отменяет удаление. Сначала создайте тег «remove» в разделе «Настройки → Теги».",
@@ -6425,6 +6832,125 @@ const ru: LocaleDictionary = {
     "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
+  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "Это правило удаляет, но у него нет лимита тайтлов за запуск, поэтому его действия не выполняются. Оно по-прежнему оценивается и доступно для предпросмотра; задайте лимит, чтобы оно могло действовать.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+    "Отложено: связанная учётная запись добавила этот элемент в избранное на медиасервере после последнего чтения избранного.",
+  "settings.maintenanceExecutionReason.ruleNotEligible":
+    "Отложено: до выполнения действия правило отключили, перевели в пробный режим или сняли с боевого режима, либо закрылся его защитный шлюз.",
+  "settings.maintenanceExecutionReason.noMatchAtExecution":
+    "Не выполнено: при повторной проверке перед действием тайтл больше не подходит под правило.",
+  "settings.maintenanceExecutionReason.unknownAtExecution":
+    "Отложено: при повторной проверке перед действием правило не смогло принять решение. Проверка повторится при следующем запуске.",
+  "settings.maintenanceExecutionReason.activeAcquisition":
+    "Отложено: для тайтла идёт захват, загрузка или импорт.",
+  "settings.maintenanceExecutionReason.acquisitionUnknown":
+    "Отложено: Scryer не смог определить, идёт ли для тайтла захват, загрузка или импорт.",
+  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+    "Отложено: очистка хранилища сейчас удаляет файлы. Действие подождёт её завершения.",
+  "settings.maintenanceExecutionReason.actionNotFullySupported":
+    "Отложено: это действие нельзя применить к этому объекту, например действие для всего тайтла к сезону или эпизоду.",
+  "settings.maintenanceExecutionReason.titleMissing":
+    "Тайтла больше нет в библиотеке, поэтому ничего не сделано.",
+  "settings.maintenanceExecutionReason.locationOperationHold":
+    "Отложено: файлы тайтла перемещаются или переименовываются. Действие выполнится после завершения.",
+  "settings.maintenanceExecutionReason.passActionStepBudget":
+    "Отложено одним из прошлых запусков, исчерпавшим свои шаги действий. У запусков больше нет такого лимита; действие выполнится при следующем запуске.",
+  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+    "Отложено: удаление в этом запуске несколько раз завершилось ошибкой, поэтому оставшиеся удаления ждут следующего запуска.",
+  "settings.maintenanceExecutionReason.actionSucceeded": "Действие выполнено.",
+  "settings.maintenanceExecutionReason.alreadySatisfied":
+    "Менять нечего: тайтл уже был в том состоянии, в которое его привело бы действие.",
+  "settings.maintenanceExecutionReason.retryPending":
+    "Действие завершилось ошибкой, которая может пройти. Оно будет повторено.",
+  "settings.maintenanceExecutionReason.actionFailed":
+    "Действие завершилось ошибкой и повторяться не будет. Ошибка указана в истории действий.",
+  "settings.maintenanceExecutionReason.leaseReclaimed":
+    "Действие прервалось до завершения, например при перезапуске Scryer. Оно освобождено для повторного запуска.",
+  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+    "Отложено: часть файлов нельзя сопоставить с эпизодами этого сезона или эпизода, поэтому удалять их небезопасно.",
+  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+    "Отложено: профиль качества, который задаёт правило, больше не соответствует ровно одному профилю. Его переименовали или удалили, либо два профиля названы одинаково.",
+  "settings.maintenanceExecutionReason.actionsNotRunnable":
+    "Отложено: действия, выбранные для этого объекта, нельзя выполнить вместе, например добавление и удаление одного и того же тега.",
+  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+    "Отложено: при повторной проверке перед действием правило выбрало другие действия. Следующая оценка заменит этого кандидата.",
+  "settings.maintenanceExecutionReason.actionNotDeclared":
+    "Отложено: у кандидата есть действие, которое текущий исходный код правила больше не объявляет, поэтому оно никогда не выполнится.",
+  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+    "Отложено: правило для корня хранилища не может выполнить одно из этих действий.",
+  "settings.maintenanceRuleMaxTitlesPerRun": "Тайтлов за запуск",
+  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+    "Наибольшее число тайтлов, с которыми правило работает за один запуск. Правилу, удаляющему файлы или тайтлы, этот лимит обязателен.",
+  "settings.maintenanceRuleMaxTitlesPerRunNone": "Без ограничения",
+  "settings.maintenanceRuleLoadRefused":
+    "Это правило нельзя запустить в сохранённом виде.",
+  "settings.maintenanceSequenceStepMonitor": "Включить отслеживание",
+  "settings.maintenanceSequenceStepFetchSubtitles": "Загрузить субтитры",
+  "settings.maintenanceSequenceStepMoveToLibrary": "Переместить в библиотеку",
+  "settings.maintenanceSequenceStepMoveToRoot": "Переместить в корневую папку",
+  "settings.notificationEvent.maintenanceRuleNotified":
+    "Уведомление правила обслуживания",
+  "settings.maintenanceExecutionReason.tagNotDefined":
+    "Отложено: тег, который записывает правило, больше не определён в Настройки › Теги.",
+  "settings.maintenanceExecutionReason.tagPatchConflict":
+    "Отложено: другое правило добавило бы тег, который это правило удаляет, или удалило бы добавляемый им тег.",
+  "settings.maintenanceExecutionReason.monitoringConflict":
+    "Отложено: другое правило недавно сделало обратное с отслеживанием этого тайтла.",
+  "settings.maintenanceExecutionReason.actionsConflict":
+    "Отложено: правило выбрало действия, которые нельзя выполнить вместе, поэтому ничего не применено.",
+  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+    "Отложено: библиотека, указанная для перемещения, больше не соответствует ровно одной библиотеке.",
+  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+    "Отложено: библиотека, указанная для перемещения, содержит другой вид тайтлов.",
+  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+    "Отложено: корневая папка, указанная для перемещения, не принадлежит библиотеке тайтла.",
+  "settings.maintenanceExecutionReason.moveRefused":
+    "Отложено: перемещение отклонено или его план устарел. Файлы остаются на месте, перемещение будет повторено.",
+  "error.ruleActionRequired":
+    "Определите хотя бы одно действие, например unmonitor, delete_files или add_tags, чтобы правило могло что-то делать.",
+  "error.ruleActionHeadFunction":
+    "Действие нельзя записать как функцию. Запишите его как правило.",
+  "error.ruleForeignDataReference":
+    "Это правило читает data вне своего пакета. Используйте input.",
+  "error.ruleWithTargetNotAllowed":
+    'Это правило не может заменить {{path}} через "with". Его решение должно опираться на то, что наблюдал Scryer.',
+  "error.ruleHeadDefinedAsFunction":
+    "{{path}} имеет значение для Scryer и не может быть функцией. Запишите его как правило.",
+  "error.ruleHeadNameRetired":
+    "Правила запросов больше не читают {{path}}. Помечайте тайтл через add_tags.",
+  "error.ruleQualityProfileUnknown":
+    "Профиля качества с таким именем нет, поэтому правило не может его применить.",
+  "error.ruleQualityProfileAmbiguous":
+    "Это имя носят несколько профилей качества. Переименуйте один, чтобы правило указывало на единственный профиль.",
+  "error.ruleMonitorUnsupported":
+    "Ни одна библиотека, к которой относится правило, не принимает этот тип отслеживания.",
+  "error.ruleAudioLanguageUnknown":
+    "Scryer не знает этот язык аудио.",
+  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+    "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+    "Правило не определяет ни одного действия, поэтому никогда ничего не сделает.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
+    "Правило определяет действие, которое его область не может выполнить.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+    "Библиотека, указанная для перемещения, содержит другой вид тайтлов, чем библиотеки правила.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+    "Библиотека, указанная для перемещения, не существует.",
+  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+    "Корневая папка, указанная для перемещения, не является настроенным корнем библиотеки.",
+  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+    "Правило не дало этому объекту ни решения, ни ошибки.",
+  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+    "Профиль качества, который задаёт правило, не существует.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "Число тайтлов за запуск должно быть не меньше 1.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "Задайте число тайтлов за запуск: это правило может удалять.",
+  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+    "Правило уже изменено другим сохранением. Ничего не сохранено; перезагрузите правило и повторите.",
+  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+    "Это правило сохранено до того, как правила стали объявлять свои действия, поэтому оно никогда не запускается. Замените его исходный код, чтобы оно снова работало.",
   "settings.refMaintFactsWatchedByAnyone":
     "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
   "settings.refMaintFactsLastWatchedByAnyoneAt":
@@ -7984,6 +8510,14 @@ const ru: LocaleDictionary = {
     "Максимальное число запросов в минуту должно быть не меньше 1; оставьте поле пустым, чтобы не ограничивать число запросов.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Максимальное число запросов в минуту задаётся для каждого управляемого индексатора, а не для индексатора, который их синхронизирует.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит запросов.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит загрузок.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Не удалось надёжно проверить месячный расход индексатора; запрос отклонён.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Месячные лимиты запросов и загрузок должны быть положительными целыми числами или пустыми.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Нижний предел минимального числа сидов не может быть отрицательным.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
@@ -10322,10 +10856,26 @@ const ru: LocaleDictionary = {
     "Правило должно объявлять назначенный ему пакет.",
   "error.ruleInputImportUnsupported":
     "Обращайтесь к входным данным правила напрямую, а не импортируйте их под другим именем.",
+  "error.ruleActionValueNotLiteral":
+    "Присвойте этой голове простой литерал: строку в кавычках, целое число для set_lease_days или список строк в кавычках для голов тегов и языков аудио.",
+  "error.ruleActionValueInvalid":
+    "Значение этой головы недопустимо: имя не может быть пустым, теги должны быть допустимыми метками, срок хранения — от 0 до 3650 дней, а значения отслеживания и языков — из тех, что предлагает Scryer.",
+  "error.ruleActionUnknownQualityProfile":
+    "Профиля качества с таким именем нет, поэтому правило не может его применить.",
+  "error.ruleActionUndefinedTag":
+    "Этот тег не определён в Настройки › Теги, поэтому при применении правила он отбрасывается.",
+  "settings.regoSnippet.shapeRequest":
+    "Задать срок хранения, который запишет одобрение, если факт выполняется.",
+  "settings.regoSnippet.tagRequest":
+    "Пометить запрошенный тайтл тегом, если факт выполняется.",
+  "error.ruleHostHelperRedefined":
+    "days_since предоставляется Scryer и не может быть переопределён. Дайте своему помощнику другое имя.",
+  "error.ruleUnreferencedRule":
+    "Это правило не является действием, и ничто в исходном коде его не использует. Проверьте написание, если оно задумывалось как действие.",
   "error.ruleMatchRequired":
     "Определите логическое правило match для этого условия обслуживания.",
   "error.ruleVoteRequired":
-    "Определите approve, deny, manual или tags для этого условия запросов.",
+    "Определите для этого правила запросов голос (approve, deny или manual), значение, меняющее одобрение, или add_tags.",
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
     "Выберите действие или последовательность действий, но не оба варианта.",
   "error.reason.INTERFACE_ACTION_DEFINITION_REQUIRED":
@@ -10684,8 +11234,14 @@ const ru: LocaleDictionary = {
     "Отклонить запрос, если его признак контента для взрослых имеет значение true.",
   "settings.regoSnippet.manualRequest":
     "Потребовать ручной проверки, когда число недавних одобрений достигает порога.",
-  "settings.regoSnippet.matchTag":
-    "Выбрать объект обслуживания по тегу. Это условие не определяет действие.",
+  "settings.regoHelper.daysSince":
+    "Полные дни между меткой времени RFC3339 и временем вычисления. Только для правил обслуживания.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Отключить отслеживание объекта с тегом.",
+  "settings.regoSnippet.tagAfterDays":
+    "Пометить тегом объект, добавленный больше заданного числа дней назад.",
+  "settings.regoSnippet.setProfile":
+    "Перевести крупные тайтлы на указанный профиль качества.",
   "settings.trustedProxiesTitle":
     "Доверенные прокси для ограничения частоты запросов",
   "settings.trustedProxiesHelp":
@@ -11473,6 +12029,15 @@ const ru: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Без ограничений",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Максимум запросов в минуту должен быть целым числом не меньше 1; оставьте поле пустым для отключения ограничения.",
+  "form.indexerMaxRequestsPerMonth": "Максимум запросов в месяц",
+  "form.indexerMaxGrabsPerMonth": "Максимум загрузок в месяц",
+  "form.indexerMonthlyLimitPlaceholder": "Без ограничений",
+  "form.indexerMonthlyLimitHelp":
+    "Учитывается только трафик этого экземпляра Scryer. Загрузка резервируется до получения файла и остаётся учтённой, если результат неизвестен. Лимиты сбрасываются в 00:00 UTC в первый день месяца.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Максимум запросов в месяц должен быть целым числом не меньше 1 или пустым.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Максимум загрузок в месяц должен быть целым числом не меньше 1 или пустым.",
   "form.subtitleProviderFacetsRequired":
     "Выберите хотя бы один тип содержимого. Scryer никогда не выполняет поиск через провайдера, у которого не выбран ни один тип.",
   "qualityProfile.qualityPreference": "Приоритет качества",
@@ -11819,50 +12384,11 @@ const ru: LocaleDictionary = {
     "Автоматическая очистка приостановлена до устранения проблемы: {{error}}",
   "settings.recycleBinScheduledDeletion": "Удаление по расписанию",
   "settings.maintenanceActionSequence": "Последовательность действий",
-  "settings.maintenanceSequenceTitle": "Последовательность действий",
-  "settings.maintenanceSequenceHelp":
-    "Выполнять эти шаги по порядку после окончания периода отсрочки для объекта. Пустая последовательность только фиксирует совпадения, не выполняя никаких действий.",
-  "settings.maintenanceSequenceEmpty":
-    "Только пробный запуск — шаги действий не настроены.",
   "settings.maintenanceSequenceObserveOnly": "Только пробный запуск",
-  "settings.maintenanceSequenceSummary": "Сводка последовательности",
-  "settings.maintenanceSequenceSummaryTarget": "Объекты: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "При включении: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Последствия: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "соответствующий условию тайтл",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "соответствующий условию тайтл, его сезоны и эпизоды",
-  "settings.maintenanceSequenceTargetSeason": "соответствующий условию сезон",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "соответствующий условию сезон и его эпизоды",
-  "settings.maintenanceSequenceTargetEpisode": "соответствующий условию эпизод",
-  "settings.maintenanceSequencePreviewPlan":
-    "Последствия по порядку для этого предпросмотра",
-  "settings.maintenanceSequencePreviewDescendants": "включая дочерние объекты",
-  "settings.maintenanceSequencePreviewMatchedScope":
-    "только объекты выбранной области, соответствующие условию",
-  "settings.maintenanceSequenceAdd": "Добавить шаг",
-  "settings.maintenanceSequencePreset": "Шаблон последовательности",
-  "settings.maintenanceSequencePresetApply": "Заменить шаблоном",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Изменить профиль, затем выполнить поиск, если он изменился",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Отключить отслеживание дочерних объектов, затем удалить файлы",
-  "settings.maintenanceSequenceTerminal": "Завершающий",
-  "settings.maintenanceSequenceDependencies": "Требуется: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants": "Включить сезоны и эпизоды",
-  "settings.maintenanceSequenceSearchCondition": "Условие поиска",
-  "settings.maintenanceSequenceSearchUnconditional": "Всегда запрашивать поиск",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Только после изменения профиля",
   "settings.maintenanceSequenceHistoryWaiting": "ожидание предыдущего шага",
   "settings.maintenanceSequenceHistorySearchRequested": "поиск запрошен",
   "settings.maintenanceSequenceHistorySearchAccepted": "принято",
   "settings.maintenanceSequenceHistoryJob": "задание {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "Этот сохранённый шаг недоступен в текущем каталоге. Удалите его или восстановите совместимый каталог перед сохранением или предпросмотром.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "Каталог шагов действий недоступен. Сохранённые шаги по-прежнему видны, но сохранение и предпросмотр несохранённых изменений приостановлены до его загрузки.",
   "settings.maintenanceSequenceStepUnmonitor": "Отключить отслеживание",
   "settings.maintenanceSequenceStepDeleteFiles": "Удалить файлы",
   "settings.maintenanceSequenceStepChangeQualityProfile":
@@ -12047,6 +12573,10 @@ const ru: LocaleDictionary = {
     "Политика списков владельца: auto, approval или none; approval, если значение не сохранено",
   "settings.refReqRequestListRank":
     "Позиция элемента в списке; отсутствует, если список не присваивает ему позицию",
+  "settings.refReqRequestListIsWatchlist":
+    "True, если это собственный список «смотреть позже» владельца в привязанной учётной записи",
+  "settings.refReqRequestListSourceType":
+    "Тип списка у провайдера, в нижнем регистре (например watchlist или user_list)",
   "move.gatheringInfo": "Сбор всех сведений...",
   "move.methodManaged": "Scryer переместит файлы",
   "move.methodManual": "Я перемещу файлы сам",
@@ -12476,6 +13006,27 @@ const ru: LocaleDictionary = {
   "script.schedule.cronUnreadable": "Не удалось описать это выражение.",
   "script.schedule.invalid": "Некорректное расписание",
   "script.schedule.nextRuns": "Ближайшие запуски",
+  "script.schedule.describe.everySeconds": "Каждые {{count}} секунды",
+  "script.schedule.describe.everySeconds.one": "Каждую {{count}} секунду",
+  "script.schedule.describe.everySeconds.few": "Каждые {{count}} секунды",
+  "script.schedule.describe.everySeconds.many": "Каждые {{count}} секунд",
+  "script.schedule.describe.everyMinute": "Каждую минуту",
+  "script.schedule.describe.everyMinutes": "Каждые {{count}} минуты",
+  "script.schedule.describe.everyMinutes.one": "Каждую {{count}} минуту",
+  "script.schedule.describe.everyMinutes.few": "Каждые {{count}} минуты",
+  "script.schedule.describe.everyMinutes.many": "Каждые {{count}} минут",
+  "script.schedule.describe.everyHour": "Каждый час",
+  "script.schedule.describe.everyHours": "Каждые {{count}} часа",
+  "script.schedule.describe.everyHours.one": "Каждый {{count}} час",
+  "script.schedule.describe.everyHours.few": "Каждые {{count}} часа",
+  "script.schedule.describe.everyHours.many": "Каждые {{count}} часов",
+  "script.schedule.describe.everyDay": "Каждый день",
+  "script.schedule.describe.everyDays": "Каждые {{count}} дня",
+  "script.schedule.describe.everyDays.one": "Каждый {{count}} день",
+  "script.schedule.describe.everyDays.few": "Каждые {{count}} дня",
+  "script.schedule.describe.everyDays.many": "Каждые {{count}} дней",
+  "script.schedule.describe.daily": "Каждый день в {{time}}",
+  "script.schedule.describe.weekly": "{{days}} в {{time}}",
   "settings.scriptInterpreters.title": "Интерпретаторы скриптов",
   "settings.scriptInterpreters.description":
     "Программы, которые Scryer использует для запуска скриптов на каждом языке. Оставьте поле пустым, чтобы использовать программу, найденную в PATH.",
@@ -13029,11 +13580,11 @@ const ru: LocaleDictionary = {
     "Загрузка, проверка и применение подписанного обновления приложения.",
   "jobs.builtin.MaintenanceRuleEvaluation.name": "Оценка правил обслуживания",
   "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Оценка включённых правил обслуживания и сверка кандидатов жизненного цикла. Никогда не выполняет действия.",
+    "Запуск и истечение аренд запросов по расписанию. Каждое правило обслуживания оценивается по собственному расписанию; запуск вручную оценивает все включённые правила и никогда не выполняет действия.",
   "jobs.builtin.LifecycleActionHandling.name":
     "Выполнение действий обслуживания",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Обработка готовых кандидатов обслуживания для активированных правил наблюдения с учётом ограничений экземпляра и полных повторных проверок безопасности.",
+    "Каждое правило обслуживания выполняет действия над своими кандидатами сразу после собственной плановой оценки или при ручном запуске этого правила, с учётом шлюзов эффектов экземпляра и полных повторных проверок безопасности. Эта задача не выполняет действия ни для одного правила.",
   "jobs.builtin.MediaServerSignalSync.name":
     "Синхронизация просмотров медиасерверов",
   "jobs.builtin.MediaServerSignalSync.description":
@@ -13540,6 +14091,35 @@ const ru: LocaleDictionary = {
     "Перетащите, чтобы изменить порядок {{value}}",
   "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
   "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
+  "ruleOutput.maintenance.add_tags": "Добавить теги",
+  "ruleOutput.maintenance.remove_tags": "Удалить теги",
+  "ruleOutput.maintenance.set_quality_profile": "Изменить профиль качества",
+  "ruleOutput.maintenance.monitor": "Отслеживать",
+  "ruleOutput.maintenance.search": "Поиск",
+  "ruleOutput.maintenance.fetch_subtitles": "Загрузить субтитры",
+  "ruleOutput.maintenance.move_to_library": "Переместить в библиотеку",
+  "ruleOutput.maintenance.move_to_root": "Переместить в корневую папку",
+  "ruleOutput.maintenance.unmonitor": "Отключить отслеживание",
+  "ruleOutput.maintenance.delete_files": "Удалить файлы",
+  "ruleOutput.maintenance.delete_title": "Удалить тайтл и файлы",
+  "ruleOutput.maintenance.notify": "Уведомить",
+  "ruleOutput.maintenance.notify.placeholder": "Текст уведомления",
+  "ruleOutput.request.approve": "Одобрить",
+  "ruleOutput.request.deny": "Отклонить",
+  "ruleOutput.request.manual": "Оставить на рассмотрение",
+  "ruleOutput.request.set_quality_profile": "Профиль качества",
+  "ruleOutput.request.set_lease_days": "Срок хранения",
+  "ruleOutput.request.set_lease_days.placeholder":
+    "Дни, или 0, чтобы хранить вечно",
+  "ruleOutput.request.set_monitor": "Отслеживание",
+  "ruleOutput.request.set_required_audio_languages": "Обязательные языки аудио",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Предпочитаемые языки аудио",
+  "ruleOutput.request.add_tags": "Добавить теги",
+  "ruleOutput.request.notify": "Уведомить",
+  "ruleOutput.request.notify.placeholder": "Текст уведомления",
+  "ruleOutput.request.reasons": "Коды причин",
+  "ruleOutput.request.reasons.placeholder": "По одному коду причины в строке",
   "settings.proxyReachThrough": "Подключаться через",
   "settings.proxyReachThroughHelp":
     "Scryer отправляет запросы к этому решателю через выбранный транспортный прокси или туннель. «Напрямую» — подключение из собственной сети Scryer.",

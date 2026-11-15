@@ -63,6 +63,34 @@ pub enum LifecycleClaimProducerValue {
     RequestLease,
 }
 
+/// A head a request rule's source can define. Votes decide the outcome; the
+/// other heads shape what an approval does or say something to the people who
+/// are notified about the request.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(name = "RequestActionHead", rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum RequestActionHeadValue {
+    /// Vote to approve.
+    Approve,
+    /// Vote to refuse. Outranks every other vote.
+    Deny,
+    /// Vote to leave the request for a person.
+    Manual,
+    /// Approve into the named quality profile.
+    SetQualityProfile,
+    /// Approve with this lease, in days; `0` keeps the title forever.
+    SetLeaseDays,
+    /// Approve with this monitoring policy.
+    SetMonitor,
+    /// Approve with these required audio languages.
+    SetRequiredAudioLanguages,
+    /// Approve with these preferred audio languages, in order.
+    SetPreferredAudioLanguages,
+    /// Stamp these tags on the title an approval creates.
+    AddTags,
+    /// Add this text to the notification sent when the request is submitted.
+    Notify,
+}
+
 /// What a lifecycle claim is.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -112,10 +140,92 @@ pub struct RequestRuleSet {
     /// rule that produced them, so this can be non-zero for a rule that is now
     /// disabled.
     pub decision_count: i32,
+    /// What the matcher in force can do, read from its source. Null when the
+    /// source cannot be read.
+    pub declared_actions: Option<RequestDeclaredActions>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
     pub updated_at: DateTime<Utc>,
+}
+
+/// Every head a request rule's source defines, and every literal value each
+/// valued head can produce.
+#[derive(SimpleObject, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestDeclaredActions {
+    /// The heads the source defines.
+    pub heads: Vec<RequestActionHeadValue>,
+    /// Quality profile names `set_quality_profile` can set.
+    pub quality_profiles: Vec<String>,
+    /// Lease lengths `set_lease_days` can set; `0` is forever.
+    pub lease_days: Vec<i32>,
+    /// Monitoring policies `set_monitor` can set.
+    pub monitors: Vec<String>,
+    /// Audio language codes `set_required_audio_languages` can set.
+    pub required_audio_languages: Vec<String>,
+    /// Audio language codes `set_preferred_audio_languages` can set.
+    pub preferred_audio_languages: Vec<String>,
+    /// Tags `add_tags` can stamp.
+    pub add_tags: Vec<String>,
+    /// Texts `notify` can send.
+    pub notifications: Vec<String>,
+}
+
+/// One text value and the rule set that set it.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub struct RequestShapedText {
+    /// The value.
+    pub value: String,
+    /// Name of the rule set that set it, as it was when the request was
+    /// evaluated.
+    pub rule_set_name: String,
+}
+
+/// One number and the rule set that set it.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub struct RequestShapedNumber {
+    /// The value.
+    pub value: i32,
+    /// Name of the rule set that set it, as it was when the request was
+    /// evaluated.
+    pub rule_set_name: String,
+}
+
+/// One list of texts and the rule set that set it.
+#[derive(SimpleObject, Clone, Debug, PartialEq, Eq)]
+pub struct RequestShapedTextList {
+    /// The value.
+    pub value: Vec<String>,
+    /// Name of the rule set that set it, as it was when the request was
+    /// evaluated.
+    pub rule_set_name: String,
+}
+
+/// What an approval of a request is changed to by its rules.
+///
+/// Applied on an automatic approval, offered to the approver on manual review,
+/// and kept in the trace only on a denial. A head two rules set to different
+/// values is listed in `conflicts`, and a head whose value cannot apply to the
+/// request in `invalid`; neither carries a value.
+#[derive(SimpleObject, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestShaping {
+    /// Quality profile name.
+    pub quality_profile: Option<RequestShapedText>,
+    /// Lease in days; `0` keeps the title forever.
+    pub lease_days: Option<RequestShapedNumber>,
+    /// Monitoring policy.
+    pub monitor: Option<RequestShapedText>,
+    /// Required audio language codes.
+    pub required_audio_languages: Option<RequestShapedTextList>,
+    /// Preferred audio language codes, in order.
+    pub preferred_audio_languages: Option<RequestShapedTextList>,
+    /// Texts the rules added to the submission notification, in evaluation
+    /// order. Always empty on the requester's own surfaces.
+    pub notifications: Vec<RequestShapedText>,
+    /// Heads two rules set to different values.
+    pub conflicts: Vec<RequestActionHeadValue>,
+    /// Heads whose value cannot apply to this request.
+    pub invalid: Vec<RequestActionHeadValue>,
 }
 
 /// One immutable revision of a request rule set's matcher.
@@ -146,6 +256,11 @@ pub struct RequestRuleSetDetail {
     pub rule_set: RequestRuleSet,
     /// The revision currently in force.
     pub revision: RequestRuleRevision,
+    /// What the revision in force can do, read from its source.
+    pub declared_actions: Option<RequestDeclaredActions>,
+    /// The visual builder's stored document, or null when the rule was not
+    /// written with the builder. Read only by the single rule set query.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
 /// Identifier returned after deleting a request rule set.
@@ -164,6 +279,10 @@ pub struct RequestRuleValidationPayload {
     pub valid: bool,
     /// Validation errors; empty when valid.
     pub errors: Vec<String>,
+    /// Findings that never block saving.
+    pub warnings: Vec<super::rules::RuleValidationDiagnosticPayload>,
+    /// What the source can do, or null when it could not be read.
+    pub declared_actions: Option<RequestDeclaredActions>,
 }
 
 /// One reason a decision came out the way it did, in the only form that is safe
@@ -239,6 +358,9 @@ pub struct RequestRuleDecision {
     pub tags: Vec<String>,
     /// Schema version of the input document the rules were evaluated against.
     pub input_schema_version: i32,
+    /// What the rules changed an approval to, or null when they changed
+    /// nothing.
+    pub shaping: Option<RequestShaping>,
 }
 
 /// Author-side preview of one matcher against one hypothetical request.
@@ -292,6 +414,9 @@ pub struct RequestPreflightPayload {
     /// `no_rule_matched`), or null when a rule decided outright. It carries no
     /// rule internals: it names the shape of the fallback, never a vote.
     pub fallback_reason: Option<String>,
+    /// What an approval would be changed to, or null when nothing would be.
+    /// Never carries a notification.
+    pub shaping: Option<RequestShaping>,
 }
 
 /// One request lease on one title: a time to delete that rules read.
@@ -397,6 +522,9 @@ pub struct CreateRequestRuleSetInput {
     pub rego_source: String,
     /// Libraries to confine the rule to. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    /// The visual builder's document, stored as given: a JSON object of at
+    /// most 64 KiB. Omitted or null stores none.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
 /// Replaces the matcher of an existing rule set, appending revision N+1.
@@ -406,6 +534,9 @@ pub struct UpdateRequestRuleMatcherInput {
     pub rule_set_id: ID,
     /// Replacement matcher source as written in the editor.
     pub rego_source: String,
+    /// The visual builder's document: a JSON object of at most 64 KiB.
+    /// Omitted keeps the stored one; null clears it.
+    pub builder_model: async_graphql::MaybeUndefined<Json<serde_json::Value>>,
 }
 
 /// Renames and re-scopes a rule set without touching its matcher, so no
@@ -427,6 +558,9 @@ pub struct UpdateRequestRuleMetadataInput {
 pub struct ValidateRequestRuleInput {
     /// Matcher source to validate, as written in the editor.
     pub rego_source: String,
+    /// Libraries the rule would be confined to, which decide the monitoring
+    /// policies it may set. Omitted or empty means every library.
+    pub library_ids: Option<Vec<String>>,
 }
 
 /// The hypothetical request an author-side preview is evaluated against.

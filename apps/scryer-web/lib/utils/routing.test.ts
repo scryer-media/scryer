@@ -14,7 +14,8 @@ import {
   maintenanceRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
-  rulesSectionsFor,
+  BETA_RULES_SECTIONS,
+  RULES_SECTIONS,
   type ParsedAppRoute,
 } from "./routing.ts";
 import { isMediaSettingsSection } from "./routes.ts";
@@ -396,19 +397,10 @@ test("indexer settings always offer the search and client panes", () => {
   assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
 });
 
-test("rulesSectionsFor drops maintenance and request rules until experimental features are on", () => {
-  assert.deepEqual(rulesSectionsFor(true), [
-    "scoring",
-    "maintenance",
-    "request",
-  ]);
-  // One entry left means there is no kind to switch between, which is how the
-  // Rules page decides to drop its kind rail.
-  assert.deepEqual(rulesSectionsFor(false), ["scoring"]);
-  // Scoring stays reachable either way, and its path is unchanged.
-  for (const enabled of [true, false]) {
-    assert.ok(rulesSectionsFor(enabled).includes("scoring"));
-  }
+test("every rule kind is offered, with maintenance and request badged beta", () => {
+  assert.deepEqual(RULES_SECTIONS, ["scoring", "maintenance", "request"]);
+  assert.deepEqual([...BETA_RULES_SECTIONS].sort(), ["maintenance", "request"]);
+  assert.equal(BETA_RULES_SECTIONS.has("scoring"), false);
   assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
   assert.equal(buildRulesPath("request"), "/automation/rules/request");
 });

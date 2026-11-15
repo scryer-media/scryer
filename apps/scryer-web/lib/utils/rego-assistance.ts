@@ -4,6 +4,13 @@ import releaseContract from "../contracts/rule-input-contract.json" with { type:
 import requestContract from "../contracts/request-input-contract.json" with { type: "json" };
 import maintenanceContract from "../contracts/maintenance-input-contract.json" with { type: "json" };
 import catalog from "../contracts/rego-assistance.json" with { type: "json" };
+import type { RuleBuilderOutputDescriptor } from "./rule-builder.ts";
+import {
+  isRuleOutputInVariant,
+  ruleOutputHeadHelp,
+  ruleOutputHeadLabel,
+  ruleOutputSnippet,
+} from "./rule-output-vocabulary.ts";
 
 export type RegoFamily = "release" | "request" | "maintenance";
 export type RegoField = {
@@ -13,6 +20,72 @@ export type RegoField = {
   availabilityKey?: string;
 };
 export const regoCatalog = catalog;
+
+export type RegoHelper = {
+  name: string;
+  args: string[];
+  returns: string;
+  descKey: string;
+};
+
+/// Helpers the host writes into one kind of rule's package rather than
+/// registering with the engine, so they exist only for that family.
+const FAMILY_HELPERS: Record<RegoFamily, RegoHelper[]> = {
+  release: [],
+  request: [],
+  maintenance: [
+    {
+      name: "days_since",
+      args: ["ts"],
+      returns: "number",
+      descKey: "settings.regoHelper.daysSince",
+    },
+  ],
+};
+
+/// Every helper an author can call in a rule of this family.
+export function regoHelpers(family: RegoFamily): RegoHelper[] {
+  return [...catalog.helpers, ...FAMILY_HELPERS[family]];
+}
+/// The builder family whose served output descriptors describe a Rego
+/// family's heads.
+export const REGO_FAMILY_OUTPUTS: Record<RegoFamily, string> = {
+  release: "scoring",
+  request: "request",
+  maintenance: "maintenance",
+};
+
+/// One head as the editor offers and explains it, built from the head's served
+/// descriptor and its translation tags.
+export type RegoHeadAssist = {
+  /// The Rego head name, which is the completion label.
+  head: string;
+  /// The translated label, or the head when the tag has no translation.
+  detail: string;
+  /// The translated help; null when it has none, and then left out.
+  documentation: string | null;
+  /// The rule the completion inserts, in the editor's snippet syntax.
+  snippet: string;
+};
+
+/// The heads a rule of this variant can define. Empty while the descriptors
+/// are loading or after the read failed, so the editor then offers no heads
+/// and works as it does for a family without head assistance.
+export function regoHeadAssists(
+  descriptors: readonly RuleBuilderOutputDescriptor[],
+  t: (key: string) => string,
+  variant: string | null | undefined,
+): RegoHeadAssist[] {
+  return descriptors
+    .filter((descriptor) => isRuleOutputInVariant(descriptor, variant))
+    .map((descriptor) => ({
+      head: descriptor.head,
+      detail: ruleOutputHeadLabel(t, descriptors, descriptor.id),
+      documentation: ruleOutputHeadHelp(t, descriptor),
+      snippet: ruleOutputSnippet(descriptor),
+    }));
+}
+
 export const regoContracts = {
   release: releaseContract,
   request: requestContract,
