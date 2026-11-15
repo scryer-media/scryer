@@ -414,7 +414,8 @@ impl AppUseCase {
             Ok(mut by_title) => {
                 for rows in by_title.values_mut() {
                     rows.retain(|row| {
-                        row.is_favorite && watch.favorite_connection_ids.contains(&row.connection_id)
+                        row.is_favorite
+                            && watch.favorite_connection_ids.contains(&row.connection_id)
                     });
                 }
                 by_title.retain(|_, rows| !rows.is_empty());

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::{
     AppError, AppResult, AppUseCase, UiCatalogViewUpdate, UiDashboardBreakpoint, UiDashboardLayout,
     UiSettings, UiSettingsFacet, UiSettingsUpdate, UiTableColumnSetting, UiTableViewMode,
+    UiTourOutcome,
 };
 use scryer_domain::User;
 
@@ -52,6 +53,11 @@ const MAX_DASHBOARD_COLUMNS: i32 = 24;
 const MAX_DASHBOARD_ITEMS: usize = 64;
 /// Longest dashboard panel id accepted.
 const MAX_DASHBOARD_PANEL_ID_LEN: usize = 64;
+
+/// Longest guided tour id accepted, e.g. `onboarding` or `release-0.23.0`.
+const MAX_TOUR_ID_LEN: usize = 64;
+/// Most tours one progress update may record.
+const MAX_TOURS_PER_UPDATE: usize = 32;
 
 impl AppUseCase {
     pub async fn get_my_ui_settings(&self, actor: &User) -> AppResult<UiSettings> {
@@ -139,6 +145,60 @@ impl AppUseCase {
             .unwrap_or_else(|| UiSettings::defaults_for_user(actor.id.clone()));
         Ok(without_unknown_table_columns(settings))
     }
+
+    /// Records that the caller finished or skipped the named guided tours, so
+    /// the web does not offer them again.
+    pub async fn record_my_ui_tours(
+        &self,
+        actor: &User,
+        tour_ids: Vec<String>,
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings> {
+        let tour_ids = validate_tour_ids(tour_ids)?;
+        let settings = self
+            .services
+            .identity
+            .ui_settings
+            .record_tours(&actor.id, &tour_ids, outcome)
+            .await?;
+        Ok(without_unknown_table_columns(settings))
+    }
+}
+
+/// Trims, de-duplicates and checks tour ids. Tour ids are opaque here: the web
+/// owns the tour registry.
+fn validate_tour_ids(tour_ids: Vec<String>) -> AppResult<Vec<String>> {
+    use crate::error_reasons::settings;
+
+    let mut seen = HashSet::new();
+    let mut accepted = Vec::with_capacity(tour_ids.len());
+    for tour_id in tour_ids {
+        let tour_id = tour_id.trim().to_string();
+        if tour_id.is_empty()
+            || tour_id.len() > MAX_TOUR_ID_LEN
+            || !tour_id.starts_with(|ch: char| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            || !tour_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.'
+            })
+        {
+            return Err(AppError::validation_refused(
+                settings::UI_TOUR_ID_INVALID,
+                format!(
+                    "tour ids must be 1 to {MAX_TOUR_ID_LEN} lowercase letters, digits, dots or hyphens"
+                ),
+            ));
+        }
+        if seen.insert(tour_id.clone()) {
+            accepted.push(tour_id);
+        }
+    }
+    if accepted.is_empty() || accepted.len() > MAX_TOURS_PER_UPDATE {
+        return Err(AppError::validation_refused(
+            settings::UI_TOUR_COUNT_OUT_OF_RANGE,
+            format!("a tour progress update must name 1 to {MAX_TOURS_PER_UPDATE} tours"),
+        ));
+    }
+    Ok(accepted)
 }
 
 fn validate_dashboard_layout(layout: &UiDashboardLayout) -> AppResult<()> {
@@ -344,4 +404,48 @@ fn validate_table_column(column: &UiTableColumnSetting) -> AppResult<()> {
 fn without_unknown_table_columns(mut settings: UiSettings) -> UiSettings {
     settings.table_columns.retain(is_known_table_column);
     settings
+}
+
+#[cfg(test)]
+mod tour_id_tests {
+    use super::{MAX_TOURS_PER_UPDATE, validate_tour_ids};
+    use crate::{AppError, error_reasons::settings};
+
+    fn reason(error: AppError) -> Option<&'static str> {
+        error.validation_reason()
+    }
+
+    #[test]
+    fn tour_ids_are_trimmed_and_deduplicated_in_order() {
+        let accepted = validate_tour_ids(vec![
+            " onboarding ".into(),
+            "release-0.23.0".into(),
+            "onboarding".into(),
+        ])
+        .expect("valid tour ids");
+        assert_eq!(accepted, vec!["onboarding", "release-0.23.0"]);
+    }
+
+    #[test]
+    fn malformed_tour_ids_are_refused_with_a_reason() {
+        for tour_id in ["", "Onboarding", "-leading", "has space", &"a".repeat(65)] {
+            let error = validate_tour_ids(vec![tour_id.to_string()]).expect_err(tour_id);
+            assert_eq!(
+                reason(error),
+                Some(settings::UI_TOUR_ID_INVALID),
+                "{tour_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_update_names_between_one_and_the_most_tours() {
+        let error = validate_tour_ids(Vec::new()).expect_err("no tours");
+        assert_eq!(reason(error), Some(settings::UI_TOUR_COUNT_OUT_OF_RANGE));
+        let too_many = (0..=MAX_TOURS_PER_UPDATE)
+            .map(|index| format!("tour-{index}"))
+            .collect();
+        let error = validate_tour_ids(too_many).expect_err("too many tours");
+        assert_eq!(reason(error), Some(settings::UI_TOUR_COUNT_OUT_OF_RANGE));
+    }
 }

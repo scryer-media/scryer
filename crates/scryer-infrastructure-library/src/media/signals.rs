@@ -217,7 +217,12 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
         // roster already names, changes nothing: it opens no write at all.
         // The swap would only rewrite every row to restamp it.
         if self
-            .participant_unchanged(connection_id, external_user_id, &deduped, read_through.as_ref())
+            .participant_unchanged(
+                connection_id,
+                external_user_id,
+                &deduped,
+                read_through.as_ref(),
+            )
             .await?
         {
             return Ok(deduped.len() as u64);

@@ -3560,6 +3560,64 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "拖动以重新排序 {{value}}",
   "qualityProfile.decisionStepMoveUp": "上移 {{value}}",
   "qualityProfile.decisionStepMoveDown": "下移 {{value}}",
+  "settings.proxyReachThrough": "经由",
+  "settings.proxyReachThroughHelp":
+    "Scryer 通过所选的传输代理或隧道向此求解器发送请求。直连表示从 Scryer 自身的网络访问求解器。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "挑战求解器不能经由另一个挑战求解器访问。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "挑战求解器不能经由自身访问。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "未找到用于访问求解器的代理或隧道。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "用于访问求解器的代理或隧道已禁用。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "只有挑战求解器可以经由其他代理访问。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "有一个或多个挑战求解器经由此代理访问。请先修改它们。",
+  "tours.onboarding.welcome.title": "欢迎使用 Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer 会查找、下载并整理你的电影、剧集和动画。下面带你快速了解一下，随时可以跳过。",
+  "tours.onboarding.search.title": "搜索一切",
+  "tours.onboarding.search.body":
+    "在任何地方查找影视、设置或操作。按 ⌘K 或 Ctrl+K 可用键盘打开搜索。",
+  "tours.onboarding.libraries.title": "你的媒体库",
+  "tours.onboarding.libraries.body":
+    "电影、剧集和动画各有一个媒体库：已有的、缺少的和正在获取的都在这里。",
+  "tours.onboarding.discover.title": "发现与请求",
+  "tours.onboarding.discover.body":
+    "浏览基于你媒体库的推荐，请求影视，并在“请求”中跟踪每个请求。",
+  "tours.onboarding.lists.title": "列表",
+  "tours.onboarding.lists.body":
+    "关注 Trakt 或你的 Plex 待看列表等来源的列表。Scryer 会保持同步，并为你添加或请求其中的影视。",
+  "tours.onboarding.activity.title": "活动",
+  "tours.onboarding.activity.body":
+    "实时显示下载和导入，以及需要你决定的事项。",
+  "tours.onboarding.indexers.title": "索引器和下载客户端",
+  "tours.onboarding.indexers.body":
+    "Scryer 至少需要一个索引器来查找发布，还需要一个下载客户端来下载。下载客户端就在下方。",
+  "tours.onboarding.indexers.action": "添加索引器",
+  "tours.onboarding.qualityProfiles.title": "质量配置",
+  "tours.onboarding.qualityProfiles.body":
+    "质量配置决定影视可以接受哪些质量，以及 Scryer 何时继续寻找更好的发布。",
+  "tours.onboarding.rules.title": "规则",
+  "tours.onboarding.rules.body":
+    "规则为发布打分，让 Scryer 优先选择你想要的，跳过你不想要的。",
+  "tours.onboarding.mediaServers.title": "媒体服务器",
+  "tours.onboarding.mediaServers.body":
+    "连接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看过什么。若要在 Scryer 导入后刷新服务器，还需在“插件”中安装该服务器的插件。",
+  "tours.onboarding.notifications.title": "通知",
+  "tours.onboarding.notifications.body":
+    "在你希望的地方获知抓取、导入以及需要处理的事项。",
+  "tours.onboarding.plugins.title": "插件",
+  "tours.onboarding.plugins.body":
+    "插件可添加索引器、下载客户端和通知服务。在这里安装和更新它们。",
+  "tours.stepOf": "第 {{current}} 步，共 {{total}} 步",
+  "tours.skip": "跳过导览",
+  "tours.back": "上一步",
+  "tours.next": "下一步",
+  "tours.done": "完成",
+  "tours.saveFailed": "无法保存导览进度，此导览可能会再次出现。",
 };
 
 export default zh_CN;

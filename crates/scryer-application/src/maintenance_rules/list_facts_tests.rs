@@ -164,7 +164,7 @@ fn no_fact_names_a_personal_list() {
             watchlists: WatchlistLoad::NotLoaded,
             metadata: MetadataLoad::default(),
             episode_shapes: EpisodeShapeLoad::default(),
-        favorites: FavoriteLoad::NotLoaded,
+            favorites: FavoriteLoad::NotLoaded,
             lists: Some(list_facts_from_rows(&rows, &subscriptions)),
             origins: Some(origins),
         },
@@ -389,7 +389,7 @@ fn unread_list_facts_stay_unknown() {
             watchlists: WatchlistLoad::NotLoaded,
             metadata: MetadataLoad::default(),
             episode_shapes: EpisodeShapeLoad::default(),
-        favorites: FavoriteLoad::NotLoaded,
+            favorites: FavoriteLoad::NotLoaded,
             lists: None,
             origins: Some(HashMap::from([(
                 "title-alpha".to_string(),
@@ -434,7 +434,7 @@ fn an_unread_request_store_leaves_only_origin_facts_unknown() {
             watchlists: WatchlistLoad::NotLoaded,
             metadata: MetadataLoad::default(),
             episode_shapes: EpisodeShapeLoad::default(),
-        favorites: FavoriteLoad::NotLoaded,
+            favorites: FavoriteLoad::NotLoaded,
             lists: Some(facts),
             origins: None,
         },
@@ -1143,7 +1143,11 @@ fn favourite(
     }
 }
 
-fn favourite_rows(rows: Vec<UserMediaSignal>, linked: &[&str], observable: &[&str]) -> FavoriteLoad {
+fn favourite_rows(
+    rows: Vec<UserMediaSignal>,
+    linked: &[&str],
+    observable: &[&str],
+) -> FavoriteLoad {
     FavoriteLoad::Loaded(FavoriteRows {
         by_title: if rows.is_empty() {
             HashMap::new()
@@ -1192,7 +1196,13 @@ fn an_unplayed_favourite_becomes_a_fact() {
     let observations = favourite_observations(
         built_input(),
         favourite_rows(
-            vec![favourite("movie", Some("user-anna"), MediaServerSignalKind::Movie, None, None)],
+            vec![favourite(
+                "movie",
+                Some("user-anna"),
+                MediaServerSignalKind::Movie,
+                None,
+                None,
+            )],
             &["user-anna", "user-boris"],
             &["user-anna", "user-boris"],
         ),
@@ -1237,8 +1247,20 @@ fn series_season_and_episode_favourites_roll_up_to_the_title() {
     let rows = || {
         favourite_rows(
             vec![
-                favourite("series", Some("user-anna"), MediaServerSignalKind::Series, None, None),
-                favourite("season-2", Some("user-boris"), MediaServerSignalKind::Season, Some(2), None),
+                favourite(
+                    "series",
+                    Some("user-anna"),
+                    MediaServerSignalKind::Series,
+                    None,
+                    None,
+                ),
+                favourite(
+                    "season-2",
+                    Some("user-boris"),
+                    MediaServerSignalKind::Season,
+                    Some(2),
+                    None,
+                ),
                 favourite(
                     "episode-1-5",
                     Some("user-cara"),
@@ -1308,7 +1330,13 @@ fn a_plex_only_member_never_reads_as_not_favourited() {
     let observations = favourite_observations(
         built_input(),
         favourite_rows(
-            vec![favourite("movie", Some("user-anna"), MediaServerSignalKind::Movie, None, None)],
+            vec![favourite(
+                "movie",
+                Some("user-anna"),
+                MediaServerSignalKind::Movie,
+                None,
+                None,
+            )],
             &["user-anna", "user-plex"],
             &["user-anna"],
         ),
@@ -1339,7 +1367,11 @@ fn a_plex_only_instance_has_the_favourite_facts_absent() {
     assert_eq!(load, FavoriteLoad::Absent("favorites_unsupported"));
     let observations = favourite_observations(built_input(), load, None);
     for fact in FAVOURITE_FACTS {
-        assert_eq!(observations[fact], absent("favorites_unsupported"), "{fact}");
+        assert_eq!(
+            observations[fact],
+            absent("favorites_unsupported"),
+            "{fact}"
+        );
     }
 
     assert_eq!(

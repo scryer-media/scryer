@@ -2640,6 +2640,7 @@ const proxyConfigFieldSelection = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled
@@ -3302,6 +3303,10 @@ export const myUiSettingsQuery = `query MyUiSettings {
       deviceClass
       facet
       viewMode
+    }
+    tours {
+      tourId
+      outcome
     }
     dashboardLayouts {
       breakpoint

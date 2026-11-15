@@ -2904,6 +2904,11 @@ input CreateProxyConfigInput {
 	"""
 	tunnelKeepaliveSeconds: Int
 	"""
+	Challenge solvers only: an enabled transport proxy or tunnel to reach
+	the solver through. Omit to reach the solver directly.
+	"""
+	reachThroughProxyConfigId: ID
+	"""
 	Whether the proxy is enabled.
 	"""
 	isEnabled: Boolean
@@ -20368,6 +20373,15 @@ type MutationRoot {
 		input: SetMyDashboardLayoutInput!
 	): UiSettingsPayload!
 	"""
+	Records that the authenticated actor finished or skipped guided tours, so they are not offered again.
+	"""
+	recordMyUiTours(
+		"""
+		Tours to record; a tour recorded before takes the new outcome.
+		"""
+		input: RecordMyUiToursInput!
+	): UiSettingsPayload!
+	"""
 	Forgets the authenticated actor's saved dashboard layout so the default layout applies again.
 	"""
 	resetMyDashboardLayout(
@@ -24888,6 +24902,12 @@ type ProxyConfigPayload {
 	"""
 	tunnelKeepaliveSeconds: Int
 	"""
+	Challenge solvers only: the transport proxy or tunnel Scryer reaches
+	this solver through, and through which it sends its own requests that
+	reuse the solver's clearance. Null reaches the solver directly.
+	"""
+	reachThroughProxyConfigId: ID
+	"""
 	Host key pinned on the first successful tunnel connect, formatted as
 	OpenSSH prints it, or null before the first connect. A host key is
 	public, so this value is shown rather than masked.
@@ -27729,6 +27749,20 @@ enum RecencyLaneValue {
 	Drained under backpressure.
 	"""
 	COLD
+}
+
+"""
+Guided tours to record for the caller, all with one outcome.
+"""
+input RecordMyUiToursInput {
+	"""
+	Tour identifiers: 1 to 32 ids of 1 to 64 lowercase letters, digits, dots or hyphens. Repeated ids count once.
+	"""
+	tourIds: [String!]!
+	"""
+	How the caller left these tours.
+	"""
+	outcome: UiTourOutcomeValue!
 }
 
 """
@@ -34641,6 +34675,10 @@ type UiSettingsPayload {
 	Saved dashboard layouts, one per breakpoint that has one; a breakpoint without an entry uses the default layout.
 	"""
 	dashboardLayouts: [UiDashboardLayout!]!
+	"""
+	Guided tours (onboarding and release highlights) the caller has finished or skipped; a tour without an entry has not been shown.
+	"""
+	tours: [UiTourProgressPayload!]!
 }
 
 """
@@ -34751,6 +34789,38 @@ enum UiThemeValue {
 	Follow the system theme.
 	"""
 	SYSTEM
+}
+
+"""
+How the caller left a guided tour. Either way the tour is not offered again.
+"""
+enum UiTourOutcomeValue {
+	"""
+	The caller reached the last step.
+	"""
+	COMPLETED
+	"""
+	The caller dismissed the tour before the end.
+	"""
+	SKIPPED
+}
+
+"""
+A guided tour the caller has finished or skipped.
+"""
+type UiTourProgressPayload {
+	"""
+	Tour identifier from the web's tour registry, e.g. `onboarding`.
+	"""
+	tourId: String!
+	"""
+	How the caller left the tour.
+	"""
+	outcome: UiTourOutcomeValue!
+	"""
+	When the outcome was recorded.
+	"""
+	recordedAt: DateTime!
 }
 
 """
@@ -35683,6 +35753,12 @@ input UpdateProxyConfigInput {
 	restores the engine's default, and zero switches keepalive off.
 	"""
 	tunnelKeepaliveSeconds: Int
+	"""
+	Challenge solvers only: the transport proxy or tunnel to reach the
+	solver through. Omission preserves it and null reaches the solver
+	directly again.
+	"""
+	reachThroughProxyConfigId: ID
 	"""
 	Replacement enabled state; omission preserves it.
 	"""

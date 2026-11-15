@@ -485,6 +485,7 @@ const PROXY_CONFIG_FIELDS = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled
@@ -986,6 +987,10 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1029,6 +1034,10 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1071,6 +1080,10 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1092,6 +1105,12 @@ export const setMyDashboardLayoutMutation = `mutation SetMyDashboardLayout($inpu
 /** Drops the saved dashboard layout for one breakpoint, or every one when null. */
 export const resetMyDashboardLayoutMutation = `mutation ResetMyDashboardLayout($breakpoint: UiDashboardBreakpoint) {
   resetMyDashboardLayout(breakpoint: $breakpoint) {${UI_SETTINGS_PAYLOAD_FIELDS}
+  }
+}`;
+
+/** Records guided tours the caller finished or skipped, so they are not offered again. */
+export const recordMyUiToursMutation = `mutation RecordMyUiTours($input: RecordMyUiToursInput!) {
+  recordMyUiTours(input: $input) {${UI_SETTINGS_PAYLOAD_FIELDS}
   }
 }`;
 

@@ -768,6 +768,8 @@ pub(crate) mod tests {
     pub(crate) fn tunnel_config() -> ProxyConfig {
         let created_at = Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "proxy-tunnel".to_string(),
             name: "Seedbox".to_string(),
             provider_type: ProxyProviderType::SshTunnel,
@@ -983,6 +985,8 @@ pub(crate) mod tests {
         let created_at = Utc.with_ymd_and_hms(2026, 9, 2, 12, 0, 0).unwrap();
         let private_key = scryer_tunnel::test_support::test_client_private_key();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: id.to_string(),
             name: "House VPN".to_string(),
             provider_type: ProxyProviderType::WireGuard,

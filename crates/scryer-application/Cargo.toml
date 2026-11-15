@@ -74,7 +74,6 @@ encoding_rs = { version = "0.8", optional = true }
 unicode-normalization = "0.1"
 whatlang = { version = "0.18.0", optional = true }
 regex = "1"
-croner = "4.0.0"
 blake3 = "1"
 crc-turbo = { workspace = true }
 rustls-pki-types = "1"
@@ -93,6 +92,8 @@ wiremock = { workspace = true }
 # Fixed IANA zones so schedule tests can exercise daylight-saving transitions
 # regardless of the host time zone.
 chrono-tz = "0.10.4"
+# Reference implementation the in-house cron evaluator is compared against.
+croner = "4.0.0"
 # Thread-local recorder for asserting emitted metric names, labels and values
 # without installing a global recorder.
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }

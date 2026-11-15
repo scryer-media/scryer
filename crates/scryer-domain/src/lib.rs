@@ -2269,6 +2269,16 @@ pub struct ProxyConfig {
     /// WireGuard only: `PersistentKeepalive`, in seconds. `None` means the
     /// engine's default; `Some(0)` switches keepalive off.
     pub tunnel_keepalive_seconds: Option<u16>,
+    /// Challenge solvers only: the transport proxy or tunnel Scryer dials the
+    /// solver through, and through which it sends its own requests that reuse
+    /// the solver's clearance. `None` reaches the solver directly.
+    pub reach_through_proxy_config_id: Option<String>,
+    /// The config `reach_through_proxy_config_id` names, as the store read it
+    /// for a runtime lookup. Never persisted or serialized; `None` whenever the
+    /// id is unset, and also on reads that only list or edit configs. A
+    /// runtime path that finds the id set but this unset fails closed.
+    #[serde(skip)]
+    pub reach_through: Option<Box<ProxyConfig>>,
     /// Host key pinned on the first successful tunnel connect, formatted the
     /// way OpenSSH prints it (`SHA256:<base64>`). A host key is public, so this
     /// is stored and exposed in the clear; the tunnel engine hard-fails when a

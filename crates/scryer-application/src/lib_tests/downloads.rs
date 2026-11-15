@@ -18994,11 +18994,24 @@ impl crate::ProxyConfigRepository for RetainedProxyRepo {
     async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
         Ok(())
     }
+
+    async fn count_solvers_reaching_through(&self, id: &str, enabled_only: bool) -> AppResult<u64> {
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter(|entry| entry.reach_through_proxy_config_id.as_deref() == Some(id))
+            .filter(|entry| !enabled_only || entry.is_enabled)
+            .count() as u64)
+    }
 }
 
 fn retained_proxy_fixture(is_enabled: bool) -> scryer_domain::ProxyConfig {
     let now = Utc::now();
     scryer_domain::ProxyConfig {
+        reach_through_proxy_config_id: None,
+        reach_through: None,
         id: "retained-proxy".to_string(),
         name: "Retained proxy".to_string(),
         provider_type: scryer_domain::ProxyProviderType::Http,
@@ -19265,6 +19278,255 @@ async fn proxy_deletion_serializes_against_download_client_proxy_assignment() {
             .proxy_config_id,
         None
     );
+}
+
+fn reach_through_solver_input(reach_through: Option<&str>) -> crate::NewProxyConfig {
+    crate::NewProxyConfig {
+        name: "Synthetic solver".to_string(),
+        provider_type: scryer_domain::ProxyProviderType::Byparr,
+        protocol: None,
+        base_url: "http://127.0.0.1:8191".to_string(),
+        request_timeout_seconds: None,
+        is_enabled: true,
+        username: None,
+        password: None,
+        remote_dns: None,
+        private_key: None,
+        private_key_passphrase: None,
+        peer_public_key: None,
+        preshared_key: None,
+        tunnel_addresses: None,
+        tunnel_dns_servers: None,
+        tunnel_mtu: None,
+        tunnel_keepalive_seconds: None,
+        reach_through_proxy_config_id: reach_through.map(str::to_string),
+    }
+}
+
+fn reach_through_reason(error: &AppError) -> Option<&'static str> {
+    error.validation_reason()
+}
+
+#[tokio::test]
+async fn a_solver_reach_through_must_name_an_enabled_transport_or_tunnel() {
+    use crate::error_reasons::integration as reasons;
+
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_entry(retained_proxy_fixture(true)));
+    let (base_app, user) = bootstrap();
+    let app = base_app
+        .with_test_overrides(|services| services.with_proxy_config_store(proxy_configs.clone()));
+
+    let missing = app
+        .create_proxy_config(&user, reach_through_solver_input(Some("absent-proxy")))
+        .await
+        .expect_err("a missing route target must be refused");
+    assert_eq!(
+        reach_through_reason(&missing),
+        Some(reasons::PROXY_REACH_THROUGH_NOT_FOUND)
+    );
+
+    let other_solver = app
+        .create_proxy_config(&user, reach_through_solver_input(None))
+        .await
+        .expect("a direct solver keeps today's behaviour");
+    assert_eq!(other_solver.reach_through_proxy_config_id, None);
+    let through_solver = app
+        .create_proxy_config(&user, reach_through_solver_input(Some(&other_solver.id)))
+        .await
+        .expect_err("a solver cannot be the route");
+    assert_eq!(
+        reach_through_reason(&through_solver),
+        Some(reasons::PROXY_REACH_THROUGH_IS_SOLVER)
+    );
+
+    let mut transport = reach_through_solver_input(Some("retained-proxy"));
+    transport.provider_type = scryer_domain::ProxyProviderType::Http;
+    transport.base_url = "http://proxy.example.test:8080".to_string();
+    let on_transport = app
+        .create_proxy_config(&user, transport)
+        .await
+        .expect_err("only a solver takes a route");
+    assert_eq!(
+        reach_through_reason(&on_transport),
+        Some(reasons::PROXY_REACH_THROUGH_REQUIRES_SOLVER)
+    );
+
+    let to_itself = app
+        .update_proxy_config(
+            &user,
+            crate::ProxyConfigUpdate {
+                id: other_solver.id.clone(),
+                reach_through_proxy_config_id: Some(Some(other_solver.id.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a solver cannot be reached through itself");
+    assert_eq!(
+        reach_through_reason(&to_itself),
+        Some(reasons::PROXY_REACH_THROUGH_SELF)
+    );
+
+    proxy_configs.set_enabled("retained-proxy", false).await;
+    let disabled = app
+        .create_proxy_config(&user, reach_through_solver_input(Some("retained-proxy")))
+        .await
+        .expect_err("a disabled route target must be refused");
+    assert_eq!(
+        reach_through_reason(&disabled),
+        Some(reasons::PROXY_REACH_THROUGH_DISABLED)
+    );
+
+    proxy_configs.set_enabled("retained-proxy", true).await;
+    let routed = app
+        .create_proxy_config(&user, reach_through_solver_input(Some(" retained-proxy ")))
+        .await
+        .expect("an enabled transport is a valid route");
+    assert_eq!(
+        routed.reach_through_proxy_config_id.as_deref(),
+        Some("retained-proxy")
+    );
+    // Refused creates write nothing: the transport and two solvers remain.
+    assert_eq!(proxy_configs.entries.lock().await.len(), 3);
+}
+
+#[tokio::test]
+async fn a_route_in_use_by_a_solver_cannot_be_disabled_or_deleted() {
+    use crate::error_reasons::integration as reasons;
+
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_entry(retained_proxy_fixture(true)));
+    let (base_app, user) = bootstrap();
+    let app = base_app
+        .with_test_overrides(|services| services.with_proxy_config_store(proxy_configs.clone()));
+    let solver = app
+        .create_proxy_config(&user, reach_through_solver_input(Some("retained-proxy")))
+        .await
+        .expect("an enabled transport is a valid route");
+
+    let disable = app
+        .update_proxy_config(
+            &user,
+            crate::ProxyConfigUpdate {
+                id: "retained-proxy".to_string(),
+                is_enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("disabling a route an enabled solver uses must be refused");
+    assert_eq!(
+        reach_through_reason(&disable),
+        Some(reasons::PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS)
+    );
+    let facts = disable.refusal_facts();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(
+        facts[0].key,
+        reasons::PROXY_REACHED_THROUGH_SOLVER_COUNT_FACT
+    );
+    assert_eq!(
+        facts[0].value,
+        crate::RefusalFactValue::Text("1".to_string())
+    );
+
+    // A disabled solver no longer blocks disabling its route, but it still
+    // blocks deleting it: deletion refuses rather than clearing the reference.
+    app.update_proxy_config(
+        &user,
+        crate::ProxyConfigUpdate {
+            id: solver.id.clone(),
+            is_enabled: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("a solver can be disabled");
+    let delete = app
+        .delete_proxy_config(&user, "retained-proxy")
+        .await
+        .expect_err("deleting a route a solver names must be refused");
+    assert_eq!(
+        reach_through_reason(&delete),
+        Some(reasons::PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS)
+    );
+    {
+        let entries = proxy_configs.entries.lock().await;
+        assert!(entries.iter().any(|entry| entry.id == "retained-proxy"));
+        let stored_solver = entries
+            .iter()
+            .find(|entry| entry.id == solver.id)
+            .expect("solver remains");
+        assert_eq!(
+            stored_solver.reach_through_proxy_config_id.as_deref(),
+            Some("retained-proxy"),
+            "a refused delete must not cascade into the solver"
+        );
+    }
+
+    app.update_proxy_config(
+        &user,
+        crate::ProxyConfigUpdate {
+            id: "retained-proxy".to_string(),
+            is_enabled: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("a route only disabled solvers use can be disabled");
+
+    // Re-enabling the solver re-checks the route it kept.
+    let reenable = app
+        .update_proxy_config(
+            &user,
+            crate::ProxyConfigUpdate {
+                id: solver.id.clone(),
+                is_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a solver cannot be enabled onto a disabled route");
+    assert_eq!(
+        reach_through_reason(&reenable),
+        Some(reasons::PROXY_REACH_THROUGH_DISABLED)
+    );
+
+    // A patch that repeats the stored route is not a route change, so the
+    // disabled solver stays editable while its route is disabled.
+    let renamed = app
+        .update_proxy_config(
+            &user,
+            crate::ProxyConfigUpdate {
+                id: solver.id.clone(),
+                name: Some("Renamed solver".to_string()),
+                reach_through_proxy_config_id: Some(Some("retained-proxy".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("an unchanged route is not re-checked");
+    assert_eq!(renamed.name, "Renamed solver");
+    assert_eq!(
+        renamed.reach_through_proxy_config_id.as_deref(),
+        Some("retained-proxy")
+    );
+
+    // Clearing the route frees the transport for deletion.
+    let cleared = app
+        .update_proxy_config(
+            &user,
+            crate::ProxyConfigUpdate {
+                id: solver.id.clone(),
+                reach_through_proxy_config_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("clearing the route is always allowed");
+    assert_eq!(cleared.reach_through_proxy_config_id, None);
+    app.delete_proxy_config(&user, "retained-proxy")
+        .await
+        .expect("an unused route can be deleted");
 }
 
 /// WP2: a non-anime series pinned to TVDB's alternate order imports a grabbed

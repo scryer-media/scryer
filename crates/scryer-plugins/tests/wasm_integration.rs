@@ -377,6 +377,8 @@ search:
     );
     let now = Utc::now();
     let proxy_config = scryer_domain::ProxyConfig {
+        reach_through_proxy_config_id: None,
+        reach_through: None,
         id: "trawl-cardigann".to_string(),
         name: "Trawl".to_string(),
         provider_type: scryer_domain::ProxyProviderType::Trawl,

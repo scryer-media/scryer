@@ -890,10 +890,10 @@ pub use types::{
     UiCatalogViewMode, UiCatalogViewSetting, UiCatalogViewUpdate, UiDashboardBreakpoint,
     UiDashboardLayout, UiDashboardLayoutItem, UiDateTimeFormat, UiDefaultLandingView, UiDensity,
     UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
-    UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
-    UpdateVerificationSettings, UpdatedLibrary, UserAuthFactorStatus, UserLoginSnapshot,
-    VerificationSettings, VerifiedLocalCredentials, WantedKind, WantedStatusCount,
-    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
+    UiTableColumnSetting, UiTableViewMode, UiTheme, UiTourOutcome, UiTourProgress,
+    UpdateRecycleBinSettings, UpdateVerificationSettings, UpdatedLibrary, UserAuthFactorStatus,
+    UserLoginSnapshot, VerificationSettings, VerifiedLocalCredentials, WantedKind,
+    WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
     WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{

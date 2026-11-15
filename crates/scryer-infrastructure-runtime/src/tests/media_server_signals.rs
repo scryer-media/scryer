@@ -785,8 +785,18 @@ async fn unplayed_favourites_are_stored_and_read_only_as_favourites() {
             CONNECTION_ID,
             PARTICIPANT,
             &[
-                favorite_signal("jf-movie-fav", MediaServerSignalKind::Movie, "title-movie", None),
-                favorite_signal("jf-series-fav", MediaServerSignalKind::Series, "title-show", None),
+                favorite_signal(
+                    "jf-movie-fav",
+                    MediaServerSignalKind::Movie,
+                    "title-movie",
+                    None,
+                ),
+                favorite_signal(
+                    "jf-series-fav",
+                    MediaServerSignalKind::Series,
+                    "title-show",
+                    None,
+                ),
                 favorite_signal(
                     "jf-season-fav",
                     MediaServerSignalKind::Season,
@@ -810,7 +820,10 @@ async fn unplayed_favourites_are_stored_and_read_only_as_favourites() {
         "title-show".to_string(),
         "title-other".to_string(),
     ];
-    let movies = store.movie_signals_for_titles(&titles).await.expect("movies");
+    let movies = store
+        .movie_signals_for_titles(&titles)
+        .await
+        .expect("movies");
     assert!(
         !movies.contains_key("title-movie"),
         "an unplayed favourite is not a play"
@@ -891,7 +904,12 @@ async fn an_unchanged_sweep_writes_nothing() {
 
     let signals = vec![
         movie_signal("jf-movie-1", Some("title-movie"), 2),
-        favorite_signal("jf-series-fav", MediaServerSignalKind::Series, "title-show", None),
+        favorite_signal(
+            "jf-series-fav",
+            MediaServerSignalKind::Series,
+            "title-show",
+            None,
+        ),
     ];
     let link = roster_link("link-alpha");
     store

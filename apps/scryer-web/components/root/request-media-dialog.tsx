@@ -66,6 +66,7 @@ import {
 } from "@/components/ui/input";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { RequestShapingSummary } from "@/components/views/settings/maintenance-action-summary";
+import { InfoHelp } from "@/components/common/info-help";
 
 /// How long the dialog waits after the requester stops changing the request
 /// before asking what would happen to it. Short enough to feel live, long
@@ -552,9 +553,15 @@ export function RequestMediaDialog({
               </label>
             ) : null}
 
-            <label className="space-y-1">
-              <span className="block text-xs font-medium text-card-foreground">
-                {t("search.keepFor")}
+            <div className="space-y-1">
+              <span className="flex items-center gap-1 text-xs font-medium text-card-foreground">
+                <label htmlFor={REQUEST_MEDIA_LEASE_ID}>
+                  {t("search.keepFor")}
+                </label>
+                <InfoHelp
+                  text={t("search.keepForHelp")}
+                  ariaLabel={t("search.keepFor")}
+                />
               </span>
               <Select
                 value={leaseChoice}
@@ -591,10 +598,7 @@ export function RequestMediaDialog({
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <span className="block text-[11px] text-muted-foreground">
-                {t("search.keepForHelp")}
-              </span>
-            </label>
+            </div>
 
             {leaseChoice === "custom" ? (
               <label className="space-y-1">

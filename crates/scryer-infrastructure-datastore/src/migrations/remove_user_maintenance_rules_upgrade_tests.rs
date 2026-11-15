@@ -6,13 +6,13 @@
 use sqlx::SqlitePool;
 
 const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0346_remove_user_maintenance_rules.sql");
+    include_str!("../../../scryer/src/db/migrations/0348_remove_user_maintenance_rules.sql");
 const POSTGRES: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0346_remove_user_maintenance_rules.sql"
+    "../../../scryer/src/db/postgres/migrations/0348_remove_user_maintenance_rules.sql"
 );
 
-/// Version the catalog is replayed to before 0346 is applied.
-const PRE_UPGRADE_VERSION: i64 = 345;
+/// Version the catalog is replayed to before 0348 is applied.
+const PRE_UPGRADE_VERSION: i64 = 347;
 
 const USER_RULE: &str = "user-rule";
 const SECOND_USER_RULE: &str = "second-user-rule";
@@ -76,7 +76,7 @@ async fn pre_upgrade_pool(foreign_keys: bool) -> SqlitePool {
         true,
     )
     .await
-    .expect("pre-0346 migration fixture should apply");
+    .expect("pre-0348 migration fixture should apply");
     let pragma = if foreign_keys {
         "PRAGMA foreign_keys = ON"
     } else {
@@ -299,7 +299,7 @@ async fn assert_unrelated_rows_intact(pool: &SqlitePool, context: &str) {
 async fn upgrade(pool: &SqlitePool) {
     crate::migrations::run_migrations(pool, crate::MigrationMode::Apply)
         .await
-        .expect("0346 upgrade should apply");
+        .expect("0348 upgrade should apply");
 }
 
 async fn run_upgrade(foreign_keys: bool) {
