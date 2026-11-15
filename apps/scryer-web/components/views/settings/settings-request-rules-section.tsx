@@ -69,6 +69,17 @@ import {
   requestVoteBadgeTone,
   requestVoteLabelKey,
 } from "@/lib/utils/request-rule-sets";
+import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
+import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
+import {
+  RequestDeclaredActionsSummary,
+  RequestRuleSourceFindings,
+  RequestShapingSummary,
+} from "@/components/views/settings/maintenance-action-summary";
+import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
+import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import {
   settingsRequestPreviewTitleResultId,
   settingsRequestDecisionRowId,
@@ -81,6 +92,7 @@ import {
   settingsRequestRuleRowId,
   settingsRequestTemplateId,
   settingsRequestUserId,
+  selectorId,
 } from "@/lib/utils/dom-ids";
 
 export type RequestQualityProfileOption = { id: string; name: string };
@@ -110,6 +122,20 @@ type SettingsRequestRulesSectionProps = {
   editingRuleSetId: string | null;
   ruleSetDraft: RequestRuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RequestRuleSetDraft>>;
+  /// Which source editor the form shows. Simple is only offered while the
+  /// draft is still the builder's.
+  builderMode: RuleEditorMode;
+  setBuilderMode: (mode: "simple" | "view") => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  setBuilderModel: (model: RuleBuilderModel) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  editAsRego: () => void;
+  builderOptions: RuleBuilderOptions;
+  /// Null until the served outputs are read, and after a failed read.
+  builderSchema: RuleBuilderSchema | null;
+  builderStatus: RuleBuilderSchemaStatus;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -263,8 +289,15 @@ function RequestContextReference() {
               <li>{t("settings.refReqOutputApprove")}</li>
               <li>{t("settings.refReqOutputDeny")}</li>
               <li>{t("settings.refReqOutputManual")}</li>
+              <li>{t("settings.refReqOutputSetQualityProfile")}</li>
+              <li>{t("settings.refReqOutputSetLeaseDays")}</li>
+              <li>{t("settings.refReqOutputSetMonitor")}</li>
+              <li>{t("settings.refReqOutputSetAudioLanguages")}</li>
               <li>{t("settings.refReqOutputTags")}</li>
+              <li>{t("settings.refReqOutputNotify")}</li>
               <li>{t("settings.refReqOutputReasons")}</li>
+              <li>{t("settings.refReqOutputShapingOutcome")}</li>
+              <li>{t("settings.refReqOutputNoSchedule")}</li>
               <li>{t("settings.refReqOutputNoPackage")}</li>
             </ul>
           </div>
@@ -808,6 +841,10 @@ function RequestPreviewPanel({
               ) : null}
             </div>
             <DecisionVotes decision={decision} />
+            <RequestShapingSummary
+              shaping={decision.shaping}
+              idPrefix="settings-request-preview-shaping"
+            />
             {decision.reasons.length > 0 ? (
               <div className="flex flex-wrap gap-1">
                 {decision.reasons.map((reason) => (
@@ -1056,6 +1093,14 @@ export function SettingsRequestRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  builderMode,
+  setBuilderMode,
+  editRegoSource,
+  setBuilderModel,
+  editAsRego,
+  builderOptions,
+  builderSchema,
+  builderStatus,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
@@ -1083,6 +1128,24 @@ export function SettingsRequestRulesSection({
   ...previewProps
 }: SettingsRequestRulesSectionProps) {
   const t = useTranslate();
+  const validationStatus = (
+    <EditorValidationStatus
+      id="settings-request-rule-validation"
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+      data-request-rule-valid={
+        validationResult ? String(validationResult.valid) : undefined
+      }
+      data-request-rule-person-targeting-refusal={
+        validationResult?.diagnostics?.some(isPersonTargetingRefusal)
+          ? "true"
+          : undefined
+      }
+    />
+  );
 
   return (
     <div id="settings-request-rules-section" className="space-y-4 text-sm">
@@ -1104,7 +1167,7 @@ export function SettingsRequestRulesSection({
                   ruleKind="request decision"
                   inputContract={requestInputContract}
                   outputContract={
-                    'Define one or more supported decisions: approve if { ... }, deny if { ... }, manual if { ... }, or tags contains "stable_tag" if { ... }.'
+                    'Define at least one vote or change. Votes are approve if { ... }, deny if { ... } and manual if { ... }. Changes to an approval are plain literals: set_quality_profile := "Profile name", set_lease_days := 30 (0 keeps it forever, otherwise 1 to 3650), set_monitor := "FUTURE_EPISODES" (MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime), set_required_audio_languages := ["eng"] and set_preferred_audio_languages := ["jpn", "eng"] (ISO 639-2 codes). add_tags := ["tag"] tags the title and notify := "message text" sends a notification. You may add reasons contains "stable_reason" if { ... }. A rule defining only reasons or notify is refused. Request rules have no schedule.'
                   }
                 />
               </div>
@@ -1119,6 +1182,9 @@ export function SettingsRequestRulesSection({
                       </TableHead>
                       <TableHead>
                         {t("settings.requestRuleLibraries")}
+                      </TableHead>
+                      <TableHead>
+                        {t("settings.requestDeclaredActionsTitle")}
                       </TableHead>
                       <TableHead className="text-center">
                         {t("settings.requestRuleRevision")}
@@ -1176,6 +1242,17 @@ export function SettingsRequestRulesSection({
                           <TableCell className="max-w-[220px] truncate text-muted-foreground">
                             {libraryNames}
                           </TableCell>
+                          <TableCell className="max-w-[320px]">
+                            {record.declaredActions ? (
+                              <RequestDeclaredActionsSummary
+                                declared={record.declaredActions}
+                                idPrefix={selectorId(
+                                  "settings-request-rule-declared-action",
+                                  record.id,
+                                )}
+                              />
+                            ) : null}
+                          </TableCell>
                           <TableCell className="text-center">
                             {record.currentRevisionNumber}
                           </TableCell>
@@ -1217,7 +1294,7 @@ export function SettingsRequestRulesSection({
                     {ruleSetRecords.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={7}
+                          colSpan={8}
                           className="text-muted-foreground"
                         >
                           {t("settings.noRequestRulesFound")}
@@ -1277,54 +1354,49 @@ export function SettingsRequestRulesSection({
                       </label>
                     </div>
 
-                    <div>
-                      <Label className="mb-2 block">
-                        {t("settings.ruleRegoSource")}
-                      </Label>
-                      <LazyRegoEditor
-                        ruleFamily="request"
-                        id="settings-request-rule-rego-source"
-                        value={ruleSetDraft.regoSource}
-                        onChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            regoSource: value,
-                          }))
-                        }
-                        diagnostics={regoDiagnostics(
-                          ruleSetDraft.regoSource,
-                          validationResult,
-                          t,
-                        )}
-                        feedback={
-                          <EditorValidationStatus
-                            id="settings-request-rule-validation"
-                            checking={validating}
-                            result={validationResult}
-                            formatError={(error) =>
-                              formatRegoValidationError(
-                                error,
-                                ruleSetDraft.regoSource,
-                              )
-                            }
-                            data-request-rule-valid={
-                              validationResult
-                                ? String(validationResult.valid)
-                                : undefined
-                            }
-                            data-request-rule-person-targeting-refusal={
-                              validationResult?.diagnostics?.some(
-                                isPersonTargetingRefusal,
-                              )
-                                ? "true"
-                                : undefined
-                            }
-                          />
-                        }
-                        minLines={12}
-                        maxLines={35}
-                      />
-                    </div>
+                    <RuleEditorSurface
+                      idPrefix="settings-request-rule"
+                      schema={builderSchema}
+                      builderStatus={builderStatus}
+                      variant={null}
+                      mode={builderMode}
+                      onModeChange={setBuilderMode}
+                      available
+                      onEditAsRego={editAsRego}
+                      model={ruleSetDraft.builderModel}
+                      onModelChange={setBuilderModel}
+                      options={builderOptions}
+                      generatedSource={ruleSetDraft.regoSource}
+                      feedback={validationStatus}
+                      editor={(readOnly) => (
+                        <LazyRegoEditor
+                          ruleFamily="request"
+                          id="settings-request-rule-rego-source"
+                          value={ruleSetDraft.regoSource}
+                          readOnly={readOnly}
+                          onChange={editRegoSource}
+                          diagnostics={regoDiagnostics(
+                            ruleSetDraft.regoSource,
+                            validationResult,
+                            t,
+                          )}
+                          feedback={validationStatus}
+                          minLines={12}
+                          maxLines={35}
+                        />
+                      )}
+                    />
+
+                    <RequestRuleSourceFindings
+                      source={ruleSetDraft.regoSource}
+                      checked={
+                        !validating &&
+                        validationResult !== null &&
+                        !validationResult.unavailable
+                      }
+                      declared={validationResult?.declaredActions}
+                      warnings={validationResult?.warnings ?? []}
+                    />
 
                     <RequestUserPicker
                       users={users}

@@ -33,7 +33,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     personTargeted: true,
     namesRequesters: true,
     regoSource:
-      'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\ntags contains "family" if {\n\tinput.facts.certification_rank <= 1\n}\n',
+      'package rules\nimport rego.v1\n\nrequesters := {"alice", "bob", "carol"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := ["family"] if {\n\tinput.facts.certification_rank <= 1\n}\n',
   },
   {
     id: "short-lease-approval",

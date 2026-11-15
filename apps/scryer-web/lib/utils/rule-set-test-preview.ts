@@ -67,12 +67,26 @@ export type RuleSetTestMutationInput = {
   sizeBytes?: number;
   listing?: RuleSetTestListingInput;
   mediaFileId?: string;
-  draft?: RuleSetDraft;
+  draft?: RuleSetTestDraft;
   editRuleSetId?: string;
   copySourceRuleSetId?: string;
   copyDisablesSource?: boolean;
   testRuleSetId?: string;
 };
+
+/** `TestRuleSetInput.draft`: the rule itself, without how the editor built it. */
+export type RuleSetTestDraft = Omit<RuleSetDraft, "builderModel">;
+
+function ruleSetTestDraft(draft: RuleSetDraft): RuleSetTestDraft {
+  return {
+    name: draft.name,
+    description: draft.description,
+    regoSource: draft.regoSource,
+    enabled: draft.enabled,
+    priority: draft.priority,
+    appliedFacets: draft.appliedFacets,
+  };
+}
 
 export function buildRuleSetTestInput({
   draft,
@@ -111,7 +125,7 @@ export function buildRuleSetTestInput({
     ? { ...selection, testRuleSetId }
     : {
         ...selection,
-        draft: draft!,
+        draft: ruleSetTestDraft(draft!),
         editRuleSetId: editRuleSetId || undefined,
         copySourceRuleSetId: copySourceRuleSetId || undefined,
         copyDisablesSource: Boolean(copySourceRuleSetId),

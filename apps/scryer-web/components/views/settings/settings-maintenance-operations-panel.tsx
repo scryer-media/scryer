@@ -1,6 +1,5 @@
 import { formatBytes } from "@/lib/utils/activity-utils";
 import { maintenanceExecutionReasonText } from "@/lib/utils/maintenance-execution-reason";
-import * as React from "react";
 import { Ban, Play, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +48,7 @@ import { selectorId } from "@/lib/utils/dom-ids";
 import { parseMaintenanceFileResults } from "@/lib/utils/maintenance-file-results";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { HelpLabel } from "@/components/common/info-help";
+import { MaintenanceDecidedActionsSummary } from "@/components/views/settings/maintenance-action-summary";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
 
@@ -75,6 +75,8 @@ function timestamp(
   return formatUiDateTime(value, format, { fallback: value });
 }
 
+/// Candidates and runs recorded before rules declared their actions in source
+/// name their action by kind and sequence; these render that history.
 function ActionKindLabel({ kind }: { kind: string }) {
   const t = useTranslate();
   const labelKey = actionKindLabelKey(kind);
@@ -118,6 +120,11 @@ function MaintenanceSequenceProgress({
             <span className="font-medium text-foreground">
               {index + 1}. {stepLabelKey ? t(stepLabelKey) : step.kind}
             </span>
+            {step.parameters.targetLibrary || step.parameters.targetRoot ? (
+              <span>
+                · {step.parameters.targetLibrary || step.parameters.targetRoot}
+              </span>
+            ) : null}
             {step.kind === "SEARCH" ? (
               acceptedReceipt ? (
                 <>
@@ -169,29 +176,6 @@ function MaintenanceSequenceProgress({
         );
       })}
     </ol>
-  );
-}
-
-/// The labels a tag action would write on the candidate's subject. Rendered
-/// beside the action name because "add tags" on its own does not say which
-/// tags, and that is the whole of what the action does.
-function TagPatchSummary({
-  patch,
-}: {
-  patch: { kind: string; tags: string[] } | undefined;
-}) {
-  const t = useTranslate();
-  if (!patch || patch.tags.length === 0) {
-    return null;
-  }
-  const key =
-    patch.kind === "REMOVE_TAGS"
-      ? "settings.maintenanceCandidatesTagPatchRemove"
-      : "settings.maintenanceCandidatesTagPatchAdd";
-  return (
-    <span className="text-xs text-muted-foreground">
-      {t(key, { tags: patch.tags.join(", ") })}
-    </span>
   );
 }
 
@@ -376,21 +360,6 @@ export function MaintenanceCandidatesPanel({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
 
-  // What a tag rule would write, keyed by rule so a candidate row can say
-  // "add needs-review" rather than only naming the action. The rule records
-  // already carry the action spec of the revision in force, so this costs no
-  // extra request.
-  const tagPatchByRuleId = React.useMemo(() => {
-    const patches = new Map<string, { kind: string; tags: string[] }>();
-    for (const record of ruleSetRecords) {
-      const tags = record.actionSpec?.tags ?? [];
-      if (tags.length > 0) {
-        patches.set(record.id, { kind: record.actionSpec.kind, tags });
-      }
-    }
-    return patches;
-  }, [ruleSetRecords]);
-
   return (
     <Card>
       <CardHeader>
@@ -544,16 +513,23 @@ export function MaintenanceCandidatesPanel({
                     <TableCell className="text-muted-foreground">
                       <div className="flex flex-col">
                         <span>{candidate.ruleName}</span>
-                        <span className="text-xs">
-                          <ActionKindLabel kind={candidate.actionKind} />
-                        </span>
-                        <MaintenanceSequenceProgress
-                          sequence={candidate.actionSequence}
-                          progress={candidate.sequenceSteps}
-                        />
-                        <TagPatchSummary
-                          patch={tagPatchByRuleId.get(candidate.ruleSetId)}
-                        />
+                        {candidate.actions ? (
+                          <div className="mt-0.5">
+                            <MaintenanceDecidedActionsSummary
+                              actions={candidate.actions}
+                              idPrefix={selectorId(
+                                "settings-maintenance-candidate-action",
+                                candidate.id,
+                              )}
+                            />
+                          </div>
+                        ) : null}
+                        {candidate.actionSequence?.steps.length ? (
+                          <MaintenanceSequenceProgress
+                            sequence={candidate.actionSequence}
+                            progress={candidate.sequenceSteps}
+                          />
+                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell>

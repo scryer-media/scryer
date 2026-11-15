@@ -83,10 +83,7 @@ import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
 import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
-import {
-  useExperimentalFeaturesEnabled,
-  useInstanceFeatures,
-} from "@/lib/context/instance-features-context";
+import { useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { useUiSettings } from "@/lib/context/ui-settings-context";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import {
@@ -737,7 +734,6 @@ function RootSidebarContent({
   onNavigate,
 }: RootSidebarProps) {
   const t = useTranslate();
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { apiExplorerEnabled } = useInstanceFeatures();
   const { isMobile, setOpenMobile } = useSidebar();
   const { resolvedTheme } = useTheme();
@@ -827,18 +823,13 @@ function RootSidebarContent({
     () =>
       settingsEntries.filter(
         (entry) =>
-          // Maintenance and request rules are still being finished, so their
-          // shortcuts are offered only when the instance has opted in. The
-          // permission each already required still applies on top.
-          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
-            experimentalFeaturesEnabled) &&
-          (!entry.requiredAnyAppPermission ||
-            hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
-            entry.requiredAnyLibraryPermission?.some((permission) =>
-              hasAnyLibraryPermission(user, permission),
-            )),
+          !entry.requiredAnyAppPermission ||
+          hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
+          entry.requiredAnyLibraryPermission?.some((permission) =>
+            hasAnyLibraryPermission(user, permission),
+          ),
       ),
-    [experimentalFeaturesEnabled, user],
+    [user],
   );
   const groupedSettingsEntries = React.useMemo(() => {
     const entriesById = new Map(

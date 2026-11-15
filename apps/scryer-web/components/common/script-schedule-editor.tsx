@@ -16,6 +16,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { validateScriptScheduleQuery } from "@/lib/graphql/queries";
 import { cn } from "@/lib/utils";
+import { selectorId } from "@/lib/utils/dom-ids";
 import {
   SCHEDULE_WEEKDAYS,
   type ScheduleWeekdayValue,
@@ -84,10 +85,12 @@ type CronValidationState = {
 };
 
 function CronExpressionField({
+  idPrefix,
   expression,
   onChange,
   disabled,
 }: {
+  idPrefix: string;
   expression: string;
   onChange: (expression: string) => void;
   disabled?: boolean;
@@ -182,7 +185,7 @@ function CronExpressionField({
           {t("script.schedule.cronExpression")}
         </Label>
         <Input
-          id="script-schedule-cron"
+          id={selectorId(idPrefix, "cron")}
           value={expression}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled}
@@ -193,7 +196,7 @@ function CronExpressionField({
         />
       </label>
       <p
-        id="script-schedule-cron-description"
+        id={selectorId(idPrefix, "cron-description")}
         className="text-xs text-[var(--scry-ink2)]"
         aria-live="polite"
       >
@@ -204,7 +207,7 @@ function CronExpressionField({
       </p>
       {current ? (
         <div
-          id="script-schedule-validation"
+          id={selectorId(idPrefix, "validation")}
           className="space-y-1 text-xs"
           aria-live="polite"
         >
@@ -227,7 +230,7 @@ function CronExpressionField({
                   .map((run, index) => (
                     <li
                       key={run}
-                      id={`script-schedule-next-run-${index}`}
+                      id={selectorId(idPrefix, "next-run", index)}
                       className="text-[var(--scry-ink2)]"
                     >
                       {formatUiDateTime(run, dateTimeFormat, { fallback: run })}
@@ -243,10 +246,12 @@ function CronExpressionField({
 }
 
 function IntervalFields({
+  idPrefix,
   everySeconds,
   onChange,
   disabled,
 }: {
+  idPrefix: string;
   everySeconds: number | null;
   onChange: (everySeconds: number) => void;
   disabled?: boolean;
@@ -280,12 +285,12 @@ function IntervalFields({
       <div className="inline-grid max-w-full grid-cols-2 gap-x-4">
         <ScheduleField
           label={t("script.schedule.every")}
-          htmlFor="script-schedule-interval-amount"
+          htmlFor={selectorId(idPrefix, "interval-amount")}
         >
           {/* Takes the column's width without widening it. */}
           <div className="w-0 min-w-full">
             <Input
-              id="script-schedule-interval-amount"
+              id={selectorId(idPrefix, "interval-amount")}
               {...integerInputProps}
               className={SCHEDULE_INPUT_HEIGHT_CLASS}
               value={amountText}
@@ -305,7 +310,7 @@ function IntervalFields({
           </div>
         </ScheduleField>
         <ScriptChoiceGroup
-          id="script-schedule-interval-unit"
+          id={selectorId(idPrefix, "interval-unit")}
           label={t("script.schedule.unit")}
           value={unit}
           disabled={disabled}
@@ -329,10 +334,12 @@ function IntervalFields({
 }
 
 function TimeField({
+  idPrefix,
   value,
   onChange,
   disabled,
 }: {
+  idPrefix: string;
   value: string | null;
   onChange: (value: string) => void;
   disabled?: boolean;
@@ -341,11 +348,11 @@ function TimeField({
   return (
     <ScheduleField
       label={t("script.schedule.time")}
-      htmlFor="script-schedule-time"
+      htmlFor={selectorId(idPrefix, "time")}
       className="w-48"
     >
       <Input
-        id="script-schedule-time"
+        id={selectorId(idPrefix, "time")}
         type="time"
         className={SCHEDULE_INPUT_HEIGHT_CLASS}
         value={value ?? ""}
@@ -359,16 +366,18 @@ function TimeField({
 }
 
 function WeekdayToggles({
+  idPrefix,
   days,
   onChange,
   disabled,
 }: {
+  idPrefix: string;
   days: ScheduleWeekdayValue[];
   onChange: (days: ScheduleWeekdayValue[]) => void;
   disabled?: boolean;
 }) {
   const t = useTranslate();
-  const labelId = "script-schedule-days-label";
+  const labelId = selectorId(idPrefix, "days-label");
   return (
     <div className="min-w-0 space-y-1.5">
       <div className="flex h-5 items-center">
@@ -377,7 +386,7 @@ function WeekdayToggles({
         </Label>
       </div>
       <ToggleGroupPrimitive.Root
-        id="script-schedule-days"
+        id={selectorId(idPrefix, "days")}
         type="multiple"
         aria-labelledby={labelId}
         // Sized to its days, like the single-choice groups beside it.
@@ -393,7 +402,7 @@ function WeekdayToggles({
         {SCHEDULE_WEEKDAYS.map((day) => (
           <ToggleGroupPrimitive.Item
             key={day}
-            id={`script-schedule-day-${day.toLowerCase()}`}
+            id={selectorId(idPrefix, "day", day)}
             value={day}
             data-value={day}
             asChild
@@ -413,20 +422,28 @@ function WeekdayToggles({
 }
 
 /**
- * Edits when a scheduled script runs. Controlled: every change reports the
- * whole schedule, with only the fields its kind uses.
+ * Edits when something runs on the scheduler: a scheduled script, or a
+ * maintenance rule. Controlled: every change reports the whole schedule, with
+ * only the fields its kind uses. The "run on startup" choice is shown only
+ * when its handler is passed.
  */
 export function ScriptScheduleEditor({
   value,
   onChange,
-  runOnStartup,
+  runOnStartup = false,
   onRunOnStartupChange,
+  manualHelp,
+  idPrefix = "script-schedule",
   disabled,
 }: {
   value: ScriptSchedule;
   onChange: (value: ScriptSchedule) => void;
-  runOnStartup: boolean;
-  onRunOnStartupChange: (runOnStartup: boolean) => void;
+  runOnStartup?: boolean;
+  onRunOnStartupChange?: (runOnStartup: boolean) => void;
+  /** Replaces the default explanation of a manual schedule. */
+  manualHelp?: string;
+  /** Prefix of every element id inside the editor. */
+  idPrefix?: string;
   disabled?: boolean;
 }) {
   const t = useTranslate();
@@ -434,7 +451,7 @@ export function ScriptScheduleEditor({
   return (
     <div className="space-y-4">
       <ScriptChoiceGroup
-        id="script-schedule-kind"
+        id={selectorId(idPrefix, "kind")}
         label={t("script.schedule.kind")}
         // The schedule heading above already names this choice.
         labelHidden
@@ -451,11 +468,12 @@ export function ScriptScheduleEditor({
 
       {value.kind === "MANUAL" ? (
         <p className="text-xs text-muted-foreground">
-          {t("script.schedule.manualHelp")}
+          {manualHelp ?? t("script.schedule.manualHelp")}
         </p>
       ) : null}
       {value.kind === "INTERVAL" ? (
         <IntervalFields
+          idPrefix={idPrefix}
           everySeconds={value.everySeconds}
           disabled={disabled}
           onChange={(everySeconds) => onChange({ ...value, everySeconds })}
@@ -463,6 +481,7 @@ export function ScriptScheduleEditor({
       ) : null}
       {value.kind === "DAILY" ? (
         <TimeField
+          idPrefix={idPrefix}
           value={value.timeLocal}
           disabled={disabled}
           onChange={(timeLocal) => onChange({ ...value, timeLocal })}
@@ -471,11 +490,13 @@ export function ScriptScheduleEditor({
       {value.kind === "WEEKLY" ? (
         <div className="flex flex-wrap gap-x-4 gap-y-3">
           <WeekdayToggles
+            idPrefix={idPrefix}
             days={value.days ?? []}
             disabled={disabled}
             onChange={(days) => onChange({ ...value, days })}
           />
           <TimeField
+            idPrefix={idPrefix}
             value={value.timeLocal}
             disabled={disabled}
             onChange={(timeLocal) => onChange({ ...value, timeLocal })}
@@ -484,21 +505,26 @@ export function ScriptScheduleEditor({
       ) : null}
       {value.kind === "CRON" ? (
         <CronExpressionField
+          idPrefix={idPrefix}
           expression={value.expression ?? ""}
           disabled={disabled}
           onChange={(expression) => onChange({ ...value, expression })}
         />
       ) : null}
 
-      <label className="flex items-center gap-2">
-        <Checkbox
-          id="script-run-on-startup"
-          checked={runOnStartup}
-          disabled={disabled}
-          onCheckedChange={(checked) => onRunOnStartupChange(checked === true)}
-        />
-        <span className="text-sm">{t("script.schedule.runOnStartup")}</span>
-      </label>
+      {onRunOnStartupChange ? (
+        <label className="flex items-center gap-2">
+          <Checkbox
+            id="script-run-on-startup"
+            checked={runOnStartup}
+            disabled={disabled}
+            onCheckedChange={(checked) =>
+              onRunOnStartupChange(checked === true)
+            }
+          />
+          <span className="text-sm">{t("script.schedule.runOnStartup")}</span>
+        </label>
+      ) : null}
     </div>
   );
 }

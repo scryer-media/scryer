@@ -20,7 +20,36 @@ const draft = {
   enabled: true,
   priority: 0,
   appliedFacets: [],
+  builderModel: null,
 };
+
+test("a draft preview sends the rule without the editor's builder model", () => {
+  const input = buildRuleSetTestInput({
+    draft: {
+      ...draft,
+      builderModel: {
+        version: 2,
+        family: "scoring",
+        join: "ALL",
+        conditions: [],
+        outputs: {},
+      },
+    },
+    editRuleSetId: "edit-rule",
+    copySourceRuleSetId: null,
+    testRuleSetId: null,
+    titleId: "title",
+    releaseName: "release",
+  });
+  assert.deepEqual(input.draft, {
+    name: "rule",
+    description: "",
+    regoSource: "package test",
+    enabled: true,
+    priority: 0,
+    appliedFacets: [],
+  });
+});
 
 test("preview requires a title, release name, and an episode for episodic titles", () => {
   const movie = {

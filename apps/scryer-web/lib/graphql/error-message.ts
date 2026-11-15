@@ -575,6 +575,21 @@ export function userFacingGraphQlErrorMessage(
         }
         return translate(key);
       }
+      if (key && reason === "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED") {
+        const { destructiveActions } = entry.extensions;
+        const actions = Array.isArray(destructiveActions)
+          ? destructiveActions.filter(
+              (action): action is string =>
+                typeof action === "string" && action !== "",
+            )
+          : [];
+        if (actions.length > 0) {
+          return translate("error.maintenanceMaxTitlesPerRunRequiredNamed", {
+            actions: actions.join(", "),
+          });
+        }
+        return translate(key);
+      }
       if (key || codeKey) return translate(key ?? codeKey!);
     }
   }

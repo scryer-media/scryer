@@ -96,19 +96,20 @@ const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<
   exclusions: "candidates",
 };
 
-/// Which kinds of rule the Rules page offers on this instance.
-///
-/// Maintenance and request rules are still being finished, so they are panes
-/// only when the instance has opted into experimental features. Scoring is
-/// always present, so a single-entry result also tells the page there is no
-/// kind to switch between and the rail can be dropped.
-export function rulesSectionsFor(
-  experimentalFeaturesEnabled: boolean,
-): RulesSection[] {
-  return experimentalFeaturesEnabled
-    ? ["scoring", "maintenance", "request"]
-    : ["scoring"];
-}
+/// Which kinds of rule the Rules page offers, in rail order. Maintenance and
+/// request rules are in beta and badged as such, but no longer wait behind the
+/// experimental-features switch.
+export const RULES_SECTIONS: readonly RulesSection[] = [
+  "scoring",
+  "maintenance",
+  "request",
+];
+
+/// Rule kinds still in beta. The rail badges these.
+export const BETA_RULES_SECTIONS: ReadonlySet<RulesSection> = new Set([
+  "maintenance",
+  "request",
+]);
 
 /// The `rules` settings section is the Scoring pane, `maintenanceRules` the
 /// Maintenance pane and `requestRules` the Request pane. Which `SettingsSection`

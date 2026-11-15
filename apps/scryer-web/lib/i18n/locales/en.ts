@@ -3967,10 +3967,26 @@ const en: LocaleDictionary = {
   "error.rulePackageRequired": "The rule must declare its assigned package.",
   "error.ruleInputImportUnsupported":
     "Reference rule input directly instead of importing it under another name.",
+  "error.ruleActionValueNotLiteral":
+    "Assign this head a plain literal: a quoted string, a whole number for set_lease_days, or a list of quoted strings for tag and audio language heads.",
+  "error.ruleActionValueInvalid":
+    "This head's value is not valid: a name cannot be empty, tags have to be valid tag labels, a lease is 0 to 3650 days, and monitoring and language values have to be ones Scryer offers.",
+  "error.ruleActionUnknownQualityProfile":
+    "No quality profile has this name, so the rule cannot apply it.",
+  "error.ruleActionUndefinedTag":
+    "This tag is not defined in Settings › Tags, so it is dropped when the rule applies.",
+  "settings.regoSnippet.shapeRequest":
+    "Set the lease an approval writes when a fact holds.",
+  "settings.regoSnippet.tagRequest":
+    "Tag the requested title when a fact holds.",
+  "error.ruleHostHelperRedefined":
+    "days_since is provided by Scryer and cannot be redefined. Give your own helper another name.",
+  "error.ruleUnreferencedRule":
+    "This rule is not an action and nothing else in the source uses it. Check the spelling if it was meant to be an action.",
   "error.ruleMatchRequired":
     "Define a boolean match rule for this maintenance matcher.",
   "error.ruleVoteRequired":
-    "Define approve, deny, manual, or tags for this request matcher.",
+    "Define a vote (approve, deny or manual), a value that shapes the approval, or add_tags for this request rule.",
 
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
     "Choose an action or an action sequence, not both.",
@@ -4506,8 +4522,14 @@ const en: LocaleDictionary = {
     "Deny a request when its adult-content fact is true.",
   "settings.regoSnippet.manualRequest":
     "Require manual review when the recent approval count reaches a threshold.",
-  "settings.regoSnippet.matchTag":
-    "Match a maintenance subject by tag. This matcher does not define an action.",
+  "settings.regoHelper.daysSince":
+    "Whole days between an RFC3339 timestamp and the evaluation time. Maintenance rules only.",
+  "settings.regoSnippet.unmonitorTagged":
+    "Unmonitor a subject that carries a tag.",
+  "settings.regoSnippet.tagAfterDays":
+    "Tag a subject added more than a number of days ago.",
+  "settings.regoSnippet.setProfile":
+    "Move large titles onto a named quality profile.",
 
   "settings.trustedProxiesTitle": "Trusted proxies for rate limiting",
   "settings.trustedProxiesHelp":
@@ -9502,55 +9524,17 @@ const en: LocaleDictionary = {
   "settings.rulesScoring": "Scoring Rules",
   "settings.maintenanceNavRules": "Rules",
   "settings.maintenanceNavHistory": "History",
-  "settings.maintenanceRuleAction": "Action",
+  "settings.maintenanceRuleAction": "Actions",
   "settings.maintenanceRuleActionHelp":
     "What this rule would do once maintenance actions are switched on.",
   "settings.maintenanceRuleActionPlaceholder": "Choose an action",
   "settings.maintenanceRuleNoActions": "No title-scoped actions are available.",
   "settings.maintenanceActionSequence": "Action sequence",
-  "settings.maintenanceSequenceTitle": "Action sequence",
-  "settings.maintenanceSequenceHelp":
-    "Run these steps in order after a subject has completed its grace period. An empty sequence records matches without acting on them.",
-  "settings.maintenanceSequenceEmpty":
-    "Dry run only — no action steps are configured.",
   "settings.maintenanceSequenceObserveOnly": "Dry run only",
-  "settings.maintenanceSequenceSummary": "Sequence summary",
-  "settings.maintenanceSequenceSummaryTarget": "Targets: {{target}}",
-  "settings.maintenanceSequenceSummaryArming": "When enabled: {{arming}}",
-  "settings.maintenanceSequenceSummaryEffects": "Effects: {{effects}}",
-  "settings.maintenanceSequenceTargetTitle": "matching title",
-  "settings.maintenanceSequenceTargetTitleDescendants":
-    "matching title, seasons, and episodes",
-  "settings.maintenanceSequenceTargetSeason": "matching season",
-  "settings.maintenanceSequenceTargetSeasonDescendants":
-    "matching season and episodes",
-  "settings.maintenanceSequenceTargetEpisode": "matching episode",
-  "settings.maintenanceSequencePreviewPlan": "Ordered effects for this preview",
-  "settings.maintenanceSequencePreviewDescendants": "include descendants",
-  "settings.maintenanceSequencePreviewMatchedScope": "matched scope only",
-  "settings.maintenanceSequenceAdd": "Add step",
-  "settings.maintenanceSequencePreset": "Sequence preset",
-  "settings.maintenanceSequencePresetApply": "Replace with preset",
-  "settings.maintenanceSequencePresetProfileThenSearch":
-    "Change profile, then search if it changed",
-  "settings.maintenanceSequencePresetUnmonitorThenDelete":
-    "Unmonitor descendants, then delete files",
-  "settings.maintenanceSequenceTerminal": "Terminal",
-  "settings.maintenanceSequenceDependencies": "Requires: {{steps}}",
-  "settings.maintenanceSequenceIncludeDescendants":
-    "Include seasons and episodes",
-  "settings.maintenanceSequenceSearchCondition": "Search condition",
-  "settings.maintenanceSequenceSearchUnconditional": "Always request search",
-  "settings.maintenanceSequenceSearchPreviousProfileChanged":
-    "Only after the profile changed",
   "settings.maintenanceSequenceHistoryWaiting": "waiting for an earlier step",
   "settings.maintenanceSequenceHistorySearchRequested": "search requested",
   "settings.maintenanceSequenceHistorySearchAccepted": "accepted",
   "settings.maintenanceSequenceHistoryJob": "job {{id}}",
-  "settings.maintenanceSequenceStepUnavailable":
-    "This saved step is unavailable from the current catalog. Remove it or restore a compatible catalog before saving or previewing.",
-  "settings.maintenanceSequenceCatalogUnavailable":
-    "The action-step catalog is unavailable. Saved steps remain visible, but saving and unsaved previews are paused until it loads.",
   "settings.maintenanceSequenceStepUnmonitor": "Unmonitor",
   "settings.maintenanceSequenceStepDeleteFiles": "Delete files",
   "settings.maintenanceSequenceStepChangeQualityProfile":
@@ -9563,9 +9547,10 @@ const en: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Grace days",
   "settings.maintenanceRuleGraceDaysHelp":
     "Days after each subject first matches before its action becomes due.",
-  "settings.maintenanceRuleTargetProfile": "Target quality profile",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "The profile this action would move matching titles to.",
+  "settings.maintenanceRuleScheduleHelp":
+    "Each rule runs on its own schedule. A run evaluates the rule, then applies its candidates whose grace period has ended. Changing the schedule keeps the rule's state. Daily, weekly and cron times use the server's local time.",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "This rule never runs on its own. Start it from Runs and history.",
   "settings.maintenanceRuleLibraries": "Library scope",
   "settings.maintenanceRuleLibrariesHelp":
     "Leave every library unchecked to scope the rule to the whole collection.",
@@ -9640,9 +9625,6 @@ const en: LocaleDictionary = {
   // ── Maintenance rules — instance gates ──
 
   // ── Maintenance rules — mode and arming ──
-  "settings.maintenanceArmingNone": "No effects",
-  "settings.maintenanceArmingReversible": "Library updates",
-  "settings.maintenanceArmingDestructive": "File deletion",
   "settings.maintenanceRuleState": "State",
   "settings.maintenanceRuleStateHelp":
     "Disabled rules are never evaluated. Dry run records candidates without acting on them. Enabled rules act on their candidates once each grace period elapses.",
@@ -9789,9 +9771,7 @@ const en: LocaleDictionary = {
     "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
   "settings.refMaintOutputTitle": "Rule output",
   "settings.refMaintOutputIntro":
-    "A matcher defines up to three names. Anything else in the package is ignored, and a decision that is not exactly this shape is rejected rather than coerced.",
-  "settings.refMaintOutputMatch":
-    "match — boolean. Leaving it undefined means the subject did not match.",
+    "A rule says what to do by defining actions, plus the optional unknown and reasons. A subject matches when at least one action holds for it. A decision that is not exactly this shape is rejected rather than coerced.",
   "settings.refMaintOutputUnknown":
     "unknown — boolean. Set it when the rule itself cannot see enough to decide; unknown always beats a match. Facts Scryer could not observe are already handled for you, so this is only for judgements of your own.",
   "settings.refMaintOutputReasons":
@@ -10057,6 +10037,159 @@ const en: LocaleDictionary = {
     "True when media metadata declares 3D video. False means not detected, including files not yet analyzed.",
   "settings.refMaintFileVideoWidth": "Video width in pixels",
   "settings.refMaintFileVideoHeight": "Video height in pixels",
+  "settings.refMaintFactsRuntimeMinutes":
+    "Runtime in minutes, as the metadata provider gave it",
+  "settings.refMaintFactsOriginalLanguage": "Original language of the title",
+  "settings.refMaintFactsSeriesStatus":
+    "Status of a show as the metadata provider gave it, such as continuing or ended",
+  "settings.refMaintFactsFirstAired": "Date the show first aired (YYYY-MM-DD)",
+  "settings.refMaintFactsNetwork": "Network that airs the show",
+  "settings.refMaintFactsStudio": "Studio that made the title",
+  "settings.refMaintFactsCountry": "Country of origin",
+  "settings.refMaintFactsPopularity":
+    "Popularity score from the metadata provider",
+  "settings.refMaintFactsTheatricalReleaseDate":
+    "Theatrical release date of a movie (YYYY-MM-DD)",
+  "settings.refMaintFactsDigitalReleaseDate":
+    "Digital release date of a movie (YYYY-MM-DD)",
+  "settings.refMaintFactsPhysicalReleaseDate":
+    "Physical release date of a movie (YYYY-MM-DD)",
+  "settings.refMaintFactsDaysSinceAdded":
+    "Whole days since the subject was added",
+  "settings.refMaintFactsMaxVideoHeight":
+    "Tallest video stream among the subject's files, in pixels",
+  "settings.refMaintFactsSeasonCount":
+    "Number of seasons of the show, specials left out",
+  "settings.refMaintFactsAiredEpisodeCount":
+    "Number of regular episodes of the show that have aired",
+  "settings.refMaintFactsUnairedEpisodeCount":
+    "Number of regular episodes of the show that have not aired",
+  "settings.refMaintFactsMissingEpisodeCount":
+    "Number of aired, monitored episodes of the show without a file",
+  "settings.refMaintFactsAiredEpisodeFilePercent":
+    "Aired episodes with a file, as a percentage of aired episodes",
+  "settings.refMaintFactsLatestSeasonNumber":
+    "Number of the show's latest season",
+  "settings.refMaintFactsLatestAiredEpisodeDate":
+    "Air date of the show's most recently aired episode (YYYY-MM-DD)",
+  "settings.refMaintFactsNextEpisodeAirDate":
+    "Air date of the show's next scheduled episode (YYYY-MM-DD)",
+  "settings.refMaintFactsGenres":
+    "Genre names from the title's stored metadata",
+  "settings.refMaintFactsRating": "The title's stored rating summary",
+  "settings.refMaintFactsRatings":
+    "Every external rating behind the rating summary",
+  "settings.refMaintFactsPlayCountTotal":
+    "Plays of the subject by every account on every enabled media server, summed; it names nobody",
+  "settings.refMaintFactsWatchlistedByUserIds":
+    "Users whose watchlists hold the title",
+  "settings.refMaintFactsWatchlistedByUsernames":
+    "Usernames of the users whose watchlists hold the title",
+  "settings.refMaintFactsWatchlistedByAnyone":
+    "Whether any user's watchlist holds the title",
+  "settings.refMaintFactsWatchlistedByAnyRequester":
+    "Whether a watchlist of one of the title's requesters holds it",
+  "settings.refMaintFactsWatchlistAddedAt":
+    "When Scryer first saw the title on any watchlist",
+  "settings.refMaintFactsWatchlistOrigins":
+    "Providers whose watchlists hold the title now",
+  "settings.refMaintFactsFavoritedByUserIds":
+    "Users who marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFactsFavoritedByUsernames":
+    "Usernames of the users who marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFactsFavoritedByAnyone":
+    "Whether any user marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFactsFavoritedByAnyRequester":
+    "Whether one of the title's requesters marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFileAudioCodec":
+    "Audio codec of the file's main audio stream",
+  "settings.refMaintFileAudioChannels": "Number of audio channels",
+  "settings.refMaintFileAudioBitrateKbps": "Audio bitrate in kbps",
+  "settings.refMaintFileVideoBitrateKbps": "Video bitrate in kbps",
+  "settings.refMaintFileVideoBitDepth": "Video bit depth",
+  "settings.refMaintFileVideoHdrFormat":
+    "HDR format of the video, such as HDR10 or Dolby Vision",
+  "settings.refMaintSectionRatings":
+    "— One entry per external rating in input.facts.ratings",
+  "settings.refMaintSectionObsRatings":
+    "— One entry per external rating in input.observations.ratings.value",
+  "settings.refMaintRatingSource": "Source of the rating",
+  "settings.refMaintRatingValue":
+    "The rating on the source's own scale, when the source gives one",
+  "settings.refMaintRatingNormalized":
+    "The rating on Scryer's common scale, comparable across sources",
+  "settings.refMaintRatingVotes":
+    "Number of votes behind the rating, when the source gives one",
+  "settings.refMaintFactsRuntimeMinutesValue":
+    "Runtime in minutes; absent when the metadata provider gave no value",
+  "settings.refMaintFactsOriginalLanguageValue":
+    "Original language; absent when the metadata provider gave no value",
+  "settings.refMaintFactsSeriesStatusValue":
+    "Show status as the provider gave it; absent when the provider gave no value",
+  "settings.refMaintFactsFirstAiredValue":
+    "First air date (YYYY-MM-DD), a date rather than a timestamp; absent when the provider gave no value",
+  "settings.refMaintFactsNetworkValue":
+    "Network name; absent when the provider gave no value",
+  "settings.refMaintFactsStudioValue":
+    "Studio name; absent when the provider gave no value",
+  "settings.refMaintFactsCountryValue":
+    "Country of origin; absent when the provider gave no value",
+  "settings.refMaintFactsPopularityValue":
+    "Popularity score; absent when the provider gave no value",
+  "settings.refMaintFactsTheatricalReleaseDateValue":
+    "Theatrical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+  "settings.refMaintFactsDigitalReleaseDateValue":
+    "Digital release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+  "settings.refMaintFactsPhysicalReleaseDateValue":
+    "Physical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+  "settings.refMaintFactsDaysSinceAddedValue":
+    "Whole days since the subject was added, counted against the evaluation clock",
+  "settings.refMaintFactsMaxVideoHeightValue":
+    "Height in pixels of the tallest video stream among the files; absent when no file reports one",
+  "settings.refMaintFactsSeasonCountValue":
+    "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsAiredEpisodeCountValue":
+    "Regular episodes whose air date is on or before the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsUnairedEpisodeCountValue":
+    "Regular episodes with no air date or one after the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsMissingEpisodeCountValue":
+    "Regular episodes that have aired, are monitored and have no file; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+    "Percentage of aired episodes that have a file; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsLatestSeasonNumberValue":
+    "Highest regular season number; absent for movies or a show with no seasons, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+    "Air date (YYYY-MM-DD) of the most recently aired regular episode; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsNextEpisodeAirDateValue":
+    "Earliest air date (YYYY-MM-DD) after the evaluation day; absent with reason no_scheduled_episode when none is scheduled, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsGenresValue":
+    "Genre names; unknown with reason metadata_unreadable when the stored metadata could not be read",
+  "settings.refMaintFactsRatingValue":
+    "Rating summary; absent when no source rated the title, unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refMaintFactsRatingsValue":
+    "One entry per external rating; unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refMaintFactsPlayCountTotalValue":
+    "Plays by every account on every enabled media server, linked to a Scryer user or not, summed. Unknown with reason audience_not_read until every account has been read recently, and with the usual watch-fact reasons whenever watch facts are unknown.",
+  "settings.refMaintFactsWatchlistedByUserIdsValue":
+    "IDs of the users whose watchlists hold the title. A watchlist is a user's own enabled, signed-in Plex, Trakt, TMDb or MDBList watchlist, Simkl or MyAnimeList plan-to-watch list, or AniList planning list. Unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently.",
+  "settings.refMaintFactsWatchlistedByUsernamesValue":
+    "Usernames of the users whose watchlists hold the title; unknown with reason user_not_found when one of them no longer exists, and with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistedByAnyoneValue":
+    "True when any user's watchlist holds the title; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+    "True when a requester's watchlist holds the title; absent with reason title_not_requested when nobody requested it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistAddedAtValue":
+    "RFC3339 timestamp of when Scryer first saw the title on any watchlist; absent with reason not_on_a_watchlist when no watchlist holds it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistOriginsValue":
+    "Providers whose watchlists hold the title now; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsFavoritedByUserIdsValue":
+    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. For a series, a favorite of the series or of any of its seasons or episodes counts; a season or episode counts its own favorites, and an episode also counts its season's and its series'. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable while a linked user can only be seen through Plex, with reason signal_identity_missing while a favorite belongs to an account not linked to a Scryer user, and with reason favorites_unreadable when the stored favorites could not be read.",
+  "settings.refMaintFactsFavoritedByUsernamesValue":
+    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+  "settings.refMaintFactsFavoritedByAnyoneValue":
+    "True when any user marked the subject a favorite, counted as for favorited_by_user_ids. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
   "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
   "settings.refMaintFileSubtitleLanguages":
     "Subtitle languages present in the file",
@@ -10079,6 +10212,153 @@ const en: LocaleDictionary = {
     "Whether this linked movie has a file on disk",
   "settings.refMaintSeriesMovieTags":
     "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
+  "settings.ruleBuilderTitle": "Rule",
+  "settings.ruleBuilderModeLabel": "Editor",
+  "settings.ruleBuilderModeSimple": "Simple",
+  "settings.ruleBuilderModeHelp":
+    "Simple builds the rule from conditions and outcomes and writes the Rego for you. Advanced shows that Rego read-only, and you can switch back to Simple at any time. To change the Rego yourself, choose Edit as Rego; after that the rule can no longer be opened in the simple builder.",
+  "settings.ruleBuilderUnavailable":
+    "This rule's source was edited by hand or did not come from the simple builder, so it can only be edited as Rego.",
+  "settings.ruleBuilderEditAsRego": "Edit as Rego",
+  "settings.ruleBuilderEditAsRegoTitle": "Edit this rule as Rego?",
+  "settings.ruleBuilderEditAsRegoIntro":
+    "Once you edit this rule as Rego, it can no longer be opened in the simple builder, even after you save it. The Rego it has now is kept as the starting point.",
+  "settings.ruleBuilderIncomplete":
+    "Finish the conditions and outcomes before saving.",
+  "settings.ruleBuilderConditions": "Conditions",
+  "settings.maintenanceBuilderConditionsHelp":
+    "Each condition checks one fact about the subject. Choose whether every condition or any one of them must hold for the actions to apply.",
+  "settings.ruleBuilderJoinAll": "All conditions match",
+  "settings.ruleBuilderJoinAny": "Any condition matches",
+  "settings.ruleBuilderAddCondition": "Add condition",
+  "settings.ruleBuilderFact": "Fact",
+  "settings.ruleBuilderFactPlaceholder": "Choose a fact",
+  "settings.ruleBuilderOperator": "Comparison",
+  "settings.ruleBuilderValue": "Value",
+  "settings.ruleBuilderDays": "Days",
+  "settings.maintenanceBuilderActionsHelp":
+    "Actions run in the order listed. Actions that cannot be combined are disabled once a conflicting one is chosen.",
+  "settings.maintenanceBuilderActionTitleOnly":
+    "Only available for title rules.",
+  "settings.ruleBuilderOutputConflict": "Cannot be combined with {{outputs}}.",
+  "settings.ruleBuilderQualityProfilePlaceholder": "Choose a quality profile",
+  "settings.maintenanceBuilderLibraryPlaceholder": "Choose a library",
+  "settings.maintenanceBuilderRootPlaceholder": "Choose a root folder",
+  "settings.ruleBuilderTagsPlaceholder": "Choose tags",
+  "settings.ruleBuilderNoTags": "No tags have been created yet.",
+  "settings.ruleBuilderGeneratedSource": "Generated Rego",
+  "settings.ruleBuilderGeneratedSourceHelp":
+    "The source the builder writes from your choices. This is what is validated, previewed and saved.",
+  "settings.ruleBuilderGeneratedSourceEmpty":
+    "Nothing is generated until the conditions and outcomes are complete.",
+  "settings.ruleBuilderOpIsTrue": "is true",
+  "settings.ruleBuilderOpIsFalse": "is false",
+  "settings.ruleBuilderOpEquals": "equals",
+  "settings.ruleBuilderOpNotEquals": "does not equal",
+  "settings.ruleBuilderOpGreaterThan": "is greater than",
+  "settings.ruleBuilderOpGreaterOrEqual": "is at least",
+  "settings.ruleBuilderOpLessThan": "is less than",
+  "settings.ruleBuilderOpLessOrEqual": "is at most",
+  "settings.ruleBuilderOpContains": "contains",
+  "settings.ruleBuilderOpNotContains": "does not contain",
+  "settings.ruleBuilderOpIsEmpty": "is empty",
+  "settings.ruleBuilderOpIsNotEmpty": "is not empty",
+  "settings.ruleBuilderOpMoreThanDaysAgo": "is more than N days ago",
+  "settings.ruleBuilderOpLessThanDaysAgo": "is less than N days ago",
+  "settings.ruleBuilderOpHasValue": "has a value",
+  "settings.ruleBuilderOpHasNoValue": "has no value",
+  "settings.ruleBuilderProblemNoConditions": "Add at least one condition.",
+  "settings.ruleBuilderProblemNoOutputs": "Choose at least one outcome.",
+  "settings.ruleBuilderProblemFactRequired": "Choose a fact.",
+  "settings.ruleBuilderProblemFactUnknown":
+    "This fact is not available for this rule.",
+  "settings.ruleBuilderProblemOperatorInvalid":
+    "Choose a comparison for this fact.",
+  "settings.ruleBuilderProblemValueRequired": "Enter a value.",
+  "settings.ruleBuilderProblemValueNotNumber": "Enter a number.",
+  "settings.ruleBuilderProblemValueNotDays":
+    "Enter a whole number of days, up to 100000.",
+  "settings.ruleBuilderProblemValueUnrepresentable":
+    "This value contains characters a rule cannot hold.",
+  "settings.ruleBuilderProblemValueDuplicate":
+    "Each entry can be listed only once.",
+  "settings.ruleBuilderProblemOutputNotInScope":
+    "This option is not available for this rule.",
+  "settings.ruleBuilderProblemOutputsConflict":
+    "This option cannot be combined with another chosen option.",
+  "settings.ruleBuilderProblemOutputRequired": "Choose one of: {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotWhole": "Enter a whole number.",
+  "settings.ruleBuilderProblemValueOutOfRange":
+    "This number is outside the allowed range.",
+  "settings.ruleBuilderProblemValueNotOffered":
+    "Choose one of the offered values.",
+  "settings.ruleBuilderProblemValueInvalid":
+    "This value has characters that are not allowed here.",
+  "settings.ruleBuilderProblemValueTooLong": "This value is too long.",
+  "settings.ruleBuilderProblemValueTooMany": "This list has too many entries.",
+  "settings.ruleBuilderProblemOutputUnknown":
+    "This rule names an option this version does not know.",
+  "settings.ruleBuilderProblemOutputNeedsOther":
+    "This option also needs {{outputs}}.",
+  "settings.ruleBuilderProblemValueNotInCatalog":
+    "Not offered any more: {{values}}. The rule keeps it until you pick another.",
+  "settings.ruleBuilderSchemaLoading":
+    "Loading the simple editor. The Rego editor works in the meantime.",
+  "settings.ruleBuilderSchemaFailed":
+    "The simple editor could not be loaded. Edit the rule as Rego, or reopen the page to try again.",
+  "settings.scoringBuilderOutputs": "Score",
+  "settings.scoringBuilderOutputsHelp":
+    "Choose one: add points to the release's score, or block the release. The code names the score entry in decision traces.",
+  "settings.scoringBuilderConditionsHelp":
+    "Each condition checks one fact about the release, the profile or the file. Choose whether every condition or any one of them must hold for the score to apply.",
+  "settings.scoringBuilderAdjustScore": "Adjust score",
+  "settings.scoringBuilderBlock": "Block release",
+  "settings.scoringBuilderCode": "Code",
+  "settings.scoringBuilderCodePlaceholder": "example_code",
+  "settings.scoringBuilderPoints": "Points",
+  "settings.requestBuilderOutputs": "Decision and changes",
+  "settings.requestBuilderOutputsHelp":
+    "Choose at most one vote: approve, deny or hold for review. A rule can also change what an approval writes, add tags or send a notification, with or without a vote. Reason codes can go with any of these.",
+  "settings.requestBuilderMonitorPlaceholder": "Choose monitoring",
+  "settings.requestBuilderLanguagesPlaceholder": "Choose languages",
+  "settings.requestDeclaredActionsTitle": "What this rule can do",
+  "settings.requestDeclaredActionsHelp":
+    "The votes and values this rule's source defines, in this order: {{order}}. An automatically approved request gets the values whose conditions hold; a request held for review shows them to the approver as suggestions.",
+  "settings.requestDeclaredActionsNone": "Nothing declared",
+  "settings.requestDeclaredActionsUnavailable":
+    "Fix the errors to see what this rule can do.",
+  "settings.requestRuleWarningsTitle": "Warnings",
+  "settings.requestRuleWarningLocation": "Line {{line}}, column {{column}}:",
+  "settings.requestBuilderConditionsHelp":
+    "Each condition checks one fact about the request, the title, the library or the time. Choose whether every condition or any one of them must hold for the decision to apply.",
+  "settings.requestBuilderOriginManual": "Requested by hand",
+  "settings.requestBuilderOriginPublicList": "From a public list",
+  "settings.requestBuilderOriginPersonalList": "From a personal list",
+  "settings.maintenanceDeclaredActionsTitle": "Declared actions",
+  "settings.maintenanceDeclaredActionsHelp":
+    "The actions this rule's source defines. A matched subject gets only the ones whose conditions hold for it, applied in this order: {{order}}.",
+  "settings.maintenanceDeclaredActionsNone": "No actions",
+  "settings.maintenanceDeclaredActionsUnavailable":
+    "Fix the errors to see what this rule does.",
+  "settings.maintenanceDecidedActionsNone": "No actions",
+  "settings.maintenanceRuleWarningsTitle": "Warnings",
+  "settings.maintenanceRuleWarningLocation":
+    "Line {{line}}, column {{column}}:",
+  "settings.refMaintOutputFlagHeads":
+    "Actions without a value (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) are booleans: define them with if, and the action applies when the body holds.",
+  "settings.refMaintOutputValueHeads":
+    "Actions with a value (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) assign a plain literal with :=. An else chain may choose between literals; a computed value is rejected.",
+  "settings.refMaintOutputHelpers":
+    "Any other rule name is a helper of your own. It only has an effect when an action, unknown or reasons uses it.",
+  "settings.refMaintActionsTitle": "Actions",
+  "settings.refMaintActionsOrder":
+    "Scryer applies a subject's actions in this order, whatever order the source lists them in: {{order}}.",
+  "settings.refMaintActionsDaysSince":
+    "days_since(timestamp) returns the whole days between an RFC3339 timestamp and the evaluation time, so days_since(input.facts.added_at) > 180 means added more than 180 days ago.",
+  "settings.refMaintActionsNotify":
+    "notify sends its message once, when the actions are applied. Previews and dry runs never send it.",
+  "settings.refMaintActionsConflicts":
+    "Conflicting actions for one subject, such as monitor with unmonitor, or the same tag both added and removed, hold that subject with a reason instead of applying either.",
   "settings.refMaintTagActionsTitle": "Tag actions",
   "settings.refMaintTagActionsNote":
     "add_tags and remove_tags write user tags on the matched title. Every label has to exist in the tag registry an administrator maintains in Settings, and labels are stored lowercase — a rule naming a tag that was deleted afterwards holds with tag_not_defined instead of writing it.",
@@ -10092,7 +10372,7 @@ const en: LocaleDictionary = {
   "settings.maintenanceTemplateGraceBadge": "{{count}}-day grace",
   "settings.maintenanceTemplateNoGraceBadge": "No grace period",
   "settings.maintenanceTemplateDestructiveBadge": "Deletes files",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Pick a target profile",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Name a target profile",
   "settings.maintenanceTemplateDeadWantedTitle": "Dead wanted entries",
   "settings.maintenanceTemplateDeadWantedDescription":
     "Titles you still monitor that no file ever arrived for. Facts are plain values, so a title whose monitoring or file state Scryer cannot see holds instead of matching. After a 30-day grace period the scope is unmonitored and anything already on disk is left alone.",
@@ -10101,13 +10381,13 @@ const en: LocaleDictionary = {
     'Caution: this template deletes the title and its files. Anything holding a file ages out unless it carries the "keep" tag. A 180-day grace period runs first, and the instance gates plus this rule\'s own arming still have to agree before anything is removed.',
   "settings.maintenanceTemplateAddedLongAgoTitle": "Added over 180 days ago",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Real date math: the matcher subtracts the title's added_at from the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
+    "Real date math: days_since compares the title's added_at with the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
   "settings.maintenanceTemplateOversizedTitle": "Oversized releases",
   "settings.maintenanceTemplateOversizedDescription":
-    "Titles whose files total more than 40 GB. Moves the title onto a quality profile you choose and searches again only if the profile actually changed — pick that target profile in the editor before saving.",
+    'Titles whose files total more than 40 GB. Moves the title onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
   "settings.maintenanceTemplateFourKPurgeTitle": "4K purge",
   "settings.maintenanceTemplateFourKPurgeDescription":
-    "Any title holding a 2160p file. After a 7-day grace period it moves onto a quality profile you choose and searches again if the profile changed. Pick that target profile in the editor before saving.",
+    'Any title holding a 2160p file. After a 7-day grace period it moves onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
   "settings.maintenanceTemplateRequestedExpiryTitle": "Requested media expiry",
   "settings.maintenanceTemplateRequestedExpiryDescription":
     'Caution: this template deletes the title and its files. Titles that came in from a request age out after 120 days unless they carry the "keep" tag.',
@@ -10126,7 +10406,7 @@ const en: LocaleDictionary = {
     "Caution: this template deletes the title and its files. It matches titles whose request leases have all run out, after a 7-day grace period. A lease that has not started yet — the title has not been imported — is left alone, and so is a title that never had a lease.",
   "settings.maintenanceTemplateNoProfileTitle": "No quality profile",
   "settings.maintenanceTemplateNoProfileDescription":
-    "Titles with no quality profile assigned. Takes no action at all: this one is for collecting a list to look at before deciding what should happen to it.",
+    "Titles with no quality profile assigned. Adds the needs-review tag so a person can pick a profile; nothing else changes.",
   "settings.maintenanceTemplateNewestEpisodesTitle":
     "Keep newest 3 downloaded episodes",
   "settings.maintenanceTemplateNewestEpisodesDescription":
@@ -10258,7 +10538,7 @@ const en: LocaleDictionary = {
     "A request rule reads one document describing the request, the person who made it, the library it targets, and what Scryer knows about the media. Facts are plain values. A fact Scryer could not observe is simply missing, and a rule that reads a missing fact holds the request for a person instead of guessing — you never write that guard yourself.",
   "settings.refReqOutputTitle": "What a request rule defines",
   "settings.refReqOutputIntro":
-    "At least one of these has to be defined, or the rule can never vote and Scryer refuses to save it.",
+    "A rule has to define a vote, a value that shapes the approval, or add_tags; one that defines none of these is refused when you save it. Valued heads take plain literals with :=.",
   "settings.refReqOutputApprove":
     "approve — the request may be granted without a person seeing it.",
   "settings.refReqOutputDeny":
@@ -10266,7 +10546,20 @@ const en: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual — the request goes to a person, whatever else voted.",
   "settings.refReqOutputTags":
-    'tags contains "…" — labels for the media, applied only on an approval.',
+    'add_tags := ["…"] — tags for the title, applied only on an approval.',
+  "settings.refReqOutputSetQualityProfile":
+    'set_quality_profile := "Profile name" — approve with this quality profile instead of the requested one.',
+  "settings.refReqOutputSetLeaseDays":
+    "set_lease_days := 30 — approve with this lease. 0 keeps the title forever; otherwise 1 to 3650 days.",
+  "settings.refReqOutputSetMonitor":
+    'set_monitor := "FUTURE_EPISODES" — approve with this monitoring: MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime.',
+  "settings.refReqOutputSetAudioLanguages":
+    'set_required_audio_languages := ["eng"] and set_preferred_audio_languages := ["jpn", "eng"] — replace the requested audio language lists.',
+  "settings.refReqOutputNotify": 'notify := "…" — send this notification.',
+  "settings.refReqOutputShapingOutcome":
+    "An automatically approved request gets these values. A request held for review shows them to the approver as suggestions, and a denied one lists them in its trace only. When two rules set different values for the same thing, the request is held for review.",
+  "settings.refReqOutputNoSchedule":
+    "Request rules have no schedule: they run on every request and on the requester's pre-flight check.",
   "settings.refReqOutputReasons":
     'reasons contains "…" — stable codes the requester is shown.',
   "settings.refReqOutputNoPackage":
@@ -10285,6 +10578,16 @@ const en: LocaleDictionary = {
   "requests.preflightManualReview": "This needs approval",
   "requests.preflightDeny": "This would be denied: {{reasons}}",
   "requests.preflightTags": "It will be tagged {{tags}}.",
+  "requests.preflightShaping":
+    "If approved, it will be changed to: {{changes}}.",
+  "requests.shapingTitle": "An approval would be changed to",
+  "requests.shapingSetBy": "set by {{rule}}",
+  "requests.shapingConflict":
+    "{{head}}: rules set different values, so a person decides",
+  "requests.shapingSuggested": "Suggested by rule {{rule}}",
+  "requests.shapingLeaseDays": "{{count}} days",
+  "requests.fallbackShapingConflict":
+    "Rules set different values for the same thing, so a person decides.",
   "requests.preflightReason": "Reason: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer could not read everything about this title, so a person will decide.",
@@ -11269,12 +11572,8 @@ const en: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Series movies",
   "settings.maintenanceActionAddTags": "Add tags",
   "settings.maintenanceActionRemoveTags": "Remove tags",
-  "settings.maintenanceRuleTags": "Tags",
-  "settings.maintenanceRuleTagsNone": "No tags picked yet",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "adds {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "removes {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Tagged for removal",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
@@ -11885,6 +12184,15 @@ const en: LocaleDictionary = {
   "script.schedule.cronUnreadable": "This expression can't be described.",
   "script.schedule.invalid": "Invalid schedule",
   "script.schedule.nextRuns": "Next runs",
+  "script.schedule.describe.everySeconds": "Every {{count}} seconds",
+  "script.schedule.describe.everyMinute": "Every minute",
+  "script.schedule.describe.everyMinutes": "Every {{count}} minutes",
+  "script.schedule.describe.everyHour": "Every hour",
+  "script.schedule.describe.everyHours": "Every {{count}} hours",
+  "script.schedule.describe.everyDay": "Every day",
+  "script.schedule.describe.everyDays": "Every {{count}} days",
+  "script.schedule.describe.daily": "Every day at {{time}}",
+  "script.schedule.describe.weekly": "{{days}} at {{time}}",
   "settings.scriptInterpreters.title": "Script interpreters",
   "settings.scriptInterpreters.description":
     "Programs Scryer uses to run scripts written in each language. Leave a field empty to use the program found on the PATH.",
@@ -11952,6 +12260,66 @@ const en: LocaleDictionary = {
     "Held: the media server could not confirm the watch history before acting.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
+  "settings.maintenanceRuleMaxTitlesPerRun": "Titles per run",
+  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+    "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
+  "settings.maintenanceRuleMaxTitlesPerRunNone": "No limit",
+  "settings.maintenanceRuleLoadRefused":
+    "This rule cannot be loaded and never runs. Replace its source to run it again.",
+  "settings.maintenanceSequenceStepMonitor": "Monitor",
+  "settings.maintenanceSequenceStepFetchSubtitles": "Fetch subtitles",
+  "settings.maintenanceSequenceStepMoveToLibrary": "Move to library",
+  "settings.maintenanceSequenceStepMoveToRoot": "Move to root folder",
+  "settings.notificationEvent.maintenanceRuleNotified":
+    "Maintenance Rule Notified",
+  "settings.maintenanceExecutionReason.tagNotDefined":
+    "Held: a tag this rule writes is no longer defined in Settings › Tags.",
+  "settings.maintenanceExecutionReason.tagPatchConflict":
+    "Held: another rule would add a tag this rule removes, or remove one it adds.",
+  "settings.maintenanceExecutionReason.monitoringConflict":
+    "Held: another rule recently did the opposite to this title's monitoring.",
+  "settings.maintenanceExecutionReason.actionsConflict":
+    "Held: the rule decided actions that cannot run together, so nothing was applied.",
+  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+    "Held: the library this move names no longer matches exactly one library.",
+  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+    "Held: the library this move names holds another kind of title.",
+  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+    "Held: the root folder this move names is not a root of the title's library.",
+  "settings.maintenanceExecutionReason.moveRefused":
+    "Held: the move was refused or its plan went stale. The files stay where they are and the move retries.",
+  "error.ruleActionRequired":
+    "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
+  "error.ruleActionHeadFunction":
+    "An action cannot be written as a function. Write it as a rule instead.",
+  "error.ruleForeignDataReference":
+    "This rule reads data outside its own package. Use input instead.",
+  "error.ruleWithTargetNotAllowed":
+    'This rule cannot replace {{path}} with "with". Its decision must rest on what Scryer observed.',
+  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+    "Set titles per run: this rule can {{actions}}.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+    "The rule defines no action, so it could never do anything.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
+    "The rule defines an action its scope cannot run.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+    "The library this move names holds another kind of title than the rule's libraries.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+    "The library this move names does not exist.",
+  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+    "The root folder this move names is not a configured library root.",
+  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+    "The rule gave this subject neither a decision nor an error.",
+  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+    "The quality profile this rule sets does not exist.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "Titles per run must be at least 1.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "Set titles per run: this rule can delete.",
+  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+    "Another save changed this rule first. Nothing was saved; reload the rule and try again.",
+  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+    "This rule was saved before rules declared their own actions, so it never runs. Replace its source to run it again.",
   "settings.refMaintFactsWatchedByAnyone":
     "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
   "settings.refMaintFactsLastWatchedByAnyoneAt":
@@ -12428,10 +12796,10 @@ const en: LocaleDictionary = {
     "Download, verify, and apply a signed application upgrade.",
   "jobs.builtin.MaintenanceRuleEvaluation.name": "Maintenance Rule Evaluation",
   "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action.",
+    "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
   "jobs.builtin.LifecycleActionHandling.name": "Maintenance Action Handling",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks.",
+    "Execute due maintenance candidates of armed rules, behind the instance effect gates and full safety rechecks. Each rule acts right after its own scheduled evaluation; running this now acts for every armed rule.",
   "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
   "jobs.builtin.MediaServerSignalSync.description":
     "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",
@@ -12622,6 +12990,34 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
   "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
   "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
+  "ruleOutput.maintenance.add_tags": "Add tags",
+  "ruleOutput.maintenance.remove_tags": "Remove tags",
+  "ruleOutput.maintenance.set_quality_profile": "Change quality profile",
+  "ruleOutput.maintenance.monitor": "Monitor",
+  "ruleOutput.maintenance.search": "Search",
+  "ruleOutput.maintenance.fetch_subtitles": "Fetch subtitles",
+  "ruleOutput.maintenance.move_to_library": "Move to library",
+  "ruleOutput.maintenance.move_to_root": "Move to root folder",
+  "ruleOutput.maintenance.unmonitor": "Unmonitor",
+  "ruleOutput.maintenance.delete_files": "Delete files",
+  "ruleOutput.maintenance.delete_title": "Delete title and files",
+  "ruleOutput.maintenance.notify": "Notify",
+  "ruleOutput.maintenance.notify.placeholder": "Notification text",
+  "ruleOutput.request.approve": "Approve",
+  "ruleOutput.request.deny": "Deny",
+  "ruleOutput.request.manual": "Hold for review",
+  "ruleOutput.request.set_quality_profile": "Quality profile",
+  "ruleOutput.request.set_lease_days": "Lease",
+  "ruleOutput.request.set_lease_days.placeholder": "Days, or 0 to keep forever",
+  "ruleOutput.request.set_monitor": "Monitoring",
+  "ruleOutput.request.set_required_audio_languages": "Required audio languages",
+  "ruleOutput.request.set_preferred_audio_languages":
+    "Preferred audio languages",
+  "ruleOutput.request.add_tags": "Add tags",
+  "ruleOutput.request.notify": "Notify",
+  "ruleOutput.request.notify.placeholder": "Notification text",
+  "ruleOutput.request.reasons": "Reason codes",
+  "ruleOutput.request.reasons.placeholder": "One reason code per line",
   "settings.proxyReachThrough": "Reach through",
   "settings.proxyReachThroughHelp":
     "Scryer sends its requests to this solver through the chosen transport proxy or tunnel. Direct reaches the solver from Scryer's own network.",

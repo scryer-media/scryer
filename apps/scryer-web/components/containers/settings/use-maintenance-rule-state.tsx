@@ -5,7 +5,7 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { maintenanceCandidatesQuery } from "@/lib/graphql/queries";
+import { maintenanceArmingCandidatesQuery } from "@/lib/graphql/queries";
 import { setMaintenanceRuleStateMutation } from "@/lib/graphql/mutations";
 import type {
   MaintenanceCandidate,
@@ -21,7 +21,7 @@ import {
 
 export const MAINTENANCE_CANDIDATE_LIMIT = 200;
 
-/// Enabling a Destructive rule in flight. The count is the number the dialog actually
+/// Enabling a destructive rule in flight. The count is the number the dialog actually
 /// showed, and the same number it sends as the acknowledgement, so the server's
 /// check compares against what the operator saw rather than a fresher count
 /// they never read.
@@ -100,14 +100,17 @@ export function useMaintenanceRuleState({
       try {
         const { data, error } = await client
           .query(
-            maintenanceCandidatesQuery,
+            maintenanceArmingCandidatesQuery,
             { ruleSetId: record.id, limit: MAINTENANCE_CANDIDATE_LIMIT },
             { requestPolicy: "network-only" },
           )
           .toPromise();
         if (error) throw error;
         const actionable = (
-          (data?.maintenanceCandidates as MaintenanceCandidate[]) ?? []
+          (data?.maintenanceCandidates as Pick<
+            MaintenanceCandidate,
+            "state" | "subjectKind" | "subjectLabel" | "titleName"
+          >[]) ?? []
         ).filter((candidate) => isNonTerminalCandidateState(candidate.state));
         setPendingArming((prev) =>
           prev && prev.record.id === record.id
