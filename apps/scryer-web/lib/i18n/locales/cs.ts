@@ -11,6 +11,8 @@ const cs: LocaleDictionary = {
     "Měsíční využití indexeru se nepodařilo spolehlivě ověřit; požadavek byl odmítnut.",
   "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
     "Měsíční limity požadavků a stažení musí být kladná celá čísla, nebo prázdné pro žádný limit.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "Toto stahování nemá ověřenou historii stažení ze Scryeru. Nebylo přidáno na seznam blokovaných ani smazáno a nebylo požádáno o vyhledání náhrady.",
   "error.reason.STANDBY_NOT_FOUND": "Tento uložený kandidát již neexistuje.",
   "error.reason.STANDBY_NOT_AVAILABLE":
     "Tento uložený kandidát již není dostupný. Obnovte seznam a zkuste to znovu.",

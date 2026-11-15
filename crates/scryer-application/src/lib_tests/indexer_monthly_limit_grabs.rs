@@ -15,6 +15,8 @@ struct PerIndexerGrabLimit {
     refused: HashMap<String, &'static str>,
     admissions: std::sync::Mutex<HashMap<String, usize>>,
     remembered: std::sync::Mutex<HashSet<String>>,
+    /// Set once the limit lifts, as a raised limit or a new month does.
+    lifted: std::sync::atomic::AtomicBool,
 }
 
 impl PerIndexerGrabLimit {
@@ -30,7 +32,17 @@ impl PerIndexerGrabLimit {
             refused: HashMap::from([(indexer_id.to_string(), reason)]),
             admissions: std::sync::Mutex::new(HashMap::new()),
             remembered: std::sync::Mutex::new(HashSet::new()),
+            lifted: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    fn lift(&self) {
+        self.lifted.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.remembered.lock().expect("remembered refusals").clear();
+    }
+
+    fn is_lifted(&self) -> bool {
+        self.lifted.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn admissions(&self, indexer_id: &str) -> usize {
@@ -70,6 +82,9 @@ impl crate::IndexerStatsTracker for PerIndexerGrabLimit {
                 .expect("admission counts")
                 .entry(indexer_id.to_string())
                 .or_default() += 1;
+            if self.is_lifted() {
+                return Ok(());
+            }
             match self.refused.get(indexer_id).copied() {
                 Some(crate::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE) => {
                     Err(AppError::temporary_unavailable_reason(
@@ -98,10 +113,12 @@ impl crate::IndexerStatsTracker for PerIndexerGrabLimit {
         indexer_id: &str,
         _at: chrono::DateTime<Utc>,
     ) -> bool {
-        self.remembered
-            .lock()
-            .expect("remembered refusals")
-            .contains(indexer_id)
+        !self.is_lifted()
+            && self
+                .remembered
+                .lock()
+                .expect("remembered refusals")
+                .contains(indexer_id)
     }
 
     fn all_stats(&self) -> Vec<crate::IndexerQueryStats> {
@@ -767,4 +784,154 @@ async fn operator_grab_of_a_pending_release_returns_the_monthly_limit_refusal() 
             .expect("list failed signatures")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn rss_sync_grabs_a_capped_release_once_the_limit_lifts() {
+    let capped_release = "Limit.Lifted.Subject.2024.1080p.WEB-DL-ONE";
+    let fixture = fixture(
+        vec![listed_release(CAPPED_INDEXER, capped_release)],
+        PerIndexerGrabLimit::refusing(CAPPED_INDEXER),
+    );
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Limit Lifted Subject".into(),
+                sort_title: Some("Limit Lifted Subject".into()),
+                slug: Some("limit-lifted-subject".into()),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                year: Some(2024),
+                content_status: Some("Released".into()),
+                min_availability: Some("announced".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create monitored movie");
+    fixture
+        .wanted_items
+        .remember_title_facet(&title.id, MediaFacet::Movie)
+        .await;
+
+    let refused = fixture
+        .app
+        .run_scheduled_rss_sync()
+        .await
+        .expect("run RSS sync at the limit");
+    assert_eq!(refused.releases_grabbed, 0);
+    assert_eq!(fixture.limit.admissions(CAPPED_INDEXER), 1);
+
+    // While the refusal is remembered, the feed item is passed over without
+    // being matched or remembered as seen.
+    let still_refused = fixture
+        .app
+        .run_scheduled_rss_sync()
+        .await
+        .expect("run RSS sync while the limit is remembered");
+    assert_eq!(still_refused.releases_grabbed, 0);
+    assert_eq!(fixture.limit.admissions(CAPPED_INDEXER), 1);
+
+    fixture.limit.lift();
+    let lifted = fixture
+        .app
+        .run_scheduled_rss_sync()
+        .await
+        .expect("run RSS sync after the limit lifts");
+
+    assert_eq!(
+        lifted.releases_grabbed, 1,
+        "a release passed over for a monthly limit is grabbed once the limit lifts"
+    );
+    let submissions = fixture.download_submissions.store.lock().await.clone();
+    assert_eq!(submissions.len(), 1, "{submissions:?}");
+    assert_eq!(submissions[0].source_title.as_deref(), Some(capped_release));
+}
+
+#[tokio::test]
+async fn replace_early_refused_by_a_monthly_limit_keeps_the_existing_download() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let limit = Arc::new(PerIndexerGrabLimit::refusing(CAPPED_INDEXER));
+    let app = app.with_test_overrides(|services| services.with_indexer_stats(limit.clone()));
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Limit Replace Subject".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "existing-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some("Limit.Replace.Subject.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .expect("record submission");
+    *download_client.queue_items.lock().await = vec![queue_history_fixture_item(
+        "existing-job",
+        DownloadQueueState::Queued,
+        0,
+    )];
+
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                indexer_id: Some(CAPPED_INDEXER.to_string()),
+                source_hint: Some("https://example.invalid/limit-replace.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Limit.Replace.Subject.2026.2160p.WEB-DL".to_string()),
+                source_password: None,
+                info_hash_hint: None,
+                size_bytes: None,
+                seeders: None,
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::ReplaceEarly,
+        )
+        .await
+        .expect_err("the replacement's indexer is at its monthly limit");
+
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::indexer_monthly_quota::GRAB_LIMIT_REACHED)
+    );
+    assert!(
+        download_client.deleted_items.lock().await.is_empty(),
+        "the existing download is not cancelled for a refused replacement"
+    );
+    let submissions = download_submissions.store.lock().await.clone();
+    assert_eq!(submissions.len(), 1, "{submissions:?}");
+    assert_eq!(submissions[0].download_client_item_id, "existing-job");
 }

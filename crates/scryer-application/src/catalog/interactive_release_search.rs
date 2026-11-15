@@ -2353,11 +2353,21 @@ struct FetchedSearchArtifact {
 /// Restate which release an artifact fetch failed on: the operator picked
 /// several and the message is all they see. The kind is flattened to a
 /// validation failure because that is what it is for the caller — one of the
-/// releases they chose cannot be downloaded.
+/// releases they chose cannot be downloaded. A failure that names a reason
+/// keeps it, so the client can still tell, for example, a monthly limit
+/// refusal apart from a broken link.
 fn prefix_app_error(error: AppError, release_title: &str) -> AppError {
+    if error.validation_reason().is_none() && error.reason().is_some() {
+        return error;
+    }
+    let reason = error.validation_reason();
     let rendered = error.to_string();
     let detail = rendered.strip_prefix("validation: ").unwrap_or(&rendered);
-    AppError::Validation(format!("{release_title}: {detail}"))
+    let message = format!("{release_title}: {detail}");
+    match reason {
+        Some(reason) => AppError::validation_refused(reason, message),
+        None => AppError::Validation(message),
+    }
 }
 
 /// `<sanitized release title><extension>`, safe to put in a
@@ -2582,5 +2592,49 @@ mod subject_shape_tests {
         }
         validate_interactive_search_subject_shape(Some("link-1"), None, None)
             .expect("series movie subject");
+    }
+}
+
+#[cfg(test)]
+mod prefix_app_error_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_refusal_keeps_its_reason_behind_the_release_title() {
+        let reason = crate::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED;
+        let error = prefix_app_error(
+            AppError::validation_refused(reason, "monthly request limit reached"),
+            "Release.Title.2026.1080p",
+        );
+        assert_eq!(error.validation_reason(), Some(reason));
+        assert!(
+            error.to_string().contains("Release.Title.2026.1080p"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_coded_temporary_failure_is_returned_unchanged() {
+        let reason = crate::error_reasons::indexer_monthly_quota::ACCOUNTING_UNAVAILABLE;
+        let error = prefix_app_error(
+            AppError::temporary_unavailable_reason(reason, "usage could not be checked", None),
+            "Release.Title.2026.1080p",
+        );
+        assert_eq!(error.reason(), Some(reason));
+    }
+
+    #[test]
+    fn an_uncoded_failure_still_names_the_release() {
+        let error = prefix_app_error(
+            AppError::Validation("link expired".to_string()),
+            "Release.Title.2026.1080p",
+        );
+        assert_eq!(error.validation_reason(), None);
+        assert!(
+            error
+                .to_string()
+                .contains("Release.Title.2026.1080p: link expired"),
+            "{error}"
+        );
     }
 }

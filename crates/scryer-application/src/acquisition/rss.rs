@@ -87,6 +87,16 @@ impl RssSeenGuids {
         is_new
     }
 
+    /// Drops `guid` from `indexer`'s set, so its next poll treats the item as
+    /// new again. Used for a release passed over only because its indexer was
+    /// at its monthly limit: nothing was decided about it, so it must come
+    /// back once the limit lifts.
+    fn forget(&mut self, indexer: &str, guid: &str) {
+        if let Some(seen) = self.by_indexer.get_mut(indexer) {
+            seen.remove(guid);
+        }
+    }
+
     /// Trims each indexer polled this cycle back to its bound, dropping its
     /// least recently returned GUIDs first. This cycle's GUIDs are never
     /// evicted: dropping one would let the next poll, which reads back to the
@@ -119,6 +129,16 @@ impl RssSeenGuids {
 
 /// The key a feed item's GUID is remembered under: the indexer that returned
 /// it, or its source name when the result carries no indexer id.
+/// The identity an RSS item is remembered by in [`RssSeenGuids`].
+fn rss_seen_guid(result: &IndexerSearchResult) -> &str {
+    result
+        .guid
+        .as_deref()
+        .or(result.download_url.as_deref())
+        .or(result.link.as_deref())
+        .unwrap_or(&result.title)
+}
+
 fn rss_seen_guid_indexer(result: &IndexerSearchResult) -> &str {
     result
         .indexer_id
@@ -1570,13 +1590,15 @@ impl AppUseCase {
             let mut seen_guids = self.runtime.acquisition.rss_seen_guids.write().await;
             let mut new_results: Vec<IndexerSearchResult> = Vec::new();
             for result in results {
+                // A release from an indexer already known to be at its
+                // monthly limit cannot be grabbed, so it is neither matched nor
+                // remembered: the first poll after the limit lifts sees it as
+                // new.
+                if self.indexer_monthly_grab_refused_now(result.indexer_id.as_deref()) {
+                    continue;
+                }
                 let release_identity = rss_release_identity(&result);
-                let guid = result
-                    .guid
-                    .as_deref()
-                    .or(result.download_url.as_deref())
-                    .or(result.link.as_deref())
-                    .unwrap_or(&result.title);
+                let guid = rss_seen_guid(&result);
 
                 // Record every fresh GUID, then give an active unknown-age row
                 // one more look even if it was already seen this process
@@ -3220,6 +3242,17 @@ impl AppUseCase {
         clippy::too_many_arguments,
         reason = "RSS grab attempts coordinate release state, client state, and reporting in one place"
     )]
+    /// Lets a release passed over for its indexer's monthly limit be seen as
+    /// new by a later poll.
+    async fn forget_rss_seen_guid(&self, result: &IndexerSearchResult) {
+        self.runtime
+            .acquisition
+            .rss_seen_guids
+            .write()
+            .await
+            .forget(rss_seen_guid_indexer(result), rss_seen_guid(result));
+    }
+
     async fn try_grab_rss_release(
         &self,
         reads: &crate::acquisition::title_reads::TitleCatalogReads,
@@ -3428,10 +3461,12 @@ impl AppUseCase {
             // An indexer already known to be at its limit is passed over the
             // same way, before anything is written for its release.
             if pass.indexer_limit_refused(candidate.indexer_id.as_deref()) {
+                self.forget_rss_seen_guid(candidate).await;
                 continue;
             }
             if self.indexer_monthly_grab_refused_now(candidate.indexer_id.as_deref()) {
                 pass.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+                self.forget_rss_seen_guid(candidate).await;
                 continue;
             }
             let scope = candidate
@@ -4287,6 +4322,7 @@ impl AppUseCase {
                     "RSS sync: grab refused by the indexer's monthly limit"
                 );
                 pass.mark_indexer_limit_refused(best.indexer_id.as_deref());
+                self.forget_rss_seen_guid(best).await;
                 Box::pin(self.try_grab_rss_release(
                     reads,
                     title,

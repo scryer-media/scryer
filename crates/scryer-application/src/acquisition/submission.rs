@@ -685,6 +685,10 @@ impl AppUseCase {
         } else {
             Vec::new()
         };
+        // Admission spends a grab slot, so it waits until this submission is
+        // known to go ahead; but it must come before anything is cancelled to
+        // make room for it, or a refused grab loses the download it replaces.
+        let mut grab_admitted = false;
         if !conflicts.is_empty() {
             match intent.conflict_policy {
                 SubmissionConflictPolicy::Abort | SubmissionConflictPolicy::Skip => {
@@ -695,6 +699,9 @@ impl AppUseCase {
                 SubmissionConflictPolicy::ReplaceEarly
                     if conflicts.iter().all(|conflict| conflict.replaceable) =>
                 {
+                    self.admit_indexer_monthly_grab(intent.request.indexer_id.as_deref())
+                        .await?;
+                    grab_admitted = true;
                     self.replace_blocking_download_submissions(&conflicts)
                         .await?;
                     state.submissions = self
@@ -724,8 +731,10 @@ impl AppUseCase {
             download_id: Some(download_id),
             ..intent.request.clone()
         };
-        self.admit_indexer_monthly_grab(request.indexer_id.as_deref())
-            .await?;
+        if !grab_admitted {
+            self.admit_indexer_monthly_grab(request.indexer_id.as_deref())
+                .await?;
+        }
         // An HTTP release is resolved by its indexer and described to the
         // client as a structured block; there is no artifact to fetch.
         if let Some(listed) = intent.http_release.as_ref() {
