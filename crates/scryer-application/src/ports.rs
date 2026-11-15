@@ -31,7 +31,9 @@ use scryer_plugin_sdk::{
 };
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -1566,6 +1568,12 @@ pub struct TitleNameBucketQuery<'a> {
     /// that reads its script; a release name carries no language tag to pick
     /// one. Empty when none applies.
     pub romanization_keys: &'a [String],
+    /// The scripts of the catalog names those keys can answer to, when a rule
+    /// set reads a catalog name in another script than the observed name's (a
+    /// Cyrillic name against its Latin transliteration). Only the
+    /// romanization lane reads them, and only by key; every other lane stays
+    /// in `script`. Empty keeps that lane in `script` too.
+    pub romanization_scripts: &'a [&'static str],
     pub collation_keys: &'a [(&'static str, Vec<u8>)],
     /// Guard on how many index hits are hydrated, so a pathological bucket
     /// cannot turn one release into a catalog-sized read. The equality lanes
@@ -1729,7 +1737,19 @@ pub fn name_candidates_in_bucket(
             let script =
                 scryer_domain::title_spelling::title_script(&candidate.match_term).as_str();
             let numbers_key = scryer_domain::title_spelling::title_numbers_key(&candidate.raw_term);
-            if script != query.script || numbers_key != query.numbers_key {
+            if numbers_key != query.numbers_key {
+                continue;
+            }
+            // A name in another script is in reach only by its romanization
+            // key, which is how the persisted index reads it.
+            if script != query.script
+                && !(query.romanization_scripts.contains(&script)
+                    && scryer_domain::title_normalization::romanization_key(
+                        &candidate.match_term,
+                        candidate.language_tag.as_deref(),
+                    )
+                    .is_some_and(|key| query.romanization_keys.contains(&key)))
+            {
                 continue;
             }
             candidates.push(candidate);
@@ -6240,6 +6260,49 @@ pub trait IndexerStatsTracker: Send + Sync {
         _dispatched_at: DateTime<Utc>,
     ) {
         self.record_api_request_sent(indexer_id, indexer_name);
+    }
+
+    /// Atomically checks and consumes one locally configured monthly request
+    /// slot. An indexer without a monthly request limit is always admitted
+    /// and costs no database work; trackers without durable quota
+    /// configuration are unlimited.
+    fn admit_monthly_request<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Blocking counterpart for plugin HTTP workers running on dedicated OS
+    /// threads. Never call this from an async runtime thread: an
+    /// implementation that would have to wait on the database there refuses
+    /// the request instead.
+    fn admit_monthly_request_blocking(
+        &self,
+        _indexer_id: &str,
+        _at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Atomically checks and consumes one locally configured monthly grab
+    /// slot. The admission is retained when downstream outcome is uncertain.
+    fn admit_monthly_grab<'a>(
+        &'a self,
+        _indexer_id: &'a str,
+        _at: DateTime<Utc>,
+    ) -> Pin<Box<dyn Future<Output = AppResult<()>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Whether a grab from this indexer is already known to be refused by a
+    /// monthly limit: its grab limit, or its request limit, is remembered as
+    /// reached for the current month and the current limit. Answered from
+    /// memory; it counts nothing and runs no statement. `false` means "not
+    /// known to be refused", so the real admission still decides.
+    fn monthly_grab_refusal_remembered(&self, _indexer_id: &str, _at: DateTime<Utc>) -> bool {
+        false
     }
 
     fn all_stats(&self) -> Vec<IndexerQueryStats>;

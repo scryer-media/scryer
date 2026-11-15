@@ -2228,6 +2228,8 @@ const ru: LocaleDictionary = {
     "Отслеживание импорта возобновлено. Обычные проверки импорта сохраняются.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_STATE_NOT_ELIGIBLE":
     "Скрыть можно только заблокированный импорт, возобновить — только скрытый. Обновите очередь и повторите действие.",
+  "error.reason.INTEGRATION_DOWNLOAD_NOT_GRABBED":
+    "У загрузки нет подтверждённой истории добавления Scryer. Релиз не заблокирован, данные не удалены, повторный поиск не запрошен.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_DOWNLOAD_CHANGED":
     "Этот элемент клиента теперь относится к другой загрузке. Обновите очередь и повторите действие.",
   "error.reason.INTEGRATION_IMPORT_TRACKING_ALREADY_RESOLVED":
@@ -7984,6 +7986,14 @@ const ru: LocaleDictionary = {
     "Максимальное число запросов в минуту должно быть не меньше 1; оставьте поле пустым, чтобы не ограничивать число запросов.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
     "Максимальное число запросов в минуту задаётся для каждого управляемого индексатора, а не для индексатора, который их синхронизирует.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_REQUEST_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит запросов.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_GRAB_LIMIT_REACHED":
+    "Достигнут заданный для этого индексатора месячный лимит загрузок.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_ACCOUNTING_UNAVAILABLE":
+    "Не удалось надёжно проверить месячный расход индексатора; запрос отклонён.",
+  "error.reason.INDEXER_MONTHLY_QUOTA_CONFIGURATION_INVALID":
+    "Месячные лимиты запросов и загрузок должны быть положительными целыми числами или пустыми.",
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Нижний предел минимального числа сидов не может быть отрицательным.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
@@ -11473,6 +11483,15 @@ const ru: LocaleDictionary = {
   "form.indexerMaxQueriesPerMinutePlaceholder": "Без ограничений",
   "form.indexerMaxQueriesPerMinuteInvalid":
     "Максимум запросов в минуту должен быть целым числом не меньше 1; оставьте поле пустым для отключения ограничения.",
+  "form.indexerMaxRequestsPerMonth": "Максимум запросов в месяц",
+  "form.indexerMaxGrabsPerMonth": "Максимум загрузок в месяц",
+  "form.indexerMonthlyLimitPlaceholder": "Без ограничений",
+  "form.indexerMonthlyLimitHelp":
+    "Учитывается только трафик этого экземпляра Scryer. Загрузка резервируется до получения файла и остаётся учтённой, если результат неизвестен. Лимиты сбрасываются в 00:00 UTC в первый день месяца.",
+  "form.indexerMaxRequestsPerMonthInvalid":
+    "Максимум запросов в месяц должен быть целым числом не меньше 1 или пустым.",
+  "form.indexerMaxGrabsPerMonthInvalid":
+    "Максимум загрузок в месяц должен быть целым числом не меньше 1 или пустым.",
   "form.subtitleProviderFacetsRequired":
     "Выберите хотя бы один тип содержимого. Scryer никогда не выполняет поиск через провайдера, у которого не выбран ни один тип.",
   "qualityProfile.qualityPreference": "Приоритет качества",

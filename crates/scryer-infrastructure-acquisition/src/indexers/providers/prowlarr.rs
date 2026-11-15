@@ -394,6 +394,7 @@ enum ProwlarrRequestError {
     RateLimited(String, Option<i64>, RateLimitCooldownAction),
     Unreachable(String),
     Unsupported(String),
+    LocalQuota(AppError),
     /// The server is older than [`ProwlarrSupportPolicy::minimum`].
     VersionUnsupported {
         version: String,
@@ -412,6 +413,7 @@ impl ProwlarrRequestError {
             Self::VersionUnsupported { .. } => {
                 Some(crate::error_reasons::ACQUISITION_PROWLARR_VERSION_UNSUPPORTED)
             }
+            Self::LocalQuota(error) => error.reason(),
             Self::RateLimited(..) | Self::Unreachable(_) | Self::Unsupported(_) => None,
         }
     }
@@ -423,6 +425,7 @@ impl ProwlarrRequestError {
             | Self::RateLimited(message, _, _)
             | Self::Unreachable(message)
             | Self::Unsupported(message) => message.clone(),
+            Self::LocalQuota(error) => error.to_string(),
             Self::VersionUnsupported { version, minimum } => {
                 format!("Prowlarr {version} is not supported; upgrade to {minimum} or newer")
             }
@@ -434,6 +437,15 @@ impl ProwlarrRequestError {
             Self::InvalidConfig(_) => ("invalid_config", None),
             Self::AuthFailed(_) => ("auth_failed", None),
             Self::RateLimited(_, retry_after_seconds, _) => ("rate_limited", *retry_after_seconds),
+            Self::LocalQuota(error)
+                if error.reason()
+                    == Some(
+                        scryer_application::error_reasons::indexer_monthly_quota::REQUEST_LIMIT_REACHED,
+                    ) =>
+            {
+                ("monthly_request_limit_reached", None)
+            }
+            Self::LocalQuota(_) => ("monthly_quota_unavailable", None),
             Self::Unreachable(_) => ("unreachable", None),
             Self::Unsupported(_) | Self::VersionUnsupported { .. } => ("unsupported", None),
         };
@@ -444,21 +456,24 @@ impl ProwlarrRequestError {
     }
 
     fn into_app_error(self) -> AppError {
-        match (self.reason(), self) {
-            (Some(reason), error) => AppError::validation_refused(reason, error.message()),
-            (None, Self::RateLimited(message, Some(retry_after_seconds), cooldown_action)) => {
-                AppError::rate_limited_temporary_unavailable(
-                    message,
-                    Some(std::time::Duration::from_secs(
-                        retry_after_seconds.max(1) as u64
-                    )),
-                    cooldown_action,
-                )
-            }
-            (None, Self::RateLimited(message, None, cooldown_action)) => {
-                AppError::rate_limited_temporary_unavailable(message, None, cooldown_action)
-            }
-            (None, error) => AppError::Repository(error.message()),
+        match self {
+            Self::LocalQuota(error) => error,
+            error => match (error.reason(), error) {
+                (Some(reason), error) => AppError::validation_refused(reason, error.message()),
+                (None, Self::RateLimited(message, Some(retry_after_seconds), cooldown_action)) => {
+                    AppError::rate_limited_temporary_unavailable(
+                        message,
+                        Some(std::time::Duration::from_secs(
+                            retry_after_seconds.max(1) as u64
+                        )),
+                        cooldown_action,
+                    )
+                }
+                (None, Self::RateLimited(message, None, cooldown_action)) => {
+                    AppError::rate_limited_temporary_unavailable(message, None, cooldown_action)
+                }
+                (None, error) => AppError::Repository(error.message()),
+            },
         }
     }
 }
@@ -1047,7 +1062,7 @@ impl ProwlarrManagementClient {
         let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
-            .send_with_rate_limit_and_dispatch_observer(
+            .send_with_rate_limit_and_async_dispatch_observer(
                 self.request_policy(path),
                 || {
                     self.outbound_http
@@ -1071,16 +1086,19 @@ impl ProwlarrManagementClient {
                     }
                 },
                 |actual_url| {
+                    let tally = Arc::clone(&tally);
                     let same_origin = reqwest::Url::parse(&url)
                         .is_ok_and(|url| url.origin() == actual_url.origin());
-                    let admitted = if same_origin {
-                        tally.try_note_sent(actual_url.as_str())
-                    } else {
-                        tally.try_note_auxiliary_sent_call("external_redirect")
-                    };
-                    admitted
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    async move {
+                        let admitted = if same_origin {
+                            tally.try_note_sent_async(actual_url.as_str()).await
+                        } else {
+                            tally.try_note_auxiliary_sent_call("external_redirect")
+                        };
+                        admitted
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             )
             .await
@@ -1090,9 +1108,12 @@ impl ProwlarrManagementClient {
                 }
             })
             .map_err(|error| match error {
-                OutboundHttpError::DispatchRejected => {
-                    ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
-                }
+                OutboundHttpError::DispatchRejected => tally
+                    .take_dispatch_error()
+                    .map(ProwlarrRequestError::LocalQuota)
+                    .unwrap_or_else(|| {
+                        ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
+                    }),
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => {
@@ -1157,7 +1178,7 @@ impl ProwlarrManagementClient {
         let observer_tally = Arc::clone(&tally);
         let response = self
             .outbound_http
-            .send_with_rate_limit_and_dispatch_observer(
+            .send_with_rate_limit_and_async_dispatch_observer(
                 // Caps can wait for a later pass, so a recorded cooldown of any
                 // length fails fast here instead of holding the sync lock while
                 // it runs out.
@@ -1184,16 +1205,19 @@ impl ProwlarrManagementClient {
                     }
                 },
                 |actual_url| {
+                    let tally = Arc::clone(&tally);
                     let same_origin = reqwest::Url::parse(&url)
                         .is_ok_and(|url| url.origin() == actual_url.origin());
-                    let admitted = if same_origin {
-                        tally.try_note_sent(actual_url.as_str())
-                    } else {
-                        tally.try_note_auxiliary_sent_call("external_redirect")
-                    };
-                    admitted
-                        .then_some(())
-                        .ok_or(OutboundHttpError::DispatchRejected)
+                    async move {
+                        let admitted = if same_origin {
+                            tally.try_note_sent_async(actual_url.as_str()).await
+                        } else {
+                            tally.try_note_auxiliary_sent_call("external_redirect")
+                        };
+                        admitted
+                            .then_some(())
+                            .ok_or(OutboundHttpError::DispatchRejected)
+                    }
                 },
             )
             .await
@@ -1203,9 +1227,12 @@ impl ProwlarrManagementClient {
                 }
             })
             .map_err(|error| match error {
-                OutboundHttpError::DispatchRejected => {
-                    ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
-                }
+                OutboundHttpError::DispatchRejected => tally
+                    .take_dispatch_error()
+                    .map(ProwlarrRequestError::LocalQuota)
+                    .unwrap_or_else(|| {
+                        ProwlarrRequestError::Unreachable("indexer dispatch is closed".to_string())
+                    }),
                 OutboundHttpError::RateLimited(rate_limited) => ProwlarrRequestError::RateLimited(
                     match rate_limited.retry_after.filter(|delay| !delay.is_zero()) {
                         Some(delay) => {
@@ -2174,6 +2201,8 @@ mod tests {
             rate_limit_seconds: None,
             rate_limit_burst: None,
             max_queries_per_minute: None,
+            max_requests_per_month: None,
+            max_grabs_per_month: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: false,

@@ -1205,6 +1205,10 @@ struct BackgroundAcquisitionCycleState {
     grabbed_urls: HashSet<String>,
     attempted_urls_by_route: Vec<(DownloadRouteKey, String)>,
     failed_routes: Vec<DownloadRouteKey>,
+    /// Indexers whose monthly limit refused a grab in this cycle. Their
+    /// remaining candidates are passed over without another attempt; the
+    /// releases themselves stay eligible.
+    limit_refused_indexers: HashSet<String>,
     /// Scopes this cycle declined to search because every uncovered indexer was
     /// cooling down or quota-spent. Work the cycle *wanted* to do and will do
     /// as soon as the condition lifts, so a cooldown that expires inside the
@@ -1316,6 +1320,16 @@ impl BackgroundAcquisitionCycleCoordinator {
 
     fn failed_routes(&self) -> Vec<DownloadRouteKey> {
         self.lock().failed_routes.clone()
+    }
+
+    fn indexer_limit_refused(&self, indexer_id: Option<&str>) -> bool {
+        indexer_id.is_some_and(|id| self.lock().limit_refused_indexers.contains(id))
+    }
+
+    fn mark_indexer_limit_refused(&self, indexer_id: Option<&str>) {
+        if let Some(id) = indexer_id {
+            self.lock().limit_refused_indexers.insert(id.to_string());
+        }
     }
 
     fn mark_failed_route(&self, route: DownloadRouteKey) {
@@ -2671,6 +2685,9 @@ async fn commit_season_pack_proposal(
         if failed_routes.contains(&pack_route) {
             continue;
         }
+        if cycle.indexer_limit_refused(best_pack.indexer_id.as_deref()) {
+            continue;
+        }
         let pack_url = best_pack
             .canonical_download_source()
             .map(|(source, _)| source);
@@ -2921,6 +2938,20 @@ async fn commit_season_pack_proposal(
                         "season pack grabbed; skipping individual episode searches for this season"
                     );
                     return Ok(grabbed_episode_ids);
+                }
+                Err(err) if err.is_indexer_monthly_limit_refusal() => {
+                    // Nothing was sent, so this says nothing about the pack:
+                    // no attempt row, no blocklist entry, no failed job. The
+                    // indexer's other packs are passed over for the rest of
+                    // the cycle and the next candidate is tried.
+                    cycle.mark_indexer_limit_refused(best_pack.indexer_id.as_deref());
+                    info!(
+                        title = title.name.as_str(),
+                        season = season_num,
+                        indexer_id = ?best_pack.indexer_id,
+                        reason = err.reason().unwrap_or_default(),
+                        "season pack grab refused by the indexer's monthly limit; trying other indexers"
+                    );
                 }
                 Err(err) => {
                     let submit_unavailable = is_download_submit_unavailable_error(&err);
@@ -5546,6 +5577,17 @@ async fn commit_scope_grab(
             .map(|decision| decision.preference_score)
             .unwrap_or(0);
 
+        // An indexer whose monthly limit already refused a grab this cycle
+        // is passed over without spending one of the attempts. So is one
+        // already known to be at its limit, before anything is written.
+        if cycle.indexer_limit_refused(candidate.indexer_id.as_deref()) {
+            continue;
+        }
+        if app.indexer_monthly_grab_refused_now(candidate.indexer_id.as_deref()) {
+            cycle.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+            continue;
+        }
+
         // ── Grab attempt ────────────────────────────────────────────────────
         grab_attempts += 1;
         if grab_attempts > 10 {
@@ -5881,6 +5923,23 @@ async fn commit_scope_grab(
                         claimed_episode_ids: recovered_scope_episode_ids(app, &submission_scope)
                             .await,
                     });
+                }
+
+                if err.is_indexer_monthly_limit_refusal() {
+                    // Nothing was sent, so this says nothing about the
+                    // release: no failed attempt, no blocklist entry, no
+                    // failed job, and the attempt is handed back so a capped
+                    // indexer cannot use up the cap.
+                    cycle.mark_indexer_limit_refused(candidate.indexer_id.as_deref());
+                    grab_attempts -= 1;
+                    info!(
+                        title = title.name.as_str(),
+                        release = candidate.title.as_str(),
+                        indexer_id = ?candidate.indexer_id,
+                        reason = err.reason().unwrap_or_default(),
+                        "grab refused by the indexer's monthly limit; trying other indexers"
+                    );
+                    continue;
                 }
 
                 // ── Grab failed — try next candidate ────────────────────────

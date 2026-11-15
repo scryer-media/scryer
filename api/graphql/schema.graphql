@@ -2443,6 +2443,14 @@ input CreateIndexerConfigInput {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Monthly request limit; at least 1, or null for unlimited.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Monthly grab limit; at least 1, or null for unlimited.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	Whether the indexer is enabled.
 	"""
 	isEnabled: Boolean
@@ -9227,6 +9235,14 @@ type IndexerConfigPayload {
 	"""
 	maxQueriesPerMinute: Int
 	"""
+	Maximum Scryer-observed requests per UTC calendar month; null means unlimited.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Maximum Scryer-initiated grabs reserved in a UTC calendar month; null means unlimited.
+	"""
+	maxGrabsPerMonth: Long
+	"""
 	UTC time until which the indexer is disabled, or null when not disabled.
 	"""
 	disabledUntil: DateTime
@@ -10049,7 +10065,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	Stable code for a failure the operator must act on, such as
 	`ACQUISITION_INDEXER_PROVIDER_UNSUPPORTED` when the indexer's plugin is
-	not loaded; null for other failures and when the indexer did not fail.
+	not loaded, or the monthly limit reason when `skipReason` is
+	`MONTHLY_LIMIT`; null for other failures and when the indexer did not
+	fail.
 	"""
 	failureReasonCode: String
 	"""
@@ -10183,6 +10201,11 @@ enum InteractiveReleaseSearchSkipReasonValue {
 	The indexer takes no text query.
 	"""
 	NO_TEXT_SEARCH
+	"""
+	A local monthly limit on the indexer refused the search, or its usage
+	could not be checked. `failureReasonCode` carries the reason code.
+	"""
+	MONTHLY_LIMIT
 }
 
 """
@@ -34955,6 +34978,14 @@ input UpdateIndexerConfigInput {
 	host limiter and go out later.
 	"""
 	maxQueriesPerMinute: Int
+	"""
+	Request limit per UTC calendar month: omission preserves it, null clears it.
+	"""
+	maxRequestsPerMonth: Long
+	"""
+	Grab limit per UTC calendar month: omission preserves it, null clears it.
+	"""
+	maxGrabsPerMonth: Long
 	"""
 	Replacement enabled state; omission preserves it.
 	"""

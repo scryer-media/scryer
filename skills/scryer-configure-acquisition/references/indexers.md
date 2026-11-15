@@ -26,11 +26,13 @@ jq -r '.data.indexers[] | "\(.id)\t\(.name)\t\(.providerType)\tenabled=\(.isEnab
 | `downloadClientId` | id | pin grabs to one client |
 | `rateLimitSeconds`, `rateLimitBurst` | int | request pacing |
 | `maxQueriesPerMinute` | int ≥ 1 | a cap per minute |
+| `maxRequestsPerMonth`, `maxGrabsPerMonth` | int ≥ 1 | caps on what this instance sends per UTC calendar month; unset means no limit |
 | `config` | [ProviderConfigValueInput] | provider fields; the base URL is the field whose `role` is CONNECTION_URL |
 | `seedingProfileId` | id | read here; set with `setIndexerSeedingProfile` (no operation file shipped; use the UI) |
 
-On update, `proxyConfigId`, `downloadClientId` and `maxQueriesPerMinute`
-are tri-state: leave out to keep, `null` to clear, a value to replace.
+On update, `proxyConfigId`, `downloadClientId`, `maxQueriesPerMinute`,
+`maxRequestsPerMonth` and `maxGrabsPerMonth` are tri-state: leave out to
+keep, `null` to clear, a value to replace.
 
 **`config` on update replaces every non-secret key.** Start from the stored
 config, change only what the operator asked, and send the whole array:

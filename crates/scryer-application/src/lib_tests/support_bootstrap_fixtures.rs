@@ -1101,6 +1101,8 @@ pub(super) fn synthetic_direct_nab_indexer_config(id: &str, provider_type: &str)
         rate_limit_seconds: None,
         rate_limit_burst: None,
         max_queries_per_minute: None,
+        max_requests_per_month: None,
+        max_grabs_per_month: None,
         disabled_until: None,
         is_enabled: true,
         enable_interactive_search: true,
