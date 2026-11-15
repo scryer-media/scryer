@@ -733,7 +733,13 @@ pub(crate) fn days_since(evaluation_time: DateTime<Utc>, since: DateTime<Utc>) -
     Observation::known((evaluation_time - since).num_days().max(0))
 }
 
+/// The tallest video among the files. Unknown while any file has no
+/// completed scan, whether it is waiting, failed or needs review: the height
+/// of that file is not known, so neither is the largest.
 fn max_video_height_observation(files: &[TitleMediaFile]) -> Observation<i64> {
+    if files.iter().any(|file| file.scan_status != "scanned") {
+        return Observation::unknown(unknown_reason::NOT_YET_COLLECTED);
+    }
     optional_known(
         files
             .iter()
@@ -1878,6 +1884,50 @@ pub(crate) mod tests {
             assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
             assert_eq!(doc["observations"][fact]["reason"], reason, "{fact}");
         }
+    }
+
+    fn scanned_file(status: &str, height: Option<i32>) -> TitleMediaFile {
+        TitleMediaFile {
+            scan_status: status.to_string(),
+            video_height: height,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn video_height_is_unknown_while_any_file_has_no_completed_scan() {
+        for status in ["pending", "failed", "scan_failed", "review_required", ""] {
+            let files = [
+                scanned_file("scanned", Some(2160)),
+                scanned_file(status, None),
+            ];
+            let observation = serde_json::to_value(max_video_height_observation(&files))
+                .expect("observation serializes");
+            assert_eq!(observation["status"], "unknown", "{status}");
+            assert_eq!(
+                observation["reason"],
+                unknown_reason::NOT_YET_COLLECTED,
+                "{status}"
+            );
+        }
+
+        let files = [
+            scanned_file("scanned", Some(1080)),
+            scanned_file("scanned", Some(2160)),
+        ];
+        let observation = serde_json::to_value(max_video_height_observation(&files))
+            .expect("observation serializes");
+        assert_eq!(observation["status"], "known");
+        assert_eq!(observation["value"], 2160);
+
+        // Scanned with no video stream, and no files at all, are both answers.
+        let audio_only = [scanned_file("scanned", None)];
+        let observation = serde_json::to_value(max_video_height_observation(&audio_only))
+            .expect("observation serializes");
+        assert_eq!(observation["status"], "absent");
+        let observation = serde_json::to_value(max_video_height_observation(&[]))
+            .expect("observation serializes");
+        assert_eq!(observation["status"], "absent");
     }
 
     #[test]

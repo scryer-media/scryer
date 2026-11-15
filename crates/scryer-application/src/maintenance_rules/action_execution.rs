@@ -1188,11 +1188,31 @@ impl AppUseCase {
             eligible_rules.push((detail, action, high_risk));
         }
 
+        // A candidate an earlier pass held waits for its rule's next
+        // evaluation: when each eligible rule's latest one began, read once
+        // for all of them. A rule with no recorded evaluation skips nothing.
+        let held_after: HashMap<String, chrono::DateTime<Utc>> = if eligible_rules.is_empty() {
+            HashMap::new()
+        } else {
+            let ids: Vec<String> = eligible_rules
+                .iter()
+                .map(|(detail, _, _)| detail.rule_set.id.clone())
+                .collect();
+            self.services
+                .customization
+                .maintenance_evaluation
+                .rule_schedule_anchors(&ids)
+                .await?
+                .into_iter()
+                .filter_map(|(id, anchor)| anchor.last_run_at.map(|started| (id, started)))
+                .collect()
+        };
+
         // Titles two rules would tag in opposite directions this pass. Computed
         // before any of them acts, so both sides hold rather than the later one
         // silently undoing the earlier one.
         let tag_conflicts = self
-            .maintenance_tag_patch_conflicts(&eligible_rules, now)
+            .maintenance_tag_patch_conflicts(&eligible_rules, &held_after, now)
             .await;
         // Which way each eligible rule can turn monitoring, from its
         // declared heads alone.
@@ -1244,6 +1264,14 @@ impl AppUseCase {
             // until the rule has acted on its own most titles per fire. A
             // candidate this pass rewrites is stamped later than `now`, so it
             // never comes back in a later page of the same walk.
+            //
+            // A candidate held after the rule's latest evaluation began is
+            // left out until the next evaluation: holding it again would
+            // repeat the same reads and writes for the same answer. The
+            // evaluation that starts each scheduled fire releases every such
+            // hold, so a hold that clears by itself is seen again on the next
+            // fire and nothing stays held unexamined past it.
+            let held_after_evaluation = held_after.get(&detail.rule_set.id).copied();
             let maximum = detail
                 .rule_set
                 .max_titles_per_run
@@ -1264,6 +1292,7 @@ impl AppUseCase {
                         &detail.rule_set.id,
                         now,
                         stale_before,
+                        held_after_evaluation,
                         cursor.as_ref(),
                         MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
                     )
@@ -1415,6 +1444,7 @@ impl AppUseCase {
     async fn maintenance_tag_patch_conflicts(
         &self,
         eligible_rules: &[(MaintenanceRuleSetDetail, EligibleRuleAction, bool)],
+        held_after: &HashMap<String, chrono::DateTime<Utc>>,
         now: chrono::DateTime<Utc>,
     ) -> Option<HashSet<String>> {
         let mut added: HashMap<String, HashSet<String>> = HashMap::new();
@@ -1436,6 +1466,9 @@ impl AppUseCase {
                         &detail.rule_set.id,
                         now,
                         stale_before,
+                        // The same selection the walk makes: a candidate it
+                        // leaves out patches nothing this pass.
+                        held_after.get(&detail.rule_set.id).copied(),
                         cursor.as_ref(),
                         MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
                     )

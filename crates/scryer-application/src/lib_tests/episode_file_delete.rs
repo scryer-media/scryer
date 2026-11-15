@@ -1824,6 +1824,7 @@ async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_t
             .contains("monitoring failure")
     );
     *setup.shows.fail_monitoring.lock().await = false;
+    setup.evaluation.begin_next_evaluation().await;
     let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 1, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 5);
@@ -1848,6 +1849,7 @@ async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
     assert_eq!(first.executed, 0);
     assert_eq!(f.remaining_file_ids().await.len(), 6);
     *setup.shows.fail_monitoring.lock().await = false;
+    setup.evaluation.begin_next_evaluation().await;
     let held = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(held.executed, 0, "{held:?}");
     assert_eq!(held.held, 1, "{held:?}");
@@ -1869,6 +1871,7 @@ async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
     *setup.shows.fail_monitoring.lock().await = true;
     f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     *setup.shows.fail_monitoring.lock().await = false;
+    setup.evaluation.begin_next_evaluation().await;
     let replayed = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(replayed.executed, 1, "{replayed:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 5);

@@ -90,6 +90,7 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
     );
 
     set_test_completed_sequence_job_state(&search_key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let completed = fixture
         .app
         .run_every_rule_action_pass_for_tests()

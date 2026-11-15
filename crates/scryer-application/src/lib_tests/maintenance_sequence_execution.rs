@@ -1020,6 +1020,7 @@ async fn completed_job_adapter_holds_without_leasing_then_reconciles_unknown_onc
     assert_eq!(receipts.len(), 1, "unknown must not submit a second job");
 
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let completed = restarted
         .run_every_rule_action_pass_for_tests()
         .await
@@ -1099,6 +1100,7 @@ async fn completed_job_adapter_retries_confirmed_failure_with_a_new_dispatch_rec
     );
 
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let retried = fixture
         .app
         .run_every_rule_action_pass_for_tests()
@@ -1156,6 +1158,7 @@ async fn completed_job_adapter_enforces_the_durable_step_attempt_budget() {
     .await;
 
     for retry in 1..=3 {
+        fixture.evaluation.begin_next_evaluation().await;
         let report = fixture
             .app
             .run_every_rule_action_pass_for_tests()
@@ -1244,6 +1247,7 @@ async fn unmonitor_after_a_waiting_search_reads_monitoring_when_it_runs() {
         "nothing is unmonitored while the search waits"
     );
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     let completed = fixture
         .app
         .run_every_rule_action_pass_for_tests()
@@ -1336,6 +1340,7 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
         .await
         .expect("external tag update");
     set_test_completed_sequence_job_state(&key, TestCompletedSequenceJobState::Completed);
+    fixture.evaluation.begin_next_evaluation().await;
     assert_eq!(
         fixture
             .app
@@ -2232,6 +2237,7 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     for _ in 0..4 {
         std::fs::write(&path, b"admit the configured-root title").expect("restore file");
         fixture.execution.evaluation.end_every_grace().await;
+        fixture.execution.evaluation.begin_next_evaluation().await;
         fixture
             .execution
             .app

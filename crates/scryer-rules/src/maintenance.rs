@@ -285,7 +285,9 @@ pub struct MaintenanceFactsDoc {
     /// Whole days since the subject was added, against the evaluation clock.
     pub days_since_added: Observation<i64>,
     /// The tallest video stream among the subject's files, in pixels; absent
-    /// when no file reports one.
+    /// when no file reports one. Unknown (`not_yet_collected`) while any of
+    /// the files has no completed scan, including one whose scan failed or
+    /// needs review.
     pub max_video_height: Observation<i64>,
     /// The shape of a show's whole episode list, whatever the subject: its
     /// seasons and its regular episodes, specials left out. An episode has

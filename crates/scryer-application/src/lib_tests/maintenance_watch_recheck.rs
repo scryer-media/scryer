@@ -76,12 +76,22 @@ struct LiveServer {
     answer: Result<ProviderItemRecheck, SignalReadFailure>,
     rechecks: Arc<AtomicUsize>,
     asked: Arc<std::sync::Mutex<Vec<String>>>,
+    favourites: ParentFavourites,
 }
 
 struct LiveReader {
     answer: Result<ProviderItemRecheck, SignalReadFailure>,
     rechecks: Arc<AtomicUsize>,
     asked: Arc<std::sync::Mutex<Vec<String>>>,
+    favourites: ParentFavourites,
+}
+
+/// The favourite re-check's answer (parent item to the accounts that have it
+/// as a favourite), and each read's asked ids.
+#[derive(Clone, Default)]
+struct ParentFavourites {
+    answer: Arc<std::sync::Mutex<std::collections::BTreeMap<String, Vec<String>>>>,
+    asked: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
 }
 
 #[async_trait]
@@ -94,6 +104,7 @@ impl MediaServerSignalSource for LiveServer {
             answer: self.answer.clone(),
             rechecks: self.rechecks.clone(),
             asked: self.asked.clone(),
+            favourites: self.favourites.clone(),
         }))
     }
 }
@@ -123,6 +134,19 @@ impl MediaServerSignalReader for LiveReader {
             .map(|id| (id.clone(), answer.clone()))
             .collect())
     }
+
+    async fn recheck_favorites(
+        &self,
+        provider_item_ids: &[String],
+        _: &[String],
+    ) -> Result<std::collections::BTreeMap<String, Vec<String>>, SignalReadFailure> {
+        self.favourites
+            .asked
+            .lock()
+            .expect("asked")
+            .push(provider_item_ids.to_vec());
+        Ok(self.favourites.answer.lock().expect("answer").clone())
+    }
 }
 
 struct RecheckFixture {
@@ -132,6 +156,7 @@ struct RecheckFixture {
     evaluation: Arc<InMemoryMaintenanceEvaluationRepo>,
     rechecks: Arc<AtomicUsize>,
     asked: Arc<std::sync::Mutex<Vec<String>>>,
+    favourites: ParentFavourites,
     connections: Arc<StubSignalConnections>,
     media_files: Arc<MockMediaFileRepo>,
     /// When the viewer's stored play happened.
@@ -197,6 +222,7 @@ fn recheck_app_with(
     let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let rechecks = Arc::new(AtomicUsize::new(0));
     let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let favourites = ParentFavourites::default();
     let connections = Arc::new(StubSignalConnections {
         connections,
         fail_list: false,
@@ -223,6 +249,7 @@ fn recheck_app_with(
                 answer,
                 rechecks: rechecks.clone(),
                 asked: asked.clone(),
+                favourites: favourites.clone(),
             }))
             .with_media_server_playback_probe(Arc::new(IdlePlayback))
     });
@@ -233,6 +260,7 @@ fn recheck_app_with(
         evaluation,
         rechecks,
         asked,
+        favourites,
         connections,
         media_files,
         stored_at: hours_ago(48),
@@ -608,6 +636,7 @@ impl RecheckFixture {
 #[tokio::test]
 async fn a_play_newer_than_the_stored_facts_holds_the_action() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(1)))],
         history: Vec::new(),
     }));
@@ -622,6 +651,7 @@ async fn a_play_newer_than_the_stored_facts_holds_the_action() {
 #[tokio::test]
 async fn a_play_no_stored_fact_credits_holds_the_action() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
         history: vec![live(STRANGER_EXTERNAL_ID, true, Some(hours_ago(72)))],
     }));
@@ -648,6 +678,7 @@ async fn a_recheck_that_cannot_be_made_holds_the_action() {
 #[tokio::test]
 async fn a_clean_recheck_lets_the_action_run_and_leaves_the_stored_facts_alone() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
         history: Vec::new(),
     }));
@@ -685,6 +716,7 @@ async fn a_rule_that_reads_no_watch_fact_is_not_rechecked() {
 #[tokio::test]
 async fn a_title_with_no_stored_plays_is_rechecked_through_the_library_mapping() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(1)))],
         history: Vec::new(),
     }));
@@ -712,6 +744,7 @@ async fn a_title_with_no_stored_plays_is_rechecked_through_the_library_mapping()
 #[tokio::test]
 async fn an_unlinked_accounts_play_of_a_title_with_no_stored_plays_holds_the_action() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
         history: vec![live(STRANGER_EXTERNAL_ID, true, Some(hours_ago(1)))],
     }));
@@ -736,6 +769,7 @@ async fn an_unlinked_accounts_play_of_a_title_with_no_stored_plays_holds_the_act
 #[tokio::test]
 async fn a_title_with_no_mapped_item_is_held() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
         history: Vec::new(),
     }));
@@ -759,6 +793,7 @@ async fn a_title_with_no_mapped_item_is_held() {
 #[tokio::test]
 async fn a_mapped_title_still_unplayed_lets_the_action_run() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
         history: Vec::new(),
     }));
@@ -808,6 +843,7 @@ async fn a_second_server_without_the_title_holds_it_as_unmapped() {
     const OTHER_CONNECTION_ID: &str = "conn-jellyfin-second";
     let fixture = recheck_app_with(
         Ok(ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
             history: Vec::new(),
         }),
@@ -842,6 +878,7 @@ async fn a_title_mapped_on_every_server_is_read_on_each_and_runs() {
     const OTHER_CONNECTION_ID: &str = "conn-jellyfin-second";
     let fixture = recheck_app_with(
         Ok(ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
             history: Vec::new(),
         }),
@@ -908,6 +945,7 @@ async fn a_title_mapped_on_every_server_is_read_on_each_and_runs() {
 #[tokio::test]
 async fn a_season_subject_is_rechecked_through_its_episodes_items() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
         history: Vec::new(),
     }));
@@ -940,6 +978,7 @@ async fn a_season_subject_is_rechecked_through_its_episodes_items() {
 #[tokio::test]
 async fn an_episode_subject_is_rechecked_through_its_own_item() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, false, None)],
         history: Vec::new(),
     }));
@@ -996,6 +1035,7 @@ async fn an_old_stored_play_is_not_a_newer_play_while_a_link_awaits_its_sweep() 
     };
     let mut fixture = recheck_app_with(
         Ok(ProviderItemRecheck {
+            parent_item_ids: Vec::new(),
             participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(played_at))],
             history: vec![live(VIEWER_EXTERNAL_ID, true, Some(played_at))],
         }),
@@ -1078,6 +1118,7 @@ const WATCHED_NOT_FAVOURITE_MATCHER: &str = "package whatever\n\
 #[tokio::test]
 async fn a_favourite_set_since_the_sweep_holds_a_rule_that_reads_favourites() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![ProviderItemPlay {
             is_favorite: true,
             ..live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))
@@ -1100,6 +1141,7 @@ async fn a_favourite_set_since_the_sweep_holds_a_rule_that_reads_favourites() {
 #[tokio::test]
 async fn a_live_favourite_does_not_hold_a_rule_that_reads_no_favourite_fact() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![ProviderItemPlay {
             is_favorite: true,
             ..live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))
@@ -1116,10 +1158,73 @@ async fn a_live_favourite_does_not_hold_a_rule_that_reads_no_favourite_fact() {
 #[tokio::test]
 async fn an_unchanged_favourite_state_lets_a_favourite_rule_run() {
     let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: Vec::new(),
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
         history: Vec::new(),
     }));
     let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
 
+    assert!(!fixture.monitored(&title_id).await, "the action ran");
+}
+
+/// The series a re-checked item is filed under, as the item answer names it.
+const PARENT_ITEM: &str = "jf-series-parent";
+
+/// A favourite set on the item's series since the sweep is read with one
+/// more request and holds a rule that reads favourites.
+#[tokio::test]
+async fn a_series_favourite_set_since_the_sweep_holds_a_rule_that_reads_favourites() {
+    let fixture = recheck_app(Ok(ProviderItemRecheck {
+        parent_item_ids: vec![PARENT_ITEM.to_string()],
+        participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
+        history: Vec::new(),
+    }));
+    fixture.favourites.answer.lock().expect("answer").insert(
+        PARENT_ITEM.to_string(),
+        vec![VIEWER_EXTERNAL_ID.to_string()],
+    );
+    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
+
+    assert_eq!(
+        *fixture.favourites.asked.lock().expect("asked"),
+        vec![vec![PARENT_ITEM.to_string()]],
+        "the parent is read once, after the item read"
+    );
+    fixture
+        .assert_held(&title_id, execution_reason::WATCH_RECHECK_NEWER_FAVORITE)
+        .await;
+}
+
+/// A parent nobody favourited lets a favourite rule run; a rule that reads
+/// no favourite fact never reads the parent at all.
+#[tokio::test]
+async fn a_parent_read_is_made_only_for_a_rule_that_reads_favourites() {
+    let answer = ProviderItemRecheck {
+        parent_item_ids: vec![PARENT_ITEM.to_string()],
+        participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
+        history: Vec::new(),
+    };
+    let fixture = recheck_app(Ok(answer.clone()));
+    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
+    // One parent read follows each item re-check the action makes.
+    let parent_reads = fixture.favourites.asked.lock().expect("asked").clone();
+    assert_eq!(parent_reads.len(), fixture.rechecks.load(Ordering::SeqCst));
+    assert!(
+        parent_reads
+            .iter()
+            .all(|asked| asked == &vec![PARENT_ITEM.to_string()])
+    );
+    assert!(!fixture.monitored(&title_id).await, "the action ran");
+
+    let fixture = recheck_app(Ok(answer));
+    fixture.favourites.answer.lock().expect("answer").insert(
+        PARENT_ITEM.to_string(),
+        vec![VIEWER_EXTERNAL_ID.to_string()],
+    );
+    let (title_id, _) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    assert!(
+        fixture.favourites.asked.lock().expect("asked").is_empty(),
+        "no favourite fact, no parent read"
+    );
     assert!(!fixture.monitored(&title_id).await, "the action ran");
 }

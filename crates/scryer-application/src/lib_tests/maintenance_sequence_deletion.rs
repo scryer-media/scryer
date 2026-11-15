@@ -629,6 +629,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
         .await
         .expect("move the selected storage root");
     capacity_recovered.store(true, Ordering::SeqCst);
+    fixture.execution.evaluation.begin_next_evaluation().await;
     let resumed = fixture
         .execution
         .app
@@ -845,6 +846,7 @@ async fn storage_sequence_holds_in_action_when_its_root_moves_over_the_subjects_
     // one: the hold keeps the journal, so the later pass still sees that its
     // root moved instead of starting over without a checkpoint.
     for pass in ["first pass after the move", "second pass after the move"] {
+        fixture.execution.evaluation.begin_next_evaluation().await;
         let report = fixture
             .execution
             .app

@@ -11163,11 +11163,19 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     /// Ordered by `(due_at, id)`. `after` continues a walk past the last row
     /// of the previous page, so a fire can work through every due candidate
     /// in bounded pages.
+    ///
+    /// `held_after` leaves out a `blocked` row last written after that
+    /// instant: the rule's latest evaluation start, so a candidate an action
+    /// pass held waits for the rule's next evaluation instead of being
+    /// examined again by every pass before it. An evaluation's own writes
+    /// carry its start time, so a row it holds or refreshes is never left out.
+    /// `None` leaves out nothing.
     async fn list_due_candidates(
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        held_after: Option<DateTime<Utc>>,
         after: Option<&MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
@@ -14436,6 +14444,28 @@ pub trait MediaServerSignalReader: Send + Sync {
         ))
     }
 
+    /// Which of `participants` have each item as a favourite now, read just
+    /// before an action that a favourite fact allowed. Nothing is stored
+    /// from it. Used for the series and season items
+    /// [`ProviderItemRecheck::parent_item_ids`] names, which the item read
+    /// itself does not return.
+    ///
+    /// The answer is keyed by provider item id, holding the participants
+    /// that have it as a favourite; an item nobody has as one may be left
+    /// out. A participant the server refuses (404 or 403) or who cannot see
+    /// an item has no favourite of it. An `Err` is a re-check that could not
+    /// be made.
+    async fn recheck_favorites(
+        &self,
+        _provider_item_ids: &[String],
+        _participants: &[String],
+    ) -> Result<std::collections::BTreeMap<String, Vec<String>>, SignalReadFailure> {
+        Err(SignalReadFailure::new(
+            crate::media_server_signals::reasons::SOURCE_UNAVAILABLE,
+            "this media server cannot re-check a favourite",
+        ))
+    }
+
     /// Every play the server records for any of its accounts, linked to a
     /// Scryer user or not, folded to one entry per account and item.
     ///
@@ -14508,6 +14538,11 @@ pub struct ProviderItemRecheck {
     /// are every listed user's own state for the item, one entry per user who
     /// has played it.
     pub history: Vec<ProviderItemPlay>,
+    /// The series and season items the server files this item under, as the
+    /// same answer names them (Jellyfin and Emby episodes). Empty for a movie
+    /// and on Plex. Reading them costs nothing; their favourite flags are read
+    /// only through [`MediaServerSignalReader::recheck_favorites`].
+    pub parent_item_ids: Vec<String>,
 }
 
 /// Durable storage for normalized media-server watch signals.
