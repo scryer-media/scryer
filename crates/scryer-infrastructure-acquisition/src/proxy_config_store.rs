@@ -98,11 +98,11 @@ impl ProxyConfigRepository for ProxyConfigStore {
         // the runtime paths that dial it. One more keyed read, only when the
         // reference is set. A target that has since gone stays unresolved,
         // and the runtime refuses to fall back to the direct route.
-        if let Some(reach_through_id) = config.reach_through_proxy_config_id.clone() {
-            if let Some(reach_through) = self.get_for_edit(&reach_through_id).await? {
-                scryer_application::validate_persisted_proxy_config(&reach_through)?;
-                config.reach_through = Some(Box::new(reach_through));
-            }
+        if let Some(reach_through_id) = config.reach_through_proxy_config_id.clone()
+            && let Some(reach_through) = self.get_for_edit(&reach_through_id).await?
+        {
+            scryer_application::validate_persisted_proxy_config(&reach_through)?;
+            config.reach_through = Some(Box::new(reach_through));
         }
         Ok(Some(config))
     }

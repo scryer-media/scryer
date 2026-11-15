@@ -461,7 +461,12 @@ fn recover_independent_technical_metadata(
         {
             push_distinct(&mut qualities, quality);
         }
-        if let Some(source) = normalize_source_token(normalized)
+        // `WEB-Rip` lexes as two tokens; bare `WEB` alone would read as WEB-DL.
+        let web_rip = normalized == "WEB"
+            && tokens.get(index + 1).is_some_and(|next| {
+                next.separator_before == SeparatorKind::Hyphen && next.normalized == "RIP"
+            });
+        if let Some(source) = normalize_source_token(if web_rip { "WEBRIP" } else { normalized })
             .or_else(|| {
                 bd_resolution
                     .as_ref()
@@ -2774,7 +2779,18 @@ fn branch_identity(
                 }
                 ParseFamily::Special => TokenRole::SpecialMarker,
                 ParseFamily::StandardEpisode => {
-                    if token_index == unit.token_range.start_token {
+                    // A split form (`S01 E05`) opens on its season marker and
+                    // closes on the episode.
+                    let split = identity_start != last_token
+                        && annotations
+                            .get(identity_start)
+                            .is_some_and(|start| start.primary_role == TokenRole::SeasonMarker);
+                    let episode_token = if split {
+                        last_token
+                    } else {
+                        unit.token_range.start_token
+                    };
+                    if token_index == episode_token {
                         TokenRole::EpisodeMarker
                     } else {
                         TokenRole::SeasonMarker
@@ -4395,7 +4411,12 @@ fn consume_unit_metadata(
         if state.metadata.source.is_none()
             && let Some(source) = compound.source
         {
-            state.metadata.source = Some(source.to_string());
+            // Bare `WEB` may open a hyphenated `WEB-Rip`; read it with its neighbor.
+            state.metadata.source = Some(if token.normalized == "WEB" {
+                coalesce_source(tokens, index)
+            } else {
+                source.to_string()
+            });
             state.metadata.source_span = Some(source_span_for_token(tokens, index));
             state.score += 10;
             state.reasons.push(reason("metadata:source", 10, None));
@@ -6651,7 +6672,8 @@ fn split_episode_revision(token: &str) -> Option<(&str, u32)> {
 fn parse_standard_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> {
     let revision = split_episode_revision(token);
     let token = revision.map_or(token, |(episode, _)| episode);
-    if revision.is_some() && is_resolution_dimension(token) {
+    // `1920x1080` is display geometry, with or without a revision suffix.
+    if is_resolution_dimension(token) {
         return None;
     }
     if token.starts_with('S') && token.contains('E') {
@@ -6716,6 +6738,9 @@ fn parse_season_keyword_episode_at(
 ) -> Option<(Option<u32>, Vec<u32>, Vec<usize>)> {
     let token = tokens.get(index)?.normalized.as_str();
     let (season, episode_index, mut consumed) = if token == "SEASON" {
+        if season_range_after(tokens, index + 1, true).is_some() {
+            return None;
+        }
         (
             tokens.get(index + 1)?.normalized.parse::<u32>().ok()?,
             index + 2,
@@ -6728,6 +6753,10 @@ fn parse_season_keyword_episode_at(
         }
         (season, index + 2, vec![index, index + 1])
     };
+    if let Some((episodes, last)) = episode_marker_at(tokens, episode_index) {
+        consumed.extend(episode_index..=last);
+        return Some((Some(season), episodes, consumed));
+    }
     let episode_token = tokens.get(episode_index)?;
     let episode = if episode_token.separator_before == SeparatorKind::Hyphen {
         let normalized = episode_token.normalized.as_str();
@@ -6820,6 +6849,12 @@ fn parse_split_standard_episode_at(
     index: usize,
 ) -> Option<(Option<u32>, Vec<u32>, Vec<usize>)> {
     let season = parse_season_token(tokens.get(index)?.normalized.as_str())?;
+    if season_range_after(tokens, index, false).is_some() {
+        return None;
+    }
+    if let Some((episodes, last)) = episode_marker_at(tokens, index + 1) {
+        return Some((Some(season), episodes, (index..=last).collect()));
+    }
     let episode_token = tokens.get(index + 1)?;
     let episode = if episode_token.separator_before == SeparatorKind::Hyphen {
         let token = episode_token.normalized.as_str();
@@ -6840,6 +6875,36 @@ fn parse_split_standard_episode_at(
         ));
     }
     Some((Some(season), vec![episode], vec![index, index + 1]))
+}
+
+/// A separate episode marker after a season (`S01.E05`, `S01 Ep06`,
+/// `S01.E.01`, `Season 1 - Episode 01`). Returns the episode and the last
+/// token it consumes.
+fn episode_marker_at(tokens: &[Token], index: usize) -> Option<(Vec<u32>, usize)> {
+    let token = tokens.get(index)?.normalized.as_str();
+    let digits = ["EPISODE", "EP", "E"]
+        .iter()
+        .find_map(|marker| token.strip_prefix(marker))?;
+    let (episodes, last) = if digits.is_empty() {
+        let next = index + 1;
+        (
+            vec![parse_numeric_token(&tokens.get(next)?.normalized)?],
+            next,
+        )
+    } else {
+        (parse_standard_episode_suffix(digits)?, index)
+    };
+    // A hyphenated continuation (`E01-E26`, `Ep 01-13`) is a batch, which the
+    // range rules own.
+    let continues_as_range = tokens.get(last + 1).is_some_and(|next| {
+        next.separator_before == SeparatorKind::Hyphen
+            && ["EP", "E"]
+                .iter()
+                .find_map(|marker| next.normalized.strip_prefix(marker))
+                .is_some_and(|digits| parse_numeric_token(digits).is_some())
+    }) || split_episode_range_end(tokens, last + 1, *episodes.last()?)
+        .is_some();
+    (!continues_as_range).then_some((episodes, last))
 }
 
 /// Hyphen continuation after a split episode (`S3.01-02`, `Season 1 - 001-020`):
@@ -7013,6 +7078,53 @@ const MAX_EXPLICIT_SEASON: u32 = 100;
 
 fn valid_explicit_season(season: u32) -> bool {
     season <= MAX_EXPLICIT_SEASON
+}
+
+/// `S01-05`, `Season 01-07`, `Season 01 - Season 07`: a season range. A bare
+/// end must be fused by a hyphen to a zero-padded start, so `S4-07` and
+/// `S01 - 05` keep reading as episodes. `season_index` is the season digits'
+/// token: the `S01` token itself, or the number after `SEASON`. A keyword that
+/// already has its season before it (`4th Season 01-19`, `Final Season 01-12`)
+/// is followed by episodes, not seasons.
+fn season_range_after(tokens: &[Token], season_index: usize, keyword: bool) -> Option<Vec<u32>> {
+    if keyword
+        && season_index
+            .checked_sub(2)
+            .and_then(|before| tokens.get(before))
+            .is_some_and(|before| {
+                let before = before.normalized.as_str();
+                before == "FINAL"
+                    || parse_numeric_token(before).is_some()
+                    || parse_ordinal_season_token(before).is_some()
+            })
+    {
+        return None;
+    }
+    let start_token = tokens.get(season_index)?.normalized.as_str();
+    let start_digits = if keyword {
+        start_token
+    } else {
+        start_token.strip_prefix('S')?
+    };
+    let start = parse_numeric_token(start_digits)?;
+    let next = tokens.get(season_index + 1)?;
+    if next.separator_before != SeparatorKind::Hyphen {
+        return None;
+    }
+    if keyword && next.normalized == "SEASON" {
+        let end = parse_numeric_token(&tokens.get(season_index + 2)?.normalized)?;
+        return (end > start)
+            .then(|| bounded_season_range(start, end))
+            .flatten();
+    }
+    let end = parse_numeric_token(&next.normalized)?;
+    let fused_padded = !next.separator_before_has_space
+        && start_digits.len() == 2
+        && start_digits.starts_with('0')
+        && next.normalized.len() == 2;
+    (fused_padded && end > start)
+        .then(|| bounded_season_range(start, end))
+        .flatten()
 }
 
 fn bounded_season_range(start: u32, end: u32) -> Option<Vec<u32>> {
@@ -7588,10 +7700,25 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
         {
             return None;
         }
+        if let Some(seasons) = season_range_after(tokens, index + 1, true) {
+            let last = if tokens[index + 2].normalized == "SEASON" {
+                index + 3
+            } else {
+                index + 2
+            };
+            return Some(SeasonPackParse {
+                seasons,
+                consumed: (index..=last).collect(),
+                is_partial: false,
+                season_part: None,
+                is_series_pack: true,
+            });
+        }
         if (tokens.get(index + 2).is_some_and(|candidate| {
             candidate.separator_before == SeparatorKind::Hyphen
                 && parse_numeric_token(candidate.normalized.as_str()).is_some()
-        }) || dot_split_episode_after_season(tokens, index + 2).is_some())
+        }) || dot_split_episode_after_season(tokens, index + 2).is_some()
+            || episode_marker_at(tokens, index + 2).is_some())
             && !has_batch_marker_around(tokens, index)
         {
             return None;
@@ -7640,6 +7767,15 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
         {
             return None;
         }
+        if let Some(seasons) = season_range_after(tokens, index, false) {
+            return Some(SeasonPackParse {
+                seasons,
+                consumed: vec![index, index + 1],
+                is_partial: false,
+                season_part: None,
+                is_series_pack: true,
+            });
+        }
         if let Some(next) = tokens.get(index + 1)
             && next.separator_before == SeparatorKind::Hyphen
             && let Some(end_season) = parse_season_token(next.normalized.as_str())
@@ -7659,6 +7795,7 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             token.separator_before == SeparatorKind::Hyphen
                 && parse_numeric_token(token.normalized.as_str()).is_some()
         }) || dot_split_episode_after_season(tokens, index + 1).is_some()
+            || episode_marker_at(tokens, index + 1).is_some()
         {
             return None;
         }
@@ -8906,14 +9043,27 @@ fn detect_compound_metadata(token: &str) -> CompoundMetadata {
 }
 
 fn detect_compound_quality(token: &str) -> Option<String> {
-    parse_resolution_quality_token(token).or_else(|| {
-        [
-            8640u32, 4320, 2160, 1440, 1080, 864, 720, 576, 540, 480, 360, 240,
-        ]
-        .into_iter()
-        .find(|resolution| token.contains(&resolution.to_string()))
-        .map(|resolution| format!("{resolution}p"))
-    })
+    const RESOLUTIONS: [u32; 12] = [
+        8640, 4320, 2160, 1440, 1080, 864, 720, 576, 540, 480, 360, 240,
+    ];
+    parse_resolution_quality_token(token)
+        .or_else(|| {
+            // `1440x1080` is 1080 lines: a `WIDTHxHEIGHT` token is its height.
+            let (dimensions, scan_type) = match token.strip_suffix('I') {
+                Some(dimensions) => (dimensions, 'i'),
+                None => (token.strip_suffix('P').unwrap_or(token), 'p'),
+            };
+            let (_, height) = dimensions.split_once('X')?;
+            let height = height.parse::<u32>().ok()?;
+            (is_resolution_dimension(dimensions) && RESOLUTIONS.contains(&height))
+                .then(|| format!("{height}{scan_type}"))
+        })
+        .or_else(|| {
+            RESOLUTIONS
+                .into_iter()
+                .find(|resolution| token.contains(&resolution.to_string()))
+                .map(|resolution| format!("{resolution}p"))
+        })
 }
 
 fn contains_any(token: &str, needles: &[&str]) -> bool {

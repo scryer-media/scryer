@@ -333,6 +333,7 @@ fn http_transport_error(
         HostHttpErrorKind::InvalidRequest => TransportError::InvalidRequest,
         HostHttpErrorKind::Timeout => TransportError::Timeout,
         HostHttpErrorKind::ResponseTooLarge => TransportError::ResponseTooLarge,
+        HostHttpErrorKind::QuotaRefused => TransportError::Cancelled,
         HostHttpErrorKind::Transport => TransportError::Transport,
     }
 }

@@ -2576,6 +2576,8 @@ export const indexersQuery = `query Indexers($providerType: String) {
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     rateLimitedUntil
     isEnabled
@@ -2834,6 +2836,8 @@ const indexerFieldSelection = `
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     disabledUntil
     rateLimitedUntil
     isEnabled

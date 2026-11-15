@@ -13,6 +13,7 @@ use crate::config_store::{
     current_encryption_key, decrypt_optional_value, maybe_encrypt_optional, maybe_encrypt_value,
 };
 use crate::encryption::EncryptionKey;
+use crate::indexers::stats::IndexerMonthlyLimits;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
 const INDEXER_COLUMNS: &str =
@@ -22,7 +23,8 @@ const INDEXER_COLUMNS: &str =
     managed_child_key,
     managed_metadata_json,
     caps_snapshot_json, last_health_status, last_error_message, last_error_code, last_error_at, config_json,
-    created_at, updated_at, max_queries_per_minute";
+    created_at, updated_at, max_queries_per_minute, max_requests_per_month,
+    max_grabs_per_month";
 
 const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
@@ -30,16 +32,19 @@ const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     enable_auto_search, proxy_config_id, download_client_id, seeding_profile_id,
     managed_parent_config_id, managed_child_key,
     managed_metadata_json, caps_snapshot_json, last_health_status, last_error_message, last_error_code,
-    last_error_at, config_json, created_at, updated_at, max_queries_per_minute
+    last_error_at, config_json, created_at, updated_at, max_queries_per_minute,
+    max_requests_per_month, max_grabs_per_month
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+    {}, {}
 )";
 
 #[derive(Clone)]
 pub struct IndexerConfigStore {
     datastore: StoreDatastore,
     encryption_key: Arc<RwLock<Option<EncryptionKey>>>,
+    monthly_limits: IndexerMonthlyLimits,
 }
 
 impl IndexerConfigStore {
@@ -50,7 +55,23 @@ impl IndexerConfigStore {
         Self {
             datastore,
             encryption_key,
+            monthly_limits: IndexerMonthlyLimits::default(),
         }
+    }
+
+    /// The in-memory copy of every indexer's monthly limits. This store keeps
+    /// it current on create, update and delete; the stats tracker reads it so
+    /// admission needs no per-request configuration read.
+    pub fn monthly_limits(&self) -> IndexerMonthlyLimits {
+        self.monthly_limits.clone()
+    }
+
+    fn remember_monthly_limits(&self, config: &IndexerConfig) {
+        self.monthly_limits.set(
+            &config.id,
+            config.max_requests_per_month,
+            config.max_grabs_per_month,
+        );
     }
 
     pub async fn migrate_legacy_indexer_config_sources(&self) -> AppResult<u64> {
@@ -200,6 +221,14 @@ impl IndexerConfigStore {
             assignments.push("max_queries_per_minute = {}".to_string());
             args.push(SqlArg::OptI64(max_queries_per_minute));
         }
+        if let Some(max_requests_per_month) = update.max_requests_per_month {
+            assignments.push("max_requests_per_month = {}".to_string());
+            args.push(SqlArg::OptI64(max_requests_per_month));
+        }
+        if let Some(max_grabs_per_month) = update.max_grabs_per_month {
+            assignments.push("max_grabs_per_month = {}".to_string());
+            args.push(SqlArg::OptI64(max_grabs_per_month));
+        }
         if let Some(is_enabled) = update.is_enabled {
             assignments.push("is_enabled = {}".to_string());
             args.push(SqlArg::Bool(is_enabled));
@@ -265,42 +294,45 @@ impl IndexerConfigStore {
             sql.push_str(" AND updated_at = {}");
             args.push(SqlArg::Timestamp(expected));
         }
-        SqlRuntime::run_in_transaction(&self.datastore, "update_indexer_config", move |tx| {
-            let sql = sql.clone();
-            let args = args.clone();
-            let id = id.clone();
-            let encryption_key = encryption_key.clone();
-            Box::pin(async move {
-                let rows = SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
-                if rows == 0 {
-                    return Err(if expected_updated_at.is_some() {
-                        AppError::validation_refused(
-                            crate::error_reasons::ACQUISITION_INDEXER_SETTINGS_STALE,
-                            "Indexer settings changed during validation; reload and try again",
-                        )
-                    } else {
+        let updated =
+            SqlRuntime::run_in_transaction(&self.datastore, "update_indexer_config", move |tx| {
+                let sql = sql.clone();
+                let args = args.clone();
+                let id = id.clone();
+                let encryption_key = encryption_key.clone();
+                Box::pin(async move {
+                    let rows = SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
+                    if rows == 0 {
+                        return Err(if expected_updated_at.is_some() {
+                            AppError::validation_refused(
+                                crate::error_reasons::ACQUISITION_INDEXER_SETTINGS_STALE,
+                                "Indexer settings changed during validation; reload and try again",
+                            )
+                        } else {
+                            AppError::not_found_reason(
+                                crate::error_reasons::ACQUISITION_INDEXER_CONFIG_NOT_FOUND,
+                                format!("indexer config {id}"),
+                            )
+                        });
+                    }
+                    fetch_optional_indexer(
+                        SqlExec::Tx(tx),
+                        &format!("SELECT {INDEXER_COLUMNS} FROM indexers WHERE id = {{}}"),
+                        &[SqlArg::Text(id.clone())],
+                        encryption_key.as_ref(),
+                    )
+                    .await?
+                    .ok_or_else(|| {
                         AppError::not_found_reason(
                             crate::error_reasons::ACQUISITION_INDEXER_CONFIG_NOT_FOUND,
                             format!("indexer config {id}"),
                         )
-                    });
-                }
-                fetch_optional_indexer(
-                    SqlExec::Tx(tx),
-                    &format!("SELECT {INDEXER_COLUMNS} FROM indexers WHERE id = {{}}"),
-                    &[SqlArg::Text(id.clone())],
-                    encryption_key.as_ref(),
-                )
-                .await?
-                .ok_or_else(|| {
-                    AppError::not_found_reason(
-                        crate::error_reasons::ACQUISITION_INDEXER_CONFIG_NOT_FOUND,
-                        format!("indexer config {id}"),
-                    )
+                    })
                 })
             })
-        })
-        .await
+            .await?;
+        self.remember_monthly_limits(&updated);
+        Ok(updated)
     }
 }
 
@@ -353,15 +385,18 @@ impl IndexerConfigRepository for IndexerConfigStore {
     async fn create(&self, config: IndexerConfig) -> AppResult<IndexerConfig> {
         let encryption_key = self.encryption_key()?;
         let args = indexer_insert_args(&config, encryption_key.as_ref())?;
-        SqlRuntime::run_in_transaction(&self.datastore, "create_indexer_config", move |tx| {
-            let config = config.clone();
-            let args = args.clone();
-            Box::pin(async move {
-                SqlRuntime::execute(SqlExec::Tx(tx), INDEXER_INSERT_SQL, &args).await?;
-                Ok(config)
+        let created =
+            SqlRuntime::run_in_transaction(&self.datastore, "create_indexer_config", move |tx| {
+                let config = config.clone();
+                let args = args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), INDEXER_INSERT_SQL, &args).await?;
+                    Ok(config)
+                })
             })
-        })
-        .await
+            .await?;
+        self.remember_monthly_limits(&created);
+        Ok(created)
     }
 
     async fn touch_last_error(&self, id: &str) -> AppResult<()> {
@@ -619,6 +654,7 @@ impl IndexerConfigRepository for IndexerConfigStore {
 
     async fn delete(&self, id: &str) -> AppResult<()> {
         let id = id.to_string();
+        let deleted_id = id.clone();
         SqlRuntime::run_in_transaction(&self.datastore, "delete_indexer_config", move |tx| {
             let id = id.clone();
             Box::pin(async move {
@@ -634,10 +670,20 @@ impl IndexerConfigRepository for IndexerConfigStore {
                         format!("indexer config {id}"),
                     ));
                 }
+                // Monthly usage is meaningless without its indexer; remove it
+                // with the indexer so nothing is left to prune later.
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "DELETE FROM indexer_monthly_usage WHERE indexer_id = {}",
+                    &[SqlArg::Text(id.clone())],
+                )
+                .await?;
                 Ok(())
             })
         })
-        .await
+        .await?;
+        self.monthly_limits.forget(&deleted_id);
+        Ok(())
     }
 }
 
@@ -673,6 +719,8 @@ fn indexer_insert_args(
         SqlArg::Timestamp(config.created_at),
         SqlArg::Timestamp(config.updated_at),
         SqlArg::OptI64(config.max_queries_per_minute),
+        SqlArg::OptI64(config.max_requests_per_month),
+        SqlArg::OptI64(config.max_grabs_per_month),
     ])
 }
 
@@ -719,6 +767,8 @@ fn row_to_indexer_config(
         rate_limit_seconds: row.opt_i64("rate_limit_seconds")?,
         rate_limit_burst: row.opt_i64("rate_limit_burst")?,
         max_queries_per_minute: row.opt_i64("max_queries_per_minute")?,
+        max_requests_per_month: row.opt_i64("max_requests_per_month")?,
+        max_grabs_per_month: row.opt_i64("max_grabs_per_month")?,
         disabled_until: row.opt_timestamp("disabled_until")?,
         is_enabled: row.bool("is_enabled")?,
         enable_interactive_search: row.bool("enable_interactive_search")?,
@@ -797,7 +847,9 @@ mod tests {
                 config_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                max_queries_per_minute INTEGER
+                max_queries_per_minute INTEGER,
+                max_requests_per_month INTEGER,
+                max_grabs_per_month INTEGER
             )",
         )
         .execute(pool)
@@ -1180,7 +1232,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_budget_round_trips_through_create_and_update() {
+    async fn query_and_monthly_limits_round_trip_through_create_and_update() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1203,6 +1255,8 @@ mod tests {
         .expect("config without a budget should deserialize");
         assert_eq!(config.max_queries_per_minute, None);
         config.max_queries_per_minute = Some(12);
+        config.max_requests_per_month = Some(120);
+        config.max_grabs_per_month = Some(30);
         store.create(config).await.expect("create should succeed");
         let created = store
             .get_by_id("budgeted")
@@ -1210,6 +1264,8 @@ mod tests {
             .expect("query should succeed")
             .expect("config should exist");
         assert_eq!(created.max_queries_per_minute, Some(12));
+        assert_eq!(created.max_requests_per_month, Some(120));
+        assert_eq!(created.max_grabs_per_month, Some(30));
 
         let preserved = store
             .update(IndexerConfigUpdate {
@@ -1220,16 +1276,22 @@ mod tests {
             .await
             .expect("unrelated update should succeed");
         assert_eq!(preserved.max_queries_per_minute, Some(12));
+        assert_eq!(preserved.max_requests_per_month, Some(120));
+        assert_eq!(preserved.max_grabs_per_month, Some(30));
 
         let replaced = store
             .update(IndexerConfigUpdate {
                 id: "budgeted".to_string(),
                 max_queries_per_minute: Some(Some(30)),
+                max_requests_per_month: Some(Some(240)),
+                max_grabs_per_month: Some(Some(60)),
                 ..Default::default()
             })
             .await
             .expect("budget update should succeed");
         assert_eq!(replaced.max_queries_per_minute, Some(30));
+        assert_eq!(replaced.max_requests_per_month, Some(240));
+        assert_eq!(replaced.max_grabs_per_month, Some(60));
         assert_eq!(
             store
                 .get_by_id("budgeted")
@@ -1239,17 +1301,170 @@ mod tests {
                 .max_queries_per_minute,
             Some(30)
         );
+        let persisted = store
+            .get_by_id("budgeted")
+            .await
+            .expect("query should succeed")
+            .expect("config should exist");
+        assert_eq!(persisted.max_requests_per_month, Some(240));
+        assert_eq!(persisted.max_grabs_per_month, Some(60));
 
         let cleared = store
             .update(IndexerConfigUpdate {
                 id: "budgeted".to_string(),
                 max_queries_per_minute: Some(None),
+                max_requests_per_month: Some(None),
+                max_grabs_per_month: Some(None),
                 ..Default::default()
             })
             .await
             .expect("budget clear should succeed");
         assert_eq!(cleared.max_queries_per_minute, None);
+        assert_eq!(cleared.max_requests_per_month, None);
+        assert_eq!(cleared.max_grabs_per_month, None);
     }
+    #[tokio::test]
+    async fn monthly_admission_follows_limit_changes_and_deletion_made_through_the_store() {
+        use crate::indexers::stats::InMemoryIndexerStatsTracker;
+        use scryer_application::IndexerStatsTracker;
+        use scryer_application::error_reasons::indexer_monthly_quota as reason;
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_test_indexers_table(&pool).await;
+        sqlx::query(
+            "CREATE TABLE indexer_monthly_usage (
+                indexer_id TEXT PRIMARY KEY NOT NULL,
+                month_start TEXT NOT NULL,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                grab_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("monthly usage table should be created");
+        let datastore = StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let store = IndexerConfigStore::new(datastore.clone(), Arc::new(RwLock::new(None)));
+        let tracker = InMemoryIndexerStatsTracker::new(Some(datastore))
+            .with_monthly_limits(store.monthly_limits());
+        let at = chrono::DateTime::parse_from_rfc3339("2026-03-10T12:00:00Z")
+            .expect("fixture time should parse")
+            .with_timezone(&Utc);
+        let usage = || async {
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT request_count, grab_count FROM indexer_monthly_usage
+                 WHERE indexer_id = 'budgeted'",
+            )
+            .fetch_optional(&pool)
+            .await
+            .expect("usage should be readable")
+        };
+        let request_reason = |result: AppResult<()>| result.err().and_then(|e| e.reason());
+
+        let mut config: IndexerConfig = serde_json::from_value(serde_json::json!({
+            "id": "budgeted", "name": "Synthetic indexer", "provider_type": "newznab",
+            "base_url": "https://indexer.example.test", "config_json": "{}",
+            "is_enabled": true, "enable_interactive_search": true, "enable_auto_search": true,
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("config should deserialize");
+        config.max_requests_per_month = Some(1);
+        store.create(config).await.expect("create should succeed");
+
+        // The limit set at creation is enforced with no restart or reload.
+        assert_eq!(
+            request_reason(tracker.admit_monthly_request("budgeted", at).await),
+            None
+        );
+        assert_eq!(
+            request_reason(tracker.admit_monthly_request("budgeted", at).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+        // A grab is refused while the request limit is reached, because its
+        // fetch would be refused. Nothing is counted for it.
+        assert_eq!(
+            request_reason(tracker.admit_monthly_grab("budgeted", at).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+        assert_eq!(usage().await, Some((1, 0)));
+
+        // Raising the limit lifts the refusal on the next request.
+        store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                max_requests_per_month: Some(Some(2)),
+                ..Default::default()
+            })
+            .await
+            .expect("limit update should succeed");
+        assert_eq!(
+            request_reason(tracker.admit_monthly_request("budgeted", at).await),
+            None
+        );
+        assert_eq!(
+            request_reason(tracker.admit_monthly_request("budgeted", at).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+
+        // An update that leaves the limit alone leaves the refusal in place.
+        store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                name: Some("Renamed indexer".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("unrelated update should succeed");
+        assert_eq!(
+            request_reason(tracker.admit_monthly_request("budgeted", at).await),
+            Some(reason::REQUEST_LIMIT_REACHED)
+        );
+
+        // Clearing the limit admits everything and stops counting.
+        store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                max_requests_per_month: Some(None),
+                ..Default::default()
+            })
+            .await
+            .expect("limit clear should succeed");
+        for _ in 0..3 {
+            assert_eq!(
+                request_reason(tracker.admit_monthly_request("budgeted", at).await),
+                None
+            );
+        }
+        assert_eq!(usage().await, Some((2, 0)));
+
+        // Deleting the indexer removes its usage and nothing recreates it.
+        store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                max_requests_per_month: Some(Some(5)),
+                ..Default::default()
+            })
+            .await
+            .expect("limit update should succeed");
+        store
+            .delete("budgeted")
+            .await
+            .expect("delete should succeed");
+        assert_eq!(usage().await, None);
+        assert_eq!(
+            request_reason(tracker.admit_monthly_request("budgeted", at).await),
+            None
+        );
+        assert_eq!(usage().await, None);
+    }
+
     #[tokio::test]
     async fn caps_health_compare_and_swap_preserves_newer_failures_and_settings() {
         let pool = SqlitePoolOptions::new()

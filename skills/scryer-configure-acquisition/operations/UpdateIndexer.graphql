@@ -17,6 +17,8 @@ mutation UpdateIndexer($input: UpdateIndexerConfigInput!) {
     rateLimitSeconds
     rateLimitBurst
     maxQueriesPerMinute
+    maxRequestsPerMonth
+    maxGrabsPerMonth
     storedSecretKeys
     lastHealthStatus
     lastErrorAt

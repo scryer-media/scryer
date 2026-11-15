@@ -4,7 +4,9 @@
 use super::{bounded_levenshtein_distance, canonical_lookup_key};
 use scryer_domain::{
     Title,
-    title_normalization::{release_romanization_keys, romanization_key},
+    title_normalization::{
+        release_romanization_keys, release_romanization_scripts, romanization_key,
+    },
     title_spelling::{
         SpellingEquivalence, TitleScript,
         compare_title_spelling_for_resolution as compare_title_spelling, title_script,
@@ -234,6 +236,19 @@ impl SpellingBucket {
 
 type Bucket = (String, TitleScript, String);
 
+/// The scripts of the catalog names an observed name can answer to: its own,
+/// then those a romanization rule set reads it against (a Latin release name
+/// can be the transliteration of a Cyrillic catalog name).
+fn catalog_scripts(observed: &str) -> Vec<TitleScript> {
+    let mut scripts = vec![title_script(observed)];
+    for script in release_romanization_scripts(observed) {
+        if !scripts.contains(&script) {
+            scripts.push(script);
+        }
+    }
+    scripts
+}
+
 /// The slice of the persisted name index one release's anchors touch.
 ///
 /// This used to be `SpellingIndex`: every name in the library, bucketed in
@@ -419,6 +434,7 @@ impl SpellingCandidates {
             script: TitleScript,
             numbers_key: String,
             romanization_keys: Vec<String>,
+            romanization_scripts: Vec<&'static str>,
             collation_keys: Vec<(&'static str, Vec<u8>)>,
         }
         // Every key a bucket query carries derives from the anchor and its
@@ -443,6 +459,10 @@ impl SpellingCandidates {
                                 script: title_script(anchor),
                                 numbers_key: numbers_key.clone(),
                                 romanization_keys: release_romanization_keys(anchor),
+                                romanization_scripts: release_romanization_scripts(anchor)
+                                    .into_iter()
+                                    .map(TitleScript::as_str)
+                                    .collect(),
                                 collation_keys: scryer_domain::title_spelling::COLLATION_PROFILES
                                     .iter()
                                     .filter_map(|profile| {
@@ -470,6 +490,7 @@ impl SpellingCandidates {
                     typo_distance: Some(anchor_fetch_distance(anchor.anchor)),
                     match_term: anchor.anchor,
                     romanization_keys: &anchor.romanization_keys,
+                    romanization_scripts: &anchor.romanization_scripts,
                     collation_keys: &anchor.collation_keys,
                     limit: BUCKET_FETCH_LIMIT,
                 }
@@ -541,11 +562,13 @@ impl SpellingCandidates {
                 if facet.is_some_and(|facet| facet != kind) {
                     continue;
                 }
-                if let Some(bucket) = self.buckets.get(&(
-                    kind.to_string(),
-                    title_script(anchor),
-                    numbers_key(observed_raw),
-                )) {
+                for script in catalog_scripts(anchor) {
+                    let Some(bucket) =
+                        self.buckets
+                            .get(&(kind.to_string(), script, numbers_key(observed_raw)))
+                    else {
+                        continue;
+                    };
                     for index in bucket.possible_matches(anchor, None) {
                         let entry = &bucket.names[index];
                         if spelling_distance(anchor, observed_raw, &entry.name, None).is_some() {
@@ -586,29 +609,33 @@ impl SpellingCandidates {
             );
             return true;
         }
-        let Some(bucket) = self.buckets.get(&(
-            identity.facet.clone(),
-            title_script(observed),
-            numbers_key(observed_raw),
-        )) else {
-            return false;
-        };
         let bound = if distance == 0 {
             0
         } else {
             distance.saturating_add(1)
         };
-        bucket
-            .possible_matches(observed, Some(bound))
-            .into_iter()
-            .any(|index| {
-                let entry = &bucket.names[index];
-                entry.identity != identity.id
-                    && !year
-                        .zip(entry.name.year)
-                        .is_some_and(|(left, right)| left != right)
-                    && spelling_distance(observed, observed_raw, &entry.name, Some(bound)).is_some()
-            })
+        // A rival may claim the spelling from another script: a Cyrillic name
+        // whose transliteration is the observed Latin name.
+        catalog_scripts(observed).into_iter().any(|script| {
+            let Some(bucket) =
+                self.buckets
+                    .get(&(identity.facet.clone(), script, numbers_key(observed_raw)))
+            else {
+                return false;
+            };
+            bucket
+                .possible_matches(observed, Some(bound))
+                .into_iter()
+                .any(|index| {
+                    let entry = &bucket.names[index];
+                    entry.identity != identity.id
+                        && !year
+                            .zip(entry.name.year)
+                            .is_some_and(|(left, right)| left != right)
+                        && spelling_distance(observed, observed_raw, &entry.name, Some(bound))
+                            .is_some()
+                })
+        })
     }
 }
 
