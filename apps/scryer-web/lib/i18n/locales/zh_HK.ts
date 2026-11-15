@@ -4306,6 +4306,121 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRunActionsRunning": "正在執行動作…",
   "settings.maintenanceRunActionsNeedsRule":
     "請在上方選擇一條規則以立即執行其動作。",
+  "settings.maintenanceSequenceObserveOnly": "僅試執行",
+  "settings.maintenanceRuleScheduleHelp":
+    "每條規則依自己的排程執行。每次執行會評估規則，然後套用寬限期已結束的候選項目。變更排程會保留規則的狀態。每日、每週與 cron 時間使用伺服器的當地時間。",
+  "settings.maintenanceRuleScheduleManualHelp":
+    "此規則不會自行執行。請從「執行與紀錄」啟動。",
+  "settings.maintenanceRuleState": "狀態",
+  "settings.maintenanceRuleStateHelp":
+    "停用的規則永遠不會被評估。試執行會記錄候選項目但不採取動作。啟用的規則會在各寬限期結束後對候選項目採取動作。",
+  "settings.maintenanceRuleStateUpdated": "已更新 {{name}}。",
+  "settings.maintenanceRuleStateDisabled": "停用",
+  "settings.maintenanceRuleStateDisabledHelp": "永不評估。",
+  "settings.maintenanceRuleStateDryRun": "試執行",
+  "settings.maintenanceRuleStateDryRunHelp": "記錄候選項目；不採取動作。",
+  "settings.maintenanceRuleStateEnabled": "啟用",
+  "settings.maintenanceRuleStateEnabledHelp":
+    "在候選項目的寬限期結束時採取動作。",
+  "settings.maintenanceRuleEditedSinceEnabled":
+    "啟用後已編輯。請檢查候選項目並再次啟用。",
+  "settings.maintenanceRuleSystemOwned": "內建",
+  "settings.maintenanceSwitchEnabled": "維護",
+  "settings.maintenanceSwitchEnabledHelp":
+    "在此執行個體上評估規則並顯示其候選項目。",
+  "settings.maintenanceSwitchActionsPaused": "暫停所有動作",
+  "settings.maintenanceSwitchActionsPausedHelp":
+    "暫停期間，啟用的規則仍會記錄候選項目，但不會取消監控、變更或刪除任何東西。",
+  "settings.maintenanceSwitchesLocked":
+    "讀取維護開關需要系統設定權限。請向管理員詢問維護是否開啟，以及動作是否已暫停。",
+  "settings.maintenanceSwitchesUpdated": "維護設定已更新。",
+  "settings.maintenanceUnpauseConfirmTitle": "要恢復維護動作嗎？",
+  "settings.maintenanceUnpauseConfirmBody":
+    "啟用的規則會在各寬限期結束時對候選項目採取動作，包括會刪除文件的規則。",
+  "settings.maintenanceUnpauseConfirmAction": "恢復動作",
+  "settings.maintenanceCandidatesEmptyMaintenanceOff":
+    "此執行個體未開啟維護，因此不顯示候選項目。",
+  "settings.maintenanceCandidatesEmptyAllDisabled":
+    "所有規則都已停用，因此沒有任何評估。請先將一條規則設為試執行。",
+  "settings.maintenanceArmDestructiveIntro":
+    "{{name}} 會刪除文件。啟用後，除非動作已暫停，它會在各寬限期結束時對下方的候選項目採取動作。",
+  "settings.maintenanceArmDestructiveTitle": "要啟用會刪除文件的規則嗎？",
+  "settings.maintenanceArmDestructiveConfirm": "啟用",
+  "settings.maintenanceCandidatesTitle": "即將移除",
+  "settings.maintenanceCandidatesSubtitle":
+    "規則已符合的作品，最早到期的排在最前。這裡的項目都尚未被處理。",
+  "settings.maintenanceRuleTemplate": "範本",
+  "settings.maintenanceRuleTemplatePlaceholder": "從範本開始",
+  "settings.refMaintFactsListsAddedByList": "主體是否由清單而非人員加入媒體庫",
+  "settings.refMaintFactsListsOnEnabledList":
+    "是否仍有任何已啟用的清單（公開或個人）列有此主體",
+  "settings.refMaintFactsListsNames": "仍列有此主體的已啟用公開清單名稱",
+  "settings.refMaintFactsListsLeftAll":
+    "曾列有此主體的每個清單是否都已將其移除",
+  "settings.refMaintFactsListsLeftAt": "最後一個清單移除此主體的時間",
+  "settings.refMaintFactsListsLastListName": "此主體最近離開的公開清單",
+  "settings.refMaintFactsListsEnabledIds":
+    "仍列有此主體的已啟用清單（公開或個人）識別碼",
+  "settings.refMaintFactsListsPublicCount": "仍列有此主體的公開清單數量",
+  "settings.refMaintFactsListsPersonalCount": "仍列有此主體的個人清單數量",
+  "settings.refMaintFactsListsFirstSeenAt":
+    "仍持有此主體的清單首次列出它的時間",
+  "settings.refMaintFactsListsLastSeenAt":
+    "仍持有此主體的清單最後一次列出它的時間",
+  "settings.refMaintFactsListsDaysOnList":
+    "自仍持有此主體的清單首次列出它以來的完整天數",
+  "settings.refMaintFactsListsBestRank":
+    "仍持有此主體的清單給它的最佳（最低）排名",
+  "settings.refMaintFactsListsOnLeave":
+    "持有此主體的已啟用清單在移除它時會做什麼",
+  "settings.refMaintFactsListsLeftHandled":
+    "每次離開清單是否都已套用其離開時的動作",
+  "settings.refMaintFactsListsMembershipStates":
+    "此主體在仍持有它的清單上的狀態",
+  "settings.refMaintFactsRequestOrigin": "建立此作品的請求來自何處",
+  "settings.refMaintFactsRequestListName": "請求此作品的公開清單",
+  "settings.refMaintFactsListsAddedByListValue":
+    "清單同步建立此作品時為真；無法讀取清單儲存區時為未知，原因為 list_store_unreadable",
+  "settings.refMaintFactsListsOnEnabledListValue":
+    "至少有一個已啟用的清單持有此主體時為真",
+  "settings.refMaintFactsListsNamesValue":
+    "僅公開清單名稱，已排序；成員的個人清單從不顯示名稱",
+  "settings.refMaintFactsListsLeftAllValue":
+    "列過此主體的每個清單都已將其移除時為真；仍有清單持有它，或從未有清單列過它時為假",
+  "settings.refMaintFactsListsLeftAtValue":
+    "RFC3339 時間戳；仍有清單持有此主體時不存在，原因為 not_left_every_list",
+  "settings.refMaintFactsListsLastListNameValue":
+    "該公開清單的名稱；此主體從未離開公開清單時不存在，原因為 no_public_list_left",
+  "settings.refMaintFactsListsEnabledIdsValue":
+    "清單識別碼，已排序；絕不是清單名稱",
+  "settings.refMaintFactsListsPublicCountValue":
+    "公開清單數量，包括已啟用或已暫停",
+  "settings.refMaintFactsListsPersonalCountValue":
+    "個人清單數量，包括已啟用或已暫停",
+  "settings.refMaintFactsListsFirstSeenAtValue":
+    "RFC3339 時間戳；沒有清單持有此主體時不存在，原因為 not_on_a_list",
+  "settings.refMaintFactsListsLastSeenAtValue":
+    "RFC3339 時間戳；沒有清單持有此主體時不存在，原因為 not_on_a_list",
+  "settings.refMaintFactsListsDaysOnListValue":
+    "到評估時間的完整天數；沒有清單持有此主體時不存在，原因為 not_on_a_list",
+  "settings.refMaintFactsListsBestRankValue":
+    "排名數字；持有此主體的清單都未排名時不存在，原因為 no_list_rank",
+  "settings.refMaintFactsListsOnLeaveValue":
+    "已排序的值，取自 keep、log、unmonitor 與 tag",
+  "settings.refMaintFactsListsLeftHandledValue":
+    "每次離開都已處理時為真；沒有清單移除過此主體時不存在，原因為 no_list_left",
+  "settings.refMaintFactsListsMembershipStatesValue":
+    "已排序的狀態，例如 in_library、added、requested 或 held",
+  "settings.refMaintFactsRequestOriginValue":
+    "manual、public_list 或 personal_list 之一；沒有請求建立此作品時不存在，原因為 title_not_requested",
+  "settings.refMaintFactsRequestListNameValue":
+    "該公開清單的名稱；手動請求與個人清單請求時不存在，原因為 no_public_request_list，因為個人清單從不顯示名稱",
+  "settings.maintenanceTemplateLeftEveryListTitle": "已離開所有清單",
+  "settings.maintenanceTemplateLeftEveryListDescription":
+    "所有清單（公開或個人）都已移除的作品，在每次離開都已處理且最後一次離開超過 30 天後。範圍內的項目會取消監控，文件保留原位。",
+  "settings.maintenanceTemplateListAddedUnwatchedTitle": "由清單加入且從未觀看",
+  "settings.maintenanceTemplateListAddedUnwatchedDescription":
+    "為清單在 90 天前加入且無人播放過的作品加上 needs-review 標籤。只要觀看資訊不完整就暫緩。不會刪除任何東西。",
   "settings.maintenanceRunActionsHeldHelp":
     "立即執行動作會略過被執行暫緩的作品，直到規則再次評估為止。每次排程執行都會先評估，因此會重新檢視被暫緩的作品。",
   "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
@@ -5009,7 +5124,8 @@ const zh_HK: LocaleDictionary = {
   "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
     "無法建立請求規則引擎。",
   "error.reason.REQUEST_RULE_FIELD_REQUIRED": "所需的值不可為空。",
-  "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE": "租期最多為十年，或為永久。",
+  "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
+    "租期必須為 1 至 3650 天（十年），或為永久。",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
     "媒體庫類型與請求的媒體類型不符。",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "找不到媒體庫。",
@@ -5023,7 +5139,7 @@ const zh_HK: LocaleDictionary = {
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
   "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
-    "請求帶有的標籤超過允許的數量。",
+    "一個請求最多可帶 16 個標籤。",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "規則評估失敗。",
   "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE": "規則編譯失敗。",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
@@ -5031,12 +5147,12 @@ const zh_HK: LocaleDictionary = {
   "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND": "找不到範例請求者。",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "找不到請求規則集。",
   "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
-    "標籤超過允許的長度。",
+    "標籤最多 64 個字元。",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "標籤含有不支援的字元；請使用字母、數字、'.'、'_'、'-' 或空格。",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "標籤不可為空。",
   "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
-    "標籤使用了保留的前綴。",
+    "標籤不可以保留前綴 'scryer:' 開頭。",
   "settings.requestRulesDefault":
     "沒有啟用任何規則時，擁有自動核准權限的成員所提出的請求會被核准，其他請求則等待審查。",
   "settings.requestRuleEnabledUpdated": "已更新 {{name}}。",
@@ -6091,6 +6207,149 @@ const zh_HK: LocaleDictionary = {
     "已暫緩：已連線的媒體伺服器沒有相符的項目，執行前無法確認觀看記錄。",
   "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "此規則會刪除，但沒有設定每次執行的作品數上限，因此其動作不會執行。它仍會評估並可預覽；設定上限後即可執行動作。",
+  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "派送維護搜尋需要已接受的回執意圖。",
+  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "派送維護搜尋需要預先配置的工作執行 ID。",
+  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
+    "維護動作步驟完成時必須附帶嘗試結果。",
+  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
+    "維護規則已有此作品的有效候選項目。",
+  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
+    "維護序列進度每頁最多接受 100 個候選項目。",
+  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
+    "維護完成上限無效。",
+  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
+    "一般維護工作派送必須從派送中狀態開始。",
+  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
+    "失敗的維護序列標記缺少失敗步驟 ID。",
+  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
+    "維護暫緩嘗試的釋放無效。",
+  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
+    "已接受的維護工作回執需要實際的工作執行 ID。",
+  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
+    "維護序列成員資格在確認不符合之前為終止狀態。",
+  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "維護工作回執的狀態轉換必須指明預期狀態。",
+  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
+    "維護序列回執投影最多接受 700 個步驟。",
+  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
+    "維護暫緩嘗試的釋放缺少原因。",
+  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "重試的維護動作步驟必須推進其嘗試次數。",
+  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
+    "此維護規則有進行中的候選項目或動作紀錄；請改為停用。",
+  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
+    "維護動作步驟與其已儲存的序列身分不符。",
+  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
+    "維護動作步驟的認領必須開始一個非負的執行中嘗試。",
+  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
+    "失敗的維護序列標記沒有保留其步驟前綴。",
+  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
+    "維護動作步驟的認領有無效的目標身分。",
+  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "成功的維護序列標記缺少完整的步驟證據。",
+  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
+    "維護終止標記與已儲存的步驟證據不符。",
+  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
+    "維護序列終止標記與候選項目的終止狀態不一致。",
+  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
+    "維護序列終止標記的預期步驟 ID 無效。",
+  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
+    "維護要刪除的文件已變更；需要重新評估。",
+  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
+    "維護刪除的指紋已變更。",
+  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
+    "維護刪除的目標已變更；需要重新評估。",
+  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID": "維護動作設定無效。",
+  "error.reason.MAINTENANCE_ACTION_INVALID":
+    "此維護動作不適用於作品範圍的規則。",
+  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE": "此維護動作無法儲存。",
+  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED": "作品不支援此維護動作。",
+  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+    "此規則已在您的媒體庫執行過動作，刪除它會抹去其所做事項的紀錄。請改為設為停用：規則會立即停止，紀錄也會保留。",
+  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
+    "維護的文件涵蓋範圍不明確。",
+  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+    "候選項目數量已變更。啟用前請檢查目前的數量。",
+  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+    "刪除子項目需要指定集或季。",
+  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+    "此規則目前正在追蹤作品，刪除它會讓這些作品不留痕跡地被捨棄。請改為設為停用，或先清除候選項目。",
+  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+    "DeleteFiles 的 Unmonitor 前置條件不相容。",
+  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+    "DeleteFiles 需要先前的 Unmonitor 步驟。",
+  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND": "找不到維護排除項目。",
+  "error.reason.MAINTENANCE_FIELD_REQUIRED": "所需的值不可為空。",
+  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED": "維護的文件擁有權已變更。",
+  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+    "維護的目標文件已變更；需要再次評估。",
+  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID": "寬限期必須為零天或以上。",
+  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
+    "寬限期最多為 3650 天（十年）。",
+  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
+    "讀取儲存空間事實的條件必須選擇已設定的媒體庫根目錄。",
+  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+    "電影作品沒有集數清單。",
+  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+    "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
+  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+    "預覽最多接受 50 個作品。",
+  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+    "預覽需要一至五十個主體。",
+  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+    "預覽主體不存在、不在規則的媒體庫中，或不屬於所選的作品與範圍。",
+  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
+    "質素設定檔動作沒有目標設定檔。",
+  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+    "確認期間規則已變更；啟用刪除前請再次檢查。",
+  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+    "啟用刪除前必須再次檢查規則設定；請重新開啟確認。",
+  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED": "規則評估失敗。",
+  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE": "維護規則編譯失敗。",
+  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND": "找不到維護規則集。",
+  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
+    "此規則隨 Scryer 提供：其條件與動作無法變更，但寬限期、媒體庫與狀態可以。",
+  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+    "此規則隨 Scryer 提供，無法刪除。請改為設為停用。",
+  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+    "此規則隨 Scryer 提供，無法重新命名。",
+  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID": "維護規則原始碼無效。",
+  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+    "此規則的動作永遠不會變更任何東西，因此只能以試執行方式執行。",
+  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
+  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
+    "序列動作必須使用序列執行器。",
+  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "維護序列步驟參數無效。",
+  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
+    "規則所選的儲存根目錄尚未設定。",
+  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED": "必須提供維護主體 ID。",
+  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID": "維護主體類型無效。",
+  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+    "找不到維護主體，或它已不屬於此作品。",
+  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
+    "標籤動作沒有設定任何標籤。",
+  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
+    "目標質素設定檔不存在。",
+  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+    "取消監控候選項目的身分與其作品不符。",
+  "error.reason.MEDIA_LIFECYCLE_CLAIM_NOT_LIVE": "生命週期認領已不再有效。",
+  "error.reason.MEDIA_REQUEST_LIFECYCLE_CLAIM_NOT_FOUND":
+    "找不到生命週期認領。",
+  "error.reason.SERVICES_MAINTENANCE_OPERATION_PROGRESS": "維護作業進行中。",
+  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND": "找不到維護規則。",
+  "error.maintenanceArmCountMismatch":
+    "候選項目數量已變更。請再次檢查並確認目前的數量。",
+  "setup.restoreRefusal.maintenanceActive":
+    "還原或復原已在進行中。請等待其完成。",
+  "jobs.builtin.MaintenanceRuleEvaluation.name": "維護規則評估",
+  "jobs.builtin.MaintenanceRuleEvaluation.description":
+    "依排程開始與結束請求租期。每條維護規則依自己的排程評估；立即執行會評估所有已啟用的規則，且永遠不會執行動作。",
+  "jobs.builtin.LifecycleActionHandling.name": "維護動作處理",
+  "jobs.builtin.LifecycleActionHandling.description":
+    "每條維護規則會在其排程評估後，或該規則被手動執行時，對到期的候選項目採取動作，並受執行個體效果閘門與完整安全重新檢查把關。此工作不代表任何規則採取動作。",
   "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
     "已暫緩：自上次讀取最愛以來，媒體伺服器上有帳號將此項目，或所檢查集數的劇集或季，標為最愛。",
   "settings.maintenanceExecutionReason.ruleNotEligible":

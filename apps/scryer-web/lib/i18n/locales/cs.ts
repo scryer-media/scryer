@@ -5946,7 +5946,7 @@ const cs: LocaleDictionary = {
   "error.reason.REQUEST_RULE_FIELD_REQUIRED":
     "Požadovaná hodnota nesmí být prázdná.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
-    "Zápůjčka smí trvat nejvýše deset let, nebo navždy.",
+    "Zápůjčka musí trvat 1 až 3650 dní (deset let), nebo navždy.",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
     "Druh knihovny neodpovídá druhu požadovaného média.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Knihovna nebyla nalezena.",
@@ -5961,7 +5961,7 @@ const cs: LocaleDictionary = {
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Toto pravidlo čte fakty o konkrétních lidech, takže jeho uložení vyžaduje oprávnění spravovat oprávnění. Požádejte o uložení správce, nebo pravidlo přepište bez těchto faktů.",
   "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
-    "Požadavek nese víc štítků, než je povoleno.",
+    "Požadavek smí nést nejvýše 16 štítků.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED":
     "Vyhodnocení pravidla selhalo.",
   "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE":
@@ -5975,12 +5975,12 @@ const cs: LocaleDictionary = {
   "error.reason.REQUEST_RULE_SET_NOT_FOUND":
     "Sada pravidel požadavků nebyla nalezena.",
   "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
-    "Štítek je delší, než je povoleno.",
+    "Štítek smí mít nejvýše 64 znaků.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
     "Štítek obsahuje nepodporovaný znak; použijte písmena, číslice, '.', '_', '-' nebo mezery.",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "Štítek nesmí být prázdný.",
   "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
-    "Štítek používá vyhrazenou předponu.",
+    "Štítek nesmí začínat vyhrazenou předponou 'scryer:'.",
   "requests.preflightReason": "Důvod: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryeru se nepodařilo zjistit vše o tomto titulu, takže rozhodne člověk.",
@@ -7709,6 +7709,165 @@ const cs: LocaleDictionary = {
     "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
   "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "Toto pravidlo maže, ale nemá limit titulů na běh, takže jeho akce se neprovádějí. Dál se vyhodnocuje a lze ho zobrazit v náhledu; nastavte limit, aby mohlo zasáhnout.",
+  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "Odeslání údržbového hledání vyžaduje přijatý záměr potvrzení.",
+  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "Odeslání údržbového hledání vyžaduje předem přidělené ID běhu úlohy.",
+  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
+    "Dokončení kroku akce údržby musí nést výsledek pokusu.",
+  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
+    "Pravidlo údržby už má pro tento titul aktivního kandidáta.",
+  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
+    "Průběh sekvence údržby přijímá nejvýše 100 kandidátů na stránku.",
+  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
+    "Neplatný limit dokončení údržby.",
+  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
+    "Obecné odeslání úlohy údržby musí začít ve stavu odesílání.",
+  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
+    "Značce neúspěšné sekvence údržby chybí ID neúspěšného kroku.",
+  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
+    "Neplatné uvolnění pozdrženého pokusu údržby.",
+  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
+    "Přijatá potvrzení úloh údržby vyžadují skutečné ID běhu úlohy.",
+  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
+    "Členství v sekvenci údržby je konečné až do potvrzené neshody.",
+  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "Přechod potvrzení úlohy údržby musí uvést očekávané stavy.",
+  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
+    "Projekce potvrzení sekvence údržby přijímá nejvýše 700 kroků.",
+  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
+    "Uvolnění pozdrženého pokusu údržby nemá důvod.",
+  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "Opakovaný krok akce údržby musí posunout svůj pokus.",
+  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
+    "Toto pravidlo údržby má živé kandidáty nebo historii akcí; místo smazání ho vypněte.",
+  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
+    "Krok akce údržby neodpovídá uložené identitě své sekvence.",
+  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
+    "Převzetí kroku akce údržby musí zahájit běžící pokus s nezáporným číslem.",
+  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
+    "Značka neúspěšné sekvence údržby nezachovává předponu svých kroků.",
+  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
+    "Převzetí kroku akce údržby má neplatnou identitu cíle.",
+  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "Značce úspěšné sekvence údržby chybí úplné doklady o krocích.",
+  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
+    "Koncová značka údržby neodpovídá uloženým dokladům o krocích.",
+  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
+    "Koncová značka sekvence údržby a koncový stav kandidáta se neshodují.",
+  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
+    "Koncová značka sekvence údržby má neplatná očekávaná ID kroků.",
+  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
+    "Soubor určený ke smazání údržbou se změnil; je nutné nové vyhodnocení.",
+  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
+    "Otisk mazání údržbou se změnil.",
+  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
+    "Cíle mazání údržbou se změnily; je nutné nové vyhodnocení.",
+  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
+    "Konfigurace akce údržby je neplatná.",
+  "error.reason.MAINTENANCE_ACTION_INVALID":
+    "Akce údržby není platná pro pravidlo v rozsahu titulu.",
+  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE": "Akci údržby nelze uložit.",
+  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
+    "Tato akce údržby není pro tituly podporována.",
+  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+    "Toto pravidlo už ve vaší knihovně provedlo akce a jeho smazání by vymazalo záznam o tom, co udělalo. Místo toho ho nastavte na Vypnuto: pravidlo se okamžitě zastaví a jeho historie zůstane.",
+  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
+    "Nejednoznačné pokrytí souborů údržbou.",
+  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+    "Počet kandidátů se změnil. Před zapnutím zkontrolujte aktuální počet.",
+  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+    "Mazání podřízených položek vyžaduje epizodu nebo sérii.",
+  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+    "Toto pravidlo právě sleduje tituly a jeho smazání by je beze stopy zahodilo. Místo toho ho nastavte na Vypnuto, nebo nejprve vymažte kandidáty.",
+  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+    "DeleteFiles má nekompatibilní předpoklad Unmonitor.",
+  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+    "DeleteFiles vyžaduje dřívější krok Unmonitor.",
+  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
+    "Výjimka z údržby nebyla nalezena.",
+  "error.reason.MAINTENANCE_FIELD_REQUIRED":
+    "Požadovaná hodnota nesmí být prázdná.",
+  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
+    "Vlastnictví souboru pro údržbu se změnilo.",
+  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+    "Cílové soubory údržby se změnily; je nutné další vyhodnocení.",
+  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
+    "Ochranná lhůta musí být nula nebo více dní.",
+  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
+    "Ochranná lhůta smí být nejvýše 3650 dní (deset let).",
+  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
+    "Podmínka, která čte fakty o úložišti, musí vybrat nakonfigurovaný kořen knihovny.",
+  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+    "Filmové tituly nemají seznam epizod.",
+  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+    "Toto pravidlo čte fakty o konkrétních lidech, takže jeho uložení vyžaduje oprávnění spravovat oprávnění. Požádejte o uložení správce, nebo pravidlo přepište bez těchto faktů.",
+  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+    "Náhled přijímá nejvýše 50 titulů.",
+  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+    "Náhled vyžaduje jeden až padesát subjektů.",
+  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+    "Subjekt náhledu chybí, leží mimo knihovny pravidla, nebo nepatří k vybraným titulům a rozsahu.",
+  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
+    "Akce profilu kvality nemá cílový profil.",
+  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+    "Pravidlo se během potvrzování změnilo; před zapnutím mazání ho zkontrolujte znovu.",
+  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+    "Konfiguraci pravidla je před zapnutím mazání nutné znovu zkontrolovat; otevřete potvrzení znovu.",
+  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED":
+    "Vyhodnocení pravidla selhalo.",
+  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
+    "Pravidlo údržby se nepodařilo zkompilovat.",
+  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
+    "Sada pravidel údržby nebyla nalezena.",
+  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
+    "Toto pravidlo je součástí Scryeru: jeho podmínku a akce nelze změnit. Jeho ochrannou lhůtu, knihovny a stav ano.",
+  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+    "Toto pravidlo je součástí Scryeru a nelze ho smazat. Místo toho ho nastavte na Vypnuto.",
+  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+    "Toto pravidlo je součástí Scryeru a nelze ho přejmenovat.",
+  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID":
+    "Zdroj pravidla údržby je neplatný.",
+  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+    "Akce tohoto pravidla nikdy nic nemění, takže může běžet jen jako zkušební běh.",
+  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED":
+    "Ověření pravidla selhalo.",
+  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
+    "Akce sekvence musí používat vykonavatele sekvencí.",
+  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "Parametry kroku sekvence údržby jsou neplatné.",
+  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
+    "Kořen úložiště, který pravidlo vybírá, není nakonfigurován.",
+  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
+    "ID subjektu údržby je povinné.",
+  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
+    "Neplatný druh subjektu údržby.",
+  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+    "Subjekt údržby nebyl nalezen, nebo už k tomuto titulu nepatří.",
+  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
+    "Akce štítku nemá nastavené žádné štítky.",
+  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
+    "Cílový profil kvality neexistuje.",
+  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+    "Identita kandidáta na zrušení sledování neodpovídá jeho titulu.",
+  "error.reason.MEDIA_LIFECYCLE_CLAIM_NOT_LIVE":
+    "Nárok životního cyklu už není živý.",
+  "error.reason.MEDIA_REQUEST_LIFECYCLE_CLAIM_NOT_FOUND":
+    "Nárok životního cyklu nebyl nalezen.",
+  "error.reason.SERVICES_MAINTENANCE_OPERATION_PROGRESS":
+    "Probíhá operace údržby.",
+  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND":
+    "Pravidlo údržby nebylo nalezeno.",
+  "error.maintenanceArmCountMismatch":
+    "Počet kandidátů se změnil. Zkontrolujte aktuální počet a znovu ho potvrďte.",
+  "setup.restoreRefusal.maintenanceActive":
+    "Obnova nebo zotavení už probíhá. Počkejte, až skončí.",
+  "jobs.builtin.MaintenanceRuleEvaluation.name": "Vyhodnocení pravidel údržby",
+  "jobs.builtin.MaintenanceRuleEvaluation.description":
+    "Podle plánu zahajuje a ukončuje zápůjčky požadavků. Každé pravidlo údržby se vyhodnocuje podle vlastního plánu; spuštění teď vyhodnotí všechna zapnutá pravidla a nikdy neprovede akci.",
+  "jobs.builtin.LifecycleActionHandling.name": "Zpracování akcí údržby",
+  "jobs.builtin.LifecycleActionHandling.description":
+    "Každé pravidlo údržby zasahuje na své splatné kandidáty hned po svém plánovaném vyhodnocení nebo při ručním spuštění daného pravidla, za branami účinků instance a s úplnými bezpečnostními kontrolami. Tato úloha nezasahuje za žádné pravidlo.",
   "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
     "Pozdrženo: od posledního načtení oblíbených označil účet na mediálním serveru jako oblíbenou tuto položku, nebo seriál či sérii kontrolovaných epizod.",
   "settings.maintenanceExecutionReason.ruleNotEligible":

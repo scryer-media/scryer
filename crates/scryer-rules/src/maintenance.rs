@@ -355,9 +355,12 @@ pub struct MaintenanceFactsDoc {
     /// series. Scryer cannot read Plex favourites: an instance whose only
     /// enabled servers are Plex has these unknown (`favorites_unsupported`),
     /// as they are while any linked member can only be observed through Plex.
-    /// `favorited_by_anyone` is never false: favourites are read only for
-    /// linked members, so with none found it is unknown
-    /// (`audience_favorites_not_read`).
+    /// `favorited_by_anyone` counts every account, linked or not. It is known
+    /// false once every account on every favourites-capable connection has a
+    /// fresh complete read of its favourites and none covers the subject.
+    /// Otherwise, with none found, it is unknown: `audience_favorites_not_read`
+    /// while an account lacks that read, and `audience_favorites_unsupported`
+    /// while a Plex connection is enabled.
     pub favorited_by_user_ids: Observation<Vec<String>>,
     pub favorited_by_usernames: Observation<Vec<String>>,
     pub favorited_by_anyone: Observation<bool>,

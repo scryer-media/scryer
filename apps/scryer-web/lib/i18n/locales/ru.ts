@@ -9175,7 +9175,7 @@ const ru: LocaleDictionary = {
   "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
     "Это действие обслуживания не поддерживается для тайтлов.",
   "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
-    "Выбранный элемент уже выполнял действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
+    "Это правило уже выполняло действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
   "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
     "Неоднозначно определены файлы, охватываемые обслуживанием.",
   "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
@@ -9183,7 +9183,7 @@ const ru: LocaleDictionary = {
   "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
     "Для удаления дочернего элемента требуется серия или сезон.",
   "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
-    "Выбранный элемент сейчас отслеживает тайтлы, и его удаление бесследно удалит сведения об отслеживании. Вместо этого отключите его или сначала очистите список кандидатов.",
+    "Это правило сейчас отслеживает тайтлы, и его удаление бесследно их отбросит. Вместо этого отключите его или сначала очистите список кандидатов.",
   "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
     "У действия DeleteFiles несовместимое предварительное условие Unmonitor.",
   "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
@@ -9199,7 +9199,7 @@ const ru: LocaleDictionary = {
   "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
     "Период ожидания должен составлять ноль или более дней.",
   "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
-    "Период ожидания не должен превышать установленный предел в днях (десять лет).",
+    "Период ожидания не должен превышать 3650 дней (десять лет).",
   "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
     "Условие, использующее сведения о хранилище, должно выбирать настроенный корень библиотеки.",
   "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
@@ -9207,7 +9207,7 @@ const ru: LocaleDictionary = {
   "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения требуется право управления разрешениями. Попросите администратора сохранить правило или перепишите его без этих сведений.",
   "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
-    "Для предварительного просмотра запрошено слишком много тайтлов.",
+    "Предварительный просмотр принимает не более 50 тайтлов.",
   "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
     "Для предварительного просмотра требуется от одного до пятидесяти объектов.",
   "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
@@ -9241,7 +9241,7 @@ const ru: LocaleDictionary = {
   "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Недопустимые параметры шага последовательности обслуживания.",
   "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Выбранный корень хранилища не настроен.",
+    "Корень хранилища, выбранный правилом, не настроен.",
   "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
     "Требуется идентификатор объекта обслуживания.",
   "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
@@ -10056,7 +10056,7 @@ const ru: LocaleDictionary = {
   "error.reason.REQUEST_RULE_FIELD_REQUIRED":
     "Запрошенное значение не должно быть пустым.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
-    "Срок действия должен быть не больше выбранного количества дней (десять лет) либо бессрочным.",
+    "Срок действия должен быть от 1 до 3650 дней (десять лет) либо бессрочным.",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
     "Тип библиотеки не соответствует типу запрошенных медиа.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
@@ -10071,7 +10071,7 @@ const ru: LocaleDictionary = {
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения нужно право управления разрешениями. Попросите администратора сохранить его или перепишите правило без этих сведений.",
   "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
-    "Запрос может содержать не более выбранного количества тегов; передано выбранное количество.",
+    "Запрос может содержать не более 16 тегов.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить правило.",
   "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE":
@@ -10084,12 +10084,12 @@ const ru: LocaleDictionary = {
     "Автор запроса для примера не найден.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "Набор правил запросов не найден.",
   "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
-    "Тег содержит выбранное количество символов; допускается не более выбранного количества.",
+    "Тег может быть длиной не более 64 символов.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
-    "Выбранный тег содержит выбранный неподдерживаемый символ; используйте буквы, цифры, '.', '_', '-' или пробелы.",
+    "Тег содержит неподдерживаемый символ; используйте буквы, цифры, '.', '_', '-' или пробелы.",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "Тег не должен быть пустым.",
   "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
-    "Выбранный тег использует выбранный зарезервированный префикс.",
+    "Тег не может начинаться с зарезервированного префикса 'scryer:'.",
   "error.reason.RULE_AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR":
     "Для автоматического обновления пакетов правил требуется стабильное исправление в рамках установленной основной и дополнительной версии.",
   "error.reason.RULE_BUNDLED_RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":

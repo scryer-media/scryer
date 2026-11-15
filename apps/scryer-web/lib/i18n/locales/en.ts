@@ -2306,7 +2306,7 @@ const en: LocaleDictionary = {
   "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
     "This maintenance action is not supported for titles.",
   "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
-    "The selected item has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
+    "This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
   "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
     "Ambiguous maintenance file coverage.",
   "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
@@ -2314,7 +2314,7 @@ const en: LocaleDictionary = {
   "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
     "Child deletion requires an episode or season.",
   "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
-    "The selected item is currently tracking the selected value title(s), and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.",
+    "This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.",
   "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
     "DeleteFiles has an incompatible Unmonitor prerequisite.",
   "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
@@ -2330,7 +2330,7 @@ const en: LocaleDictionary = {
   "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
     "Grace period must be zero or more days.",
   "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
-    "Grace period must be at most the selected value days (ten years).",
+    "Grace period must be at most 3650 days (ten years).",
   "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
     "A matcher that reads storage facts must select a configured library root.",
   "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
@@ -2338,7 +2338,7 @@ const en: LocaleDictionary = {
   "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
   "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
-    "Preview accepts at most the selected value titles, the selected value were requested.",
+    "Preview accepts at most 50 titles.",
   "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
     "Preview requires between one and fifty subjects.",
   "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
@@ -2351,7 +2351,7 @@ const en: LocaleDictionary = {
     "The rule configuration must be reviewed again before arming deletion; reopen the confirmation.",
   "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
   "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
-    "Maintenance rule the selected value failed to compile.",
+    "The maintenance rule failed to compile.",
   "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
     "Maintenance rule set was not found.",
   "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
@@ -2370,17 +2370,17 @@ const en: LocaleDictionary = {
   "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Maintenance sequence step parameters are invalid.",
   "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Storage root the selected item is not configured.",
+    "The storage root the rule selects is not configured.",
   "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
     "Maintenance subject ID is required.",
   "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
     "Invalid maintenance subject kind.",
   "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
-    "Maintenance subject no longer belongs to this title was not found.",
+    "The maintenance subject was not found, or no longer belongs to this title.",
   "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
     "Tag action has no tags configured.",
   "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "Target quality profile the selected item does not exist.",
+    "The target quality profile does not exist.",
   "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
     "Maintenance unmonitoring candidate identity does not match its title.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
@@ -3173,7 +3173,7 @@ const en: LocaleDictionary = {
   "error.reason.REQUEST_RULE_FIELD_REQUIRED":
     "The requested value must not be empty.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
-    "A lease must be at most the selected value days (ten years), or forever.",
+    "A lease must be from 1 to 3650 days (ten years), or forever.",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
     "Library facet does not match requested media facet.",
   "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Library was not found.",
@@ -3188,7 +3188,7 @@ const en: LocaleDictionary = {
   "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
   "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
-    "A request may carry at most the selected value tags, the selected value were supplied.",
+    "A request may carry at most 16 tags.",
   "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
   "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE": "Rule failed to compile.",
   "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "Rule validation failed.",
@@ -3198,12 +3198,12 @@ const en: LocaleDictionary = {
     "Sample requester was not found.",
   "error.reason.REQUEST_RULE_SET_NOT_FOUND": "Request rule set was not found.",
   "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
-    "Tag is the selected value characters, at most the selected value are allowed.",
+    "A tag may be at most 64 characters long.",
   "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
-    "Tag the selected item contains unsupported character the selected item; use letters, digits, '.', '_', '-', or spaces.",
+    "A tag contains an unsupported character; use letters, digits, '.', '_', '-', or spaces.",
   "error.reason.REQUEST_RULE_TAG_REQUIRED": "Tag must not be empty.",
   "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
-    "Tag the selected item uses the reserved the selected item prefix.",
+    "A tag may not start with the reserved prefix 'scryer:'.",
   "error.reason.RULE_AUTOMATIC_RULE_PACK_UPDATES_REQUIRE_STABLE_PATCH_INSTALLED_MAJOR_MINOR":
     "Automatic rule pack updates require a stable patch on the installed major/minor.",
   "error.reason.RULE_BUNDLED_RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":
