@@ -26,7 +26,7 @@ fn validate_graphql_documents(root: impl AsRef<Path>) {
             println!("cargo:rerun-if-changed={}", path.display());
             let document = fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-            graphql_parser::query::parse_query::<String>(&document).unwrap_or_else(|error| {
+            async_graphql_parser::parse_query(&document).unwrap_or_else(|error| {
                 panic!("invalid GraphQL document {}: {error}", path.display())
             });
         }

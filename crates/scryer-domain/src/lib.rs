@@ -2269,6 +2269,16 @@ pub struct ProxyConfig {
     /// WireGuard only: `PersistentKeepalive`, in seconds. `None` means the
     /// engine's default; `Some(0)` switches keepalive off.
     pub tunnel_keepalive_seconds: Option<u16>,
+    /// Challenge solvers only: the transport proxy or tunnel Scryer dials the
+    /// solver through, and through which it sends its own requests that reuse
+    /// the solver's clearance. `None` reaches the solver directly.
+    pub reach_through_proxy_config_id: Option<String>,
+    /// The config `reach_through_proxy_config_id` names, as the store read it
+    /// for a runtime lookup. Never persisted or serialized; `None` whenever the
+    /// id is unset, and also on reads that only list or edit configs. A
+    /// runtime path that finds the id set but this unset fails closed.
+    #[serde(skip)]
+    pub reach_through: Option<Box<ProxyConfig>>,
     /// Host key pinned on the first successful tunnel connect, formatted the
     /// way OpenSSH prints it (`SHA256:<base64>`). A host key is public, so this
     /// is stored and exposed in the clear; the tunnel engine hard-fails when a
@@ -4340,6 +4350,7 @@ pub enum DomainEventType {
     ListUnfollowed,
     ListSyncFinished,
     ListSubscriptionChanged,
+    MaintenanceRuleNotified,
 }
 
 impl DomainEventType {
@@ -4405,6 +4416,7 @@ impl DomainEventType {
             Self::ListUnfollowed => "list_unfollowed",
             Self::ListSyncFinished => "list_sync_finished",
             Self::ListSubscriptionChanged => "list_subscription_changed",
+            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
         }
     }
 
@@ -4470,6 +4482,7 @@ impl DomainEventType {
             "list_unfollowed" => Some(Self::ListUnfollowed),
             "list_sync_finished" => Some(Self::ListSyncFinished),
             "list_subscription_changed" => Some(Self::ListSubscriptionChanged),
+            "maintenance_rule_notified" => Some(Self::MaintenanceRuleNotified),
             _ => None,
         }
     }
@@ -4584,6 +4597,23 @@ pub struct TitleAddedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleUpdatedEventData {
     pub title: TitleContextSnapshot,
+}
+
+/// A maintenance rule applied its actions to a subject and its `notify`
+/// action asked for this message. Written once per applied candidate.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleNotifiedEventData {
+    pub title: TitleContextSnapshot,
+    pub rule_set_id: String,
+    pub rule_name: String,
+    /// `title`, `season` or `episode`.
+    pub subject_kind: String,
+    pub subject_id: String,
+    /// The subject as a person reads it: the title, or the title with its
+    /// season or episode.
+    pub subject_label: String,
+    /// The message the rule wrote.
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5421,6 +5451,7 @@ pub enum DomainEventPayload {
     ListUnfollowed(ListUnfollowedEventData),
     ListSyncFinished(ListSyncFinishedEventData),
     ListSubscriptionChanged(ListSubscriptionChangedEventData),
+    MaintenanceRuleNotified(MaintenanceRuleNotifiedEventData),
 }
 
 impl DomainEventPayload {
@@ -5488,6 +5519,7 @@ impl DomainEventPayload {
             Self::ListUnfollowed(_) => DomainEventType::ListUnfollowed,
             Self::ListSyncFinished(_) => DomainEventType::ListSyncFinished,
             Self::ListSubscriptionChanged(_) => DomainEventType::ListSubscriptionChanged,
+            Self::MaintenanceRuleNotified(_) => DomainEventType::MaintenanceRuleNotified,
         }
     }
 }
@@ -5962,8 +5994,32 @@ pub struct MaintenanceRuleSet {
     pub system_owned: bool,
     /// Revision number of the matcher currently in force.
     pub current_revision_number: i64,
+    /// When the rule evaluates and then acts on what it decided. `Manual`
+    /// runs it only on request.
+    #[serde(default = "default_maintenance_rule_schedule")]
+    pub schedule: ScriptSchedule,
+    /// The most titles (subjects) the rule acts on in one fire, scheduled or
+    /// manual. `None` is no limit; a rule that can delete always has one.
+    /// Titles past it wait for the next fire.
+    #[serde(default)]
+    pub max_titles_per_run: Option<u32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// The `max_titles_per_run` the shipped expired-request-leases rule carries:
+/// the ten titles per fire it acted on before rules carried a maximum.
+pub const SYSTEM_MAINTENANCE_RULE_MAX_TITLES_PER_RUN: u32 = 10;
+
+/// Seconds between runs of a maintenance rule that has no schedule of its
+/// own, matching the cadence of the instance-wide evaluation job.
+pub const DEFAULT_MAINTENANCE_RULE_INTERVAL_SECONDS: i64 = 8 * 60 * 60;
+
+/// The schedule a maintenance rule runs on until its author picks one.
+pub fn default_maintenance_rule_schedule() -> ScriptSchedule {
+    ScriptSchedule::Interval {
+        every_seconds: DEFAULT_MAINTENANCE_RULE_INTERVAL_SECONDS,
+    }
 }
 
 impl MaintenanceRuleSet {
@@ -6019,9 +6075,10 @@ pub struct MaintenanceRuleRevision {
     /// Rego source with the package declaration already rewritten to the
     /// system-assigned rule ID.
     pub rego_source: String,
-    /// Serialized `MaintenanceActionSpec`. Stored as JSON because the closed
-    /// action catalog lives in the application layer; callers deserialize it at
-    /// that boundary rather than passing the raw text around.
+    /// Serialized declared actions: the action heads the revision's source
+    /// defines. Stored as JSON because the action vocabulary lives in the
+    /// application layer; callers deserialize it at that boundary rather than
+    /// passing the raw text around.
     pub action_spec_json: String,
     pub grace_days: i64,
     /// Configured library root whose capacity and owned files this revision
@@ -6031,6 +6088,10 @@ pub struct MaintenanceRuleRevision {
     pub matcher_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The simple builder's document for this revision's source, as canonical
+    /// JSON text, or `None` when the source was written by hand.
+    #[serde(default)]
+    pub builder_model_json: Option<String>,
 }
 
 /// Lifecycle state of one maintenance candidate (RFC 137 section 8).
@@ -6142,6 +6203,10 @@ pub struct LifecycleCandidate {
     /// closed action enum lives in the application layer, so the domain row
     /// carries the string the revision's spec serialized to.
     pub action_kind: String,
+    /// What the rule decided for this subject when it last matched, as the
+    /// stored JSON of its decided actions. Null on candidates written before
+    /// rules declared their own actions.
+    pub decided_actions_json: Option<String>,
     pub grace_days: i64,
     pub first_matched_at: DateTime<Utc>,
     pub last_matched_at: DateTime<Utc>,
@@ -7022,6 +7087,11 @@ impl MediaServerProvider {
         matches!(self, Self::Jellyfin | Self::Plex | Self::Emby)
     }
 
+    /// Whether the server keeps per-user favourites. Plex has none.
+    pub fn has_favorites(&self) -> bool {
+        matches!(self, Self::Jellyfin | Self::Emby)
+    }
+
     pub fn external_account_provider(&self) -> Option<ExternalAccountProvider> {
         match self {
             Self::Jellyfin => Some(ExternalAccountProvider::Jellyfin),
@@ -7140,16 +7210,22 @@ pub struct MediaServerPlaybackItem {
 
 /// What a watch signal is about.
 ///
-/// Deliberately only the two granularities the RFC records observations at.
-/// There is no `Show` variant: a series-level "watched" is an aggregate over
-/// its episodes, and storing it would create a second answer that the next
-/// sweep could contradict.
+/// Plays are recorded per movie and per episode only: a series-level
+/// "watched" is an aggregate over its episodes, and storing it would create a
+/// second answer that the next sweep could contradict.
+///
+/// `Series` and `Season` exist for favourites alone. Jellyfin and Emby let a
+/// person favourite a whole series or one season, and that mark lives on the
+/// series or season item, not on any episode, so it has nowhere else to be
+/// stored. A row of either kind is never a play.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaServerSignalKind {
     #[default]
     Movie,
     Episode,
+    Series,
+    Season,
 }
 
 impl MediaServerSignalKind {
@@ -7157,6 +7233,8 @@ impl MediaServerSignalKind {
         match self {
             Self::Movie => "movie",
             Self::Episode => "episode",
+            Self::Series => "series",
+            Self::Season => "season",
         }
     }
 
@@ -7164,8 +7242,16 @@ impl MediaServerSignalKind {
         match value {
             "movie" => Some(Self::Movie),
             "episode" => Some(Self::Episode),
+            "series" => Some(Self::Series),
+            "season" => Some(Self::Season),
             _ => None,
         }
+    }
+
+    /// Whether the item belongs to a series: its title is found through the
+    /// series' external ids rather than its own.
+    pub const fn is_within_series(self) -> bool {
+        matches!(self, Self::Episode | Self::Season)
     }
 }
 
@@ -7190,12 +7276,16 @@ pub struct NewUserMediaSignal {
     pub kind: MediaServerSignalKind,
     pub scryer_title_id: Option<String>,
     pub scryer_episode_id: Option<String>,
+    /// The provider's season number, for a season or an episode. It places a
+    /// season favourite, which has no episode id, and an episode, on the
+    /// season subject a rule is asked about.
+    pub season_number: Option<i64>,
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
     /// The person marked the item as a favourite on the server. An intent
     /// signal beside the played state; always `false` for Plex, which has no
-    /// favourite.
+    /// favourite. A favourite nobody played is stored too, unplayed.
     pub is_favorite: bool,
     pub observed_at: DateTime<Utc>,
 }
@@ -7212,6 +7302,7 @@ pub struct UserMediaSignal {
     pub kind: MediaServerSignalKind,
     pub scryer_title_id: Option<String>,
     pub scryer_episode_id: Option<String>,
+    pub season_number: Option<i64>,
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
@@ -8208,6 +8299,7 @@ pub enum NotificationEventType {
     ListTitleLeft,
     ListSyncFailed,
     ListUnfollowed,
+    MaintenanceRuleNotified,
     Test,
 }
 
@@ -8243,6 +8335,7 @@ impl NotificationEventType {
             Self::ListTitleLeft => "list_title_left",
             Self::ListSyncFailed => "list_sync_failed",
             Self::ListUnfollowed => "list_unfollowed",
+            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
             Self::Test => "test",
         }
     }
@@ -8278,6 +8371,7 @@ impl NotificationEventType {
             Self::ListTitleLeft,
             Self::ListSyncFailed,
             Self::ListUnfollowed,
+            Self::MaintenanceRuleNotified,
             Self::Test,
         ]
     }
@@ -8313,6 +8407,7 @@ impl NotificationEventType {
             "list_title_left" => Some(Self::ListTitleLeft),
             "list_sync_failed" => Some(Self::ListSyncFailed),
             "list_unfollowed" => Some(Self::ListUnfollowed),
+            "maintenance_rule_notified" => Some(Self::MaintenanceRuleNotified),
             "test" => Some(Self::Test),
             "release_grabbed" => Some(Self::Grab),
             "download_failed" => Some(Self::Download),

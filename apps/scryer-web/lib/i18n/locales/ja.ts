@@ -2524,9 +2524,6 @@ const ja: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "猶予日数",
   "settings.maintenanceRuleGraceDaysHelp":
     "ルールが最初に一致してからアクションが実行されるまでの日数です（現在アクションは実行されません）。",
-  "settings.maintenanceRuleTargetProfile": "対象の品質プロファイル",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "このアクションが一致したタイトルを切り替える先のプロファイルです。",
   "settings.maintenanceRuleLibraries": "ライブラリの適用範囲",
   "settings.maintenanceRuleLibrariesHelp":
     "すべてのライブラリのチェックを外すと、ルールはコレクション全体に適用されます。",
@@ -2601,9 +2598,6 @@ const ja: LocaleDictionary = {
   // ── メンテナンスルール — インスタンスゲート ──
 
   // ── メンテナンスルール — モードと有効化 ──
-  "settings.maintenanceArmingNone": "効果なし",
-  "settings.maintenanceArmingReversible": "可逆",
-  "settings.maintenanceArmingDestructive": "破壊的",
   "settings.maintenanceArmDestructiveLoading":
     "このルールが保持している候補を数えています…",
   "settings.maintenanceArmDestructiveCount":
@@ -3319,12 +3313,8 @@ const ja: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "シリーズ映画",
   "settings.maintenanceActionAddTags": "タグを追加",
   "settings.maintenanceActionRemoveTags": "タグを削除",
-  "settings.maintenanceRuleTags": "タグ",
-  "settings.maintenanceRuleTagsNone": "タグが選択されていません",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} を追加",
-  "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} を削除",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "削除対象としてタグ付け",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
@@ -3859,6 +3849,65 @@ const ja: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "ドラッグして {{value}} を並べ替え",
   "qualityProfile.decisionStepMoveUp": "{{value}} を上へ移動",
   "qualityProfile.decisionStepMoveDown": "{{value}} を下へ移動",
+  "settings.proxyReachThrough": "経由先",
+  "settings.proxyReachThroughHelp":
+    "Scryer はこのソルバーへのリクエストを、選択したトランスポートプロキシまたはトンネル経由で送信します。直接接続では Scryer 自身のネットワークからソルバーに接続します。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "チャレンジソルバーを別のチャレンジソルバー経由で接続することはできません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "チャレンジソルバーを自分自身経由で接続することはできません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "ソルバーへの経由先プロキシまたはトンネルが見つかりません。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "ソルバーへの経由先プロキシまたはトンネルは無効です。",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "別のプロキシ経由で接続できるのはチャレンジソルバーだけです。",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "1 つ以上のチャレンジソルバーがこのプロキシ経由で接続されています。先にそれらを変更してください。",
+  "tours.onboarding.welcome.title": "Scryer へようこそ",
+  "tours.onboarding.welcome.body":
+    "Scryer は映画、シリーズ、アニメを探してダウンロードし、整理します。簡単にご案内します。いつでもスキップできます。",
+  "tours.onboarding.search.title": "なんでも検索",
+  "tours.onboarding.search.body":
+    "タイトル、設定、操作をどこからでも探せます。⌘K または Ctrl+K でキーボードから検索を開けます。",
+  "tours.onboarding.libraries.title": "ライブラリ",
+  "tours.onboarding.libraries.body":
+    "映画、シリーズ、アニメにはそれぞれライブラリがあり、持っているもの、足りないもの、取得中のものが分かります。",
+  "tours.onboarding.discover.title": "見つけてリクエスト",
+  "tours.onboarding.discover.body":
+    "ライブラリに基づくおすすめを眺めてタイトルをリクエストし、各リクエストは「リクエスト」で確認できます。",
+  "tours.onboarding.lists.title": "リスト",
+  "tours.onboarding.lists.body":
+    "Trakt や Plex のウォッチリストなどのリストをフォローできます。Scryer は同期を保ち、そのタイトルを追加またはリクエストします。",
+  "tours.onboarding.activity.title": "アクティビティ",
+  "tours.onboarding.activity.body":
+    "ダウンロードとインポートの進行状況、そしてあなたの判断が必要なものが表示されます。",
+  "tours.onboarding.indexers.title": "インデクサーとダウンロードクライアント",
+  "tours.onboarding.indexers.body":
+    "リリースを探すには少なくとも 1 つのインデクサーが、取得するにはダウンロードクライアントが必要です。ダウンロードクライアントはすぐ下にあります。",
+  "tours.onboarding.indexers.action": "インデクサーを追加",
+  "tours.onboarding.qualityProfiles.title": "品質プロファイル",
+  "tours.onboarding.qualityProfiles.body":
+    "品質プロファイルは、タイトルに許可する品質と、Scryer がより良いリリースを探し続ける条件を決めます。",
+  "tours.onboarding.rules.title": "ルール",
+  "tours.onboarding.rules.body":
+    "ルールはリリースを採点し、Scryer が望むものを優先し、望まないものを見送れるようにします。",
+  "tours.onboarding.mediaServers.title": "メディアサーバー",
+  "tours.onboarding.mediaServers.body":
+    "Jellyfin、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
+  "tours.onboarding.notifications.title": "通知",
+  "tours.onboarding.notifications.body":
+    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。",
+  "tours.onboarding.plugins.title": "プラグイン",
+  "tours.onboarding.plugins.body":
+    "プラグインはインデクサー、ダウンロードクライアント、通知サービスを追加します。ここでインストールと更新ができます。",
+  "tours.stepOf": "ステップ {{current}} / {{total}}",
+  "tours.skip": "ツアーをスキップ",
+  "tours.back": "戻る",
+  "tours.next": "次へ",
+  "tours.done": "完了",
+  "tours.saveFailed":
+    "ツアーの進行状況を保存できなかったため、このツアーが再度表示される場合があります。",
 };
 
 export default ja;

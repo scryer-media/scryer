@@ -3,7 +3,9 @@
 use super::*;
 
 use crate::lib_tests::maintenance_execution::{ExecutionFixture, execution_app, seed_title};
-use crate::lib_tests::maintenance_sequence_execution::{arm_and_evaluate, sequence_draft};
+use crate::lib_tests::maintenance_sequence_execution::{
+    arm_and_evaluate, arm_and_evaluate_all, sequence_draft,
+};
 use crate::lib_tests::maintenance_title_completion::{
     TitleFixture, add_episode_file, season_and_episode, title_fixture,
 };
@@ -37,7 +39,7 @@ pub(super) fn deletion_steps() -> Vec<MaintenanceActionStep> {
             },
         },
         MaintenanceActionStep {
-            id: "delete-files".to_string(),
+            id: "delete_files".to_string(),
             kind: MaintenanceActionStepKind::DeleteFiles,
             parameters: MaintenanceActionStepParameters::None,
         },
@@ -379,9 +381,12 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
         add_episode_file(&fixture, &other_season, "Sequence/Season 02/S02E02.mkv").await;
     let mut draft = sequence_draft(deletion_steps());
     draft.subject_kind = scryer_domain::MaintenanceRuleSubjectKind::Episode;
-    draft.rego_source = format!(
-        "package selected_episode\nimport rego.v1\n\nmatch if {{\n  input.subject.subject_id == {:?}\n}}\n",
-        selected.id
+    super::maintenance_sequence_execution::with_matcher(
+        &mut draft,
+        &format!(
+            "package selected_episode\nimport rego.v1\n\nmatch if {{\n  input.subject.subject_id == {:?}\n}}\n",
+            selected.id
+        ),
     );
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     assert_eq!(candidate.subject_id, selected.id);
@@ -564,7 +569,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     assert_eq!(deletion_run.status, LifecycleActionRunStatus::Held);
     let journal: serde_json::Value =
         serde_json::from_str(&deletion_run.detail).expect("parse storage journal");
-    assert_eq!(journal["sequence_step_id"].as_str(), Some("delete-files"));
+    assert_eq!(journal["sequence_step_id"].as_str(), Some("delete_files"));
     let journal_files = journal["files"].as_array().expect("journal files");
     assert_eq!(
         journal_files
@@ -724,7 +729,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     assert_eq!(
         steps
             .iter()
-            .find(|step| step.key.step_id == "delete-files")
+            .find(|step| step.key.step_id == "delete_files")
             .expect("persisted DeleteFiles step")
             .state,
         MaintenanceActionStepState::Held
@@ -732,7 +737,7 @@ async fn storage_sequence_holds_its_journal_when_target_or_root_identity_changes
     assert_eq!(
         steps
             .iter()
-            .find(|step| step.key.step_id == "delete-files")
+            .find(|step| step.key.step_id == "delete_files")
             .and_then(|step| step.hold_reason.as_deref()),
         Some(execution_reason::UNKNOWN_AT_EXECUTION)
     );
@@ -1202,4 +1207,131 @@ async fn storage_omission_sweep_reaches_a_terminal_marker_after_one_hundred_reta
             .is_none(),
         "the marker after a full retained page must not starve behind it"
     );
+}
+
+// ── A deleting rule acts on at most the titles its operator chose per run ───
+
+/// Five synthetic movies, each with one file on the fixture root, under one
+/// armed deleting rule with the given maximum. A stray file beside them that
+/// no title owns must outlive every run.
+async fn deleting_rule_over_five(
+    max_titles_per_run: u32,
+) -> (TitleFixture, String, Vec<PathBuf>, PathBuf) {
+    let fixture = title_fixture("Synthetic retire 0", MediaFacet::Movie).await;
+    let mut paths = vec![fixture.root.join("retire-0/movie.mkv")];
+    add_movie_file(&fixture.execution.app, &fixture.title.id, &paths[0]).await;
+    for index in 1..5 {
+        let title = seed_title(
+            &fixture.execution.app,
+            &fixture.execution.user,
+            &format!("Synthetic retire {index}"),
+            true,
+        )
+        .await;
+        let path = fixture.root.join(format!("retire-{index}/movie.mkv"));
+        add_movie_file(&fixture.execution.app, &title.id, &path).await;
+        paths.push(path);
+    }
+    let stray = fixture.root.join("unowned/stray.mkv");
+    write_media_file(&stray);
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        crate::maintenance_rules::MaintenanceRuleDraft {
+            max_titles_per_run: Some(max_titles_per_run),
+            ..sequence_draft(deletion_steps())
+        },
+    )
+    .await;
+    assert_eq!(candidates.len(), 5, "{candidates:?}");
+    super::maintenance_rules::arm_rule(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        &rule_set_id,
+        MaintenanceEffectArming::Destructive,
+        Some(5),
+    )
+    .await;
+    (fixture, rule_set_id, paths, stray)
+}
+
+fn remaining(paths: &[PathBuf]) -> usize {
+    paths.iter().filter(|path| path.exists()).count()
+}
+
+#[tokio::test]
+async fn a_deleting_rule_stops_at_its_maximum_and_the_next_fire_continues() {
+    let (fixture, _rule_set_id, paths, stray) = deleting_rule_over_five(2).await;
+    let before = fixture.execution.evaluation.all_candidates().await;
+
+    let first = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("first fire");
+    assert_eq!(first.executed, 2, "{first:?}");
+    assert_eq!(first.held, 0, "past the maximum is not a hold: {first:?}");
+    assert_eq!(first.rules_stopped_at_maximum, 1, "{first:?}");
+    assert_eq!(remaining(&paths), 3, "files past the maximum are untouched");
+    assert!(stray.exists(), "a file no title owns is never touched");
+    // The three left over are exactly as evaluation left them: no hold, no
+    // reason, no stamp, no history.
+    let after = fixture.execution.evaluation.all_candidates().await;
+    let untouched = after
+        .iter()
+        .filter(|candidate| {
+            before.iter().any(|seen| {
+                seen.id == candidate.id
+                    && seen.state == candidate.state
+                    && seen.state_reason == candidate.state_reason
+                    && seen.updated_at == candidate.updated_at
+            })
+        })
+        .count();
+    assert_eq!(untouched, 3, "{after:?}");
+    let acted_on: std::collections::HashSet<String> = fixture
+        .execution
+        .evaluation
+        .all_action_runs()
+        .await
+        .into_iter()
+        .map(|run| run.candidate_id)
+        .collect();
+    assert_eq!(acted_on.len(), 2, "history names only the titles acted on");
+
+    let second = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("second fire");
+    assert_eq!(second.executed, 2, "{second:?}");
+    assert_eq!(remaining(&paths), 1);
+
+    let third = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("third fire");
+    assert_eq!(third.executed, 1, "{third:?}");
+    assert_eq!(third.rules_stopped_at_maximum, 0, "{third:?}");
+    assert_eq!(remaining(&paths), 0);
+    assert!(stray.exists());
+}
+
+#[tokio::test]
+async fn a_very_large_maximum_acts_on_every_due_title() {
+    let (fixture, _rule_set_id, paths, stray) = deleting_rule_over_five(u32::MAX).await;
+
+    let report = fixture
+        .execution
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("one fire");
+    assert_eq!(report.executed, 5, "{report:?}");
+    assert_eq!(report.rules_stopped_at_maximum, 0, "{report:?}");
+    assert_eq!(remaining(&paths), 0);
+    assert!(stray.exists(), "a file no title owns is never touched");
 }

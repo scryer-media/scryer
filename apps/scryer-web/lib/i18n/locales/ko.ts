@@ -2468,9 +2468,6 @@ const ko: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "유예 일수",
   "settings.maintenanceRuleGraceDaysHelp":
     "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",
-  "settings.maintenanceRuleTargetProfile": "대상 품질 프로필",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "이 작업이 일치하는 타이틀을 옮길 프로필입니다.",
   "settings.maintenanceRuleLibraries": "라이브러리 범위",
   "settings.maintenanceRuleLibrariesHelp":
     "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
@@ -2544,9 +2541,6 @@ const ko: LocaleDictionary = {
   // ── 유지 관리 규칙 — 인스턴스 게이트 ──
 
   // ── 유지 관리 규칙 — 모드와 무장 ──
-  "settings.maintenanceArmingNone": "효과 없음",
-  "settings.maintenanceArmingReversible": "되돌릴 수 있음",
-  "settings.maintenanceArmingDestructive": "파괴적",
   "settings.maintenanceArmDestructiveLoading":
     "이 규칙이 이미 보유한 후보를 세는 중…",
   "settings.maintenanceArmDestructiveCount":
@@ -3254,12 +3248,8 @@ const ko: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "시리즈 영화",
   "settings.maintenanceActionAddTags": "태그 추가",
   "settings.maintenanceActionRemoveTags": "태그 제거",
-  "settings.maintenanceRuleTags": "태그",
-  "settings.maintenanceRuleTagsNone": "선택된 태그가 없습니다",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "{{tags}} 추가",
-  "settings.maintenanceCandidatesTagPatchRemove": "{{tags}} 제거",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "삭제 대상 태그",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
@@ -3785,6 +3775,65 @@ const ko: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "드래그하여 {{value}} 순서 변경",
   "qualityProfile.decisionStepMoveUp": "{{value}} 위로 이동",
   "qualityProfile.decisionStepMoveDown": "{{value}} 아래로 이동",
+  "settings.proxyReachThrough": "경유",
+  "settings.proxyReachThroughHelp":
+    "Scryer는 선택한 전송 프록시 또는 터널을 통해 이 솔버로 요청을 보냅니다. 직접 연결은 Scryer 자체 네트워크에서 솔버에 연결합니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "챌린지 솔버는 다른 챌린지 솔버를 경유할 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "챌린지 솔버는 자기 자신을 경유할 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "솔버에 연결할 경유 프록시 또는 터널을 찾을 수 없습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "솔버에 연결할 경유 프록시 또는 터널이 비활성화되어 있습니다.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "다른 프록시를 경유할 수 있는 것은 챌린지 솔버뿐입니다.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "하나 이상의 챌린지 솔버가 이 프록시를 경유합니다. 먼저 변경하세요.",
+  "tours.onboarding.welcome.title": "Scryer에 오신 것을 환영합니다",
+  "tours.onboarding.welcome.body":
+    "Scryer는 영화, 시리즈, 애니메이션을 찾아 다운로드하고 정리합니다. 간단히 둘러보겠습니다. 언제든지 건너뛸 수 있습니다.",
+  "tours.onboarding.search.title": "무엇이든 검색",
+  "tours.onboarding.search.body":
+    "어디서든 타이틀, 설정, 작업을 찾을 수 있습니다. ⌘K 또는 Ctrl+K를 눌러 키보드로 검색을 여세요.",
+  "tours.onboarding.libraries.title": "라이브러리",
+  "tours.onboarding.libraries.body":
+    "영화, 시리즈, 애니메이션마다 라이브러리가 있어 보유한 것, 없는 것, 받는 중인 것을 보여 줍니다.",
+  "tours.onboarding.discover.title": "탐색과 요청",
+  "tours.onboarding.discover.body":
+    "라이브러리를 바탕으로 한 추천을 둘러보고 타이틀을 요청한 뒤, 각 요청은 요청 메뉴에서 확인하세요.",
+  "tours.onboarding.lists.title": "목록",
+  "tours.onboarding.lists.body":
+    "Trakt나 Plex 관심 목록 같은 제공자의 목록을 팔로우하세요. Scryer가 동기화를 유지하고 해당 타이틀을 추가하거나 요청합니다.",
+  "tours.onboarding.activity.title": "활동",
+  "tours.onboarding.activity.body":
+    "진행 중인 다운로드와 가져오기, 그리고 결정이 필요한 항목을 보여 줍니다.",
+  "tours.onboarding.indexers.title": "인덱서와 다운로드 클라이언트",
+  "tours.onboarding.indexers.body":
+    "릴리스를 찾으려면 인덱서가 하나 이상, 받으려면 다운로드 클라이언트가 필요합니다. 다운로드 클라이언트는 바로 아래에 있습니다.",
+  "tours.onboarding.indexers.action": "인덱서 추가",
+  "tours.onboarding.qualityProfiles.title": "품질 프로필",
+  "tours.onboarding.qualityProfiles.body":
+    "품질 프로필은 타이틀에 허용할 품질과 Scryer가 더 나은 릴리스를 계속 찾을 조건을 정합니다.",
+  "tours.onboarding.rules.title": "규칙",
+  "tours.onboarding.rules.body":
+    "규칙은 릴리스에 점수를 매겨 Scryer가 원하는 것은 우선하고 원하지 않는 것은 건너뛰게 합니다.",
+  "tours.onboarding.mediaServers.title": "미디어 서버",
+  "tours.onboarding.mediaServers.body":
+    "Jellyfin, Plex 또는 Emby를 연결하면 Scryer가 시청한 항목을 알 수 있습니다. Scryer가 가져올 때 서버가 새로 고쳐지게 하려면 플러그인에서 해당 서버의 플러그인도 설치하세요.",
+  "tours.onboarding.notifications.title": "알림",
+  "tours.onboarding.notifications.body":
+    "가져오기, 다운로드 시작, 확인이 필요한 일을 원하는 곳에서 알려 드립니다.",
+  "tours.onboarding.plugins.title": "플러그인",
+  "tours.onboarding.plugins.body":
+    "플러그인은 인덱서, 다운로드 클라이언트, 알림 서비스를 추가합니다. 여기서 설치하고 업데이트하세요.",
+  "tours.stepOf": "{{total}}단계 중 {{current}}단계",
+  "tours.skip": "둘러보기 건너뛰기",
+  "tours.back": "뒤로",
+  "tours.next": "다음",
+  "tours.done": "완료",
+  "tours.saveFailed":
+    "둘러보기 진행 상황을 저장하지 못해 이 둘러보기가 다시 표시될 수 있습니다.",
 };
 
 export default ko;

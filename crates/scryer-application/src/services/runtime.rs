@@ -2377,6 +2377,9 @@ pub struct AppRuntimeJobState {
     pub custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler,
     /// Serializes the overlap check and run start for scheduled scripts.
     pub(crate) custom_job_start_lock: Arc<tokio::sync::Mutex<()>>,
+    /// When this process started. A maintenance execution lease last
+    /// touched before it belongs to a worker that no longer exists.
+    pub(crate) process_started_at: chrono::DateTime<chrono::Utc>,
     /// Cancelled at shutdown; every running script (scheduled, manual or
     /// post-import) is asked to exit and then killed when it fires.
     pub(crate) script_shutdown: tokio_util::sync::CancellationToken,
@@ -2773,6 +2776,7 @@ impl AppRuntimeState {
                 score_refresh: Arc::new(crate::quality::evaluations::ScoreRefreshRuntime::default()),
                 custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler::default(),
                 custom_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                process_started_at: chrono::Utc::now(),
                 script_shutdown: tokio_util::sync::CancellationToken::new(),
                 script_runs: tokio_util::task::TaskTracker::new(),
             },

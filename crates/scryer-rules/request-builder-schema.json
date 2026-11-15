@@ -5,7 +5,7 @@
       "id": "APPROVE",
       "head": "approve",
       "labelKey": "ruleOutput.request.approve",
-      "helpKey": "ruleOutput.request.approve.help",
+      "helpKey": null,
       "valueKind": "FLAG",
       "options": null,
       "min": null,
@@ -17,13 +17,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "DENY",
       "head": "deny",
       "labelKey": "ruleOutput.request.deny",
-      "helpKey": "ruleOutput.request.deny.help",
+      "helpKey": null,
       "valueKind": "FLAG",
       "options": null,
       "min": null,
@@ -35,13 +35,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "MANUAL",
       "head": "manual",
       "labelKey": "ruleOutput.request.manual",
-      "helpKey": "ruleOutput.request.manual.help",
+      "helpKey": null,
       "valueKind": "FLAG",
       "options": null,
       "min": null,
@@ -53,13 +53,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "SET_QUALITY_PROFILE",
       "head": "set_quality_profile",
       "labelKey": "ruleOutput.request.set_quality_profile",
-      "helpKey": "ruleOutput.request.set_quality_profile.help",
+      "helpKey": null,
       "valueKind": "CHOICE",
       "options": "qualityProfiles",
       "min": null,
@@ -71,13 +71,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "SET_LEASE_DAYS",
       "head": "set_lease_days",
       "labelKey": "ruleOutput.request.set_lease_days",
-      "helpKey": "ruleOutput.request.set_lease_days.help",
+      "helpKey": null,
       "valueKind": "NUMBER",
       "options": null,
       "min": 0,
@@ -89,13 +89,13 @@
       "perItem": false,
       "destructive": true,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "SET_MONITOR",
       "head": "set_monitor",
       "labelKey": "ruleOutput.request.set_monitor",
-      "helpKey": "ruleOutput.request.set_monitor.help",
+      "helpKey": null,
       "valueKind": "CHOICE",
       "options": "monitorTypes",
       "min": null,
@@ -107,15 +107,15 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "SET_REQUIRED_AUDIO_LANGUAGES",
       "head": "set_required_audio_languages",
       "labelKey": "ruleOutput.request.set_required_audio_languages",
-      "helpKey": "ruleOutput.request.set_required_audio_languages.help",
+      "helpKey": null,
       "valueKind": "TEXT_LIST",
-      "options": "languages",
+      "options": "audioLanguages",
       "min": null,
       "max": null,
       "maxItems": 16,
@@ -125,15 +125,15 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "SET_PREFERRED_AUDIO_LANGUAGES",
       "head": "set_preferred_audio_languages",
       "labelKey": "ruleOutput.request.set_preferred_audio_languages",
-      "helpKey": "ruleOutput.request.set_preferred_audio_languages.help",
+      "helpKey": null,
       "valueKind": "TEXT_LIST",
-      "options": "languages",
+      "options": "audioLanguages",
       "min": null,
       "max": null,
       "maxItems": 16,
@@ -143,13 +143,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "ADD_TAGS",
       "head": "add_tags",
       "labelKey": "ruleOutput.request.add_tags",
-      "helpKey": "ruleOutput.request.add_tags.help",
+      "helpKey": null,
       "valueKind": "TEXT_LIST",
       "options": "titleTags",
       "min": null,
@@ -161,13 +161,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "NOTIFY",
       "head": "notify",
       "labelKey": "ruleOutput.request.notify",
-      "helpKey": "ruleOutput.request.notify.help",
+      "helpKey": null,
       "valueKind": "TEXT",
       "options": null,
       "min": null,
@@ -179,13 +179,13 @@
       "perItem": false,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     },
     {
       "id": "REASONS",
       "head": "reasons",
       "labelKey": "ruleOutput.request.reasons",
-      "helpKey": "ruleOutput.request.reasons.help",
+      "helpKey": null,
       "valueKind": "TEXT_LIST",
       "options": null,
       "min": null,
@@ -197,16 +197,20 @@
       "perItem": true,
       "destructive": false,
       "variants": null,
-      "conflictsWith": null
+      "conflictsWith": []
     }
   ],
   "outputRules": [
     {
-      "rule": "at_most_one",
-      "of": ["APPROVE", "DENY", "MANUAL"]
+      "rule": "AT_MOST_ONE",
+      "of": [
+        "APPROVE",
+        "DENY",
+        "MANUAL"
+      ]
     },
     {
-      "rule": "at_least_one",
+      "rule": "AT_LEAST_ONE",
       "of": [
         "APPROVE",
         "DENY",

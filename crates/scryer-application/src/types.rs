@@ -4968,6 +4968,39 @@ impl UiPalette {
     }
 }
 
+/// How a user left a guided tour. Either way the tour is not offered again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UiTourOutcome {
+    Completed,
+    Skipped,
+}
+
+impl UiTourOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Skipped => "skipped",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "completed" => Some(Self::Completed),
+            "skipped" => Some(Self::Skipped),
+            _ => None,
+        }
+    }
+}
+
+/// A guided tour the user has finished or skipped. Tour ids are opaque here:
+/// the web owns the tour registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiTourProgress {
+    pub tour_id: String,
+    pub outcome: UiTourOutcome,
+    pub recorded_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiSettings {
     pub user_id: String,
@@ -4992,6 +5025,8 @@ pub struct UiSettings {
     pub catalog_views: Vec<UiCatalogViewSetting>,
     /// Saved dashboard layouts, one per breakpoint that has one.
     pub dashboard_layouts: Vec<UiDashboardLayout>,
+    /// Guided tours the user has finished or skipped.
+    pub tours: Vec<UiTourProgress>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -5040,6 +5075,7 @@ impl UiSettings {
             table_columns: Vec::new(),
             catalog_views: Vec::new(),
             dashboard_layouts: Vec::new(),
+            tours: Vec::new(),
             created_at: None,
             updated_at: None,
         }

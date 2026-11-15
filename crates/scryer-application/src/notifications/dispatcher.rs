@@ -12,13 +12,13 @@ use scryer_domain::{
     DownloadFailedEventData, Episode, ExternalId, ImportCompletedEventData,
     ImportRejectedEventData, ListRequestSubmittedEventData, ListSyncFailedEventData,
     ListTitleAddedEventData, ListTitleLeftEventData, ListUnfollowedEventData,
-    MediaFileDeletedEventData, MediaFileDeletedReason, MediaFileRenamedEventData,
-    MediaFileRestoredEventData, MediaFileUpgradedEventData, MediaPathUpdate,
-    MediaRequestResolvedEventData, MediaRequestSubmittedEventData, MediaUpdateType,
-    NotificationEventType, NotificationTargetKind, PostProcessingCompletedEventData,
-    PostProcessingResult, ReleaseGrabbedEventData, SubtitleDownloadedEventData,
-    SubtitleSearchFailedEventData, Title, TitleAddedEventData, TitleContextSnapshot,
-    TitleDeletedEventData, TitleMovedEventData,
+    MaintenanceRuleNotifiedEventData, MediaFileDeletedEventData, MediaFileDeletedReason,
+    MediaFileRenamedEventData, MediaFileRestoredEventData, MediaFileUpgradedEventData,
+    MediaPathUpdate, MediaRequestResolvedEventData, MediaRequestSubmittedEventData,
+    MediaUpdateType, NotificationEventType, NotificationTargetKind,
+    PostProcessingCompletedEventData, PostProcessingResult, ReleaseGrabbedEventData,
+    SubtitleDownloadedEventData, SubtitleSearchFailedEventData, Title, TitleAddedEventData,
+    TitleContextSnapshot, TitleDeletedEventData, TitleMovedEventData,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use tokio_util::sync::CancellationToken;
@@ -58,6 +58,7 @@ macro_rules! notification_event_mappings {
             list_title_left => DomainEventPayload::ListTitleLeft(_) => DomainEventPayload::ListTitleLeft(data) => DomainEventType::ListTitleLeft => NotificationEventType::ListTitleLeft => build_list_title_left_notification(data),
             list_sync_failed => DomainEventPayload::ListSyncFailed(_) => DomainEventPayload::ListSyncFailed(data) => DomainEventType::ListSyncFailed => NotificationEventType::ListSyncFailed => build_list_sync_failed_notification(data),
             list_unfollowed => DomainEventPayload::ListUnfollowed(_) => DomainEventPayload::ListUnfollowed(data) => DomainEventType::ListUnfollowed => NotificationEventType::ListUnfollowed => build_list_unfollowed_notification(data),
+            maintenance_rule_notified => DomainEventPayload::MaintenanceRuleNotified(_) => DomainEventPayload::MaintenanceRuleNotified(data) => DomainEventType::MaintenanceRuleNotified => NotificationEventType::MaintenanceRuleNotified => build_maintenance_rule_notified_notification(data),
         }
     };
 }
@@ -1199,6 +1200,23 @@ fn build_list_unfollowed_notification(data: &ListUnfollowedEventData) -> BuiltNo
                 data.list.list_name
             ),
             None,
+            &[],
+            &[],
+        ),
+    }
+}
+
+/// A maintenance rule's own message, named by the rule and the subject it
+/// acted on. The message is the operator's, sent as the rule wrote it.
+fn build_maintenance_rule_notified_notification(
+    data: &MaintenanceRuleNotifiedEventData,
+) -> BuiltNotification {
+    BuiltNotification {
+        payload: base_notification_payload(
+            NotificationEventType::MaintenanceRuleNotified,
+            format!("{}: {}", data.rule_name, data.subject_label),
+            data.message.clone(),
+            Some(&data.title),
             &[],
             &[],
         ),
@@ -2979,6 +2997,20 @@ mod tests {
                 DomainEventPayload::ListUnfollowed(scryer_domain::ListUnfollowedEventData {
                     list: list_sample_subject(),
                 }),
+            ),
+            list_sample_event(
+                24,
+                DomainEventPayload::MaintenanceRuleNotified(
+                    scryer_domain::MaintenanceRuleNotifiedEventData {
+                        title: title_context("Kept Movie", MediaFacet::Movie),
+                        rule_set_id: "rule-1".to_string(),
+                        rule_name: "Archive finished".to_string(),
+                        subject_kind: "title".to_string(),
+                        subject_id: "title-1".to_string(),
+                        subject_label: "Kept Movie".to_string(),
+                        message: "Moved to the archive.".to_string(),
+                    },
+                ),
             ),
         ]
     }

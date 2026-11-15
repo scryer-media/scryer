@@ -2607,9 +2607,6 @@ const it: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Giorni di tolleranza",
   "settings.maintenanceRuleGraceDaysHelp":
     "Giorni dalla prima corrispondenza della regola prima che l'azione venga eseguita (nessuna azione viene ancora eseguita).",
-  "settings.maintenanceRuleTargetProfile": "Profilo di qualità di destinazione",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Il profilo a cui questa azione sposterebbe i titoli corrispondenti.",
   "settings.maintenanceRuleLibraries": "Ambito delle librerie",
   "settings.maintenanceRuleLibrariesHelp":
     "Lascia tutte le librerie deselezionate per applicare la regola all'intera collezione.",
@@ -2686,9 +2683,6 @@ const it: LocaleDictionary = {
   // ── Regole di manutenzione — cancelli dell'istanza ──
 
   // ── Regole di manutenzione — modalità e armamento ──
-  "settings.maintenanceArmingNone": "Nessun effetto",
-  "settings.maintenanceArmingReversible": "Reversibile",
-  "settings.maintenanceArmingDestructive": "Distruttivo",
   "settings.maintenanceArmDestructiveLoading":
     "Conteggio dei candidati già in carico a questa regola…",
   "settings.maintenanceArmDestructiveCount":
@@ -3416,12 +3410,8 @@ const it: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Film della serie",
   "settings.maintenanceActionAddTags": "Aggiungi tag",
   "settings.maintenanceActionRemoveTags": "Rimuovi tag",
-  "settings.maintenanceRuleTags": "Tag",
-  "settings.maintenanceRuleTagsNone": "Nessun tag selezionato",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "aggiunge {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "rimuove {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle":
     "Contrassegnato per la rimozione",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
@@ -3964,6 +3954,65 @@ const it: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Trascina per riordinare {{value}}",
   "qualityProfile.decisionStepMoveUp": "Sposta {{value}} in alto",
   "qualityProfile.decisionStepMoveDown": "Sposta {{value}} in basso",
+  "settings.proxyReachThrough": "Raggiungi tramite",
+  "settings.proxyReachThroughHelp":
+    "Scryer invia le sue richieste a questo risolutore tramite il proxy di trasporto o il tunnel scelto. Diretto raggiunge il risolutore dalla rete di Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Un risolutore di challenge non può essere raggiunto tramite un altro risolutore di challenge.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Un risolutore di challenge non può essere raggiunto tramite se stesso.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Il proxy o tunnel per raggiungere il risolutore non è stato trovato.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Il proxy o tunnel per raggiungere il risolutore è disattivato.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Solo un risolutore di challenge può essere raggiunto tramite un altro proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Uno o più risolutori di challenge vengono raggiunti tramite questo proxy. Modificali prima.",
+  "tours.onboarding.welcome.title": "Benvenuto in Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer trova, scarica e organizza i tuoi film, serie e anime. Ecco un breve giro; puoi saltarlo in qualsiasi momento.",
+  "tours.onboarding.search.title": "Cerca qualsiasi cosa",
+  "tours.onboarding.search.body":
+    "Trova un titolo, un'impostazione o un'azione da qualsiasi punto. Premi ⌘K o Ctrl+K per aprire la ricerca dalla tastiera.",
+  "tours.onboarding.libraries.title": "Le tue librerie",
+  "tours.onboarding.libraries.body":
+    "Film, serie e anime hanno ciascuno una libreria: cosa hai, cosa manca e cosa sta arrivando.",
+  "tours.onboarding.discover.title": "Scopri e richiedi",
+  "tours.onboarding.discover.body":
+    "Sfoglia suggerimenti basati sulle tue librerie, richiedi un titolo e segui ogni richiesta in Richieste.",
+  "tours.onboarding.lists.title": "Liste",
+  "tours.onboarding.lists.body":
+    "Segui liste di provider come Trakt o la tua watchlist di Plex. Scryer le mantiene sincronizzate e aggiunge o richiede i loro titoli per te.",
+  "tours.onboarding.activity.title": "Attività",
+  "tours.onboarding.activity.body":
+    "Download e importazioni mentre avvengono, e tutto ciò che richiede una tua decisione.",
+  "tours.onboarding.indexers.title": "Indexer e client di download",
+  "tours.onboarding.indexers.body":
+    "Scryer ha bisogno di almeno un indexer per trovare le release e di un client di download per scaricarle. I client di download sono subito sotto.",
+  "tours.onboarding.indexers.action": "Aggiungi un indexer",
+  "tours.onboarding.qualityProfiles.title": "Profili qualità",
+  "tours.onboarding.qualityProfiles.body":
+    "Un profilo di qualità stabilisce quali qualità può avere un titolo e quando Scryer continua a cercare una release migliore.",
+  "tours.onboarding.rules.title": "Regole",
+  "tours.onboarding.rules.body":
+    "Le regole assegnano un punteggio alle release, così Scryer preferisce quelle che vuoi e scarta le altre.",
+  "tours.onboarding.mediaServers.title": "Media server",
+  "tours.onboarding.mediaServers.body":
+    "Collega Jellyfin, Plex o Emby perché Scryer sappia cosa hai guardato. Perché il server si aggiorni quando Scryer importa qualcosa, installa anche il plugin di quel server in Plugin.",
+  "tours.onboarding.notifications.title": "Notifiche",
+  "tours.onboarding.notifications.body":
+    "Ricevi avvisi su acquisizioni, importazioni e tutto ciò che richiede attenzione, dove preferisci.",
+  "tours.onboarding.plugins.title": "Plugin",
+  "tours.onboarding.plugins.body":
+    "I plugin aggiungono indexer, client di download e servizi di notifica. Installali e aggiornali qui.",
+  "tours.stepOf": "Passaggio {{current}} di {{total}}",
+  "tours.skip": "Salta il tour",
+  "tours.back": "Indietro",
+  "tours.next": "Avanti",
+  "tours.done": "Fatto",
+  "tours.saveFailed":
+    "Non è stato possibile salvare l’avanzamento del tour, quindi potrebbe ricomparire.",
 };
 
 export default it;

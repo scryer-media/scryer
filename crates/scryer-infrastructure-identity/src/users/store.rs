@@ -4,8 +4,9 @@ use scryer_application::{
     AppError, AppResult, UiCatalogViewMode, UiCatalogViewSetting, UiCatalogViewUpdate,
     UiDashboardBreakpoint, UiDashboardLayout, UiDashboardLayoutItem, UiDateTimeFormat,
     UiDefaultLandingView, UiDensity, UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet,
-    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UserExternalAccountRepository, UserLoginSnapshot, UserRepository, UserUiSettingsRepository,
+    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme, UiTourOutcome,
+    UiTourProgress, UserExternalAccountRepository, UserLoginSnapshot, UserRepository,
+    UserUiSettingsRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, LibraryGrant, User,
@@ -703,6 +704,46 @@ impl UserUiSettingsRepository for UserStore {
         )
         .await
     }
+
+    async fn record_tours(
+        &self,
+        user_id: &str,
+        tour_ids: &[String],
+        outcome: UiTourOutcome,
+    ) -> AppResult<UiSettings> {
+        let user_id = user_id.to_string();
+        let tour_ids = tour_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "record_user_ui_tours", move |tx| {
+            let user_id = user_id.clone();
+            let tour_ids = tour_ids.clone();
+            Box::pin(async move {
+                if !tour_ids.is_empty() {
+                    let now = Utc::now();
+                    let values = vec!["({}, {}, {}, {})"; tour_ids.len()].join(", ");
+                    let mut args = Vec::with_capacity(tour_ids.len() * 4);
+                    for tour_id in &tour_ids {
+                        args.push(SqlArg::Text(user_id.clone()));
+                        args.push(SqlArg::Text(tour_id.clone()));
+                        args.push(SqlArg::Text(outcome.as_str().to_string()));
+                        args.push(SqlArg::Timestamp(now));
+                    }
+                    tx.execute(
+                        &format!(
+                            "INSERT INTO user_ui_tours (user_id, tour_id, outcome, recorded_at)
+                             VALUES {values}
+                             ON CONFLICT(user_id, tour_id) DO UPDATE SET
+                                 outcome = excluded.outcome,
+                                 recorded_at = excluded.recorded_at"
+                        ),
+                        &args,
+                    )
+                    .await?;
+                }
+                load_ui_settings_by_user_id_tx(tx, &user_id).await
+            })
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -1309,6 +1350,7 @@ async fn load_ui_settings_by_user_id(
     settings.table_columns = load_ui_table_columns(datastore.read_exec(), user_id).await?;
     settings.catalog_views = load_ui_catalog_views(datastore.read_exec(), user_id).await?;
     settings.dashboard_layouts = load_ui_dashboard_layouts(datastore.read_exec(), user_id).await?;
+    settings.tours = load_ui_tours(datastore.read_exec(), user_id).await?;
     Ok(Some(settings))
 }
 
@@ -1329,6 +1371,7 @@ async fn load_ui_settings_by_user_id_tx(
     settings.table_columns = load_ui_table_columns(SqlExec::Tx(tx), user_id).await?;
     settings.catalog_views = load_ui_catalog_views(SqlExec::Tx(tx), user_id).await?;
     settings.dashboard_layouts = load_ui_dashboard_layouts(SqlExec::Tx(tx), user_id).await?;
+    settings.tours = load_ui_tours(SqlExec::Tx(tx), user_id).await?;
     Ok(settings)
 }
 
@@ -1484,6 +1527,7 @@ fn row_to_ui_settings(row: &SqlRow) -> AppResult<UiSettings> {
         table_columns: Vec::new(),
         catalog_views: Vec::new(),
         dashboard_layouts: Vec::new(),
+        tours: Vec::new(),
         created_at: Some(row.timestamp("created_at")?),
         updated_at: Some(row.timestamp("updated_at")?),
     })
@@ -1514,6 +1558,32 @@ fn row_to_ui_table_column(row: &SqlRow) -> AppResult<UiTableColumnSetting> {
         column_order: row.i32("column_order")?,
         visible: row.bool("visible")?,
     })
+}
+
+/// Loads the guided tours the user has finished or skipped. One row per tour
+/// the web has ever shipped, served by the primary key.
+async fn load_ui_tours(exec: SqlExec<'_, '_>, user_id: &str) -> AppResult<Vec<UiTourProgress>> {
+    let rows = SqlRuntime::fetch_all(
+        exec,
+        "SELECT tour_id, outcome, recorded_at
+           FROM user_ui_tours
+          WHERE user_id = {}
+          ORDER BY tour_id",
+        &[SqlArg::Text(user_id.to_string())],
+    )
+    .await?;
+    rows.iter()
+        .map(|row| {
+            let outcome = row.text("outcome")?;
+            Ok(UiTourProgress {
+                tour_id: row.text("tour_id")?,
+                outcome: UiTourOutcome::parse(&outcome).ok_or_else(|| {
+                    AppError::Repository(format!("unknown ui tour outcome {outcome:?}"))
+                })?,
+                recorded_at: row.timestamp("recorded_at")?,
+            })
+        })
+        .collect()
 }
 
 async fn load_ui_catalog_views(
@@ -1990,6 +2060,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create dashboard layout tables");
+        sqlx::query(
+            "CREATE TABLE user_ui_tours (
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                tour_id TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (outcome IN ('completed', 'skipped')),
+                recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, tour_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create user_ui_tours table");
         sqlx::query(
             "CREATE UNIQUE INDEX idx_user_external_accounts_provider_identity
                ON user_external_accounts(provider, connection_id, external_user_id)",
@@ -2479,6 +2561,7 @@ mod tests {
             "user_ui_dashboard_layout_items" => {
                 "SELECT COUNT(*) FROM user_ui_dashboard_layout_items WHERE user_id = ?"
             }
+            "user_ui_tours" => "SELECT COUNT(*) FROM user_ui_tours WHERE user_id = ?",
             other => panic!("unexpected table {other}"),
         };
         sqlx::query_scalar(sql)
@@ -2583,6 +2666,82 @@ mod tests {
             .await
             .expect("save layout again");
         assert!(saved.hide_sponsor_button);
+    }
+
+    #[tokio::test]
+    async fn ui_tours_record_in_one_write_take_the_latest_outcome_and_cascade() {
+        let store = test_store().await;
+        let user_a = test_user("tourist_a");
+        let user_b = test_user("tourist_b");
+        UserRepository::create(&store, user_a.clone())
+            .await
+            .expect("create user a");
+        UserRepository::create(&store, user_b.clone())
+            .await
+            .expect("create user b");
+
+        let fresh = UserUiSettingsRepository::get_by_user_id(&store, &user_a.id)
+            .await
+            .expect("load settings")
+            .expect("user exists");
+        assert!(fresh.tours.is_empty(), "no tour has been shown yet");
+
+        let recorded = UserUiSettingsRepository::record_tours(
+            &store,
+            &user_a.id,
+            &["onboarding".to_string(), "release-0.23.0".to_string()],
+            UiTourOutcome::Skipped,
+        )
+        .await
+        .expect("record tours");
+        let outcomes: Vec<_> = recorded
+            .tours
+            .iter()
+            .map(|tour| (tour.tour_id.as_str(), tour.outcome))
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                ("onboarding", UiTourOutcome::Skipped),
+                ("release-0.23.0", UiTourOutcome::Skipped),
+            ]
+        );
+
+        // Recording a tour again keeps one row and takes the new outcome.
+        let replayed = UserUiSettingsRepository::record_tours(
+            &store,
+            &user_a.id,
+            &["onboarding".to_string()],
+            UiTourOutcome::Completed,
+        )
+        .await
+        .expect("record onboarding again");
+        assert_eq!(replayed.tours.len(), 2);
+        assert_eq!(replayed.tours[0].tour_id, "onboarding");
+        assert_eq!(replayed.tours[0].outcome, UiTourOutcome::Completed);
+        assert_eq!(
+            UserUiSettingsRepository::get_by_user_id(&store, &user_a.id)
+                .await
+                .expect("reload")
+                .expect("user exists")
+                .tours,
+            replayed.tours
+        );
+
+        // Nothing leaks to the other user.
+        let other = UserUiSettingsRepository::get_by_user_id(&store, &user_b.id)
+            .await
+            .expect("load other user")
+            .expect("other user exists");
+        assert!(other.tours.is_empty());
+
+        UserRepository::delete(&store, &user_a.id)
+            .await
+            .expect("delete user");
+        assert_eq!(
+            count_user_rows(&store, "user_ui_tours", &user_a.id).await,
+            0
+        );
     }
 
     #[tokio::test]

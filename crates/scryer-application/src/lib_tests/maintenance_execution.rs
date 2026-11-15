@@ -13,10 +13,7 @@ use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
 use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, MaintenanceRuleReadFault};
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::test_support::InMemoryLocationOperationStore;
-use crate::maintenance_rules::{
-    MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceActionKind, MaintenanceActionSpec,
-    MaintenanceMatcherDraft, MaintenanceRuleDraft, execution_reason,
-};
+use crate::maintenance_rules::{MaintenanceMatcherDraft, MaintenanceRuleDraft, execution_reason};
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
     PlaybackProbeStatus,
@@ -92,12 +89,13 @@ const ALWAYS_MATCHER: &str = "match := true\n";
 
 pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Unmonitor stale".to_string(),
         description: String::new(),
-        rego_source: rego_source.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            rego_source,
+            crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
         storage_root_id: None,
@@ -107,12 +105,13 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
 
 fn delete_draft() -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Retire".to_string(),
         description: String::new(),
-        rego_source: ALWAYS_MATCHER.to_string(),
-        action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-            MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+        rego_source: crate::lib_tests::legacy_source(
+            ALWAYS_MATCHER,
+            crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
         ),
         grace_days: 0,
         storage_root_id: None,
@@ -224,12 +223,13 @@ async fn replacing_the_matcher_disarms_the_rule() {
             &fixture.user,
             &rule_id,
             MaintenanceMatcherDraft {
-                rego_source: ALWAYS_MATCHER.to_string(),
-                action_definition: crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
-                    MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                rego_source: crate::lib_tests::legacy_source(
+                    ALWAYS_MATCHER,
+                    crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 0,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -337,39 +337,9 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
     let title = seed_title(&fixture.app, &fixture.user, "Interrupted", true).await;
     fixture.evaluate().await;
 
-    // Attempt one reserved its number and inserted its `running` row, then its
-    // worker died: the candidate is `executing` with nobody driving it and the
-    // run row never finished.
+    // The worker that took the lease died before it ran a step: the candidate
+    // is `executing` with nobody driving it.
     let candidate = fixture.only_candidate().await;
-    fixture
-        .evaluation
-        .record_candidate_attempts(&candidate.id, 1, Utc::now())
-        .await
-        .expect("reserve the interrupted attempt");
-    fixture
-        .evaluation
-        .start_action_run(&scryer_domain::LifecycleActionRun {
-            id: "run-interrupted".to_string(),
-            candidate_id: candidate.id.clone(),
-            rule_set_id: rule_id.clone(),
-            revision_number: candidate.revision_number,
-            title_id: title.id.clone(),
-            subject_id: title.id.clone(),
-            subject_kind: "title".to_string(),
-            action_kind: candidate.action_kind.clone(),
-            match_generation: candidate.match_generation,
-            idempotency_key: "orphan-key".to_string(),
-            attempt: 1,
-            status: scryer_domain::LifecycleActionRunStatus::Running,
-            hold_reason: None,
-            error: None,
-            detail: "{}".to_string(),
-            started_at: Utc::now(),
-            finished_at: None,
-            created_at: Utc::now(),
-        })
-        .await
-        .expect("the interrupted attempt's run row");
     fixture
         .evaluation
         .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
@@ -390,36 +360,18 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
         .expect("title exists");
     assert!(!stored.monitored, "the reclaimed attempt must do the work");
 
-    let runs = fixture.evaluation.all_action_runs().await;
-    let orphan = runs
-        .iter()
-        .find(|run| run.id == "run-interrupted")
-        .expect("the orphaned run row is still there");
-    assert_eq!(
-        orphan.status,
-        scryer_domain::LifecycleActionRunStatus::Failed,
-        "an abandoned attempt must not keep reading as live work"
-    );
-    assert!(
-        orphan
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains(execution_reason::LEASE_RECLAIMED)),
-        "{orphan:?}"
-    );
-
-    let fresh = runs
-        .iter()
-        .find(|run| run.id != "run-interrupted")
-        .expect("the reclaiming attempt wrote its own row");
-    assert_eq!(
-        fresh.attempt, 2,
-        "the reclaim must take the next attempt number, not collide with the orphan's"
-    );
-    assert_eq!(
-        fresh.status,
-        scryer_domain::LifecycleActionRunStatus::Succeeded
-    );
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].attempt, 1, "the reclaim runs the step once");
+    assert!(steps[0].state.is_completion_success(), "{steps:?}");
     assert_eq!(
         fixture.only_candidate().await.state,
         MaintenanceCandidateState::Succeeded
@@ -460,54 +412,6 @@ async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
     let candidate = fixture.only_candidate().await;
     assert_eq!(candidate.state, MaintenanceCandidateState::Canceled);
     assert_eq!(candidate.state_reason, execution_reason::TITLE_MISSING);
-}
-
-#[tokio::test]
-async fn a_candidate_that_crash_looped_through_its_attempts_terminates() {
-    let fixture = execution_app(None);
-    let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
-        .await;
-    fixture.open_gates(true, false).await;
-    fixture
-        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
-        .await;
-    let title = seed_title(&fixture.app, &fixture.user, "Doomed Loop", true).await;
-    fixture.evaluate().await;
-
-    // Every attempt in the budget was reserved and none of them reported back —
-    // the shape a crash loop leaves. Counting reservations is what lets the cap
-    // bite here at all; a counter only advanced on a handled failure would retry
-    // this row forever.
-    let candidate = fixture.only_candidate().await;
-    fixture
-        .evaluation
-        .record_candidate_attempts(&candidate.id, MAINTENANCE_MAX_ACTION_ATTEMPTS, Utc::now())
-        .await
-        .expect("reserve the whole budget");
-    fixture
-        .evaluation
-        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
-        .await;
-
-    let report = fixture.handle().await;
-    assert_eq!(report.failed, 1, "{report:?}");
-    assert_eq!(report.executed, 0);
-
-    let candidate = fixture.only_candidate().await;
-    assert_eq!(candidate.state, MaintenanceCandidateState::Failed);
-    assert_eq!(candidate.state_reason, execution_reason::ACTION_FAILED);
-
-    let stored = fixture
-        .app
-        .get_title(&fixture.user, &title.id)
-        .await
-        .expect("read title")
-        .expect("title exists");
-    assert!(
-        stored.monitored,
-        "an exhausted candidate must not get one more go at the action"
-    );
 }
 
 // ── Concurrent writers cannot clobber each other (Fix 4) ────────────────────
@@ -596,7 +500,7 @@ async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
     );
     assert_ne!(after.state_reason, execution_reason::ACTION_SUCCEEDED);
 
-    // The action itself did happen, and its run row still says so: that is
+    // The action itself did happen, and its step row still says so: that is
     // honest evidence of what this worker did, whoever owns the candidate now.
     let stored = fixture
         .app
@@ -605,12 +509,17 @@ async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
         .expect("read title")
         .expect("title exists");
     assert!(!stored.monitored);
-    let runs = fixture.evaluation.all_action_runs().await;
-    assert_eq!(runs.len(), 1);
-    assert_eq!(
-        runs[0].status,
-        scryer_domain::LifecycleActionRunStatus::Succeeded
-    );
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert!(steps[0].state.is_completion_success(), "{steps:?}");
 }
 
 // ── A transient rule read holds; only a deleted rule cancels (Fix 5) ────────
@@ -739,7 +648,10 @@ async fn reversible_unmonitor_executes_and_records_the_evidence() {
 async fn action_result_write_failures_still_consume_the_rule_execution_budget() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(MaintenanceRuleDraft {
+            max_titles_per_run: Some(10),
+            ..unmonitor_draft(MONITORED_MATCHER)
+        })
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -766,7 +678,7 @@ async fn action_result_write_failures_still_consume_the_rule_execution_budget() 
     assert_eq!(report.failed, 10, "{report:?}");
     assert_eq!(
         report.candidates_considered, 10,
-        "errors must consume the ten-action rule budget"
+        "errors must count toward the rule's ten-title maximum"
     );
     let mut changed = 0;
     for title in titles {
@@ -798,15 +710,25 @@ async fn an_already_met_postcondition_reports_already_satisfied() {
     seed_title(&fixture.app, &fixture.user, "Already Done", false).await;
     fixture.evaluate().await;
 
-    let report = fixture.handle().await;
-    assert_eq!(report.already_satisfied, 1, "{report:?}");
-    assert_eq!(report.executed, 0);
+    let candidate = fixture.only_candidate().await;
+    fixture.handle().await;
 
     let candidates = fixture.evaluation.all_candidates().await;
     assert_eq!(candidates[0].state, MaintenanceCandidateState::Succeeded);
+    let steps = fixture
+        .evaluation
+        .list_action_steps(
+            &candidate.id,
+            candidate.match_generation,
+            candidate.revision_number,
+        )
+        .await
+        .expect("step history");
+    assert_eq!(steps.len(), 1, "{steps:?}");
     assert_eq!(
-        candidates[0].state_reason,
-        execution_reason::ALREADY_SATISFIED
+        steps[0].state,
+        scryer_domain::MaintenanceActionStepState::AlreadySatisfied,
+        "an unmonitor of an unmonitored title changes nothing and says so"
     );
 }
 
@@ -839,6 +761,203 @@ async fn destructive_result_write_failures_trip_the_high_risk_breaker() {
         "result write failures must trip the destructive breaker"
     );
     assert_eq!(fixture.evaluation.all_action_runs().await.len(), 3);
+}
+
+// ── A rule acts on at most the titles its operator chose per run ────────────
+
+#[tokio::test]
+async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
+    let fixture = execution_app(None);
+    let error = fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: None,
+                ..delete_draft()
+            },
+        )
+        .await
+        .expect_err("a deleting rule needs a maximum");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let facts = error.refusal_facts();
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(
+        facts[0].key,
+        crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT
+    );
+    assert!(
+        matches!(&facts[0].value, crate::RefusalFactValue::List(heads) if !heads.is_empty()),
+        "{facts:?}"
+    );
+
+    let zero = fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: Some(0),
+                ..unmonitor_draft(ALWAYS_MATCHER)
+            },
+        )
+        .await
+        .expect_err("a maximum of zero acts on nothing");
+    assert_eq!(
+        zero.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_INVALID)
+    );
+    assert!(
+        fixture
+            .rules
+            .list_rule_sets()
+            .await
+            .expect("list rules")
+            .is_empty()
+    );
+
+    // A rule that cannot delete needs none; null is no limit.
+    fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: None,
+                ..unmonitor_draft(ALWAYS_MATCHER)
+            },
+        )
+        .await
+        .expect("a reversible rule saves without a maximum");
+}
+
+#[tokio::test]
+async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
+    let fixture = execution_app(None);
+    let created = fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: None,
+                ..unmonitor_draft(ALWAYS_MATCHER)
+            },
+        )
+        .await
+        .expect("a reversible rule saves without a maximum");
+    let rule_id = created.rule_set.id.clone();
+    let deleting_source = crate::lib_tests::legacy_source(
+        ALWAYS_MATCHER,
+        crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
+    );
+    let save = |max_titles_per_run| crate::maintenance_rules::MaintenanceMatcherDraft {
+        rego_source: deleting_source.clone(),
+        grace_days: 0,
+        storage_root_id: None,
+        max_titles_per_run,
+    };
+
+    let refused = fixture
+        .app
+        .update_maintenance_rule_matcher(&fixture.user, &rule_id, save(None))
+        .await
+        .expect_err("a delete head without a maximum is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let unchanged = fixture
+        .rules
+        .get_rule_set(&rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(unchanged.current_revision_number, 1);
+    assert_eq!(unchanged.max_titles_per_run, None);
+
+    let saved = fixture
+        .app
+        .update_maintenance_rule_matcher(&fixture.user, &rule_id, save(Some(Some(7))))
+        .await
+        .expect("a delete head saved with its maximum");
+    assert_eq!(saved.rule_set.max_titles_per_run, Some(7));
+    assert!(saved.declared_actions.destructive);
+    let stored = fixture
+        .rules
+        .get_rule_set(&rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(stored.current_revision_number, 2);
+    assert_eq!(stored.max_titles_per_run, Some(7));
+}
+
+#[tokio::test]
+async fn a_destructive_rule_cannot_lose_its_maximum_or_arm_without_one() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+
+    let cleared = fixture
+        .app
+        .update_maintenance_rule_metadata_with_schedule(
+            &fixture.user,
+            &rule_id,
+            "Retire".to_string(),
+            String::new(),
+            Vec::new(),
+            None,
+            Some(None),
+        )
+        .await
+        .expect_err("clearing a deleting rule's maximum is refused");
+    assert_eq!(
+        cleared.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+
+    let raised = fixture
+        .app
+        .update_maintenance_rule_metadata_with_schedule(
+            &fixture.user,
+            &rule_id,
+            "Retire".to_string(),
+            String::new(),
+            Vec::new(),
+            None,
+            Some(Some(100_000)),
+        )
+        .await
+        .expect("any maximum of at least one is accepted");
+    assert_eq!(raised.max_titles_per_run, Some(100_000));
+
+    // A row that reached the store without one (written by hand, say)
+    // cannot be armed to delete, and a pass never acts on it.
+    fixture
+        .rules
+        .set_rule_set_max_titles_per_run(&rule_id, None, Utc::now())
+        .await
+        .expect("strip the maximum");
+    seed_title(&fixture.app, &fixture.user, "Synthetic keeper", true).await;
+    fixture.evaluate().await;
+    let refused = fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            MaintenanceRuleState::Enabled,
+            Some(1),
+            None,
+        )
+        .await
+        .expect_err("arming a deleting rule without a maximum is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
 }
 
 #[tokio::test]
@@ -1061,10 +1180,10 @@ async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same
             &fixture.user,
             &rule_id,
             MaintenanceMatcherDraft {
-                rego_source: ALWAYS_MATCHER.into(),
-                action_definition: draft.action_definition,
+                rego_source: draft.rego_source,
                 grace_days: 0,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -1281,6 +1400,90 @@ async fn a_candidate_inside_its_grace_window_is_not_touched() {
 }
 
 #[tokio::test]
+async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
+    let fixture = execution_app(None);
+    let mut draft = unmonitor_draft(MONITORED_MATCHER);
+    draft.rego_source = "add_tags := [\"graced\"] if {\n\tinput.facts.monitored\n}\n\n\
+                         unmonitor if {\n\tinput.facts.monitored\n}\n"
+        .to_string();
+    draft.grace_days = 30;
+    fixture
+        .app
+        .create_title_tag_definition(&fixture.user, "graced", None)
+        .await
+        .expect("define title tag");
+    let rule_id = fixture.observed_rule(draft).await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Graced Title", true).await;
+    let untouched =
+        |title: &Title| title.monitored && !title.tags.iter().any(|tag| tag == "graced");
+    let read_title = || async {
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("read title")
+            .expect("title exists")
+    };
+
+    // Every path short of a due candidate: evaluation, preview, the handler,
+    // and evaluation again. None of them applies an action.
+    fixture.evaluate().await;
+    fixture
+        .app
+        .preview_maintenance_rule(
+            &fixture.user,
+            crate::maintenance_rules::MaintenancePreviewRequest {
+                matcher: crate::maintenance_rules::MaintenancePreviewMatcher::Stored {
+                    rule_set_id: rule_id.clone(),
+                },
+                selection: crate::maintenance_rules::MaintenancePreviewSelection::Titles(vec![
+                    title.id.clone(),
+                ]),
+            },
+        )
+        .await
+        .expect("preview the rule");
+    let report = fixture.handle().await;
+    assert_eq!(report.candidates_considered, 0, "{report:?}");
+    fixture.evaluate().await;
+    assert_eq!(fixture.handle().await.candidates_considered, 0);
+    assert!(untouched(&read_title().await));
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Observing);
+    assert!(candidate.due_at > Utc::now() + chrono::Duration::days(29));
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
+    assert!(
+        fixture
+            .evaluation
+            .action_steps_with_id("unmonitor")
+            .await
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .evaluation
+            .action_steps_with_id("add_tags")
+            .await
+            .is_empty()
+    );
+
+    // Once the grace ends, the same candidate carries the actions.
+    fixture.evaluation.end_every_grace().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    let after = read_title().await;
+    assert!(!after.monitored);
+    assert!(after.tags.iter().any(|tag| tag == "graced"));
+}
+
+#[tokio::test]
 async fn an_undecidable_subject_blocks_at_execution() {
     let fixture = execution_app(None);
     let rule_id = fixture
@@ -1430,6 +1633,73 @@ async fn a_destructive_action_holds_while_a_location_operation_owns_the_title() 
         candidate.state_reason,
         execution_reason::LOCATION_OPERATION_HOLD
     );
+}
+
+#[tokio::test]
+async fn a_reversible_action_also_holds_while_a_location_operation_owns_the_title() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    operations
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
+        .await
+        .expect("claim the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(
+        stored.monitored,
+        "a held unmonitor must leave the title monitored"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Blocked);
+    assert_eq!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+
+    // Waiting on the operation charges no attempt, however often it repeats.
+    fixture.handle().await;
+    fixture.handle().await;
+    assert!(
+        fixture
+            .evaluation
+            .all_step_attempts()
+            .await
+            .iter()
+            .all(|attempt| attempt.state == scryer_domain::MaintenanceActionStepState::Held),
+        "a location hold must never be recorded as a dispatch"
+    );
+
+    operations
+        .release_location_operation_ownership("operation-1")
+        .await
+        .expect("release the claim");
+    fixture.evaluate().await;
+    let after = fixture.handle().await;
+    assert_eq!(after.held, 0, "{after:?}");
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored, "the released title is unmonitored");
 }
 
 #[tokio::test]

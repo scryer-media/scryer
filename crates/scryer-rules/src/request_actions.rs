@@ -27,6 +27,10 @@ use crate::diagnostic_codes;
 use crate::policy::decode::{
     MAX_REASON_CODE_LEN, MAX_REASON_CODES, MAX_TAG_LEN, MAX_TAGS, TAG_PATTERN, check_tag,
 };
+use crate::rule_builder_schema::{
+    RuleBuilderOutputDescriptor, RuleBuilderOutputRule, RuleBuilderOutputRuleKind,
+    RuleBuilderSchema,
+};
 use crate::rule_scan::{
     RuleLiteral, RuleScanIssue, foreign_data_references, head_defined_as_function,
     is_function_rule, issue, plain_value_exprs, referenced_names, rule_refr, source_position,
@@ -98,21 +102,9 @@ impl RequestHeadRole {
     }
 }
 
-/// The shape of the value a head takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RequestValueKind {
-    /// No value: the head is defined or it is not.
-    Flag,
-    /// Free text.
-    Text,
-    /// One text value out of a catalog.
-    Choice,
-    /// A whole number.
-    Number,
-    /// A list of text values.
-    TextList,
-}
+/// The shape of the value a head takes: the builder's value kinds, so the
+/// request family serves the same schema shape as every other family.
+pub use crate::rule_builder_schema::RuleBuilderValueKind as RequestValueKind;
 
 /// The check each item of a list head passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,7 +223,7 @@ const fn audio_languages(
     head: RequestActionHead,
 ) -> RequestHeadSpec {
     RequestHeadSpec {
-        options: Some("languages"),
+        options: Some("audioLanguages"),
         max_items: Some(MAX_AUDIO_LANGUAGES),
         max_bytes: Some(MAX_AUDIO_LANGUAGE_LEN),
         pattern: Some(AUDIO_LANGUAGE_PATTERN),
@@ -362,11 +354,6 @@ impl RequestHeadSpec {
     /// Translation key of the head's name. The server sends no display text.
     pub fn label_key(&self) -> String {
         format!("ruleOutput.{REQUEST_RULE_FAMILY}.{}", self.rule_name)
-    }
-
-    /// Translation key of the head's help text.
-    pub fn help_key(&self) -> String {
-        format!("{}.help", self.label_key())
     }
 
     /// The template written out for `items` and helper `helper`: `{head}` is
@@ -712,46 +699,6 @@ fn check_reason_code(reason: &str) -> Result<(), String> {
 
 // ── Builder schema ──────────────────────────────────────────────────────────
 
-/// One output the rule builder offers, as a client reads it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuleBuilderOutputDescriptor {
-    pub id: &'static str,
-    pub head: &'static str,
-    pub label_key: String,
-    pub help_key: String,
-    pub value_kind: RequestValueKind,
-    pub options: Option<&'static str>,
-    pub min: Option<i64>,
-    pub max: Option<i64>,
-    pub max_items: Option<usize>,
-    pub max_bytes: Option<usize>,
-    pub pattern: Option<&'static str>,
-    pub template: &'static str,
-    pub per_item: bool,
-    pub destructive: bool,
-    pub variants: Option<&'static [&'static str]>,
-    pub conflicts_with: Option<&'static [&'static str]>,
-}
-
-/// A rule about which outputs one rule chooses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuleBuilderOutputRule {
-    /// `at_most_one` or `at_least_one`.
-    pub rule: &'static str,
-    /// The output ids the rule is about.
-    pub of: Vec<&'static str>,
-}
-
-/// What the rule builder needs to offer a family's outputs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuleBuilderSchema {
-    pub family: &'static str,
-    pub outputs: Vec<RuleBuilderOutputDescriptor>,
-    pub output_rules: Vec<RuleBuilderOutputRule>,
-}
-
 /// The request rule builder schema, read off [`REQUEST_HEADS`].
 pub fn request_builder_schema() -> RuleBuilderSchema {
     let ids = |keep: fn(&RequestHeadSpec) -> bool| {
@@ -769,7 +716,7 @@ pub fn request_builder_schema() -> RuleBuilderSchema {
                 id: spec.id,
                 head: spec.rule_name,
                 label_key: spec.label_key(),
-                help_key: spec.help_key(),
+                help_key: None,
                 value_kind: spec.value_kind,
                 options: spec.options,
                 min: spec.min,
@@ -781,32 +728,24 @@ pub fn request_builder_schema() -> RuleBuilderSchema {
                 per_item: spec.per_item,
                 destructive: spec.destructive,
                 variants: spec.variants,
-                conflicts_with: spec.conflicts_with,
+                conflicts_with: spec.conflicts_with.unwrap_or_default().to_vec(),
             })
             .collect(),
         output_rules: vec![
             // One rule casts one vote: manual beats deny beats approve, so a
             // second would never count.
             RuleBuilderOutputRule {
-                rule: "at_most_one",
-                of: ids(|spec| spec.role == RequestHeadRole::Vote),
+                rule: RuleBuilderOutputRuleKind::AtMostOne,
+                of: Some(ids(|spec| spec.role == RequestHeadRole::Vote)),
             },
             // Reasons and a notification alone decide nothing, so the server
             // refuses a rule that writes only those.
             RuleBuilderOutputRule {
-                rule: "at_least_one",
-                of: ids(|spec| spec.role.decides()),
+                rule: RuleBuilderOutputRuleKind::AtLeastOne,
+                of: Some(ids(|spec| spec.role.decides())),
             },
         ],
     }
-}
-
-/// [`request_builder_schema`] as the checked-in JSON file holds it.
-pub fn request_builder_schema_json() -> String {
-    let mut json = serde_json::to_string_pretty(&request_builder_schema())
-        .expect("the builder schema serializes");
-    json.push('\n');
-    json
 }
 
 // ── Static head scan ────────────────────────────────────────────────────────

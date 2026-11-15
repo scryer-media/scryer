@@ -23,6 +23,9 @@ export type RegoValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: RuleValidationDiagnostic[];
+  /// Findings that never block saving. Maintenance and request validation
+  /// send them.
+  warnings?: RuleValidationDiagnostic[];
   unavailable?: boolean;
 };
 export type RegoDiagnostic = { line: number; column: number; message: string };
@@ -35,6 +38,22 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_MATCH_REQUIRED: "error.ruleMatchRequired",
   RULE_VOTE_REQUIRED: "error.ruleVoteRequired",
   RULE_TARGETS_PERSON: "error.ruleTargetsPerson",
+  RULE_ACTION_VALUE_NOT_LITERAL: "error.ruleActionValueNotLiteral",
+  RULE_ACTION_VALUE_INVALID: "error.ruleActionValueInvalid",
+  RULE_ACTION_UNKNOWN_QUALITY_PROFILE: "error.ruleActionUnknownQualityProfile",
+  RULE_ACTION_UNDEFINED_TAG: "error.ruleActionUndefinedTag",
+  RULE_HOST_HELPER_REDEFINED: "error.ruleHostHelperRedefined",
+  RULE_UNREFERENCED_RULE: "error.ruleUnreferencedRule",
+  RULE_ACTION_REQUIRED: "error.ruleActionRequired",
+  RULE_ACTION_HEAD_FUNCTION: "error.ruleActionHeadFunction",
+  RULE_FOREIGN_DATA_REFERENCE: "error.ruleForeignDataReference",
+  RULE_WITH_TARGET_NOT_ALLOWED: "error.ruleWithTargetNotAllowed",
+  RULE_HEAD_DEFINED_AS_FUNCTION: "error.ruleHeadDefinedAsFunction",
+  RULE_HEAD_NAME_RETIRED: "error.ruleHeadNameRetired",
+  RULE_QUALITY_PROFILE_UNKNOWN: "error.ruleQualityProfileUnknown",
+  RULE_QUALITY_PROFILE_AMBIGUOUS: "error.ruleQualityProfileAmbiguous",
+  RULE_MONITOR_UNSUPPORTED: "error.ruleMonitorUnsupported",
+  RULE_AUDIO_LANGUAGE_UNKNOWN: "error.ruleAudioLanguageUnknown",
 };
 
 /** Compiler-owned diagnostics keep their detail; owned conditions use i18n. */

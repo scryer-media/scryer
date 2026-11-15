@@ -382,6 +382,12 @@ export function approveMediaRequestLeaseOptionId(value: string): string {
   return selectorId("approve-media-request-lease-option", value);
 }
 
+/// The "suggested by a rule" marker beside an approve-dialog field a rule's
+/// shaping prefilled, keyed by the shaping head (`SET_QUALITY_PROFILE`, ...).
+export function approveMediaRequestSuggestedId(head: string): string {
+  return selectorId("approve-media-request-suggested", head);
+}
+
 /// Mirrors `TitleTagsPicker`'s own remove-button id exactly — the picker keeps
 /// the label's case and only collapses whitespace, so this cannot go through
 /// `selectorId`, which lowercases.

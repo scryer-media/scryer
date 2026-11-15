@@ -2546,7 +2546,8 @@ async fn a_monitor_no_scoped_library_accepts_is_refused_at_save() {
 #[tokio::test]
 async fn the_builder_model_round_trips_and_is_bounded() {
     let harness = bootstrap_media_request_app();
-    let model = serde_json::json!({ "rows": [{ "fact": "origin" }] });
+    let model =
+        serde_json::json!({ "family": "request", "version": 1, "rows": [{ "fact": "origin" }] });
     let created = harness
         .app
         .create_request_rule_set(
@@ -2606,15 +2607,24 @@ async fn the_builder_model_round_trips_and_is_bounded() {
         .expect("store it again");
     assert_eq!(read(true).await, Some(model));
 
-    // Not an object, and too large, are refused with their codes.
+    // Not an object, another family's document, and too large, are refused
+    // with the codes every rule family uses.
     for (bad, code) in [
         (
             serde_json::json!(["not", "an", "object"]),
-            crate::error_reasons::request_rules::BUILDER_MODEL_NOT_OBJECT,
+            crate::error_reasons::rules::BUILDER_MODEL_INVALID,
         ),
         (
-            serde_json::json!({ "blob": "x".repeat(crate::REQUEST_BUILDER_MODEL_MAX_BYTES) }),
-            crate::error_reasons::request_rules::BUILDER_MODEL_TOO_LARGE,
+            serde_json::json!({ "family": "maintenance", "version": 1 }),
+            crate::error_reasons::rules::BUILDER_MODEL_INVALID,
+        ),
+        (
+            serde_json::json!({
+                "family": "request",
+                "version": 1,
+                "blob": "x".repeat(crate::rules::builder_model::MAX_BUILDER_MODEL_BYTES),
+            }),
+            crate::error_reasons::rules::BUILDER_MODEL_TOO_LARGE,
         ),
     ] {
         let refusal = harness

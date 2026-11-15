@@ -1,4 +1,5 @@
 use super::*;
+use crate::rules::builder_model::{BuilderFamily, BuilderModelChange};
 use scryer_domain::RuleSet;
 use scryer_rules::validation::{
     ValidationResult, retired_release_input_fields, validate_user_rule,
@@ -27,6 +28,25 @@ impl AppUseCase {
         self.services.customization.rule_sets.get_rule_set(id).await
     }
 
+    /// The simple builder's stored document for one rule set, if any.
+    pub async fn get_rule_set_builder_model(
+        &self,
+        actor: &User,
+        id: &str,
+    ) -> AppResult<Option<serde_json::Value>> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        let stored = self
+            .services
+            .customization
+            .rule_sets
+            .get_rule_set_builder_model(id)
+            .await?;
+        Ok(crate::rules::builder_model::stored_builder_model(
+            stored.as_deref(),
+        ))
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "mirrors the rule-set creation contract field for field"
@@ -41,8 +61,44 @@ impl AppUseCase {
         priority: i32,
         enabled: Option<bool>,
     ) -> AppResult<RuleSet> {
+        self.create_rule_set_with_builder_model(
+            actor,
+            name,
+            description,
+            rego_source,
+            applied_facets,
+            priority,
+            enabled,
+            BuilderModelChange::Keep,
+        )
+        .await
+    }
+
+    /// [`Self::create_rule_set`] that also stores the simple builder's
+    /// document. `Keep` and `Clear` both store none. The document never
+    /// changes what the rule's source validates or scores to.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the rule-set creation contract field for field"
+    )]
+    pub async fn create_rule_set_with_builder_model(
+        &self,
+        actor: &User,
+        name: String,
+        description: String,
+        rego_source: String,
+        applied_facets: Vec<MediaFacet>,
+        priority: i32,
+        enabled: Option<bool>,
+        builder_model: BuilderModelChange,
+    ) -> AppResult<RuleSet> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let builder_model = crate::rules::builder_model::resolved_builder_model(
+            &builder_model,
+            None,
+            BuilderFamily::Scoring,
+        )?;
 
         let id = Id::new_rego_safe().0;
         let _mutation = self.services.customization.rule_mutation_lock.lock().await;
@@ -100,11 +156,22 @@ impl AppUseCase {
             managed_tag_filter: None,
         };
 
-        self.services
-            .customization
-            .rule_sets
-            .create_rule_set(&rule_set)
-            .await?;
+        match builder_model.as_deref() {
+            None => {
+                self.services
+                    .customization
+                    .rule_sets
+                    .create_rule_set(&rule_set)
+                    .await?
+            }
+            Some(builder_model) => {
+                self.services
+                    .customization
+                    .rule_sets
+                    .create_rule_set_with_builder_model(&rule_set, Some(builder_model))
+                    .await?
+            }
+        }
         self.services
             .customization
             .rule_sets
@@ -135,11 +202,46 @@ impl AppUseCase {
         priority: Option<i32>,
         managed_tag_filter: Option<Vec<String>>,
     ) -> AppResult<RuleSet> {
+        self.update_rule_set_with_builder_model(
+            actor,
+            id,
+            name,
+            description,
+            rego_source,
+            applied_facets,
+            priority,
+            managed_tag_filter,
+            BuilderModelChange::Keep,
+        )
+        .await
+    }
+
+    /// [`Self::update_rule_set`] that also keeps, clears or replaces the
+    /// stored builder document. Keeping it takes the write path a rule edit
+    /// has always taken.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the application boundary mirrors the editable rule-set fields explicitly"
+    )]
+    pub async fn update_rule_set_with_builder_model(
+        &self,
+        actor: &User,
+        id: String,
+        name: Option<String>,
+        description: Option<String>,
+        rego_source: Option<String>,
+        applied_facets: Option<Vec<MediaFacet>>,
+        priority: Option<i32>,
+        managed_tag_filter: Option<Vec<String>>,
+        builder_model: BuilderModelChange,
+    ) -> AppResult<RuleSet> {
+        let edits_builder_model = builder_model != BuilderModelChange::Keep;
         let edits_authored_fields = name.is_some()
             || description.is_some()
             || rego_source.is_some()
             || applied_facets.is_some()
-            || priority.is_some();
+            || priority.is_some()
+            || edits_builder_model;
         if !edits_authored_fields && managed_tag_filter.is_none() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::rules::SET_FIELD_REQUIRED,
@@ -197,6 +299,7 @@ impl AppUseCase {
             ));
         }
 
+        let previous_source = rule_set.rego_source.clone();
         let mut repaired_retired_source = false;
         if let Some(new_source) = &rego_source {
             // Rewrite the package declaration to match the existing rule ID.
@@ -248,13 +351,37 @@ impl AppUseCase {
             rule_set.disabled_reason_code = None;
         }
         rule_set.updated_at = Utc::now();
+        // A managed rule never reaches here with a builder change: editing
+        // one is refused above as an authored-field edit, and so is a source
+        // edit, so its omitted field stays a keep.
+        let builder_model =
+            builder_model.after_source_edit(&previous_source, &rule_set.rego_source);
+        let builder_model = match &builder_model {
+            BuilderModelChange::Keep => None,
+            change => Some(crate::rules::builder_model::resolved_builder_model(
+                change,
+                None,
+                BuilderFamily::Scoring,
+            )?),
+        };
         let engine = self.prospective_engine(&[rule_set.clone()], &[]).await?;
 
-        self.services
-            .customization
-            .rule_sets
-            .update_rule_set(&rule_set)
-            .await?;
+        match builder_model {
+            None => {
+                self.services
+                    .customization
+                    .rule_sets
+                    .update_rule_set(&rule_set)
+                    .await?
+            }
+            Some(builder_model) => {
+                self.services
+                    .customization
+                    .rule_sets
+                    .update_rule_set_with_builder_model(&rule_set, builder_model.as_deref())
+                    .await?
+            }
+        }
         self.services
             .customization
             .rule_sets
@@ -961,6 +1088,7 @@ pub(crate) mod tests {
         rules: Mutex<Vec<RuleSet>>,
         packs: Mutex<Vec<scryer_domain::RulePackInstallation>>,
         fail_pack_apply: std::sync::atomic::AtomicBool,
+        builder_models: Mutex<std::collections::HashMap<String, String>>,
     }
 
     impl TestRuleSetRepo {
@@ -969,6 +1097,19 @@ pub(crate) mod tests {
                 rules: Mutex::new(rules),
                 packs: Mutex::new(Vec::new()),
                 fail_pack_apply: std::sync::atomic::AtomicBool::new(false),
+                builder_models: Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+
+        async fn store_builder_model(&self, id: &str, builder_model: Option<&str>) {
+            let mut models = self.builder_models.lock().await;
+            match builder_model {
+                Some(model) => {
+                    models.insert(id.to_string(), model.to_string());
+                }
+                None => {
+                    models.remove(id);
+                }
             }
         }
 
@@ -1124,8 +1265,33 @@ pub(crate) mod tests {
             Ok(())
         }
 
+        async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>> {
+            Ok(self.builder_models.lock().await.get(id).cloned())
+        }
+
+        async fn create_rule_set_with_builder_model(
+            &self,
+            rule_set: &RuleSet,
+            builder_model: Option<&str>,
+        ) -> AppResult<()> {
+            self.create_rule_set(rule_set).await?;
+            self.store_builder_model(&rule_set.id, builder_model).await;
+            Ok(())
+        }
+
+        async fn update_rule_set_with_builder_model(
+            &self,
+            rule_set: &RuleSet,
+            builder_model: Option<&str>,
+        ) -> AppResult<()> {
+            self.update_rule_set(rule_set).await?;
+            self.store_builder_model(&rule_set.id, builder_model).await;
+            Ok(())
+        }
+
         async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
             self.rules.lock().await.retain(|rule| rule.id != id);
+            self.builder_models.lock().await.remove(id);
             Ok(())
         }
 

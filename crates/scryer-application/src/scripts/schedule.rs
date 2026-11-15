@@ -10,16 +10,16 @@
 //!   first wall-clock minute that exists (02:30 becomes 03:00). A time that
 //!   occurs twice on a fall-back day fires once, at the earlier instance,
 //!   matching the auto-backup job.
-//! - Cron follows croner's rules: a fixed-time expression (`30 1 * * *`)
-//!   fires once at the earlier instance of a repeated time and at the first
-//!   instant after a gap; an expression with a wildcard or stepped minute or
-//!   hour field fires on both instances of a repeated time.
+//! - Cron keeps the rules of the `croner` crate, which [`super::cron`]
+//!   reproduces: a fixed-time expression (`30 1 * * *`) fires once at the
+//!   earlier instance of a repeated time and at the first instant after a
+//!   gap; an expression with a wildcard or stepped minute or hour field
+//!   fires on both instances of a repeated time.
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeDelta, TimeZone, Utc, Weekday};
-use croner::Cron;
-use croner::parser::{CronParser, Seconds, Year};
 use scryer_domain::{ScheduleWeekday, ScriptSchedule};
 
+use super::cron::CronExpression;
 use crate::AppError;
 
 /// Shortest interval a scheduled script may repeat at.
@@ -319,25 +319,21 @@ fn next_local_time_on_days<Tz: TimeZone>(
 }
 
 fn next_cron_occurrence<Tz: TimeZone>(
-    cron: &Cron,
+    cron: &CronExpression,
     after: DateTime<Utc>,
     tz: &Tz,
 ) -> Result<DateTime<Utc>, ScheduleError> {
-    cron.find_next_occurrence(&after.with_timezone(tz), false)
+    cron.next_after(&after.with_timezone(tz))
         .map(|next| next.with_timezone(&Utc))
         .map_err(|error| ScheduleError::new(format!("cron expression never runs: {error}")))
 }
 
-fn parse_cron(expression: &str) -> Result<Cron, ScheduleError> {
+fn parse_cron(expression: &str) -> Result<CronExpression, ScheduleError> {
     let expression = expression.trim();
     if expression.is_empty() {
         return Err(ScheduleError::new("cron expression is required"));
     }
-    CronParser::builder()
-        .seconds(Seconds::Disallowed)
-        .year(Year::Disallowed)
-        .build()
-        .parse(expression)
+    CronExpression::parse(expression)
         .map_err(|error| ScheduleError::new(format!("invalid cron expression: {error}")))
 }
 

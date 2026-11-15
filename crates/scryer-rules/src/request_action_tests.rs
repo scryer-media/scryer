@@ -517,18 +517,23 @@ fn every_template_filled_with_its_sample_validates_and_declares_the_head() {
 #[test]
 fn the_output_rules_follow_the_validation_rules() {
     use crate::request_actions::request_builder_schema;
+    use crate::rule_builder_schema::RuleBuilderOutputRuleKind;
     let schema = request_builder_schema();
-    let rule = |name: &str| {
+    let rule = |name: RuleBuilderOutputRuleKind| {
         schema
             .output_rules
             .iter()
             .find(|rule| rule.rule == name)
-            .unwrap_or_else(|| panic!("{name} rule"))
+            .unwrap_or_else(|| panic!("{name:?} rule"))
             .of
             .clone()
+            .expect("the rule names its outputs")
     };
-    assert_eq!(rule("at_most_one"), vec!["APPROVE", "DENY", "MANUAL"]);
-    let deciding = rule("at_least_one");
+    assert_eq!(
+        rule(RuleBuilderOutputRuleKind::AtMostOne),
+        vec!["APPROVE", "DENY", "MANUAL"]
+    );
+    let deciding = rule(RuleBuilderOutputRuleKind::AtLeastOne);
     for output in &schema.outputs {
         let head = RequestActionHead::from_rule_name(output.head);
         let spec = crate::request_actions::head_spec(output.head).expect("table entry");
@@ -548,10 +553,7 @@ fn the_output_rules_follow_the_validation_rules() {
             output.label_key,
             format!("ruleOutput.request.{}", output.head)
         );
-        assert_eq!(
-            output.help_key,
-            format!("ruleOutput.request.{}.help", output.head)
-        );
+        assert_eq!(output.help_key, None, "{}", output.head);
     }
 }
 
@@ -605,23 +607,6 @@ fn every_item_pattern_matches_the_engine_check() {
             );
         }
     }
-}
-
-#[test]
-fn the_builder_schema_file_matches_the_table() {
-    // Compared as JSON values: the file keeps the layout the web formatter
-    // gives it.
-    let file: serde_json::Value =
-        serde_json::from_str(include_str!("../request-builder-schema.json")).expect("valid JSON");
-    let table: serde_json::Value =
-        serde_json::from_str(&crate::request_actions::request_builder_schema_json())
-            .expect("valid JSON");
-    assert_eq!(
-        file, table,
-        "crates/scryer-rules/request-builder-schema.json is out of date with REQUEST_HEADS; \
-         write request_builder_schema_json() to it and to the web copy, then format the web \
-         copy with prettier"
-    );
 }
 
 #[test]

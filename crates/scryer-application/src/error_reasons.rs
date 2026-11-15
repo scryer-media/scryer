@@ -1699,8 +1699,18 @@ pub mod rules {
         "RULE_BUNDLED_TRASH_PACK_CONTAINS_NO_TEMPLATES";
     /// The rule source is invalid.
     pub const SOURCE_INVALID: &str = "RULE_SOURCE_INVALID";
+    /// A builder document is not an object naming this rule's family and a
+    /// document version.
+    pub const BUILDER_MODEL_INVALID: &str = "RULE_BUILDER_MODEL_INVALID";
+    /// A builder document is larger than a rule may store.
+    pub const BUILDER_MODEL_TOO_LARGE: &str = "RULE_BUILDER_MODEL_TOO_LARGE";
+    /// The rule builder has no schema for the asked family.
+    pub const BUILDER_FAMILY_UNKNOWN: &str = "RULE_BUILDER_FAMILY_UNKNOWN";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        BUILDER_MODEL_INVALID,
+        BUILDER_MODEL_TOO_LARGE,
+        BUILDER_FAMILY_UNKNOWN,
         PACK_UP_TO_DATE,
         INPUT_RETIRED,
         TARGETS_PERSON,
@@ -1933,6 +1943,16 @@ pub mod maintenance {
     pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE";
     /// Maintenance action is not storable.
     pub const ACTION_NOT_STORABLE: &str = "MAINTENANCE_ACTION_NOT_STORABLE";
+    /// The rule's current revision stores its action the way builds before
+    /// rules declared their own actions did. It is never evaluated or run
+    /// until a revision that declares its actions replaces it.
+    pub const RULE_STORED_ACTIONS_NOT_DECLARED: &str =
+        "MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED";
+    /// Another save gave the rule a new revision first; this save wrote
+    /// nothing and can be retried against the current revision.
+    pub const RULE_REVISION_CONFLICT: &str = "MAINTENANCE_RULE_REVISION_CONFLICT";
+    /// A previewed subject got neither a decision nor an error from the rule.
+    pub const PREVIEW_NO_DECISION: &str = "MAINTENANCE_PREVIEW_NO_DECISION";
     /// This maintenance action is not supported for titles.
     pub const ACTION_UNSUPPORTED: &str = "MAINTENANCE_ACTION_UNSUPPORTED";
     /// Maintenance action is not valid for a title-scoped rule.
@@ -1979,6 +1999,27 @@ pub mod maintenance {
     pub const RULE_SOURCE_INVALID: &str = "MAINTENANCE_RULE_SOURCE_INVALID";
     /// The maintenance action configuration is invalid.
     pub const ACTION_CONFIGURATION_INVALID: &str = "MAINTENANCE_ACTION_CONFIGURATION_INVALID";
+    /// The rule source defines no action head, so it could never do anything.
+    pub const ACTION_HEAD_REQUIRED: &str = "MAINTENANCE_ACTION_HEAD_REQUIRED";
+    /// The rule defines an action head its scope cannot run.
+    pub const ACTION_HEAD_UNSUPPORTED_FOR_SCOPE: &str =
+        "MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE";
+    /// A `set_quality_profile` literal names no existing quality profile.
+    pub const QUALITY_PROFILE_NOT_FOUND: &str = "MAINTENANCE_QUALITY_PROFILE_NOT_FOUND";
+    /// A `move_to_library` literal names no library.
+    pub const MOVE_LIBRARY_NOT_FOUND: &str = "MAINTENANCE_MOVE_LIBRARY_NOT_FOUND";
+    /// A `move_to_library` literal names a library of another media kind
+    /// than the rule's libraries.
+    pub const MOVE_LIBRARY_FACET_MISMATCH: &str = "MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH";
+    /// A `move_to_root` literal names no configured library root.
+    pub const MOVE_ROOT_NOT_FOUND: &str = "MAINTENANCE_MOVE_ROOT_NOT_FOUND";
+    /// A rule that can delete was saved or armed without the most titles it
+    /// may act on in one run. The `destructiveActions` extension names the
+    /// delete actions that require it.
+    pub const RULE_MAX_TITLES_PER_RUN_REQUIRED: &str =
+        "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
+    /// The most titles a rule acts on in one run is below one.
+    pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
@@ -2006,6 +2047,9 @@ pub mod maintenance {
         GRACE_PERIOD_INVALID,
         GRACE_PERIOD_OUT_OF_RANGE,
         ACTION_NOT_STORABLE,
+        RULE_STORED_ACTIONS_NOT_DECLARED,
+        RULE_REVISION_CONFLICT,
+        PREVIEW_NO_DECISION,
         ACTION_UNSUPPORTED,
         ACTION_INVALID,
         FIELD_REQUIRED,
@@ -2025,7 +2069,18 @@ pub mod maintenance {
         DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
         RULE_SOURCE_INVALID,
         ACTION_CONFIGURATION_INVALID,
+        ACTION_HEAD_REQUIRED,
+        ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
+        QUALITY_PROFILE_NOT_FOUND,
+        MOVE_LIBRARY_NOT_FOUND,
+        MOVE_LIBRARY_FACET_MISMATCH,
+        MOVE_ROOT_NOT_FOUND,
+        RULE_MAX_TITLES_PER_RUN_REQUIRED,
+        RULE_MAX_TITLES_PER_RUN_INVALID,
     ];
+
+    /// The deleting action heads that make a rule's per-run maximum required.
+    pub const RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT: &str = "destructiveActions";
 }
 
 pub mod acquisition {
@@ -3559,6 +3614,10 @@ pub mod settings {
     pub const DASHBOARD_ITEM_EXCEEDS_COLUMNS: &str = "SETTINGS_DASHBOARD_ITEM_EXCEEDS_COLUMNS";
     /// Language must be a language code of at most the selected value letters, digits or hyphens.
     pub const LANGUAGE_OUT_OF_RANGE: &str = "SETTINGS_LANGUAGE_OUT_OF_RANGE";
+    /// A tour id is empty, too long, or uses characters other than lowercase letters, digits, dots and hyphens.
+    pub const UI_TOUR_ID_INVALID: &str = "SETTINGS_UI_TOUR_ID_INVALID";
+    /// A tour progress update names no tour, or more tours than one update may record.
+    pub const UI_TOUR_COUNT_OUT_OF_RANGE: &str = "SETTINGS_UI_TOUR_COUNT_OUT_OF_RANGE";
     /// The requested value must be a #RRGGBB hex color.
     pub const MUST_RRGGBB_HEX_COLOR: &str = "SETTINGS_MUST_RRGGBB_HEX_COLOR";
     /// Duplicate UI table column setting for the selected value the selected value the selected value column the selected value.
@@ -3811,6 +3870,8 @@ pub mod settings {
         DASHBOARD_ITEM_SIZE_OUT_OF_RANGE,
         DASHBOARD_ITEM_EXCEEDS_COLUMNS,
         LANGUAGE_OUT_OF_RANGE,
+        UI_TOUR_ID_INVALID,
+        UI_TOUR_COUNT_OUT_OF_RANGE,
         MUST_RRGGBB_HEX_COLOR,
         UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED,
         TABLE_COLUMN_ORDER_OUT_OF_RANGE,
@@ -3948,14 +4009,8 @@ pub mod request_rules {
     /// Failed to build the request rules engine.
     pub const FAILED_BUILD_REQUEST_RULES_ENGINE: &str =
         "REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE";
-    /// The stored builder document is larger than the server keeps.
-    pub const BUILDER_MODEL_TOO_LARGE: &str = "REQUEST_RULE_BUILDER_MODEL_TOO_LARGE";
-    /// The builder document is not a JSON object.
-    pub const BUILDER_MODEL_NOT_OBJECT: &str = "REQUEST_RULE_BUILDER_MODEL_NOT_OBJECT";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
-        BUILDER_MODEL_TOO_LARGE,
-        BUILDER_MODEL_NOT_OBJECT,
         RULE_VALIDATION_FAILED,
         SAMPLE_REQUESTER_NOT_FOUND,
         SAMPLE_LIBRARY_NOT_FOUND,
@@ -4480,6 +4535,25 @@ pub mod integration {
     /// Proxy config is assigned to one or more download clients.
     pub const PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS: &str =
         "INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS";
+    /// A solver's reach-through names another challenge solver; only a
+    /// transport proxy or tunnel can carry a solver's traffic.
+    pub const PROXY_REACH_THROUGH_IS_SOLVER: &str = "INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER";
+    /// A solver's reach-through names the solver itself.
+    pub const PROXY_REACH_THROUGH_SELF: &str = "INTEGRATION_PROXY_REACH_THROUGH_SELF";
+    /// A solver's reach-through names a proxy config that does not exist.
+    pub const PROXY_REACH_THROUGH_NOT_FOUND: &str = "INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND";
+    /// A solver's reach-through names a disabled proxy config.
+    pub const PROXY_REACH_THROUGH_DISABLED: &str = "INTEGRATION_PROXY_REACH_THROUGH_DISABLED";
+    /// A reach-through was set on a proxy config that is not a challenge solver.
+    pub const PROXY_REACH_THROUGH_REQUIRES_SOLVER: &str =
+        "INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER";
+    /// The proxy config is how one or more challenge solvers are reached, so
+    /// it cannot be deleted, or disabled while any of them is enabled.
+    pub const PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS: &str =
+        "INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS";
+    /// Fact on `PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS`: how many solvers
+    /// stand in the way.
+    pub const PROXY_REACHED_THROUGH_SOLVER_COUNT_FACT: &str = "solverCount";
     /// Only SSH tunnel proxies pin a host key.
     pub const ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY: &str =
         "INTEGRATION_ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY";
@@ -4740,6 +4814,12 @@ pub mod integration {
         PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S,
         PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS,
         PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS,
+        PROXY_REACH_THROUGH_IS_SOLVER,
+        PROXY_REACH_THROUGH_SELF,
+        PROXY_REACH_THROUGH_NOT_FOUND,
+        PROXY_REACH_THROUGH_DISABLED,
+        PROXY_REACH_THROUGH_REQUIRES_SOLVER,
+        PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS,
         ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY,
         WIREGUARD_TUNNELS_NO_HOST_KEY_RESET,
         ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE,

@@ -1,6 +1,8 @@
 use async_graphql::{Enum, ID, InputObject, Json, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
+use super::{ScriptScheduleInput, ScriptSchedulePayload};
+
 // ── Enums ──────────────────────────────────────────────────────────────────
 
 /// The one control of a maintenance rule set.
@@ -108,33 +110,37 @@ pub enum MaintenanceCandidateState {
     Blocked,
 }
 
-/// A media subject a maintenance action can be configured against.
+/// An action a maintenance rule's source can define.
+///
+/// Each value is a Rego rule name: `unmonitor if { … }`,
+/// `set_quality_profile := "Name" if { … }`, and so on.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum MaintenanceActionSubject {
-    /// A movie title.
-    Movie,
-    /// A show title.
-    Show,
-    /// One season of a show.
-    Season,
-    /// One episode of a show.
-    Episode,
-}
-
-/// How destructive a maintenance action is, and therefore the minimum control
-/// its execution requires.
-#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum MaintenanceRiskClass {
-    /// Mutates no managed media or catalog state.
-    None,
-    /// Reversible Scryer state, a notification, or a bounded refresh.
-    Low,
-    /// Changes acquisition intent, starts external work, or reorganizes files.
-    Medium,
-    /// Deletes, blocklists, or can otherwise make media unavailable.
-    High,
+pub enum MaintenanceActionHead {
+    /// `unmonitor`: stop monitoring the subject and everything under it.
+    Unmonitor,
+    /// `delete_files`: unmonitor the subject, then delete its files.
+    DeleteFiles,
+    /// `delete_title`: delete the title and its files. Title rules only.
+    DeleteTitle,
+    /// `search`: search for the title.
+    Search,
+    /// `set_quality_profile`: change the title's quality profile, by name.
+    SetQualityProfile,
+    /// `add_tags`: add tags to the title.
+    AddTags,
+    /// `remove_tags`: remove tags from the title.
+    RemoveTags,
+    /// `monitor`: monitor the subject.
+    Monitor,
+    /// `move_to_library`: move the title into another library, by name.
+    MoveToLibrary,
+    /// `move_to_root`: move the title to another root folder, by path.
+    MoveToRoot,
+    /// `notify`: send a notification naming the rule and the subject.
+    Notify,
+    /// `fetch_subtitles`: search for subtitles.
+    FetchSubtitles,
 }
 
 /// What a matcher decided for one subject.
@@ -151,8 +157,9 @@ pub enum MaintenanceOutcome {
 
 // ── Read models ────────────────────────────────────────────────────────────
 
-/// A maintenance rule set: identity, scope, and evaluation state. The matcher
-/// and the action it authorizes live on the revision, never here.
+/// A maintenance rule set: identity, scope, and evaluation state. The source,
+/// which declares both when the rule matches and what it does, lives on the
+/// revision.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceRuleSet {
     /// Rule-set ID.
@@ -166,10 +173,11 @@ pub struct MaintenanceRuleSet {
     /// What enabling this rule arms. `DESTRUCTIVE` means enabling it requires
     /// the candidate-count confirmation.
     pub enabled_arming: MaintenanceEffectArming,
-    /// The rule was enabled when its matcher, action, or scope last changed, so
-    /// it fell back to dry run. Review its candidates and enable it again.
+    /// The rule can delete media and was enabled when its source or scope last
+    /// changed, so it fell back to dry run. Review its candidates and enable it
+    /// again.
     pub edited_since_enabled: bool,
-    /// Shipped with Scryer: name, matcher and action are fixed and the rule
+    /// Shipped with Scryer: name and source are fixed and the rule
     /// cannot be deleted.
     pub system_owned: bool,
     /// Libraries the rule is confined to. Empty means every library.
@@ -180,11 +188,23 @@ pub struct MaintenanceRuleSet {
     pub current_revision_number: i32,
     /// Grace period of the revision currently in force, in days.
     pub grace_days: i32,
-    /// Action the revision currently in force authorizes.
-    pub action_spec: MaintenanceActionSpec,
-    /// Ordered schema-2 actions for the revision currently in force. Legacy
-    /// rows expose their unchanged action spec and leave this null.
-    pub action_sequence: Option<MaintenanceActionSequence>,
+    /// The actions the source of the revision currently in force declares.
+    pub declared_actions: MaintenanceDeclaredActions,
+    /// Stable reason code when the revision in force cannot be evaluated or
+    /// run, such as `MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED` for a rule
+    /// saved before rules declared their own actions. The rule matches nothing
+    /// and cannot be enabled until its source is saved again. Null when the
+    /// rule is usable.
+    pub load_refusal: Option<String>,
+    /// When the rule evaluates and then acts on what it decided. A rule saved
+    /// without one runs every eight hours.
+    pub schedule: ScriptSchedulePayload,
+    /// The most titles the rule acts on in one run. Due titles beyond it wait
+    /// for the next run. Null means no limit.
+    pub max_titles_per_run: Option<i32>,
+    /// UTC time of the next scheduled run. Null while the rule is disabled,
+    /// when its schedule is manual, or before the scheduler has loaded it.
+    pub next_run_at: Option<DateTime<Utc>>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
@@ -217,25 +237,53 @@ pub struct MaintenanceRuleRevision {
     pub created_at: DateTime<Utc>,
 }
 
-/// The closed, schema-versioned action configuration a rule revision stores.
+/// Everything a rule's source declares it can do, read from the source
+/// without running it. Every list holds each value once, in source order.
 #[derive(SimpleObject, Clone)]
-pub struct MaintenanceActionSpec {
-    /// Catalog action the revision authorizes.
-    pub kind: MaintenanceActionKind,
-    /// Schema version the stored parameters were validated against.
-    pub schema_version: i32,
-    /// Target quality profile, set only for the quality-profile action and null
-    /// for every other kind.
-    pub target_quality_profile_id: Option<String>,
-    /// Tags the action writes, set only for the tag actions and empty for every
-    /// other kind. Labels are registry-defined and stored lowercase.
-    pub tags: Vec<String>,
+pub struct MaintenanceDeclaredActions {
+    /// Every action head the source defines.
+    pub heads: Vec<MaintenanceActionHead>,
+    /// Whether any defined head deletes media. Enabling such a rule needs the
+    /// candidate-count confirmation.
+    pub destructive: bool,
+    /// Every quality profile name written for `set_quality_profile`.
+    pub quality_profiles: Vec<String>,
+    /// Every tag written for `add_tags`.
+    pub add_tags: Vec<String>,
+    /// Every tag written for `remove_tags`.
+    pub remove_tags: Vec<String>,
+    /// Every library name written for `move_to_library`.
+    pub libraries: Vec<String>,
+    /// Every root folder path written for `move_to_root`.
+    pub roots: Vec<String>,
+    /// Every notification text written for `notify`.
+    pub notifications: Vec<String>,
+}
+
+/// What a rule decided for one subject, in the order the actions run.
+/// Deleting files unmonitors first, so `DELETE_FILES` comes with `UNMONITOR`.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceDecidedActions {
+    /// The decided action heads, in execution order.
+    pub heads: Vec<MaintenanceActionHead>,
+    /// Quality profile name to set, or null when the profile is not changed.
+    pub quality_profile: Option<String>,
+    /// Tags to add.
+    pub add_tags: Vec<String>,
+    /// Tags to remove.
+    pub remove_tags: Vec<String>,
+    /// Library name to move the title into, or null.
+    pub library: Option<String>,
+    /// Root folder path to move the title to, or null.
+    pub root: Option<String>,
+    /// Notification text to send, or null.
+    pub notification: Option<String>,
 }
 
 /// One typed parameter set for a sequence step. The action catalog decides
 /// which fields are meaningful for each `kind`; the application rejects every
 /// other shape before the sequence can be stored.
-#[derive(SimpleObject, Clone)]
+#[derive(SimpleObject, Clone, Default)]
 pub struct MaintenanceActionStepParameters {
     /// Whether a title-level unmonitor step also unmonitors its seasons and
     /// episodes. This is required before a title file-deletion step can cover
@@ -247,6 +295,10 @@ pub struct MaintenanceActionStepParameters {
     pub search_condition: Option<MaintenanceSearchCondition>,
     /// Tags written by an add-tags or remove-tags step.
     pub tags: Vec<String>,
+    /// Library name a move-to-library step sends the title to.
+    pub target_library: Option<String>,
+    /// Root folder path a move-to-root step sends the title to.
+    pub target_root: Option<String>,
 }
 
 /// The closed catalog of sequence step kinds. These kinds are intentionally
@@ -269,6 +321,14 @@ pub enum MaintenanceActionStepKind {
     RemoveTags,
     /// Delete the selected title record and its authorized files.
     DeleteTitleAndFiles,
+    /// Monitor the selected scope.
+    Monitor,
+    /// Search for subtitles for the selected scope's files.
+    FetchSubtitles,
+    /// Move the selected title into another library.
+    MoveToLibrary,
+    /// Move the selected title to another root folder of its library.
+    MoveToRoot,
 }
 
 /// The explicit condition a search step applies before requesting work.
@@ -301,33 +361,6 @@ pub struct MaintenanceActionSequence {
     pub steps: Vec<MaintenanceActionStep>,
 }
 
-/// Backend-owned capabilities for one schema-2 primitive.
-#[derive(SimpleObject, Clone)]
-pub struct MaintenanceActionStepDescriptor {
-    /// Stable catalog identifier for this primitive.
-    pub id: String,
-    /// Primitive represented by this descriptor.
-    pub kind: MaintenanceActionStepKind,
-    /// Operator-facing label for the primitive.
-    pub label: String,
-    /// Subjects that may use this primitive.
-    pub supported_subjects: Vec<MaintenanceActionSubject>,
-    /// Name of the typed parameter shape accepted by this primitive.
-    pub parameter_schema: String,
-    /// Effects used when arbitrating conflicts with other steps.
-    pub effect_classes: Vec<String>,
-    /// Risk class that determines the required arming level.
-    pub risk_class: MaintenanceRiskClass,
-    /// Preconditions this primitive requires before it can execute.
-    pub requires: Vec<String>,
-    /// Whether this primitive ends the sequence when it succeeds.
-    pub terminal: bool,
-    /// How completion for this primitive is determined.
-    pub completion_policy: String,
-    /// Whether this primitive is permitted for a storage-root-scoped rule.
-    pub storage_root_allowed: bool,
-}
-
 /// A rule set together with the revision currently in force.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceRuleSetDetail {
@@ -335,37 +368,11 @@ pub struct MaintenanceRuleSetDetail {
     pub rule_set: MaintenanceRuleSet,
     /// The revision currently in force.
     pub revision: MaintenanceRuleRevision,
-    /// The action that revision authorizes, already decoded.
-    pub action_spec: MaintenanceActionSpec,
-    /// Ordered actions for a schema-2 revision. Legacy revisions keep this
-    /// null and continue to expose their original `actionSpec` unchanged.
-    pub action_sequence: Option<MaintenanceActionSequence>,
-}
-
-/// Static registry entry describing one maintenance action to the rule builder.
-#[derive(SimpleObject, Clone)]
-pub struct MaintenanceActionDescriptor {
-    /// Scopes for which this build implements the action.
-    pub supported_rule_scopes: Vec<MaintenanceRuleSubjectKind>,
-    /// Catalog action this descriptor describes.
-    pub kind: MaintenanceActionKind,
-    /// Subjects the action may be configured against.
-    pub supported_subjects: Vec<MaintenanceActionSubject>,
-    /// Risk class governing the controls the action requires.
-    pub risk_class: MaintenanceRiskClass,
-    /// Effect classes the action declares for conflict arbitration.
-    pub effect_classes: Vec<String>,
-    /// When a due action becomes eligible to execute.
-    pub timing_mode: String,
-    /// Repeat semantics the registry allows for the action.
-    pub allowed_repeat_modes: Vec<String>,
-    /// Whether configuring the action requires a target quality profile.
-    pub requires_target_quality_profile: bool,
-    /// Whether configuring the action requires at least one title tag.
-    pub requires_tags: bool,
-    /// Whether this action remains valid when a configured storage root limits
-    /// the files it may affect.
-    pub supports_storage_scope: bool,
+    /// The actions that revision's source declares.
+    pub declared_actions: MaintenanceDeclaredActions,
+    /// The simple builder's document for the revision's source, or null when
+    /// the source was written by hand.
+    pub builder_model: Option<Json<serde_json::Value>>,
 }
 
 /// Identifier returned after deleting a maintenance rule set.
@@ -384,6 +391,10 @@ pub struct MaintenanceRuleValidationPayload {
     pub valid: bool,
     /// Validation errors; empty when valid.
     pub errors: Vec<String>,
+    /// Conditions worth fixing that do not stop the source from saving.
+    pub warnings: Vec<super::rules::RuleValidationDiagnosticPayload>,
+    /// The actions the source declares, or null when it does not parse.
+    pub declared_actions: Option<MaintenanceDeclaredActions>,
 }
 
 /// One subject's preview outcome. `outcome` is null exactly when `error` is set:
@@ -427,6 +438,11 @@ pub struct MaintenancePreviewTitle {
     pub reason_codes: Vec<String>,
     /// Why evaluation failed for this subject, or null when it succeeded.
     pub error: Option<String>,
+    /// Stable code for `error`, such as `RULE_RUNTIME_ERROR` or
+    /// `RULE_OUTPUT_INVALID`; null exactly when `error` is null.
+    pub error_code: Option<String>,
+    /// What the rule decided for this subject, or null unless it matched.
+    pub actions: Option<MaintenanceDecidedActions>,
     /// The input document the rule evaluated for this subject: its `facts`
     /// and their `observations`, with the subject and library. Null unless
     /// the caller may manage permissions, because the document names who
@@ -502,6 +518,9 @@ pub struct MaintenanceCandidate {
     /// this candidate becomes due while the rule is in `OBSERVE` mode, armed for
     /// the action's risk class, and its instance effect gate is on.
     pub action_kind: MaintenanceActionKind,
+    /// What the rule decided for this subject on its latest match. Null only
+    /// for candidates opened before rules declared their own actions.
+    pub actions: Option<MaintenanceDecidedActions>,
     /// The immutable schema-2 sequence that opened this candidate. Legacy
     /// candidates retain their original `actionKind` and leave this null.
     pub action_sequence: Option<MaintenanceActionSequence>,
@@ -714,56 +733,6 @@ pub struct MaintenanceEvaluationTriggerPayload {
 
 // ── Inputs ─────────────────────────────────────────────────────────────────
 
-/// Selects one catalog action and its parameters.
-#[derive(InputObject, Clone)]
-pub struct MaintenanceActionInput {
-    /// Catalog action to authorize.
-    pub kind: MaintenanceActionKind,
-    /// Target quality profile. Required by the quality-profile action and
-    /// rejected for every other kind.
-    pub target_quality_profile_id: Option<String>,
-    /// Tags to add or remove. Required by the tag actions, ignored by every
-    /// other kind, and rejected unless every label is already defined in the
-    /// title-tag registry.
-    pub tags: Option<Vec<String>>,
-}
-
-/// Parameters for one input sequence step. The selected `kind` determines the
-/// accepted subset. Keeping this input closed and validated by the server
-/// prevents Rego or the web client from inventing effects.
-#[derive(InputObject, Clone)]
-pub struct MaintenanceActionStepParametersInput {
-    /// Include monitored descendants when unmonitoring a whole title.
-    pub include_descendants: Option<bool>,
-    /// Quality-profile identifier for a change-quality-profile step.
-    pub target_quality_profile_id: Option<String>,
-    /// Condition that controls whether a search step requests work.
-    pub search_condition: Option<MaintenanceSearchCondition>,
-    /// Tags to add or remove for a tag step.
-    pub tags: Option<Vec<String>>,
-}
-
-/// One ordered input action with a caller-stable identifier.
-#[derive(InputObject, Clone)]
-pub struct MaintenanceActionStepInput {
-    /// Caller-stable identifier used for durable step receipts and history.
-    pub id: ID,
-    /// Catalog primitive this input step configures.
-    pub kind: MaintenanceActionStepKind,
-    /// Typed parameters accepted by the selected primitive.
-    pub parameters: MaintenanceActionStepParametersInput,
-}
-
-/// A versioned ordered sequence. An empty sequence is a valid observe-only
-/// rule and is not represented with a placeholder action.
-#[derive(InputObject, Clone)]
-pub struct MaintenanceActionSequenceInput {
-    /// Schema version that defines this sequence input representation.
-    pub schema_version: i32,
-    /// Ordered steps to store in the new immutable revision.
-    pub steps: Vec<MaintenanceActionStepInput>,
-}
-
 /// Creates a maintenance rule set together with its first matcher revision.
 #[derive(InputObject)]
 pub struct CreateMaintenanceRuleSetInput {
@@ -776,12 +745,6 @@ pub struct CreateMaintenanceRuleSetInput {
     /// Matcher source as written in the editor. The package declaration is
     /// applied by the server.
     pub rego_source: String,
-    /// Legacy action the first revision authorizes. Supply this or
-    /// `actionSequence`, never both.
-    pub action: Option<MaintenanceActionInput>,
-    /// Ordered actions the first revision authorizes. Supply this or `action`,
-    /// never both.
-    pub action_sequence: Option<MaintenanceActionSequenceInput>,
     /// Days a subject must match continuously before the action becomes due;
     /// defaults to zero.
     pub grace_days: Option<i32>,
@@ -790,6 +753,15 @@ pub struct CreateMaintenanceRuleSetInput {
     /// Configured library root whose capacity and owned files this revision
     /// uses. Required when the matcher reads a storage fact.
     pub storage_root_id: Option<String>,
+    /// The simple builder's document for the source, or omitted for a rule
+    /// written by hand.
+    pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
+    /// When the rule runs. Omitted means every eight hours.
+    pub schedule: Option<ScriptScheduleInput>,
+    /// The most titles the rule may act on in one run, at least one.
+    /// Required when the rule deletes files or titles; omitted means no
+    /// limit otherwise.
+    pub max_titles_per_run: Option<i32>,
 }
 
 /// Replaces the matcher of an existing rule set, appending a revision.
@@ -799,18 +771,20 @@ pub struct UpdateMaintenanceRuleMatcherInput {
     pub id: ID,
     /// Replacement matcher source as written in the editor.
     pub rego_source: String,
-    /// Legacy action the new revision authorizes. Supply this or
-    /// `actionSequence`, never both.
-    pub action: Option<MaintenanceActionInput>,
-    /// Ordered actions the new revision authorizes. Supply this or `action`,
-    /// never both.
-    pub action_sequence: Option<MaintenanceActionSequenceInput>,
     /// Days a subject must match continuously before the action becomes due;
     /// defaults to zero.
     pub grace_days: Option<i32>,
     /// Configured library root. Omission preserves the current root, null
     /// clears it, and a value replaces it.
     pub storage_root_id: MaybeUndefined<ID>,
+    /// The simple builder's document. Omit to keep the current revision's
+    /// document, pass null to clear it, or pass a document to replace it.
+    pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
+    /// Replacement most titles the rule may act on in one run, checked with
+    /// the new source so a delete head and its maximum can be saved
+    /// together. Omitted keeps the current value, null clears it, and a
+    /// value of at least one replaces it.
+    pub max_titles_per_run: MaybeUndefined<i32>,
 }
 
 /// Renames and re-scopes a rule set without touching its matcher.
@@ -824,6 +798,14 @@ pub struct UpdateMaintenanceRuleMetadataInput {
     pub description: Option<String>,
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+    /// Replacement schedule. Omitted keeps the current one. Changing it
+    /// leaves the rule's state and arming alone.
+    pub schedule: Option<ScriptScheduleInput>,
+    /// Replacement most titles the rule may act on in one run. Omitted keeps
+    /// the current value, null clears it, and a value of at least one
+    /// replaces it. A rule that deletes files or titles cannot be cleared.
+    /// Changing it leaves the rule's state and arming alone.
+    pub max_titles_per_run: MaybeUndefined<i32>,
 }
 
 /// What the operator reviewed before enabling a rule that can delete files.
@@ -875,9 +857,9 @@ pub struct ValidateMaintenanceRuleInput {
 
 /// Runs one matcher against a bounded title selection without saving anything.
 ///
-/// Supply either `ruleSetId` to preview a stored rule set, or `regoSource` with
-/// exactly one action definition (`action` or `actionSequence`) to preview an
-/// unsaved draft, never both. Select titles with either `titleIds` or
+/// Supply either `ruleSetId` to preview a stored rule set, or `regoSource` to
+/// preview an unsaved draft, never both. A draft's source declares its own
+/// actions. Select titles with either `titleIds` or
 /// `libraryId`, never both.
 #[derive(InputObject)]
 pub struct PreviewMaintenanceRuleInput {
@@ -889,12 +871,6 @@ pub struct PreviewMaintenanceRuleInput {
     pub rule_set_id: Option<ID>,
     /// Unsaved matcher source to preview, as written in the editor.
     pub rego_source: Option<String>,
-    /// Legacy action for the unsaved draft. Supply this or `actionSequence`,
-    /// never both.
-    pub action: Option<MaintenanceActionInput>,
-    /// Ordered actions for the unsaved draft. Supply this or `action`, never
-    /// both.
-    pub action_sequence: Option<MaintenanceActionSequenceInput>,
     /// Grace period for the unsaved draft; defaults to zero.
     pub grace_days: Option<i32>,
     /// Configured library root for an unsaved matcher. Required when its

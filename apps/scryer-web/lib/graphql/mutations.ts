@@ -4,15 +4,19 @@ import {
   JOB_RUN_FIELDS,
   LOCATION_OPERATION_FIELDS,
   MAINTENANCE_EXCLUSION_FIELDS,
+  MAINTENANCE_DECIDED_ACTIONS_FIELDS,
+  MAINTENANCE_DECLARED_ACTIONS_FIELDS,
   MAINTENANCE_RULE_SET_DETAIL_FIELDS,
   MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
   POST_PROCESSING_SCRIPT_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
+  REQUEST_DECLARED_ACTIONS_FIELDS,
   REQUEST_RULE_DECISION_FIELDS,
   REQUEST_RULE_SET_DETAIL_FIELDS,
   REQUEST_RULE_SET_FIELDS,
+  REQUEST_SHAPING_FIELDS,
   SCRIPT_INTERPRETER_SETTINGS_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
@@ -481,6 +485,7 @@ const PROXY_CONFIG_FIELDS = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled
@@ -982,6 +987,10 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1025,6 +1034,10 @@ export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMy
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1067,6 +1080,10 @@ const UI_SETTINGS_PAYLOAD_FIELDS = `
       facet
       viewMode
     }
+    tours {
+      tourId
+      outcome
+    }
     dashboardLayouts {
       breakpoint
       columns
@@ -1088,6 +1105,12 @@ export const setMyDashboardLayoutMutation = `mutation SetMyDashboardLayout($inpu
 /** Drops the saved dashboard layout for one breakpoint, or every one when null. */
 export const resetMyDashboardLayoutMutation = `mutation ResetMyDashboardLayout($breakpoint: UiDashboardBreakpoint) {
   resetMyDashboardLayout(breakpoint: $breakpoint) {${UI_SETTINGS_PAYLOAD_FIELDS}
+  }
+}`;
+
+/** Records guided tours the caller finished or skipped, so they are not offered again. */
+export const recordMyUiToursMutation = `mutation RecordMyUiTours($input: RecordMyUiToursInput!) {
+  recordMyUiTours(input: $input) {${UI_SETTINGS_PAYLOAD_FIELDS}
   }
 }`;
 
@@ -2885,7 +2908,10 @@ export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule
   validateMaintenanceRule(input: $input) {
     valid
     diagnostics { code message line column path }
+    warnings { code message line column path }
     errors
+    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
+    }
   }
 }`;
 
@@ -2910,6 +2936,9 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       outcome
       reasonCodes
       error
+      errorCode
+      actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
+      }
       facts
     }
   }
@@ -2993,7 +3022,10 @@ export const validateRequestRuleMutation = `mutation ValidateRequestRule($input:
   validateRequestRule(input: $input) {
     valid
     diagnostics { code message line column path }
+    warnings { code message line column path }
     errors
+    declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
+    }
   }
 }`;
 
@@ -3009,6 +3041,8 @@ export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: P
     undefinedTags
     inputDocument
     decision {${REQUEST_RULE_DECISION_FIELDS}
+      shaping {${REQUEST_SHAPING_FIELDS}
+      }
     }
   }
 }`;

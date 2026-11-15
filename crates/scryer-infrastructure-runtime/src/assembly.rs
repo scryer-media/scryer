@@ -421,6 +421,30 @@ impl RuleSetRepository for DatastoreCustomizationStore {
         self.rule_sets.update_rule_set(rule_set).await
     }
 
+    async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>> {
+        self.rule_sets.get_rule_set_builder_model(id).await
+    }
+
+    async fn create_rule_set_with_builder_model(
+        &self,
+        rule_set: &scryer_domain::RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        self.rule_sets
+            .create_rule_set_with_builder_model(rule_set, builder_model)
+            .await
+    }
+
+    async fn update_rule_set_with_builder_model(
+        &self,
+        rule_set: &scryer_domain::RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        self.rule_sets
+            .update_rule_set_with_builder_model(rule_set, builder_model)
+            .await
+    }
+
     async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
         self.rule_sets.delete_rule_set(id).await
     }

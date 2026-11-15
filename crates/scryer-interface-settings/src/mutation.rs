@@ -879,6 +879,26 @@ impl SettingsMutations {
         Ok(from_ui_settings(settings))
     }
 
+    /// Records that the authenticated actor finished or skipped guided tours, so they are not offered again.
+    async fn record_my_ui_tours(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Tours to record; a tour recorded before takes the new outcome.")]
+        input: RecordMyUiToursInput,
+    ) -> GqlResult<UiSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .record_my_ui_tours(
+                &actor,
+                input.tour_ids,
+                crate::to_app_ui_tour_outcome(input.outcome),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_ui_settings(settings))
+    }
+
     /// Forgets the authenticated actor's saved dashboard layout so the default layout applies again.
     async fn reset_my_dashboard_layout(
         &self,

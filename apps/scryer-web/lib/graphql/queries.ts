@@ -2640,6 +2640,7 @@ const proxyConfigFieldSelection = `
     tunnelDnsServers
     tunnelMtu
     tunnelKeepaliveSeconds
+    reachThroughProxyConfigId
     hostKeyFingerprint
     hostKeyPinnedAt
     isEnabled
@@ -3302,6 +3303,10 @@ export const myUiSettingsQuery = `query MyUiSettings {
       deviceClass
       facet
       viewMode
+    }
+    tours {
+      tourId
+      outcome
     }
     dashboardLayouts {
       breakpoint
@@ -4117,10 +4122,33 @@ export const ruleSetQuery = `query RuleSet($id: ID!) {
     managedTagFilter
     createdAt
     updatedAt
+    builderModel
   }
 }`;
 
 // ── Maintenance Rules ─────────────────────────────────────────────────
+
+/// Everything a rule's source declares it can do. Shared by the rule list, the
+/// rule detail and validation, which all render the same summary.
+export const MAINTENANCE_DECLARED_ACTIONS_FIELDS = `
+      heads
+      destructive
+      qualityProfiles
+      addTags
+      removeTags
+      libraries
+      roots
+      notifications`;
+
+/// What a rule decided for one subject, on preview rows and candidates.
+export const MAINTENANCE_DECIDED_ACTIONS_FIELDS = `
+      heads
+      qualityProfile
+      addTags
+      removeTags
+      library
+      root
+      notification`;
 
 export const MAINTENANCE_RULE_SET_FIELDS = `
     id
@@ -4134,25 +4162,18 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
     subjectKind
     currentRevisionNumber
     graceDays
-    actionSpec {
+    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
+    }
+    schedule {
       kind
-      schemaVersion
-      targetQualityProfileId
-      tags
+      everySeconds
+      timeLocal
+      days
+      expression
     }
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
-    }
+    nextRunAt
+    maxTitlesPerRun
+    loadRefusal
     createdAt
     updatedAt`;
 
@@ -4173,70 +4194,62 @@ export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
 }`;
 
 /// Detail payload shared by the rule-set query and every mutation that returns
-/// a rule set with its current revision and action.
+/// a rule set with its current revision and declared actions.
 export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
     ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
     }
     revision {${maintenanceRuleRevisionFieldSelection}
     }
-    actionSpec {
-      kind
-      schemaVersion
-      targetQualityProfileId
-      tags
-    }
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-        }
-      }
+    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
     }`;
 
+/// Opening the editor is the one reader of the builder model, so it is
+/// selected here and not on the mutation payloads that share the detail fields.
 export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
   maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+    builderModel
+  }
+}`;
+
+/// Tag names for the rule builder's tag pickers; nothing else about a tag
+/// shows there.
+export const ruleBuilderTagLabelsQuery = `query RuleBuilderTagLabels {
+  titleTagDefinitions {
+    label
+  }
+}`;
+
+/// The outputs one rule family's builder offers, read once per page.
+export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!) {
+  ruleBuilderSchema(family: $family) {
+    family
+    outputs {
+      id
+      head
+      labelKey
+      helpKey
+      valueKind
+      options
+      min
+      max
+      maxItems
+      maxBytes
+      pattern
+      template
+      perItem
+      destructive
+      variants
+      conflictsWith
+    }
+    outputRules {
+      rule
+      of
+    }
   }
 }`;
 
 export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
   maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
-  }
-}`;
-
-export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
-  maintenanceActionDescriptors {
-    kind
-    supportedRuleScopes
-    supportedSubjects
-    riskClass
-    effectClasses
-    timingMode
-    allowedRepeatModes
-    requiresTargetQualityProfile
-    requiresTags
-    supportsStorageScope
-  }
-}`;
-
-export const maintenanceActionStepDescriptorsQuery = `query MaintenanceActionStepDescriptors {
-  maintenanceActionStepDescriptors {
-    id
-    kind
-    label
-    supportedSubjects
-    parameterSchema
-    effectClasses
-    riskClass
-    requires
-    terminal
-    completionPolicy
-    storageRootAllowed
   }
 }`;
 
@@ -4262,7 +4275,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     state
     stateReason
     reasonCodes
-    actionKind
+    actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
+    }
     actionSequence {
       schemaVersion
       steps {
@@ -4273,6 +4287,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
     }
@@ -4285,6 +4301,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
       run {
@@ -4314,6 +4332,18 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     dueAt
     heldSince
     updatedAt
+  }
+}`;
+
+/// What enabling a destructive rule asks the operator to acknowledge: the same
+/// candidates as the table, reduced to the fields the confirmation lists.
+export const maintenanceArmingCandidatesQuery = `query MaintenanceArmingCandidates($ruleSetId: ID, $limit: Int) {
+  maintenanceCandidates(ruleSetId: $ruleSetId, limit: $limit) {
+    id
+    state
+    subjectKind
+    subjectLabel
+    titleName
   }
 }`;
 
@@ -4357,6 +4387,8 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
     }
@@ -4369,6 +4401,8 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
       run {
@@ -4433,6 +4467,17 @@ export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetI
 // Request rules are saved disabled. An enabled rule covering the library
 // decides a request; with none, the requester's library permission does.
 
+/// Every head a request rule's source defines and the literals they carry.
+export const REQUEST_DECLARED_ACTIONS_FIELDS = `
+      heads
+      qualityProfiles
+      leaseDays
+      monitors
+      requiredAudioLanguages
+      preferredAudioLanguages
+      addTags
+      notifications`;
+
 export const REQUEST_RULE_SET_FIELDS = `
     id
     name
@@ -4441,8 +4486,22 @@ export const REQUEST_RULE_SET_FIELDS = `
     libraryIds
     currentRevisionNumber
     decisionCount
+    declaredActions {${REQUEST_DECLARED_ACTIONS_FIELDS}
+    }
     createdAt
     updatedAt`;
+
+/// What an approval would be changed to, with the rule set that set each
+/// value, for the surfaces that show it to a manager: the author preview and
+/// the approver's queue.
+export const REQUEST_SHAPING_FIELDS = `
+      qualityProfile { value ruleSetName }
+      leaseDays { value ruleSetName }
+      monitor { value ruleSetName }
+      requiredAudioLanguages { value ruleSetName }
+      preferredAudioLanguages { value ruleSetName }
+      notifications { value ruleSetName }
+      conflicts`;
 
 const requestRuleRevisionFieldSelection = `
     id
@@ -4498,6 +4557,7 @@ export const requestRuleSetsQuery = `query RequestRuleSets {
 
 export const requestRuleSetQuery = `query RequestRuleSet($id: ID!) {
   requestRuleSet(id: $id) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+    builderModel
   }
 }`;
 
@@ -4524,6 +4584,14 @@ export const previewMyRequestDecisionQuery = `query PreviewMyRequestDecision($in
     reasons {
       code
       ruleName
+    }
+    shaping {
+      qualityProfile { value }
+      leaseDays { value }
+      monitor { value }
+      requiredAudioLanguages { value }
+      preferredAudioLanguages { value }
+      conflicts
     }
   }
 }`;
@@ -5189,6 +5257,8 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
       expiresAt
     }
     decision {${REQUEST_RULE_DECISION_FIELDS}
+      shaping {${REQUEST_SHAPING_FIELDS}
+      }
     }
   }
 }`;

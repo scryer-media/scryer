@@ -152,6 +152,11 @@ mod release_facts;
 pub mod request_rules;
 mod rules;
 pub use rules::arr_custom_format;
+pub use rules::builder_model::{
+    BuilderFamily, BuilderModelChange, MAX_BUILDER_MODEL_BYTES, RULE_BUILDER_FAMILIES,
+    RuleBuilderOutputDescriptor, RuleBuilderOutputRule, RuleBuilderOutputRuleKind,
+    RuleBuilderSchema, RuleBuilderValueKind, rule_builder_schema, stored_builder_model,
+};
 pub use rules::preview::{
     RuleSetTestContext, RuleSetTestDraft, RuleSetTestDraftContribution, RuleSetTestEntry,
     RuleSetTestError, RuleSetTestListingFacts, RuleSetTestListingInput, RuleSetTestParsed,
@@ -510,13 +515,12 @@ pub use request_rules::{
     ALL_FALLBACKS, ArbitratedShaping, Arbitration, ArbitrationReason, FALLBACK_ERROR,
     FALLBACK_HELD, FALLBACK_LIBRARY_PERMISSION, FALLBACK_NO_RULE_MATCHED, FALLBACK_RULE_MANUAL,
     FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER,
-    PREFLIGHT_REQUEST_ID_PREFIX, REQUEST_BUILDER_MODEL_MAX_BYTES, REQUEST_MAX_LEASE_DAYS,
-    RecordedVote, RequestDecisionReason, RequestDraft, RequestEvaluation, RequestEvaluationPurpose,
-    RequestPreflight, RequestRuleDraft, RequestRulePreviewMatcher, RequestRulePreviewRequest,
-    RequestRulePreviewResult, RequestRuleSample, RequestRuleScope, RequestRuleSetDetail,
-    RequestRuleValidation, RequestRulesEngineCache, RequestRulesEngineHandle, ResolvedShaping,
-    ScopedError, ScopedVote, ShapedValue, ShapingRefusal, arbitrate, validate_lease_days,
-    validate_tag_list,
+    PREFLIGHT_REQUEST_ID_PREFIX, REQUEST_MAX_LEASE_DAYS, RecordedVote, RequestDecisionReason,
+    RequestDraft, RequestEvaluation, RequestEvaluationPurpose, RequestPreflight, RequestRuleDraft,
+    RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRulePreviewResult,
+    RequestRuleSample, RequestRuleScope, RequestRuleSetDetail, RequestRuleValidation,
+    RequestRulesEngineCache, RequestRulesEngineHandle, ResolvedShaping, ScopedError, ScopedVote,
+    ShapedValue, ShapingRefusal, arbitrate, validate_lease_days, validate_tag_list,
 };
 pub use security::backup::{AutoBackupRunOutcome, start_background_auto_backup_scheduler};
 pub use security::backup_bundle::{
@@ -711,18 +715,18 @@ pub use ports::{
     LogicalBackupExporter, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MaintenanceActionJobReceiptClaim,
     MaintenanceActionJobReceiptTransition, MaintenanceActionStepCandidateKey,
     MaintenanceActionStepClaim, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
-    MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
+    MaintenanceCandidateRepository, MaintenanceDueCursor, MaintenanceEvaluationRepository,
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
-    MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
-    MaintenanceSequenceCompletionRepository, MediaAnalyzer, MediaFileHashCandidate,
-    MediaFileRepository, MediaRequestFingerprintSummary, MediaRequestOrder, MediaRequestQuery,
-    MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
-    MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
-    NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
-    NotificationApplicationUpdatePayload, NotificationChannelRepository, NotificationClient,
-    NotificationDownloadPayload, NotificationEpisodePayload, NotificationExternalIdsPayload,
-    NotificationFilePayload, NotificationHealthPayload, NotificationImportPayload,
-    NotificationManualInteractionPayload, NotificationMediaFilePayload,
+    MaintenanceRuleScheduleAnchor, MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
+    MaintenanceSequenceCompletionRepository, MaintenanceStepAct, MediaAnalyzer,
+    MediaFileHashCandidate, MediaFileRepository, MediaRequestFingerprintSummary, MediaRequestOrder,
+    MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
+    MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
+    NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,
+    NotificationAppPayload, NotificationApplicationUpdatePayload, NotificationChannelRepository,
+    NotificationClient, NotificationDownloadPayload, NotificationEpisodePayload,
+    NotificationExternalIdsPayload, NotificationFilePayload, NotificationHealthPayload,
+    NotificationImportPayload, NotificationManualInteractionPayload, NotificationMediaFilePayload,
     NotificationMediaUpdatePayload, NotificationMediaUpdateTypePayload, NotificationPayload,
     NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
     NotificationSubscriptionRepository, NotificationTitleMovePayload, NotificationTitlePayload,
@@ -888,11 +892,11 @@ pub use types::{
     UiCatalogViewMode, UiCatalogViewSetting, UiCatalogViewUpdate, UiDashboardBreakpoint,
     UiDashboardLayout, UiDashboardLayoutItem, UiDateTimeFormat, UiDefaultLandingView, UiDensity,
     UiDeviceClass, UiPalette, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
-    UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
-    UpdateVerificationSettings, UpdatedLibrary, UserAccountTimestamps, UserAuthFactorStatus,
-    UserLoginSnapshot, VerificationSettings, VerifiedLocalCredentials, WantedKind,
-    WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
-    WebauthnChallengeType, WebauthnCredentialRecord,
+    UiTableColumnSetting, UiTableViewMode, UiTheme, UiTourOutcome, UiTourProgress,
+    UpdateRecycleBinSettings, UpdateVerificationSettings, UpdatedLibrary, UserAccountTimestamps,
+    UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings, VerifiedLocalCredentials,
+    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
+    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_PAGE_CURSOR_MAX_BYTES,
@@ -1493,5 +1497,6 @@ pub(crate) mod lib_tests;
 pub(crate) mod test_wait;
 
 pub use ports::TitleCounts;
+pub use ports::TitleEpisodeShape;
 pub use ports::TitleRecyclePurge;
 pub use types::{DashboardImportEvidence, DashboardImportKind, DashboardRecentImport};

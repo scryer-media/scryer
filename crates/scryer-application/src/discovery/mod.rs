@@ -248,6 +248,7 @@ mod rail_labels;
 mod records;
 mod section;
 mod watchlist;
+pub(crate) use watchlist::discovery_watchlist_source_matches;
 
 use catalog::*;
 use context::*;
@@ -258,7 +259,6 @@ use records::*;
 pub(crate) use section::DiscoverySectionCache;
 #[cfg(test)]
 use section::*;
-pub(crate) use watchlist::discovery_watchlist_source_matches;
 use watchlist::*;
 
 pub(crate) use affinity_cache::DiscoveryAffinityCache;

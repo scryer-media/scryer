@@ -2682,9 +2682,6 @@ const fr: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Jours de grâce",
   "settings.maintenanceRuleGraceDaysHelp":
     "Jours après la première correspondance de la règle avant que l'action ne s'exécute (aucune action ne s'exécute pour l'instant).",
-  "settings.maintenanceRuleTargetProfile": "Profil de qualité cible",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Le profil vers lequel cette action déplacerait les titres correspondants.",
   "settings.maintenanceRuleLibraries": "Portée des bibliothèques",
   "settings.maintenanceRuleLibrariesHelp":
     "Ne cochez aucune bibliothèque pour appliquer la règle à toute la collection.",
@@ -2762,9 +2759,6 @@ const fr: LocaleDictionary = {
   // ── Règles de maintenance — verrous de l'instance ──
 
   // ── Règles de maintenance — mode et armement ──
-  "settings.maintenanceArmingNone": "Aucun effet",
-  "settings.maintenanceArmingReversible": "Réversible",
-  "settings.maintenanceArmingDestructive": "Destructif",
   "settings.maintenanceArmDestructiveLoading":
     "Comptage des candidats déjà retenus par cette règle…",
   "settings.maintenanceArmDestructiveCount":
@@ -3497,12 +3491,8 @@ const fr: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Films de série",
   "settings.maintenanceActionAddTags": "Ajouter des tags",
   "settings.maintenanceActionRemoveTags": "Retirer des tags",
-  "settings.maintenanceRuleTags": "Tags",
-  "settings.maintenanceRuleTagsNone": "Aucun tag sélectionné",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "ajoute {{tags}}",
-  "settings.maintenanceCandidatesTagPatchRemove": "retire {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle":
     "Marqué pour suppression",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
@@ -4046,6 +4036,65 @@ const fr: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Faire glisser pour réordonner {{value}}",
   "qualityProfile.decisionStepMoveUp": "Monter {{value}}",
   "qualityProfile.decisionStepMoveDown": "Descendre {{value}}",
+  "settings.proxyReachThrough": "Joindre via",
+  "settings.proxyReachThroughHelp":
+    "Scryer envoie ses requêtes à ce solveur via le proxy de transport ou le tunnel choisi. Direct joint le solveur depuis le réseau de Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Un solveur de défis ne peut pas être joint via un autre solveur de défis.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Un solveur de défis ne peut pas être joint via lui-même.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Le proxy ou le tunnel permettant de joindre le solveur est introuvable.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Le proxy ou le tunnel permettant de joindre le solveur est désactivé.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Seul un solveur de défis peut être joint via un autre proxy.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Un ou plusieurs solveurs de défis sont joints via ce proxy. Modifiez-les d'abord.",
+  "tours.onboarding.welcome.title": "Bienvenue dans Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer trouve, télécharge et range vos films, séries et anime. Voici un petit tour d'horizon ; vous pouvez le passer à tout moment.",
+  "tours.onboarding.search.title": "Rechercher partout",
+  "tours.onboarding.search.body":
+    "Trouvez un titre, un réglage ou une action depuis n'importe où. Appuyez sur ⌘K ou Ctrl+K pour ouvrir la recherche au clavier.",
+  "tours.onboarding.libraries.title": "Vos bibliothèques",
+  "tours.onboarding.libraries.body":
+    "Films, séries et anime ont chacun leur bibliothèque : ce que vous avez, ce qui manque et ce qui arrive.",
+  "tours.onboarding.discover.title": "Découvrir et demander",
+  "tours.onboarding.discover.body":
+    "Parcourez des suggestions tirées de vos bibliothèques, demandez un titre et suivez chaque demande dans Demandes.",
+  "tours.onboarding.lists.title": "Listes",
+  "tours.onboarding.lists.body":
+    "Suivez des listes de fournisseurs comme Trakt ou votre watchlist Plex. Scryer les garde synchronisées et ajoute ou demande leurs titres pour vous.",
+  "tours.onboarding.activity.title": "Activité",
+  "tours.onboarding.activity.body":
+    "Les téléchargements et importations en direct, et tout ce qui attend une décision de votre part.",
+  "tours.onboarding.indexers.title": "Indexeurs et clients de téléchargement",
+  "tours.onboarding.indexers.body":
+    "Scryer a besoin d'au moins un indexeur pour trouver des releases et d'un client de téléchargement pour les récupérer. Les clients de téléchargement sont juste en dessous.",
+  "tours.onboarding.indexers.action": "Ajouter un indexeur",
+  "tours.onboarding.qualityProfiles.title": "Profils de qualité",
+  "tours.onboarding.qualityProfiles.body":
+    "Un profil de qualité fixe les qualités qu'un titre peut avoir et le moment où Scryer continue à chercher une meilleure release.",
+  "tours.onboarding.rules.title": "Règles",
+  "tours.onboarding.rules.body":
+    "Les règles notent les releases, pour que Scryer privilégie celles que vous voulez et écarte les autres.",
+  "tours.onboarding.mediaServers.title": "Serveurs multimédias",
+  "tours.onboarding.mediaServers.body":
+    "Connectez Jellyfin, Plex ou Emby pour que Scryer sache ce que vous avez regardé. Pour que votre serveur s'actualise quand Scryer importe quelque chose, installez aussi le plugin de ce serveur dans Plugins.",
+  "tours.onboarding.notifications.title": "Notifications",
+  "tours.onboarding.notifications.body":
+    "Soyez prévenu des captures, des importations et de tout ce qui demande votre attention, là où vous le souhaitez.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Les plugins ajoutent des indexeurs, des clients de téléchargement et des services de notification. Installez-les et mettez-les à jour ici.",
+  "tours.stepOf": "Étape {{current}} sur {{total}}",
+  "tours.skip": "Passer la visite",
+  "tours.back": "Retour",
+  "tours.next": "Suivant",
+  "tours.done": "Terminé",
+  "tours.saveFailed":
+    "La progression de la visite n’a pas pu être enregistrée ; elle pourrait réapparaître.",
 };
 
 export default fr;

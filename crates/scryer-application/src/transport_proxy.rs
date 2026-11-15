@@ -68,8 +68,51 @@ pub fn transport_proxy_request_timeout(config: &ProxyConfig) -> Duration {
 /// flap does not churn clients while an endpoint, credential or `remote_dns`
 /// edit does. Pairing it with the id also covers reassignment to a different
 /// proxy row.
+///
+/// A solver reached through another config also carries that config's
+/// revision, so editing the tunnel a solver is reached through rebuilds every
+/// client and plugin built for the solver, exactly as editing the solver does.
 pub fn transport_proxy_revision(config: &ProxyConfig) -> String {
-    format!("{}@{}", config.id, config.updated_at.to_rfc3339())
+    let own = format!("{}@{}", config.id, config.updated_at.to_rfc3339());
+    match (
+        config.reach_through_proxy_config_id.as_deref(),
+        config.reach_through.as_deref(),
+    ) {
+        (Some(_), Some(route)) => format!("{own}+{}", transport_proxy_revision(route)),
+        (Some(route_id), None) => format!("{own}+{route_id}@unresolved"),
+        (None, _) => own,
+    }
+}
+
+/// The transport proxy or tunnel Scryer reaches a challenge solver through.
+///
+/// `Ok(None)` means the solver is reached directly, as it always was: no
+/// reference is set, or `config` is not a solver at all. When a reference is
+/// set this never falls back to the direct route: a reference the store could
+/// not resolve, or one that names a disabled config or another solver, is an
+/// error the caller must surface instead of dialling.
+///
+/// The returned config is the route for the solve request and for every
+/// request Scryer sends itself on the solver's behalf (the first attempt, the
+/// replay with the solver's clearance, artifact fetches), so the origin sees
+/// one source address for the whole session.
+pub fn solver_reach_through(config: &ProxyConfig) -> Result<Option<&ProxyConfig>, String> {
+    if !config.is_challenge_solver() {
+        return Ok(None);
+    }
+    let Some(route_id) = config.reach_through_proxy_config_id.as_deref() else {
+        return Ok(None);
+    };
+    let detail = match config.reach_through.as_deref() {
+        None => "the proxy it is reached through no longer exists",
+        Some(route) if route.id != route_id => "the proxy it is reached through no longer exists",
+        Some(route) if route.is_challenge_solver() => {
+            "it is set to be reached through another challenge solver"
+        }
+        Some(route) if !route.is_enabled => "the proxy it is reached through is disabled",
+        Some(route) => return Ok(Some(route)),
+    };
+    Err(transport_proxy_unreachable_message(config, detail))
 }
 
 /// The proxy URL a non-solver proxy egresses through, or the reason it cannot.
@@ -168,9 +211,12 @@ pub fn transport_proxied_reqwest_client_with_options(
 /// hosts' rule, so these requests cannot leave by a different route than the
 /// indexer's searches do:
 ///
-/// * no proxy, or a challenge solver: `direct()`. A solver is consulted only
-///   when a response turns out to be a challenge page; the plugin hosts send an
-///   indexer's requests directly first, and so do these.
+/// * no proxy, or a challenge solver reached directly: `direct()`. A solver is
+///   consulted only when a response turns out to be a challenge page; the
+///   plugin hosts send an indexer's requests directly first, and so do these.
+/// * a challenge solver reached through a proxy or tunnel: a client that
+///   egresses through that route, or an error when the route cannot be used.
+///   The origin must not see Scryer's own address beside the route's.
 /// * every other kind: a client that egresses through the proxy, or an error.
 ///   The filter is "not a solver" rather than "is a transport" for the same
 ///   reason as in the plugin hosts: a kind that slipped past both would egress
@@ -182,8 +228,13 @@ pub fn indexer_host_request_client(
     proxy: Option<&ProxyConfig>,
     direct: impl FnOnce() -> reqwest::Client,
 ) -> Result<reqwest::Client, String> {
-    let Some(proxy) = proxy.filter(|proxy| !proxy.is_challenge_solver()) else {
-        return Ok(direct());
+    let proxy = match proxy {
+        None => return Ok(direct()),
+        Some(solver) if solver.is_challenge_solver() => match solver_reach_through(solver)? {
+            Some(route) => route,
+            None => return Ok(direct()),
+        },
+        Some(proxy) => proxy,
     };
     if !proxy.is_enabled {
         return Err(format!("Proxy {} is disabled.", proxy.name.trim()));
@@ -293,6 +344,8 @@ mod tests {
     fn transport_config(provider_type: ProxyProviderType, base_url: &str) -> ProxyConfig {
         let created_at = Utc.with_ymd_and_hms(2026, 9, 1, 12, 0, 0).unwrap();
         ProxyConfig {
+            reach_through_proxy_config_id: None,
+            reach_through: None,
             id: "proxy-1".to_string(),
             name: "House VPN".to_string(),
             provider_type,
@@ -369,6 +422,78 @@ mod tests {
         let mut reassigned = config.clone();
         reassigned.id = "proxy-2".to_string();
         assert_ne!(transport_proxy_revision(&reassigned), baseline);
+    }
+
+    fn solver_config(route: Option<ProxyConfig>) -> ProxyConfig {
+        let mut solver = transport_config(ProxyProviderType::Byparr, "http://solver.invalid:8191");
+        solver.id = "solver-1".to_string();
+        solver.name = "House solver".to_string();
+        solver.reach_through_proxy_config_id = route.as_ref().map(|route| route.id.clone());
+        solver.reach_through = route.map(Box::new);
+        solver
+    }
+
+    #[test]
+    fn a_host_request_for_a_directly_reached_solver_is_direct() {
+        let mut direct_built = false;
+        indexer_host_request_client(Some(&solver_config(None)), || {
+            direct_built = true;
+            scryer_outbound_http::indexer_reqwest_client()
+        })
+        .expect("direct client");
+        assert!(direct_built);
+    }
+
+    #[test]
+    fn a_host_request_for_a_routed_solver_never_uses_the_direct_client() {
+        let route = transport_config(ProxyProviderType::Socks5, "socks5://gw.invalid:1080");
+        let mut direct_built = false;
+        indexer_host_request_client(Some(&solver_config(Some(route.clone()))), || {
+            direct_built = true;
+            scryer_outbound_http::indexer_reqwest_client()
+        })
+        .expect("routed client");
+        assert!(!direct_built);
+
+        // A route that cannot be used is refused, not replaced by a direct
+        // request.
+        let mut disabled = route.clone();
+        disabled.is_enabled = false;
+        let mut unresolved = solver_config(Some(route));
+        unresolved.reach_through = None;
+        for solver in [solver_config(Some(disabled)), unresolved] {
+            let result = indexer_host_request_client(Some(&solver), || {
+                direct_built = true;
+                scryer_outbound_http::indexer_reqwest_client()
+            });
+            assert!(result.is_err());
+            assert!(!direct_built);
+        }
+    }
+
+    #[test]
+    fn a_solved_session_does_not_outlive_the_route_it_was_earned_on() {
+        use crate::challenge_solver::solved_session_scope;
+
+        let route = transport_config(ProxyProviderType::Socks5, "socks5://gw.invalid:1080");
+        let direct = solved_session_scope(&solver_config(None));
+        let routed = solved_session_scope(&solver_config(Some(route.clone())));
+        assert_eq!(direct, "solver-1");
+        assert_ne!(routed, direct);
+
+        let mut edited = route.clone();
+        edited.updated_at = route.updated_at + chrono::Duration::seconds(1);
+        assert_ne!(solved_session_scope(&solver_config(Some(edited))), routed);
+
+        let mut other = route.clone();
+        other.id = "proxy-2".to_string();
+        assert_ne!(solved_session_scope(&solver_config(Some(other))), routed);
+
+        let mut unresolved = solver_config(Some(route));
+        unresolved.reach_through = None;
+        let unresolved = solved_session_scope(&unresolved);
+        assert_ne!(unresolved, routed);
+        assert_ne!(unresolved, direct);
     }
 
     #[test]

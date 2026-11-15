@@ -36,7 +36,11 @@ import {
 import { Label } from "@/components/ui/label";
 import { LazyRegoEditor } from "@/components/common/lazy-rego-editor";
 import { EditorValidationStatus } from "@/components/common/editor-validation-status";
-import { MaintenanceActionSequenceEditor } from "@/components/views/settings/maintenance-action-sequence-editor";
+import {
+  MaintenanceDecidedActionsSummary,
+  MaintenanceDeclaredActionsSummary,
+  MaintenanceRuleSourceFindings,
+} from "@/components/views/settings/maintenance-action-summary";
 import { SingleSelectField } from "@/components/ui/select";
 import {
   Table,
@@ -57,8 +61,7 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
-  MaintenanceActionSequence,
-  MaintenanceActionStepDescriptor,
+  MaintenanceDeclaredActions,
   MaintenancePreviewResult,
   MaintenancePreviewSource,
   MaintenancePreviewTitle,
@@ -71,18 +74,40 @@ import type {
 } from "@/lib/types/maintenance-rule-sets";
 import {
   MAINTENANCE_PREVIEW_LIMIT_MAX,
-  actionKindLabelKey,
-  actionStepKindLabelKey,
   previewOutcomeBadgeTone,
   previewOutcomeLabelKey,
   ruleStateLabelKey,
   ruleStateOptionsFor,
+  maintenanceRuleBuilder,
+  maintenanceLoadRefusalKey,
+  maintenancePreviewErrorText,
 } from "@/lib/utils/maintenance-rule-sets";
+import { useRuleOutputDescriptors } from "@/lib/hooks/use-rule-builder-schema";
+import {
+  ruleOutputHeadHelp,
+  ruleOutputHeadLabel,
+  ruleOutputHeadNames,
+  ruleOutputSyntax,
+  templateRuleOutputs,
+} from "@/lib/utils/rule-output-vocabulary";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
+import type { RuleBuilderOptions } from "@/components/views/settings/rule-builder";
+import type { RuleBuilderSchema } from "@/lib/utils/rule-builder";
+import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
+import { RuleEditorSurface } from "@/components/views/settings/rule-editor-surface";
+import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
+import {
+  withRegeneratedRuleSource,
+  type RuleEditorMode,
+} from "@/lib/utils/rule-builder-mode";
+import {
+  MaintenanceRuleScheduleField,
+  MaintenanceRuleScheduleSummary,
+} from "@/components/views/settings/maintenance-rule-schedule";
+import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
-export type MaintenanceQualityProfileOption = { id: string; name: string };
 export type MaintenanceStorageRootOption = {
   id: string;
   path: string;
@@ -96,6 +121,23 @@ type SettingsMaintenanceRulesSectionProps = {
   setRuleSetDraft: React.Dispatch<
     React.SetStateAction<MaintenanceRuleSetDraft>
   >;
+  /// Changes with every editor opening; controls that keep their own typing
+  /// state are keyed on it.
+  editorSessionKey: number;
+  /// Which editor the rule form shows. Simple is only offered while the draft
+  /// is still the builder's.
+  editorMode: RuleEditorMode;
+  setEditorMode: (mode: "simple" | "view") => void;
+  /// A hand edit of the source; the container decides whether it detaches
+  /// the rule from the builder.
+  editRegoSource: (source: string) => void;
+  setBuilderModel: (model: RuleBuilderModel) => void;
+  /// Set once a hand edit in this editor session detached the rule.
+  editAsRego: () => void;
+  builderOptions: RuleBuilderOptions;
+  /// Null until the served outputs are read, and after a failed read.
+  builderSchema: RuleBuilderSchema | null;
+  builderStatus: RuleBuilderSchemaStatus;
   submitRuleSet: (
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
@@ -106,11 +148,8 @@ type SettingsMaintenanceRulesSectionProps = {
   /// here: the container prefills the draft and the operator still saves it.
   applyTemplate: (template: MaintenanceRuleTemplate) => void;
   ruleSetRecords: MaintenanceRuleSetRecord[];
-  actionStepDescriptors: MaintenanceActionStepDescriptor[];
-  actionStepDescriptorsLoaded: boolean;
   libraries: MaintenanceLibraryOption[];
   storageRoots: MaintenanceStorageRootOption[];
-  qualityProfiles: MaintenanceQualityProfileOption[];
   copyRuleSet: (record: MaintenanceRuleSetRecord) => void;
   editRuleSet: (record: MaintenanceRuleSetRecord) => void;
   deleteRuleSet: (record: MaintenanceRuleSetRecord) => Promise<void> | void;
@@ -146,90 +185,9 @@ type SettingsMaintenanceRulesSectionProps = {
 };
 
 type RefField = { field: string; type: string; descKey: string };
+
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = maintenanceInputContract.sections as RefSectionDef[];
-
-function ActionLabel({ kind }: { kind: string }) {
-  const t = useTranslate();
-  const labelKey = actionKindLabelKey(kind);
-  return <>{labelKey ? t(labelKey) : kind}</>;
-}
-
-function ActionSummary({ record }: { record: MaintenanceRuleSetRecord }) {
-  const t = useTranslate();
-  if (!record.actionSequence) {
-    return <ActionLabel kind={record.actionSpec.kind} />;
-  }
-  if (record.actionSequence.steps.length === 0) {
-    return <>{t("settings.maintenanceSequenceObserveOnly")}</>;
-  }
-  const labels = record.actionSequence.steps
-    .map((step) => {
-      const key = actionStepKindLabelKey(step.kind);
-      return key ? t(key) : step.kind;
-    })
-    .join(" → ");
-  return (
-    <span className="block max-w-[260px] truncate" title={labels}>
-      {labels}
-    </span>
-  );
-}
-
-function ActionSequencePreview({
-  sequence,
-}: {
-  sequence: MaintenanceActionSequence;
-}) {
-  const t = useTranslate();
-  return (
-    <div
-      id="settings-maintenance-preview-action-sequence"
-      className="rounded border border-border bg-muted/30 px-3 py-2"
-    >
-      <p className="text-xs font-medium">
-        {t("settings.maintenanceSequencePreviewPlan")}
-      </p>
-      {sequence.steps.length === 0 ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("settings.maintenanceSequenceObserveOnly")}
-        </p>
-      ) : (
-        <ol className="mt-1 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
-          {sequence.steps.map((step) => {
-            const key = actionStepKindLabelKey(step.kind);
-            let parameters: string | null = null;
-            if (step.kind === "UNMONITOR") {
-              parameters = step.parameters.includeDescendants
-                ? t("settings.maintenanceSequencePreviewDescendants")
-                : t("settings.maintenanceSequencePreviewMatchedScope");
-            } else if (step.kind === "CHANGE_QUALITY_PROFILE") {
-              parameters = step.parameters.targetQualityProfileId ?? "—";
-            } else if (step.kind === "SEARCH") {
-              parameters =
-                step.parameters.searchCondition === "PREVIOUS_PROFILE_CHANGED"
-                  ? t(
-                      "settings.maintenanceSequenceSearchPreviousProfileChanged",
-                    )
-                  : t("settings.maintenanceSequenceSearchUnconditional");
-            } else if (
-              step.kind === "ADD_TAGS" ||
-              step.kind === "REMOVE_TAGS"
-            ) {
-              parameters = step.parameters.tags.join(", ") || "—";
-            }
-            return (
-              <li key={step.id}>
-                {key ? t(key) : step.kind}
-                {parameters ? ` · ${parameters}` : ""}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
-  );
-}
 
 function RefFieldTable({ section }: { section: RefSectionDef }) {
   const t = useTranslate();
@@ -287,6 +245,7 @@ function RefFieldTable({ section }: { section: RefSectionDef }) {
 function MaintenanceContextReference() {
   const t = useTranslate();
   const [open, setOpen] = React.useState(false);
+  const descriptors = useRuleOutputDescriptors("maintenance");
 
   return (
     <Card>
@@ -317,10 +276,70 @@ function MaintenanceContextReference() {
               {t("settings.refMaintOutputIntro")}
             </p>
             <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
-              <li>{t("settings.refMaintOutputMatch")}</li>
+              <li>{t("settings.refMaintOutputFlagHeads")}</li>
+              <li>{t("settings.refMaintOutputValueHeads")}</li>
+              <li>{t("settings.refMaintOutputHelpers")}</li>
               <li>{t("settings.refMaintOutputUnknown")}</li>
               <li>{t("settings.refMaintOutputReasons")}</li>
               <li>{t("settings.refMaintOutputNoPackage")}</li>
+            </ul>
+          </div>
+
+          <div>
+            <h4 className="mb-1 font-semibold">
+              <HelpLabel
+                label={t("settings.refMaintActionsTitle")}
+                help={t("settings.refMaintActionsOrder", {
+                  order: ruleOutputHeadNames(descriptors),
+                })}
+              />
+            </h4>
+            <Table id="settings-maintenance-rules-reference-actions">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[260px]">
+                    {t("settings.refColField")}
+                  </TableHead>
+                  <TableHead>{t("settings.refColDescription")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {descriptors.map((descriptor) => {
+                  const help = ruleOutputHeadHelp(t, descriptor);
+                  return (
+                    <TableRow
+                      key={descriptor.id}
+                      id={selectorId(
+                        "settings-maintenance-rules-reference-action",
+                        descriptor.id,
+                      )}
+                      data-ui="settings-table-row"
+                    >
+                      <TableCell>
+                        <code data-code-font className="text-xs">
+                          {ruleOutputSyntax(descriptor)}
+                        </code>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {ruleOutputHeadLabel(t, descriptors, descriptor.id)}
+                        {help ? (
+                          <span className="block text-xs">{help}</span>
+                        ) : null}
+                        {descriptor.destructive ? (
+                          <Badge tone="negative" className="ml-2 text-[10px]">
+                            {t("settings.maintenanceTemplateDestructiveBadge")}
+                          </Badge>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-muted-foreground">
+              <li>{t("settings.refMaintActionsDaysSince")}</li>
+              <li>{t("settings.refMaintActionsNotify")}</li>
+              <li>{t("settings.refMaintActionsConflicts")}</li>
             </ul>
           </div>
 
@@ -354,6 +373,8 @@ function MaintenanceTemplateCard({
   onApply: (template: MaintenanceRuleTemplate) => void;
 }) {
   const t = useTranslate();
+  const descriptors = useRuleOutputDescriptors("maintenance");
+  const heads = templateRuleOutputs(template.regoSource, descriptors);
   return (
     <button
       id={selectorId("settings-maintenance-template", template.id)}
@@ -372,9 +393,11 @@ function MaintenanceTemplateCard({
         {t(template.descriptionKey)}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <Badge tone="neutral" className="text-[10px]">
-          <ActionLabel kind={template.actionKind} />
-        </Badge>
+        {heads.map((head) => (
+          <Badge key={head} tone="neutral" className="text-[10px]">
+            {ruleOutputHeadLabel(t, descriptors, head)}
+          </Badge>
+        ))}
         {template.subjectKind ? (
           <Badge tone="info" className="text-[10px]">
             {t(
@@ -477,7 +500,7 @@ function MaintenancePreviewPanel({
   isEditorOpen,
   draftName,
   draftScope,
-  draftActionSequence,
+  draftDeclaredActions,
   ruleSetRecords,
   libraries,
   previewSource,
@@ -495,7 +518,8 @@ function MaintenancePreviewPanel({
 }: {
   draftName: string;
   draftScope: MaintenanceRuleScope;
-  draftActionSequence: MaintenanceActionSequence;
+  /// What the draft declares, from its latest validation.
+  draftDeclaredActions: MaintenanceDeclaredActions | null | undefined;
 } & Pick<
   SettingsMaintenanceRulesSectionProps,
   | "isEditorOpen"
@@ -523,10 +547,10 @@ function MaintenancePreviewPanel({
     previewSource === "draft"
       ? draftScope
       : (storedRule?.subjectKind ?? "TITLE");
-  const sequence =
+  const declared =
     previewSource === "draft"
-      ? draftActionSequence
-      : storedRule?.actionSequence;
+      ? draftDeclaredActions
+      : storedRule?.declaredActions;
   const [selectedSubject, setSelectedSubject] = React.useState<
     MaintenanceTestSubject | undefined
   >();
@@ -633,7 +657,20 @@ function MaintenancePreviewPanel({
           </label>
         </div>
 
-        {sequence ? <ActionSequencePreview sequence={sequence} /> : null}
+        {declared ? (
+          <div
+            id="settings-maintenance-preview-declared-actions"
+            className="rounded border border-border bg-muted/30 px-3 py-2"
+          >
+            <p className="mb-1 text-xs font-medium">
+              {t("settings.maintenanceDeclaredActionsTitle")}
+            </p>
+            <MaintenanceDeclaredActionsSummary
+              declared={declared}
+              idPrefix="settings-maintenance-preview-declared-action"
+            />
+          </div>
+        ) : null}
 
         <MaintenanceSubjectPicker
           key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${scope}:${draftName}`}
@@ -705,6 +742,7 @@ function MaintenancePreviewPanel({
                     <TableHead className="w-[140px]">
                       {t("settings.maintenancePreviewColOutcome")}
                     </TableHead>
+                    <TableHead>{t("settings.maintenanceRuleAction")}</TableHead>
                     <TableHead>
                       {t("settings.maintenancePreviewColReasons")}
                     </TableHead>
@@ -770,10 +808,23 @@ function MaintenancePreviewPanel({
                           </div>
                         )}
                       </TableCell>
+                      <TableCell>
+                        {title.actions ? (
+                          <MaintenanceDecidedActionsSummary
+                            actions={title.actions}
+                            idPrefix={selectorId(
+                              "settings-maintenance-preview-action",
+                              title.subjectId,
+                            )}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {title.error ? (
                           <span className="text-[var(--scry-danger-text)]">
-                            {title.error}
+                            {maintenancePreviewErrorText(title, t)}
                           </span>
                         ) : title.reasonCodes.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -798,7 +849,7 @@ function MaintenancePreviewPanel({
                   ))}
                   {previewResult.titles.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={3} className="text-muted-foreground">
+                      <TableCell colSpan={4} className="text-muted-foreground">
                         {t("settings.maintenancePreviewNoTitles")}
                       </TableCell>
                     </TableRow>
@@ -878,17 +929,23 @@ export function SettingsMaintenanceRulesSection({
   editingRuleSetId,
   ruleSetDraft,
   setRuleSetDraft,
+  editorSessionKey,
+  editorMode,
+  setEditorMode,
+  editRegoSource,
+  setBuilderModel,
+  editAsRego,
+  builderOptions,
+  builderSchema,
+  builderStatus,
   submitRuleSet,
   mutatingRuleSetId,
   resetRuleSetDraft,
   startCreateRuleSet,
   applyTemplate,
   ruleSetRecords,
-  actionStepDescriptors,
-  actionStepDescriptorsLoaded,
   libraries,
   storageRoots,
-  qualityProfiles,
   copyRuleSet,
   editRuleSet,
   deleteRuleSet,
@@ -901,8 +958,27 @@ export function SettingsMaintenanceRulesSection({
   ...previewProps
 }: SettingsMaintenanceRulesSectionProps) {
   const t = useTranslate();
-  const editingSystemOwned = ruleSetRecords.some(
-    (record) => record.id === editingRuleSetId && record.systemOwned,
+  const editingRecord = editingRuleSetId
+    ? ruleSetRecords.find((record) => record.id === editingRuleSetId)
+    : undefined;
+  const editingSystemOwned = editingRecord?.systemOwned === true;
+  // The saved next run describes the saved schedule, so it shows only while
+  // the editor still holds that schedule.
+  const editingNextRunAt =
+    editingRecord &&
+    JSON.stringify(toScriptScheduleInput(editingRecord.schedule)) ===
+      JSON.stringify(toScriptScheduleInput(ruleSetDraft.schedule))
+      ? editingRecord.nextRunAt
+      : null;
+  const validationStatus = (
+    <EditorValidationStatus
+      id="settings-maintenance-rule-validation"
+      checking={validating}
+      result={validationResult}
+      formatError={(error) =>
+        formatRegoValidationError(error, ruleSetDraft.regoSource)
+      }
+    />
   );
 
   // Candidates and history are one pane each. They keep the instance switches,
@@ -940,7 +1016,7 @@ export function SettingsMaintenanceRulesSection({
                   ruleKind="maintenance"
                   inputContract={maintenanceInputContract}
                   outputContract={
-                    'Define match if { ... }. You may also add reasons contains "stable_reason" if { match }.'
+                    'Declare actions by defining rules with these names: unmonitor, monitor, search, fetch_subtitles, delete_files and delete_title as "name if { ... }"; set_quality_profile := "Profile name", move_to_library := "Library name", move_to_root := "/path/of/root" and notify := "message text" as plain string literals; add_tags := ["tag"] and remove_tags := ["tag"] as plain lists of string literals. delete_title, move_to_library and move_to_root act on whole titles. Any other rule name is a helper of your own. days_since(ts) returns whole days since an RFC3339 timestamp; do not define a rule with that name. You may add reasons contains "stable_reason" if { ... } and unknown if { ... } to hold a subject.'
                   }
                 />
               </div>
@@ -955,6 +1031,12 @@ export function SettingsMaintenanceRulesSection({
                       </TableHead>
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleGraceDays")}
+                      </TableHead>
+                      <TableHead>
+                        <HelpLabel
+                          label={t("jobs.column.schedule")}
+                          help={t("settings.maintenanceRuleScheduleHelp")}
+                        />
                       </TableHead>
                       <TableHead className="w-[240px]">
                         <HelpLabel
@@ -1011,11 +1093,39 @@ export function SettingsMaintenanceRulesSection({
                           <TableCell className="max-w-[200px] truncate text-muted-foreground">
                             {record.description || "—"}
                           </TableCell>
-                          <TableCell>
-                            <ActionSummary record={record} />
+                          <TableCell className="max-w-[320px]">
+                            <MaintenanceDeclaredActionsSummary
+                              declared={record.declaredActions}
+                              idPrefix={selectorId(
+                                "settings-maintenance-rule-declared-action",
+                                record.id,
+                              )}
+                            />
+                            {record.loadRefusal ? (
+                              <p
+                                id={selectorId(
+                                  "settings-maintenance-rule-load-refusal",
+                                  record.id,
+                                )}
+                                className="mt-1 text-xs text-[var(--scry-danger-text)]"
+                              >
+                                {t(
+                                  maintenanceLoadRefusalKey(record.loadRefusal),
+                                )}
+                              </p>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-center">
                             {record.graceDays}
+                          </TableCell>
+                          <TableCell className="min-w-[10rem] text-muted-foreground">
+                            <MaintenanceRuleScheduleSummary
+                              record={record}
+                              idPrefix={selectorId(
+                                "settings-maintenance-rule-schedule",
+                                record.id,
+                              )}
+                            />
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
@@ -1190,67 +1300,50 @@ export function SettingsMaintenanceRulesSection({
                       />
                     ) : null}
 
-                    <div>
-                      <Label className="mb-2 block">
-                        {t("settings.ruleRegoSource")}
-                      </Label>
-                      <LazyRegoEditor
-                        ruleFamily="maintenance"
-                        id="settings-maintenance-rule-rego-source"
-                        value={ruleSetDraft.regoSource}
-                        readOnly={editingSystemOwned}
-                        onChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            regoSource: value,
-                          }))
-                        }
-                        diagnostics={regoDiagnostics(
-                          ruleSetDraft.regoSource,
-                          validationResult,
-                          t,
-                        )}
-                        feedback={
-                          <EditorValidationStatus
-                            id="settings-maintenance-rule-validation"
-                            checking={validating}
-                            result={validationResult}
-                            formatError={(error) =>
-                              formatRegoValidationError(
-                                error,
-                                ruleSetDraft.regoSource,
-                              )
-                            }
-                          />
-                        }
-                        minLines={12}
-                        maxLines={35}
-                      />
-                    </div>
+                    <RuleEditorSurface
+                      idPrefix="settings-maintenance-rule"
+                      schema={builderSchema}
+                      builderStatus={builderStatus}
+                      variant={ruleSetDraft.subjectKind}
+                      mode={editorMode}
+                      onModeChange={setEditorMode}
+                      available={!editingSystemOwned}
+                      onEditAsRego={editAsRego}
+                      model={ruleSetDraft.builderModel}
+                      onModelChange={setBuilderModel}
+                      options={builderOptions}
+                      generatedSource={ruleSetDraft.regoSource}
+                      feedback={validationStatus}
+                      editor={(readOnly) => (
+                        <LazyRegoEditor
+                          ruleFamily="maintenance"
+                          ruleVariant={ruleSetDraft.subjectKind}
+                          id="settings-maintenance-rule-rego-source"
+                          value={ruleSetDraft.regoSource}
+                          readOnly={editingSystemOwned || readOnly}
+                          onChange={editRegoSource}
+                          diagnostics={regoDiagnostics(
+                            ruleSetDraft.regoSource,
+                            validationResult,
+                            t,
+                          )}
+                          feedback={validationStatus}
+                          minLines={12}
+                          maxLines={35}
+                        />
+                      )}
+                    />
 
-                    {!actionStepDescriptorsLoaded ? (
-                      <p
-                        id="settings-maintenance-sequence-catalog-unavailable"
-                        className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-xs text-[var(--scry-warning-text)]"
-                      >
-                        {t("settings.maintenanceSequenceCatalogUnavailable")}
-                      </p>
-                    ) : null}
-                    <fieldset disabled={editingSystemOwned}>
-                      <MaintenanceActionSequenceEditor
-                        sequence={ruleSetDraft.actionSequence}
-                        descriptors={actionStepDescriptors}
-                        subjectKind={ruleSetDraft.subjectKind}
-                        storageRootId={ruleSetDraft.storageRootId}
-                        qualityProfiles={qualityProfiles}
-                        onChange={(actionSequence) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            actionSequence,
-                          }))
-                        }
-                      />
-                    </fieldset>
+                    <MaintenanceRuleSourceFindings
+                      source={ruleSetDraft.regoSource}
+                      checked={
+                        !validating &&
+                        validationResult !== null &&
+                        !validationResult.unavailable
+                      }
+                      declared={validationResult?.declaredActions}
+                      warnings={validationResult?.warnings ?? []}
+                    />
 
                     <label className="block md:max-w-[50%]">
                       <Label className="mb-2 block">
@@ -1274,6 +1367,42 @@ export function SettingsMaintenanceRulesSection({
                         placeholder="0"
                       />
                     </label>
+
+                    <label className="block md:max-w-[50%]">
+                      <Label className="mb-2 block">
+                        <HelpLabel
+                          label={t("settings.maintenanceRuleMaxTitlesPerRun")}
+                          help={t("settings.maintenanceRuleMaxTitlesPerRunHelp")}
+                        />
+                      </Label>
+                      <Input
+                        id="settings-maintenance-rule-max-titles-per-run"
+                        {...integerInputProps}
+                        min={1}
+                        required={
+                          validationResult?.declaredActions?.destructive === true
+                        }
+                        value={ruleSetDraft.maxTitlesPerRun ?? ""}
+                        onChange={(event) => {
+                          const digits = sanitizeDigits(event.target.value);
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            maxTitlesPerRun: digits === "" ? null : Number(digits),
+                          }));
+                        }}
+                        placeholder={t("settings.maintenanceRuleMaxTitlesPerRunNone")}
+                      />
+                    </label>
+
+                    <MaintenanceRuleScheduleField
+                      key={editorSessionKey}
+                      idPrefix="settings-maintenance-rule-form-schedule"
+                      value={ruleSetDraft.schedule}
+                      onChange={(schedule) =>
+                        setRuleSetDraft((prev) => ({ ...prev, schedule }))
+                      }
+                      nextRunAt={editingNextRunAt}
+                    />
 
                     <div>
                       <Label className="mb-2 block">
@@ -1332,11 +1461,15 @@ export function SettingsMaintenanceRulesSection({
                         value={ruleSetDraft.subjectKind}
                         disabled={Boolean(editingRuleSetId)}
                         onValueChange={(value) =>
-                          setRuleSetDraft((prev) => ({
-                            ...prev,
-                            subjectKind:
-                              value as MaintenanceRuleSetDraft["subjectKind"],
-                          }))
+                          // The builder writes for one scope, so a builder
+                          // rule regenerates for the new one.
+                          setRuleSetDraft((prev) =>
+                            withRegeneratedRuleSource(maintenanceRuleBuilder(builderSchema), {
+                              ...prev,
+                              subjectKind:
+                                value as MaintenanceRuleSetDraft["subjectKind"],
+                            }),
+                          )
                         }
                         options={[
                           { value: "TITLE", label: t("label.title") },
@@ -1435,7 +1568,7 @@ export function SettingsMaintenanceRulesSection({
               isEditorOpen={isEditorOpen}
               draftName={ruleSetDraft.name}
               draftScope={ruleSetDraft.subjectKind}
-              draftActionSequence={ruleSetDraft.actionSequence}
+              draftDeclaredActions={validationResult?.declaredActions}
               ruleSetRecords={ruleSetRecords}
               libraries={libraries}
               {...previewProps}

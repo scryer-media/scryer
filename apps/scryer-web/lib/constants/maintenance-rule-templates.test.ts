@@ -1,30 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import cs from "../i18n/locales/cs.ts";
 import en from "../i18n/locales/en.ts";
 import ru from "../i18n/locales/ru.ts";
-import type { MaintenanceActionKind } from "../types/maintenance-rule-sets.ts";
-import { actionKindLabelKey } from "../utils/maintenance-rule-sets.ts";
+import zhHK from "../i18n/locales/zh_HK.ts";
+import zhTW from "../i18n/locales/zh_TW.ts";
+import { MAINTENANCE_SERVED_PAYLOAD } from "../utils/rule-builder-contract-fixture.ts";
+import { templateRuleOutputs } from "../utils/rule-output-vocabulary.ts";
 import {
   MAINTENANCE_RULE_TEMPLATES,
   maintenanceTemplateFacetLabelKey,
 } from "./maintenance-rule-templates.ts";
 
-/// The wire names the web types define. A template may only name one of these:
-/// anything else would build an action payload the API rejects.
-const ACTION_KINDS: MaintenanceActionKind[] = [
-  "DO_NOTHING",
-  "UNMONITOR_SCOPE_KEEP_FILES",
-  "DELETE_TITLE_AND_FILES",
-  "UNMONITOR_TITLE_DELETE_ALL_FILES",
-  "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
-  "UNMONITOR_SCOPE_DELETE_FILES",
-  "UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY",
-  "UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY",
-  "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
-  "ADD_TAGS",
-  "REMOVE_TAGS",
-];
+const DESCRIPTORS = MAINTENANCE_SERVED_PAYLOAD.outputs;
+const templateActionHeads = (source: string) => templateRuleOutputs(source, DESCRIPTORS);
 
 test("the gallery ships every starter template exactly once", () => {
   assert.equal(MAINTENANCE_RULE_TEMPLATES.length, 17);
@@ -56,10 +46,10 @@ test("every template carries a matcher the API can accept", () => {
       template.regoSource.startsWith("package rules\nimport rego.v1\n"),
       `${template.id} does not open with the pinned package and import lines`,
     );
-    assert.match(
+    assert.doesNotMatch(
       template.regoSource,
-      /(^|\n)match if /,
-      `${template.id} defines no match rule`,
+      /(^|\n)match\b/,
+      `${template.id} still defines the retired match rule`,
     );
     /// Templates are pinned byte-for-byte against the matcher fixtures the API
     /// validates, so nothing may re-indent them into spaces.
@@ -71,16 +61,22 @@ test("every template carries a matcher the API can accept", () => {
   }
 });
 
-test("every template names a real action kind and a non-negative grace period", () => {
+test("every template declares at least one served action and a non-negative grace period", () => {
+  const labelled: [string, Record<string, string>][] = [
+    ["en", en], ["cs", cs], ["ru", ru], ["zh_HK", zhHK], ["zh_TW", zhTW],
+  ];
   for (const template of MAINTENANCE_RULE_TEMPLATES) {
-    assert.ok(
-      ACTION_KINDS.includes(template.actionKind),
-      `${template.id} names an unknown action kind`,
-    );
-    assert.ok(
-      actionKindLabelKey(template.actionKind),
-      `${template.id} names an action kind with no label`,
-    );
+    const heads = templateActionHeads(template.regoSource);
+    assert.ok(heads.length > 0, `${template.id} declares no action`);
+    for (const head of heads) {
+      const descriptor = DESCRIPTORS.find((entry) => entry.id === head);
+      assert.ok(descriptor, `${template.id} declares ${head}, which is not served`);
+      for (const [name, strings] of labelled)
+        assert.ok(
+          strings[descriptor.labelKey],
+          `${template.id} declares ${head}, which has no ${name} label`,
+        );
+    }
     assert.ok(
       Number.isInteger(template.graceDays) && template.graceDays >= 0,
       `${template.id} has an unusable grace period`,
@@ -92,33 +88,62 @@ test("every template names a real action kind and a non-negative grace period", 
   }
 });
 
-test("a template never picks the quality profile the operator has to choose", () => {
+test("each template keeps the action it was written for", () => {
+  const headsById = Object.fromEntries(
+    MAINTENANCE_RULE_TEMPLATES.map((template) => [
+      template.id,
+      templateActionHeads(template.regoSource),
+    ]),
+  );
+  assert.deepEqual(headsById, {
+    "dead-wanted-entries": ["UNMONITOR"],
+    "library-aging": ["DELETE_TITLE"],
+    "added-over-180-days-ago": ["UNMONITOR"],
+    "oversized-releases": ["SET_QUALITY_PROFILE", "SEARCH"],
+    "four-k-purge": ["SET_QUALITY_PROFILE", "SEARCH"],
+    "requested-media-expiry": ["DELETE_TITLE"],
+    "departed-requester": ["DELETE_TITLE"],
+    "system-added-cleanup": ["UNMONITOR"],
+    "watched-by-every-requester": ["DELETE_TITLE"],
+    "expired-request-leases": ["DELETE_TITLE"],
+    "tagged-for-removal": ["DELETE_TITLE"],
+    "flag-for-review": ["ADD_TAGS"],
+    "no-quality-profile": ["ADD_TAGS"],
+    "keep-newest-three-downloaded-episodes": ["DELETE_FILES"],
+    "keep-newest-two-downloaded-seasons": ["DELETE_FILES"],
+    "left-every-public-list": ["UNMONITOR"],
+    "list-added-never-watched": ["ADD_TAGS"],
+  });
+});
+
+test("a template that sets a quality profile is marked as needing the operator's own", () => {
   for (const template of MAINTENANCE_RULE_TEMPLATES) {
-    const changesProfile =
-      template.actionKind === "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED";
-    assert.equal(
-      template.requiresTargetQualityProfile === true,
-      changesProfile,
-      `${template.id} disagrees with its action about needing a target profile`,
+    const setsProfile = templateActionHeads(template.regoSource).includes(
+      "SET_QUALITY_PROFILE",
     );
     assert.equal(
-      template.targetQualityProfileId,
-      undefined,
-      `${template.id} pins a quality profile that only the operator can pick`,
+      template.requiresTargetQualityProfile === true,
+      setsProfile,
+      `${template.id} disagrees with its source about needing a target profile`,
     );
   }
 });
 
 test("every file-deleting template is marked and says so in its copy", () => {
   for (const template of MAINTENANCE_RULE_TEMPLATES) {
-    const deletesFiles = [
-      "DELETE_TITLE_AND_FILES",
-      "UNMONITOR_SCOPE_DELETE_FILES",
-    ].includes(template.actionKind);
+    const heads = templateActionHeads(template.regoSource);
+    const deletesFiles =
+      heads.includes("DELETE_FILES") || heads.includes("DELETE_TITLE");
     assert.equal(
       template.destructive === true,
       deletesFiles,
-      `${template.id} disagrees with its action about deleting files`,
+      `${template.id} disagrees with its source about deleting files`,
+    );
+    // The server refuses a deleting rule without a per-run maximum.
+    assert.equal(
+      template.maxTitlesPerRun !== undefined,
+      deletesFiles,
+      `${template.id} disagrees with its source about needing a per-run maximum`,
     );
     if (deletesFiles) {
       assert.match(
@@ -128,22 +153,6 @@ test("every file-deleting template is marked and says so in its copy", () => {
       );
     }
   }
-
-  assert.deepEqual(
-    MAINTENANCE_RULE_TEMPLATES.filter((template) => template.destructive).map(
-      (template) => template.id,
-    ),
-    [
-      "library-aging",
-      "requested-media-expiry",
-      "departed-requester",
-      "watched-by-every-requester",
-      "expired-request-leases",
-      "tagged-for-removal",
-      "keep-newest-three-downloaded-episodes",
-      "keep-newest-two-downloaded-seasons",
-    ],
-  );
 });
 
 test("retention examples use the rank for their exact scope", () => {

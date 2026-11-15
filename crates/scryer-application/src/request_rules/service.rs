@@ -48,9 +48,6 @@ use crate::{AppError, AppResult, AppUseCase};
 /// would take down the import that tried to start its clock.
 pub const REQUEST_MAX_LEASE_DAYS: i64 = 3650;
 
-/// The largest builder document the server keeps, in bytes of its JSON text.
-pub const REQUEST_BUILDER_MODEL_MAX_BYTES: usize = 64 * 1024;
-
 // ── Request models ──────────────────────────────────────────────────────────
 
 /// A new rule set plus its first matcher revision.
@@ -1028,31 +1025,14 @@ fn literal_diagnostic(
     }
 }
 
-/// The builder document as stored: a JSON object no larger than
-/// [`REQUEST_BUILDER_MODEL_MAX_BYTES`]. The server never reads inside it.
+/// The builder document as stored, checked the way every rule family's is:
+/// an object naming the request family and a version, within the shared size
+/// bound. The server never reads inside it.
 pub(crate) fn validated_builder_model_json(model: &serde_json::Value) -> AppResult<String> {
-    if !model.is_object() {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::request_rules::BUILDER_MODEL_NOT_OBJECT,
-            "the builder model must be a JSON object",
-        ));
-    }
-    let json = serde_json::to_string(model).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::request_rules::BUILDER_MODEL_NOT_OBJECT,
-            format!("the builder model could not be encoded: {error}"),
-        )
-    })?;
-    if json.len() > REQUEST_BUILDER_MODEL_MAX_BYTES {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::request_rules::BUILDER_MODEL_TOO_LARGE,
-            format!(
-                "the builder model is {} bytes, at most {REQUEST_BUILDER_MODEL_MAX_BYTES} are kept",
-                json.len()
-            ),
-        ));
-    }
-    Ok(json)
+    crate::rules::builder_model::checked_builder_model(
+        model,
+        crate::rules::builder_model::BuilderFamily::Request,
+    )
 }
 
 /// Rewrite the package to the system-assigned id, then run every check that has

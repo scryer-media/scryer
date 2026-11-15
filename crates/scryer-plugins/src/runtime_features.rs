@@ -23,9 +23,10 @@ pub const PLUGIN_RUNTIME_TARGET_WASIP2: &str = "wasm32-wasip2";
 /// set this module returns.
 const SUPPORTED_PLUGIN_RUNTIME_TARGETS: &[&str] = &[PLUGIN_RUNTIME_TARGET_WASIP2];
 
-const SIMD128_PROBE_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/simd128_probe.wasm"));
-const RELAXED_SIMD_PROBE_WASM: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/relaxed_simd_probe.wasm"));
+// Compiled from the `.wat` file beside each one; a test keeps the pairs
+// byte-identical.
+const SIMD128_PROBE_WASM: &[u8] = include_bytes!("../probes/simd128.wasm");
+const RELAXED_SIMD_PROBE_WASM: &[u8] = include_bytes!("../probes/relaxed_simd.wasm");
 
 /// Every capability token this host satisfies: WASI targets and wasm features
 /// in one namespace.
@@ -119,6 +120,31 @@ mod tests {
                 PLUGIN_REQUIRED_FEATURE_RELAXED_SIMD.to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn committed_probe_modules_match_their_wat_sources() {
+        for (name, committed, source) in [
+            (
+                "simd128",
+                SIMD128_PROBE_WASM,
+                include_str!("../probes/simd128.wat"),
+            ),
+            (
+                "relaxed_simd",
+                RELAXED_SIMD_PROBE_WASM,
+                include_str!("../probes/relaxed_simd.wat"),
+            ),
+        ] {
+            let compiled = wat::parse_str(source)
+                .unwrap_or_else(|error| panic!("probes/{name}.wat does not compile: {error}"));
+            assert_eq!(
+                committed,
+                compiled.as_slice(),
+                "probes/{name}.wasm is not the compiled form of probes/{name}.wat; \
+                 write the bytes `wat::parse_str` returns for it to probes/{name}.wasm"
+            );
+        }
     }
 
     #[test]

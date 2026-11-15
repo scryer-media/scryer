@@ -2578,9 +2578,6 @@ const de: LocaleDictionary = {
   "settings.maintenanceRuleGraceDays": "Karenztage",
   "settings.maintenanceRuleGraceDaysHelp":
     "Tage nach der ersten Übereinstimmung der Regel, bevor die Aktion ausgeführt würde (es werden noch keine Aktionen ausgeführt).",
-  "settings.maintenanceRuleTargetProfile": "Ziel-Qualitätsprofil",
-  "settings.maintenanceRuleTargetProfileHelp":
-    "Das Profil, auf das diese Aktion übereinstimmende Titel umstellen würde.",
   "settings.maintenanceRuleLibraries": "Bibliotheksbereich",
   "settings.maintenanceRuleLibrariesHelp":
     "Lassen Sie alle Bibliotheken unmarkiert, damit die Regel für die gesamte Sammlung gilt.",
@@ -2653,9 +2650,6 @@ const de: LocaleDictionary = {
   // ── Wartungsregeln — Instanzschalter ──
 
   // ── Wartungsregeln — Modus und Scharfschaltung ──
-  "settings.maintenanceArmingNone": "Keine Wirkungen",
-  "settings.maintenanceArmingReversible": "Umkehrbar",
-  "settings.maintenanceArmingDestructive": "Destruktiv",
   "settings.maintenanceArmDestructiveLoading":
     "Die Kandidaten dieser Regel werden gezählt…",
   "settings.maintenanceArmDestructiveCount":
@@ -3386,12 +3380,8 @@ const de: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Serienfilme",
   "settings.maintenanceActionAddTags": "Tags hinzufügen",
   "settings.maintenanceActionRemoveTags": "Tags entfernen",
-  "settings.maintenanceRuleTags": "Tags",
-  "settings.maintenanceRuleTagsNone": "Noch keine Tags ausgewählt",
   "settings.maintenanceRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceCandidatesTagPatchAdd": "fügt {{tags}} hinzu",
-  "settings.maintenanceCandidatesTagPatchRemove": "entfernt {{tags}}",
   "settings.maintenanceTemplateTaggedForRemovalTitle": "Zum Entfernen markiert",
   "settings.maintenanceTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
@@ -3934,6 +3924,65 @@ const de: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Ziehen, um {{value}} neu anzuordnen",
   "qualityProfile.decisionStepMoveUp": "{{value}} nach oben verschieben",
   "qualityProfile.decisionStepMoveDown": "{{value}} nach unten verschieben",
+  "settings.proxyReachThrough": "Erreichen über",
+  "settings.proxyReachThroughHelp":
+    "Scryer sendet seine Anfragen an diesen Solver über den gewählten Transport-Proxy oder Tunnel. Direkt erreicht den Solver aus Scryers eigenem Netzwerk.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Ein Challenge-Solver kann nicht über einen anderen Challenge-Solver erreicht werden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Ein Challenge-Solver kann nicht über sich selbst erreicht werden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "Der Proxy oder Tunnel, über den der Solver erreicht werden soll, wurde nicht gefunden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "Der Proxy oder Tunnel, über den der Solver erreicht werden soll, ist deaktiviert.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Nur ein Challenge-Solver kann über einen anderen Proxy erreicht werden.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Ein oder mehrere Challenge-Solver werden über diesen Proxy erreicht. Ändere sie zuerst.",
+  "tours.onboarding.welcome.title": "Willkommen bei Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer findet, lädt und ordnet deine Filme, Serien und Anime. Hier ein kurzer Rundgang; du kannst ihn jederzeit überspringen.",
+  "tours.onboarding.search.title": "Alles durchsuchen",
+  "tours.onboarding.search.body":
+    "Finde einen Titel, eine Einstellung oder eine Aktion von überall aus. Mit ⌘K oder Strg+K öffnest du die Suche per Tastatur.",
+  "tours.onboarding.libraries.title": "Deine Bibliotheken",
+  "tours.onboarding.libraries.body":
+    "Filme, Serien und Anime haben je eine Bibliothek: was du hast, was fehlt und was unterwegs ist.",
+  "tours.onboarding.discover.title": "Entdecken und anfragen",
+  "tours.onboarding.discover.body":
+    "Stöbere in Vorschlägen auf Basis deiner Bibliotheken, frage einen Titel an und verfolge jede Anfrage unter Anfragen.",
+  "tours.onboarding.lists.title": "Listen",
+  "tours.onboarding.lists.body":
+    "Folge Listen von Anbietern wie Trakt oder deiner Plex-Watchlist. Scryer hält sie synchron und fügt ihre Titel für dich hinzu oder fragt sie an.",
+  "tours.onboarding.activity.title": "Aktivität",
+  "tours.onboarding.activity.body":
+    "Downloads und Importe in Echtzeit, und alles, was eine Entscheidung von dir braucht.",
+  "tours.onboarding.indexers.title": "Indexer und Download-Clients",
+  "tours.onboarding.indexers.body":
+    "Scryer braucht mindestens einen Indexer, um Releases zu finden, und einen Download-Client, um sie zu laden. Die Download-Clients stehen direkt darunter.",
+  "tours.onboarding.indexers.action": "Indexer hinzufügen",
+  "tours.onboarding.qualityProfiles.title": "Qualitätsprofile",
+  "tours.onboarding.qualityProfiles.body":
+    "Ein Qualitätsprofil legt fest, welche Qualitäten ein Titel haben darf und wann Scryer weiter nach einem besseren Release sucht.",
+  "tours.onboarding.rules.title": "Regeln",
+  "tours.onboarding.rules.body":
+    "Regeln bewerten Releases, damit Scryer die bevorzugt, die du willst, und die übergeht, die du nicht willst.",
+  "tours.onboarding.mediaServers.title": "Medienserver",
+  "tours.onboarding.mediaServers.body":
+    "Verbinde Jellyfin, Plex oder Emby, damit Scryer weiß, was du gesehen hast. Damit sich dein Server nach jedem Import von Scryer aktualisiert, installiere zusätzlich das Plugin dieses Servers unter Plugins.",
+  "tours.onboarding.notifications.title": "Benachrichtigungen",
+  "tours.onboarding.notifications.body":
+    "Erfahre von Grabs, Importen und allem, was Aufmerksamkeit braucht, dort, wo du es möchtest.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Plugins fügen Indexer, Download-Clients und Benachrichtigungsdienste hinzu. Hier installierst und aktualisierst du sie.",
+  "tours.stepOf": "Schritt {{current}} von {{total}}",
+  "tours.skip": "Tour überspringen",
+  "tours.back": "Zurück",
+  "tours.next": "Weiter",
+  "tours.done": "Fertig",
+  "tours.saveFailed":
+    "Der Fortschritt der Tour konnte nicht gespeichert werden, daher erscheint sie möglicherweise erneut.",
 };
 
 export default de;

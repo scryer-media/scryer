@@ -1298,6 +1298,7 @@ async fn notification_event_types_query_returns_only_dispatchable_subscription_e
             "list_title_left",
             "list_sync_failed",
             "list_unfollowed",
+            "maintenance_rule_notified",
         ]
     );
 }

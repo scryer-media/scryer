@@ -669,12 +669,62 @@ fn cors_allowed_origin(origin: &str) -> Option<String> {
     canonical_origin(origin)
 }
 
+/// How long repeat rejections of one browser Origin log at debug after the
+/// first warning. A page left open on a disallowed origin reconnects every
+/// few seconds; one warning per origin per interval keeps the cause visible.
+const WS_ORIGIN_REJECTION_WARN_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// Origins are client-supplied, so the remembered set is bounded.
+const WS_ORIGIN_REJECTION_LOG_CAPACITY: usize = 64;
+
+#[derive(Debug, Default)]
+struct OriginRejectionLog {
+    last_warned: std::sync::Mutex<HashMap<String, Instant>>,
+}
+
+impl OriginRejectionLog {
+    fn warning_due(&self, origin: &str, now: Instant) -> bool {
+        let mut last_warned = self
+            .last_warned
+            .lock()
+            .expect("origin rejection log lock must not be poisoned");
+        if let Some(last) = last_warned.get(origin)
+            && now.saturating_duration_since(*last) < WS_ORIGIN_REJECTION_WARN_INTERVAL
+        {
+            return false;
+        }
+        if last_warned.len() >= WS_ORIGIN_REJECTION_LOG_CAPACITY
+            && !last_warned.contains_key(origin)
+        {
+            last_warned.retain(|_, last| {
+                now.saturating_duration_since(*last) < WS_ORIGIN_REJECTION_WARN_INTERVAL
+            });
+            if last_warned.len() >= WS_ORIGIN_REJECTION_LOG_CAPACITY {
+                last_warned.clear();
+            }
+        }
+        last_warned.insert(origin.to_owned(), now);
+        true
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WebSocketOriginPolicy {
     allowed_origins: Vec<String>,
+    rejection_log: Arc<OriginRejectionLog>,
 }
 
 impl WebSocketOriginPolicy {
+    /// Whether a rejection of this request's Origin should log at warn rather
+    /// than debug.
+    fn rejection_warning_due(&self, headers: &HeaderMap, now: Instant) -> bool {
+        let origin = headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .unwrap_or_default();
+        self.rejection_log.warning_due(origin, now)
+    }
+
     pub(crate) fn from_env(cors: &CorsConfig) -> Self {
         Self::from_env_for_mode(cors, cfg!(debug_assertions))
     }
@@ -698,6 +748,7 @@ impl WebSocketOriginPolicy {
 
         Self {
             allowed_origins: origins,
+            rejection_log: Arc::default(),
         }
     }
 
@@ -1026,12 +1077,26 @@ pub(crate) async fn graphql_ws_handler(
     let auth_enabled = auth_snapshot.effective_form_login_enabled;
     let local_bypass_active = local_ip_bypass_active(&auth_snapshot, &headers, Some(remote_addr));
     let connection_epoch = auth_snapshot.epoch;
+    // Subscribed before the upgrade, so an invalidation that lands while the
+    // connection is being set up still closes it.
+    let auth_epoch = auth_runtime.subscribe_epoch();
     if let Err(error) = state.ws_origin_policy.check(&headers) {
-        tracing::warn!(
-            remote_addr = %remote_addr,
-            error = %error,
-            "rejecting GraphQL WebSocket connection because browser Origin is not allowed"
-        );
+        if state
+            .ws_origin_policy
+            .rejection_warning_due(&headers, Instant::now())
+        {
+            tracing::warn!(
+                remote_addr = %remote_addr,
+                error = %error,
+                "rejecting GraphQL WebSocket connection because browser Origin is not allowed; repeats from this Origin log at debug for 10 minutes"
+            );
+        } else {
+            tracing::debug!(
+                remote_addr = %remote_addr,
+                error = %error,
+                "rejecting GraphQL WebSocket connection because browser Origin is not allowed"
+            );
+        }
         return (StatusCode::FORBIDDEN, error).into_response();
     }
     if authorization_token_from_headers(&headers)
@@ -1210,8 +1275,28 @@ pub(crate) async fn graphql_ws_handler(
                 _ = restore.shutdown_workers.cancelled() => {}
                 _ = connection => {}
                 _ = api_explorer::until_revoked(app, explorer_session) => {}
+                // Every operation on a connection from an older auth epoch is
+                // refused, so the connection is closed and the client
+                // reconnects with fresh credentials instead of resubscribing
+                // on it forever.
+                _ = until_auth_epoch_moves_past(auth_epoch, connection_epoch) => {}
             }
         })
+}
+
+/// Resolves once the auth epoch differs from `connection_epoch`. Never
+/// resolves if the epoch sender is gone.
+async fn until_auth_epoch_moves_past(
+    mut auth_epoch: tokio::sync::watch::Receiver<u64>,
+    connection_epoch: u64,
+) {
+    if auth_epoch
+        .wait_for(|epoch| *epoch != connection_epoch)
+        .await
+        .is_err()
+    {
+        std::future::pending::<()>().await;
+    }
 }
 
 #[derive(Clone)]
@@ -2875,6 +2960,7 @@ mod ws_origin_tests {
     fn websocket_origin_policy_allows_configured_origin() {
         let policy = WebSocketOriginPolicy {
             allowed_origins: vec!["https://scryer.example.test".to_string()],
+            rejection_log: Arc::default(),
         };
         let headers = ws_headers(
             "127.0.0.1:8080",
@@ -2883,6 +2969,54 @@ mod ws_origin_tests {
         );
 
         assert!(policy.check(&headers).is_ok());
+    }
+
+    #[test]
+    fn origin_rejection_warns_once_per_origin_per_interval() {
+        let policy = WebSocketOriginPolicy::default();
+        let start = Instant::now();
+        let first = ws_headers("192.168.1.25:8080", Some("http://localhost:3003"), None);
+        let other = ws_headers("192.168.1.25:8080", Some("http://localhost:3004"), None);
+
+        assert!(policy.rejection_warning_due(&first, start));
+        assert!(!policy.rejection_warning_due(&first, start + Duration::from_secs(8)));
+        assert!(policy.rejection_warning_due(&other, start + Duration::from_secs(8)));
+        assert!(policy.rejection_warning_due(&first, start + WS_ORIGIN_REJECTION_WARN_INTERVAL));
+    }
+
+    #[test]
+    fn origin_rejection_log_stays_bounded() {
+        let log = OriginRejectionLog::default();
+        let now = Instant::now();
+        for index in 0..(WS_ORIGIN_REJECTION_LOG_CAPACITY * 3) {
+            assert!(log.warning_due(&format!("http://host-{index}.example.test"), now));
+        }
+        let remembered = log.last_warned.lock().expect("lock").len();
+        assert!(remembered <= WS_ORIGIN_REJECTION_LOG_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn stale_auth_epoch_closes_the_connection() {
+        use futures_util::FutureExt;
+        let (sender, receiver) = tokio::sync::watch::channel(7_u64);
+        let mut until_stale = Box::pin(until_auth_epoch_moves_past(receiver, 7));
+        assert!((&mut until_stale).now_or_never().is_none());
+
+        sender.send(8).expect("receiver alive");
+        tokio::time::timeout(Duration::from_secs(30), until_stale)
+            .await
+            .expect("connection closes once the auth epoch moves on");
+    }
+
+    #[tokio::test]
+    async fn epoch_changed_before_upgrade_closes_immediately() {
+        let (_sender, receiver) = tokio::sync::watch::channel(8_u64);
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            until_auth_epoch_moves_past(receiver, 7),
+        )
+        .await
+        .expect("an epoch already past the connection's closes it");
     }
 
     #[test]

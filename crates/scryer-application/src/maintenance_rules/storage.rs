@@ -104,6 +104,12 @@ pub(crate) struct MaintenanceStorageFactSnapshot {
 
 pub(crate) type MaintenanceStorageFactCache = HashMap<String, MaintenanceStorageFactSnapshot>;
 
+/// The roots one preview or rule pass has resolved, by id, so the library
+/// configuration is read once per root rather than once per subject. A root
+/// that does not resolve is remembered as `None`; a failed read is not
+/// remembered.
+pub(crate) type MaintenanceStorageRootMemo = HashMap<String, Option<MaintenanceStorageRoot>>;
+
 impl AppUseCase {
     /// Resolve a root from its immutable configuration ID. A missing or invalid
     /// root is an unknown observation rather than a fallback to any related
@@ -228,6 +234,33 @@ impl AppUseCase {
         storage_root_id: Option<&str>,
     ) -> AppResult<MaintenanceRootFileSummary> {
         let Some(root) = self.maintenance_storage_root(storage_root_id).await? else {
+            return Ok(MaintenanceRootFileSummary::default());
+        };
+        Ok(maintenance_root_file_summary_on(files, &root).await)
+    }
+
+    /// [`Self::maintenance_root_file_summary`] resolving each root once per
+    /// `memo`. The summary is the same; only the repeated configuration read
+    /// goes.
+    pub(crate) async fn maintenance_root_file_summary_memo(
+        &self,
+        files: &[crate::types::TitleMediaFile],
+        storage_root_id: Option<&str>,
+        memo: &mut MaintenanceStorageRootMemo,
+    ) -> AppResult<MaintenanceRootFileSummary> {
+        let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
+        else {
+            return Ok(MaintenanceRootFileSummary::default());
+        };
+        let root = match memo.get(storage_root_id) {
+            Some(root) => root.clone(),
+            None => {
+                let root = self.maintenance_storage_root(Some(storage_root_id)).await?;
+                memo.insert(storage_root_id.to_string(), root.clone());
+                root
+            }
+        };
+        let Some(root) = root else {
             return Ok(MaintenanceRootFileSummary::default());
         };
         Ok(maintenance_root_file_summary_on(files, &root).await)

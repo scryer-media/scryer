@@ -23,32 +23,26 @@ use scryer_domain::{
 #[tokio::test]
 async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
     let fixture = execution_app(None);
-    let title = seed_title(&fixture.app, &fixture.user, "Sequence History", false).await;
-    fixture
-        .app
-        .create_title_tag_definition(&fixture.user, "after-search", None)
-        .await
-        .expect("define follow-up tag");
-    let (rule_set_id, candidate) = arm_and_evaluate(
-        &fixture,
-        sequence_draft(vec![
-            MaintenanceActionStep {
-                id: "search".to_string(),
-                kind: MaintenanceActionStepKind::Search,
-                parameters: MaintenanceActionStepParameters::Search {
-                    condition: MaintenanceSearchCondition::Unconditional,
-                },
+    let title = seed_title(&fixture.app, &fixture.user, "Sequence History", true).await;
+    // Declared heads always search before they unmonitor, so the unmonitor
+    // is the step that waits behind the accepted search.
+    let steps = vec![
+        MaintenanceActionStep {
+            id: "search".to_string(),
+            kind: MaintenanceActionStepKind::Search,
+            parameters: MaintenanceActionStepParameters::Search {
+                condition: MaintenanceSearchCondition::Unconditional,
             },
-            MaintenanceActionStep {
-                id: "tag".to_string(),
-                kind: MaintenanceActionStepKind::AddTags,
-                parameters: MaintenanceActionStepParameters::Tags {
-                    tags: vec!["after-search".to_string()],
-                },
+        },
+        MaintenanceActionStep {
+            id: "unmonitor".to_string(),
+            kind: MaintenanceActionStepKind::Unmonitor,
+            parameters: MaintenanceActionStepParameters::Unmonitor {
+                include_descendants: true,
             },
-        ]),
-    )
-    .await;
+        },
+    ];
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture, sequence_draft(steps)).await;
     let search_key = MaintenanceActionStepKey {
         candidate_id: candidate.id.clone(),
         match_generation: candidate.match_generation,
@@ -140,15 +134,13 @@ async fn real_sequence_history_tracks_waiting_search_then_the_following_step() {
         "the later step is rendered from its durable sequence record",
     );
     assert!(
-        fixture
+        !fixture
             .app
             .get_title(&fixture.user, &title.id)
             .await
             .expect("read title")
             .expect("title survives sequence")
-            .tags
-            .iter()
-            .any(|tag| tag == "after-search"),
+            .monitored,
         "the real follow-up step ran after the accepted job completed"
     );
 }
@@ -169,7 +161,7 @@ async fn fresh_lease_closes_an_abandoned_sequence_history_before_recording_its_r
         .await
         .expect("define recovery tag");
     let sequence = MaintenanceActionSequence::new(vec![MaintenanceActionStep {
-        id: "tag".to_string(),
+        id: "add_tags".to_string(),
         kind: MaintenanceActionStepKind::AddTags,
         parameters: MaintenanceActionStepParameters::Tags {
             tags: vec!["recovered".to_string()],

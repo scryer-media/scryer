@@ -4662,6 +4662,65 @@ const nl: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Sleep om {{value}} te verplaatsen",
   "qualityProfile.decisionStepMoveUp": "{{value}} omhoog verplaatsen",
   "qualityProfile.decisionStepMoveDown": "{{value}} omlaag verplaatsen",
+  "settings.proxyReachThrough": "Bereiken via",
+  "settings.proxyReachThroughHelp":
+    "Scryer stuurt zijn verzoeken naar deze solver via de gekozen transportproxy of tunnel. Direct bereikt de solver vanuit het eigen netwerk van Scryer.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_IS_SOLVER":
+    "Een challenge-solver kan niet via een andere challenge-solver worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_SELF":
+    "Een challenge-solver kan niet via zichzelf worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_NOT_FOUND":
+    "De proxy of tunnel om de solver via te bereiken is niet gevonden.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_DISABLED":
+    "De proxy of tunnel om de solver via te bereiken is uitgeschakeld.",
+  "error.reason.INTEGRATION_PROXY_REACH_THROUGH_REQUIRES_SOLVER":
+    "Alleen een challenge-solver kan via een andere proxy worden bereikt.",
+  "error.reason.INTEGRATION_PROXY_CONFIG_REACHED_THROUGH_BY_SOLVERS":
+    "Een of meer challenge-solvers worden via deze proxy bereikt. Wijzig die eerst.",
+  "tours.onboarding.welcome.title": "Welkom bij Scryer",
+  "tours.onboarding.welcome.body":
+    "Scryer zoekt, downloadt en ordent je films, series en anime. Hier volgt een korte rondleiding; je kunt die altijd overslaan.",
+  "tours.onboarding.search.title": "Alles doorzoeken",
+  "tours.onboarding.search.body":
+    "Vind een titel, instelling of actie vanaf elke plek. Druk op ⌘K of Ctrl+K om zoeken met het toetsenbord te openen.",
+  "tours.onboarding.libraries.title": "Je bibliotheken",
+  "tours.onboarding.libraries.body":
+    "Films, series en anime hebben elk een bibliotheek: wat je hebt, wat ontbreekt en wat onderweg is.",
+  "tours.onboarding.discover.title": "Ontdekken en aanvragen",
+  "tours.onboarding.discover.body":
+    "Blader door suggesties op basis van je bibliotheken, vraag een titel aan en volg elke aanvraag in Aanvragen.",
+  "tours.onboarding.lists.title": "Lijsten",
+  "tours.onboarding.lists.body":
+    "Volg lijsten van aanbieders zoals Trakt of je Plex-watchlist. Scryer houdt ze gesynchroniseerd en voegt hun titels voor je toe of vraagt ze aan.",
+  "tours.onboarding.activity.title": "Activiteit",
+  "tours.onboarding.activity.body":
+    "Downloads en imports terwijl ze gebeuren, en alles wat een beslissing van je nodig heeft.",
+  "tours.onboarding.indexers.title": "Indexers en downloadclients",
+  "tours.onboarding.indexers.body":
+    "Scryer heeft minstens één indexer nodig om releases te vinden en een downloadclient om ze op te halen. De downloadclients staan er direct onder.",
+  "tours.onboarding.indexers.action": "Indexer toevoegen",
+  "tours.onboarding.qualityProfiles.title": "Kwaliteitsprofielen",
+  "tours.onboarding.qualityProfiles.body":
+    "Een kwaliteitsprofiel bepaalt welke kwaliteiten een titel mag hebben en wanneer Scryer blijft zoeken naar een betere release.",
+  "tours.onboarding.rules.title": "Regels",
+  "tours.onboarding.rules.body":
+    "Regels geven releases een score, zodat Scryer kiest wat je wilt en overslaat wat je niet wilt.",
+  "tours.onboarding.mediaServers.title": "Mediaservers",
+  "tours.onboarding.mediaServers.body":
+    "Koppel Jellyfin, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
+  "tours.onboarding.notifications.title": "Meldingen",
+  "tours.onboarding.notifications.body":
+    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt.",
+  "tours.onboarding.plugins.title": "Plugins",
+  "tours.onboarding.plugins.body":
+    "Plugins voegen indexers, downloadclients en meldingsdiensten toe. Installeer en werk ze hier bij.",
+  "tours.stepOf": "Stap {{current}} van {{total}}",
+  "tours.skip": "Rondleiding overslaan",
+  "tours.back": "Terug",
+  "tours.next": "Volgende",
+  "tours.done": "Klaar",
+  "tours.saveFailed":
+    "De voortgang van de rondleiding kon niet worden opgeslagen, dus deze kan opnieuw verschijnen.",
 };
 
 export default nl;

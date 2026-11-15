@@ -66,33 +66,72 @@ impl RuleSetRepository for RuleSetStore {
     }
 
     async fn update_rule_set(&self, rule_set: &RuleSet) -> AppResult<()> {
-        let args = rule_set_args(rule_set)?;
         execute_write(
             &self.datastore,
             "update_rule_set",
-            "UPDATE rule_sets
-                SET name = {}, description = {}, rego_source = {}, enabled = {},
-                    priority = {}, applied_facets = {}, updated_at = {},
-                    is_managed = {}, managed_key = {}, managed_tag_filter = {},
-                    evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}, disabled_reason_code = {}
-              WHERE id = {}",
-            vec![
-                args[1].clone(),
-                args[2].clone(),
-                args[3].clone(),
-                args[4].clone(),
-                args[5].clone(),
-                args[6].clone(),
-                args[8].clone(),
-                args[9].clone(),
-                args[10].clone(),
-                args[11].clone(),
-                args[12].clone(),
-                args[13].clone(),
-                args[14].clone(),
-                args[15].clone(),
-                args[0].clone(),
-            ],
+            UPDATE_RULE_SET_SQL,
+            update_rule_set_args(rule_set)?,
+        )
+        .await
+    }
+
+    async fn get_rule_set_builder_model(&self, id: &str) -> AppResult<Option<String>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT builder_model_json FROM rule_sets WHERE id = {}",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?;
+        match row {
+            Some(row) => row.opt_text("builder_model_json"),
+            None => Ok(None),
+        }
+    }
+
+    async fn create_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        let args = rule_set_args(rule_set)?;
+        let builder_args = builder_model_args(&rule_set.id, builder_model);
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "create_rule_set_with_builder_model",
+            move |tx| {
+                let args = args.clone();
+                let builder_args = builder_args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_RULE_SET_SQL, &args).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), SET_BUILDER_MODEL_SQL, &builder_args)
+                        .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn update_rule_set_with_builder_model(
+        &self,
+        rule_set: &RuleSet,
+        builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        let args = update_rule_set_args(rule_set)?;
+        let builder_args = builder_model_args(&rule_set.id, builder_model);
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "update_rule_set_with_builder_model",
+            move |tx| {
+                let args = args.clone();
+                let builder_args = builder_args.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(SqlExec::Tx(tx), UPDATE_RULE_SET_SQL, &args).await?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), SET_BUILDER_MODEL_SQL, &builder_args)
+                        .await?;
+                    Ok(())
+                })
+            },
         )
         .await
     }
@@ -433,6 +472,45 @@ const INSERT_RULE_SET_SQL: &str = "INSERT INTO rule_sets
      updated_at, is_managed, managed_key, managed_tag_filter, evaluation_phase,
      exclusive_group, disabled_reason, disabled_reason_code)
  VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+
+const UPDATE_RULE_SET_SQL: &str = "UPDATE rule_sets
+    SET name = {}, description = {}, rego_source = {}, enabled = {},
+        priority = {}, applied_facets = {}, updated_at = {},
+        is_managed = {}, managed_key = {}, managed_tag_filter = {},
+        evaluation_phase = {}, exclusive_group = {}, disabled_reason = {}, disabled_reason_code = {}
+  WHERE id = {}";
+
+/// The builder document is written on its own statement so every other
+/// write of a rule row, pack installs included, leaves it untouched.
+const SET_BUILDER_MODEL_SQL: &str = "UPDATE rule_sets SET builder_model_json = {} WHERE id = {}";
+
+fn update_rule_set_args(rule_set: &RuleSet) -> AppResult<Vec<SqlArg>> {
+    let args = rule_set_args(rule_set)?;
+    Ok(vec![
+        args[1].clone(),
+        args[2].clone(),
+        args[3].clone(),
+        args[4].clone(),
+        args[5].clone(),
+        args[6].clone(),
+        args[8].clone(),
+        args[9].clone(),
+        args[10].clone(),
+        args[11].clone(),
+        args[12].clone(),
+        args[13].clone(),
+        args[14].clone(),
+        args[15].clone(),
+        args[0].clone(),
+    ])
+}
+
+fn builder_model_args(rule_set_id: &str, builder_model: Option<&str>) -> Vec<SqlArg> {
+    vec![
+        SqlArg::OptText(builder_model.map(str::to_string)),
+        SqlArg::Text(rule_set_id.to_string()),
+    ]
+}
 
 async fn fetch_rule_sets(
     exec: SqlExec<'_, '_>,

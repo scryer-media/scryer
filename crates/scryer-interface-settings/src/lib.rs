@@ -629,6 +629,31 @@ pub(crate) fn from_ui_settings(settings: scryer_application::UiSettings) -> UiSe
                     .collect(),
             })
             .collect(),
+        tours: settings
+            .tours
+            .into_iter()
+            .map(|tour| UiTourProgressPayload {
+                tour_id: tour.tour_id,
+                outcome: from_ui_tour_outcome(tour.outcome),
+                recorded_at: tour.recorded_at,
+            })
+            .collect(),
+    }
+}
+
+fn from_ui_tour_outcome(outcome: scryer_application::UiTourOutcome) -> UiTourOutcomeValue {
+    match outcome {
+        scryer_application::UiTourOutcome::Completed => UiTourOutcomeValue::Completed,
+        scryer_application::UiTourOutcome::Skipped => UiTourOutcomeValue::Skipped,
+    }
+}
+
+pub(crate) fn to_app_ui_tour_outcome(
+    outcome: UiTourOutcomeValue,
+) -> scryer_application::UiTourOutcome {
+    match outcome {
+        UiTourOutcomeValue::Completed => scryer_application::UiTourOutcome::Completed,
+        UiTourOutcomeValue::Skipped => scryer_application::UiTourOutcome::Skipped,
     }
 }
 

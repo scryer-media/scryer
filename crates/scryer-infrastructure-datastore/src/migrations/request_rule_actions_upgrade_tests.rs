@@ -2,12 +2,12 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePoolOptions;
 
 /// The migration that removes every request rule set.
-pub(super) const REQUEST_RULE_ACTIONS_VERSION: i64 = 345;
+pub(super) const REQUEST_RULE_ACTIONS_VERSION: i64 = 355;
 
 const SQLITE_MIGRATION: &str =
-    include_str!("../../../scryer/src/db/migrations/0345_request_rule_actions.sql");
+    include_str!("../../../scryer/src/db/migrations/0355_request_rule_actions.sql");
 const POSTGRES_MIGRATION: &str =
-    include_str!("../../../scryer/src/db/postgres/migrations/0345_request_rule_actions.sql");
+    include_str!("../../../scryer/src/db/postgres/migrations/0355_request_rule_actions.sql");
 
 async fn pool_before_upgrade() -> sqlx::SqlitePool {
     let pool = SqlitePoolOptions::new()
