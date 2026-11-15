@@ -135,6 +135,7 @@ fn module_flavor_for_artifact(
             PluginRuntimeBacking::DownloadClient => ModuleFlavor::DownloadClient,
             PluginRuntimeBacking::Notification => ModuleFlavor::Notification,
             PluginRuntimeBacking::List => ModuleFlavor::ListProvider,
+            PluginRuntimeBacking::Metadata => ModuleFlavor::MetadataProvider,
         },
     )
 }
@@ -2099,6 +2100,10 @@ pub(crate) fn validate_descriptor_for_type(
                 PluginKind::ListProvider,
                 ProviderDescriptor::ListProvider(_)
             )
+            | (
+                PluginKind::MetadataProvider,
+                ProviderDescriptor::MetadataProvider(_)
+            )
     );
     if !provider_matches_kind {
         warn!(
@@ -3661,6 +3666,7 @@ fn descriptor_source_label(descriptor: &PluginDescriptor) -> &'static str {
         ProviderDescriptor::DownloadClient(_) => "download_client_component",
         ProviderDescriptor::Notification(_) => "notification_component",
         ProviderDescriptor::ListProvider(_) => "list_component",
+        ProviderDescriptor::MetadataProvider(_) => "metadata_component",
     }
 }
 
@@ -3691,6 +3697,9 @@ pub(crate) fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Ve
             }
             PluginRuntimeBacking::List => {
                 crate::wasmtime_host::validate_list_component(&bytes)?;
+            }
+            PluginRuntimeBacking::Metadata => {
+                crate::wasmtime_host::validate_metadata_component(&bytes)?;
             }
         }
         let descriptor = embedded.descriptor;
@@ -3725,6 +3734,7 @@ pub(crate) fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Ve
         crate::wasmtime_host::download_client_component_describe,
         crate::wasmtime_host::notification_component_describe,
         crate::wasmtime_host::list_component_describe,
+        crate::wasmtime_host::metadata_component_describe,
     ] {
         if let Ok(descriptor) = describe(&bytes) {
             debug!(
@@ -3819,6 +3829,10 @@ impl PluginDescriptorLoader for WasmPluginDescriptorLoader {
             }
             ProviderDescriptor::ListProvider(_) => {
                 crate::wasmtime_host::list_component_describe(wasm_bytes)
+                    .map_err(AppError::Validation)?
+            }
+            ProviderDescriptor::MetadataProvider(_) => {
+                crate::wasmtime_host::metadata_component_describe(wasm_bytes)
                     .map_err(AppError::Validation)?
             }
         };
@@ -4647,6 +4661,9 @@ mod tests {
             ProviderDescriptor::ListProvider(provider) => {
                 provider.provider_type = provider_type.to_string()
             }
+            ProviderDescriptor::MetadataProvider(provider) => {
+                provider.provider_type = provider_type.to_string()
+            }
         }
     }
 
@@ -4658,6 +4675,7 @@ mod tests {
             ProviderDescriptor::Subtitle(provider) => provider.provider_aliases = aliases,
             ProviderDescriptor::ArchiveExtractor(provider) => provider.provider_aliases = aliases,
             ProviderDescriptor::ListProvider(provider) => provider.provider_aliases = aliases,
+            ProviderDescriptor::MetadataProvider(provider) => provider.provider_aliases = aliases,
         }
     }
 
@@ -4671,6 +4689,9 @@ mod tests {
                 provider.allowed_hosts = allowed_hosts
             }
             ProviderDescriptor::ListProvider(provider) => provider.allowed_hosts = allowed_hosts,
+            ProviderDescriptor::MetadataProvider(provider) => {
+                provider.allowed_hosts = allowed_hosts
+            }
         }
     }
 

@@ -74,6 +74,8 @@ pub struct AppLibraryServices {
     /// preview time to plan the merge (FR-066/FR-071) and again at the title
     /// checkpoint to run it (FR-063–FR-067).
     pub(crate) title_merges: Arc<dyn crate::location::merge::engine::TitleMergeRepository>,
+    /// Metadata-provider plugins, asked only when SMG has no answer.
+    pub(crate) metadata_plugins: Arc<dyn crate::metadata_plugins::MetadataPluginProvider>,
 }
 
 #[derive(Clone)]
@@ -388,6 +390,7 @@ impl AppServices {
                 ),
                 location_operations: Arc::new(null_repositories::NullLocationOperationRepository),
                 title_merges: Arc::new(null_repositories::NullTitleMergeRepository),
+                metadata_plugins: Arc::new(crate::metadata_plugins::NullMetadataPluginProvider),
             },
             integrations: AppIntegrationServices {
                 indexer_configs,

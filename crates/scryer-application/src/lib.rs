@@ -104,6 +104,7 @@ mod library_scan_titles;
 mod library_scan_unmatched;
 pub mod lifecycle_claims;
 pub mod lists;
+pub mod metadata_plugins;
 pub use lists::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
 pub mod location;
 pub mod maintenance_rules;

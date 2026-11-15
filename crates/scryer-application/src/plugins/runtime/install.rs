@@ -146,6 +146,17 @@ impl AppUseCase {
                         AppError::Repository(format!("failed to upsert list provider plugin: {e}"))
                     })?;
             }
+            "metadata_provider" => {
+                self.services
+                    .library
+                    .metadata_plugins
+                    .upsert_runtime_plugin(runtime_plugin)
+                    .map_err(|e| {
+                        AppError::Repository(format!(
+                            "failed to upsert metadata provider plugin: {e}"
+                        ))
+                    })?;
+            }
             other => {
                 return Err(AppError::validation_refused(crate::error_reasons::plugins::TYPE_RUNTIME_UPSERT_UNSUPPORTED, format!(
                     "unsupported plugin_type '{}' for runtime upsert",

@@ -288,6 +288,8 @@ function categoryLabel(pluginType: string, t: Translate): string {
       return t("settings.pluginCategoryNotification");
     case "subtitle_provider":
       return t("settings.pluginCategorySubtitleProvider");
+    case "metadata_provider":
+      return t("settings.pluginCategoryMetadataProvider");
     default:
       return pluginType;
   }
