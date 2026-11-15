@@ -2525,6 +2525,42 @@ impl TitleRepository for TitleStore {
         load_title_ratings_batch(&self.datastore, title_ids).await
     }
 
+    async fn list_title_episode_shapes(
+        &self,
+        title_ids: &[String],
+        today: chrono::NaiveDate,
+    ) -> AppResult<Vec<(String, scryer_application::TitleEpisodeShape)>> {
+        load_title_episode_shapes(&self.datastore, title_ids, today).await
+    }
+
+    async fn list_title_genres(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Vec<String>)>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut by_id =
+            crate::media::canonical_tags::load_title_metadata_tags_in_lowered_categories(
+                self.datastore.read_exec(),
+                title_ids,
+                &["genre"],
+            )
+            .await?;
+        Ok(title_ids
+            .iter()
+            .map(|id| {
+                let genres = by_id
+                    .remove(id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|tag| tag.name)
+                    .collect();
+                (id.clone(), genres)
+            })
+            .collect())
+    }
+
     async fn get_title_credits(&self, title_id: &str) -> AppResult<Vec<TitleCredit>> {
         let mut credits =
             load_title_credits(self.datastore.read_exec(), &[title_id.to_string()]).await?;
@@ -7506,6 +7542,114 @@ async fn load_title_ratings(
     Ok(ratings.remove(title_id).unwrap_or_default())
 }
 
+/// The grouped read behind [`TitleRepository::list_title_episode_shapes`].
+///
+/// One statement per bounded chunk of title ids, grouped by title. The id
+/// filter is served by `idx_episodes_title (title_id, season_number)`, the
+/// season join by the `collections` key, and the file probe by
+/// `idx_file_episode_map_episode` and the `media_files` key. Episodes count the
+/// way the catalog's episode progress counts them: regular seasons only, and a
+/// file only when it is a live primary file not awaiting review.
+async fn load_title_episode_shapes(
+    datastore: &StoreDatastore,
+    title_ids: &[String],
+    today: chrono::NaiveDate,
+) -> AppResult<Vec<(String, scryer_application::TitleEpisodeShape)>> {
+    if title_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dialect = title_catalog_dialect_for_datastore(datastore);
+    let today = today.format("%Y-%m-%d").to_string();
+    // Today is bound twice per statement, ahead of the ids.
+    let (ids, per_statement) = id_list_statements(
+        title_ids,
+        1,
+        2,
+        max_binds(&datastore.read_exec()),
+        TITLE_ID_LIST_BIND_CHUNK,
+    );
+    let season_number = match dialect {
+        TitleCatalogSqlDialect::Sqlite => {
+            "CASE WHEN trim(e.season_number) <> ''
+                  AND trim(e.season_number) NOT GLOB '*[^0-9]*'
+                 THEN CAST(trim(e.season_number) AS INTEGER) END"
+        }
+        TitleCatalogSqlDialect::Postgres => {
+            "CASE WHEN trim(e.season_number) ~ '^[0-9]+$'
+                 THEN CAST(trim(e.season_number) AS BIGINT) END"
+        }
+    };
+    let monitored = title_catalog_bool_column_is_true(dialect, "e.monitored");
+    let live_file = title_catalog_live_media_file_predicate(dialect, "mf");
+    let mut shapes = Vec::new();
+    for chunk in ids.chunks(per_statement) {
+        let placeholders = std::iter::repeat_n("{}", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT episode.title_id,
+                    COUNT(DISTINCT episode.collection_id) AS season_count,
+                    COALESCE(SUM(episode.aired), 0) AS aired_episode_count,
+                    COALESCE(SUM(1 - episode.aired), 0) AS unaired_episode_count,
+                    COALESCE(SUM(episode.aired * episode.has_file), 0) AS aired_episode_file_count,
+                    COALESCE(SUM(episode.aired * episode.monitored * (1 - episode.has_file)), 0)
+                        AS missing_episode_count,
+                    MAX(episode.season_number) AS latest_season_number,
+                    MAX(CASE WHEN episode.aired = 1 THEN episode.air_day END)
+                        AS latest_aired_episode_date,
+                    MIN(CASE WHEN episode.upcoming = 1 THEN episode.air_day END)
+                        AS next_episode_air_date
+               FROM (
+                    SELECT e.title_id,
+                           e.collection_id,
+                           {season_number} AS season_number,
+                           CASE WHEN {monitored} THEN 1 ELSE 0 END AS monitored,
+                           substr(trim(e.air_date), 1, 10) AS air_day,
+                           CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                                 AND substr(trim(e.air_date), 1, 10) <= {{}}
+                                THEN 1 ELSE 0 END AS aired,
+                           CASE WHEN trim(COALESCE(e.air_date, '')) <> ''
+                                 AND substr(trim(e.air_date), 1, 10) > {{}}
+                                THEN 1 ELSE 0 END AS upcoming,
+                           CASE WHEN EXISTS (
+                                SELECT 1
+                                  FROM file_episode_map fem
+                                  JOIN media_files mf ON mf.id = fem.file_id
+                                 WHERE fem.episode_id = e.id
+                                   AND fem.role = 'primary'
+                                   AND mf.scan_status <> 'review_required'
+                                   AND {live_file}
+                           ) THEN 1 ELSE 0 END AS has_file
+                      FROM episodes e
+                     INNER JOIN collections c ON c.id = e.collection_id
+                     WHERE e.title_id IN ({placeholders})
+                       AND c.collection_type <> 'specials'
+                       AND c.collection_index <> '0'
+               ) episode
+              GROUP BY episode.title_id"
+        );
+        let mut args = vec![SqlArg::Text(today.clone()), SqlArg::Text(today.clone())];
+        args.extend(chunk.iter().cloned().map(SqlArg::Text));
+        let rows = SqlRuntime::fetch_all(datastore.read_exec(), &sql, &args).await?;
+        for row in &rows {
+            shapes.push((
+                row.text("title_id")?,
+                scryer_application::TitleEpisodeShape {
+                    season_count: row.i64("season_count")?,
+                    aired_episode_count: row.i64("aired_episode_count")?,
+                    unaired_episode_count: row.i64("unaired_episode_count")?,
+                    aired_episode_file_count: row.i64("aired_episode_file_count")?,
+                    missing_episode_count: row.i64("missing_episode_count")?,
+                    latest_season_number: row.opt_i64("latest_season_number")?,
+                    latest_aired_episode_date: row.opt_text("latest_aired_episode_date")?,
+                    next_episode_air_date: row.opt_text("next_episode_air_date")?,
+                },
+            ));
+        }
+    }
+    Ok(shapes)
+}
+
 async fn load_title_ratings_batch(
     datastore: &StoreDatastore,
     title_ids: &[String],
@@ -8232,6 +8376,43 @@ mod tests {
                 (id, parse_facet(&facet), canonical_tags)
             })
             .collect()
+    }
+
+    /// The batched genre read returns each title's genre names in tag order,
+    /// an empty list for a title with none, and reads past one id chunk.
+    #[tokio::test]
+    async fn title_genres_are_read_in_one_batch_per_chunk() {
+        let (datastore, pool) = metadata_tag_store(&[("title", "title_id")]).await;
+        let tags = "title_metadata_tags";
+        insert_tag_row(&pool, tags, &["emberfall", "drama", "Genre", "Drama"], 1).await;
+        insert_tag_row(&pool, tags, &["emberfall", "action", "genre", "Action"], 0).await;
+        insert_tag_row(&pool, tags, &["emberfall", "heist", "theme", "Heist"], 0).await;
+        insert_tag_row(&pool, tags, &["ashgrove", "studio", "studio", "Studio"], 0).await;
+        let mut ids = vec!["emberfall".to_string(), "ashgrove".to_string()];
+        ids.extend((0..2_100).map(|index| format!("fixture-title-{index}")));
+        insert_tag_row(
+            &pool,
+            tags,
+            &["fixture-title-2099", "mystery", "genre", "Mystery"],
+            0,
+        )
+        .await;
+
+        let store = TitleStore::new(datastore);
+        let genres: std::collections::HashMap<_, _> = store
+            .list_title_genres(&ids)
+            .await
+            .expect("genres load")
+            .into_iter()
+            .collect();
+
+        assert_eq!(genres.len(), ids.len());
+        assert_eq!(
+            genres["emberfall"],
+            vec!["Action".to_string(), "Drama".to_string()]
+        );
+        assert!(genres["ashgrove"].is_empty());
+        assert_eq!(genres["fixture-title-2099"], vec!["Mystery".to_string()]);
     }
 
     #[tokio::test]
@@ -9401,6 +9582,115 @@ mod tests {
             writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         });
         (store, pool)
+    }
+
+    #[tokio::test]
+    async fn episode_shapes_are_one_grouped_read_per_chunk() {
+        let (store, pool) = migrated_test_store().await;
+        // Episode rows only; the shape read never touches the titles table.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let recycled = format!("/library/Ember Shore{RECYCLE_BIN_PATH_SEGMENT}e5.mkv");
+        sqlx::raw_sql(
+            "INSERT INTO collections (id, title_id, collection_type, collection_index, created_at) VALUES
+                 ('ember-s1', 'show-ember', 'season', '1', '2024-01-01'),
+                 ('ember-s2', 'show-ember', 'season', '2', '2024-01-01'),
+                 ('ember-sp', 'show-ember', 'specials', '0', '2024-01-01'),
+                 ('ash-s1', 'show-ash', 'season', '1', '2024-01-01'),
+                 ('cinder-sp', 'show-cinder', 'specials', '0', '2024-01-01');
+             INSERT INTO episodes
+                 (id, title_id, collection_id, episode_type, season_number, air_date, monitored, created_at)
+             VALUES
+                 ('e1', 'show-ember', 'ember-s1', 'standard', '1', '2024-01-01', 1, '2024-01-01'),
+                 ('e2', 'show-ember', 'ember-s1', 'standard', '1', '2024-01-08', 1, '2024-01-01'),
+                 ('e3', 'show-ember', 'ember-s1', 'standard', '1', '2024-01-15', 0, '2024-01-01'),
+                 ('e4', 'show-ember', 'ember-s2', 'standard', '2', '2024-02-01T20:00:00Z', 1, '2024-01-01'),
+                 ('e5', 'show-ember', 'ember-s2', 'standard', '2', '2024-02-05', 1, '2024-01-01'),
+                 ('e6', 'show-ember', 'ember-s2', 'standard', '2', '2024-02-12', 1, '2024-01-01'),
+                 ('e7', 'show-ember', 'ember-s2', 'standard', '2', '2024-03-01', 1, '2024-01-01'),
+                 ('e8', 'show-ember', 'ember-s2', 'standard', '2', NULL, 1, '2024-01-01'),
+                 ('sp1', 'show-ember', 'ember-sp', 'special', '0', '2024-01-20', 1, '2024-01-01'),
+                 ('a1', 'show-ash', 'ash-s1', 'standard', '1', '2023-06-01', 1, '2024-01-01'),
+                 ('c1', 'show-cinder', 'cinder-sp', 'special', '0', '2023-06-01', 1, '2024-01-01');
+             INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, created_at) VALUES
+                 ('f1', 'show-ember', '/library/Ember Shore/e1.mkv', 1, 'scanned', '2024-01-01'),
+                 ('f4', 'show-ember', '/library/Ember Shore/e4.mkv', 1, 'review_required', '2024-01-01'),
+                 ('f6', 'show-ember', '/library/Ember Shore/e2-extra.mkv', 1, 'scanned', '2024-01-01'),
+                 ('fsp', 'show-ember', '/library/Ember Shore/sp1.mkv', 1, 'scanned', '2024-01-01'),
+                 ('fa1', 'show-ash', '/library/Ash Grove/a1.mkv', 1, 'scanned', '2024-01-01');
+             INSERT INTO file_episode_map (file_id, episode_id, role) VALUES
+                 ('f1', 'e1', 'primary'),
+                 ('f4', 'e4', 'primary'),
+                 ('f5', 'e5', 'primary'),
+                 ('f6', 'e2', 'additional'),
+                 ('fsp', 'sp1', 'primary'),
+                 ('fa1', 'a1', 'primary');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, created_at)
+             VALUES ('f5', 'show-ember', ?, 1, 'scanned', '2024-01-01')",
+        )
+        .bind(&recycled)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // More ids than one statement binds, with shows on both sides of the cut.
+        let mut ids: Vec<String> = (0..2_100)
+            .map(|index| format!("fixture-title-{index}"))
+            .collect();
+        ids.insert(0, "show-ember".to_string());
+        ids.push("show-ash".to_string());
+        ids.push("show-cinder".to_string());
+        let today = chrono::NaiveDate::from_ymd_opt(2024, 2, 5).unwrap();
+        let shapes: std::collections::HashMap<_, _> = store
+            .list_title_episode_shapes(&ids, today)
+            .await
+            .expect("episode shapes load")
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            shapes.len(),
+            2,
+            "only shows with regular episodes have a row"
+        );
+        assert_eq!(
+            shapes["show-ember"],
+            scryer_application::TitleEpisodeShape {
+                season_count: 2,
+                // e1–e5; an episode airing today has aired.
+                aired_episode_count: 5,
+                // Two scheduled and one with no air date.
+                unaired_episode_count: 3,
+                // Only e1: e4 awaits review, e5's file is recycled, e2's is
+                // not its primary.
+                aired_episode_file_count: 1,
+                // e2, e4 and e5; e3 is not monitored.
+                missing_episode_count: 3,
+                latest_season_number: Some(2),
+                latest_aired_episode_date: Some("2024-02-05".to_string()),
+                next_episode_air_date: Some("2024-02-12".to_string()),
+            }
+        );
+        assert_eq!(
+            shapes["show-ash"],
+            scryer_application::TitleEpisodeShape {
+                season_count: 1,
+                aired_episode_count: 1,
+                unaired_episode_count: 0,
+                aired_episode_file_count: 1,
+                missing_episode_count: 0,
+                latest_season_number: Some(1),
+                latest_aired_episode_date: Some("2023-06-01".to_string()),
+                next_episode_air_date: None,
+            }
+        );
     }
 
     fn external_id(source: &str, value: &str) -> ExternalId {

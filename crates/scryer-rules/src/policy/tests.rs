@@ -54,6 +54,7 @@ struct ProbeDecision {
 struct ProbeError {
     rule_set_id: String,
     tier: &'static str,
+    kind: crate::policy::PolicyErrorKind,
     message: String,
 }
 
@@ -204,10 +205,15 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
         Ok(())
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         ProbeError {
             rule_set_id: rule.id.clone(),
             tier: rule.extra,
+            kind,
             message,
         }
     }
@@ -392,8 +398,9 @@ fn a_malformed_decision_is_an_error_not_a_decision() {
     );
 
     assert!(records.is_empty(), "{records:?}");
-    assert!(
-        errors[0].message.contains("'allow' must be a boolean"),
+    assert_eq!(
+        errors[0].kind,
+        crate::policy::PolicyErrorKind::MalformedDecision,
         "{}",
         errors[0].message
     );

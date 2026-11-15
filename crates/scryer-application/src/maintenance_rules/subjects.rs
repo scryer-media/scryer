@@ -400,12 +400,125 @@ impl AppUseCase {
             .await
     }
 
+    /// The episode inventories of a page of titles, read together: one read
+    /// each of collections, episodes and episode files for every show in
+    /// `titles`, then each inventory built exactly as
+    /// [`Self::maintenance_load_title_episode_inventory`] builds it, in title
+    /// order. Movies get none.
+    ///
+    /// The map is a head start, never the answer. A show it lacks is loaded
+    /// through the per-title path, which then succeeds or fails as it always
+    /// did: when a batched read fails nothing is returned, and when one
+    /// title's inventory cannot be built, it and every later title are left
+    /// out, so no file is probed that the per-title path would not reach.
+    /// `presence` is the pass memo; `None` probes each file the way the
+    /// per-title loader does without one.
+    pub(crate) async fn maintenance_load_title_episode_inventories(
+        &self,
+        titles: &[Title],
+        mut presence: Option<&mut MaintenancePassFilePresence>,
+    ) -> HashMap<String, Arc<MaintenanceTitleEpisodeInventory>> {
+        let shows: Vec<&Title> = titles
+            .iter()
+            .filter(|title| title.facet != scryer_domain::MediaFacet::Movie)
+            .collect();
+        let mut inventories = HashMap::new();
+        if shows.is_empty() {
+            return inventories;
+        }
+        let show_ids: Vec<String> = shows.iter().map(|title| title.id.clone()).collect();
+        let reads = async {
+            let collections = self
+                .services
+                .catalog
+                .shows
+                .list_collections_for_titles(&show_ids)
+                .await?;
+            let mut episodes: HashMap<String, Vec<Episode>> = HashMap::new();
+            for episode in self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_titles(&show_ids)
+                .await?
+            {
+                episodes
+                    .entry(episode.title_id.clone())
+                    .or_default()
+                    .push(episode);
+            }
+            let requests: Vec<(String, Vec<String>)> = show_ids
+                .iter()
+                .filter_map(|title_id| {
+                    let ids: Vec<String> = episodes
+                        .get(title_id)?
+                        .iter()
+                        .map(|episode| episode.id.clone())
+                        .collect();
+                    Some((title_id.clone(), ids))
+                })
+                .collect();
+            let files: HashMap<String, Vec<EpisodeScopedMediaFile>> = if requests.is_empty() {
+                HashMap::new()
+            } else {
+                self.services
+                    .library
+                    .media_files
+                    .list_live_media_files_for_titles_episode_ids(&requests)
+                    .await?
+                    .into_iter()
+                    .collect()
+            };
+            AppResult::Ok((collections, episodes, files))
+        };
+        let (mut collections, mut episodes, mut files) = match reads.await {
+            Ok(reads) => reads,
+            Err(error) => {
+                tracing::debug!(
+                    error = %error,
+                    "batched episode inventory read failed; titles load one at a time"
+                );
+                return inventories;
+            }
+        };
+        for title in shows {
+            let episodes = episodes.remove(&title.id).unwrap_or_default();
+            let mut scoped = files.remove(&title.id).unwrap_or_default();
+            {
+                let read_of = episode_reads(&episodes);
+                for file in &mut scoped {
+                    per_title_read_role(file, &read_of);
+                }
+            }
+            let presence = match presence.as_deref_mut() {
+                Some(memo) => FilePresence::Probe(Some(memo)),
+                None => FilePresence::Probe(None),
+            };
+            match self
+                .build_title_episode_inventory(
+                    title,
+                    collections.remove(&title.id).unwrap_or_default(),
+                    episodes,
+                    scoped,
+                    presence,
+                )
+                .await
+            {
+                Ok(inventory) => {
+                    inventories.insert(title.id.clone(), inventory);
+                }
+                Err(_) => break,
+            }
+        }
+        inventories
+    }
+
     /// [`FilePresence::Skip`] only for a candidate listing, through
     /// [`MaintenanceListingInventories`], which never hands the inventory on.
     async fn load_title_episode_inventory(
         &self,
         title: &Title,
-        mut presence: FilePresence<'_>,
+        presence: FilePresence<'_>,
     ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
         let collections = self
             .services
@@ -419,41 +532,41 @@ impl AppUseCase {
             .shows
             .list_episodes_for_title(&title.id)
             .await?;
-        if episodes.iter().any(|episode| episode.title_id != title.id)
-            || collections
-                .iter()
-                .any(|collection| collection.title_id != title.id)
-        {
-            return Err(AppError::Repository(
-                "maintenance subject ownership mismatch".into(),
-            ));
-        }
-        if episodes.iter().any(|episode| {
-            episode
-                .collection_id
-                .as_ref()
-                .is_some_and(|id| !collections.iter().any(|collection| &collection.id == id))
-        }) {
-            return Err(AppError::Repository(
-                "maintenance episode collection ownership mismatch".into(),
-            ));
-        }
+        // Ownership is proved before any file is read.
+        episodes_are_owned(title, &collections, &episodes)?;
         // Bound the relation query. Keep complete coverage returned for each
         // file, including associations outside the selected episode batch.
-        let mut scoped_files = HashMap::new();
-        for batch in episodes.chunks(100) {
+        let mut scoped_files = Vec::new();
+        for batch in episodes.chunks(INVENTORY_EPISODE_READ_CHUNK) {
             let ids: Vec<String> = batch.iter().map(|episode| episode.id.clone()).collect();
-            for file in self
-                .services
-                .library
-                .media_files
-                .list_live_media_files_for_episode_ids(&title.id, &ids)
-                .await?
-            {
-                scoped_files.insert(file.media_file.id.clone(), file);
-            }
+            scoped_files.extend(
+                self.services
+                    .library
+                    .media_files
+                    .list_live_media_files_for_episode_ids(&title.id, &ids)
+                    .await?,
+            );
         }
-        let mut scoped_files: Vec<_> = scoped_files.into_values().collect();
+        self.build_title_episode_inventory(title, collections, episodes, scoped_files, presence)
+            .await
+    }
+
+    /// One title's inventory from rows already read. `scoped_files` may hold
+    /// a file more than once; the last copy is the one kept.
+    async fn build_title_episode_inventory(
+        &self,
+        title: &Title,
+        collections: Vec<Collection>,
+        episodes: Vec<Episode>,
+        scoped_files: Vec<EpisodeScopedMediaFile>,
+        mut presence: FilePresence<'_>,
+    ) -> AppResult<Arc<MaintenanceTitleEpisodeInventory>> {
+        episodes_are_owned(title, &collections, &episodes)?;
+        let mut deduplicated = HashMap::new();
+        for file in scoped_files {
+            deduplicated.insert(file.media_file.id.clone(), file);
+        }
+        let mut scoped_files: Vec<_> = deduplicated.into_values().collect();
         scoped_files.sort_by(|left, right| left.media_file.id.cmp(&right.media_file.id));
         let episode_ids: HashSet<&str> =
             episodes.iter().map(|episode| episode.id.as_str()).collect();
@@ -770,6 +883,123 @@ pub(crate) struct MaintenanceListingInventories {
     by_title: HashMap<String, Arc<MaintenanceTitleEpisodeInventory>>,
 }
 
+/// The files [`AppUseCase::maintenance_title_deletion_files`] returns, built
+/// from rows a page already holds instead of read again: `title_files` is the
+/// title's file listing and `inventory` its episode inventory. `None` for a
+/// show whose inventory is not in hand; the caller then reads.
+pub(crate) fn maintenance_title_owned_files_in_hand(
+    title: &Title,
+    title_files: &[TitleMediaFile],
+    inventory: Option<&MaintenanceTitleEpisodeInventory>,
+) -> Option<Vec<TitleMediaFile>> {
+    if title.facet == scryer_domain::MediaFacet::Movie {
+        let mut owned: HashMap<&str, &TitleMediaFile> = HashMap::new();
+        for file in title_files {
+            if file.title_id == title.id && file.series_movie_link_ids.is_empty() {
+                owned.insert(file.id.as_str(), file);
+            }
+        }
+        let mut owned: Vec<TitleMediaFile> = owned.into_values().cloned().collect();
+        owned.sort_by(|left, right| left.id.cmp(&right.id));
+        return Some(owned);
+    }
+    let inventory = inventory.filter(|inventory| inventory.title_id == title.id)?;
+    let episode_ids: HashSet<&str> = inventory
+        .episodes
+        .iter()
+        .map(|episode| episode.id.as_str())
+        .collect();
+    // A show's manifest holds only episode files whose every association is
+    // the title's own; the inventory holds each file once, sorted by id.
+    Some(
+        inventory
+            .scoped_files
+            .iter()
+            .filter(|scoped| {
+                scoped.media_file.title_id == title.id
+                    && scoped.media_file.series_movie_link_ids.is_empty()
+                    && scoped
+                        .episode_ids
+                        .iter()
+                        .all(|episode_id| episode_ids.contains(episode_id.as_str()))
+            })
+            .map(|scoped| scoped.media_file.clone())
+            .collect(),
+    )
+}
+
+/// Episodes per inventory read of one title; the per-title loader reads a
+/// title's files this many episodes at a time.
+const INVENTORY_EPISODE_READ_CHUNK: usize = 100;
+
+/// Every episode and collection belongs to the title, and every episode's
+/// collection is one of the title's.
+fn episodes_are_owned(
+    title: &Title,
+    collections: &[Collection],
+    episodes: &[Episode],
+) -> AppResult<()> {
+    if episodes.iter().any(|episode| episode.title_id != title.id)
+        || collections
+            .iter()
+            .any(|collection| collection.title_id != title.id)
+    {
+        return Err(AppError::Repository(
+            "maintenance subject ownership mismatch".into(),
+        ));
+    }
+    let collection_ids: HashSet<&str> = collections
+        .iter()
+        .map(|collection| collection.id.as_str())
+        .collect();
+    if episodes.iter().any(|episode| {
+        episode
+            .collection_id
+            .as_ref()
+            .is_some_and(|id| !collection_ids.contains(id.as_str()))
+    }) {
+        return Err(AppError::Repository(
+            "maintenance episode collection ownership mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The role the per-title loader leaves on a file: it reads a title's files
+/// [`INVENTORY_EPISODE_READ_CHUNK`] episodes at a time, marks a file primary
+/// when it is primary for an episode of that read, and keeps the last read's
+/// copy. The batched read marks it over all of the title's episodes, so a file
+/// spanning two reads is set back to what the last of them said.
+fn per_title_read_role(file: &mut EpisodeScopedMediaFile, read_of: &HashMap<&str, usize>) {
+    let Some(last_read) = file
+        .episode_ids
+        .iter()
+        .filter_map(|id| read_of.get(id.as_str()))
+        .max()
+        .copied()
+    else {
+        return;
+    };
+    file.media_file.role = if file
+        .primary_episode_ids
+        .iter()
+        .any(|id| read_of.get(id.as_str()) == Some(&last_read))
+    {
+        crate::MediaFileRole::Primary
+    } else {
+        crate::MediaFileRole::Additional
+    };
+}
+
+/// Which of the per-title loader's reads each episode of a title falls in.
+fn episode_reads(episodes: &[Episode]) -> HashMap<&str, usize> {
+    episodes
+        .iter()
+        .enumerate()
+        .map(|(index, episode)| (episode.id.as_str(), index / INVENTORY_EPISODE_READ_CHUNK))
+        .collect()
+}
+
 /// Whether an inventory load probes its files' presence on disk.
 enum FilePresence<'a> {
     /// A candidate listing: no listing field depends on presence.
@@ -791,6 +1021,27 @@ pub(crate) struct MaintenancePassFilePresence {
 impl MaintenancePassFilePresence {
     pub(crate) fn probed_paths(&self) -> usize {
         self.by_path.len()
+    }
+}
+
+#[cfg(test)]
+impl MaintenanceTitleEpisodeInventory {
+    /// Everything the inventory holds, in a fixed order, so two loads can be
+    /// compared field by field.
+    pub(crate) fn comparable(&self) -> String {
+        let files: Vec<String> = self
+            .scoped_files
+            .iter()
+            .map(|scoped| format!("{scoped:?}"))
+            .collect();
+        let mut availability: Vec<_> = self.file_availability.iter().collect();
+        availability.sort_by(|left, right| left.0.cmp(right.0));
+        let mut coverage: Vec<_> = self.episode_coverage.iter().collect();
+        coverage.sort_by(|left, right| left.0.cmp(right.0));
+        format!(
+            "title={}\ncollections={:?}\nepisodes={:?}\nfiles={files:?}\navailability={availability:?}\ncoverage={coverage:?}",
+            self.title_id, self.collections, self.episodes
+        )
     }
 }
 
@@ -879,6 +1130,66 @@ impl AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A batched file row carries the role over all of a title's episodes;
+    /// the per-title loader leaves the role its last 100-episode read gave.
+    #[test]
+    fn a_file_spanning_two_reads_keeps_the_role_of_the_last_one() {
+        let episodes: Vec<Episode> = (0..150)
+            .map(|index| {
+                episode(
+                    &format!("episode-{index:03}"),
+                    "season-1",
+                    "1",
+                    &index.to_string(),
+                    None,
+                    EpisodeType::Standard,
+                )
+            })
+            .collect();
+        let read_of = episode_reads(&episodes);
+        let scoped = |links: &[(usize, bool)]| EpisodeScopedMediaFile {
+            media_file: TitleMediaFile {
+                id: "file-fixture".to_string(),
+                role: crate::MediaFileRole::Primary,
+                ..Default::default()
+            },
+            title_role: crate::MediaFileRole::Primary,
+            episode_ids: links
+                .iter()
+                .map(|(index, _)| format!("episode-{index:03}"))
+                .collect(),
+            primary_episode_ids: links
+                .iter()
+                .filter(|(_, primary)| *primary)
+                .map(|(index, _)| format!("episode-{index:03}"))
+                .collect(),
+        };
+        let role = |links: &[(usize, bool)]| {
+            let mut file = scoped(links);
+            per_title_read_role(&mut file, &read_of);
+            file.media_file.role
+        };
+        // Primary in the first read only: the second read says additional.
+        assert_eq!(
+            role(&[(99, true), (100, false)]),
+            crate::MediaFileRole::Additional
+        );
+        assert_eq!(
+            role(&[(99, false), (100, true)]),
+            crate::MediaFileRole::Primary
+        );
+        assert_eq!(
+            role(&[(3, true), (4, false)]),
+            crate::MediaFileRole::Primary
+        );
+        assert_eq!(
+            role(&[(3, false), (4, false)]),
+            crate::MediaFileRole::Additional
+        );
+        // A file linked to none of the title's episodes keeps its role.
+        assert_eq!(role(&[]), crate::MediaFileRole::Primary);
+    }
 
     fn collection(id: &str, index: &str, collection_type: CollectionType) -> Collection {
         Collection {

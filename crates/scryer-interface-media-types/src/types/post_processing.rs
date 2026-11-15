@@ -139,7 +139,8 @@ impl From<ScheduleWeekdayValue> for ScheduleWeekday {
 }
 
 #[derive(InputObject, Clone, Debug)]
-/// Schedule for a scheduled script. Only the fields of the chosen kind are read.
+/// Schedule for a scheduled script or a maintenance rule. Only the fields of
+/// the chosen kind are read.
 pub struct ScriptScheduleInput {
     /// Schedule shape.
     pub kind: ScriptScheduleKindValue,
@@ -181,7 +182,7 @@ impl ScriptScheduleInput {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
-/// Stored schedule of a scheduled script.
+/// Stored schedule of a scheduled script or a maintenance rule.
 pub struct ScriptSchedulePayload {
     /// Schedule shape.
     pub kind: ScriptScheduleKindValue,

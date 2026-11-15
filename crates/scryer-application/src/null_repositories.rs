@@ -1619,6 +1619,27 @@ impl RuleSetRepository for NullRuleSetRepository {
             "rule set repository is not configured".to_string(),
         ))
     }
+    async fn get_rule_set_builder_model(&self, _id: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+    async fn create_rule_set_with_builder_model(
+        &self,
+        _rule_set: &RuleSet,
+        _builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "rule set repository is not configured".to_string(),
+        ))
+    }
+    async fn update_rule_set_with_builder_model(
+        &self,
+        _rule_set: &RuleSet,
+        _builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "rule set repository is not configured".to_string(),
+        ))
+    }
     async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
         Err(AppError::Repository(
             "rule set repository is not configured".to_string(),
@@ -1667,6 +1688,18 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
     async fn add_revision(
         &self,
         _revision: &MaintenanceRuleRevision,
+        _max_titles_per_run: Option<Option<u32>>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn add_revision_keeping_arming(
+        &self,
+        _revision: &MaintenanceRuleRevision,
+        _effect_arming: scryer_domain::MaintenanceEffectArming,
+        _max_titles_per_run: Option<Option<u32>>,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         Err(AppError::Repository(
@@ -1689,6 +1722,8 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
         _name: &str,
         _description: &str,
         _library_ids: &[String],
+        _schedule: Option<&scryer_domain::ScriptSchedule>,
+        _max_titles_per_run: Option<Option<u32>>,
         _disarm: bool,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -1733,6 +1768,20 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         _subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
         Ok(None)
+    }
+    async fn list_active_subject_candidates(
+        &self,
+        _rule_set_id: &str,
+        _subject_kind: &str,
+        _subject_ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn get_candidates_by_ids(
+        &self,
+        _ids: &[String],
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
     }
     async fn list_candidates(
         &self,
@@ -1822,6 +1871,7 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         _rule_set_id: &str,
         _due_before: DateTime<Utc>,
         _stale_before: DateTime<Utc>,
+        _after: Option<&crate::MaintenanceDueCursor>,
         _limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
         Ok(vec![])
@@ -1963,6 +2013,15 @@ impl crate::ports::MaintenanceActionStepRepository for NullMaintenanceEvaluation
         &self,
         _key: &scryer_domain::MaintenanceActionStepKey,
     ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>> {
+        Ok(vec![])
+    }
+
+    async fn list_step_acts_since(
+        &self,
+        _step_kinds: &[&str],
+        _since: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<Vec<crate::MaintenanceStepAct>> {
         Ok(vec![])
     }
 
@@ -2110,6 +2169,13 @@ impl crate::ports::MaintenanceEvaluationRunRepository for NullMaintenanceEvaluat
         _limit: Option<usize>,
     ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>> {
         Ok(vec![])
+    }
+    async fn rule_schedule_anchors(
+        &self,
+        _rule_set_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, crate::ports::MaintenanceRuleScheduleAnchor>>
+    {
+        Ok(std::collections::HashMap::new())
     }
 }
 

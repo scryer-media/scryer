@@ -556,7 +556,11 @@ impl AppUseCase {
         started_at: chrono::DateTime<Utc>,
     ) -> Result<ParticipantOutcome, SignalReadFailure> {
         let scryer_user_id = participant.user_id.as_str();
-        let items = reader.fetch_played_items(external_user_id).await?;
+        let played = reader.fetch_played_items(external_user_id).await?;
+        // Read before anything is written: a failed favourites read fails the
+        // participant, and every stored row of theirs stays as it was.
+        let favorites = reader.fetch_favorite_items(external_user_id).await?;
+        let items = merge_favorite_items(played, favorites);
 
         let observed_at = Utc::now();
         let (subjects, titles) = self
@@ -583,6 +587,12 @@ impl AppUseCase {
                     kind: item.kind,
                     scryer_title_id: subject.title_id,
                     scryer_episode_id: subject.episode_id,
+                    season_number: match item.kind {
+                        MediaServerSignalKind::Episode | MediaServerSignalKind::Season => {
+                            item.season_number
+                        }
+                        MediaServerSignalKind::Movie | MediaServerSignalKind::Series => None,
+                    },
                     played: item.played,
                     play_count: item.play_count,
                     last_played_at: item.last_played_at,
@@ -665,8 +675,10 @@ impl AppUseCase {
         let mut lookups: Vec<TitleExternalIdLookup> = Vec::new();
         for item in items {
             let ids = match item.kind {
-                MediaServerSignalKind::Movie => &item.external_ids,
-                MediaServerSignalKind::Episode => &item.series_external_ids,
+                MediaServerSignalKind::Movie | MediaServerSignalKind::Series => &item.external_ids,
+                MediaServerSignalKind::Episode | MediaServerSignalKind::Season => {
+                    &item.series_external_ids
+                }
             };
             for source in SIGNAL_EXTERNAL_ID_SOURCES {
                 let Some(external_id) = ids.get(source).map(|value| value.trim()) else {
@@ -801,4 +813,42 @@ pub fn log_signal_sync_report(report: &MediaServerSignalSyncReport) {
         signals_unmapped = report.signals_unmapped,
         "media-server signal sync finished"
     );
+}
+
+/// One participant's rows: every played item, with the favourites read laid
+/// over it.
+///
+/// A favourite that was also played marks that row. A favourite nobody played
+/// becomes its own unplayed row: whatever the favourites listing says about
+/// plays is ignored, so the watch facts still come from the played read
+/// alone. `None` (a server with no favourites) leaves the played read as it
+/// is.
+pub(crate) fn merge_favorite_items(
+    mut played: Vec<ProviderPlayedItem>,
+    favorites: Option<Vec<ProviderPlayedItem>>,
+) -> Vec<ProviderPlayedItem> {
+    let Some(favorites) = favorites else {
+        return played;
+    };
+    let positions: HashMap<String, usize> = played
+        .iter()
+        .enumerate()
+        .map(|(position, item)| (item.provider_item_id.clone(), position))
+        .collect();
+    let mut appended = HashSet::new();
+    for mut favorite in favorites {
+        if let Some(position) = positions.get(&favorite.provider_item_id) {
+            played[*position].is_favorite = true;
+            continue;
+        }
+        if !appended.insert(favorite.provider_item_id.clone()) {
+            continue;
+        }
+        favorite.is_favorite = true;
+        favorite.played = false;
+        favorite.play_count = 0;
+        favorite.last_played_at = None;
+        played.push(favorite);
+    }
+    played
 }

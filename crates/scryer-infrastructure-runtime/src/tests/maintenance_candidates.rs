@@ -42,6 +42,8 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 subject_kind: MaintenanceRuleSubjectKind::Title,
                 system_owned: false,
                 current_revision_number: 1,
+                schedule: scryer_domain::default_maintenance_rule_schedule(),
+                max_titles_per_run: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -57,6 +59,7 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 matcher_content_hash: "hash-1".to_string(),
                 created_by: None,
                 created_at: now,
+                builder_model_json: None,
             },
         )
         .await
@@ -87,6 +90,7 @@ fn candidate(id: &str, rule_set_id: &str, title_id: &str, generation: i64) -> Li
         last_evaluated_at: now,
         held_since: None,
         action_attempts: 0,
+        decided_actions_json: None,
         created_at: now,
         updated_at: now,
     }
@@ -1500,7 +1504,7 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         .expect("create blocked");
 
     let due = store
-        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), 10)
+        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), None, 10)
         .await
         .expect("list due");
     let ids: Vec<&str> = due.iter().map(|row| row.id.as_str()).collect();
@@ -1509,6 +1513,45 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         vec!["cand-blocked", "cand-due"],
         "oldest due first; blocked re-checks, future stays out"
     );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn due_selection_pages_past_a_cursor_in_due_then_id_order() {
+    let (services, db) = temp_services("scryer_maintenance_due_cursor").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+    let tied = now - chrono::Duration::hours(2);
+    // Two rows share a due time, so the id breaks the tie across a page.
+    for (id, title, due_at) in [
+        ("cand-c", "title-3", now - chrono::Duration::hours(1)),
+        ("cand-b", "title-2", tied),
+        ("cand-a", "title-1", tied),
+        ("cand-d", "title-4", now - chrono::Duration::minutes(5)),
+    ] {
+        let mut row = candidate(id, "rule-a", title, 1);
+        row.due_at = due_at;
+        store.create_candidate(&row).await.expect("create due");
+    }
+
+    let stale_before = now - chrono::Duration::hours(1);
+    let mut walked = Vec::new();
+    let mut cursor: Option<scryer_application::MaintenanceDueCursor> = None;
+    loop {
+        let page = store
+            .list_due_candidates("rule-a", now, stale_before, cursor.as_ref(), 2)
+            .await
+            .expect("list a page");
+        let Some(last) = page.last() else { break };
+        cursor = Some(scryer_application::MaintenanceDueCursor::after(last));
+        walked.extend(page.iter().map(|row| row.id.clone()));
+        if page.len() < 2 {
+            break;
+        }
+    }
+    assert_eq!(walked, vec!["cand-a", "cand-b", "cand-c", "cand-d"]);
 
     let _ = std::fs::remove_file(db);
 }
@@ -1535,7 +1578,7 @@ async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
     // A worker holding a fresh lease is doing its job; selecting the row again
     // would put two workers on one candidate.
     let live = store
-        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), 10)
+        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), None, 10)
         .await
         .expect("list with a live lease");
     assert!(
@@ -1549,7 +1592,13 @@ async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
     // inflating the count destructive arming makes an operator acknowledge.
     let later = now + chrono::Duration::hours(2);
     let stranded = store
-        .list_due_candidates("rule-a", later, later - chrono::Duration::hours(1), 10)
+        .list_due_candidates(
+            "rule-a",
+            later,
+            later - chrono::Duration::hours(1),
+            None,
+            10,
+        )
         .await
         .expect("list with a stale lease");
     let ids: Vec<&str> = stranded.iter().map(|row| row.id.as_str()).collect();
@@ -2400,7 +2449,9 @@ async fn action_sequence_migration_preserves_pre_0232_in_flight_legacy_rows() {
         INSERT INTO maintenance_rule_exclusions (id, title_id, subject_kind, subject_id, reason) VALUES ('exclusion', 'title', 'title', 'title', 'keep');
         INSERT INTO lifecycle_action_runs (id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id, action_kind, match_generation, idempotency_key, attempt, status, detail, started_at) VALUES ('run', 'candidate', 'rule', 3, 'title', 'title', 'title', 'unmonitor_scope_keep_files', 7, 'legacy-key', 2, 'failed', '{"evidence":true}', '2026-01-02T00:00:00Z');
     "#).await;
-    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+    // Every step up to the one that removes rules written before rules
+    // declared their own actions; that step is checked at the end.
+    crate::migrations::run_upgrade_migrations_through(&pool, 345)
         .await
         .unwrap();
     let row = sqlx::query("SELECT subject_kind, subject_id, first_matched_at, due_at, match_generation, action_attempts FROM lifecycle_candidates WHERE id = 'candidate'").fetch_one(&pool).await.unwrap();
@@ -2425,6 +2476,36 @@ async fn action_sequence_migration_preserves_pre_0232_in_flight_legacy_rows() {
     .await
     .unwrap();
     assert_eq!(rule_state, (false, "disabled".into(), "none".into()));
+    let exclusion: String = sqlx::query_scalar(
+        "SELECT subject_id FROM maintenance_rule_exclusions WHERE id = 'exclusion'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(exclusion, "title");
+
+    // The rest of the upgrade removes this user rule and its history; the
+    // exclusion that names no rule is kept.
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .unwrap();
+    for (table, count) in [
+        (
+            "maintenance_rule_sets",
+            "SELECT COUNT(*) FROM maintenance_rule_sets",
+        ),
+        (
+            "lifecycle_candidates",
+            "SELECT COUNT(*) FROM lifecycle_candidates",
+        ),
+        (
+            "lifecycle_action_runs",
+            "SELECT COUNT(*) FROM lifecycle_action_runs",
+        ),
+    ] {
+        let remaining: i64 = sqlx::query_scalar(count).fetch_one(&pool).await.unwrap();
+        assert_eq!(remaining, 0, "{table}");
+    }
     let exclusion: String = sqlx::query_scalar(
         "SELECT subject_id FROM maintenance_rule_exclusions WHERE id = 'exclusion'",
     )
@@ -2649,4 +2730,183 @@ async fn confirmed_non_match_release_matches_the_unconditional_update() {
     new_path.pool().close().await;
     let _ = std::fs::remove_file(old_db);
     let _ = std::fs::remove_file(new_db);
+}
+
+fn evaluation_run(
+    id: &str,
+    rule_set_id: &str,
+    started_at: chrono::DateTime<Utc>,
+) -> MaintenanceEvaluationRun {
+    MaintenanceEvaluationRun {
+        id: id.to_string(),
+        rule_set_id: rule_set_id.to_string(),
+        revision_number: 1,
+        matcher_content_hash: "hash-1".to_string(),
+        started_at,
+        finished_at: None,
+        status: MaintenanceEvaluationRunStatus::Running,
+        evaluated_count: 0,
+        matched_count: 0,
+        no_match_count: 0,
+        unknown_count: 0,
+        error_count: 0,
+        canceled_candidates: 0,
+        superseded_candidates: 0,
+        duration_ms: None,
+        error: None,
+    }
+}
+
+#[tokio::test]
+async fn schedule_anchors_carry_each_rules_latest_run_and_interrupted_sequences() {
+    let (services, db) = temp_services("scryer_maintenance_schedule_anchors").await;
+    for id in ["rule-a", "rule-b", "rule-c"] {
+        seed_rule_set(&services, id).await;
+    }
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+    let latest = now - chrono::Duration::minutes(5);
+    for (id, rule, at) in [
+        ("run-1", "rule-a", now - chrono::Duration::hours(3)),
+        ("run-2", "rule-a", latest),
+        ("run-3", "rule-c", now - chrono::Duration::hours(1)),
+    ] {
+        store
+            .start_evaluation_run(&evaluation_run(id, rule, at))
+            .await
+            .expect("start run");
+    }
+    let mut row = candidate("cand-b", "rule-b", "title-1", 1);
+    row.state = MaintenanceCandidateState::Due;
+    store.create_candidate(&row).await.expect("create");
+    assert!(
+        store
+            .lease_candidate_for_execution("cand-b", now - chrono::Duration::hours(1), now)
+            .await
+            .expect("lease")
+    );
+
+    let anchors = store
+        .rule_schedule_anchors(&["rule-a".to_string(), "rule-b".to_string()])
+        .await
+        .expect("anchors");
+    assert_eq!(anchors.len(), 2, "{anchors:?}");
+    let a = anchors["rule-a"];
+    assert_eq!(
+        a.last_run_at.map(|at| at.timestamp_millis()),
+        Some(latest.timestamp_millis())
+    );
+    assert!(!a.in_flight);
+    let b = anchors["rule-b"];
+    assert_eq!(b.last_run_at, None);
+    assert!(b.in_flight);
+    assert!(
+        !anchors.contains_key("rule-c"),
+        "a rule not asked for is not read"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn step_acts_list_succeeded_attempts_of_those_kinds_within_the_window_only() {
+    let (services, db) = temp_services("scryer_maintenance_step_acts_window").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let leased_at = Utc::now();
+    let window_start = leased_at - chrono::Duration::minutes(1);
+
+    let claim = async |candidate_id: &str, step_kind: &str| {
+        let row = candidate(candidate_id, "rule-a", candidate_id, 1);
+        store
+            .create_candidate(&row)
+            .await
+            .expect("create candidate");
+        let mut step = sequence_step_run(&row, 0);
+        step.step_kind = step_kind.to_string();
+        let mut identity: serde_json::Value =
+            serde_json::from_str(&step.target_identity_json).expect("identity");
+        identity["step_kind"] = serde_json::Value::from(step_kind);
+        step.target_identity_json = identity.to_string();
+        let lease = format!("lease-{candidate_id}");
+        match store
+            .claim_action_step(&step, window_start, &lease, leased_at)
+            .await
+            .expect("claim")
+        {
+            scryer_application::MaintenanceActionStepClaim::Claimed(step) => (step, lease),
+            other => panic!("unexpected step claim: {other:?}"),
+        }
+    };
+    let finish = async |step: &scryer_domain::MaintenanceActionStepRun,
+                        lease: &str,
+                        state: MaintenanceActionStepState| {
+        let mut finished = step.clone();
+        finished.state = state;
+        if state == MaintenanceActionStepState::Failed {
+            finished.error = Some("fixture failure".to_string());
+        }
+        finished.updated_at = leased_at + chrono::Duration::seconds(1);
+        finished.finished_at = Some(finished.updated_at);
+        assert!(
+            store
+                .finish_action_step(&finished, lease)
+                .await
+                .expect("finish")
+        );
+    };
+    let (unmonitored, unmonitor_lease) = claim("title-unmonitor", "unmonitor").await;
+    finish(
+        &unmonitored,
+        &unmonitor_lease,
+        MaintenanceActionStepState::Succeeded,
+    )
+    .await;
+    let (monitor_failed, monitor_lease) = claim("title-monitor-failed", "monitor").await;
+    finish(
+        &monitor_failed,
+        &monitor_lease,
+        MaintenanceActionStepState::Failed,
+    )
+    .await;
+    let (_running, _) = claim("title-monitor-running", "monitor").await;
+    let (searched, search_lease) = claim("title-search", "search").await;
+    finish(
+        &searched,
+        &search_lease,
+        MaintenanceActionStepState::Succeeded,
+    )
+    .await;
+
+    let kinds = ["monitor", "unmonitor"];
+    let acts = store
+        .list_step_acts_since(&kinds, window_start, 100)
+        .await
+        .expect("list acts");
+    assert_eq!(
+        acts,
+        vec![scryer_application::MaintenanceStepAct {
+            rule_set_id: "rule-a".to_string(),
+            title_id: "title-unmonitor".to_string(),
+            step_kind: "unmonitor".to_string(),
+        }],
+        "only succeeded attempts of the named kinds are acts"
+    );
+    let later = store
+        .list_step_acts_since(&kinds, leased_at + chrono::Duration::minutes(1), 100)
+        .await
+        .expect("list acts");
+    assert!(
+        later.is_empty(),
+        "attempts before the window are not listed"
+    );
+    assert!(
+        store
+            .list_step_acts_since(&kinds, window_start, 0)
+            .await
+            .expect("list acts")
+            .is_empty()
+    );
+
+    let _ = std::fs::remove_file(db);
 }

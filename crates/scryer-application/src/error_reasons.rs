@@ -1699,8 +1699,18 @@ pub mod rules {
         "RULE_BUNDLED_TRASH_PACK_CONTAINS_NO_TEMPLATES";
     /// The rule source is invalid.
     pub const SOURCE_INVALID: &str = "RULE_SOURCE_INVALID";
+    /// A builder document is not an object naming this rule's family and a
+    /// document version.
+    pub const BUILDER_MODEL_INVALID: &str = "RULE_BUILDER_MODEL_INVALID";
+    /// A builder document is larger than a rule may store.
+    pub const BUILDER_MODEL_TOO_LARGE: &str = "RULE_BUILDER_MODEL_TOO_LARGE";
+    /// The rule builder has no schema for the asked family.
+    pub const BUILDER_FAMILY_UNKNOWN: &str = "RULE_BUILDER_FAMILY_UNKNOWN";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
+        BUILDER_MODEL_INVALID,
+        BUILDER_MODEL_TOO_LARGE,
+        BUILDER_FAMILY_UNKNOWN,
         PACK_UP_TO_DATE,
         INPUT_RETIRED,
         TARGETS_PERSON,
@@ -1933,6 +1943,16 @@ pub mod maintenance {
     pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE";
     /// Maintenance action is not storable.
     pub const ACTION_NOT_STORABLE: &str = "MAINTENANCE_ACTION_NOT_STORABLE";
+    /// The rule's current revision stores its action the way builds before
+    /// rules declared their own actions did. It is never evaluated or run
+    /// until a revision that declares its actions replaces it.
+    pub const RULE_STORED_ACTIONS_NOT_DECLARED: &str =
+        "MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED";
+    /// Another save gave the rule a new revision first; this save wrote
+    /// nothing and can be retried against the current revision.
+    pub const RULE_REVISION_CONFLICT: &str = "MAINTENANCE_RULE_REVISION_CONFLICT";
+    /// A previewed subject got neither a decision nor an error from the rule.
+    pub const PREVIEW_NO_DECISION: &str = "MAINTENANCE_PREVIEW_NO_DECISION";
     /// This maintenance action is not supported for titles.
     pub const ACTION_UNSUPPORTED: &str = "MAINTENANCE_ACTION_UNSUPPORTED";
     /// Maintenance action is not valid for a title-scoped rule.
@@ -1979,6 +1999,27 @@ pub mod maintenance {
     pub const RULE_SOURCE_INVALID: &str = "MAINTENANCE_RULE_SOURCE_INVALID";
     /// The maintenance action configuration is invalid.
     pub const ACTION_CONFIGURATION_INVALID: &str = "MAINTENANCE_ACTION_CONFIGURATION_INVALID";
+    /// The rule source defines no action head, so it could never do anything.
+    pub const ACTION_HEAD_REQUIRED: &str = "MAINTENANCE_ACTION_HEAD_REQUIRED";
+    /// The rule defines an action head its scope cannot run.
+    pub const ACTION_HEAD_UNSUPPORTED_FOR_SCOPE: &str =
+        "MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE";
+    /// A `set_quality_profile` literal names no existing quality profile.
+    pub const QUALITY_PROFILE_NOT_FOUND: &str = "MAINTENANCE_QUALITY_PROFILE_NOT_FOUND";
+    /// A `move_to_library` literal names no library.
+    pub const MOVE_LIBRARY_NOT_FOUND: &str = "MAINTENANCE_MOVE_LIBRARY_NOT_FOUND";
+    /// A `move_to_library` literal names a library of another media kind
+    /// than the rule's libraries.
+    pub const MOVE_LIBRARY_FACET_MISMATCH: &str = "MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH";
+    /// A `move_to_root` literal names no configured library root.
+    pub const MOVE_ROOT_NOT_FOUND: &str = "MAINTENANCE_MOVE_ROOT_NOT_FOUND";
+    /// A rule that can delete was saved or armed without the most titles it
+    /// may act on in one run. The `destructiveActions` extension names the
+    /// delete actions that require it.
+    pub const RULE_MAX_TITLES_PER_RUN_REQUIRED: &str =
+        "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
+    /// The most titles a rule acts on in one run is below one.
+    pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
@@ -2006,6 +2047,9 @@ pub mod maintenance {
         GRACE_PERIOD_INVALID,
         GRACE_PERIOD_OUT_OF_RANGE,
         ACTION_NOT_STORABLE,
+        RULE_STORED_ACTIONS_NOT_DECLARED,
+        RULE_REVISION_CONFLICT,
+        PREVIEW_NO_DECISION,
         ACTION_UNSUPPORTED,
         ACTION_INVALID,
         FIELD_REQUIRED,
@@ -2025,7 +2069,18 @@ pub mod maintenance {
         DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
         RULE_SOURCE_INVALID,
         ACTION_CONFIGURATION_INVALID,
+        ACTION_HEAD_REQUIRED,
+        ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
+        QUALITY_PROFILE_NOT_FOUND,
+        MOVE_LIBRARY_NOT_FOUND,
+        MOVE_LIBRARY_FACET_MISMATCH,
+        MOVE_ROOT_NOT_FOUND,
+        RULE_MAX_TITLES_PER_RUN_REQUIRED,
+        RULE_MAX_TITLES_PER_RUN_INVALID,
     ];
+
+    /// The deleting action heads that make a rule's per-run maximum required.
+    pub const RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT: &str = "destructiveActions";
 }
 
 pub mod acquisition {

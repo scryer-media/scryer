@@ -476,6 +476,9 @@ fn map_event_type(event_type: DomainNotificationEventType) -> NotificationEventT
         DomainNotificationEventType::ListTitleLeft => NotificationEventType::ListTitleLeft,
         DomainNotificationEventType::ListSyncFailed => NotificationEventType::ListSyncFailed,
         DomainNotificationEventType::ListUnfollowed => NotificationEventType::ListUnfollowed,
+        DomainNotificationEventType::MaintenanceRuleNotified => {
+            NotificationEventType::MaintenanceRuleNotified
+        }
         DomainNotificationEventType::Test => NotificationEventType::Test,
     }
 }

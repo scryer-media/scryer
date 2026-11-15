@@ -528,7 +528,11 @@ impl PolicyFamily for ReleaseFamily {
         Ok(())
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        _kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         RuleEvalError {
             rule_set_id: rule.id.clone(),
             rule_set_name: rule.name.clone(),
@@ -2247,6 +2251,104 @@ score_entry["internal"] := 300 if {
             duration_seconds: Some(7200),
             num_chapters: Some(1),
             container_format: Some("matroska".to_string()),
+        }
+    }
+
+    fn user_policy(id: &str, body: &str) -> UserPolicy {
+        UserPolicy {
+            id: id.to_string(),
+            name: id.to_string(),
+            rego_source: format!("package scryer.rules.user.{id}\n{body}\n"),
+            origin: PolicyOrigin::User,
+            applied_facets: vec![],
+        }
+    }
+
+    /// The scoring templates the web ships, read from the file it builds.
+    fn shipped_scoring_templates() -> Vec<(String, String)> {
+        let source = include_str!("../../../apps/scryer-web/lib/constants/rule-templates.ts");
+        let mut templates = Vec::new();
+        for (index, chunk) in source.split("regoSource: `").skip(1).enumerate() {
+            let body = chunk.split('`').next().expect("template body is closed");
+            templates.push((format!("shipped_template_{index}"), body.to_string()));
+        }
+        templates
+    }
+
+    /// The maintenance family's source scan (action heads, host helpers,
+    /// `with` targets, foreign `data`) never reaches a scoring rule: a scoring
+    /// source that uses `with`, defines rules named like maintenance heads or
+    /// helpers, or is one of the shipped templates validates and scores as it
+    /// always has.
+    #[test]
+    fn scoring_sources_are_untouched_by_the_maintenance_source_contract() {
+        let cases = [
+            (
+                "with_override",
+                "import rego.v1\n\n\
+                 score_entry[\"forced\"] := 100 if {\n\
+                 \tfreeleech with input.release.extra.freeleech as true\n\
+                 }\n\n\
+                 freeleech if input.release.extra.freeleech == true\n",
+                vec![("forced", 100)],
+            ),
+            (
+                "maintenance_names",
+                "import rego.v1\n\n\
+                 delete_files := true\n\
+                 unmonitor := 1\n\
+                 days_since(x) := x\n\
+                 match if true\n\n\
+                 score_entry[\"named\"] := 50 if {\n\
+                 \tdelete_files\n\
+                 \tunmonitor == days_since(1)\n\
+                 \tmatch\n\
+                 }\n",
+                vec![("named", 50)],
+            ),
+        ];
+        for (id, body, expected) in cases {
+            let policy = user_policy(id, body);
+            let validation = crate::validation::validate_user_rule(&policy.rego_source, id)
+                .expect("validation runs");
+            assert!(validation.valid, "{id}: {:?}", validation.diagnostics);
+            assert!(
+                validation.warnings.is_empty(),
+                "{id}: {:?}",
+                validation.warnings
+            );
+
+            let result = UserRulesEngine::build(&[policy])
+                .expect("scoring rule loads")
+                .evaluator()
+                .evaluate(&test_input(), "movie")
+                .expect("scoring runs");
+            assert!(result.errors.is_empty(), "{id}: {result:?}");
+            let entries: Vec<(&str, i32)> = result
+                .entries
+                .iter()
+                .map(|entry| (entry.code.as_str(), entry.delta))
+                .collect();
+            assert_eq!(entries, expected, "{id}");
+        }
+
+        let templates = shipped_scoring_templates();
+        assert_eq!(templates.len(), 12, "every shipped template is read");
+        for (id, body) in templates {
+            let policy = user_policy(&id, &body);
+            let validation = crate::validation::validate_user_rule(&policy.rego_source, &id)
+                .expect("validation runs");
+            assert!(
+                validation.valid,
+                "{id}: {:?}\n{body}",
+                validation.diagnostics
+            );
+            let result = UserRulesEngine::build(&[policy])
+                .expect("template loads")
+                .evaluator()
+                .evaluate(&test_input(), "movie")
+                .expect("template scores");
+            assert!(result.errors.is_empty(), "{id}: {result:?}");
         }
     }
 }

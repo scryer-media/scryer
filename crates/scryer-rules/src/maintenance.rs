@@ -10,9 +10,10 @@
 //! signal store stands behind it, and it is fact-shaped like everything else:
 //! `watched_by_user_ids`, `last_watched_at`, the two requester rollups, and the
 //! anonymous `watched_by_anyone` pair are plain values that go missing when the
-//! host could not observe them. Watchlist
-//! and favorite signals are still absent — nothing collects them yet, and a
-//! fact rules cannot be told the truth about has no business in the contract.
+//! host could not observe them. Watchlists come from members' own list
+//! subscriptions. Favourites come from Jellyfin and Emby, read on their own so
+//! a favourite nobody played is seen; Plex has none, and its members are never
+//! read as "not a favourite".
 //!
 //! Two things make a rule safe to write. The rule reads facts as plain values,
 //! so it says what it means (`input.facts.monitored`, not a status dance), and
@@ -266,6 +267,93 @@ pub struct MaintenanceFactsDoc {
     pub storage_available_bytes: Observation<i64>,
     pub storage_total_bytes: Observation<i64>,
     pub storage_available_percent: Observation<f64>,
+    /// Metadata Scryer already stores on the title row. Each is absent when
+    /// the metadata provider gave no value, and the movie release dates are
+    /// absent for a show. `first_aired` and the release dates are dates as the
+    /// provider gave them (`YYYY-MM-DD`), not timestamps.
+    pub runtime_minutes: Observation<i64>,
+    pub original_language: Observation<String>,
+    pub series_status: Observation<String>,
+    pub first_aired: Observation<String>,
+    pub network: Observation<String>,
+    pub studio: Observation<String>,
+    pub country: Observation<String>,
+    pub popularity: Observation<f64>,
+    pub theatrical_release_date: Observation<String>,
+    pub digital_release_date: Observation<String>,
+    pub physical_release_date: Observation<String>,
+    /// Whole days since the subject was added, against the evaluation clock.
+    pub days_since_added: Observation<i64>,
+    /// The tallest video stream among the subject's files, in pixels; absent
+    /// when no file reports one.
+    pub max_video_height: Observation<i64>,
+    /// The shape of a show's whole episode list, whatever the subject: its
+    /// seasons and its regular episodes, specials left out. An episode has
+    /// aired once its air date is on or before the evaluation day; one with
+    /// no air date or a later one has not. Missing means aired, monitored and
+    /// without a file. Absent for movies; unknown when the episode store
+    /// could not be read.
+    pub season_count: Observation<i64>,
+    pub aired_episode_count: Observation<i64>,
+    pub unaired_episode_count: Observation<i64>,
+    pub missing_episode_count: Observation<i64>,
+    /// Aired episodes with a file, as a percentage of aired episodes; absent
+    /// when nothing has aired.
+    pub aired_episode_file_percent: Observation<f64>,
+    pub latest_season_number: Observation<i64>,
+    pub latest_aired_episode_date: Observation<String>,
+    /// The earliest air date after the evaluation day; absent when none is
+    /// scheduled.
+    pub next_episode_air_date: Observation<String>,
+    /// Genre names from the stored metadata tags. Unknown when the tag store
+    /// could not be read.
+    pub genres: Observation<Vec<String>>,
+    /// The stored rating summary and every external rating behind it. Unknown
+    /// when the rating store could not be read; `rating` is absent when no
+    /// source rated the title.
+    pub rating: Observation<f64>,
+    pub ratings: Observation<Vec<MaintenanceRatingDoc>>,
+    /// Plays of the subject by every account on every enabled media server,
+    /// linked to a Scryer user or not, summed. Anonymous, and behind the same
+    /// gate as `watched_by_anyone`.
+    pub play_count_total: Observation<i64>,
+    /// Watch-later lists. A member's watchlist is one of their own personal
+    /// list subscriptions to a source that holds what they want to watch
+    /// (the Plex, Trakt, TMDb and MDBList watchlists, Simkl and MyAnimeList
+    /// plan-to-watch, and the AniList planning list), enabled and signed in.
+    /// Every one of these is unknown while any such list has failed its last
+    /// sync, never synced, or has not synced recently: a watchlist Scryer has
+    /// not read could hold the title. A member with no watchlist contributes
+    /// nothing.
+    pub watchlisted_by_user_ids: Observation<Vec<String>>,
+    pub watchlisted_by_usernames: Observation<Vec<String>>,
+    pub watchlisted_by_anyone: Observation<bool>,
+    pub watchlisted_by_any_requester: Observation<bool>,
+    /// When Scryer first saw the title on any watchlist (RFC3339), and the
+    /// providers whose watchlists hold it now.
+    pub watchlist_added_at: Observation<String>,
+    pub watchlist_origins: Observation<Vec<String>>,
+    /// Members who marked the subject a favourite on an enabled Jellyfin or
+    /// Emby server. For a series title a favourite of the series itself, or
+    /// of any of its seasons or episodes, counts; a season or episode
+    /// subject counts its own favourites and, for an episode, its season's
+    /// and its series'. Plex has no favourites: an instance whose only
+    /// enabled servers are Plex has these absent, and while any linked member
+    /// can only be observed through Plex they are unknown.
+    pub favorited_by_user_ids: Observation<Vec<String>>,
+    pub favorited_by_usernames: Observation<Vec<String>>,
+    pub favorited_by_anyone: Observation<bool>,
+    pub favorited_by_any_requester: Observation<bool>,
+}
+
+/// One external rating as a rule sees it: the source's own value, its value on
+/// Scryer's common scale, and its vote count when the source gives one.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+pub struct MaintenanceRatingDoc {
+    pub source: String,
+    pub value: Option<f64>,
+    pub normalized: f64,
+    pub votes: Option<i64>,
 }
 
 /// Facts that name, or are computed from, identifiable people.
@@ -276,10 +364,12 @@ pub struct MaintenanceFactsDoc {
 /// lives here, beside the fact document, because it is a property of the facts
 /// themselves rather than of any one caller.
 ///
-/// `requested`, `last_watched_at`, `watched_by_anyone`, and
-/// `last_watched_by_anyone_at` are deliberately absent: they are anonymous
-/// aggregates that say something happened, never who did it.
-pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
+/// `requested`, `last_watched_at`, `watched_by_anyone`,
+/// `last_watched_by_anyone_at`, `play_count_total`, `watchlisted_by_anyone`,
+/// `watchlist_added_at`, `watchlist_origins` and `favorited_by_anyone` are
+/// deliberately absent: they are anonymous aggregates that say something
+/// happened, never who did it.
+pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 13] = [
     "added_by_user_id",
     "added_by_username",
     "requested_by_user_ids",
@@ -287,20 +377,69 @@ pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
     "watched_by_user_ids",
     "watched_by_any_requester",
     "watched_by_all_requesters",
+    "watchlisted_by_user_ids",
+    "watchlisted_by_usernames",
+    "watchlisted_by_any_requester",
+    "favorited_by_user_ids",
+    "favorited_by_usernames",
+    "favorited_by_any_requester",
+];
+
+/// Facts read from members' Jellyfin and Emby favourites. The host reads the
+/// stored favourites only for a rule that reads one.
+pub const FAVORITE_MAINTENANCE_FACTS: [&str; 4] = [
+    "favorited_by_user_ids",
+    "favorited_by_usernames",
+    "favorited_by_anyone",
+    "favorited_by_any_requester",
+];
+
+/// Facts read from members' watch-later lists. The host loads the list
+/// subscriptions behind them only for a rule that reads one.
+pub const WATCHLIST_MAINTENANCE_FACTS: [&str; 6] = [
+    "watchlisted_by_user_ids",
+    "watchlisted_by_usernames",
+    "watchlisted_by_anyone",
+    "watchlisted_by_any_requester",
+    "watchlist_added_at",
+    "watchlist_origins",
+];
+
+/// Facts read from the stored metadata tags and ratings. The host reads those
+/// stores only for a rule that reads one.
+pub const METADATA_MAINTENANCE_FACTS: [&str; 3] = ["genres", "rating", "ratings"];
+
+/// Facts read from one grouped count over a show's stored episodes. The host
+/// reads it only for a rule that reads one.
+pub const EPISODE_SHAPE_MAINTENANCE_FACTS: [&str; 8] = [
+    "season_count",
+    "aired_episode_count",
+    "unaired_episode_count",
+    "missing_episode_count",
+    "aired_episode_file_percent",
+    "latest_season_number",
+    "latest_aired_episode_date",
+    "next_episode_air_date",
 ];
 
 /// Facts computed from media-server watch history.
 ///
 /// A rule that reads one decided on plays stored by the last sweep, so the
 /// executor reads the server again before acting on it: a play since that
-/// sweep is evidence the stored facts do not have yet.
-pub const WATCH_MAINTENANCE_FACTS: [&str; 6] = [
+/// sweep is evidence the stored facts do not have yet. The favourites are in
+/// this group too: they come from the same sweep.
+pub const WATCH_MAINTENANCE_FACTS: [&str; 11] = [
     "watched_by_user_ids",
     "last_watched_at",
     "watched_by_any_requester",
     "watched_by_all_requesters",
     "watched_by_anyone",
     "last_watched_by_anyone_at",
+    "play_count_total",
+    "favorited_by_user_ids",
+    "favorited_by_usernames",
+    "favorited_by_anyone",
+    "favorited_by_any_requester",
 ];
 
 /// One series movie as a rule sees it.
@@ -333,6 +472,12 @@ pub struct MaintenanceFileDoc {
     pub video_height: Option<i32>,
     pub audio_languages: Vec<String>,
     pub subtitle_languages: Vec<String>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i32>,
+    pub audio_bitrate_kbps: Option<i32>,
+    pub video_bitrate_kbps: Option<i32>,
+    pub video_bit_depth: Option<i32>,
+    pub video_hdr_format: Option<String>,
     pub added_at: Option<String>,
 }
 
@@ -367,6 +512,11 @@ pub type MaintenanceEvalRecord = EvalRecord<MaintenanceDecision>;
 pub struct MaintenanceEvalError {
     pub rule_set_id: String,
     pub rule_set_name: String,
+    /// What went wrong, as one of the codes in [`crate::diagnostic_codes`]:
+    /// `RULE_RUNTIME_ERROR`, `RULE_OUTPUT_INVALID`, or the code of the
+    /// condition that refused the rule's source at load.
+    pub code: &'static str,
+    /// Display text; code never reads it.
     pub message: String,
 }
 
@@ -386,11 +536,11 @@ pub fn rewrite_package_declaration(rego_source: &str, rule_id: &str) -> String {
 
 /// Source for the generated evaluation entry point.
 ///
-/// `object.get` with a default is what makes `unknown` and `reasons` optional
-/// and an undefined `match` mean "did not match": a rule whose body fails
-/// leaves the name off the package document entirely, and the default fills in.
-/// A `match` that is defined but not boolean survives to the host, which
-/// rejects it rather than coercing it.
+/// `object.get` with a default is what makes `unknown`, `reasons` and every
+/// action head optional: a rule whose body fails leaves the name off the
+/// package document entirely, and the default fills in. A head that is defined
+/// with the wrong type survives to the host, which rejects it rather than
+/// coercing it. `match` is not projected: it is an ordinary author helper.
 pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
     object_wrapper_source(
         WRAPPER_PACKAGE_PREFIX,
@@ -398,7 +548,6 @@ pub(crate) fn decision_wrapper_source(rule_id: &str) -> String {
         rule_id,
         "decision",
         &[
-            WrapperField::new("matched", "match", "false"),
             WrapperField::new("unknown", HOLD_RULE_NAME, "false"),
             WrapperField::new("reasons", "reasons", "[]"),
         ]
@@ -536,10 +685,24 @@ impl PolicyFamily for MaintenanceFamily {
         decode_decision(value)
     }
 
-    fn eval_error(rule: &RuleHandle<Self::RuleExtra>, message: String) -> Self::EvalError {
+    /// The same action scan validation runs. A stored source that would no
+    /// longer save, or whose actions the host cannot read, never decides.
+    fn load_refusal(
+        _policy: &Self::Policy,
+        module: &regorus::unstable::Module,
+    ) -> Option<crate::policy::PolicyRefusal> {
+        maintenance_actions::load_refusal(module)
+    }
+
+    fn eval_error(
+        rule: &RuleHandle<Self::RuleExtra>,
+        kind: crate::policy::PolicyErrorKind,
+        message: String,
+    ) -> Self::EvalError {
         MaintenanceEvalError {
             rule_set_id: rule.id.clone(),
             rule_set_name: rule.name.clone(),
+            code: kind.code(),
             message,
         }
     }
@@ -597,9 +760,6 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
         return Err("decision must be an object".to_string());
     }
 
-    let matched = *value["matched"]
-        .as_bool()
-        .map_err(|_| "'match' must be a boolean".to_string())?;
     let unknown = *value["unknown"]
         .as_bool()
         .map_err(|_| "'unknown' must be a boolean".to_string())?;
@@ -608,11 +768,12 @@ pub(crate) fn decode_decision(value: &Value) -> Result<MaintenanceDecision, Stri
     // error for the rule even on a subject the rule holds.
     let actions = decode_actions(value)?;
 
-    // Unknown wins over match: a rule that cannot see enough to decide must
-    // hold the candidate rather than advance it.
+    // Unknown wins over every action: a rule that cannot see enough to decide
+    // must hold the candidate rather than advance it. Otherwise a subject
+    // matches exactly when at least one action head fired for it.
     let outcome = if unknown {
         MaintenanceOutcome::Unknown
-    } else if matched {
+    } else if !actions.is_empty() {
         MaintenanceOutcome::Match
     } else {
         MaintenanceOutcome::NoMatch
@@ -683,6 +844,12 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
                 video_height: Some(2160),
                 audio_languages: vec!["eng".to_string()],
                 subtitle_languages: vec!["eng".to_string()],
+                audio_codec: Some("eac3".to_string()),
+                audio_channels: Some(6),
+                audio_bitrate_kbps: Some(640),
+                video_bitrate_kbps: Some(16_000),
+                video_bit_depth: Some(10),
+                video_hdr_format: Some("hdr10".to_string()),
                 added_at: Some("2024-01-02T00:00:00Z".to_string()),
             }]),
             episode_count: Observation::known(0),
@@ -728,6 +895,47 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             storage_available_bytes: Observation::absent(),
             storage_total_bytes: Observation::absent(),
             storage_available_percent: Observation::absent(),
+            runtime_minutes: Observation::known(118),
+            original_language: Observation::known("en".to_string()),
+            // A movie subject: a show's status does not apply to it.
+            series_status: Observation::absent(),
+            first_aired: Observation::absent(),
+            network: Observation::absent(),
+            studio: Observation::known("Fixture Studio".to_string()),
+            country: Observation::known("us".to_string()),
+            popularity: Observation::known(12.5),
+            theatrical_release_date: Observation::known("2023-11-10".to_string()),
+            digital_release_date: Observation::known("2024-01-05".to_string()),
+            physical_release_date: Observation::known("2024-02-20".to_string()),
+            days_since_added: Observation::known(120),
+            max_video_height: Observation::known(2160),
+            season_count: Observation::known(3),
+            aired_episode_count: Observation::known(28),
+            unaired_episode_count: Observation::known(2),
+            missing_episode_count: Observation::known(1),
+            aired_episode_file_percent: Observation::known(96.4),
+            latest_season_number: Observation::known(3),
+            latest_aired_episode_date: Observation::known("2024-02-01".to_string()),
+            next_episode_air_date: Observation::known("2024-02-08".to_string()),
+            genres: Observation::known(vec!["Drama".to_string()]),
+            rating: Observation::known(7.4),
+            ratings: Observation::known(vec![MaintenanceRatingDoc {
+                source: "imdb".to_string(),
+                value: Some(7.4),
+                normalized: 7.4,
+                votes: Some(1200),
+            }]),
+            play_count_total: Observation::known(3),
+            watchlisted_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            watchlisted_by_usernames: Observation::known(vec!["operator".to_string()]),
+            watchlisted_by_anyone: Observation::known(true),
+            watchlisted_by_any_requester: Observation::known(true),
+            watchlist_added_at: Observation::known("2023-12-01T00:00:00Z".to_string()),
+            watchlist_origins: Observation::known(vec!["trakt".to_string()]),
+            favorited_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            favorited_by_usernames: Observation::known(vec!["member".to_string()]),
+            favorited_by_anyone: Observation::known(true),
+            favorited_by_any_requester: Observation::absent(),
         },
     }
 }
@@ -765,7 +973,7 @@ mod tests {
     fn stereo_boolean_is_available_to_maintenance_rules() {
         let policy = policy(
             "stereo_file",
-            "match if { input.facts.files[_].is_3d == true }",
+            "unmonitor if { input.facts.files[_].is_3d == true }",
         );
         let validation =
             crate::validation::validate_maintenance_rule(&policy.rego_source, &policy.id).unwrap();
@@ -781,6 +989,12 @@ mod tests {
                 video_height: None,
                 audio_languages: vec![],
                 subtitle_languages: vec![],
+                audio_codec: None,
+                audio_channels: None,
+                audio_bitrate_kbps: None,
+                video_bitrate_kbps: None,
+                video_bit_depth: None,
+                video_hdr_format: None,
                 added_at: None,
             }]);
             let result = evaluate_against(std::slice::from_ref(&policy), input);
@@ -807,7 +1021,7 @@ mod tests {
     fn matching_rule_reports_match() {
         let result = evaluate(&[policy(
             "monitored_movie",
-            "match if {\n  input.facts.monitored\n}\n",
+            "unmonitor if {\n  input.facts.monitored\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -823,7 +1037,7 @@ mod tests {
     fn evaluator_reuse_tracks_changed_known_and_unknown_facts() {
         let engine = MaintenanceRulesEngine::build(&[policy(
             "monitored_movie",
-            "match if {\n  input.facts.monitored\n}\n",
+            "unmonitor if {\n  input.facts.monitored\n}\n",
         )])
         .expect("policy should compile");
         let mut evaluator = engine.evaluator();
@@ -869,7 +1083,7 @@ mod tests {
     fn undefined_match_reports_no_match() {
         let result = evaluate(&[policy(
             "never_matches",
-            "match if {\n  input.subject.facet == \"series\"\n}\n",
+            "unmonitor if {\n  input.subject.facet == \"series\"\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -885,7 +1099,7 @@ mod tests {
     fn a_policy_declared_unknown_takes_precedence_over_match() {
         let result = evaluate(&[policy(
             "holds_on_unknown",
-            "match := true\n\nunknown if {\n  input.observations.last_upgraded_at.status == \"known\"\n}\n",
+            "unmonitor := true\n\nunknown if {\n  input.observations.last_upgraded_at.status == \"known\"\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -905,7 +1119,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "downloads_in_flight",
-                "match if {\n  not input.facts.active_downloads\n}\n",
+                "unmonitor if {\n  not input.facts.active_downloads\n}\n",
             )],
             input,
         );
@@ -931,7 +1145,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "not_ranked_episode",
-                "match if {\n  not input.facts.episode_position_by_air_date\n}\n",
+                "unmonitor if {\n  not input.facts.episode_position_by_air_date\n}\n",
             )],
             input,
         );
@@ -953,9 +1167,9 @@ mod tests {
         // These are the editor's scope-specific examples: rank one is newest,
         // so a policy deletes only positions after the retained window.
         const KEEP_NEWEST_TWO_DOWNLOADED_EPISODES: &str =
-            "match if {\n  input.facts.episode_position_by_air_date > 2\n}\n";
+            "unmonitor if {\n  input.facts.episode_position_by_air_date > 2\n}\n";
         const KEEP_NEWEST_ONE_DOWNLOADED_SEASON: &str =
-            "match if {\n  input.facts.season_position_by_air_date > 1\n}\n";
+            "unmonitor if {\n  input.facts.season_position_by_air_date > 1\n}\n";
 
         let mut episode_input = synthetic_maintenance_input();
         episode_input.subject.kind = MaintenanceSubjectKind::Episode;
@@ -1002,7 +1216,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "system_added",
-                "match if {\n  not input.facts.added_by_user_id\n  input.facts.has_file\n}\n",
+                "unmonitor if {\n  not input.facts.added_by_user_id\n  input.facts.has_file\n}\n",
             )],
             input,
         );
@@ -1026,7 +1240,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "many_unknowns",
-                "match if {\n  input.facts.active_downloads\n  input.facts.last_upgraded_at\n  \
+                "unmonitor if {\n  input.facts.active_downloads\n  input.facts.last_upgraded_at\n  \
                  input.facts.added_by_username == \"operator\"\n}\n",
             )],
             input,
@@ -1052,7 +1266,7 @@ mod tests {
         let result = evaluate_against(
             &[policy(
                 "inspects_the_envelope",
-                "match if {\n  input.observations.active_downloads.status == \"unknown\"\n}\n\n\
+                "unmonitor if {\n  input.observations.active_downloads.status == \"unknown\"\n}\n\n\
                  reasons contains reason if {\n  \
                    reason := input.observations.active_downloads.reason\n\
                  }\n",
@@ -1076,7 +1290,7 @@ mod tests {
     #[test]
     fn evaluation_time_supports_date_arithmetic() {
         const AGE_MATCHER: &str = "day_ns := (24 * 60 * 60) * 1000000000\n\n\
-             match if {\n  \
+             unmonitor if {\n  \
                age := time.parse_rfc3339_ns(input.evaluation_time) - \
              time.parse_rfc3339_ns(input.facts.added_at)\n  \
                age > 180 * day_ns\n\
@@ -1107,7 +1321,7 @@ mod tests {
     fn reason_codes_are_collected_from_a_set_rule() {
         let result = evaluate(&[policy(
             "set_reasons",
-            "match := true\n\nreasons contains \"stale\"\n\nreasons contains \"unwatched\"\n",
+            "unmonitor := true\n\nreasons contains \"stale\"\n\nreasons contains \"unwatched\"\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -1121,7 +1335,7 @@ mod tests {
     fn reason_codes_are_collected_from_an_array_rule() {
         let result = evaluate(&[policy(
             "array_reasons",
-            "match := true\n\nreasons := [\"first\", \"second\"]\n",
+            "unmonitor := true\n\nreasons := [\"first\", \"second\"]\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -1133,14 +1347,13 @@ mod tests {
 
     #[test]
     fn non_boolean_match_is_an_error_not_a_decision() {
-        let result = evaluate(&[policy("numeric_match", "match := 1\n")]);
+        let result = evaluate(&[policy("numeric_match", "unmonitor := 1\n")]);
 
         assert!(result.records.is_empty(), "{:?}", result.records);
         assert_eq!(result.errors.len(), 1);
-        assert!(
-            result.errors[0]
-                .message
-                .contains("'match' must be a boolean"),
+        assert_eq!(
+            result.errors[0].code,
+            crate::diagnostic_codes::RULE_OUTPUT_INVALID,
             "{}",
             result.errors[0].message
         );
@@ -1154,7 +1367,7 @@ mod tests {
             .join(", ");
         let result = evaluate(&[policy(
             "too_many_reasons",
-            &format!("match := true\n\nreasons := [{entries}]\n"),
+            &format!("unmonitor := true\n\nreasons := [{entries}]\n"),
         )]);
 
         assert!(result.records.is_empty(), "{:?}", result.records);
@@ -1170,7 +1383,7 @@ mod tests {
         let long = "x".repeat(MAX_REASON_CODE_LEN + 1);
         let result = evaluate(&[policy(
             "long_reason",
-            &format!("match := true\n\nreasons := [\"{long}\"]\n"),
+            &format!("unmonitor := true\n\nreasons := [\"{long}\"]\n"),
         )]);
 
         assert!(result.records.is_empty(), "{:?}", result.records);
@@ -1186,9 +1399,9 @@ mod tests {
         let result = evaluate(&[
             policy(
                 "broken",
-                "match if {\n  lower(input.subject.year) == \"x\"\n}\n",
+                "unmonitor if {\n  lower(input.subject.year) == \"x\"\n}\n",
             ),
-            policy("healthy", "match := true\n"),
+            policy("healthy", "unmonitor := true\n"),
         ]);
 
         assert_eq!(result.errors.len(), 1);
@@ -1209,7 +1422,7 @@ mod tests {
 
         let policies = [policy(
             "runaway",
-            "match if {\n  count([1 |\n    some i in numbers.range(1, 3000)\n    some j in numbers.range(1, 3000)\n    i == j\n  ]) > 0\n}\n",
+            "unmonitor if {\n  count([1 |\n    some i in numbers.range(1, 3000)\n    some j in numbers.range(1, 3000)\n    i == j\n  ]) > 0\n}\n",
         )];
         let engine =
             MaintenanceRulesEngine::build_with_limits(&policies, limits).expect("should compile");
@@ -1225,7 +1438,7 @@ mod tests {
 
     #[test]
     fn records_carry_a_stable_policy_content_hash() {
-        let policies = [policy("hashed", "match := true\n")];
+        let policies = [policy("hashed", "unmonitor := true\n")];
         let first = evaluate(&policies);
         let second = evaluate(&policies);
 
@@ -1256,9 +1469,11 @@ mod tests {
     fn oversized_input_is_rejected_before_evaluation() {
         let mut limits = RuntimeLimits::maintenance_defaults();
         limits.max_input_bytes = 16;
-        let engine =
-            MaintenanceRulesEngine::build_with_limits(&[policy("tiny", "match := true\n")], limits)
-                .expect("should compile");
+        let engine = MaintenanceRulesEngine::build_with_limits(
+            &[policy("tiny", "unmonitor := true\n")],
+            limits,
+        )
+        .expect("should compile");
         let err = engine
             .evaluator()
             .evaluate(&synthetic_maintenance_input())
@@ -1318,7 +1533,6 @@ mod tests {
             "package scryer.maintenance.wrapper.rule_1\n\
              import rego.v1\n\n\
              decision := {\n\
-             \t\"matched\": object.get(data.scryer.maintenance.user.rule_1, \"match\", false),\n\
              \t\"unknown\": object.get(data.scryer.maintenance.user.rule_1, \"unknown\", false),\n\
              \t\"reasons\": object.get(data.scryer.maintenance.user.rule_1, \"reasons\", []),\n\
              \t\"unmonitor\": object.get(data.scryer.maintenance.user.rule_1, \"unmonitor\", false),\n\
@@ -1328,6 +1542,11 @@ mod tests {
              \t\"set_quality_profile\": object.get(data.scryer.maintenance.user.rule_1, \"set_quality_profile\", null),\n\
              \t\"add_tags\": object.get(data.scryer.maintenance.user.rule_1, \"add_tags\", []),\n\
              \t\"remove_tags\": object.get(data.scryer.maintenance.user.rule_1, \"remove_tags\", []),\n\
+             \t\"monitor\": object.get(data.scryer.maintenance.user.rule_1, \"monitor\", false),\n\
+             \t\"fetch_subtitles\": object.get(data.scryer.maintenance.user.rule_1, \"fetch_subtitles\", false),\n\
+             \t\"move_to_library\": object.get(data.scryer.maintenance.user.rule_1, \"move_to_library\", null),\n\
+             \t\"move_to_root\": object.get(data.scryer.maintenance.user.rule_1, \"move_to_root\", null),\n\
+             \t\"notify\": object.get(data.scryer.maintenance.user.rule_1, \"notify\", null),\n\
              }\n"
         );
         assert_eq!(
@@ -1349,5 +1568,38 @@ mod tests {
             decision_wrapper_source("rule_1").contains(&format!("\"{hold}\", false)")),
             "the wrapper must read the head the family declares"
         );
+    }
+
+    #[test]
+    fn an_action_head_written_under_data_is_refused_at_compile() {
+        // The action scan reads heads by their leading name, so a head
+        // spelled as a full `data.` path would slip past it. The Rego compiler
+        // refuses any rule that shadows `data`, which keeps such a head from
+        // ever deciding an action.
+        for body in [
+            "data.scryer.maintenance.user.data_head.delete_files := true\n",
+            "data.scryer.maintenance.user.data_head.delete_title if { true }\n",
+        ] {
+            assert!(
+                MaintenanceRulesEngine::build(&[policy("data_head", body)]).is_err(),
+                "{body}"
+            );
+            let validated = crate::validation::validate_maintenance_rule(
+                &rewrite_package_declaration(body, "data_head"),
+                "data_head",
+            )
+            .expect("validation runs");
+            assert!(!validated.valid, "{body}");
+            let codes: Vec<&str> = validated
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect();
+            assert_eq!(
+                codes,
+                vec![crate::diagnostic_codes::RULE_COMPILATION_ERROR],
+                "{body}"
+            );
+        }
     }
 }

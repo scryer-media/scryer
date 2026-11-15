@@ -1374,6 +1374,10 @@ impl AppUseCase {
             JobKey::ProwlarrSync => self.prowlarr_sync_tick_has_work().await,
             JobKey::StagedNzbPrune => self.staged_nzb_prune_tick_has_work().await,
             JobKey::ListSync => self.list_sync_tick_has_work().await,
+            // Each rule acts right after its own scheduled evaluation, so the
+            // instance-wide tick has nothing left to do. An explicit run
+            // still acts for every armed rule.
+            JobKey::LifecycleActionHandling => false,
             _ => return true,
         };
         if !has_work {
@@ -2160,6 +2164,18 @@ impl AppUseCase {
                 Ok(JobExecutionOutcome::new(
                     Some(format!("Pruned {count} staged NZB artifacts")),
                     serde_json::to_string(&CountSummary { count }).ok(),
+                ))
+            }
+            JobKey::MaintenanceRuleEvaluation if run.trigger_source != JobTriggerSource::Manual => {
+                // Each rule evaluates on its own schedule; the instance-wide
+                // tick keeps only the lease clock.
+                let report = self.run_maintenance_lease_reconciliation_job().await;
+                Ok(JobExecutionOutcome::new(
+                    Some(format!(
+                        "{} request lease(s) expired, {} started; rules run on their own schedules",
+                        report.leases_expired, report.leases_activated
+                    )),
+                    serde_json::to_string(&report).ok(),
                 ))
             }
             JobKey::MaintenanceRuleEvaluation => {

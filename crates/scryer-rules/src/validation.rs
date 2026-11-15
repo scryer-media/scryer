@@ -235,6 +235,47 @@ impl ValidationResult {
     }
 }
 
+/// One-based line and character column of a byte offset in a source.
+///
+/// Diagnostics point where an editor would: one column per character. Regorus
+/// counts a tab as four columns and a token by its bytes, so its own columns
+/// drift on indented or non-ASCII lines.
+pub(crate) fn character_position(source: &str, byte_offset: usize) -> Option<(usize, usize)> {
+    let before = source.get(..byte_offset)?;
+    let line = before.matches('\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |index| index + 1);
+    Some((line, before[line_start..].chars().count() + 1))
+}
+
+/// The character column for a regorus column on one-based `line` of `source`.
+///
+/// For positions regorus reports only as text, such as a compile error. It
+/// replays regorus's count: four for a tab, the byte length for anything else.
+pub(crate) fn character_column(source: &str, line: usize, regorus_column: usize) -> Option<usize> {
+    let text = source.split('\n').nth(line.checked_sub(1)?)?;
+    let mut column = 1;
+    for (index, ch) in text.chars().enumerate() {
+        if column >= regorus_column {
+            return Some(index + 1);
+        }
+        column += if ch == '\t' { 4 } else { ch.len_utf8() };
+    }
+    Some(text.chars().count() + 1)
+}
+
+impl ValidationResult {
+    /// Restate every diagnostic column regorus reported for `source` as a
+    /// character column. Positions the scan computed are characters already.
+    fn with_character_columns(mut self, source: &str) -> Self {
+        for diagnostic in &mut self.diagnostics {
+            if let (Some(line), Some(column)) = (diagnostic.line, diagnostic.column) {
+                diagnostic.column = character_column(source, line, column).or(Some(column));
+            }
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InputPathComponent {
     Field(String),
@@ -1636,14 +1677,17 @@ pub fn validate_managed_rule(
 ///    as a whole value, and every fact is selected by a literal name. All three
 ///    keep the referenced-fact set statically resolvable, which is what lets the
 ///    engine hold a rule whose facts it cannot observe.
-/// 4. The source defines a rule named `match`. The wrapper defaults an
-///    undefined `match` to false, so a matcher that never defines one would
-///    quietly evaluate to no-match forever — this is the only place that catches
-///    it.
+/// 4. The source defines at least one action head. The wrapper defaults every
+///    undefined head, so a rule that defines none would quietly do nothing
+///    forever; this is the only place that catches it. `match` is an ordinary
+///    helper name.
 /// 5. Every `input.*` reference resolves in the maintenance catalog.
 /// 6. Every value written for `set_quality_profile`, `add_tags` or
-///    `remove_tags` is a plain literal the action accepts, and the source does
-///    not redefine a host helper such as `days_since`.
+///    `remove_tags` is a plain literal the action accepts, within the tag
+///    count; no action head is written as a function; the source reads no
+///    `data` outside its own package; and it does not define or import under
+///    a name the `days_since` helper resolves. The engine runs the same scan
+///    when it loads the rule and refuses to evaluate a source that fails it.
 /// 7. A dry run against synthetic input yields a well-formed decision.
 ///
 /// A rule name that is neither part of the contract nor used anywhere else in
@@ -1664,7 +1708,7 @@ pub fn validate_maintenance_rule(
 
     let policy_path = maintenance::user_policy_path(rule_set_id);
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
-        return Ok(ValidationResult::compilation_error(e));
+        return Ok(ValidationResult::compilation_error(e).with_character_columns(rego_source));
     }
     let policy_module_index = engine.get_modules().len() - 1;
     let module = engine.get_modules()[policy_module_index].clone();
@@ -1695,18 +1739,18 @@ pub fn validate_maintenance_rule(
         return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
-    if !module_defines_rule(module, "match") {
-        return Ok(ValidationResult::invalid_code(
-            crate::diagnostic_codes::RULE_MATCH_REQUIRED,
-            "maintenance rule must define a boolean 'match' rule, for example: match if { ... }",
-        ));
-    }
-
     let scan = crate::maintenance_actions::scan_module(module);
     let warnings = scan.warnings.iter().map(action_scan_diagnostic).collect();
     if !scan.errors.is_empty() {
         let errors = scan.errors.iter().map(action_scan_diagnostic).collect();
         return Ok(ValidationResult::from_diagnostics(errors).with_warnings(warnings));
+    }
+    if scan.defined_heads.is_empty() {
+        return Ok(ValidationResult::invalid_code(
+            crate::diagnostic_codes::RULE_ACTION_REQUIRED,
+            "maintenance rule must define at least one action, for example: unmonitor if { ... }",
+        )
+        .with_warnings(warnings));
     }
 
     let input_value = serde_json::to_value(maintenance::synthetic_maintenance_input())
@@ -1735,6 +1779,16 @@ fn action_scan_diagnostic(
     let mut diagnostic = ValidationDiagnostic::new(issue.code, issue.message.clone());
     diagnostic.line = Some(issue.line);
     diagnostic.column = Some(issue.column);
+    // These two concern a rule the author named, and the name is the fact a
+    // client needs to point at it; the action codes name their head in the
+    // code's own meaning.
+    if matches!(
+        issue.code,
+        crate::diagnostic_codes::RULE_UNREFERENCED_RULE
+            | crate::diagnostic_codes::RULE_HOST_HELPER_REDEFINED
+    ) {
+        diagnostic.path = Some(issue.rule.clone());
+    }
     diagnostic
 }
 
@@ -2402,10 +2456,10 @@ mod tests {
     #[test]
     fn maintenance_source_and_loaded_module_fact_hooks_agree() {
         for (id, body) in [
-            ("known_fact", "match if {\n  input.facts.monitored\n}\n"),
+            ("known_fact", "unmonitor if {\n  input.facts.monitored\n}\n"),
             (
                 "dynamic_fact",
-                "match if {\n  some fact\n  input.facts[fact]\n}\n",
+                "unmonitor if {\n  some fact\n  input.facts[fact]\n}\n",
             ),
         ] {
             let policy = maintenance_policy(id, body);
@@ -2449,7 +2503,7 @@ mod tests {
     fn valid_maintenance_rule_passes_validation() {
         let result = validate_maintenance_body(
             "unmonitored_and_stale",
-            "match if {\n  \
+            "unmonitor if {\n  \
                not input.facts.monitored\n  \
                input.facts.files[0].quality == \"2160P\"\n\
              }\n\n\
@@ -2464,7 +2518,7 @@ mod tests {
     fn a_maintenance_rule_may_read_the_observation_envelope_directly() {
         let result = validate_maintenance_body(
             "envelope_reader",
-            "match if {\n  \
+            "unmonitor if {\n  \
                input.observations.monitored.status == \"known\"\n  \
                not input.observations.monitored.value\n  \
                input.observations.files.value[0].quality == \"2160P\"\n\
@@ -2478,17 +2532,21 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_without_match_is_rejected() {
-        let result = validate_maintenance_body(
-            "no_match_rule",
+    fn maintenance_rule_without_an_action_is_rejected() {
+        for body in [
             "unknown if {\n  not input.facts.monitored\n}\n",
-        );
-        assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("must define a boolean 'match' rule"),
-            "{:?}",
-            result.errors
-        );
+            // `match` is an ordinary helper now; on its own it decides nothing.
+            "match if {\n  not input.facts.monitored\n}\n",
+        ] {
+            let result = validate_maintenance_body("no_action_rule", body);
+            assert!(!result.valid, "{body}");
+            assert_eq!(
+                result.diagnostics[0].code,
+                crate::diagnostic_codes::RULE_ACTION_REQUIRED,
+                "{body}: {:?}",
+                result.diagnostics
+            );
+        }
     }
 
     /// The referenced-fact set is what makes an unobservable fact hold a rule,
@@ -2497,7 +2555,7 @@ mod tests {
     fn maintenance_rule_with_dynamic_fact_access_is_rejected() {
         let result = validate_maintenance_body(
             "dynamic_fact",
-            "match if {\n  some fact\n  input.facts[fact]\n}\n",
+            "unmonitor if {\n  some fact\n  input.facts[fact]\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2518,7 +2576,7 @@ mod tests {
     fn maintenance_rule_reading_the_whole_fact_object_is_rejected() {
         let result = validate_maintenance_body(
             "whole_object",
-            "match if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
+            "unmonitor if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2532,7 +2590,7 @@ mod tests {
 
         let build_error = maintenance_build_error(
             "whole_object",
-            "match if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
+            "unmonitor if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
         );
         assert!(
             build_error.contains("Unsupported reference to the whole fact object"),
@@ -2551,7 +2609,7 @@ mod tests {
 
         assert_maintenance_rejected_everywhere(
             "input_alias",
-            "match if {\n  \
+            "unmonitor if {\n  \
                doc := input\n  \
                doc.facts.watched_by_user_ids\n\
              }\n",
@@ -2560,20 +2618,20 @@ mod tests {
 
         assert_maintenance_rejected_everywhere(
             "input_object_get",
-            "match if {\n  object.get(input, [\"facts\", \"monitored\"], false)\n}\n",
+            "unmonitor if {\n  object.get(input, [\"facts\", \"monitored\"], false)\n}\n",
             EXPECTED,
         );
 
         assert_maintenance_rejected_everywhere(
             "input_as_function_argument",
-            "match if {\n  watched(input)\n}\n\n\
+            "unmonitor if {\n  watched(input)\n}\n\n\
              watched(doc) if {\n  doc.facts.last_watched_at\n}\n",
             EXPECTED,
         );
 
         assert_maintenance_rejected_everywhere(
             "input_walk",
-            "match if {\n  \
+            "unmonitor if {\n  \
                some path, value\n  \
                walk(input, [path, value])\n  \
                path == [\"facts\", \"monitored\"]\n  \
@@ -2584,7 +2642,7 @@ mod tests {
 
         assert_maintenance_rejected_everywhere(
             "input_bare_comparison",
-            "match if {\n  input == {}\n}\n",
+            "unmonitor if {\n  input == {}\n}\n",
             EXPECTED,
         );
     }
@@ -2596,7 +2654,7 @@ mod tests {
     fn maintenance_rule_overriding_the_whole_input_document_is_rejected() {
         assert_maintenance_rejected_everywhere(
             "input_with_override",
-            "match if {\n  \
+            "unmonitor if {\n  \
                inner with input as {\"facts\": {\"monitored\": false}}\n\
              }\n\n\
              inner if {\n  not input.facts.monitored\n}\n",
@@ -2604,27 +2662,46 @@ mod tests {
         );
     }
 
-    /// Over-approximating on purpose: a `with input.facts.<name> as ...`
-    /// override still names its fact, so the referenced-fact set keeps counting
-    /// it — the rule is held on a fact it only substitutes for, which errs
-    /// toward holding rather than deciding.
+    /// A `with input.facts.<name> as ...` override decides from a value the
+    /// rule wrote, not the one Scryer observed, so it is refused at both the
+    /// save and the load, by code.
     #[test]
-    fn maintenance_rule_may_override_a_named_fact() {
-        let body = "match if {\n  \
+    fn maintenance_rule_overriding_a_named_fact_is_refused() {
+        let body = "unmonitor if {\n  \
                       inner with input.facts.monitored as false\n\
                     }\n\n\
                     inner if {\n  not input.facts.monitored\n}\n";
         let result = validate_maintenance_body("named_fact_override", body);
-        assert!(result.valid, "errors: {:?}", result.errors);
+        assert!(!result.valid);
+        let codes: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![crate::diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED],
+            "{:?}",
+            result.errors
+        );
 
-        let facts = maintenance_referenced_facts(
-            &maintenance::rewrite_package_declaration(body, "named_fact_override"),
+        let engine = maintenance::MaintenanceRulesEngine::build(&[maintenance_policy(
             "named_fact_override",
-        )
-        .expect("named-fact override should resolve a fact set");
-        assert!(
-            facts.contains("monitored"),
-            "override should still count the fact: {facts:?}"
+            body,
+        )])
+        .expect("a refused rule still loads");
+        let evaluation = engine
+            .evaluator()
+            .evaluate(&maintenance::synthetic_maintenance_input())
+            .expect("evaluation runs");
+        assert!(evaluation.records.is_empty(), "{:?}", evaluation.records);
+        assert_eq!(
+            evaluation
+                .errors
+                .iter()
+                .map(|error| error.code)
+                .collect::<Vec<_>>(),
+            vec![crate::diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED]
         );
     }
 
@@ -2632,7 +2709,7 @@ mod tests {
     /// paths, so an ordinary fact read must stay untouched at both gates.
     #[test]
     fn maintenance_rule_reading_a_named_fact_is_still_accepted() {
-        let body = "match if {\n  not input.facts.monitored\n}\n";
+        let body = "unmonitor if {\n  not input.facts.monitored\n}\n";
         let result = validate_maintenance_body("named_fact_read", body);
         assert!(result.valid, "errors: {:?}", result.errors);
 
@@ -2659,7 +2736,7 @@ mod tests {
     #[test]
     fn maintenance_rule_importing_part_of_input_is_rejected() {
         let source = maintenance::rewrite_package_declaration(
-            "import input.facts\n\nmatch if {\n  facts.monitored\n}\n",
+            "import input.facts\n\nunmonitor if {\n  facts.monitored\n}\n",
             "imported_facts",
         );
         let result = validate_maintenance_rule(&source, "imported_facts").expect("validates");
@@ -2680,63 +2757,63 @@ mod tests {
         let templates: [(&str, &str); 15] = [
             (
                 "dead-wanted",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
             ),
             (
                 "library-aging",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.has_file\n\tnot \"keep\" in input.facts.tags\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.has_file\n\tnot \"keep\" in input.facts.tags\n}\n",
             ),
             (
                 "added-age",
-                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.added_at)\n\tage > 180 * day_ns\n}\n",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nunmonitor if {\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.added_at)\n\tage > 180 * day_ns\n}\n",
             ),
             (
                 "oversized",
-                "package rules\nimport rego.v1\n\nmatch if input.facts.total_file_size_bytes > 40000000000\n",
+                "package rules\nimport rego.v1\n\nunmonitor if input.facts.total_file_size_bytes > 40000000000\n",
             ),
             (
                 "4k-purge",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tsome file in input.facts.files\n\tfile.video_height >= 2160\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tsome file in input.facts.files\n\tfile.video_height >= 2160\n}\n",
             ),
             (
                 "requested-expiry",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tnot \"keep\" in input.facts.tags\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.requested\n\tnot \"keep\" in input.facts.tags\n}\n",
             ),
             (
                 "departed-requester",
-                "package rules\nimport rego.v1\n\nmatch if {\n\t\"departed-user\" in input.facts.requested_by_usernames\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\t\"departed-user\" in input.facts.requested_by_usernames\n}\n",
             ),
             (
                 "system-added",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
             ),
             (
                 "watched-by-every-requester",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
             ),
             (
                 "no-profile",
-                "package rules\nimport rego.v1\n\nmatch if not input.facts.quality_profile_id\n",
+                "package rules\nimport rego.v1\n\nunmonitor if not input.facts.quality_profile_id\n",
             ),
             (
                 "expired-request-leases",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.request_lease_state == \"expired\"\n}\n",
             ),
             (
                 "tagged-for-removal",
-                "package rules\nimport rego.v1\n\nmatch if {\n\t\"remove\" in input.facts.tags\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\t\"remove\" in input.facts.tags\n}\n",
             ),
             (
                 "flag-for-review",
-                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tinput.facts.has_file\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.first_imported_at)\n\tage > 365 * day_ns\n}\n",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nunmonitor if {\n\tinput.facts.has_file\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.first_imported_at)\n\tage > 365 * day_ns\n}\n",
             ),
             (
                 "left-every-public-list",
-                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tinput.facts.lists_left_all\n\tinput.facts.lists_left_handled\n\tgone := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.lists_left_at)\n\tgone > 30 * day_ns\n}\n",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nunmonitor if {\n\tinput.facts.lists_left_all\n\tinput.facts.lists_left_handled\n\tgone := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.lists_left_at)\n\tgone > 30 * day_ns\n}\n",
             ),
             (
                 "list-added-never-watched",
-                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.lists_added_by_list\n\tinput.facts.lists_days_on_list > 90\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n",
+                "package rules\nimport rego.v1\n\nunmonitor if {\n\tinput.facts.lists_added_by_list\n\tinput.facts.lists_days_on_list > 90\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n",
             ),
         ];
 
@@ -2750,10 +2827,16 @@ mod tests {
 
     #[test]
     fn maintenance_rule_with_non_boolean_match_is_rejected() {
-        let result = validate_maintenance_body("numeric_match", "match := 42\n");
+        let result = validate_maintenance_body("numeric_match", "unmonitor := 42\n");
         assert!(!result.valid);
-        assert!(
-            result.errors[0].contains("'match' must be a boolean"),
+        let codes: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        assert_eq!(
+            codes,
+            vec![crate::diagnostic_codes::RULE_OUTPUT_INVALID],
             "{:?}",
             result.errors
         );
@@ -2763,7 +2846,7 @@ mod tests {
     fn maintenance_rule_with_unknown_input_path_is_rejected() {
         let result = validate_maintenance_body(
             "watch_count",
-            "match if {\n  input.facts.watch_count == 0\n}\n",
+            "unmonitor if {\n  input.facts.watch_count == 0\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2779,7 +2862,7 @@ mod tests {
     fn maintenance_rule_cannot_use_release_extra_paths() {
         let result = validate_maintenance_body(
             "extra_path",
-            "match if {\n  input.release.extra.anything == \"x\"\n}\n",
+            "unmonitor if {\n  input.release.extra.anything == \"x\"\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -2791,7 +2874,7 @@ mod tests {
 
     #[test]
     fn maintenance_rule_with_wrong_package_is_rejected() {
-        let source = maintenance::rewrite_package_declaration("match := true\n", "actual_id");
+        let source = maintenance::rewrite_package_declaration("unmonitor := true\n", "actual_id");
         let result = validate_maintenance_rule(&source, "expected_id").unwrap();
         assert!(!result.valid);
         assert!(result.errors[0].contains("package declaration"));
@@ -3568,7 +3651,7 @@ mod tests {
 
         let maintenance_reading_a_request_fact = validate_maintenance_body(
             "request_fact",
-            "match if {\n  input.facts.certification_rank <= 2\n}\n",
+            "unmonitor if {\n  input.facts.certification_rank <= 2\n}\n",
         );
         assert!(!maintenance_reading_a_request_fact.valid);
         assert!(

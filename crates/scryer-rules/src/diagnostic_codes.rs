@@ -18,8 +18,12 @@ pub const RULE_TARGETS_PERSON: &str = "RULE_TARGETS_PERSON";
 pub const RULE_PACKAGE_REQUIRED: &str = "RULE_PACKAGE_REQUIRED";
 /// Rule input cannot be imported into another name.
 pub const RULE_INPUT_IMPORT_UNSUPPORTED: &str = "RULE_INPUT_IMPORT_UNSUPPORTED";
-/// A maintenance matcher must define match.
+/// Retired: maintenance rules defined `match` before their source declared
+/// actions. No longer reported; kept so the code is never reused.
 pub const RULE_MATCH_REQUIRED: &str = "RULE_MATCH_REQUIRED";
+/// A maintenance rule defines none of the action heads, so it could never do
+/// anything to a subject.
+pub const RULE_ACTION_REQUIRED: &str = "RULE_ACTION_REQUIRED";
 /// A request matcher must define a vote or tags.
 pub const RULE_VOTE_REQUIRED: &str = "RULE_VOTE_REQUIRED";
 /// A maintenance action head that carries a value (`set_quality_profile`,
@@ -33,15 +37,30 @@ pub const RULE_HOST_HELPER_REDEFINED: &str = "RULE_HOST_HELPER_REDEFINED";
 /// A warning: a rule name is not an action head, not part of the contract,
 /// and never used elsewhere in the rule, which usually means a misspelling.
 pub const RULE_UNREFERENCED_RULE: &str = "RULE_UNREFERENCED_RULE";
+/// A maintenance action head is written as a function. A function of no
+/// arguments still defines the head when evaluated, so any function under an
+/// action name is refused rather than half understood.
+pub const RULE_ACTION_HEAD_FUNCTION: &str = "RULE_ACTION_HEAD_FUNCTION";
+/// A maintenance rule reads `data` outside its own package, which would let a
+/// decision depend on facts the host does not track.
+pub const RULE_FOREIGN_DATA_REFERENCE: &str = "RULE_FOREIGN_DATA_REFERENCE";
+/// A maintenance rule uses `with` to replace its input, its `data`, or a
+/// value the host's helpers depend on, so the decision would rest on facts
+/// the host never observed.
+pub const RULE_WITH_TARGET_NOT_ALLOWED: &str = "RULE_WITH_TARGET_NOT_ALLOWED";
 /// All supported diagnostic codes.
 pub const ALL: &[&str] = &[
+    RULE_WITH_TARGET_NOT_ALLOWED,
     RULE_ACTION_VALUE_NOT_LITERAL,
     RULE_ACTION_VALUE_INVALID,
     RULE_HOST_HELPER_REDEFINED,
     RULE_UNREFERENCED_RULE,
+    RULE_ACTION_HEAD_FUNCTION,
+    RULE_FOREIGN_DATA_REFERENCE,
     RULE_PACKAGE_REQUIRED,
     RULE_INPUT_IMPORT_UNSUPPORTED,
     RULE_MATCH_REQUIRED,
+    RULE_ACTION_REQUIRED,
     RULE_VOTE_REQUIRED,
     RULE_VALIDATION_FAILED,
     RULE_COMPILATION_ERROR,

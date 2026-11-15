@@ -16,23 +16,23 @@
 //! `days_since(ts)`, the whole days between an RFC3339 timestamp and the
 //! run's `input.evaluation_time`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use regorus::Value;
-use regorus::unstable::{Expr, Module, Rule, RuleHead};
-use serde::Serialize;
+use regorus::unstable::{Expr, Literal, Module, Query, Rule, RuleHead};
+use serde::{Deserialize, Serialize};
 
 use crate::RulesError;
 use crate::diagnostic_codes;
 use crate::maintenance::{self, USER_PACKAGE_PREFIX};
-use crate::policy::decode::{check_tag, decode_tag_list};
+use crate::policy::decode::{MAX_TAGS, check_tag, decode_tag_list};
 use crate::runtime::RuntimeLimits;
 use crate::validation::{parse_module, rule_head_name, static_reference, visit_rule_expr_nodes};
 
 // ── Action heads ────────────────────────────────────────────────────────────
 
 /// One action head a maintenance rule may define.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaintenanceActionHead {
     Unmonitor,
@@ -42,11 +42,19 @@ pub enum MaintenanceActionHead {
     SetQualityProfile,
     AddTags,
     RemoveTags,
+    Monitor,
+    FetchSubtitles,
+    MoveToLibrary,
+    MoveToRoot,
+    Notify,
 }
+
+/// The longest `notify` message, in bytes.
+pub const MAX_NOTIFY_LEN: usize = 500;
 
 impl MaintenanceActionHead {
     /// Every action head, in the order the wrapper projects them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 12] = [
         Self::Unmonitor,
         Self::DeleteFiles,
         Self::DeleteTitle,
@@ -54,6 +62,28 @@ impl MaintenanceActionHead {
         Self::SetQualityProfile,
         Self::AddTags,
         Self::RemoveTags,
+        Self::Monitor,
+        Self::FetchSubtitles,
+        Self::MoveToLibrary,
+        Self::MoveToRoot,
+        Self::Notify,
+    ];
+
+    /// Every action head, in the order the host applies them. The builder
+    /// offers them in this order too.
+    pub const EXECUTION_ORDER: [Self; 12] = [
+        Self::AddTags,
+        Self::RemoveTags,
+        Self::SetQualityProfile,
+        Self::Monitor,
+        Self::Search,
+        Self::FetchSubtitles,
+        Self::MoveToLibrary,
+        Self::MoveToRoot,
+        Self::Unmonitor,
+        Self::DeleteFiles,
+        Self::DeleteTitle,
+        Self::Notify,
     ];
 
     /// The Rego rule name an author writes.
@@ -66,6 +96,11 @@ impl MaintenanceActionHead {
             Self::SetQualityProfile => "set_quality_profile",
             Self::AddTags => "add_tags",
             Self::RemoveTags => "remove_tags",
+            Self::Monitor => "monitor",
+            Self::FetchSubtitles => "fetch_subtitles",
+            Self::MoveToLibrary => "move_to_library",
+            Self::MoveToRoot => "move_to_root",
+            Self::Notify => "notify",
         }
     }
 
@@ -75,9 +110,14 @@ impl MaintenanceActionHead {
 
     /// Whether the head carries a value rather than a plain yes.
     pub const fn carries_value(self) -> bool {
+        self.carries_string() || matches!(self, Self::AddTags | Self::RemoveTags)
+    }
+
+    /// Whether the head's value is one string rather than a list.
+    pub const fn carries_string(self) -> bool {
         matches!(
             self,
-            Self::SetQualityProfile | Self::AddTags | Self::RemoveTags
+            Self::SetQualityProfile | Self::MoveToLibrary | Self::MoveToRoot | Self::Notify
         )
     }
 
@@ -86,23 +126,71 @@ impl MaintenanceActionHead {
         matches!(self, Self::DeleteFiles | Self::DeleteTitle)
     }
 
+    /// The heads that cannot be applied together with this one. Each pair is
+    /// listed once, on the head that comes first in [`Self::EXECUTION_ORDER`].
+    pub const fn conflicts_with(self) -> &'static [Self] {
+        match self {
+            Self::Monitor => &[Self::Unmonitor, Self::DeleteFiles, Self::DeleteTitle],
+            Self::MoveToLibrary => &[Self::MoveToRoot, Self::DeleteFiles, Self::DeleteTitle],
+            Self::MoveToRoot => &[Self::DeleteFiles, Self::DeleteTitle],
+            _ => &[],
+        }
+    }
+
     /// The Rego literal the wrapper uses when the head is undefined.
     pub(crate) const fn wrapper_default(self) -> &'static str {
         match self {
-            Self::Unmonitor | Self::DeleteFiles | Self::DeleteTitle | Self::Search => "false",
-            Self::SetQualityProfile => "null",
+            Self::Unmonitor
+            | Self::DeleteFiles
+            | Self::DeleteTitle
+            | Self::Search
+            | Self::Monitor
+            | Self::FetchSubtitles => "false",
+            Self::SetQualityProfile | Self::MoveToLibrary | Self::MoveToRoot | Self::Notify => {
+                "null"
+            }
             Self::AddTags | Self::RemoveTags => "[]",
         }
+    }
+
+    /// The example a refusal shows for a value head.
+    fn value_example(self) -> &'static str {
+        match self {
+            Self::SetQualityProfile => "\"HD-1080p\"",
+            Self::MoveToLibrary => "\"Movies\"",
+            Self::MoveToRoot => "\"/media/movies\"",
+            Self::Notify => "\"Archived to cold storage\"",
+            _ => "[\"stale\"]",
+        }
+    }
+
+    /// Why a string value written for this head is refused, if it is.
+    fn check_string(self, value: &str) -> Option<String> {
+        let name = self.rule_name();
+        let blank = match self {
+            Self::SetQualityProfile => value.is_empty(),
+            _ => value.trim().is_empty(),
+        };
+        if blank {
+            return Some(format!("'{name}' must not be empty"));
+        }
+        (self == Self::Notify && value.len() > MAX_NOTIFY_LEN).then(|| {
+            format!(
+                "'{name}' is {} bytes, at most {MAX_NOTIFY_LEN} are allowed",
+                value.len()
+            )
+        })
     }
 }
 
 /// Rule names with a meaning to the host other than an action.
-const CONTRACT_RULE_NAMES: [&str; 3] = ["match", "unknown", "reasons"];
+const CONTRACT_RULE_NAMES: [&str; 2] = ["unknown", "reasons"];
 
 // ── Decoded actions ─────────────────────────────────────────────────────────
 
 /// The actions one rule decided for one subject.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MaintenanceActions {
     pub unmonitor: bool,
     pub delete_files: bool,
@@ -111,6 +199,18 @@ pub struct MaintenanceActions {
     pub set_quality_profile: Option<String>,
     pub add_tags: Vec<String>,
     pub remove_tags: Vec<String>,
+    // The heads below are left out of the JSON while unset, so a decision
+    // that uses none of them keeps the form it was stored in before.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub monitor: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fetch_subtitles: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_to_library: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_to_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify: Option<String>,
 }
 
 impl MaintenanceActions {
@@ -136,8 +236,28 @@ impl MaintenanceActions {
                 MaintenanceActionHead::SetQualityProfile => self.set_quality_profile.is_some(),
                 MaintenanceActionHead::AddTags => !self.add_tags.is_empty(),
                 MaintenanceActionHead::RemoveTags => !self.remove_tags.is_empty(),
+                MaintenanceActionHead::Monitor => self.monitor,
+                MaintenanceActionHead::FetchSubtitles => self.fetch_subtitles,
+                MaintenanceActionHead::MoveToLibrary => self.move_to_library.is_some(),
+                MaintenanceActionHead::MoveToRoot => self.move_to_root.is_some(),
+                MaintenanceActionHead::Notify => self.notify.is_some(),
             })
             .collect()
+    }
+
+    /// The first pair of decided heads that cannot be applied together, in
+    /// execution order. A decision with one is held and applies nothing.
+    pub fn conflict(&self) -> Option<(MaintenanceActionHead, MaintenanceActionHead)> {
+        let heads = self.heads();
+        MaintenanceActionHead::EXECUTION_ORDER
+            .into_iter()
+            .filter(|head| heads.contains(head))
+            .find_map(|head| {
+                head.conflicts_with()
+                    .iter()
+                    .find(|other| heads.contains(other))
+                    .map(|other| (head, *other))
+            })
     }
 }
 
@@ -152,17 +272,19 @@ pub(crate) fn decode_actions(value: &Value) -> Result<MaintenanceActions, String
             .copied()
             .map_err(|_| format!("'{}' must be a boolean", head.rule_name()))
     };
-    let profile_name = MaintenanceActionHead::SetQualityProfile.rule_name();
-    let set_quality_profile = match &value[profile_name] {
-        Value::Null => None,
-        profile => {
-            let profile = profile
-                .as_string()
-                .map_err(|_| format!("'{profile_name}' must be a string"))?;
-            if profile.is_empty() {
-                return Err(format!("'{profile_name}' must not be empty"));
+    let string = |head: MaintenanceActionHead| -> Result<Option<String>, String> {
+        let name = head.rule_name();
+        match &value[name] {
+            Value::Null => Ok(None),
+            text => {
+                let text = text
+                    .as_string()
+                    .map_err(|_| format!("'{name}' must be a string"))?;
+                if let Some(problem) = head.check_string(text) {
+                    return Err(problem);
+                }
+                Ok(Some(text.to_string()))
             }
-            Some(profile.to_string())
         }
     };
     let tags = |head: MaintenanceActionHead| {
@@ -180,9 +302,14 @@ pub(crate) fn decode_actions(value: &Value) -> Result<MaintenanceActions, String
         delete_files: flag(MaintenanceActionHead::DeleteFiles)?,
         delete_title: flag(MaintenanceActionHead::DeleteTitle)?,
         search: flag(MaintenanceActionHead::Search)?,
-        set_quality_profile,
+        set_quality_profile: string(MaintenanceActionHead::SetQualityProfile)?,
         add_tags: tags(MaintenanceActionHead::AddTags)?,
         remove_tags: tags(MaintenanceActionHead::RemoveTags)?,
+        monitor: flag(MaintenanceActionHead::Monitor)?,
+        fetch_subtitles: flag(MaintenanceActionHead::FetchSubtitles)?,
+        move_to_library: string(MaintenanceActionHead::MoveToLibrary)?,
+        move_to_root: string(MaintenanceActionHead::MoveToRoot)?,
+        notify: string(MaintenanceActionHead::Notify)?,
     })
 }
 
@@ -277,6 +404,10 @@ pub struct MaintenanceActionScanIssue {
 pub struct MaintenanceActionScan {
     /// Every action head the source defines, through any rule or `default`.
     pub defined_heads: BTreeSet<MaintenanceActionHead>,
+    /// Where each defined head is first written, as (line, column), so a
+    /// refusal about the head itself can point at it.
+    #[serde(skip)]
+    pub head_positions: BTreeMap<MaintenanceActionHead, (usize, usize)>,
     /// Every profile name written for `set_quality_profile`, across all
     /// definitions and `else` branches, in source order.
     pub quality_profiles: Vec<MaintenanceActionLiteral>,
@@ -284,6 +415,12 @@ pub struct MaintenanceActionScan {
     pub add_tags: Vec<MaintenanceActionLiteral>,
     /// Every tag written for `remove_tags`, in source order.
     pub remove_tags: Vec<MaintenanceActionLiteral>,
+    /// Every library name written for `move_to_library`, in source order.
+    pub libraries: Vec<MaintenanceActionLiteral>,
+    /// Every root path written for `move_to_root`, in source order.
+    pub roots: Vec<MaintenanceActionLiteral>,
+    /// Every message written for `notify`, in source order.
+    pub notifications: Vec<MaintenanceActionLiteral>,
     /// Conditions that refuse the rule.
     pub errors: Vec<MaintenanceActionScanIssue>,
     /// Conditions worth telling the author about that do not refuse the rule.
@@ -300,6 +437,9 @@ impl MaintenanceActionScan {
         match head {
             MaintenanceActionHead::SetQualityProfile => &mut self.quality_profiles,
             MaintenanceActionHead::AddTags => &mut self.add_tags,
+            MaintenanceActionHead::MoveToLibrary => &mut self.libraries,
+            MaintenanceActionHead::MoveToRoot => &mut self.roots,
+            MaintenanceActionHead::Notify => &mut self.notifications,
             _ => &mut self.remove_tags,
         }
     }
@@ -323,11 +463,30 @@ pub fn scan_maintenance_action_heads(
     Ok(scan_module(&module))
 }
 
+/// Why a loaded source must not be evaluated: its first scan error, or no
+/// action head at all. The same conditions refuse it at save.
+pub(crate) fn load_refusal(module: &Module) -> Option<crate::policy::PolicyRefusal> {
+    let scan = scan_module(module);
+    if let Some(error) = scan.errors.into_iter().next() {
+        return Some(crate::policy::PolicyRefusal {
+            code: error.code,
+            message: error.message,
+        });
+    }
+    scan.defined_heads
+        .is_empty()
+        .then(|| crate::policy::PolicyRefusal {
+            code: diagnostic_codes::RULE_ACTION_REQUIRED,
+            message: "maintenance rule defines no action".to_string(),
+        })
+}
+
 /// One-based line and column where an expression starts in its source.
 ///
 /// Regorus places a reference or a call at its last component and a string
 /// inside its quotes, so this walks back to the leftmost part and steps onto
-/// the opening quote: the position an author would point at.
+/// the opening quote: the position an author would point at. The column
+/// counts characters, as an editor does, not regorus's own columns.
 fn source_position(expr: &Expr) -> (usize, usize) {
     match expr {
         Expr::RefDot { refr, .. } | Expr::RefBrack { refr, .. } => source_position(refr),
@@ -338,21 +497,26 @@ fn source_position(expr: &Expr) -> (usize, usize) {
         | Expr::AssignExpr { lhs, .. }
         | Expr::OrExpr { lhs, .. } => source_position(lhs),
         Expr::String { span, .. } | Expr::RawString { span, .. } => {
-            let opening_quote = (span.start as usize)
+            let start = span.start as usize;
+            let opening_quote = start
                 .checked_sub(1)
                 .and_then(|index| span.source.contents().as_bytes().get(index))
                 .is_some_and(|byte| matches!(byte, b'"' | b'`'));
-            let column = if opening_quote && span.col > 1 {
-                span.col - 1
-            } else {
-                span.col
-            };
-            (span.line as usize, column as usize)
+            let start = if opening_quote { start - 1 } else { start };
+            span_position(span, start)
         }
         _ => {
             let span = expr.span();
-            (span.line as usize, span.col as usize)
+            span_position(span, span.start as usize)
         }
+    }
+}
+
+fn span_position(span: &regorus::unstable::Span, byte_offset: usize) -> (usize, usize) {
+    let contents = span.source.contents();
+    match crate::validation::character_position(contents, byte_offset) {
+        Some(position) => position,
+        None => (span.line as usize, span.col as usize),
     }
 }
 
@@ -371,12 +535,135 @@ fn issue(
     }
 }
 
+/// Names an author may not define or import under, because the host helper
+/// resolves them: the helper itself, and every name its body calls. Regorus
+/// looks a call up in the package before the builtins, and an import alias
+/// shadows a builtin namespace, so a rule named `floor` or an import aliased
+/// `time` would quietly change what `days_since` returns.
+const HOST_HELPER_NAMES: [&str; 4] = [DAYS_SINCE_HELPER, "floor", "is_string", "time"];
+
+fn helper_redefined(name: &str, at: (usize, usize)) -> MaintenanceActionScanIssue {
+    issue(
+        diagnostic_codes::RULE_HOST_HELPER_REDEFINED,
+        name,
+        format!(
+            "'{name}' is used by Scryer's {DAYS_SINCE_HELPER} helper and cannot be redefined \
+             or imported under; give your own name another spelling"
+        ),
+        at,
+    )
+}
+
+/// Every `data` reference outside the rule's own package, once per place.
+///
+/// The unknown-fact hold reads the facts a rule references from its own
+/// source. A read of another package's document, or of `data` as a whole,
+/// would let a decision depend on something the hold never sees, so the
+/// only `data` a rule may name is its own package's.
+fn foreign_data_references(module: &Module) -> Vec<MaintenanceActionScanIssue> {
+    let package = static_reference(&module.package.refr)
+        .map(|reference| reference.fields())
+        .unwrap_or_default();
+    let is_foreign = |expr: &Expr| {
+        static_reference(expr).is_some_and(|reference| {
+            let fields = reference.fields();
+            fields.first().map(String::as_str) == Some("data")
+                && !(fields.len() > package.len() && fields[1..=package.len()] == package[..])
+        })
+    };
+    let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut issues = Vec::new();
+    let mut report = |at: (usize, usize), issues: &mut Vec<MaintenanceActionScanIssue>| {
+        if seen.insert(at) {
+            issues.push(issue(
+                diagnostic_codes::RULE_FOREIGN_DATA_REFERENCE,
+                "data",
+                "a maintenance rule may read only its own package under 'data'; use \
+                 input.facts for what Scryer knows about the subject"
+                    .to_string(),
+                at,
+            ));
+        }
+    };
+    for import in &module.imports {
+        if is_foreign(&import.refr) {
+            report(source_position(&import.refr), &mut issues);
+        }
+    }
+    for rule in &module.policy {
+        visit_rule_expr_nodes(rule, |expr| {
+            // Only the outermost reference: its parts share its position.
+            if matches!(
+                expr,
+                Expr::Var { .. } | Expr::RefDot { .. } | Expr::RefBrack { .. }
+            ) && is_foreign(expr)
+            {
+                report(source_position(expr), &mut issues);
+            }
+        });
+    }
+    issues
+}
+
+/// Every `with` that replaces the rule's input, its `data`, or a name the
+/// host's helpers are built on, once per place.
+///
+/// The unknown-fact hold and the execution re-check both judge the facts the
+/// host observed. A `with input...` or `with data...` would let a decision
+/// rest on values the rule wrote itself, and a `with time...` (or another
+/// helper name) would change what `days_since` computes.
+fn protected_with_targets(module: &Module) -> Vec<MaintenanceActionScanIssue> {
+    fn check_query(query: &Query, issues: &mut Vec<MaintenanceActionScanIssue>) {
+        for statement in &query.stmts {
+            for with_mod in &statement.with_mods {
+                let target = rule_head_name(&with_mod.refr);
+                if target.is_some_and(|name| {
+                    name == "input" || name == "data" || HOST_HELPER_NAMES.contains(&name)
+                }) {
+                    let name = target.unwrap_or_default();
+                    issues.push(issue(
+                        diagnostic_codes::RULE_WITH_TARGET_NOT_ALLOWED,
+                        name,
+                        format!(
+                            "'with' cannot replace '{name}' in a maintenance rule; the rule \
+                             must decide from what Scryer observed"
+                        ),
+                        source_position(&with_mod.refr),
+                    ));
+                }
+            }
+            if let Literal::Every { query, .. } = &statement.literal {
+                check_query(query, issues);
+            }
+        }
+    }
+
+    let mut issues = Vec::new();
+    for rule in &module.policy {
+        if let Rule::Spec { bodies, .. } = rule.as_ref() {
+            for body in bodies {
+                check_query(&body.query, &mut issues);
+            }
+        }
+        visit_rule_expr_nodes(rule, |expr| match expr {
+            Expr::ArrayCompr { query, .. }
+            | Expr::SetCompr { query, .. }
+            | Expr::ObjectCompr { query, .. } => check_query(query, &mut issues),
+            _ => {}
+        });
+    }
+    let mut seen = BTreeSet::new();
+    issues.retain(|issue| seen.insert((issue.line, issue.column)));
+    issues
+}
+
 fn not_literal(head: MaintenanceActionHead, at: (usize, usize)) -> MaintenanceActionScanIssue {
     let name = head.rule_name();
-    let expected = if head == MaintenanceActionHead::SetQualityProfile {
-        format!("a string literal, for example: {name} := \"HD-1080p\" if {{ ... }}")
+    let example = head.value_example();
+    let expected = if head.carries_string() {
+        format!("a string literal, for example: {name} := {example} if {{ ... }}")
     } else {
-        format!("an array of string literals, for example: {name} := [\"stale\"] if {{ ... }}")
+        format!("an array of string literals, for example: {name} := {example} if {{ ... }}")
     };
     issue(
         diagnostic_codes::RULE_ACTION_VALUE_NOT_LITERAL,
@@ -400,16 +687,8 @@ pub(crate) fn scan_module(module: &Module) -> MaintenanceActionScan {
         if !defined.iter().any(|(seen, _)| seen == name) {
             defined.push((name.to_string(), at));
         }
-        if name == DAYS_SINCE_HELPER {
-            scan.errors.push(issue(
-                diagnostic_codes::RULE_HOST_HELPER_REDEFINED,
-                name,
-                format!(
-                    "'{name}' is provided by Scryer and cannot be redefined; give your own \
-                     helper another name"
-                ),
-                at,
-            ));
+        if HOST_HELPER_NAMES.contains(&name) {
+            scan.errors.push(helper_redefined(name, at));
             continue;
         }
 
@@ -421,25 +700,50 @@ pub(crate) fn scan_module(module: &Module) -> MaintenanceActionScan {
             Rule::Default { args, .. } => !args.is_empty(),
         };
         if is_function {
-            // A function is not part of the package document, so it never
-            // reaches the wrapper and defines no action. A value head written
-            // as one is refused, because its author plainly meant a value.
-            if head.carries_value() {
-                scan.errors.push(not_literal(head, source_position(refr)));
-            }
+            // A function of no arguments is evaluated into the package
+            // document like any rule, so it would decide the action while the
+            // scan could not read it. Every arity is refused alike.
+            scan.errors.push(issue(
+                diagnostic_codes::RULE_ACTION_HEAD_FUNCTION,
+                name,
+                format!(
+                    "'{name}' is an action and cannot be written as a function; write it as a \
+                     rule, for example: {name} if {{ ... }}"
+                ),
+                at,
+            ));
             continue;
         }
         scan.defined_heads.insert(head);
+        scan.head_positions.entry(head).or_insert(at);
         if head.carries_value() {
             scan_value_rule(&mut scan, head, rule, refr);
         }
     }
 
+    for import in &module.imports {
+        let (alias, at) = match &import.r#as {
+            Some(alias) => (
+                Some(alias.text().to_string()),
+                span_position(alias, alias.start as usize),
+            ),
+            None => (
+                static_reference(&import.refr).and_then(|reference| reference.fields().pop()),
+                source_position(&import.refr),
+            ),
+        };
+        if let Some(alias) = alias.filter(|alias| HOST_HELPER_NAMES.contains(&alias.as_str())) {
+            scan.errors.push(helper_redefined(&alias, at));
+        }
+    }
+    scan.errors.extend(foreign_data_references(module));
+    scan.errors.extend(protected_with_targets(module));
+
     let referenced = referenced_names(module);
     for (name, at) in defined {
         if MaintenanceActionHead::from_rule_name(&name).is_some()
             || CONTRACT_RULE_NAMES.contains(&name.as_str())
-            || name == DAYS_SINCE_HELPER
+            || HOST_HELPER_NAMES.contains(&name.as_str())
             || referenced.contains(&name)
         {
             continue;
@@ -504,7 +808,7 @@ fn scan_value_rule(
             scan.errors.push(not_literal(head, source_position(refr)));
             continue;
         };
-        let literals: Vec<&Expr> = if head == MaintenanceActionHead::SetQualityProfile {
+        let literals: Vec<&Expr> = if head.carries_string() {
             vec![value]
         } else {
             match value {
@@ -519,15 +823,29 @@ fn scan_value_rule(
             scan.errors.push(not_literal(head, source_position(value)));
             continue;
         }
+        // The same bound the decision decoder enforces, counted the same way:
+        // entries as written, before duplicates fold.
+        if !head.carries_string() && literals.len() > MAX_TAGS {
+            scan.errors.push(issue(
+                diagnostic_codes::RULE_ACTION_VALUE_INVALID,
+                head.rule_name(),
+                format!(
+                    "'{}' has {} entries, at most {MAX_TAGS} are allowed",
+                    head.rule_name(),
+                    literals.len()
+                ),
+                source_position(value),
+            ));
+            continue;
+        }
 
         for expr in literals {
             let Some(text) = string_literal(expr) else {
                 continue;
             };
             let at = source_position(expr);
-            let problem = if head == MaintenanceActionHead::SetQualityProfile {
-                text.is_empty()
-                    .then(|| format!("'{}' must not be empty", head.rule_name()))
+            let problem = if head.carries_string() {
+                head.check_string(&text)
             } else {
                 check_tag(&text).err()
             };
@@ -562,6 +880,20 @@ fn string_literal(expr: &Expr) -> Option<String> {
 /// document (`data.<package>.archive`).
 fn referenced_names(module: &Module) -> HashSet<String> {
     let package = static_reference(&module.package.refr).map(|reference| reference.fields());
+    // A name an import binds stands for the path it imports, so a use of
+    // `me.helper` after `import data.<own package> as me` uses `helper`.
+    let imported: HashMap<String, Vec<String>> = module
+        .imports
+        .iter()
+        .filter_map(|import| {
+            let target = static_reference(&import.refr)?.fields();
+            let alias = match &import.r#as {
+                Some(alias) => alias.text().to_string(),
+                None => target.last()?.clone(),
+            };
+            Some((alias, target))
+        })
+        .collect();
     let mut names = HashSet::new();
     for rule in &module.policy {
         let head_refr: *const Expr = rule_refr(rule);
@@ -572,7 +904,15 @@ fn referenced_names(module: &Module) -> HashSet<String> {
             let Some(reference) = static_reference(expr) else {
                 return;
             };
-            let fields = reference.fields();
+            let mut fields = reference.fields();
+            if let Some(target) = fields.first().and_then(|root| imported.get(root))
+                && target.first().map(String::as_str) == Some("data")
+            {
+                // Keep the alias itself too: a rule may define a name that an
+                // import also binds, and the plain reading must not be lost.
+                names.insert(fields[0].clone());
+                fields.splice(0..1, target.iter().cloned());
+            }
             let name = match fields.first().map(String::as_str) {
                 Some("data") => package.as_ref().and_then(|package| {
                     (fields.len() > package.len() + 1 && fields[1..=package.len()] == package[..])

@@ -2837,6 +2837,23 @@ impl crate::ports::RuleSetRepository for FixedRuleSetRepo {
     async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
         Ok(())
     }
+    async fn get_rule_set_builder_model(&self, _id: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+    async fn create_rule_set_with_builder_model(
+        &self,
+        _rule_set: &scryer_domain::RuleSet,
+        _builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn update_rule_set_with_builder_model(
+        &self,
+        _rule_set: &scryer_domain::RuleSet,
+        _builder_model: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
     async fn record_rule_set_history(
         &self,
         _rule_set_id: &str,
