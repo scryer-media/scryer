@@ -1272,6 +1272,52 @@ const cs: LocaleDictionary = {
     "Nebyla nalezena žádná připojení mediálních serverů.",
   "settings.capabilities": "Možnosti",
   "settings.credentials": "Přihlašovací údaje",
+  "settings.watchHistory": "Historie sledování",
+  "settings.watchHistoryNotRead": "Zatím nenačteno",
+  "settings.watchHistoryLastFullRead": "Poslední úplné načtení {{time}}",
+  "settings.watchHistoryIncomplete": "Poslední načtení neúplné",
+  "settings.watchHistoryIncompleteHelp":
+    "Pravidla životního cyklu považují historii sledování za neznámou, dokud není každý zapnutý mediální server načten celý. Důvod: {{reason}}",
+  "settings.watchHistorySignalCount":
+    "{{count}} zhlédnutých položek z {{accounts}} propojených účtů",
+  "settings.watchHistoryDisabled": "Při vypnutí se nenačítá",
+  "settings.watchHistoryStale": "Zastaralé",
+  "settings.watchHistoryStaleHelp":
+    "Pravidla životního cyklu považují historii sledování za neznámou, dokud není každý zapnutý mediální server nedávno načten celý.",
+  "settings.watchSyncReason.credentialMissing":
+    "Pro toto připojení není uložen žádný klíč API.",
+  "settings.watchSyncReason.providerUnsupported":
+    "Tento typ mediálního serveru nepodporuje čtení historie sledování.",
+  "settings.watchSyncReason.baseUrlInvalid":
+    "Základní URL připojení není použitelná adresa.",
+  "settings.watchSyncReason.plexServerNotSelected":
+    "Pro toto připojení není vybrán žádný server Plex.",
+  "settings.watchSyncReason.plexServerUnreachable":
+    "Vybraný server Plex není u účtu uveden, nebo neuvádí žádnou adresu, na které je dostupný.",
+  "settings.watchSyncReason.plexAccountIdInvalid":
+    "Propojený účet Plex má ID, které server nedokáže dohledat.",
+  "settings.watchSyncReason.participantIdMissing":
+    "Propojený účet nemá ID uživatele mediálního serveru.",
+  "settings.watchSyncReason.accessDenied": "Mediální server odmítl přístup.",
+  "settings.watchSyncReason.requestRejected":
+    "Mediální server požadavek odmítl.",
+  "settings.watchSyncReason.requestFailed": "Mediální server nebyl dostupný.",
+  "settings.watchSyncReason.responseUnreadable":
+    "Mediální server poslal odpověď, kterou Scryer nedokázal přečíst.",
+  "settings.watchSyncReason.itemsUnreadable":
+    "Některé zhlédnuté položky nešlo přečíst.",
+  "settings.watchSyncReason.pagingNotHonoured":
+    "Mediální server nevrátil historii sledování po stránkách, jak bylo požadováno.",
+  "settings.watchSyncReason.filterNotHonoured":
+    "Mediální server na dotaz na zhlédnuté položky vrátil i nezhlédnuté.",
+  "settings.watchSyncReason.unmappedPlayedMovies":
+    "Některé zhlédnuté filmy nešlo přiřadit k titulu v knihovně.",
+  "settings.watchSyncReason.unplacedFavorites":
+    "Některá oblíbení nešlo přiřadit k médiím v knihovně, takže oblíbené tohoto účtu se nepočítají jako známé.",
+  "settings.watchSyncReason.storeFailed":
+    "Scryer nedokázal uložit načtenou historii sledování.",
+  "settings.watchSyncReason.sourceUnavailable":
+    "Čtení historie sledování není v tomto sestavení dostupné.",
   "settings.apiKeyConfigured": "Klíč API uložen",
   "settings.apiKeyMissing": "Chybí klíč API",
   "settings.plexServerSelected": "Server Plex vybrán",
@@ -3926,6 +3972,9 @@ const cs: LocaleDictionary = {
   "requests.status.pending": "Čeká na vyřízení",
   "requests.status.approved": "Schváleno",
   "requests.status.canceled": "Zrušeno",
+  "requests.queueTitle": "Fronta požadavků",
+  "requests.myTitle": "Moje požadavky",
+  "requests.status.dismissed": "Zamítnuto",
   "status.requestApproved": "{{name}} schváleno.",
   "status.requestApprovedSearchFailed":
     "{{name}} schváleno, ale vyhledávání požadovaného titulu nebylo zařazeno do fronty: {{error}}",
@@ -5013,6 +5062,8 @@ const cs: LocaleDictionary = {
   "settings.maintenanceRunActionsRunning": "Probíhají akce…",
   "settings.maintenanceRunActionsNeedsRule":
     "Vyberte výše jedno pravidlo, které má teď zasáhnout.",
+  "settings.maintenanceRunActionsHeldHelp":
+    "Okamžité spuštění akcí přeskočí tituly, které běh pozdržel, dokud se pravidlo znovu nevyhodnotí. Každý plánovaný běh nejprve vyhodnocuje, takže se na pozdržené tituly podívá znovu.",
   "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
     "Vyberte pravidlo, které má zasáhnout. Pravidla jednají jen sama za sebe, takže okamžitý zásah potřebuje jedno pravidlo.",
   "settings.maintenanceRunStarted": "Běh spuštěn.",
@@ -5263,11 +5314,11 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsStorageRootIdValue":
     "Trvalý identifikátor nakonfigurovaného kořene knihovny vybraný v této revizi",
   "settings.refMaintFactsStorageAvailableBytesValue":
-    "Dostupná kapacita v bajtech, zjištěná přímo z vybraného kořene",
+    "Bajty dostupné na vybraném kořeni. Plánované běhy používají poslední měření, které probíhá každých pět minut; náhled a kontrola těsně před akcí čtou kořen v tu chvíli. Neznámé s důvodem storage_not_sampled před prvním měřením kořene, storage_sample_stale, když je poslední měření starší než deset minut, a storage_capacity_unavailable, když kořen nešlo přečíst",
   "settings.refMaintFactsStorageTotalBytesValue":
-    "Celková kapacita v bajtech, zjištěná přímo z vybraného kořene",
+    "Celková kapacita vybraného kořene v bajtech, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
   "settings.refMaintFactsStorageAvailablePercentValue":
-    "Dostupná kapacita dělená celkovou kapacitou, od 0 do 100",
+    "Dostupná kapacita dělená celkovou kapacitou, od 0 do 100, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
   "settings.refMaintFactsActiveDownloadsValue":
     "True, pokud u subjektu právě probíhá stahování",
   "settings.refMaintFactsWatchedByUserIdsValue":
@@ -5436,7 +5487,7 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsDaysSinceAddedValue":
     "Celé dny od přidání subjektu, počítané podle hodin vyhodnocení",
   "settings.refMaintFactsMaxVideoHeightValue":
-    "Výška nejvyšší video stopy mezi soubory v pixelech; chybí, pokud ji žádný soubor neuvádí",
+    "Výška nejvyšší video stopy mezi soubory v pixelech; chybí, pokud ji žádný soubor neuvádí. Neznámé s důvodem not_yet_collected, dokud každý soubor titulu nemá dokončenou kontrolu, včetně souborů, jejichž kontrola selhala nebo vyžaduje posouzení",
   "settings.refMaintFactsSeasonCountValue":
     "Série v celém seznamu epizod pořadu bez speciálů, bez ohledu na subjekt; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
   "settings.refMaintFactsAiredEpisodeCountValue":
@@ -5474,13 +5525,13 @@ const cs: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "Poskytovatelé, jejichž seznamy ke zhlédnutí titul nyní obsahují; unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "ID uživatelů, kteří subjekt označili jako oblíbený na zapnutém serveru Jellyfin nebo Emby. Titul počítá každé své oblíbení; oblíbení seriálu nebo série platí pro všechny série a epizody seriálu; oblíbení epizody platí pro tuto epizodu, její sérii a seriál. Scryer neumí číst oblíbené z Plexu: neznámé s důvodem favorites_unsupported, když jsou všechny zapnuté servery Plex, s důvodem favorite_member_unobservable, dokud je propojený uživatel vidět jen přes Plex, s důvodem signal_identity_missing, dokud oblíbení patří účtu nepropojenému s uživatelem Scryeru, a s důvodem favorites_unreadable, když nešlo načíst uložená oblíbení.",
+    "ID uživatelů, kteří subjekt označili jako oblíbený na zapnutém serveru Jellyfin nebo Emby. Titul počítá každé své oblíbení; oblíbení seriálu nebo série platí pro všechny série a epizody seriálu; oblíbení epizody platí pro tuto epizodu, její sérii a seriál. Scryer neumí číst oblíbené z Plexu: neznámé s důvodem favorites_unsupported, když jsou všechny zapnuté servery Plex, a s důvodem favorite_member_unobservable, dokud je propojený uživatel vidět jen přes Plex. Neznámé s důvodem favorites_member_not_read, dokud oblíbené propojeného uživatele nebyly nedávno načteny celé, a s důvodem favorites_unreadable, když nešlo načíst uložená oblíbení. Po aktualizaci zůstávají fakty oblíbených neznámé, dokud první synchronizace oblíbené nenačte.",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený, počítáno jako u favorited_by_user_ids; neznámé s důvodem user_not_found, když některý z nich už neexistuje, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
+    "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený, počítáno jako u favorited_by_user_ids; neznámé s důvodem user_not_found, když některý z nich už neexistuje, a ze stejných důvodů jako favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "Pravda, když subjekt pokrývá oblíbení načtené z Jellyfinu nebo Emby, počítáno jako u favorited_by_user_ids. Nikdy není nepravda: oblíbení se čtou jen pro propojené uživatele, takže když se žádné nenajde, je neznámé s důvodem audience_favorites_not_read, případně s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable.",
+    "Pravda, když subjekt pokrývá oblíbení načtené z Jellyfinu nebo Emby, počítáno jako u favorited_by_user_ids, ať je účet propojen s uživatelem Scryeru, nebo ne. Nepravda, když byla oblíbená každého účtu na každém zapnutém serveru Jellyfin a Emby nedávno načtena celá a žádné subjekt nepokrývá. Neznámé s důvodem audience_favorites_not_read, dokud některý účet na takovém serveru nemá nedávné úplné načtení, s důvodem audience_favorites_unsupported, dokud je zapnutý server Plex, protože účty Plexu mohou mít oblíbené, které Scryer nepřečte, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "Pravda, když subjekt označil jako oblíbený některý žadatel, počítáno jako u favorited_by_user_ids; chybí s důvodem title_not_requested, když titul nikdo nevyžádal, neznámé s důvodem requester_not_linked, když žadatel nemá propojený účet mediálního serveru, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
+    "Pravda, když subjekt označil jako oblíbený některý žadatel, počítáno jako u favorited_by_user_ids; chybí s důvodem title_not_requested, když titul nikdo nevyžádal, neznámé s důvodem requester_not_linked, když žadatel nemá propojený účet mediálního serveru, s důvodem favorites_member_not_read, když oblíbené žadatele nebyly nedávno načteny celé, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Jazyky zvuku přítomné v souboru",
   "settings.refMaintFileSubtitleLanguages": "Jazyky titulků přítomné v souboru",
   "settings.refMaintFileAddedAt":
@@ -5888,6 +5939,48 @@ const cs: LocaleDictionary = {
   "requests.shapingLeaseDays": "Dní: {{count}}",
   "requests.fallbackShapingConflict":
     "Pravidla nastavila pro totéž různé hodnoty, takže rozhodne člověk.",
+  "requests.fallbackShapingInvalid":
+    "Pravidla by schválila, ale hodnotu, kterou nastavila, nelze na tento požadavek použít, takže rozhodne člověk.",
+  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+    "Nepodařilo se sestavit modul pravidel požadavků.",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED":
+    "Požadovaná hodnota nesmí být prázdná.",
+  "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
+    "Zápůjčka smí trvat nejvýše deset let, nebo navždy.",
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+    "Druh knihovny neodpovídá druhu požadovaného média.",
+  "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "Knihovna nebyla nalezena.",
+  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+    "Rozhodnutí o tomto požadavku nemůžete číst.",
+  "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
+    "Požadavky na média musí obsahovat externí identifikátory SMG.",
+  "error.reason.REQUEST_RULE_MEDIA_REQUEST_ID_REQUIRED":
+    "ID požadavku na médium je povinné.",
+  "error.reason.REQUEST_RULE_MEDIA_REQUEST_NOT_FOUND":
+    "Požadavek na médium nebyl nalezen.",
+  "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
+    "Toto pravidlo čte fakty o konkrétních lidech, takže jeho uložení vyžaduje oprávnění spravovat oprávnění. Požádejte o uložení správce, nebo pravidlo přepište bez těchto faktů.",
+  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
+    "Požadavek nese víc štítků, než je povoleno.",
+  "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED":
+    "Vyhodnocení pravidla selhalo.",
+  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE":
+    "Pravidlo se nepodařilo zkompilovat.",
+  "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED":
+    "Ověření pravidla selhalo.",
+  "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND":
+    "Ukázková knihovna nebyla nalezena.",
+  "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND":
+    "Ukázkový žadatel nebyl nalezen.",
+  "error.reason.REQUEST_RULE_SET_NOT_FOUND":
+    "Sada pravidel požadavků nebyla nalezena.",
+  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
+    "Štítek je delší, než je povoleno.",
+  "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
+    "Štítek obsahuje nepodporovaný znak; použijte písmena, číslice, '.', '_', '-' nebo mezery.",
+  "error.reason.REQUEST_RULE_TAG_REQUIRED": "Štítek nesmí být prázdný.",
+  "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
+    "Štítek používá vyhrazenou předponu.",
   "requests.preflightReason": "Důvod: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryeru se nepodařilo zjistit vše o tomto titulu, takže rozhodne člověk.",
@@ -6108,26 +6201,21 @@ const cs: LocaleDictionary = {
     "Kolik dní uplynulo od poslední žádosti tohoto žadatele",
   "settings.refReqFactsLibraryTitleCount":
     "Kolik titulů cílová knihovna obsahuje",
-  "settings.refReqFactsSeasonCount":
-    "Kolik sérií seriál má, u seriálů",
+  "settings.refReqFactsSeasonCount": "Kolik sérií seriál má, u seriálů",
   "settings.refReqFactsEpisodeCount":
     "Kolik běžných epizod seriál má, u seriálů",
   "settings.refReqFactsAiredEpisodeCount":
     "Kolik z těchto epizod bylo odvysíláno do dne vyhodnocení",
   "settings.refReqFactsUnairedEpisodeCount":
     "Kolik z těchto epizod ještě nebylo odvysíláno",
-  "settings.refReqFactsNextEpisodeAirDate":
-    "Kdy se vysílá další epizoda",
+  "settings.refReqFactsNextEpisodeAirDate": "Kdy se vysílá další epizoda",
   "settings.refReqFactsTheatricalReleaseDate":
     "Datum uvedení v kinech, u filmů",
-  "settings.refReqFactsDigitalReleaseDate":
-    "Datum digitálního vydání, u filmů",
-  "settings.refReqFactsPhysicalReleaseDate":
-    "Datum vydání na nosiči, u filmů",
+  "settings.refReqFactsDigitalReleaseDate": "Datum digitálního vydání, u filmů",
+  "settings.refReqFactsPhysicalReleaseDate": "Datum vydání na nosiči, u filmů",
   "settings.refReqFactsHomeReleaseAvailable":
     "Zda film vyšel digitálně nebo na nosiči",
-  "settings.refReqFactsDaysUntilRelease":
-    "Dny do prvního vydání filmu",
+  "settings.refReqFactsDaysUntilRelease": "Dny do prvního vydání filmu",
   "settings.refReqFactsOtherRequesterCount":
     "Kolik dalších členů o tento titul požádalo",
   "settings.refReqFactsPendingByOtherRequester":
@@ -7622,7 +7710,7 @@ const cs: LocaleDictionary = {
   "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "Toto pravidlo maže, ale nemá limit titulů na běh, takže jeho akce se neprovádějí. Dál se vyhodnocuje a lze ho zobrazit v náhledu; nastavte limit, aby mohlo zasáhnout.",
   "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
-    "Pozdrženo: propojený účet označil tuto položku na mediálním serveru jako oblíbenou od posledního načtení oblíbených.",
+    "Pozdrženo: od posledního načtení oblíbených označil účet na mediálním serveru jako oblíbenou tuto položku, nebo seriál či sérii kontrolovaných epizod.",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "Pozdrženo: před provedením akce bylo pravidlo vypnuto, přepnuto na zkušební běh nebo odjištěno, nebo se zavřela jeho bezpečnostní brána.",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -7712,8 +7800,7 @@ const cs: LocaleDictionary = {
     "Tento název má více profilů kvality. Jeden přejmenujte, aby pravidlo určovalo jediný profil.",
   "error.ruleMonitorUnsupported":
     "Žádná knihovna, na kterou se pravidlo vztahuje, tento typ sledování nepřijímá.",
-  "error.ruleAudioLanguageUnknown":
-    "Scryer tento jazyk zvuku nezná.",
+  "error.ruleAudioLanguageUnknown": "Scryer tento jazyk zvuku nezná.",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "Nastavte počet titulů na běh. Potřebují ho tyto akce pravidla: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":

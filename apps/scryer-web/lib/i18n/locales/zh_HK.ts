@@ -1069,6 +1069,47 @@ const zh_HK: LocaleDictionary = {
   "settings.noMediaServersFound": "找不到已設定的媒體伺服器。",
   "settings.capabilities": "功能",
   "settings.credentials": "憑證",
+  "settings.watchHistory": "觀看紀錄",
+  "settings.watchHistoryNotRead": "尚未讀取",
+  "settings.watchHistoryLastFullRead": "上次完整讀取 {{time}}",
+  "settings.watchHistoryIncomplete": "上次讀取不完整",
+  "settings.watchHistoryIncompleteHelp":
+    "在每個已啟用的媒體伺服器都完整讀取之前，生命週期規則會將觀看紀錄視為未知。原因：{{reason}}",
+  "settings.watchHistorySignalCount":
+    "來自 {{accounts}} 個已連結帳號的 {{count}} 個已觀看項目",
+  "settings.watchHistoryDisabled": "停用時不讀取",
+  "settings.watchHistoryStale": "已過期",
+  "settings.watchHistoryStaleHelp":
+    "在每個已啟用的媒體伺服器近期都完整讀取之前，生命週期規則會將觀看紀錄視為未知。",
+  "settings.watchSyncReason.credentialMissing": "此連線沒有儲存 API 金鑰。",
+  "settings.watchSyncReason.providerUnsupported":
+    "此類媒體伺服器不支援讀取觀看紀錄。",
+  "settings.watchSyncReason.baseUrlInvalid":
+    "此連線的基礎 URL 不是可用的位址。",
+  "settings.watchSyncReason.plexServerNotSelected":
+    "此連線沒有選擇 Plex 伺服器。",
+  "settings.watchSyncReason.plexServerUnreachable":
+    "所選的 Plex 伺服器不在帳號清單中，或沒有列出可連線的位址。",
+  "settings.watchSyncReason.plexAccountIdInvalid":
+    "已連結的 Plex 帳號有伺服器無法查詢的 ID。",
+  "settings.watchSyncReason.participantIdMissing":
+    "已連結的帳號沒有媒體伺服器用戶 ID。",
+  "settings.watchSyncReason.accessDenied": "媒體伺服器拒絕存取。",
+  "settings.watchSyncReason.requestRejected": "媒體伺服器拒絕了請求。",
+  "settings.watchSyncReason.requestFailed": "無法連線到媒體伺服器。",
+  "settings.watchSyncReason.responseUnreadable":
+    "媒體伺服器傳回了 Scryer 無法讀取的回應。",
+  "settings.watchSyncReason.itemsUnreadable": "部分已觀看項目無法讀取。",
+  "settings.watchSyncReason.pagingNotHonoured":
+    "媒體伺服器沒有依要求分頁傳回觀看紀錄。",
+  "settings.watchSyncReason.filterNotHonoured":
+    "要求已觀看項目時，媒體伺服器傳回了未觀看的項目。",
+  "settings.watchSyncReason.unmappedPlayedMovies":
+    "部分已觀看的電影無法對應到媒體庫中的作品。",
+  "settings.watchSyncReason.unplacedFavorites":
+    "部分最愛無法對應到媒體庫中的媒體，因此該帳號的最愛不視為已知。",
+  "settings.watchSyncReason.storeFailed": "Scryer 無法儲存讀到的觀看紀錄。",
+  "settings.watchSyncReason.sourceUnavailable": "此版本無法讀取觀看紀錄。",
   "settings.apiKeyConfigured": "API 金鑰已設定",
   "settings.apiKeyMissing": "缺少 API 金鑰",
   "settings.plexServerSelected": "已選取 Plex 伺服器",
@@ -3348,6 +3389,9 @@ const zh_HK: LocaleDictionary = {
   "requests.status.pending": "待處理",
   "requests.status.approved": "已核准",
   "requests.status.canceled": "已取消",
+  "requests.queueTitle": "請求隊列",
+  "requests.myTitle": "我的請求",
+  "requests.status.dismissed": "已駁回",
   "status.requestApproved": "已核准 {{name}}。",
   "status.requestApprovedSearchFailed":
     "已核准 {{name}}，但未能將搜尋加入隊列：{{error}}",
@@ -4262,6 +4306,8 @@ const zh_HK: LocaleDictionary = {
   "settings.maintenanceRunActionsRunning": "正在執行動作…",
   "settings.maintenanceRunActionsNeedsRule":
     "請在上方選擇一條規則以立即執行其動作。",
+  "settings.maintenanceRunActionsHeldHelp":
+    "立即執行動作會略過被執行暫緩的作品，直到規則再次評估為止。每次排程執行都會先評估，因此會重新檢視被暫緩的作品。",
   "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
     "請選擇要執行動作的規則。規則只會為自己執行動作，因此立即執行需要指定一條規則。",
   "settings.maintenanceRunStarted": "運行已啓動。",
@@ -4442,11 +4488,11 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintFactsStorageRootIdValue":
     "在此版本中選取的持久配置媒體庫根目錄標識符",
   "settings.refMaintFactsStorageAvailableBytesValue":
-    "從所選根目錄本身觀察到的可用容量（字節）",
+    "所選根目錄的可用位元組。排程執行使用最近一次量測，每五分鐘量測一次；預覽與動作前的檢查則在當下讀取根目錄。根目錄尚未量測時為未知，原因為 storage_not_sampled；最近一次量測超過十分鐘時原因為 storage_sample_stale；無法讀取根目錄時原因為 storage_capacity_unavailable",
   "settings.refMaintFactsStorageTotalBytesValue":
-    "從所選根目錄本身觀察到的總容量（字節）",
+    "所選根目錄的總容量（位元組），與 storage_available_bytes 來自同一次量測，未知的原因相同",
   "settings.refMaintFactsStorageAvailablePercentValue":
-    "可用容量除以總容量，介於 0 至 100",
+    "可用容量除以總容量，介於 0 至 100，與 storage_available_bytes 來自同一次量測，未知的原因相同",
   "settings.refMaintFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
   "settings.refMaintFactsWatchedByUserIdsValue":
     "播放過它的所有人的標識符，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的分集，包括遺失的文件。未來分集已排除；缺少分集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 用戶 (signal_identity_missing)。",
@@ -4557,7 +4603,7 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintFactsDaysSinceAddedValue":
     "主體加入後經過的完整天數，依評估時鐘計算",
   "settings.refMaintFactsMaxVideoHeightValue":
-    "文件中最高影片串流的高度（像素）；沒有文件回報時缺失",
+    "文件中最高影片串流的高度（像素）；沒有文件回報時缺失。在作品的每個文件都完成掃描之前為未知，原因為 not_yet_collected，包括掃描失敗或需要審查的文件",
   "settings.refMaintFactsSeasonCountValue":
     "節目完整集數清單中的季數，不含特別篇，與主體無關；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsAiredEpisodeCountValue":
@@ -4595,13 +4641,13 @@ const zh_HK: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "目前待看清單中有此作品的提供者；任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "在已啟用的 Jellyfin 或 Emby 伺服器上將此主體標為最愛的用戶 ID。作品計入其所有最愛；劇集或季的最愛適用於該劇集的每一季與每一集；單集的最愛適用於該集、其所屬季與劇集。Scryer 無法讀取 Plex 的最愛：所有已啟用伺服器都是 Plex 時為未知，原因為 favorites_unsupported；已連結用戶只能透過 Plex 看到時為未知，原因為 favorite_member_unobservable；最愛屬於未連結 Scryer 用戶的帳號時為未知，原因為 signal_identity_missing；無法讀取已儲存的最愛時為未知，原因為 favorites_unreadable。",
+    "在已啟用的 Jellyfin 或 Emby 伺服器上將此主體標為最愛的用戶 ID。作品計入其所有最愛；劇集或季的最愛計入該劇集的每一季與每一集；單集的最愛計入該集、其所屬季與劇集。Scryer 無法讀取 Plex 的最愛：所有已啟用伺服器皆為 Plex 時為未知，原因為 favorites_unsupported；已連結的用戶只能透過 Plex 看到時，原因為 favorite_member_unobservable。已連結用戶的最愛近期沒有完整讀取時為未知，原因為 favorites_member_not_read；無法讀取已儲存的最愛時，原因為 favorites_unreadable。升級後，最愛相關事實會維持未知，直到第一次同步讀取最愛為止。",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "將此主體標為最愛的用戶名稱，計算方式同 favorited_by_user_ids；其中有人已不存在時為未知，原因為 user_not_found，另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
+    "將此主體標為最愛的用戶名稱，計算方式同 favorited_by_user_ids；其中有人已不存在時為未知，原因為 user_not_found，其他未知原因同 favorited_by_user_ids。",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "從 Jellyfin 或 Emby 讀到的最愛涵蓋此主體時為真，計算方式同 favorited_by_user_ids。它永遠不會是假：最愛只會為已連結的用戶讀取，因此沒找到時為未知，原因為 audience_favorites_not_read，或為 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable。",
+    "從 Jellyfin 或 Emby 讀到的最愛涵蓋此主體時為真，計算方式同 favorited_by_user_ids，不論帳號是否連結到 Scryer 用戶。每個已啟用的 Jellyfin 與 Emby 伺服器上每個帳號的最愛近期都已完整讀取，且沒有任何最愛涵蓋此主體時為假。這類伺服器上有帳號近期沒有完整讀取時為未知，原因為 audience_favorites_not_read；啟用了 Plex 伺服器時原因為 audience_favorites_unsupported，因為 Plex 帳號可能有 Scryer 無法讀取的最愛；另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "有請求者將此主體標為最愛時為真，計算方式同 favorited_by_user_ids；沒有人請求此作品時不存在，原因為 title_not_requested；請求者沒有已連結的媒體伺服器帳號時為未知，原因為 requester_not_linked，另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
+    "有請求者將此主體標為最愛時為真，計算方式同 favorited_by_user_ids；沒有人請求此作品時不存在，原因為 title_not_requested；請求者沒有已連結的媒體伺服器帳號時為未知，原因為 requester_not_linked；請求者的最愛近期沒有完整讀取時原因為 favorites_member_not_read，另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
   "settings.refMaintFileAudioLanguages": "文件中存在的音訊語言",
   "settings.refMaintFileSubtitleLanguages": "文件中存在的字幕語言",
   "settings.refMaintFileAddedAt": "新增文件時的 RFC3339 時間戳",
@@ -4957,6 +5003,45 @@ const zh_HK: LocaleDictionary = {
   "requests.shapingLeaseDays": "{{count}} 日",
   "requests.fallbackShapingConflict":
     "規則為同一樣嘢設定咗唔同數值，所以由人決定。",
+  "requests.fallbackShapingInvalid":
+    "規則原本會核准，但其設定的數值無法套用到此請求，因此由人工決定。",
+  "requests.fallbackLibraryPermission": "由請求者的「自動核准請求」權限核准。",
+  "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
+    "無法建立請求規則引擎。",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "所需的值不可為空。",
+  "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE": "租期最多為十年，或為永久。",
+  "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
+    "媒體庫類型與請求的媒體類型不符。",
+  "error.reason.REQUEST_RULE_LIBRARY_NOT_FOUND": "找不到媒體庫。",
+  "error.reason.REQUEST_RULE_MAY_NOT_READ_REQUEST_S_DECISION":
+    "您無法讀取此請求的決策。",
+  "error.reason.REQUEST_RULE_MEDIA_REQUESTS_INVALID":
+    "媒體請求必須包含 SMG 外部識別碼。",
+  "error.reason.REQUEST_RULE_MEDIA_REQUEST_ID_REQUIRED":
+    "必須提供媒體請求 ID。",
+  "error.reason.REQUEST_RULE_MEDIA_REQUEST_NOT_FOUND": "找不到媒體請求。",
+  "error.reason.REQUEST_RULE_PERSON_TARGETING_PERMISSION_REQUIRED":
+    "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
+  "error.reason.REQUEST_RULE_REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED":
+    "請求帶有的標籤超過允許的數量。",
+  "error.reason.REQUEST_RULE_RULE_EVALUATION_FAILED": "規則評估失敗。",
+  "error.reason.REQUEST_RULE_RULE_FAILED_COMPILE": "規則編譯失敗。",
+  "error.reason.REQUEST_RULE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
+  "error.reason.REQUEST_RULE_SAMPLE_LIBRARY_NOT_FOUND": "找不到範例媒體庫。",
+  "error.reason.REQUEST_RULE_SAMPLE_REQUESTER_NOT_FOUND": "找不到範例請求者。",
+  "error.reason.REQUEST_RULE_SET_NOT_FOUND": "找不到請求規則集。",
+  "error.reason.REQUEST_RULE_TAG_CHARACTERS_MOST_ALLOWED":
+    "標籤超過允許的長度。",
+  "error.reason.REQUEST_RULE_TAG_CONTAINS_UNSUPPORTED_CHARACTER":
+    "標籤含有不支援的字元；請使用字母、數字、'.'、'_'、'-' 或空格。",
+  "error.reason.REQUEST_RULE_TAG_REQUIRED": "標籤不可為空。",
+  "error.reason.REQUEST_RULE_TAG_USES_RESERVED_PREFIX":
+    "標籤使用了保留的前綴。",
+  "settings.requestRulesDefault":
+    "沒有啟用任何規則時，擁有自動核准權限的成員所提出的請求會被核准，其他請求則等待審查。",
+  "settings.requestRuleEnabledUpdated": "已更新 {{name}}。",
+  "settings.requestRuleRequesterFieldsHint":
+    "此規則會讀取請求者欄位，需要「管理權限」才能儲存。",
   "requests.preflightReason": "原因：{{reason}}。",
   "requests.preflightMetadataPartial":
     "Scryer 無法讀取此作品的完整中繼資料，因此將由人工決定。",
@@ -5126,46 +5211,31 @@ const zh_HK: LocaleDictionary = {
   "settings.refReqFactsDaysSinceLastRequest":
     "距離此請求者上次發起任何請求的天數",
   "settings.refReqFactsLibraryTitleCount": "目標媒體庫包含的作品數量",
-  "settings.refReqFactsSeasonCount":
-    "劇集的季數，適用於劇集",
-  "settings.refReqFactsEpisodeCount":
-    "劇集的一般集數，適用於劇集",
-  "settings.refReqFactsAiredEpisodeCount":
-    "截至評估當天已播出的集數",
-  "settings.refReqFactsUnairedEpisodeCount":
-    "尚未播出的集數",
-  "settings.refReqFactsNextEpisodeAirDate":
-    "下一集的播出日期",
-  "settings.refReqFactsTheatricalReleaseDate":
-    "影院上映日期，適用於電影",
-  "settings.refReqFactsDigitalReleaseDate":
-    "數碼發行日期，適用於電影",
-  "settings.refReqFactsPhysicalReleaseDate":
-    "實體（光碟）發行日期，適用於電影",
-  "settings.refReqFactsHomeReleaseAvailable":
-    "電影是否已推出數碼版或光碟",
-  "settings.refReqFactsDaysUntilRelease":
-    "距離電影首次發行的天數",
-  "settings.refReqFactsOtherRequesterCount":
-    "有多少其他成員請求過這部作品",
+  "settings.refReqFactsSeasonCount": "劇集的季數，適用於劇集",
+  "settings.refReqFactsEpisodeCount": "劇集的一般集數，適用於劇集",
+  "settings.refReqFactsAiredEpisodeCount": "截至評估當天已播出的集數",
+  "settings.refReqFactsUnairedEpisodeCount": "尚未播出的集數",
+  "settings.refReqFactsNextEpisodeAirDate": "下一集的播出日期",
+  "settings.refReqFactsTheatricalReleaseDate": "影院上映日期，適用於電影",
+  "settings.refReqFactsDigitalReleaseDate": "數碼發行日期，適用於電影",
+  "settings.refReqFactsPhysicalReleaseDate": "實體（光碟）發行日期，適用於電影",
+  "settings.refReqFactsHomeReleaseAvailable": "電影是否已推出數碼版或光碟",
+  "settings.refReqFactsDaysUntilRelease": "距離電影首次發行的天數",
+  "settings.refReqFactsOtherRequesterCount": "有多少其他成員請求過這部作品",
   "settings.refReqFactsPendingByOtherRequester":
     "其他成員對這部作品的請求是否仍在等待",
   "settings.refReqFactsOnRequesterWatchlist":
     "作品是否在請求者自己的稍後觀看清單上",
   "settings.refReqFactsRequesterWatchlistDays":
     "作品在請求者稍後觀看清單上的時間",
-  "settings.refReqFactsListExcluded":
-    "此作品是否受清單排除規則涵蓋",
+  "settings.refReqFactsListExcluded": "此作品是否受清單排除規則涵蓋",
   "settings.refReqFactsRequesterTitlesInLibraryCount":
     "此請求者的請求已加入目標媒體庫的作品數",
-  "settings.refReqFactsStorageRootId":
-    "作品將存放的根資料夾",
-  "settings.refReqFactsStorageAvailableBytes":
-    "該根目錄的可用空間，以位元組計",
+  "settings.refReqFactsStorageRootId": "作品將存放的根資料夾",
+  "settings.refReqFactsStorageAvailableBytes": "該根目錄的可用空間，以位元組計",
   "settings.refReqFactsStorageTotalBytes":
     "該根目錄所在檔案系統的總大小，以位元組計",
-  "settings.refReqFactsStorageAvailablePercent":
-    "該根目錄的可用空間百分比",
+  "settings.refReqFactsStorageAvailablePercent": "該根目錄的可用空間百分比",
   "settings.refReqSectionCertifications":
     "— input.facts.certifications 中每個分級認證對應一項",
   "settings.refReqCertCountry": "頒發分級認證的國家/地區",
@@ -5277,6 +5347,20 @@ const zh_HK: LocaleDictionary = {
     "同一次量度的總位元組；unknown 的情況同 storage_available_bytes",
   "settings.refReqFactsStorageAvailablePercentValue":
     "同一次量度的可用位元組乘以 100 再除以總位元組；unknown 的情況同 storage_available_bytes",
+  "settings.refReqRequestList":
+    "提交此請求的清單；見下方 input.request.list。手動請求時不存在",
+  "settings.refReqSectionRequestList":
+    "— 清單請求背後的清單，位於 input.request.list。手動請求及無法讀取清單時不存在",
+  "settings.refReqRequestListSubscriptionId": "清單的識別碼",
+  "settings.refReqRequestListName": "清單名稱；個人清單從不命名，因此不存在",
+  "settings.refReqRequestListScope": "public 或 personal",
+  "settings.refReqRequestListMode":
+    "清單如何處理其項目：add、hold、request 或 discover",
+  "settings.refReqRequestListProvider": "清單提供者",
+  "settings.refReqRequestListOwnerIsRequester": "清單擁有者就是請求者時為真",
+  "settings.refReqRequestListOwnerListPolicy":
+    "擁有者的清單政策：auto、approval 或 none；未儲存時為 approval",
+  "settings.refReqRequestListRank": "項目在清單上的排名；清單未排名時不存在",
   "move.dialogTitle": "移動標題",
   "move.destinationLibrary": "目標庫",
   "move.destinationRoot": "目標根目錄",
@@ -6008,7 +6092,7 @@ const zh_HK: LocaleDictionary = {
   "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "此規則會刪除，但沒有設定每次執行的作品數上限，因此其動作不會執行。它仍會評估並可預覽；設定上限後即可執行動作。",
   "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
-    "已暫緩：自上次讀取最愛以來，已連結的帳號在媒體伺服器上將此項目標為最愛。",
+    "已暫緩：自上次讀取最愛以來，媒體伺服器上有帳號將此項目，或所檢查集數的劇集或季，標為最愛。",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "已暫緩：動作執行前，規則已停用、改為試執行或解除啟用，或其安全閘門已關閉。",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -6093,10 +6177,8 @@ const zh_HK: LocaleDictionary = {
     "沒有品質設定檔使用此名稱，因此規則無法套用。",
   "error.ruleQualityProfileAmbiguous":
     "有多個品質設定檔使用此名稱。請重新命名其中一個，讓規則只指向單一設定檔。",
-  "error.ruleMonitorUnsupported":
-    "此規則適用的媒體庫都不接受這種監看類型。",
-  "error.ruleAudioLanguageUnknown":
-    "Scryer 不認得此音訊語言。",
+  "error.ruleMonitorUnsupported": "此規則適用的媒體庫都不接受這種監看類型。",
+  "error.ruleAudioLanguageUnknown": "Scryer 不認得此音訊語言。",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "請設定每次執行的作品數。此規則的以下動作需要它：{{actions}}。",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":

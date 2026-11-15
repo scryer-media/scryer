@@ -5776,6 +5776,8 @@ const en: LocaleDictionary = {
     "The media server returned unwatched items when asked for watched ones.",
   "settings.watchSyncReason.unmappedPlayedMovies":
     "Some watched movies could not be matched to a library title.",
+  "settings.watchSyncReason.unplacedFavorites":
+    "Some favorites could not be matched to library media, so that account's favorites are not counted as known.",
   "settings.watchSyncReason.storeFailed":
     "Scryer could not save the watch history it read.",
   "settings.watchSyncReason.sourceUnavailable":
@@ -9738,6 +9740,8 @@ const en: LocaleDictionary = {
   "settings.maintenanceRunActionsRunning": "Running actions…",
   "settings.maintenanceRunActionsNeedsRule":
     "Choose one rule above to act on it now.",
+  "settings.maintenanceRunActionsHeldHelp":
+    "Acting now skips titles a run has held until the rule evaluates again. Each scheduled run evaluates first, so it looks at held titles again.",
   "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
     "Choose the rule to act on. Rules act only for themselves, so acting now needs one rule.",
   "settings.maintenanceRunStarted": "Run started.",
@@ -9993,11 +9997,11 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsStorageRootIdValue":
     "Durable configured library-root identifier selected on this revision",
   "settings.refMaintFactsStorageAvailableBytesValue":
-    "Available capacity in bytes, observed from the selected root itself",
+    "Bytes available on the selected root. Scheduled runs use the last sample, taken every five minutes; preview and the check just before an action read the root at that moment. Unknown with reason storage_not_sampled before the root's first sample, storage_sample_stale when the last sample is more than ten minutes old, and storage_capacity_unavailable when the root could not be read",
   "settings.refMaintFactsStorageTotalBytesValue":
-    "Total capacity in bytes, observed from the selected root itself",
+    "Total capacity in bytes of the selected root, from the same reading as storage_available_bytes and unknown for the same reasons",
   "settings.refMaintFactsStorageAvailablePercentValue":
-    "Available capacity divided by total capacity, from 0 to 100",
+    "Available capacity divided by total capacity, from 0 to 100, from the same reading as storage_available_bytes and unknown for the same reasons",
   "settings.refMaintFactsActiveDownloadsValue":
     "True when a download for the subject is in flight",
   "settings.refMaintFactsWatchedByUserIdsValue":
@@ -10168,7 +10172,7 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsDaysSinceAddedValue":
     "Whole days since the subject was added, counted against the evaluation clock",
   "settings.refMaintFactsMaxVideoHeightValue":
-    "Height in pixels of the tallest video stream among the files; absent when no file reports one",
+    "Height in pixels of the tallest video stream among the files; absent when no file reports one. Unknown with reason not_yet_collected until every file of the title has a completed scan, including a file whose scan failed or needs review",
   "settings.refMaintFactsSeasonCountValue":
     "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsAiredEpisodeCountValue":
@@ -10206,13 +10210,13 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "Providers whose watchlists hold the title now; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. A title counts every favorite of it; a series or season favorite counts for every season and episode of the series; an episode favorite counts for that episode, its season and the series. Scryer cannot read Plex favorites: unknown with reason favorites_unsupported when every enabled server is Plex, with reason favorite_member_unobservable while a linked user can only be seen through Plex, with reason signal_identity_missing while a favorite belongs to an account not linked to a Scryer user, and with reason favorites_unreadable when the stored favorites could not be read.",
+    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. A title counts every favorite of it; a series or season favorite counts for every season and episode of the series; an episode favorite counts for that episode, its season and the series. Scryer cannot read Plex favorites: unknown with reason favorites_unsupported when every enabled server is Plex, and with reason favorite_member_unobservable while a linked user can only be seen through Plex. Unknown with reason favorites_member_not_read while a linked user's favorites have no recent complete read, and with reason favorites_unreadable when the stored favorites could not be read. After an upgrade the favorite facts stay unknown until the first sweep has read favorites.",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
+    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists, and for the same reasons as favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "True when a favorite read from Jellyfin or Emby covers the subject, counted as for favorited_by_user_ids. It is never false: favorites are read only for linked users, so with none found it is unknown with reason audience_favorites_not_read, or with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable.",
+    "True when a favorite read from Jellyfin or Emby covers the subject, counted as for favorited_by_user_ids, whether or not the account is linked to a Scryer user. False once every account on every enabled Jellyfin and Emby server has had its favorites read in full recently and none covers the subject. Unknown with reason audience_favorites_not_read while some account on such a server has no recent complete read, with reason audience_favorites_unsupported while a Plex server is enabled, since Plex accounts could have favorites Scryer cannot read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
+    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account, with reason favorites_member_not_read when a requester's favorites have no recent complete read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
   "settings.refMaintFileSubtitleLanguages":
     "Subtitle languages present in the file",
@@ -10611,6 +10615,8 @@ const en: LocaleDictionary = {
   "requests.shapingLeaseDays": "{{count}} days",
   "requests.fallbackShapingConflict":
     "Rules set different values for the same thing, so a person decides.",
+  "requests.fallbackShapingInvalid":
+    "Rules would approve, but a value they set cannot apply to this request, so a person decides.",
   "requests.preflightReason": "Reason: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer could not read everything about this title, so a person will decide.",
@@ -10846,12 +10852,10 @@ const en: LocaleDictionary = {
     "How many of those episodes have aired by the evaluation day",
   "settings.refReqFactsUnairedEpisodeCount":
     "How many of those episodes have not aired yet",
-  "settings.refReqFactsNextEpisodeAirDate":
-    "When the next episode airs",
+  "settings.refReqFactsNextEpisodeAirDate": "When the next episode airs",
   "settings.refReqFactsTheatricalReleaseDate":
     "Theatrical release date, for movies",
-  "settings.refReqFactsDigitalReleaseDate":
-    "Digital release date, for movies",
+  "settings.refReqFactsDigitalReleaseDate": "Digital release date, for movies",
   "settings.refReqFactsPhysicalReleaseDate":
     "Physical (disc) release date, for movies",
   "settings.refReqFactsHomeReleaseAvailable":
@@ -12376,7 +12380,7 @@ const en: LocaleDictionary = {
   "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "This rule deletes but has no titles-per-run limit, so its actions do not run. It still evaluates and previews; set a limit to let it act.",
   "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
-    "Held: a linked account marked this item a favorite on the media server since favorites were last read.",
+    "Held: since favorites were last read, an account on the media server marked this item, or the series or a season of the episodes checked, a favorite.",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "Held: before the action ran, the rule was disabled, set to dry run or disarmed, or its safety gate closed.",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -12467,8 +12471,7 @@ const en: LocaleDictionary = {
     "More than one quality profile has this name. Rename one so the rule names a single profile.",
   "error.ruleMonitorUnsupported":
     "No library this rule applies to accepts this monitor type.",
-  "error.ruleAudioLanguageUnknown":
-    "Scryer does not know this audio language.",
+  "error.ruleAudioLanguageUnknown": "Scryer does not know this audio language.",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "Set titles per run. These actions of the rule need it: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":

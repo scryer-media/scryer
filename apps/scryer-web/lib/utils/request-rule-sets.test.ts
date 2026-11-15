@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import en from "../i18n/locales/en.ts";
 import type { RequestShaping } from "../types/request-rule-sets.ts";
 import {
   REQUEST_STARTER_SOURCE,
   requestApprovalPrefill,
+  requestFallbackReasonLabelKey,
   requestDeclaredActionEntries,
   requestRuleReadsRequester,
   requestShapingConflicts,
@@ -65,7 +67,15 @@ function shaping(overrides: Partial<RequestShaping> = {}): RequestShaping {
 test("declared request heads carry the values the API lists for them, each head once", () => {
   const entries = requestDeclaredActionEntries(
     {
-      heads: ["APPROVE", "SET_LEASE_DAYS", "SET_MONITOR", "SET_REQUIRED_AUDIO_LANGUAGES", "ADD_TAGS", "APPROVE", "ARCHIVE"],
+      heads: [
+        "APPROVE",
+        "SET_LEASE_DAYS",
+        "SET_MONITOR",
+        "SET_REQUIRED_AUDIO_LANGUAGES",
+        "ADD_TAGS",
+        "APPROVE",
+        "ARCHIVE",
+      ],
       qualityProfiles: [],
       leaseDays: [0, 30],
       monitors: ["FUTURE_EPISODES"],
@@ -97,9 +107,17 @@ test("shaping lists each shaped value with the rule that set it, and conflicts o
     conflicts: ["SET_MONITOR", "SET_MONITOR", "SET_PREFERRED_AUDIO_LANGUAGES"],
   });
   assert.deepEqual(requestShapingEntries(value, FORMAT), [
-    { head: "SET_QUALITY_PROFILE", value: "Sample Profile", ruleSetName: "Sample rule" },
+    {
+      head: "SET_QUALITY_PROFILE",
+      value: "Sample Profile",
+      ruleSetName: "Sample rule",
+    },
     { head: "SET_LEASE_DAYS", value: "forever", ruleSetName: null },
-    { head: "SET_REQUIRED_AUDIO_LANGUAGES", value: "eng", ruleSetName: "Sample rule" },
+    {
+      head: "SET_REQUIRED_AUDIO_LANGUAGES",
+      value: "eng",
+      ruleSetName: "Sample rule",
+    },
     { head: "NOTIFY", value: "Sample notice", ruleSetName: "Other rule" },
   ]);
   assert.deepEqual(requestShapingConflicts(value), [
@@ -120,10 +138,16 @@ test("a request held for review prefills the approver's form and marks each sugg
     {
       effectiveOutcome: "MANUAL_REVIEW",
       shaping: shaping({
-        qualityProfile: { value: "Sample Profile", ruleSetName: "Profile rule" },
+        qualityProfile: {
+          value: "Sample Profile",
+          ruleSetName: "Profile rule",
+        },
         leaseDays: { value: 30, ruleSetName: "Lease rule" },
         monitor: { value: "FUTURE_EPISODES" },
-        requiredAudioLanguages: { value: ["eng"], ruleSetName: "Language rule" },
+        requiredAudioLanguages: {
+          value: ["eng"],
+          ruleSetName: "Language rule",
+        },
         preferredAudioLanguages: { value: ["jpn", "eng"] },
       }),
     },
@@ -148,7 +172,10 @@ test("a request held for review prefills the approver's form and marks each sugg
 
 test("a zero-day lease prefills forever", () => {
   const prefill = requestApprovalPrefill(
-    { effectiveOutcome: "MANUAL_REVIEW", shaping: shaping({ leaseDays: { value: 0 } }) },
+    {
+      effectiveOutcome: "MANUAL_REVIEW",
+      shaping: shaping({ leaseDays: { value: 0 } }),
+    },
     "MOVIE",
     PROFILES,
   );
@@ -177,10 +204,16 @@ test("only a request held for review is prefilled", () => {
   const value = shaping({ qualityProfile: { value: "Sample Profile" } });
   for (const effectiveOutcome of ["APPROVED", "DENIED"])
     assert.deepEqual(
-      requestApprovalPrefill({ effectiveOutcome, shaping: value }, "SERIES", PROFILES),
+      requestApprovalPrefill(
+        { effectiveOutcome, shaping: value },
+        "SERIES",
+        PROFILES,
+      ),
       { suggested: {} },
     );
-  assert.deepEqual(requestApprovalPrefill(null, "SERIES", PROFILES), { suggested: {} });
+  assert.deepEqual(requestApprovalPrefill(null, "SERIES", PROFILES), {
+    suggested: {},
+  });
 });
 
 test("the starter source shapes with add_tags and never the retired tag check", () => {
@@ -188,4 +221,23 @@ test("the starter source shapes with add_tags and never the retired tag check", 
   assert.doesNotMatch(REQUEST_STARTER_SOURCE, /tags contains/);
   assert.equal(REQUEST_STARTER_SOURCE.includes("package "), false);
   assert.equal(REQUEST_STARTER_SOURCE.includes("import rego.v1"), false);
+});
+
+// Mirrors `ALL_FALLBACKS` in crates/scryer-application/src/request_rules/arbitration.rs.
+test("every fallback a decision can carry is said in words", () => {
+  const translations = en as Record<string, string>;
+  for (const code of [
+    "rule_manual",
+    "held",
+    "error",
+    "no_rule_matched",
+    "library_permission",
+    "shaping_conflict",
+    "shaping_invalid",
+  ]) {
+    const key = requestFallbackReasonLabelKey(code);
+    assert.ok(key, `${code} has a label`);
+    assert.ok(translations[key], `${key} has English text`);
+  }
+  assert.equal(requestFallbackReasonLabelKey("something_newer"), null);
 });

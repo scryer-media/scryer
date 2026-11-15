@@ -214,7 +214,8 @@ export function requestApprovalPrefill(
     );
     if (profile) {
       prefill.qualityProfileId = profile.id;
-      prefill.suggested.SET_QUALITY_PROFILE = shaping.qualityProfile.ruleSetName ?? "";
+      prefill.suggested.SET_QUALITY_PROFILE =
+        shaping.qualityProfile.ruleSetName ?? "";
     }
   }
   if (
@@ -479,6 +480,7 @@ const FALLBACK_REASON_LABEL_KEYS: Record<string, string> = {
   no_rule_matched: "requests.fallbackNoRuleMatched",
   library_permission: "requests.fallbackLibraryPermission",
   shaping_conflict: "requests.fallbackShapingConflict",
+  shaping_invalid: "requests.fallbackShapingInvalid",
 };
 
 export function requestFallbackReasonLabelKey(reason: string): string | null {

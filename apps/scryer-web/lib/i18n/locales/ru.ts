@@ -4745,6 +4745,8 @@ const ru: LocaleDictionary = {
   "settings.maintenanceRunActionsRunning": "Выполняются действия…",
   "settings.maintenanceRunActionsNeedsRule":
     "Выберите выше одно правило, чтобы выполнить его действия сейчас.",
+  "settings.maintenanceRunActionsHeldHelp":
+    "Немедленный запуск пропускает тайтлы, отложенные запуском, пока правило не будет оценено снова. Каждый плановый запуск сначала оценивает правило и поэтому снова рассматривает отложенные тайтлы.",
   "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
     "Выберите правило для выполнения действий. Правила действуют только за себя, поэтому для запуска сейчас нужно одно правило.",
   "settings.maintenanceRunStarted": "Запуск начат.",
@@ -5050,7 +5052,7 @@ const ru: LocaleDictionary = {
   "settings.refMaintFactsDaysSinceAddedValue":
     "Полных дней с момента добавления субъекта по часам оценки",
   "settings.refMaintFactsMaxVideoHeightValue":
-    "Высота в пикселях самого высокого видеопотока среди файлов; отсутствует, если ни один файл её не сообщает",
+    "Высота в пикселях самого высокого видеопотока среди файлов; отсутствует, если ни один файл её не сообщает. Неизвестно с причиной not_yet_collected, пока каждый файл тайтла не прошёл сканирование до конца, включая файлы, сканирование которых не удалось или требует проверки",
   "settings.refMaintFactsSeasonCountValue":
     "Сезоны во всём списке эпизодов шоу без спецвыпусков, независимо от объекта; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
   "settings.refMaintFactsAiredEpisodeCountValue":
@@ -5088,13 +5090,13 @@ const ru: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "Поставщики, в чьих списках к просмотру тайтл есть сейчас; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "ID пользователей, отметивших объект как избранное на включённом сервере Jellyfin или Emby. Тайтл учитывает каждое своё избранное; избранное сериала или сезона учитывается для каждого сезона и эпизода сериала; избранное эпизода учитывается для этого эпизода, его сезона и сериала. Scryer не может читать избранное Plex: неизвестно с причиной favorites_unsupported, если все включённые серверы — Plex, с причиной favorite_member_unobservable, пока связанный пользователь виден только через Plex, с причиной signal_identity_missing, пока избранное принадлежит учётной записи, не связанной с пользователем Scryer, и с причиной favorites_unreadable, если сохранённое избранное не удалось прочитать.",
+    "ID пользователей, отметивших объект как избранное на включённом сервере Jellyfin или Emby. Тайтл учитывает каждое своё избранное; избранное сериала или сезона учитывается для каждого сезона и эпизода сериала; избранное эпизода — для этого эпизода, его сезона и сериала. Scryer не умеет читать избранное Plex: неизвестно с причиной favorites_unsupported, если все включённые серверы — Plex, и с причиной favorite_member_unobservable, пока связанного пользователя видно только через Plex. Неизвестно с причиной favorites_member_not_read, пока избранное связанного пользователя давно не читалось полностью, и с причиной favorites_unreadable, если сохранённое избранное не удалось прочитать. После обновления факты избранного остаются неизвестными, пока первый обход не прочитает избранное.",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "Имена пользователей, отметивших объект как избранное, с подсчётом как для favorited_by_user_ids; неизвестно с причиной user_not_found, если кого-то из них больше нет, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
+    "Имена пользователей, отметивших объект как избранное, с подсчётом как для favorited_by_user_ids; неизвестно с причиной user_not_found, если кого-то из них больше нет, и по тем же причинам, что и favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "Истина, когда объект покрывает избранное, прочитанное из Jellyfin или Emby, с подсчётом как для favorited_by_user_ids. Никогда не бывает ложью: избранное читается только для связанных пользователей, поэтому, если ничего не найдено, значение неизвестно с причиной audience_favorites_not_read или с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable.",
+    "Истина, когда объект покрывает избранное, прочитанное из Jellyfin или Emby, с подсчётом как для favorited_by_user_ids, независимо от того, связана ли учётная запись с пользователем Scryer. Ложь, когда избранное каждой учётной записи на каждом включённом сервере Jellyfin и Emby недавно прочитано полностью и ничто не покрывает объект. Неизвестно с причиной audience_favorites_not_read, пока у какой-либо учётной записи на таком сервере нет недавнего полного чтения, с причиной audience_favorites_unsupported, пока включён сервер Plex, ведь у учётных записей Plex может быть избранное, которое Scryer не читает, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "Истина, когда объект отметил как избранное кто-то из запросивших, с подсчётом как для favorited_by_user_ids; отсутствует с причиной title_not_requested, если тайтл никто не запрашивал, неизвестно с причиной requester_not_linked, если у запросившего нет связанной учётной записи медиасервера, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
+    "Истина, когда объект отметил как избранное кто-то из запросивших, с подсчётом как для favorited_by_user_ids; отсутствует с причиной title_not_requested, если тайтл никто не запрашивал, неизвестно с причиной requester_not_linked, если у запросившего нет связанной учётной записи медиасервера, с причиной favorites_member_not_read, если избранное запросившего давно не читалось полностью, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Языки аудиодорожек в файле",
   "settings.refMaintFileSubtitleLanguages": "Языки субтитров в файле",
   "settings.refMaintFileAddedAt": "Метка времени RFC3339 добавления файла",
@@ -5484,6 +5486,8 @@ const ru: LocaleDictionary = {
   "requests.shapingLeaseDays": "Дней: {{count}}",
   "requests.fallbackShapingConflict":
     "Правила задали разные значения одного и того же, поэтому решает человек.",
+  "requests.fallbackShapingInvalid":
+    "Правила одобрили бы запрос, но заданное ими значение к нему неприменимо, поэтому решает человек.",
   "requests.preflightReason": "Причина: {{reason}}.",
   "requests.preflightMetadataPartial":
     "Scryer не смог прочитать всё об этом тайтле, поэтому решение примет человек.",
@@ -5684,16 +5688,14 @@ const ru: LocaleDictionary = {
     "Сколько дней прошло с прошлого запроса этого пользователя",
   "settings.refReqFactsLibraryTitleCount":
     "Сколько тайтлов в целевой библиотеке",
-  "settings.refReqFactsSeasonCount":
-    "Сколько сезонов у сериала, для сериалов",
+  "settings.refReqFactsSeasonCount": "Сколько сезонов у сериала, для сериалов",
   "settings.refReqFactsEpisodeCount":
     "Сколько обычных эпизодов у сериала, для сериалов",
   "settings.refReqFactsAiredEpisodeCount":
     "Сколько из этих эпизодов вышло к дню оценки",
   "settings.refReqFactsUnairedEpisodeCount":
     "Сколько из этих эпизодов ещё не вышло",
-  "settings.refReqFactsNextEpisodeAirDate":
-    "Когда выходит следующий эпизод",
+  "settings.refReqFactsNextEpisodeAirDate": "Когда выходит следующий эпизод",
   "settings.refReqFactsTheatricalReleaseDate":
     "Дата выхода в кинотеатрах, для фильмов",
   "settings.refReqFactsDigitalReleaseDate":
@@ -5702,8 +5704,7 @@ const ru: LocaleDictionary = {
     "Дата выпуска на носителе, для фильмов",
   "settings.refReqFactsHomeReleaseAvailable":
     "Вышел ли фильм в цифре или на носителе",
-  "settings.refReqFactsDaysUntilRelease":
-    "Дней до первого выхода фильма",
+  "settings.refReqFactsDaysUntilRelease": "Дней до первого выхода фильма",
   "settings.refReqFactsOtherRequesterCount":
     "Сколько других участников запрашивали этот тайтл",
   "settings.refReqFactsPendingByOtherRequester":
@@ -5712,8 +5713,7 @@ const ru: LocaleDictionary = {
     "Есть ли тайтл в собственном списке «смотреть позже» пользователя",
   "settings.refReqFactsRequesterWatchlistDays":
     "Как давно тайтл в списке «смотреть позже» пользователя",
-  "settings.refReqFactsListExcluded":
-    "Попадает ли тайтл под исключение списка",
+  "settings.refReqFactsListExcluded": "Попадает ли тайтл под исключение списка",
   "settings.refReqFactsRequesterTitlesInLibraryCount":
     "Сколько тайтлов запросы этого пользователя добавили в целевую библиотеку",
   "settings.refReqFactsStorageRootId":
@@ -6835,7 +6835,7 @@ const ru: LocaleDictionary = {
   "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "Это правило удаляет, но у него нет лимита тайтлов за запуск, поэтому его действия не выполняются. Оно по-прежнему оценивается и доступно для предпросмотра; задайте лимит, чтобы оно могло действовать.",
   "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
-    "Отложено: связанная учётная запись добавила этот элемент в избранное на медиасервере после последнего чтения избранного.",
+    "Отложено: после последнего чтения избранного учётная запись на медиасервере добавила в избранное этот элемент либо сериал или сезон проверенных эпизодов.",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "Отложено: до выполнения действия правило отключили, перевели в пробный режим или сняли с боевого режима, либо закрылся его защитный шлюз.",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -6925,8 +6925,7 @@ const ru: LocaleDictionary = {
     "Это имя носят несколько профилей качества. Переименуйте один, чтобы правило указывало на единственный профиль.",
   "error.ruleMonitorUnsupported":
     "Ни одна библиотека, к которой относится правило, не принимает этот тип отслеживания.",
-  "error.ruleAudioLanguageUnknown":
-    "Scryer не знает этот язык аудио.",
+  "error.ruleAudioLanguageUnknown": "Scryer не знает этот язык аудио.",
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
     "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
@@ -12518,11 +12517,11 @@ const ru: LocaleDictionary = {
   "settings.refMaintFactsStorageRootIdValue":
     "Постоянный идентификатор настроенной корневой папки медиатеки, выбранной в этой редакции",
   "settings.refMaintFactsStorageAvailableBytesValue":
-    "Доступная ёмкость в байтах, измеренная непосредственно в выбранной корневой папке",
+    "Байты, доступные в выбранной корневой папке. Плановые запуски берут последний замер, который делается каждые пять минут; предпросмотр и проверка непосредственно перед действием читают корневую папку в этот момент. Неизвестно с причиной storage_not_sampled до первого замера корневой папки, storage_sample_stale, если последнему замеру больше десяти минут, и storage_capacity_unavailable, если корневую папку не удалось прочитать",
   "settings.refMaintFactsStorageTotalBytesValue":
-    "Общая ёмкость в байтах, измеренная непосредственно в выбранной корневой папке",
+    "Общая ёмкость выбранной корневой папки в байтах, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
   "settings.refMaintFactsStorageAvailablePercentValue":
-    "Доступная ёмкость, делённая на общую ёмкость, от 0 до 100",
+    "Доступная ёмкость, делённая на общую ёмкость, от 0 до 100, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
   "settings.refMaintFactsListsEnabledIdsValue":
     "Отсортированные идентификаторы списков; никогда не название списка",
   "settings.refMaintFactsListsPublicCountValue":
@@ -13948,6 +13947,8 @@ const ru: LocaleDictionary = {
     "Медиасервер вернул непросмотренные элементы в ответ на запрос просмотренных.",
   "settings.watchSyncReason.unmappedPlayedMovies":
     "Некоторые просмотренные фильмы не удалось сопоставить с тайтлами библиотеки.",
+  "settings.watchSyncReason.unplacedFavorites":
+    "Часть избранного не удалось сопоставить с медиа библиотеки, поэтому избранное этой учётной записи не считается известным.",
   "settings.watchSyncReason.storeFailed":
     "Scryer не смог сохранить прочитанную историю просмотров.",
   "settings.watchSyncReason.sourceUnavailable":

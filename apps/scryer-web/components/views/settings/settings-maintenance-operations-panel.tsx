@@ -733,6 +733,12 @@ export function MaintenanceRunsPanel({
                 {t("settings.maintenanceRunActionsNeedsRule")}
               </p>
             ) : null}
+            <p
+              id={selectorId("settings-maintenance-run-actions-held-help")}
+              className="max-w-xs text-xs text-muted-foreground"
+            >
+              {t("settings.maintenanceRunActionsHeldHelp")}
+            </p>
           </div>
           <div className="flex items-end">
             <Button
