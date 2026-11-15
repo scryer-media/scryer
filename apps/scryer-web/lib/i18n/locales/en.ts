@@ -9717,6 +9717,10 @@ const en: LocaleDictionary = {
   "settings.maintenanceRunEvaluationRunning": "Evaluating…",
   "settings.maintenanceRunActionsNow": "Run actions now",
   "settings.maintenanceRunActionsRunning": "Running actions…",
+  "settings.maintenanceRunActionsNeedsRule":
+    "Choose one rule above to act on it now.",
+  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+    "Choose the rule to act on. Rules act only for themselves, so acting now needs one rule.",
   "settings.maintenanceRunStarted": "Run started.",
   "settings.maintenanceRunNotStarted": "Nothing started: {{message}}",
   "settings.maintenanceEvaluationRunsTitle": "Evaluation runs",
@@ -10147,21 +10151,21 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsMaxVideoHeightValue":
     "Height in pixels of the tallest video stream among the files; absent when no file reports one",
   "settings.refMaintFactsSeasonCountValue":
-    "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsAiredEpisodeCountValue":
-    "Regular episodes whose air date is on or before the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Regular episodes whose air date is on or before the evaluation day; an episode with no air date counts as not aired. Absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsUnairedEpisodeCountValue":
-    "Regular episodes with no air date or one after the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Regular episodes with no air date or one after the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsMissingEpisodeCountValue":
-    "Regular episodes that have aired, are monitored and have no file; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Regular episodes that have aired, are monitored and have no file; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsAiredEpisodeFilePercentValue":
-    "Percentage of aired episodes that have a file; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Percentage of aired episodes that have a file; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsLatestSeasonNumberValue":
-    "Highest regular season number; absent for movies or a show with no seasons, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Highest regular season number; absent for movies or a show with no seasons, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsLatestAiredEpisodeDateValue":
-    "Air date (YYYY-MM-DD) of the most recently aired regular episode; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Air date (YYYY-MM-DD) of the most recently aired regular episode; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsNextEpisodeAirDateValue":
-    "Earliest air date (YYYY-MM-DD) after the evaluation day; absent with reason no_scheduled_episode when none is scheduled, unknown with reason episode_store_unreadable when the episode store could not be read",
+    "Earliest air date (YYYY-MM-DD) after the evaluation day; absent with reason no_scheduled_episode when none is scheduled, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
   "settings.refMaintFactsGenresValue":
     "Genre names; unknown with reason metadata_unreadable when the stored metadata could not be read",
   "settings.refMaintFactsRatingValue":
@@ -10171,7 +10175,7 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsPlayCountTotalValue":
     "Plays by every account on every enabled media server, linked to a Scryer user or not, summed. Unknown with reason audience_not_read until every account has been read recently, and with the usual watch-fact reasons whenever watch facts are unknown.",
   "settings.refMaintFactsWatchlistedByUserIdsValue":
-    "IDs of the users whose watchlists hold the title. A watchlist is a user's own enabled, signed-in Plex, Trakt, TMDb or MDBList watchlist, Simkl or MyAnimeList plan-to-watch list, or AniList planning list. Unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently.",
+    "IDs of the users whose watchlists hold the title. A watchlist is a user's own enabled, signed-in Plex, Trakt, TMDb or MDBList watchlist, Simkl or MyAnimeList plan-to-watch list, or AniList planning list. Unknown with reason watchlist_not_synced while any watchlist has never synced, last failed, is switched off, is set not to sync or has lost its account, and with reason watchlist_stale while any has not synced recently.",
   "settings.refMaintFactsWatchlistedByUsernamesValue":
     "Usernames of the users whose watchlists hold the title; unknown with reason user_not_found when one of them no longer exists, and with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
   "settings.refMaintFactsWatchlistedByAnyoneValue":
@@ -10183,13 +10187,13 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "Providers whose watchlists hold the title now; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. For a series, a favorite of the series or of any of its seasons or episodes counts; a season or episode counts its own favorites, and an episode also counts its season's and its series'. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable while a linked user can only be seen through Plex, with reason signal_identity_missing while a favorite belongs to an account not linked to a Scryer user, and with reason favorites_unreadable when the stored favorites could not be read.",
+    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. A title counts every favorite of it; a series or season favorite counts for every season and episode of the series; an episode favorite counts for that episode, its season and the series. Scryer cannot read Plex favorites: unknown with reason favorites_unsupported when every enabled server is Plex, with reason favorite_member_unobservable while a linked user can only be seen through Plex, with reason signal_identity_missing while a favorite belongs to an account not linked to a Scryer user, and with reason favorites_unreadable when the stored favorites could not be read.",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "True when any user marked the subject a favorite, counted as for favorited_by_user_ids. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+    "True when a favorite read from Jellyfin or Emby covers the subject, counted as for favorited_by_user_ids. It is never false: favorites are read only for linked users, so with none found it is unknown with reason audience_favorites_not_read, or with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable.",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
   "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
   "settings.refMaintFileSubtitleLanguages":
     "Subtitle languages present in the file",
@@ -12260,6 +12264,10 @@ const en: LocaleDictionary = {
     "Held: the media server could not confirm the watch history before acting.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
+  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "This rule deletes but has no titles-per-run limit, so its actions do not run. It still evaluates and previews; set a limit to let it act.",
+  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+    "Held: a linked account marked this item a favorite on the media server since favorites were last read.",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "Held: before the action ran, the rule was disabled, set to dry run or disarmed, or its safety gate closed.",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -12309,7 +12317,7 @@ const en: LocaleDictionary = {
     "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
   "settings.maintenanceRuleMaxTitlesPerRunNone": "No limit",
   "settings.maintenanceRuleLoadRefused":
-    "This rule cannot be loaded and never runs. Replace its source to run it again.",
+    "This rule cannot run as it is stored.",
   "settings.maintenanceSequenceStepMonitor": "Monitor",
   "settings.maintenanceSequenceStepFetchSubtitles": "Fetch subtitles",
   "settings.maintenanceSequenceStepMoveToLibrary": "Move to library",
@@ -12843,7 +12851,7 @@ const en: LocaleDictionary = {
     "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
   "jobs.builtin.LifecycleActionHandling.name": "Maintenance Action Handling",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Execute due maintenance candidates of armed rules, behind the instance effect gates and full safety rechecks. Each rule acts right after its own scheduled evaluation; running this now acts for every armed rule.",
+    "Each maintenance rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule.",
   "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
   "jobs.builtin.MediaServerSignalSync.description":
     "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",

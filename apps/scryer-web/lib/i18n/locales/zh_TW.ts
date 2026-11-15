@@ -4267,6 +4267,10 @@ const zh_TW: LocaleDictionary = {
   "settings.maintenanceRunEvaluationRunning": "評估中…",
   "settings.maintenanceRunActionsNow": "立即執行動作",
   "settings.maintenanceRunActionsRunning": "正在執行動作…",
+  "settings.maintenanceRunActionsNeedsRule":
+    "請在上方選擇一條規則以立即執行其動作。",
+  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+    "請選擇要執行動作的規則。規則只會為自己執行動作，因此立即執行需要指定一條規則。",
   "settings.maintenanceRunStarted": "執行已啟動。",
   "settings.maintenanceRunNotStarted": "未啟動任何內容：{{message}}",
   "settings.maintenanceEvaluationRunsTitle": "評估執行",
@@ -4563,21 +4567,21 @@ const zh_TW: LocaleDictionary = {
   "settings.refMaintFactsMaxVideoHeightValue":
     "檔案中最高視訊串流的高度（像素）；沒有檔案回報時缺失",
   "settings.refMaintFactsSeasonCountValue":
-    "影集完整單集清單中的季數，不含特別篇，與主體無關；電影缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "節目完整集數清單中的季數，不含特別篇，與主體無關；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsAiredEpisodeCountValue":
-    "播出日期在評估當日或之前的一般單集；電影缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "播出日期在評估當天或之前的一般集數；沒有播出日期的集數視為未播出。電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsUnairedEpisodeCountValue":
-    "沒有播出日期或播出日期在評估當日之後的一般單集；電影缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "沒有播出日期或播出日期在評估當天之後的一般集數；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsMissingEpisodeCountValue":
-    "已播出、受監控且沒有檔案的一般單集；電影缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "已播出、受監控且沒有檔案的一般集數；電影則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsAiredEpisodeFilePercentValue":
-    "有檔案的已播出單集百分比；尚無單集播出時以原因 no_aired_episode 缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "已播出集數中有檔案的百分比；尚無任何播出時不存在，原因為 no_aired_episode，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsLatestSeasonNumberValue":
-    "最高的一般季號；電影或沒有季的影集缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "最大的一般季數；電影或沒有季的節目則不存在，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsLatestAiredEpisodeDateValue":
-    "最近播出的一般單集的播出日期（YYYY-MM-DD）；尚無單集播出時以原因 no_aired_episode 缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "最近播出的一般集數的播出日期（YYYY-MM-DD）；尚無任何播出時不存在，原因為 no_aired_episode，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsNextEpisodeAirDateValue":
-    "評估當日之後最早的播出日期（YYYY-MM-DD）；沒有排定單集時以原因 no_scheduled_episode 缺失，無法讀取單集儲存時以原因 episode_store_unreadable 視為未知",
+    "評估當天之後最早的播出日期（YYYY-MM-DD）；沒有排定集數時不存在，原因為 no_scheduled_episode，無法讀取集數儲存時為未知，原因為 episode_store_unreadable，節目尚未儲存任何一般集數時為未知，原因為 episode_list_empty",
   "settings.refMaintFactsGenresValue":
     "類型名稱；無法讀取已儲存的中繼資料時以原因 metadata_unreadable 視為未知",
   "settings.refMaintFactsRatingValue":
@@ -4587,7 +4591,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refMaintFactsPlayCountTotalValue":
     "所有已啟用媒體伺服器上所有帳戶（無論是否連結到 Scryer 使用者）的播放次數總和。在所有帳戶最近被讀取之前以原因 audience_not_read 視為未知；觀看事實未知時，以一般原因視為未知。",
   "settings.refMaintFactsWatchlistedByUserIdsValue":
-    "待看清單中有此作品的使用者 ID。待看清單是使用者自己已啟用並登入的 Plex、Trakt、TMDb 或 MDBList 待看清單、Simkl 或 MyAnimeList 的 plan-to-watch 清單，或 AniList 的 planning 清單。任何待看清單近期未同步時，以原因 watchlist_not_synced 或 watchlist_stale 視為未知。",
+    "待看清單包含此作品的使用者 ID。待看清單是使用者自己已啟用並登入的 Plex、Trakt、TMDb 或 MDBList 待看清單，Simkl 或 MyAnimeList 的 plan-to-watch 清單，或 AniList 的 planning 清單。任何清單從未同步、上次失敗、已關閉、設為不同步或已失去其帳號時為未知，原因為 watchlist_not_synced；任何清單近期未同步時為未知，原因為 watchlist_stale。",
   "settings.refMaintFactsWatchlistedByUsernamesValue":
     "待看清單中有此作品的使用者名稱；其中有人已不存在時以原因 user_not_found 視為未知，任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
   "settings.refMaintFactsWatchlistedByAnyoneValue":
@@ -4599,13 +4603,13 @@ const zh_TW: LocaleDictionary = {
   "settings.refMaintFactsWatchlistOriginsValue":
     "目前待看清單中有此作品的提供者；任何待看清單近期未同步時以原因 watchlist_not_synced 或 watchlist_stale 視為未知",
   "settings.refMaintFactsFavoritedByUserIdsValue":
-    "在已啟用的 Jellyfin 或 Emby 伺服器上將主體標為最愛的使用者 ID。對影集而言，影集本身或其任何一季或單集的最愛都算；季或單集計算自己的最愛，單集還會計算其所屬季和影集的最愛。Plex 沒有最愛：所有已啟用的伺服器都是 Plex 時以原因 favorites_unsupported 缺失，已連結使用者只能透過 Plex 觀察時以原因 favorite_member_unobservable 視為未知，最愛屬於未連結 Scryer 使用者的帳戶時以原因 signal_identity_missing 視為未知，無法讀取已儲存的最愛時以原因 favorites_unreadable 視為未知。",
+    "在已啟用的 Jellyfin 或 Emby 伺服器上將此主體標為最愛的使用者 ID。作品計入其所有最愛；影集或季的最愛適用於該影集的每一季與每一集；單集的最愛適用於該集、其所屬季與影集。Scryer 無法讀取 Plex 的最愛：所有已啟用伺服器都是 Plex 時為未知，原因為 favorites_unsupported；已連結使用者只能透過 Plex 看到時為未知，原因為 favorite_member_unobservable；最愛屬於未連結 Scryer 使用者的帳號時為未知，原因為 signal_identity_missing；無法讀取已儲存的最愛時為未知，原因為 favorites_unreadable。",
   "settings.refMaintFactsFavoritedByUsernamesValue":
-    "將主體標為最愛的使用者名稱，計算方式同 favorited_by_user_ids；其中有人已不存在時以原因 user_not_found 視為未知。Plex 沒有最愛：所有已啟用的伺服器都是 Plex 時以原因 favorites_unsupported 缺失，或以原因 favorite_member_unobservable 或 favorites_unreadable 視為未知。",
+    "將此主體標為最愛的使用者名稱，計算方式同 favorited_by_user_ids；其中有人已不存在時為未知，原因為 user_not_found，另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
   "settings.refMaintFactsFavoritedByAnyoneValue":
-    "任何使用者將主體標為最愛時為 true，計算方式同 favorited_by_user_ids。Plex 沒有最愛：所有已啟用的伺服器都是 Plex 時以原因 favorites_unsupported 缺失，或以原因 favorite_member_unobservable 或 favorites_unreadable 視為未知。",
+    "從 Jellyfin 或 Emby 讀到的最愛涵蓋此主體時為真，計算方式同 favorited_by_user_ids。它永遠不會是假：最愛只會為已連結的使用者讀取，因此沒找到時為未知，原因為 audience_favorites_not_read，或為 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable。",
   "settings.refMaintFactsFavoritedByAnyRequesterValue":
-    "請求者將主體標為最愛時為 true，計算方式同 favorited_by_user_ids；沒有人請求時以原因 title_not_requested 缺失，請求者沒有連結的媒體伺服器帳戶時以原因 requester_not_linked 視為未知。Plex 沒有最愛：所有已啟用的伺服器都是 Plex 時以原因 favorites_unsupported 缺失，或以原因 favorite_member_unobservable 或 favorites_unreadable 視為未知。",
+    "有請求者將此主體標為最愛時為真，計算方式同 favorited_by_user_ids；沒有人請求此作品時不存在，原因為 title_not_requested；請求者沒有已連結的媒體伺服器帳號時為未知，原因為 requester_not_linked，另可能因 favorites_unsupported、favorite_member_unobservable 或 favorites_unreadable 而未知，同 favorited_by_user_ids。",
   "settings.refMaintFileAudioLanguages": "檔案中存在的音訊語言",
   "settings.refMaintFileSubtitleLanguages": "檔案中存在的字幕語言",
   "settings.refMaintFileAddedAt": "新增檔案時的 RFC3339 時間戳記",
@@ -5919,6 +5923,10 @@ const zh_TW: LocaleDictionary = {
     "已暫緩：執行前媒體伺服器無法確認觀看紀錄。",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "已暫緩：已連線的媒體伺服器沒有相符的項目，執行前無法確認觀看紀錄。",
+  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+    "此規則會刪除，但沒有設定每次執行的作品數上限，因此其動作不會執行。它仍會評估並可預覽；設定上限後即可執行動作。",
+  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+    "已暫緩：自上次讀取最愛以來，已連結的帳號在媒體伺服器上將此項目標為最愛。",
   "settings.maintenanceExecutionReason.ruleNotEligible":
     "已暫緩：動作執行前，規則已停用、改為試執行或解除啟用，或其安全閘門已關閉。",
   "settings.maintenanceExecutionReason.noMatchAtExecution":
@@ -5966,8 +5974,7 @@ const zh_TW: LocaleDictionary = {
   "settings.maintenanceRuleMaxTitlesPerRunHelp":
     "此規則在一次執行中最多處理的作品數。會刪除檔案或作品的規則必須設定此上限。",
   "settings.maintenanceRuleMaxTitlesPerRunNone": "不限制",
-  "settings.maintenanceRuleLoadRefused":
-    "無法載入此規則，因此它永遠不會執行。請取代其原始碼以再次執行。",
+  "settings.maintenanceRuleLoadRefused": "此規則以目前儲存的形式無法執行。",
   "settings.maintenanceSequenceStepMonitor": "監控",
   "settings.maintenanceSequenceStepFetchSubtitles": "取得字幕",
   "settings.maintenanceSequenceStepMoveToLibrary": "移至媒體庫",

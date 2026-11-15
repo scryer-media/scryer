@@ -17,6 +17,8 @@ export const MAINTENANCE_EXECUTION_REASON_KEYS: Readonly<
   playback_unknown: "settings.maintenanceExecutionReason.playbackUnknown",
   watch_recheck_newer_play:
     "settings.maintenanceExecutionReason.watchRecheckNewerPlay",
+  watch_recheck_newer_favorite:
+    "settings.maintenanceExecutionReason.watchRecheckNewerFavorite",
   watch_recheck_uncredited_play:
     "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay",
   watch_recheck_unavailable:

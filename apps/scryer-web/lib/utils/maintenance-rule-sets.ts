@@ -713,6 +713,8 @@ export function excludeMaintenanceSubjectInput(options: {
 const MAINTENANCE_LOAD_REFUSAL_KEYS: Readonly<Record<string, string>> = {
   MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED:
     "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED",
+  MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN:
+    "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN",
 };
 
 export function maintenanceLoadRefusalKey(code: string): string {
@@ -724,7 +726,8 @@ export function maintenanceLoadRefusalKey(code: string): string {
 /// Preview failures the web words itself. The evaluator's own failures carry
 /// the engine's detail, which only the server's text has.
 const MAINTENANCE_PREVIEW_ERROR_KEYS: Readonly<Record<string, string>> = {
-  MAINTENANCE_PREVIEW_NO_DECISION: "error.reason.MAINTENANCE_PREVIEW_NO_DECISION",
+  MAINTENANCE_PREVIEW_NO_DECISION:
+    "error.reason.MAINTENANCE_PREVIEW_NO_DECISION",
 };
 
 export function maintenancePreviewErrorText(

@@ -947,11 +947,15 @@ export function SettingsMaintenanceRulesContainer({
     t,
   ]);
 
+  /// Acting now is always for one rule: rules act only through their own
+  /// fires, so the server refuses a call that names none.
   const runActionHandlerNow = useCallback(async () => {
+    const ruleSetId = maintenanceFilterArgument(runScopeRuleSetId);
+    if (!ruleSetId) return;
     setActionTriggering(true);
     try {
       const { data, error } = await client
-        .mutation(runMaintenanceActionHandlerNowMutation, {})
+        .mutation(runMaintenanceActionHandlerNowMutation, { ruleSetId })
         .toPromise();
       if (error) throw error;
       announceTrigger(
@@ -973,6 +977,7 @@ export function SettingsMaintenanceRulesContainer({
     client,
     refreshCandidates,
     refreshRuns,
+    runScopeRuleSetId,
     setGlobalStatus,
     t,
   ]);
