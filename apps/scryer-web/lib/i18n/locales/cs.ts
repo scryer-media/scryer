@@ -5943,8 +5943,7 @@ const cs: LocaleDictionary = {
     "Pravidla by schválila, ale hodnotu, kterou nastavila, nelze na tento požadavek použít, takže rozhodne člověk.",
   "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
     "Nepodařilo se sestavit modul pravidel požadavků.",
-  "error.reason.REQUEST_RULE_FIELD_REQUIRED":
-    "Požadovaná hodnota nesmí být prázdná.",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "Povinné pole je prázdné.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "Zápůjčka musí trvat 1 až 3650 dní (deset let), nebo navždy.",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
@@ -7786,8 +7785,7 @@ const cs: LocaleDictionary = {
     "DeleteFiles vyžaduje dřívější krok Unmonitor.",
   "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
     "Výjimka z údržby nebyla nalezena.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED":
-    "Požadovaná hodnota nesmí být prázdná.",
+  "error.reason.MAINTENANCE_FIELD_REQUIRED": "Povinné pole je prázdné.",
   "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
     "Vlastnictví souboru pro údržbu se změnilo.",
   "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":

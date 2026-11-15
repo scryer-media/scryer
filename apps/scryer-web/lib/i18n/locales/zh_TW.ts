@@ -5132,7 +5132,7 @@ const zh_TW: LocaleDictionary = {
   "requests.fallbackLibraryPermission": "由請求者的「自動核准請求」權限核准。",
   "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
     "無法建立請求規則引擎。",
-  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "所需的值不可為空。",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "必填欄位為空。",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "租期必須為 1 至 3650 天（十年），或為永久。",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
@@ -6289,7 +6289,7 @@ const zh_TW: LocaleDictionary = {
   "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
     "DeleteFiles 需要先前的 Unmonitor 步驟。",
   "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND": "找不到維護排除項目。",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED": "所需的值不可為空。",
+  "error.reason.MAINTENANCE_FIELD_REQUIRED": "必填欄位為空。",
   "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED": "維護的檔案擁有權已變更。",
   "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
     "維護的目標檔案已變更；需要再次評估。",

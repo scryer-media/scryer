@@ -7438,7 +7438,7 @@ const ru: LocaleDictionary = {
     "Метка ключа API не должна содержать управляющие символы.",
   "error.reason.API_KEY_LABEL_REQUIRED": "Требуется метка ключа API.",
   "error.reason.API_KEY_LABEL_TOO_LONG":
-    "Длина метки ключа API не должна превышать выбранное число символов.",
+    "Длина метки ключа API не должна превышать 120 символов.",
   "error.reason.API_KEY_OWNER_DISABLED": "Владелец ключа API отключён.",
   "error.reason.API_KEY_OWNER_NO_LONGER_EXISTS":
     "Владелец ключа API больше не существует.",
@@ -7446,7 +7446,7 @@ const ru: LocaleDictionary = {
   "error.reason.APPLICATION_UPGRADE_APPLICATION_UPDATE_NOTICE_UNAVAILABLE":
     "Уведомление об обновлении приложения недоступно.",
   "error.reason.APPLICATION_UPGRADE_BACKUP_ALREADY_EXISTS":
-    "Перезапись существующей резервной копии приложения для выбранного элемента запрещена.",
+    "Перезапись существующей резервной копии приложения запрещена.",
   "error.reason.APPLICATION_UPGRADE_EXPECTEDTAG_DOES_NOT_MATCH_CURRENT_APPLICATION_UPDATE_NOTICE":
     "ExpectedTag не соответствует текущему уведомлению об обновлении приложения.",
   "error.reason.APPLICATION_UPGRADE_EXPECTEDTAG_REQUIRED":
@@ -7462,13 +7462,13 @@ const ru: LocaleDictionary = {
   "error.reason.APPLICATION_UPGRADE_INSTALLER_DIGEST_INVALID":
     "Недопустимая контрольная сумма установщика.",
   "error.reason.APPLICATION_UPGRADE_INSUFFICIENT_FREE_SPACE_APPLICATION_UPGRADE":
-    "Недостаточно свободного места для обновления приложения: требуется выбранное число байтов, доступно выбранное число байтов.",
+    "Недостаточно свободного места для обновления приложения.",
   "error.reason.APPLICATION_UPGRADE_JOB_ALREADY_RUNNING":
     "Задание обновления приложения уже выполняется.",
   "error.reason.APPLICATION_UPGRADE_JOURNAL_PHASE_UNSUPPORTED":
-    "Неподдерживаемая фаза журнала обновления приложения для выбранного элемента.",
+    "В журнале обновления приложения записан неподдерживаемый этап.",
   "error.reason.APPLICATION_UPGRADE_JOURNAL_SCHEMA_UNSUPPORTED":
-    "Неподдерживаемая схема журнала обновления приложения для выбранного элемента.",
+    "Журнал обновления приложения использует неподдерживаемую схему.",
   "error.reason.APPLICATION_UPGRADE_NO_APPLICATION_UPDATE_NOTICE_UNAVAILABLE":
     "Нет доступного уведомления об обновлении приложения.",
   "error.reason.APPLICATION_UPGRADE_RUNNING_EXECUTABLE_NO_PARENT_DIRECTORY":
@@ -7507,15 +7507,15 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_COLLECTION_TYPE_REQUIRED": "Требуется тип коллекции.",
   "error.reason.CATALOG_COLLECTION_TYPE_UNKNOWN": "Неизвестный тип коллекции.",
   "error.reason.CATALOG_CONFIGURED_QUALITY_PROFILE_MISSING_CATALOG":
-    "Настроенный профиль качества для выбранного элемента из выбранного значения отсутствует в каталоге.",
+    "Настроенный профиль качества отсутствует в каталоге.",
   "error.reason.CATALOG_DELETE_PREVIEW_CONFIRMATION_REQUIRED_BEFORE_DELETING_FILES_DISK":
     "Перед удалением файлов с диска необходимо подтвердить предварительный просмотр удаления.",
   "error.reason.CATALOG_DOWNLOAD_ALREADY_QUEUED_TITLE":
     "Загрузка этого тайтла уже добавлена в очередь.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_DISABLED":
-    "Клиент загрузки с выбранным значением отключён.",
+    "Выбранный клиент загрузки отключён.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_DOES_NOT_EXIST":
-    "Клиент загрузки с выбранным значением не существует.",
+    "Выбранный клиент загрузки не существует.",
   "error.reason.CATALOG_DOWNLOAD_CLIENT_UNAVAILABLE":
     "Выбранный клиент загрузки не подходит.",
   "error.reason.CATALOG_EPISODE_FIELD_REQUIRED":
@@ -7532,18 +7532,18 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_EXISTING_DOWNLOAD_NO_LONGER_SAFE_REPLACE":
     "Существующую загрузку больше нельзя безопасно заменить.",
   "error.reason.CATALOG_ID_ALREADY_ASSIGNED_TITLE":
-    "Запрошенный идентификатор с выбранным значением уже назначен тайтлу с выбранным значением.",
+    "Этот внешний идентификатор уже назначен другому тайтлу.",
   "error.reason.CATALOG_INDEXER_UNKNOWN":
-    "Неизвестный индексатор с выбранным значением.",
+    "Один из выбранных индексаторов неизвестен.",
   "error.reason.CATALOG_INTERACTIVE_RELEASE_SEARCH_NOT_FOUND":
     "Интерактивный поиск релизов не найден.",
   "error.reason.CATALOG_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
   "error.reason.CATALOG_LISTED_BOTH_ADD_REMOVE":
-    "Выбранный элемент указан и для добавления, и для удаления; выберите одно действие.",
+    "Тег указан и для добавления, и для удаления; выберите одно действие.",
   "error.reason.CATALOG_MAGNET_LINK_NO_FILE_DOWNLOAD":
-    "Запрошенное значение является magnet-ссылкой и не содержит файла для загрузки.",
+    "Этот релиз является magnet-ссылкой и не содержит файла для загрузки.",
   "error.reason.CATALOG_MEDIA_FILE_DELETION_ALREADY_RUNNING":
-    "Для выбранного значения уже выполняется удаление медиафайла.",
+    "Для этого медиафайла уже выполняется удаление.",
   "error.reason.CATALOG_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.CATALOG_METADATA_LANGUAGE_INVALID":
     "Язык метаданных должен быть одним из следующих: eng, spa, fra, deu, ita, por, kor, zho, jpn, nld, ces или rus.",
@@ -7552,7 +7552,7 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_MINIMUM_AVAILABILITY_ONLY_VALID_MOVIE_TITLES":
     "Минимальная доступность применима только к тайтлам фильмов.",
   "error.reason.CATALOG_MOST_RELEASES_DOWNLOADED_ONCE":
-    "Одновременно можно загружать не более выбранного числа релизов.",
+    "Одновременно можно загрузить не более 50 релизов.",
   "error.reason.CATALOG_MOVIE_ENTITY_NOT_FOUND": "Сущность фильма не найдена.",
   "error.reason.CATALOG_MOVIE_METADATA_RESPONSE_MISSING_TITLE_NOT_FOUND":
     "В ответе с метаданными фильма отсутствует искомый тайтл.",
@@ -7561,13 +7561,13 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_MOVIE_TITLE_DOES_NOT_CANONICAL_FOLDER_PATH":
     "У тайтла фильма нет канонического пути к папке.",
   "error.reason.CATALOG_NOT_DEFINED_TAG":
-    "Выбранный элемент не является заданным тегом; прежде чем его можно будет применить, администратор должен добавить его в настройках.",
+    "Это не заданный тег; прежде чем его можно будет применить, администратор должен добавить его в настройках.",
   "error.reason.CATALOG_NO_QUALITY_PROFILE_NOT_CONFIGURED":
     "Профиль качества не настроен; выберите глобальный профиль либо профиль категории, библиотеки или тайтла.",
   "error.reason.CATALOG_NO_USABLE_DOWNLOAD_SOURCE":
-    "У запрошенного значения нет пригодного источника загрузки.",
+    "У этого релиза нет пригодного источника загрузки.",
   "error.reason.CATALOG_PENDING_RENAME_REFERS_MISSING_TITLE_TAG":
-    "Ожидающее переименование ссылается на отсутствующий тег тайтла с выбранным значением.",
+    "Ожидающее переименование ссылается на тег тайтла, которого больше нет.",
   "error.reason.CATALOG_PRIMARY_MOVIE_FILE_ONLY_SET_MOVIE_TITLES_SERIES_MOVIE_FILES_EPISODE_FILES":
     "Основной файл фильма можно задать только для тайтлов фильмов, файлов фильмов сериала или файлов эпизодов.",
   "error.reason.CATALOG_PROVIDE_EXACTLY_ONE_TITLE_ID_QUERY":
@@ -7602,7 +7602,7 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_SMG_ID_OUT_OF_RANGE":
     "Идентификатор Smg должен быть положительным.",
   "error.reason.CATALOG_SMG_NO_SERIES_NOT_FOUND":
-    "Для запрошенного значения в SMG нет сериала с выбранным идентификатором тайтла.",
+    "В SMG нет сериала для этого тайтла.",
   "error.reason.CATALOG_SNAPSHOT_JSON_COLUMN_INVALID":
     "Недопустимый JSON снимка.",
   "error.reason.CATALOG_SNAPSHOT_TITLE_MISSING_AMBIGUOUS":
@@ -7612,9 +7612,9 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_TAG_ADD_REMOVE_REQUIRED":
     "Необходимо указать хотя бы один тег для добавления или удаления.",
   "error.reason.CATALOG_TITLES_NO_SERIES_METADATA":
-    "У запрошенного числа тайтлов нет метаданных сериала.",
+    "У тайтлов этого типа нет метаданных сериала.",
   "error.reason.CATALOG_TITLE_CARRY_MOST_TAGS":
-    "У тайтла может быть не более выбранного числа тегов; после этого изменения у него будет выбранное число тегов.",
+    "У тайтла может быть не более 50 тегов; после этого изменения их стало бы больше.",
   "error.reason.CATALOG_TITLE_FACET_UNSUPPORTED":
     "Неподдерживаемый аспект тайтла.",
   "error.reason.CATALOG_TITLE_FIELD_REQUIRED":
@@ -7625,7 +7625,7 @@ const ru: LocaleDictionary = {
   "error.reason.CATALOG_TITLE_REQUIRED":
     "Необходимо указать хотя бы один тайтл.",
   "error.reason.CATALOG_TITLE_TAG_CHANGED_WHILE_RENAME_PENDING":
-    "Тег тайтла с выбранным значением изменился, пока ожидалось его переименование.",
+    "Тег тайтла изменился, пока ожидалось его переименование.",
   "error.reason.CATALOG_TOO_MANY_CONCURRENT_INTERACTIVE_SEARCHES":
     "Слишком много одновременных интерактивных поисков.",
   "error.reason.CATALOG_TVDB_ID_INVALID":
@@ -7776,23 +7776,23 @@ const ru: LocaleDictionary = {
   "error.reason.DATASTORE_URL_SCHEME_UNSUPPORTED":
     "URL хранилища должен использовать SQLite или PostgreSQL.",
   "error.reason.DISCOVERY_CONTEXT_CHANGE_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип изменения контекста обнаружения с выбранным значением.",
+    "Тип изменения контекста обнаружения не поддерживается.",
   "error.reason.DISCOVERY_HOME_HERO_NOT_FOUND":
     "Главный баннер на главной странице рекомендаций не найден.",
   "error.reason.DISCOVERY_INCREMENTAL_RELOAD_RESOLVES_CHANGED_SUBJECTS_ABOVE_SMG_LIMIT":
-    "При инкрементальном обновлении обнаружения получено выбранное число изменённых объектов, превышающее выбранный лимит SMG.",
+    "Инкрементальное обновление обнаружения затрагивает более 250 изменённых объектов, что превышает лимит SMG.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_PREVIOUS_SUBJECT_JSON":
-    "Ожидающее изменение обнаружения с выбранным значением содержит некорректный JSON предыдущего объекта.",
+    "Ожидающее изменение обнаружения содержит некорректный JSON предыдущего объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_INVALID_RAW_SUBJECT_JSON":
-    "Ожидающее изменение обнаружения с выбранным значением содержит некорректный JSON исходного объекта.",
+    "Ожидающее изменение обнаружения содержит некорректный JSON исходного объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_RAW_SUBJECT_JSON":
-    "В ожидающем изменении обнаружения с выбранным значением отсутствует JSON исходного объекта.",
+    "В ожидающем изменении обнаружения отсутствует JSON исходного объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_CHANGE_MISSING_SUBJECT_KEY":
-    "В ожидающем изменении обнаружения с выбранным значением отсутствует ключ объекта.",
+    "В ожидающем изменении обнаружения отсутствует ключ объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_REMATCH_MISSING_PREVIOUS_SUBJECT_KEY":
-    "В ожидающем повторном сопоставлении обнаружения с выбранным значением отсутствует ключ предыдущего объекта.",
+    "В ожидающем повторном сопоставлении обнаружения отсутствует ключ предыдущего объекта.",
   "error.reason.DISCOVERY_PENDING_DISCOVERY_REMOVAL_MISSING_SUBJECT_KEY":
-    "В ожидающем удалении обнаруженного объекта с выбранным значением отсутствует ключ объекта.",
+    "В ожидающем удалении из обнаружения отсутствует ключ объекта.",
   "error.reason.DOWNLOAD_CLIENT_CONFIG_JSON_INVALID":
     "Недопустимый JSON конфигурации клиента загрузки.",
   "error.reason.DOWNLOAD_PATH_MAPPING_DOWNLOAD_CLIENT_CONFIG_JSON_INVALID":
@@ -7800,19 +7800,19 @@ const ru: LocaleDictionary = {
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_INVALID":
     "Remote_path_mappings должен быть строкой.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_DUPLICATES_EXISTING_REMOTE_PATH_ROOT":
-    "Строка сопоставления удалённых путей с выбранным значением дублирует существующий корень удалённого пути.",
+    "Строка сопоставления удалённых путей повторяет уже сопоставленный удалённый путь.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_INVALID":
-    "Строка сопоставления удалённых путей с выбранным значением должна иметь формат REMOTE => LOCAL.",
+    "Каждая строка сопоставления удалённых путей должна иметь формат REMOTE => LOCAL.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_LOCAL_PATH_INVALID":
-    "В строке сопоставления удалённых путей с выбранным значением локальный путь должен быть абсолютным.",
+    "Локальный путь в сопоставлении удалённых путей должен быть абсолютным.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_END_WHITESPACE":
-    "В строке сопоставления удалённых путей с выбранным значением удалённый путь не может заканчиваться пробельным символом.",
+    "Удалённый путь в сопоставлении не может заканчиваться пробельным символом.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REMOTE_PATH_CANNOT_START_WHITESPACE":
-    "В строке сопоставления удалённых путей с выбранным значением удалённый путь не может начинаться с пробельного символа.",
+    "Удалённый путь в сопоставлении не может начинаться с пробельного символа.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_LOCAL_PATH":
-    "В строке сопоставления удалённых путей с выбранным значением требуется локальный путь.",
+    "В строке сопоставления удалённых путей отсутствует локальный путь.",
   "error.reason.DOWNLOAD_PATH_MAPPING_REMOTE_PATH_MAPPINGS_LINE_REQUIRES_REMOTE_PATH":
-    "В строке сопоставления удалённых путей с выбранным значением требуется удалённый путь.",
+    "В строке сопоставления удалённых путей отсутствует удалённый путь.",
   "error.reason.EVENTS_ACTIVE_PLUGIN_INSTALL_PROGRESS_NOT_FOUND":
     "Сведения о ходе активной установки плагина не найдены.",
   "error.reason.EVENTS_EPISODE_NOT_FOUND": "Эпизод не найден.",
@@ -7823,13 +7823,13 @@ const ru: LocaleDictionary = {
   "error.reason.EXTERNAL_ACCOUNT_LINKED_ELSEWHERE":
     "Эта учётная запись уже привязана к другому пользователю.",
   "error.reason.EXTERNAL_IMPORT_API_VERSION_EXPECTED_ONE_UNSUPPORTED":
-    "Неподдерживаемая версия API выбранного поставщика для выбранного элемента; ожидалась одна из выбранных версий.",
+    "Версия API внешнего приложения не поддерживается.",
   "error.reason.EXTERNAL_IMPORT_COULD_NOT_DETERMINE_VERSION":
-    "Не удалось определить выбранную версию из выбранного элемента.",
+    "Не удалось определить версию внешнего приложения.",
   "error.reason.EXTERNAL_IMPORT_DID_NOT_REPORT_API_VERSION":
-    "Запрошенный источник не сообщил версию API.",
+    "Внешнее приложение не сообщило версию API.",
   "error.reason.EXTERNAL_IMPORT_INVALID_HOST":
-    "У запрошенного значения недопустимый хост.",
+    "У URL источника недопустимый хост.",
   "error.reason.EXTERNAL_IMPORT_SESSION_GONE":
     "Сеанс импорта больше не существует. Подключитесь снова.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_APPLICATION_MISMATCH":
@@ -7837,25 +7837,25 @@ const ru: LocaleDictionary = {
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_INVALID":
     "Недопустимый URL источника.",
   "error.reason.EXTERNAL_IMPORT_SOURCE_URL_QUERY_OR_FRAGMENT":
-    "Запрошенное значение не должно содержать строку запроса или фрагмент.",
+    "URL источника не должен содержать строку запроса или фрагмент.",
   "error.reason.EXTERNAL_IMPORT_VERSION_EXPECTED_MAJOR_NEWER_UNSUPPORTED":
-    "Неподдерживаемая версия выбранного приложения для выбранного элемента; ожидалась выбранная основная версия или новее.",
+    "Эта версия внешнего приложения не поддерживается; требуется более новая основная версия.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_CLAIM_LIBRARY_ROOT_TITLE_FOLDER":
     "Нельзя назначить корневую папку библиотеки папкой тайтла.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_COMPARE_FOLDER_FOLDER_OWNED_TITLE":
-    "Невозможно сравнить папку с выбранным значением с папкой с выбранным значением, принадлежащей тайтлу с выбранным значением.",
+    "Невозможно сравнить папку с папкой, принадлежащей другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_INSPECT_FOLDER_OWNED_ANOTHER_TITLE":
-    "Невозможно проверить папку с выбранным значением, принадлежащую другому тайтлу.",
+    "Невозможно проверить папку, принадлежащую другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_INSPECT_TITLE_FOLDER":
-    "Невозможно проверить папку тайтла с выбранным значением.",
+    "Невозможно проверить папку тайтла.",
   "error.reason.FOLDER_OWNERSHIP_CANNOT_RESOLVE_TITLE_FOLDER":
-    "Невозможно определить путь к папке тайтла с выбранным значением.",
+    "Невозможно определить путь к папке тайтла.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_ALREADY_OWNED_TITLE":
-    "Папка с выбранным значением уже принадлежит тайтлу с выбранным значением.",
+    "Папка уже принадлежит другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_NOT_TITLE_BOUNDARY":
-    "Записанная папка выбранного элемента является корнем библиотеки, а не папкой тайтла; сначала исправьте папку тайтла.",
+    "Записанная папка тайтла является корнем библиотеки, а не папкой тайтла; сначала исправьте папку тайтла.",
   "error.reason.FOLDER_OWNERSHIP_FOLDER_OVERLAPS_FOLDER_OWNED_TITLE":
-    "Папка с выбранным значением пересекается с папкой, принадлежащей тайтлу с выбранным значением.",
+    "Папка пересекается с папкой, принадлежащей другому тайтлу.",
   "error.reason.FOLDER_OWNERSHIP_PATH_OUTSIDE_LIBRARY_ROOT":
     "Нельзя назначить тайтлу папку за пределами корней его библиотеки.",
   "error.reason.FOLDER_OWNERSHIP_RECYCLE_RESTORE_DESTINATION_OVERLAPS_ANOTHER_TITLE_S_OWNED_FOLDER":
@@ -7863,7 +7863,7 @@ const ru: LocaleDictionary = {
   "error.reason.FOLDER_OWNERSHIP_RECYCLE_RESTORE_PATH_OUTSIDE_TITLE_S_CURRENT_OWNED_FOLDER":
     "Путь восстановления из корзины находится за пределами текущей папки тайтла; разрешите изменение папки перед восстановлением.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_ALREADY_OWNS_ANOTHER_FOLDER":
-    "Тайтлу с выбранным значением уже принадлежит другая папка.",
+    "Этому тайтлу уже принадлежит другая папка.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_CHANGED":
     "Папка тайтла изменилась во время сохранения. Обновите страницу и попробуйте снова.",
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_INVALID":
@@ -7875,15 +7875,15 @@ const ru: LocaleDictionary = {
   "error.reason.FOLDER_OWNERSHIP_TITLE_FOLDER_PATH_REQUIRED":
     "Требуется путь к папке тайтла.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_EMPTY":
-    "Настроенный корневой путь медиафайлов с выбранным значением пуст.",
+    "Один из настроенных медиакорней пуст.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY":
-    "Настроенный корневой путь медиафайлов с выбранным значением не является каталогом.",
+    "Один из настроенных медиакорней не является каталогом.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_SYMLINK":
-    "Настроенный корневой путь медиафайлов с выбранным значением является символической ссылкой.",
+    "Один из настроенных медиакорней является символической ссылкой.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNAVAILABLE":
-    "Настроенный корневой путь медиафайлов с выбранным значением недоступен.",
+    "Один из настроенных медиакорней недоступен.",
   "error.reason.FS_SAFETY_CONFIGURED_MEDIA_ROOT_UNREADABLE":
-    "Настроенный корневой путь медиафайлов с выбранным значением недоступен для чтения.",
+    "Один из настроенных медиакорней недоступен для чтения.",
   "error.reason.HTTP_API_EXPLORER_DISABLED": "Обозреватель API отключён.",
   "error.reason.HTTP_API_EXPLORER_MODE_DUPLICATE":
     "Повторяющийся режим доступа к обозревателю API.",
@@ -8047,21 +8047,21 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_ENTRY_ESCAPES_EXTRACTION_DIRECTORY":
     "Элемент архива выходит за пределы каталога распаковки.",
   "error.reason.IMPORT_ARCHIVE_EXTRACTION_REQUIRES_RESOLVED_IMPORT_DESTINATION_BEFORE_STAGING_OUTPUT":
-    "Перед размещением результатов распаковки выбранного значения в промежуточном хранилище необходимо определить путь назначения импорта.",
+    "Для извлечения архива нужно определить место назначения импорта до подготовки результата.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_ARCHIVES_NESTED_MORE_LEVELS_DEEP":
-    "Архив содержит вложенные архивы с глубиной более выбранного числа уровней.",
+    "Архив содержит архивы с вложенностью более 2 уровней.",
   "error.reason.IMPORT_ARCHIVE_HOLDS_MORE_NESTED_ARCHIVES":
-    "Архив содержит больше выбранного числа вложенных архивов.",
+    "Архив содержит более 16 вложенных архивов.",
   "error.reason.IMPORT_ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING":
-    "Архив сопоставлен с выбранным тайтлом, но распакованную рабочую папку с выбранным значением не удалось переместить в выбранное место без копирования.",
+    "Архив сопоставлен с тайтлом, но извлечённые файлы не удалось переместить в место назначения тайтла без копирования.",
   "error.reason.IMPORT_ARCHIVE_OUTPUT_DIRECTORY_NOT_INSIDE_STAGING_WORKSPACE":
-    "Выходной каталог архива с выбранным значением находится за пределами промежуточной рабочей папки.",
+    "Каталог вывода архива находится вне промежуточной рабочей области.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_DOES_NOT_SUPPORT_EXTRACTION":
-    "Плагин архивов не поддерживает распаковку выбранного формата.",
+    "Плагин архивов не поддерживает извлечение этого формата архива.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_MANIFEST_OUTPUT_NOT_REGULAR_FILE":
     "Выходной файл манифеста плагина архивов не является обычным файлом.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_MANIFEST_SIZE_MISMATCH":
-    "Размер выбранного файла не соответствует манифесту плагина архивов.",
+    "Манифест плагина архивов указывает другой размер для извлечённого файла.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_SYMLINK":
     "Результат работы плагина архивов содержит символическую ссылку.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_DIRECTORIES":
@@ -8071,15 +8071,15 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_CONTAINS_TOO_MANY_FILES":
     "Результат работы плагина архивов содержит слишком много файлов.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_EXCEEDS_BYTES":
-    "Результат работы плагина архивов превышает выбранное число байтов.",
+    "Вывод плагина архивов превышает ограничение в 2 ТиБ.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_NOT_REGULAR_FILE":
     "Результат работы плагина архивов не является обычным файлом.",
   "error.reason.IMPORT_ARCHIVE_PLUGIN_OUTPUT_TOO_LARGE":
     "Результат работы плагина архивов слишком велик.",
   "error.reason.IMPORT_ARCHIVE_REEXTRACTION_FAILED":
-    "Архив сопоставлен с выбранным тайтлом, но повторно распаковать его в папку назначения этого тайтла не удалось.",
+    "Архив сопоставлен с тайтлом, но его не удалось повторно извлечь в место назначения тайтла.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_LIES_INSIDE_OWN_EXTRACTION_OUTPUT":
-    "Исходный архив с выбранным значением находится внутри собственного результата распаковки.",
+    "Источник архива находится внутри собственного каталога извлечения.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_METADATA_ESCAPES_SOURCE_DIRECTORY":
     "Метаданные источника архива указывают за пределы каталога источника.",
   "error.reason.IMPORT_ARCHIVE_SOURCE_METADATA_EXCEEDS_ENTRY_LIMIT":
@@ -8091,7 +8091,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_ARCHIVE_SOURCE_SYMLINK_FORBIDDEN":
     "Источник архива не должен быть символической ссылкой.",
   "error.reason.IMPORT_ARCHIVE_STAGING_OUTPUT_DIRECTORY_NOT_EMPTY":
-    "Промежуточный выходной каталог архива с выбранным значением не пуст.",
+    "Промежуточный каталог вывода архива не пуст.",
   "error.reason.IMPORT_ARR_SOURCE_WARMUP_RESULT_NOT_FOUND":
     "Результат предварительной подготовки источника arr не найден.",
   "error.reason.IMPORT_CHANGED_WHILE_RETRY_REQUESTED":
@@ -8103,9 +8103,9 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_CLEANUP_STATE_INVALID":
     "Записанное состояние очистки недопустимо.",
   "error.reason.IMPORT_CLEANUP_TARGET_IS_OUTPUT_ROOT":
-    "Удаление корневого выходного каталога клиента загрузки с выбранным значением запрещено.",
+    "Удаление корня вывода клиента загрузки запрещено.",
   "error.reason.IMPORT_CLEANUP_TARGET_OVERLAPS_LIBRARY_ROOT":
-    "Удаление загруженных клиентом данных с выбранным значением запрещено, поскольку они пересекаются с настроенной корневой папкой библиотеки.",
+    "Удаление данных клиента загрузки запрещено: они пересекаются с настроенным корнем библиотеки.",
   "error.reason.IMPORT_CLIENT_DOES_NOT_REPORT_COMPLETED_DOWNLOAD":
     "Клиент не сообщает о завершённой загрузке; повторная попытка импорта не может перезапустить неудавшуюся или активную загрузку.",
   "error.reason.IMPORT_CLIENT_JOB_ID_NOW_BELONGS_DIFFERENT_DOWNLOAD":
@@ -8121,7 +8121,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_COMPLETED_SOURCE_NO_TRUSTWORTHY_DOWNLOAD_IDENTITY":
     "У завершённого источника нет достоверных идентификационных данных загрузки; используйте ручной импорт.",
   "error.reason.IMPORT_DESTINATION_OCCUPIED":
-    "Восстановление старой резервной копии обновления с выбранным значением запрещено, поскольку место назначения занято.",
+    "Восстановление резервной копии старого файла запрещено: место назначения занято.",
   "error.reason.IMPORT_DISC_IMPORT_TARGETS_INVALID":
     "Цели импорта диска должны в точности соответствовать явно заданным сопоставлениям эпизодов.",
   "error.reason.IMPORT_DISC_SELECTION_CANNOT_INCLUDE_SEPARATE_EPISODE_SERIES_MOVIE_TARGET":
@@ -8141,38 +8141,38 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_DOWNLOAD_BUSY_IMPORT_CHANGED":
     "Загрузка занята или импорт изменился; обновите данные и повторите попытку.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_COMPLETED_DOWNLOAD_NOT_FOUND":
-    "Завершённая загрузка клиента загрузки с выбранным значением недоступна для очистки данных.",
+    "Завершённая загрузка клиента недоступна для очистки данных.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_CONFIGURATION_NO_LONGER_MATCHES_SOURCE":
     "Настройки клиента загрузки больше не соответствуют этому источнику; используйте ручной импорт.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_NOT_FOUND": "Клиент загрузки не найден.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PATH_MAPPING_UNUSABLE_LOCAL_ROOT":
     "В сопоставлении путей клиента загрузки указан непригодный локальный корневой каталог.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_CHECKPOINT_NOT_DIRECTORY":
-    "Контрольная точка очистки данных клиента загрузки с выбранным значением не является каталогом.",
+    "Контрольная точка очистки данных клиента загрузки не является каталогом.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_CLEANUP_REQUIRES_CONFIGURED_CLIENT_ID":
     "Для очистки данных клиента загрузки требуется настроенный идентификатор клиента.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_INVALID":
     "Путь к данным клиента загрузки должен быть абсолютным.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_NOT_FILE_DIRECTORY_SYMLINK":
-    "Путь к данным клиента загрузки с выбранным значением не является файлом, каталогом или символической ссылкой.",
+    "Путь к данным клиента загрузки не является файлом, каталогом или символической ссылкой.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_OUTSIDE_OUTPUT_ROOT":
-    "Путь к данным клиента загрузки с выбранным значением находится за пределами выходного корневого каталога с выбранным значением.",
+    "Путь к данным клиента загрузки находится вне корня вывода клиента.",
   "error.reason.IMPORT_DOWNLOAD_CLIENT_PAYLOAD_PATH_TRAVERSES_SYMLINK":
-    "Путь к данным клиента загрузки с выбранным значением проходит через символическую ссылку с выбранным значением.",
+    "Путь к данным клиента загрузки проходит через символическую ссылку.",
   "error.reason.IMPORT_DOWNLOAD_FAILED":
     "Загрузка завершилась с ошибкой; повторите загрузку перед импортом.",
   "error.reason.IMPORT_DOWNLOAD_HOLDS_MORE_ARCHIVE_SETS":
-    "В загрузке больше наборов архивов, чем допускает выбранное значение.",
+    "Загрузка содержит более 256 наборов архивов.",
   "error.reason.IMPORT_DOWNLOAD_NO_STABLE_IDENTITY_YET":
     "У этой загрузки пока нет устойчивых идентификационных данных; её источники остаются удержанными.",
   "error.reason.IMPORT_DOWNLOAD_NO_TITLE_AUTHORIZE_RELEASE_AGAINST":
     "У импорта этой загрузки нет тайтла, по которому можно разрешить освобождение её источников.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_NO_LONGER_REAL_DIRECTORY":
-    "Каталог данных загрузки с выбранным значением больше не является реальным каталогом.",
+    "Каталог данных загрузки больше не является настоящим каталогом.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_DIRECTORY_TOO_MANY_ENTRIES_INVENTORY_SAFELY":
-    "В каталоге данных загрузки с выбранным значением слишком много элементов для безопасной инвентаризации.",
+    "В каталоге данных загрузки слишком много элементов для безопасной инвентаризации.",
   "error.reason.IMPORT_DOWNLOAD_PAYLOAD_INVENTORY_ENTRY_NOT_SAFE_RELATIVE_PATH":
-    "Элемент описи данных загрузки с выбранным значением не является безопасным относительным путём.",
+    "Элемент инвентаризации данных загрузки не является безопасным относительным путём.",
   "error.reason.IMPORT_DOWNLOAD_STATE_UNAVAILABLE":
     "Не удалось определить текущее состояние загрузки в клиенте; повторите попытку, когда его история станет доступна.",
   "error.reason.IMPORT_DOWNLOAD_STILL_BEING_IMPORTED":
@@ -8184,19 +8184,19 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_EPISODIC_DISCS_REQUIRE_PLAYBACK_TITLE_MAPPINGS":
     "Для дисков с эпизодами требуется сопоставление воспроизводимых тайтлов; диски с фильмами нельзя сопоставлять с эпизодами.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_DEDUPKEY_DUPLICATED":
-    "В выбранном значении повторяется dedupKey настройки внешнего импорта.",
+    "В настройке внешнего импорта одна и та же запись указана несколько раз.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_INSTANCEID_DUPLICATED":
     "Повторяется instanceId настройки внешнего импорта.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_CANNOT_EMPTY":
     "Черновик секретных данных настройки внешнего импорта не может быть пустым; вместо этого удалите черновик.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_OUT_OF_RANGE":
-    "Размер черновика секретных данных настройки внешнего импорта с выбранным значением не должен превышать выбранное число байтов.",
+    "Секрет в настройке внешнего импорта слишком длинный.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_REQUIRED":
-    "Черновик секретных данных настройки внешнего импорта с выбранным значением не может быть пустым.",
+    "Секрет в настройке внешнего импорта не может быть пустым.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST":
-    "Черновик секретных данных настройки внешнего импорта поддерживает не более выбранного количества элементов выбранного типа.",
+    "Настройка внешнего импорта поддерживает не более 500 переопределений каждого вида.",
   "error.reason.IMPORT_EXTERNAL_IMPORT_SETUP_SECRET_DRAFT_SUPPORTS_MOST_INSTANCE_API_KEYS":
-    "Черновик секретных данных настройки внешнего импорта поддерживает не более выбранного числа API-ключей экземпляров.",
+    "Настройка внешнего импорта поддерживает не более 25 ключей API экземпляров.",
   "error.reason.IMPORT_EXTRACTED_ARCHIVE_WORKSPACE_UNAVAILABLE":
     "Рабочий каталог распакованного архива недоступен.",
   "error.reason.IMPORT_FILE_NOT_FOUND": "Исходный файл не найден.",
@@ -8225,7 +8225,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_CANDIDATE_REQUIRED":
     "Требуется хотя бы один кандидат для ручного импорта.",
   "error.reason.IMPORT_MANUAL_IMPORT_EPISODE_TARGET_DOES_NOT_BELONG_TITLE":
-    "Целевой эпизод ручного импорта с выбранным значением не принадлежит тайтлу с выбранным значением.",
+    "Эпизод, выбранный для ручного импорта, не принадлежит этому тайтлу.",
   "error.reason.IMPORT_MANUAL_IMPORT_EPISODE_TARGET_UNAVAILABLE":
     "Целевой эпизод ручного импорта недоступен.",
   "error.reason.IMPORT_MANUAL_IMPORT_FILE_INVALID":
@@ -8247,7 +8247,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_REQUEST_MISSING_ACTOR":
     "В запросе ручного импорта не указан инициатор.",
   "error.reason.IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_DOES_NOT_BELONG_TITLE":
-    "Целевой фильм сериала для ручного импорта с выбранным значением не принадлежит тайтлу с выбранным значением.",
+    "Фильм сериала, выбранный для ручного импорта, не принадлежит этому тайтлу.",
   "error.reason.IMPORT_MANUAL_IMPORT_SERIES_MOVIE_TARGET_UNAVAILABLE":
     "Целевой фильм сериала для ручного импорта недоступен.",
   "error.reason.IMPORT_MANUAL_IMPORT_SOURCE_CONFLICTING_CANONICAL_DOWNLOAD_IDENTITY":
@@ -8263,20 +8263,20 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD":
     "Тайтл ручного импорта не соответствует запросу Scryer, по которому была получена эта загрузка.",
   "error.reason.IMPORT_MANUAL_TITLE_OUTSIDE_DURABLE_SCRYER_SUBMISSION_TITLE":
-    "Выбранный вручную тайтл с выбранным значением не входит в тайтл сохранённого запроса Scryer с выбранным значением.",
+    "Выбранный вручную тайтл не совпадает с тайтлом, для которого была отправлена эта загрузка.",
   "error.reason.IMPORT_MAPPED_DISC_EPISODE_NO_LONGER_BELONGS_IMPORT_TITLE":
     "Сопоставленный эпизод диска больше не принадлежит тайтлу импорта.",
   "error.reason.IMPORT_MEDIA_FILE_CHANGED_BEFORE_IMPORT_METADATA_PUBLISHED":
     "Медиафайл изменился до публикации метаданных импорта.",
   "error.reason.IMPORT_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.IMPORT_MEDIA_ROOT_REQUIRED":
-    "Невозможно безопасно заменить выбранный элемент улучшенной версией: не удалось определить настроенный корневой каталог медиа.",
+    "Невозможно безопасно обновить этот файл: не удалось определить ни одного настроенного медиакорня.",
   "error.reason.IMPORT_MULTIPLE_SCENE_SUBTITLES_MAP_SAME_DESTINATION":
     "Несколько субтитров сцены сопоставлены с одним путём назначения; источники сохранены.",
   "error.reason.IMPORT_NEWER_IMPORT_ATTEMPT_OWNS_DOWNLOAD":
     "Этой загрузкой владеет более новая попытка импорта; обновите её историю.",
   "error.reason.IMPORT_NOT_HOLDING_SOURCES":
-    "Импорт с выбранным значением не удерживает свои источники.",
+    "Этот импорт не удерживает свои источники.",
   "error.reason.IMPORT_NO_COMPLETED_IMPORT_ATTEMPT_UNAVAILABLE":
     "Нет завершённой попытки импорта для повтора; используйте ручной импорт.",
   "error.reason.IMPORT_NZBGET_CLEANUP_IDENTITY_CHANGED":
@@ -8290,7 +8290,7 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_NZBGET_TERMINAL_CLEANUP_METADATA_NOT_FOUND":
     "Метаданные окончательной очистки NZBGet недоступны: не найдены.",
   "error.reason.IMPORT_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Защитная проверка замены по тому же пути отклонена: старый файл с выбранным значением находится за пределами корневого каталога медиа с выбранным значением.",
+    "Обновление запрещено: старый файл находится вне текущих медиакорней; оставьте старый корень в настройках, пока существующие файлы не будут перемещены, заменены или удалены.",
   "error.reason.IMPORT_PAYLOAD_DIRECTORY_OWNERSHIP_UNVERIFIED":
     "Принадлежность каталога данных не подтверждена; удаление общего каталога запрещено.",
   "error.reason.IMPORT_PAYLOAD_OVERLAPS_RECYCLE_ROOT":
@@ -8304,9 +8304,9 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_RECORD_CONFLICTS_COMPLETED_SOURCE_IDENTITY":
     "Запись импорта конфликтует с идентификационными данными завершённого источника; используйте ручной импорт.",
   "error.reason.IMPORT_RECYCLE_BIN_CONFIG_REQUIRED":
-    "Замена выбранного элемента улучшенной версией запрещена: не удалось определить настройки корзины для корневого каталога старого файла с выбранным значением.",
+    "Обновление запрещено: не удалось определить настройки корзины для корня старого файла.",
   "error.reason.IMPORT_REGULAR_FILE_REQUIRED":
-    "Удаление старого файла с выбранным значением при замене улучшенной версией запрещено: это не обычный файл.",
+    "Замена старого файла при обновлении запрещена: это не обычный файл.",
   "error.reason.IMPORT_RELEASING_THESE_SOURCES_ALSO_RELEASES_IMPORT_TITLE_MAY_NOT_RESOLVE_IMPORTS":
     "Освобождение этих источников также освободит импорт тайтла, для которого у вас может не быть права разрешать проблемы импорта.",
   "error.reason.IMPORT_RESOURCE_NOT_FOUND": "Импорт не найден.",
@@ -8364,9 +8364,9 @@ const ru: LocaleDictionary = {
   "error.reason.IMPORT_SOURCE_UNAVAILABLE":
     "Источник ручного импорта недоступен.",
   "error.reason.IMPORT_STATUS_ONLY_FAILED_SKIPPED_IMPORTS_RETRIED":
-    "Импорт с выбранным значением имеет выбранный статус; повторить можно только импорты с ошибкой или пропущенные импорты.",
+    "Повторить можно только неудавшиеся или пропущенные импорты.",
   "error.reason.IMPORT_SYMLINK_REFUSED":
-    "Удаление старого файла с выбранным значением при замене улучшенной версией запрещено: это символическая ссылка.",
+    "Замена старого файла при обновлении запрещена: это символическая ссылка.",
   "error.reason.IMPORT_UNAVAILABLE": "Этот импорт больше нельзя отменить.",
   "error.reason.IMPORT_UNSAFE_ARCHIVE_ENTRY_PATH":
     "Небезопасный путь элемента архива.",
@@ -8394,13 +8394,13 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_DOWNLOAD_ALREADY_BEING_PROCESSED":
     "Эта загрузка уже обрабатывается.",
   "error.reason.INTEGRATION_DOWNLOAD_ALREADY_RESOLVED":
-    "Загрузка уже обработана с выбранным результатом; игнорировать нечего.",
+    "Загрузка уже разрешена; игнорировать нечего.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONFIG_INVALID":
     "Недопустимые настройки клиента загрузки.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_CONFIG_NOT_FOUND":
     "Настройки клиента загрузки не найдены.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_ALL_PROTOCOL_FAMILIES_REQUIRED_INDEXER":
-    "Клиент загрузки с выбранным значением не поддерживает все семейства протоколов, необходимые индексатору с выбранным значением.",
+    "Клиент загрузки поддерживает не все семейства протоколов, которые требуются индексатору.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_DOES_NOT_SUPPORT_PASSWORD_RETRIES":
     "Этот клиент загрузки не поддерживает повторные попытки с паролем.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_FIELD_REQUIRED":
@@ -8410,7 +8410,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_NAME_REQUIRED":
     "Требуется имя клиента загрузки.",
   "error.reason.INTEGRATION_DOWNLOAD_CLIENT_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип клиента загрузки: выбранный элемент.",
+    "Этот тип клиента загрузки не поддерживается.",
   "error.reason.INTEGRATION_DOWNLOAD_NOT_STATE_IMPORTED_HAND_RIGHT_NOW":
     "Текущее состояние этой загрузки не позволяет импортировать её вручную.",
   "error.reason.INTEGRATION_DOWNLOAD_SUBMISSION_NOT_FOUND":
@@ -8419,8 +8419,7 @@ const ru: LocaleDictionary = {
     "Загрузка больше недоступна для ручного импорта.",
   "error.reason.INTEGRATION_ENABLE_PROXY_BEFORE_TESTING_OUTBOUND_ROUTE":
     "Включите этот прокси перед проверкой исходящего маршрута.",
-  "error.reason.INTEGRATION_FIELD_REQUIRED":
-    "Требуется указать запрошенное значение.",
+  "error.reason.INTEGRATION_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.INTEGRATION_HELD_SOURCES_COULD_NOT_SETTLED":
     "Не удалось завершить обработку удерживаемых источников.",
   "error.reason.INTEGRATION_HTTP_3_CONNECT_ENDPOINT_INVALID":
@@ -8446,7 +8445,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_INDEXER_CONNECTION_URL_REQUIRED":
     "Требуется URL подключения к индексатору.",
   "error.reason.INTEGRATION_INDEXER_DOES_NOT_SUPPORT_TORRENTS_SO_SEEDING_PROFILE_CANNOT_ASSIGNED":
-    "Индексатор с выбранным значением не поддерживает торренты, поэтому ему нельзя назначить профиль сидирования с выбранным значением.",
+    "Этот индексатор не поддерживает торренты, поэтому ему нельзя назначить профиль раздачи.",
   "error.reason.INTEGRATION_INDEXER_FIELD_REQUIRED":
     "Нужно указать хотя бы одно поле индексатора.",
   "error.reason.INTEGRATION_INDEXER_ID_REQUIRED":
@@ -8456,9 +8455,9 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_INDEXER_PROVIDER_DECLARES_MULTIPLE_CONNECTION_URL_CONFIG_FIELDS":
     "Провайдер индексатора объявляет несколько полей настроек connection_url.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_DOES_NOT_DECLARE_SUPPORTED_PROTOCOL_FAMILY":
-    "Провайдер индексатора с выбранным значением не объявляет поддерживаемое семейство протоколов.",
+    "Поставщик индексатора не объявляет поддерживаемое семейство протоколов.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип провайдера индексатора: выбранный элемент.",
+    "Этот тип поставщика индексатора не поддерживается.",
   "error.reason.INTEGRATION_INDEXER_PROVIDER_UNAVAILABLE":
     "Провайдер индексатора недоступен.",
   "error.reason.INTEGRATION_INDEXER_REQUEST_REJECTED":
@@ -8478,17 +8477,17 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_MANAGED_CHILD_INDEXER_REQUIRES_PARENT":
     "Для управляемого дочернего индексатора требуется родительский индексатор.",
   "error.reason.INTEGRATION_MANAGED_CHILD_PLAN_CONTAINS_DUPLICATE_CHILD_KEY":
-    "План управляемых дочерних индексаторов содержит повторяющийся child_key с выбранным значением.",
+    "В плане управляемых дочерних индексаторов один и тот же ключ указан несколько раз.",
   "error.reason.INTEGRATION_MANAGED_CHILD_PLAN_ENTRIES_REQUIRE_CHILD_KEY":
     "Для элементов плана управляемых дочерних индексаторов требуется child_key.",
   "error.reason.INTEGRATION_MANAGED_CHILD_REQUIRES_NAME":
-    "Для управляемого дочернего элемента с выбранным значением требуется имя.",
+    "Управляемому дочернему индексатору требуется имя.",
   "error.reason.INTEGRATION_MANAGED_CHILD_REQUIRES_PROVIDER_TYPE":
-    "Для управляемого дочернего элемента с выбранным значением требуется provider_type.",
+    "Управляемому дочернему индексатору требуется тип поставщика.",
   "error.reason.INTEGRATION_MANAGED_CHILD_ROUTING_CONTAINS_DUPLICATE_SCOPE":
-    "Маршрутизация управляемых дочерних элементов содержит повторяющуюся область с выбранным значением.",
+    "В маршрутизации управляемых дочерних индексаторов одна и та же область указана несколько раз.",
   "error.reason.INTEGRATION_MANAGED_CHILD_ROUTING_SCOPE_UNSUPPORTED":
-    "Область маршрутизации управляемых дочерних элементов с выбранным значением не поддерживается.",
+    "Область маршрутизации управляемого дочернего индексатора не поддерживается.",
   "error.reason.INTEGRATION_MANAGED_INDEXERS_CANNOT_USE_PROXY":
     "Управляемые индексаторы не могут использовать прокси; решением проверок занимается управляющее приложение.",
   "error.reason.INTEGRATION_MANUAL_IMPORT_CANDIDATE_UNAVAILABLE":
@@ -8504,7 +8503,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD":
     "Тайтл ручного импорта не соответствует запросу Scryer, по которому была получена эта загрузка.",
   "error.reason.INTEGRATION_MAPPED_DOWNLOAD_CLIENT_NO_LONGER_EXISTS":
-    "Сопоставленный клиент загрузки с выбранным значением больше не существует.",
+    "Сопоставленный клиент загрузки больше не существует.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_OUT_OF_RANGE":
     "Максимальное число запросов в минуту должно быть не меньше 1; оставьте поле пустым, чтобы не ограничивать число запросов.",
   "error.reason.INTEGRATION_MAX_QUERIES_PER_MINUTE_SET_EACH_MANAGED_INDEXER_NOT_INDEXER_SYNCS_THEM":
@@ -8520,11 +8519,11 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_MINIMUM_SEEDERS_FLOOR_CANNOT_NEGATIVE":
     "Нижний предел минимального числа сидов не может быть отрицательным.",
   "error.reason.INTEGRATION_NOT_DNS_SERVER_ADDRESS":
-    "`выбранное значение` не является адресом DNS-сервера; строка `DNS` принимает IP-адреса.",
+    "Запись DNS не является адресом DNS-сервера; строка `DNS` принимает IP-адреса.",
   "error.reason.INTEGRATION_NO_INDEXER_MANAGEMENT_CLIENT_AVAILABLE_PROVIDER_TYPE":
-    "Для выбранного типа провайдера нет доступного клиента управления индексаторами.",
+    "Для этого типа поставщика нет клиента управления индексаторами.",
   "error.reason.INTEGRATION_NO_INDEXER_PROVIDER_AVAILABLE_PROVIDER_TYPE":
-    "Для выбранного типа провайдера нет доступного провайдера индексаторов.",
+    "Для этого типа поставщика нет поставщика индексаторов.",
   "error.reason.INTEGRATION_ONLY_SSH_TUNNELS_TAKE_PRIVATE_KEY_PASSPHRASE":
     "Парольная фраза закрытого ключа используется только в SSH-туннелях.",
   "error.reason.INTEGRATION_ONLY_SSH_TUNNEL_PROXIES_PIN_HOST_KEY":
@@ -8538,7 +8537,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PRIVATE_KEY_INVALID":
     "Закрытый ключ должен быть блоком PEM, начинающимся с -----BEGIN и заканчивающимся на -----.",
   "error.reason.INTEGRATION_PROVIDER_TYPE_DOES_NOT_SUPPORT_MANAGED_CHILD_SYNC":
-    "Выбранный тип провайдера не поддерживает синхронизацию управляемых дочерних элементов.",
+    "Этот тип поставщика не поддерживает синхронизацию управляемых дочерних индексаторов.",
   "error.reason.INTEGRATION_PROVIDER_TYPE_REQUIRED":
     "Тип провайдера не может быть пустым.",
   "error.reason.INTEGRATION_PROWLARR_INDEXERS_CANNOT_USE_CHALLENGE_SOLVERS":
@@ -8548,7 +8547,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PROWLARR_MANAGEMENT_PARENTS_CANNOT_MAPPED_DOWNLOAD_CLIENT":
     "Родительские элементы управления Prowlarr нельзя сопоставить с клиентом загрузки.",
   "error.reason.INTEGRATION_PROXIES_DO_NOT_USE_CHALLENGE_SOLVER_PROTOCOL":
-    "Прокси запрошенного типа не используют протокол средства решения проверок.",
+    "Прокси этого типа не используют протокол средства решения проверок.",
   "error.reason.INTEGRATION_PROXY_BASE_URL_HOST_REQUIRED":
     "Базовый URL прокси должен содержать хост.",
   "error.reason.INTEGRATION_PROXY_BASE_URL_INVALID":
@@ -8558,9 +8557,9 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PROXY_CONFIGURATION_NOT_FOUND":
     "Настройки прокси не найдены.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_DOWNLOAD_CLIENT_S":
-    "Настройки прокси назначены включённым клиентам загрузки в выбранном количестве.",
+    "Прокси назначен включённым клиентам загрузки.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ENABLED_INDEXER_S":
-    "Настройки прокси назначены включённым индексаторам в выбранном количестве.",
+    "Прокси назначен включённым индексаторам.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_DOWNLOAD_CLIENTS":
     "Настройки прокси назначены одному или нескольким клиентам загрузки.",
   "error.reason.INTEGRATION_PROXY_CONFIG_ASSIGNED_ONE_MORE_INDEXERS":
@@ -8581,7 +8580,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_PROXY_PASSWORD_REQUIRES_USERNAME":
     "Для указания пароля прокси требуется имя пользователя.",
   "error.reason.INTEGRATION_PROXY_TIMEOUT_OUT_OF_RANGE":
-    "Время ожидания прокси должно быть от 1 до выбранного числа секунд.",
+    "Тайм-аут прокси должен быть от 1 до 120 секунд.",
   "error.reason.INTEGRATION_PROXY_URL_CREDENTIALS_FORBIDDEN":
     "Базовый URL прокси не должен содержать учётные данные; используйте поля имени пользователя и пароля.",
   "error.reason.INTEGRATION_REMOTE_DNS_APPLIES_ONLY_SOCKS_PROXIES":
@@ -8593,7 +8592,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_SEEDING_PROFILE_NOT_FOUND":
     "Профиль сидирования не найден.",
   "error.reason.INTEGRATION_SEEDING_PROFILE_STILL_ASSIGNED":
-    "Профиль сидирования всё ещё назначен выбранному элементу.",
+    "Профиль раздачи всё ещё назначен индексатору или клиенту загрузки.",
   "error.reason.INTEGRATION_SOCKS4_PROXIES_DO_NOT_CARRY_CREDENTIALS":
     "Прокси SOCKS4 не передают учётные данные; для прокси с аутентификацией используйте SOCKS5.",
   "error.reason.INTEGRATION_SOCKS4_PROXY_BASE_URL_INVALID":
@@ -8617,11 +8616,11 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_TEST_URL_INVALID":
     "Тестовый URL должен использовать HTTP или HTTPS и не содержать учётных данных.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_BUSY_PROCESSING":
-    "Отслеживаемая загрузка с выбранным значением занята обработкой.",
+    "Эта отслеживаемая загрузка сейчас обрабатывается.",
   "error.reason.INTEGRATION_TRACKED_DOWNLOAD_NOT_FOUND":
     "Отслеживаемая загрузка не найдена.",
   "error.reason.INTEGRATION_TUNNEL_MTU_OUT_OF_RANGE":
-    "MTU туннеля должен находиться между выбранными нижним и верхним значениями; указанное значение выходит за этот диапазон.",
+    "MTU туннеля вне допустимого диапазона.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_INVALID":
     "Недопустимый адрес интерфейса WireGuard.",
   "error.reason.INTEGRATION_WIREGUARD_ADDRESS_REQUIRED":
@@ -8639,14 +8638,14 @@ const ru: LocaleDictionary = {
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PEER_S_PUBLIC_KEY_PEER_SECTION":
     "Для туннелей WireGuard требуется открытый ключ узла из раздела `[Peer]`.",
   "error.reason.INTEGRATION_WIREGUARD_TUNNELS_REQUIRE_PRIVATE_KEY":
-    "Для туннелей WireGuard требуется закрытый ключ; выбранное значение.",
+    "Для туннелей WireGuard требуется закрытый ключ; ключи WireGuard — это 32 байта в base64, в точности как их выводит `wg genkey` (44 символа, оканчивающиеся на `=`).",
   "error.reason.JOB_TASK_FAILED":
     "Запрошенная фоновая задача завершилась с ошибкой.",
   "error.reason.JOB_ACQUISITION_SEARCH_JOBS_INVALID":
     "Задания поиска для получения релизов необходимо запускать через мутацию поиска для получения релизов.",
   "error.reason.JOB_ACTION_PERMISSION_DENIED":
     "У вас нет разрешения на это действие.",
-  "error.reason.JOB_ALREADY_RUNNING": "Выбранный элемент уже выполняется.",
+  "error.reason.JOB_ALREADY_RUNNING": "Это задание уже выполняется.",
   "error.reason.JOB_APPLICATION_UPGRADE_JOBS_INVALID":
     "Задания обновления приложения необходимо запускать через мутацию обновления приложения.",
   "error.reason.JOB_ARTWORK_ENCODING_SHUTTING_DOWN":
@@ -8673,24 +8672,24 @@ const ru: LocaleDictionary = {
     "Операции с расположением необходимо запускать через мутацию операции с расположением.",
   "error.reason.JOB_MEDIA_FILE_DELETION_JOBS_INVALID":
     "Задания удаления медиафайлов необходимо запускать через мутацию удаления медиафайлов.",
-  "error.reason.JOB_NO_LIBRARIES": "У запрошенного элемента нет библиотек.",
+  "error.reason.JOB_NO_LIBRARIES": "У этого задания нет библиотек для запуска.",
   "error.reason.JOB_ONLY_RUN_CONFIGURED_SCHEDULE":
-    "Запрошенный элемент может запускаться только по настроенному расписанию.",
+    "Это задание может запускаться только по настроенному расписанию.",
   "error.reason.JOB_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Восстановление элемента корзины с выбранным значением запрещено: исходный путь находится за пределами определённых корневых каталогов библиотек.",
+    "Восстановление этого элемента корзины запрещено: его исходный путь находится вне корней библиотеки.",
   "error.reason.JOB_RECYCLE_BIN_BATCHES_CANNOT_INCLUDE_SAME_ITEM_MORE_ONCE":
     "Пакет операций с корзиной не может включать один элемент более одного раза.",
   "error.reason.JOB_RECYCLE_BIN_BATCHES_LIMITED_ITEMS":
-    "Число элементов в пакете операций с корзиной ограничено выбранным значением.",
+    "Пакеты операций с корзиной ограничены 250 элементами.",
   "error.reason.JOB_RECYCLE_BIN_ITEM_REQUIRED":
     "Выберите хотя бы один элемент корзины.",
   "error.reason.JOB_RECYCLE_ENTRY_NOT_FOUND": "Элемент корзины не найден.",
   "error.reason.JOB_RECYCLE_OPERATION_ALREADY_RUNNING":
-    "Для выбранного элемента уже выполняется операция с корзиной.",
+    "Для этого элемента корзины уже выполняется операция.",
   "error.reason.JOB_RECYCLE_PURGE_JOBS_INVALID":
     "Задания окончательного удаления из корзины необходимо запускать через мутацию корзины.",
   "error.reason.JOB_RECYCLE_RESTORE_ALREADY_RUNNING":
-    "Для выбранного элемента уже выполняется восстановление из корзины.",
+    "Для этого элемента корзины уже выполняется восстановление.",
   "error.reason.JOB_RECYCLE_RESTORE_ALREADY_RUNNING_ONE_SELECTED_DESTINATIONS":
     "Для одного из выбранных путей назначения уже выполняется восстановление из корзины.",
   "error.reason.JOB_RECYCLE_RESTORE_JOBS_INVALID":
@@ -8698,26 +8697,26 @@ const ru: LocaleDictionary = {
   "error.reason.JOB_RECYCLE_RESTORE_PREVIEW_STALE":
     "Предварительный просмотр восстановления из корзины устарел; заново проверьте выбранный способ разрешения конфликта.",
   "error.reason.JOB_REGULAR_FILE_REQUIRED":
-    "Замена по пути назначения восстановления с выбранным значением запрещена: это не обычный файл.",
+    "Замена места восстановления запрещена: это не обычный файл.",
   "error.reason.JOB_REPLACE_RECYCLE_BIN_UNAVAILABLE":
-    "Замена выбранного элемента запрещена: корзина недоступна.",
+    "Замена файла запрещена: корзина недоступна.",
   "error.reason.JOB_RESTORE_DESTINATION_CHANGED_AFTER_CONFIRMATION":
     "Путь назначения восстановления изменился после подтверждения; просмотрите этот элемент и повторите попытку.",
   "error.reason.JOB_SCHEDULED_SCRIPT_ALREADY_RUNNING":
     "Этот скрипт по расписанию уже выполняется.",
   "error.reason.JOB_SCHEDULED_SCRIPT_DISABLED":
-    "Скрипт по расписанию с выбранным значением отключён.",
+    "Этот запланированный скрипт отключён.",
   "error.reason.JOB_SCHEDULED_SCRIPT_NO_LONGER_EXISTS":
-    "Скрипт по расписанию с выбранным значением больше не существует.",
+    "Этот запланированный скрипт больше не существует.",
   "error.reason.JOB_SCRIPT_NOT_FOUND": "Скрипт не найден.",
   "error.reason.JOB_SCRIPT_NOT_SCHEDULED_SCRIPT":
-    "Скрипт с выбранным значением не является скриптом с расписанием.",
+    "Этот скрипт не является запланированным скриптом.",
   "error.reason.JOB_SELECTED_RECYCLE_ENTRIES_CANNOT_SHARE_SAME_RESTORE_DESTINATION":
     "Выбранные элементы корзины не могут иметь один и тот же путь назначения восстановления.",
   "error.reason.JOB_SELECT_FILES_SEASONS_TITLES_REFRESH_SCORES":
     "Выберите файлы, сезоны или тайтлы для обновления оценок.",
   "error.reason.JOB_SYMLINK_REFUSED":
-    "Замена по пути назначения восстановления с выбранным значением запрещена: это символическая ссылка.",
+    "Замена места восстановления запрещена: это символическая ссылка.",
   "error.reason.JOB_TITLE_DELETION_JOBS_INVALID":
     "Задания удаления тайтлов необходимо запускать через мутацию удаления тайтлов.",
   "error.reason.JOB_TITLE_RENAME_JOBS_INVALID":
@@ -8729,9 +8728,9 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_BATCH_SIZE_OUT_OF_RANGE":
     "Размер пакета должен быть положительным.",
   "error.reason.LIBRARY_COLLECTION_DOES_NOT_BELONG_TITLE":
-    "Коллекция с выбранным значением не принадлежит тайтлу с выбранным значением.",
+    "Коллекция не принадлежит этому тайтлу.",
   "error.reason.LIBRARY_CONFIGURED_ROOT_FOLDER_INVALID":
-    "Настроенная корневая папка выбранного типа с выбранным значением недопустима.",
+    "Одна из настроенных корневых папок некорректна.",
   "error.reason.LIBRARY_DEFAULT_LIBRARIES_CANNOT_DELETED":
     "Библиотеки по умолчанию нельзя удалить.",
   "error.reason.LIBRARY_DEFAULT_LIBRARY_NOT_FOUND":
@@ -8739,17 +8738,17 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_DEFAULT_MONITOR_TYPE_INVALID":
     "Выберите тип мониторинга по умолчанию, который поддерживает эта библиотека.",
   "error.reason.LIBRARY_DELETE_TARGET_NOT_FILE":
-    "Удаление каталога по пути с выбранным значением через операцию удаления отдельного файла запрещено.",
+    "Удаление каталога при удалении одного файла запрещено.",
   "error.reason.LIBRARY_DELETE_TARGET_OUTSIDE_ROOTS":
-    "Удаление выбранного элемента с выбранным значением запрещено: он находится за пределами настроенных корневых папок.",
+    "Удаление этого пути запрещено: он находится вне настроенных корневых папок.",
   "error.reason.LIBRARY_DELETE_TARGET_PARENT_REQUIRED":
-    "Удаление выбранного элемента с выбранным значением запрещено: у него нет родительского каталога.",
+    "Удаление этого пути запрещено: у него нет родительского каталога.",
   "error.reason.LIBRARY_DELETION_ALREADY_RUNNING":
     "Эта библиотека уже удаляется.",
   "error.reason.LIBRARY_DESTINATION_FOLDER_CONTAINS_INDEPENDENT_UNRESOLVED_TITLE_BOUNDARY":
     "Папка назначения содержит границу другого тайтла или тайтла с неустановленной принадлежностью.",
   "error.reason.LIBRARY_DESTINATION_OCCUPIED":
-    "Восстановление файла из корзины с выбранным значением запрещено: путь назначения занят.",
+    "Восстановление этого файла из корзины запрещено: место назначения занято.",
   "error.reason.LIBRARY_EPISODE_FOLDER_OPTIONAL_GROUP_INVALID":
     "Недопустимая необязательная группа в шаблоне папки эпизода.",
   "error.reason.LIBRARY_EPISODE_FOLDER_PATTERN_INVALID":
@@ -8780,10 +8779,10 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER":
     "Идентификационные данные медиа конфликтуют с предложенной папкой тайтла.",
   "error.reason.LIBRARY_MEDIA_ROOT_REQUIRED":
-    "Удаление выбранного элемента запрещено: настроенные корневые каталоги медиа недоступны.",
+    "Удаление или восстановление этого файла запрещено: нет доступных настроенных медиакорней.",
   "error.reason.LIBRARY_NAME_REQUIRED": "Требуется имя библиотеки.",
   "error.reason.LIBRARY_NO_ROOT_FOLDERS_UNAVAILABLE":
-    "Нет доступных настроенных корневых папок выбранного типа для безопасного удаления.",
+    "Нет настроенных корневых папок, доступных для безопасного удаления.",
   "error.reason.LIBRARY_ONE_MORE_SELECTED_EPISODES_DO_NOT_BELONG_TARGET_TITLE":
     "Один или несколько выбранных эпизодов не принадлежат целевому тайтлу.",
   "error.reason.LIBRARY_ONLY_PROVIDER_BACKED_DOWNLOADED_SUBTITLES_BLOCKLISTED":
@@ -8793,14 +8792,14 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_PATH_CANNOT_ESCAPE_ROOT":
     "Путь не может выходить за пределы своего корня.",
   "error.reason.LIBRARY_PATH_COMPONENT_INVALID":
-    "Запрошенное значение не должно содержать компоненты . или ...",
+    "Путь или шаблон именования содержит недопустимый компонент пути; используйте только относительные непустые компоненты без «.» и «..».",
   "error.reason.LIBRARY_PATH_INVALID": "Путь должен быть абсолютным.",
   "error.reason.LIBRARY_PATH_NOT_DIRECTORY":
     "Путь библиотеки не является каталогом.",
   "error.reason.LIBRARY_PATH_OUTSIDE_LIBRARY_ROOT":
-    "Удаление выбранного элемента запрещено: он находится за пределами настроенных корневых каталогов медиа.",
+    "Удаление или восстановление этого пути запрещено: он находится вне настроенных медиакорней.",
   "error.reason.LIBRARY_PENDING_IMPORT_ALREADY_BEING_RESOLVED":
-    "Ожидающий импорт с выбранным значением уже обрабатывается.",
+    "Этот ожидающий импорт уже разрешается.",
   "error.reason.LIBRARY_PENDING_IMPORT_DIRECTORY_CONTAINS_NO_FILES_ATTACH":
     "В каталоге ожидающего импорта нет файлов для прикрепления.",
   "error.reason.LIBRARY_PENDING_IMPORT_DOES_NOT_KNOWN_TITLE":
@@ -8834,14 +8833,14 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_RECORDED_SUBTITLE_PATH_OUTSIDE_TITLE_S_OWNED_FOLDER":
     "Сохранённый путь к субтитрам находится за пределами папки, принадлежащей их тайтлу.",
   "error.reason.LIBRARY_RECYCLE_BIN_PATH_UNSAFE":
-    "Перемещение выбранного элемента в корзину запрещено: путь к корзине небезопасен.",
+    "Перемещение этого файла в корзину запрещено: путь корзины небезопасен.",
   "error.reason.LIBRARY_RECYCLE_ENTRY_ID_NOT_VALID_OPAQUE_ID":
     "Идентификатор элемента корзины не является допустимым непрозрачным идентификатором.",
   "error.reason.LIBRARY_REGULAR_FILE_REQUIRED":
-    "Восстановление файла из корзины с выбранным значением запрещено: это не обычный файл.",
+    "Удаление или восстановление этого файла запрещено: это не обычный файл.",
   "error.reason.LIBRARY_RENAMER_DISABLED": "Переименование отключено.",
   "error.reason.LIBRARY_RENAME_ALREADY_RUNNING":
-    "Для выбранного элемента уже выполняется переименование.",
+    "Для этого тайтла уже выполняется переименование.",
   "error.reason.LIBRARY_RENAME_FOLDERS_OVERLAP":
     "Папки выбранных тайтлов пересекаются.",
   "error.reason.LIBRARY_RENAME_PATH_OUTSIDE_ROOT":
@@ -8851,11 +8850,11 @@ const ru: LocaleDictionary = {
     "Запрошенная категория не соответствует категории тайтла.",
   "error.reason.LIBRARY_RESOURCE_NOT_FOUND": "Библиотека не найдена.",
   "error.reason.LIBRARY_ROOTS_NOT_CONFIGURED":
-    "Корневые каталоги библиотеки запрошенного типа не настроены.",
+    "Для этого типа медиа не настроены корни библиотеки.",
   "error.reason.LIBRARY_ROOT_ALREADY_ASSIGNED":
-    "Корневой каталог библиотеки с выбранным значением уже используется выбранным элементом.",
+    "Этот корень библиотеки уже используется другой библиотекой.",
   "error.reason.LIBRARY_ROOT_CANNOT_USED":
-    "Корневой каталог библиотеки с выбранным значением нельзя использовать.",
+    "Этот корень библиотеки нельзя использовать.",
   "error.reason.LIBRARY_ROOT_DUPLICATED":
     "Корневые каталоги внутри библиотеки должны быть уникальными.",
   "error.reason.LIBRARY_ROOT_ID_DUPLICATED":
@@ -8885,9 +8884,9 @@ const ru: LocaleDictionary = {
   "error.reason.LIBRARY_SELECTED_FOLDER_ORGANIZING_FOLDER_MIXED_TITLE_LAYOUT":
     "Выбранная папка является группирующей или содержит смешанную структуру тайтлов; выберите папку тайтла с его медиафайлами.",
   "error.reason.LIBRARY_SYMLINK_REFUSED":
-    "Восстановление файла из корзины с выбранным значением запрещено: это символическая ссылка.",
+    "Удаление или восстановление этого файла запрещено: это символическая ссылка.",
   "error.reason.LIBRARY_TEMPLATE_BRACES_UNBALANCED":
-    "Шаблон запрошенного типа содержит непарную скобку '}}'.",
+    "Шаблон именования содержит непарную фигурную скобку.",
   "error.reason.LIBRARY_TEMPLATE_IDENTITY_TOKEN_REQUIRED":
     "Шаблон именования должен содержать токен идентификации.",
   "error.reason.LIBRARY_TEMPLATE_OPTIONAL_GROUP_INVALID":
@@ -8937,19 +8936,19 @@ const ru: LocaleDictionary = {
   "error.reason.LIST_TITLE_NOT_FOUND": "Тайтл не найден.",
   "error.reason.LIST_USER_NOT_FOUND": "Пользователь не найден.",
   "error.reason.LOCATION_CATALOG_CANNOT_MAP_FILE_OUTSIDE_RECORDED_FOLDER":
-    "Каталог не может сопоставить файл за пределами сохранённой папки выбранного элемента. Сначала исправьте сопоставление его папки.",
+    "Каталог не может сопоставить файл вне записанной папки тайтла. Сначала исправьте сопоставление папки.",
   "error.reason.LOCATION_CATALOG_PATH_AMBIGUOUS":
-    "Путь в каталоге для выбранного элемента неоднозначен. Перед перемещением исправьте сопоставление его папки.",
+    "Путь в каталоге для этого тайтла неоднозначен. Исправьте сопоставление папки, прежде чем перемещать его.",
   "error.reason.LOCATION_CONFIRMED_PLAN_NO_INSTRUCTIONS_TITLE":
-    "В подтверждённом плане нет инструкций для тайтла с выбранным значением.",
+    "В подтверждённом плане нет инструкций для этого тайтла.",
   "error.reason.LOCATION_COULD_NOT_COMPARE":
-    "Не удалось сравнить выбранный элемент. Убедитесь, что он доступен для чтения, и повторите попытку; источник сохранён.",
+    "Не удалось сравнить файлы. Убедитесь, что они доступны для чтения, и повторите попытку; источник сохранён.",
   "error.reason.LOCATION_DESTINATION_CHANGED_DURING_COMPARISON":
     "Файл назначения изменился во время сравнения. Источник сохранён; повторите попытку, когда файлы перестанут изменяться.",
   "error.reason.LOCATION_DESTINATION_COPY_NO_LONGER_HOLDS_CONTENT_MOVE_PROVED_IDENTICAL_SOURCE":
     "Копия в месте назначения больше не содержит данные, тождественность которых источнику была подтверждена при этом перемещении. Источник сохранён; повторите попытку, чтобы сравнить файлы заново.",
   "error.reason.LOCATION_DESTINATION_OCCUPIED":
-    "Промежуточный путь назначения с выбранным значением занят файлом, который не был создан этим перемещением. Оба файла сохранены; переместите или удалите мешающий файл и повторите попытку.",
+    "Промежуточный путь назначения занят файлом, который это перемещение не записывало. Оба файла сохранены; переместите или удалите этот файл и повторите попытку.",
   "error.reason.LOCATION_DESTINATION_REQUIRED":
     "Выберите библиотеку или корневой каталог назначения.",
   "error.reason.LOCATION_DESTINATION_TITLE_NOT_FOUND":
@@ -8963,13 +8962,13 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_FILE_CHANGED_WHILE_HASHING":
     "Файл изменился во время вычисления хеша.",
   "error.reason.LOCATION_FOLDER_ALREADY_OWNED_TITLE":
-    "Папка с выбранным значением уже принадлежит тайтлу с выбранным значением; выберите обмен папками или передачу владения.",
+    "Папка уже принадлежит другому тайтлу; выберите обмен или перехват.",
   "error.reason.LOCATION_FOLDER_NOT_INSIDE_ROOT_LIBRARY":
-    "Папка с выбранным значением не находится внутри корневого каталога библиотеки с выбранным значением.",
+    "Папка не находится внутри корня этой библиотеки.",
   "error.reason.LOCATION_FOLDER_NOT_OWNED_ANOTHER_TITLE":
-    "Папка с выбранным значением не принадлежит другому тайтлу; выбранный способ разрешения конфликта неприменим.",
+    "Папка не принадлежит другому тайтлу, поэтому это решение неприменимо.",
   "error.reason.LOCATION_FOLDER_NOT_TITLE_BOUNDARY":
-    "Папка с выбранным значением является корневым каталогом библиотеки, а не папкой тайтла.",
+    "Папка является корнем библиотеки, а не папкой тайтла.",
   "error.reason.LOCATION_FOLDER_PATH_REQUIRED": "Требуется путь к папке.",
   "error.reason.LOCATION_FULL_HASH_BACKFILL_ALREADY_RUNNING":
     "Фоновое заполнение полных хешей уже выполняется.",
@@ -8979,26 +8978,26 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_LIBRARY_ROOT_NOT_FOUND":
     "Корневой каталог библиотеки не найден.",
   "error.reason.LOCATION_MERGE_TITLE_INTO_BLOCKED":
-    "Объединение тайтла с выбранным значением с выбранным целевым тайтлом заблокировано.",
+    "Объединение этих тайтлов заблокировано.",
   "error.reason.LOCATION_MERGE_UNAVAILABLE":
     "Для объединения нет допустимого сопоставления идентификационных данных.",
   "error.reason.LOCATION_MORE_ONE_CATALOG_RECORD_WOULD_POINT":
-    "На выбранный путь будут ссылаться несколько записей каталога. Устраните этот конфликт каталога перед подтверждением ручного перемещения.",
+    "На один и тот же путь указывало бы больше одной записи каталога. Устраните этот конфликт в каталоге, прежде чем подтверждать ручное перемещение.",
   "error.reason.LOCATION_OPERATION_NOT_FOUND":
     "Операция с расположением не найдена.",
   "error.reason.LOCATION_OPERATION_SOURCE_LIBRARIES_UNAVAILABLE":
     "Исходные библиотеки операции с расположением недоступны.",
   "error.reason.LOCATION_OPERATION_STILL_RUNNING":
-    "Операция с расположением с выбранным значением ещё выполняется; отмените её вместо того, чтобы отказываться от неё.",
+    "Эта операция с расположением ещё выполняется; сначала отмените её или дождитесь её остановки.",
   "error.reason.LOCATION_OWNERSHIP_BUSY":
     "Эти элементы сейчас заняты операцией с расположением.",
   "error.reason.LOCATION_PATH_COMPONENT_INVALID":
-    "Папка с выбранным значением не должна содержать компоненты . или ...",
+    "Папка не должна содержать компоненты «.» или «..».",
   "error.reason.LOCATION_PATH_NOT_FOUND": "Путь не найден.",
   "error.reason.LOCATION_PATH_OUTSIDE_LIBRARY_ROOT":
     "После разрешения выбранного пути папка оказывается за пределами корневого каталога своей библиотеки.",
   "error.reason.LOCATION_RECORDED_FOLDER_LIBRARY_ROOT_NOT_FOLDER_SWAP":
-    "Сохранённая папка выбранного элемента является корневым каталогом библиотеки, а не папкой для обмена; вместо этого передайте владение папкой.",
+    "Записанная папка тайтла является корнем библиотеки, а не папкой для обмена; вместо этого перехватите папку.",
   "error.reason.LOCATION_RECOVERY_ALREADY_RUNNING":
     "Восстановление уже выполняется.",
   "error.reason.LOCATION_RECOVERY_COMMIT_RECEIPT_REQUIRED":
@@ -9155,15 +9154,15 @@ const ru: LocaleDictionary = {
   "error.reason.LOCATION_STALE_PLAN":
     "План изменился. Повторите предварительный просмотр.",
   "error.reason.LOCATION_TITLE_OWNS_NO_FOLDER_SWAP":
-    "У выбранного тайтла нет папки для обмена; вместо этого назначьте ему эту папку.",
+    "У этого тайтла нет папки для обмена; вместо этого перехватите папку.",
   "error.reason.LOCATION_TITLE_SELECTION_REQUIRED":
     "Выберите хотя бы один тайтл для переноса.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NEEDS_VERIFIED_AGAIN_BEFORE_CATALOG_ENTRY_UPDATED":
-    "Перед обновлением записи каталога необходимо повторно проверить перенесённый файл.",
+    "Перенесённый файл нужно проверить ещё раз, прежде чем можно будет обновить его запись в каталоге.",
   "error.reason.LOCATION_TRANSFERRED_FILE_NOT_FINISHED_VERIFICATION":
-    "Проверка перенесённого файла ещё не завершена. Его запись в каталоге не изменена.",
+    "Проверка перенесённого файла не завершена. Его запись в каталоге оставлена без изменений.",
   "error.reason.LOCATION_VERIFICATION_FAILED":
-    "Проверка выбранного элемента не удалась.",
+    "Проверка перенесённого файла не пройдена.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "Файл в месте назначения не прошёл проверку.",
   "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
@@ -9190,8 +9189,7 @@ const ru: LocaleDictionary = {
     "Перед действием DeleteFiles требуется шаг Unmonitor.",
   "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
     "Исключение обслуживания не найдено.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED":
-    "Обязательное значение не должно быть пустым.",
+  "error.reason.MAINTENANCE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
     "Принадлежность файла обслуживания изменилась.",
   "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
@@ -9294,7 +9292,7 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_DISC_SELECTION_REQUIRES_ISO_IMAGE":
     "Для выбора содержимого диска требуется ISO-образ.",
   "error.reason.MEDIA_DISC_TITLE_RUNTIME_SECONDS_IMPLAUSIBLE_EPISODE":
-    "Длительность выбранной программы диска неправдоподобна для указанной серии.",
+    "Продолжительность тайтла диска неправдоподобна для эпизода, с которым он сопоставлен.",
   "error.reason.MEDIA_EACH_EPISODE_DISTINCT_PLAYBACK_TITLE_OCCUR_ONLY_ONE_MAPPING":
     "Каждая серия и каждая отдельная воспроизводимая программа могут присутствовать только в одном сопоставлении.",
   "error.reason.MEDIA_EPISODE_MAPPINGS_REQUIRE_SERIES_TITLE":
@@ -9356,17 +9354,17 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_LOCATION_OPERATION_NOT_FOUND":
     "Операция с расположением не найдена.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_INCOMPLETE_UNSUPPORTED_ANALYSIS":
-    "Анализ сопоставленного тайтла диска с выбранным значением неполон или не поддерживается.",
+    "Анализ сопоставленного тайтла диска неполон или не поддерживается.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_NO_ESTABLISHED_RUNTIME":
-    "Для сопоставленного тайтла диска с выбранным значением не определена продолжительность.",
+    "Для сопоставленного тайтла диска не установлена продолжительность.",
   "error.reason.MEDIA_MAPPED_DISC_TITLE_NO_LONGER_EXISTS":
-    "Сопоставленный тайтл диска с выбранным значением больше не существует; проверьте сопоставление.",
+    "Сопоставленный тайтл диска больше не существует; проверьте сопоставление.",
   "error.reason.MEDIA_MAPPED_EPISODE_DOES_NOT_BELONG_TITLE":
     "Сопоставленный эпизод не относится к этому тайтлу.",
   "error.reason.MEDIA_MAP_EACH_COMPLETE_DISC_TITLE_ONE_EPISODE":
     "Сопоставьте каждый полный тайтл диска с одним эпизодом; для объединённых эпизодов нужны отдельные тайтлы воспроизведения, созданные при авторинге.",
   "error.reason.MEDIA_MOST_SEARCH_LANGUAGES_ALLOWED":
-    "Допускается не более выбранного количества языков поиска.",
+    "Допускается не более 16 языков поиска.",
   "error.reason.MEDIA_MOVIE_IDENTITY_UNSUPPORTED":
     "У выбранного фильма нет поддерживаемого идентификатора.",
   "error.reason.MEDIA_NATIVE_DIAGNOSTICS_NOT_COMPILED_INTO_TARGET":
@@ -9454,13 +9452,13 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_REQUEST_QUALITY_PROFILE_ID_REQUIRED":
     "Необходимо указать ID профиля качества.",
   "error.reason.MEDIA_REQUEST_QUALITY_PROFILE_UNKNOWN":
-    "Неизвестный профиль качества с выбранным значением.",
+    "Выбранный профиль качества неизвестен.",
   "error.reason.MEDIA_REQUEST_RELEASE_REASON_REQUIRED":
     "Необходимо указать причину освобождения.",
   "error.reason.MEDIA_REQUEST_REQUESTED_QUALITY_PROFILE_NOT_ALLOWED_LIBRARY":
     "Запрошенный профиль качества не разрешён для этой библиотеки.",
   "error.reason.MEDIA_REQUEST_REQUEST_MONITOR_TYPE_UNSUPPORTED":
-    "Неподдерживаемый тип отслеживания запроса с выбранным значением.",
+    "Этот тип отслеживания запроса не поддерживается.",
   "error.reason.MEDIA_REQUEST_REQUEST_TITLE_REQUIRED":
     "Необходимо указать тайтл запроса.",
   "error.reason.MEDIA_REQUEST_RESOURCE_NOT_FOUND": "Запрос медиа не найден.",
@@ -9476,7 +9474,7 @@ const ru: LocaleDictionary = {
   "error.reason.MEDIA_SCAN_BATCH_SIZE_INVALID":
     "Размер пакета должен быть больше 0.",
   "error.reason.MEDIA_SEARCH_LANGUAGE_CHOOSE_LANGUAGE_OFFERED_SEARCH_LANGUAGE_PICKER_UNKNOWN":
-    "Неизвестный язык поиска с выбранным значением; выберите язык из списка языков поиска.",
+    "Язык поиска неизвестен; выберите язык, предложенный в списке языков поиска.",
   "error.reason.MEDIA_SELECTED_ROOT_CHANGED":
     "Выбранный корневой каталог изменился.",
   "error.reason.MEDIA_SERIES_MOVIE_LINK_NOT_FOUND":
@@ -9636,24 +9634,24 @@ const ru: LocaleDictionary = {
   "error.reason.NOTIFICATION_MEDIA_SERVER_NOTIFICATION_TARGETS_INVALID":
     "Получателями уведомлений медиасерверов необходимо управлять в разделе «Медиасерверы».",
   "error.reason.NOTIFICATION_MEDIA_SERVER_PROVIDER_INVALID":
-    "Недопустимый провайдер медиасервера: выбранный элемент.",
+    "Некорректный поставщик медиасервера.",
   "error.reason.NOTIFICATION_PLEX_MEDIA_SERVER_BASE_URL_INVALID":
-    "Недопустимый базовый URL медиасервера Plex: выбранный элемент.",
+    "Некорректный базовый URL медиасервера Plex.",
   "error.reason.NOTIFICATION_PLUGIN_CHANNEL_TYPE_NOT_FOUND":
     "Плагин уведомлений для этого типа канала не найден.",
   "error.reason.NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_EVENT":
-    "Выбранный провайдер уведомлений не поддерживает выбранное событие.",
+    "Этот поставщик уведомлений не поддерживает одно из выбранных событий.",
   "error.reason.NOTIFICATION_PROVIDER_DOES_NOT_SUPPORT_TEST_NOTIFICATIONS":
-    "Выбранный провайдер уведомлений не поддерживает тестовые уведомления.",
+    "Этот поставщик уведомлений не поддерживает тестовые уведомления.",
   "error.reason.NOTIFICATION_PROVIDER_REQUIRES":
-    "Для выбранного провайдера уведомлений необходим выбранный элемент.",
+    "У этого поставщика уведомлений не заполнена обязательная настройка.",
   "error.reason.NOTIFICATION_PROVIDER_UNAVAILABLE":
-    "Выбранный провайдер уведомлений недоступен.",
+    "Этот поставщик уведомлений недоступен.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_NOT_FOUND": "Подписка не найдена.",
   "error.reason.NOTIFICATION_SUBSCRIPTION_TARGET_REQUIRED":
     "Необходимо указать получателя подписки на уведомления.",
   "error.reason.NOTIFICATION_TARGET_ID_REQUIRED_TARGET_KIND":
-    "Для выбранного вида получателя уведомлений необходимо указать ID получателя.",
+    "Для этого вида цели уведомления требуется идентификатор цели.",
   "error.reason.NOTIFICATION_TARGET_KIND_INVALID":
     "Недопустимый вид получателя уведомлений.",
   "error.reason.NOTIFICATION_TARGET_KIND_REQUIRED_WHEN_TARGET_ID_PROVIDED":
@@ -9677,7 +9675,7 @@ const ru: LocaleDictionary = {
   "error.reason.OAUTH_CLIENT_DISPLAY_NAME_REQUIRED":
     "Необходимо указать отображаемое имя клиента OAuth.",
   "error.reason.OAUTH_CLIENT_DISPLAY_NAME_TOO_LONG":
-    "Длина отображаемого имени клиента OAuth не должна превышать выбранное количество символов.",
+    "Отображаемое имя клиента OAuth не должно превышать 120 символов.",
   "error.reason.OAUTH_CLIENT_NOT_FOUND": "Клиент OAuth не найден.",
   "error.reason.OAUTH_CLIENT_UNKNOWN": "Неизвестный клиент OAuth.",
   "error.reason.OAUTH_CODE_CHALLENGE_INVALID":
@@ -9718,7 +9716,7 @@ const ru: LocaleDictionary = {
     "Пользователь OAuth больше не существует.",
   "error.reason.PLUGIN_ALREADY_INSTALLED": "Этот плагин уже установлен.",
   "error.reason.PLUGIN_ALREADY_VERSION_SELECTED_RELEASE":
-    "У выбранного плагина уже установлена выбранная версия.",
+    "Плагин уже имеет версию выбранного релиза.",
   "error.reason.PLUGIN_ARCHIVE_EXTRACTOR_CONFLICT":
     "Этот формат поддерживают несколько включённых плагинов распаковки архивов. Отключите один из них в разделе «Настройки → Плагины».",
   "error.reason.PLUGIN_ARCHIVE_PATH_OUTSIDE_ROOT":
@@ -9726,27 +9724,27 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_ARCHIVE_PATH_UNSAFE":
     "Путь плагина в архиве не является безопасным относительным путём.",
   "error.reason.PLUGIN_ARTIFACT_DIGEST_REQUIRED":
-    "Запрошенное значение должно содержать хотя бы один хеш.",
+    "Артефакт плагина должен содержать хотя бы один хеш.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECTS_NOT_ALLOWED":
-    "Перенаправления артефакта плагина запрещены для выбранного значения.",
+    "Перенаправления для этого артефакта плагина не разрешены.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_DID_NOT_INCLUDE_LOCATION_HEADER":
-    "Перенаправление артефакта плагина для выбранного значения не содержит заголовка Location.",
+    "Перенаправление артефакта плагина не содержало заголовка Location.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_HEADER":
-    "Перенаправление артефакта плагина для выбранного значения содержит недопустимый заголовок Location.",
+    "Перенаправление артефакта плагина содержало некорректный заголовок Location.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_INCLUDED_INVALID_LOCATION_URL":
-    "Перенаправление артефакта плагина для выбранного значения содержит недопустимый URL в Location.",
+    "Перенаправление артефакта плагина содержало некорректный URL в Location.",
   "error.reason.PLUGIN_ARTIFACT_REDIRECT_LIMIT_EXCEEDED":
-    "Превышен лимит перенаправлений артефакта плагина для выбранного значения.",
+    "Загрузка артефакта плагина перенаправлялась слишком много раз.",
   "error.reason.PLUGIN_ARTIFACT_UNTRUSTED":
     "Не удалось подтвердить доверие к артефакту плагина.",
   "error.reason.PLUGIN_BLOCKED_VERSION_SCRYER_SO_CANNOT_TESTED":
-    "Выбранный плагин заблокирован в этой версии Scryer, поэтому его нельзя проверить. Выбранное значение.",
+    "Этот плагин заблокирован в этой версии Scryer, поэтому его нельзя протестировать.",
   "error.reason.PLUGIN_BROTLI_DECOMPRESSION_NOT_COMPILED_INTO_TARGET":
     "Распаковка плагинов brotli не включена в эту сборку.",
   "error.reason.PLUGIN_BUNDLED_PLUGIN":
-    "Выбранный плагин входит в комплект поставки; удалите загруженную замену, прежде чем загружать локальную сборку.",
+    "Это встроенный плагин; удалите загруженную замену, прежде чем загружать локальную сборку.",
   "error.reason.PLUGIN_CANNOT_REVERT_BUILT_PLUGIN_NO_BUNDLED_DEFINITION_UNAVAILABLE":
-    "Нельзя восстановить встроенный плагин: для выбранного элемента недоступно определение из комплекта поставки.",
+    "Невозможно вернуть этот встроенный плагин: встроенное определение недоступно.",
   "error.reason.PLUGIN_CANNOT_UNINSTALL_BUILT_PLUGINS":
     "Встроенные плагины нельзя удалить; вместо этого отключите их.",
   "error.reason.PLUGIN_CATALOG_ARTIFACTS_MISSING":
@@ -9760,13 +9758,13 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_CATALOG_REDIRECT_OUT_OF_RANGE":
     "Перенаправление каталога плагинов должно содержать хотя бы один артефакт.",
   "error.reason.PLUGIN_CATALOG_REDIRECT_SCHEMA_UNSUPPORTED":
-    "Неподдерживаемая схема перенаправления каталога плагинов: выбранный элемент.",
+    "Перенаправление каталога плагинов использует неподдерживаемую схему.",
   "error.reason.PLUGIN_CATALOG_SCHEMA_UNSUPPORTED":
-    "Неподдерживаемая схема каталога плагинов: выбранный элемент.",
+    "Каталог плагинов использует неподдерживаемую схему.",
   "error.reason.PLUGIN_CATALOG_V3_JSON_INVALID":
     "Недопустимый JSON каталога плагинов v3.",
   "error.reason.PLUGIN_CATALOG_VERSION_INVALID":
-    "Недопустимая версия каталога: выбранный элемент.",
+    "Версия в каталоге некорректна.",
   "error.reason.PLUGIN_CATALOG_VERSION_OUT_OF_RANGE":
     "Версия каталога плагинов должна быть больше нуля.",
   "error.reason.PLUGIN_CHANGED_WHILE_RUNTIME_BEING_PREPARED":
@@ -9774,25 +9772,25 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_CLIENT_CONFIG_JSON_INVALID":
     "Недопустимый config_json клиента.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_APPROVED_TIER_INVALID":
-    "Одобренный уровень источника каталога сообщества для выбранного элемента должен быть verified_community.",
+    "Одобренный уровень источника каталога сообщества должен быть verified_community.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_MUST_PUBLISH_EXACTLY_ONE_PLUGIN":
-    "Выбранный источник каталога сообщества должен публиковать ровно один плагин.",
+    "Источник каталога сообщества должен публиковать ровно один плагин.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_PUBLISHED_PLUGIN":
-    "Выбранный источник каталога сообщества опубликовал выбранный плагин.",
+    "Источник каталога сообщества опубликовал не тот плагин, для которого он был одобрен.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SIGNER_REPO_DOES_NOT_MATCH_APPROVED_REPO":
-    "Репозиторий подписанта выбранного источника каталога сообщества не совпадает с выбранным одобренным репозиторием.",
+    "Репозиторий подписи источника каталога сообщества не совпадает с одобренным репозиторием.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SOURCE_REPO_DOES_NOT_MATCH_APPROVED_REPO":
-    "Репозиторий исходного кода выбранного источника каталога сообщества не совпадает с выбранным одобренным репозиторием.",
+    "Исходный репозиторий источника каталога сообщества не совпадает с одобренным репозиторием.",
   "error.reason.PLUGIN_COMMUNITY_CATALOG_SOURCE_SUPPORT_TIER_DOES_NOT_MATCH_APPROVED_TIER":
-    "Уровень поддержки выбранного источника каталога сообщества не совпадает с одобренным уровнем.",
+    "Уровень поддержки источника каталога сообщества не совпадает с одобренным уровнем.",
   "error.reason.PLUGIN_COMMUNITY_RULE_PACK_PUBLISH_FORBIDDEN":
-    "Выбранный источник каталога сообщества не должен публиковать пакеты правил.",
+    "Источник каталога сообщества не должен публиковать пакеты правил.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Повторяющийся ID выбранного источника сообщества в каталоге плагинов.",
+    "В каталоге плагинов один и тот же идентификатор источника сообщества указан несколько раз.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_NESTING_FORBIDDEN":
-    "Выбранный источник каталога сообщества не должен публиковать вложенные источники сообщества.",
+    "Источник каталога сообщества не должен публиковать вложенные источники сообщества.",
   "error.reason.PLUGIN_COMMUNITY_SOURCE_SUPPORT_TIER_INVALID":
-    "Уровень поддержки выбранного источника сообщества должен быть verified_community.",
+    "Уровень поддержки источника сообщества должен быть verified_community.",
   "error.reason.PLUGIN_COMPONENT_DESCRIPTOR_DIFFERS_PERSISTED_METADATA":
     "Дескриптор компонента отличается от сохранённых метаданных.",
   "error.reason.PLUGIN_COMPONENT_DESCRIPTOR_MISMATCH":
@@ -9802,32 +9800,30 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_COMPONENT_UPGRADE_BLOCKED":
     "Обновление плагина заблокировано установленными компонентами.",
   "error.reason.PLUGIN_DECOMPRESSED_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES":
-    "Распакованные данные запрошенного значения превышают максимальный размер — выбранное количество байт.",
+    "Распакованные данные превышают максимальный размер.",
   "error.reason.PLUGIN_DECOMPRESSED_SIZE_LIMIT_EXCEEDS_PLATFORM_S_MAXIMUM_BUFFER_SIZE":
-    "Лимит размера распакованных данных запрошенного значения, равный выбранному значению, превышает максимальный размер буфера этой платформы.",
+    "Ограничение размера после распаковки превышает максимальный размер буфера на этой платформе.",
   "error.reason.PLUGIN_DESCRIPTOR_ID_MISMATCH":
-    "ID дескриптора загруженного плагина не совпадает с выбранным ID в реестре.",
+    "Идентификатор в дескрипторе загруженного плагина не совпадает с идентификатором в реестре.",
   "error.reason.PLUGIN_DIGEST_ALGORITHM_REQUIRED":
     "Не указан алгоритм хеширования.",
   "error.reason.PLUGIN_DIGEST_MISMATCH":
-    "Хеш запрошенного значения не совпадает: ожидался blake3.",
-  "error.reason.PLUGIN_DIGEST_STRING_INVALID":
-    "Недопустимая строка хеша: выбранный элемент.",
+    "Хеш blake3 артефакта плагина не совпадает.",
+  "error.reason.PLUGIN_DIGEST_STRING_INVALID": "Строка дайджеста некорректна.",
   "error.reason.PLUGIN_DIGEST_VALUE_INVALID":
-    "Выбранное значение хеша должно быть шестнадцатеричным.",
+    "Значение дайджеста должно быть шестнадцатеричным.",
   "error.reason.PLUGIN_DIGEST_VALUE_REQUIRED": "Не указано значение хеша.",
   "error.reason.PLUGIN_DOES_NOT_INCLUDE_BLAKE3_DIGEST":
-    "Запрошенное значение не содержит хеш blake3.",
+    "Артефакт плагина не содержит хеш blake3.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_PLUGIN_TYPE_BUT_REGISTRY_EXPECTS":
-    "Значение plugin_type загруженного выбранного плагина не совпадает со значением, ожидаемым реестром.",
+    "Тип загруженного плагина не совпадает с ожидаемым реестром.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_PROVIDER_TYPE_BUT_REGISTRY_EXPECTS":
-    "Значение provider_type загруженного выбранного плагина не совпадает со значением, ожидаемым реестром.",
+    "Тип поставщика загруженного плагина не совпадает с ожидаемым реестром.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_SDK_VERSION_BUT_SELECTED_RELEASE":
-    "Значение sdk_version загруженного выбранного плагина не совпадает со значением выбранного релиза.",
+    "Версия SDK загруженного плагина не совпадает с выбранным релизом.",
   "error.reason.PLUGIN_DOWNLOADED_PLUGIN_VERSION_BUT_SELECTED_RELEASE":
-    "Версия загруженного выбранного плагина не совпадает с версией выбранного релиза.",
-  "error.reason.PLUGIN_FIELD_REQUIRED":
-    "Необходимо указать запрошенное значение.",
+    "Версия загруженного плагина не совпадает с выбранным релизом.",
+  "error.reason.PLUGIN_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.PLUGIN_GITHUB_OWNER_REQUIRED": "Не указан владелец GitHub.",
   "error.reason.PLUGIN_GITHUB_REPOSITORY_INVALID":
     "Репозиторий GitHub должен включать владельца и имя репозитория.",
@@ -9836,7 +9832,7 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_GITHUB_REPO_NAME_REQUIRED":
     "Не указано имя репозитория GitHub.",
   "error.reason.PLUGIN_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Повторяющийся ID выбранного плагина в каталоге плагинов.",
+    "В каталоге плагинов один и тот же идентификатор плагина указан несколько раз.",
   "error.reason.PLUGIN_INDEXER_HOST_FORBIDDEN":
     "Хост индексатора не разрешён для этого экземпляра.",
   "error.reason.PLUGIN_INSTALLED_PACK_VERSION_INVALID":
@@ -9844,25 +9840,25 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_INSTALLED_PLUGIN_SETTINGS_DESCRIPTOR_UNAVAILABLE":
     "Дескриптор настроек установленного плагина недоступен.",
   "error.reason.PLUGIN_INSTALLED_VERSION_INVALID":
-    "Недопустимая установленная версия: выбранный элемент.",
+    "Установленная версия некорректна.",
   "error.reason.PLUGIN_INVALID_PERSISTED_DESCRIPTOR_JSON":
-    "У выбранного плагина недопустимый сохранённый descriptor_json.",
+    "Сохранённый дескриптор плагина некорректен.",
   "error.reason.PLUGIN_LIST_LINKED_ACCOUNT_REQUIRED":
     "Провайдер списков читает только собственные списки участника и требует привязанную учётную запись этого участника.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_CATALOG_NOT_UTF_8":
     "Каталог плагинов для ручной установки имеет кодировку, отличную от UTF-8.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_CATALOG_SOURCE_MISSING_GITHUB_REPO":
-    "У выбранного источника каталога плагинов для ручной установки не указан репозиторий GitHub.",
+    "У источника каталога для плагина, добавленного вручную, отсутствует репозиторий GitHub.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_MISSING_SOURCE_REPO":
-    "У выбранного плагина для ручной установки не указан репозиторий исходного кода.",
+    "У плагина, добавленного вручную, отсутствует исходный репозиторий.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPOSITORIES_INVALID":
     "Репозитории плагинов для ручной установки должны размещаться на github.com.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_MUST_PUBLISH_EXACTLY_ONE_PLUGIN_ENTRY":
-    "Выбранный репозиторий плагина для ручной установки должен публиковать ровно одну запись плагина.",
+    "Репозиторий плагина, добавленного вручную, должен публиковать ровно одну запись плагина.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_NO_SDK_COMPATIBLE_RELEASE":
-    "В выбранном репозитории плагина для ручной установки нет релиза, совместимого с SDK.",
+    "В репозитории плагина, добавленного вручную, нет релиза, совместимого с SDK.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_REPO_PUBLISHED_PLUGIN_SOURCE_REPO":
-    "Выбранный репозиторий плагина для ручной установки опубликовал выбранный плагин из выбранного репозитория исходного кода.",
+    "Репозиторий плагина, добавленного вручную, опубликовал плагин из другого исходного репозитория.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_FILE_NAME_REQUIRED":
     "Необходимо указать имя загружаемого файла плагина для ручной установки.",
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_INVALID":
@@ -9872,17 +9868,17 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_MANUAL_PLUGIN_UPLOAD_REQUIRES_EXPLICIT_RISK_ACKNOWLEDGEMENT":
     "Ручная загрузка плагина требует явного подтверждения рисков.",
   "error.reason.PLUGIN_MISSING_PERSISTED_DESCRIPTOR_JSON":
-    "У выбранного плагина отсутствует сохранённый descriptor_json.",
+    "У плагина отсутствует сохранённый дескриптор.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_DIGEST_ALGORITHM":
-    "У выбранного плагина отсутствует сохранённый алгоритм хеширования wasm.",
+    "У плагина отсутствует сохранённый алгоритм дайджеста WASM.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_DIGEST_VALUE":
-    "У выбранного плагина отсутствует сохранённое значение хеша wasm.",
+    "У плагина отсутствует сохранённое значение дайджеста WASM.",
   "error.reason.PLUGIN_MISSING_PERSISTED_WASM_PAYLOAD":
-    "У выбранного плагина отсутствуют сохранённые данные WASM.",
+    "У плагина отсутствуют сохранённые данные WASM.",
   "error.reason.PLUGIN_MISSING_USABLE_BLAKE3_DIGEST":
-    "У запрошенного значения отсутствует пригодный хеш blake3.",
+    "У артефакта плагина отсутствует пригодный хеш blake3.",
   "error.reason.PLUGIN_MUST_USE_SUPPORTED_ALGORITHM_HEX_DIGEST":
-    "Для запрошенного значения необходимо использовать поддерживаемый хеш в формате <algorithm>:<hex>.",
+    "Хеш должен использовать поддерживаемый формат <algorithm>:<hex>.",
   "error.reason.PLUGIN_NETWORK_ENDPOINT_RESOLUTION_FAILED":
     "Не удалось разрешить адреса настроенных конечных точек индексатора.",
   "error.reason.PLUGIN_NEWZNAB_PROFILE_INVALID":
@@ -9890,41 +9886,41 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_NOT_AVAILABLE_PLUGIN_CATALOG_NOT_FOUND":
     "Плагин не найден в каталоге плагинов и недоступен для установки.",
   "error.reason.PLUGIN_NO_LONGER_HOST_COMPATIBLE_RELEASE_SCRYER_VERSION":
-    "Для выбранного плагина больше нет релиза, совместимого с этой версией Scryer.",
+    "У плагина больше нет релиза, совместимого с этой версией Scryer.",
   "error.reason.PLUGIN_NO_LONGER_INSTALLED_NOT_FOUND":
     "Плагин не найден: он больше не установлен.",
   "error.reason.PLUGIN_OFFICIAL_NZBGEEK_PLUGIN_NOT_AVAILABLE_BUILTIN_MIGRATION_NOT_FOUND":
     "Официальный плагин nzbgeek недоступен для миграции встроенного плагина.",
   "error.reason.PLUGIN_PAYLOAD_EXCEEDS_MAXIMUM_SIZE_BYTES":
-    "Данные запрошенного значения превышают максимальный размер — выбранное количество байт.",
+    "Данные превышают максимальный размер.",
   "error.reason.PLUGIN_PAYLOAD_TOO_LARGE_VALIDATE_DECOMPRESSED_SIZE":
-    "Данные запрошенного значения слишком велики для проверки размера после распаковки.",
+    "Данные слишком велики для проверки размера после распаковки.",
   "error.reason.PLUGIN_PROVIDER_TYPE_RESERVED_FIRST_PARTY_CODE":
-    "Выбранный тип провайдера зарезервирован для собственного кода приложения.",
+    "Этот тип поставщика зарезервирован для собственного кода Scryer.",
   "error.reason.PLUGIN_PROXY_CONFIGURATION_NOT_FOUND":
     "Конфигурация прокси не найдена.",
   "error.reason.PLUGIN_PROXY_DISABLED_DOWNLOAD_CLIENT":
     "Прокси отключён для этого клиента загрузки.",
   "error.reason.PLUGIN_RELEASE_ARTIFACT_BYTES_OUT_OF_RANGE":
-    "Размер в байтах выбранного артефакта выбранного релиза выбранного плагина должен быть больше нуля.",
+    "Размер артефакта релиза плагина должен быть больше нуля.",
   "error.reason.PLUGIN_RELEASE_ARTIFACT_INVALID":
-    "Выбранный артефакт выбранного релиза выбранного плагина должен содержать wasm_digests.",
+    "Артефакт релиза плагина должен содержать wasm_digests.",
   "error.reason.PLUGIN_RELEASE_DUPLICATE_ARTIFACT_VARIANT_ENCODING_ROWS":
-    "Выбранный релиз выбранного плагина содержит повторяющиеся строки варианта/кодировки артефакта.",
+    "В релизе плагина повторяются строки артефактов с одинаковым вариантом и кодировкой.",
   "error.reason.PLUGIN_RELEASE_INVALID_MAX_SCRYER_VERSION":
-    "В выбранном релизе выбранного плагина указано недопустимое значение max_scryer_version.",
+    "У релиза плагина некорректное значение max_scryer_version.",
   "error.reason.PLUGIN_RELEASE_INVALID_MIN_SCRYER_VERSION":
-    "В выбранном релизе выбранного плагина указано недопустимое значение min_scryer_version.",
+    "У релиза плагина некорректное значение min_scryer_version.",
   "error.reason.PLUGIN_RELEASE_MIN_SCRYER_VERSION_GREATER_MAX_SCRYER_VERSION":
-    "В выбранном релизе выбранного плагина значение min_scryer_version больше max_scryer_version.",
+    "У релиза плагина min_scryer_version больше, чем max_scryer_version.",
   "error.reason.PLUGIN_RELEASE_OUT_OF_RANGE":
-    "Выбранный релиз выбранного элемента должен содержать хотя бы один артефакт.",
+    "Релиз должен содержать хотя бы один артефакт.",
   "error.reason.PLUGIN_RELEASE_VERSION_INVALID":
-    "Недопустимая версия релиза плагина: выбранный элемент.",
+    "Версия релиза плагина некорректна.",
   "error.reason.PLUGIN_RELEASE_VERSION_PLUGIN_DUPLICATED":
-    "Повторяющаяся выбранная версия релиза для выбранного плагина.",
+    "У плагина одна и та же версия релиза указана несколько раз.",
   "error.reason.PLUGIN_REQUESTS_HOST_PROCESS_CAPABILITY_WHICH_RESERVED_OFFICIAL_PLUGINS":
-    "Выбранный плагин запрашивает возможность host-process, зарезервированную для официальных плагинов.",
+    "Плагин запрашивает возможность host-process, которая зарезервирована для официальных плагинов.",
   "error.reason.PLUGIN_REQUIRED_PLUGIN_SETTING_REQUIRED":
     "Отсутствует обязательная настройка плагина.",
   "error.reason.PLUGIN_RESOURCE_NOT_FOUND":
@@ -9932,45 +9928,45 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_RULE_PACK_CATALOG_CHANGED_DURING_DOWNLOAD":
     "Каталог пакетов правил изменился во время загрузки.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_DUPLICATE_RULE_ID":
-    "Выбранный пакет правил содержит повторяющийся ID выбранного правила.",
+    "Пакет правил содержит повторяющийся идентификатор правила.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_NO_RULES":
-    "Выбранный пакет правил не содержит правил.",
+    "Пакет правил не содержит правил.",
   "error.reason.PLUGIN_RULE_PACK_CONTAINS_RULE_REQUIRED_FIELDS_MISSING":
-    "Выбранный пакет правил содержит правило без обязательных полей.",
+    "Пакет правил содержит правило без обязательных полей.",
   "error.reason.PLUGIN_RULE_PACK_DOES_NOT_MATCH_CATALOG_ID_VERSION":
-    "ID или версия выбранного пакета правил не совпадает с каталогом.",
+    "Пакет правил не совпадает с идентификатором и версией в каталоге.",
   "error.reason.PLUGIN_RULE_PACK_EMPTY":
-    "В выбранном пакете правил выбранное значение пусто.",
+    "В пакете правил пусто обязательное поле.",
   "error.reason.PLUGIN_RULE_PACK_ID_PLUGIN_CATALOG_DUPLICATED":
-    "Повторяющийся ID выбранного пакета правил в каталоге плагинов.",
+    "В каталоге плагинов один и тот же идентификатор пакета правил указан несколько раз.",
   "error.reason.PLUGIN_RULE_PACK_INVALID_MIN_SCRYER_VERSION":
-    "В выбранном пакете правил указано недопустимое выбранное значение min_scryer_version.",
+    "У пакета правил некорректное значение min_scryer_version.",
   "error.reason.PLUGIN_RULE_PACK_NOT_FOUND": "Пакет правил не найден.",
   "error.reason.PLUGIN_RULE_PACK_NO_COMPATIBLE_ARTIFACT":
-    "Для выбранного пакета правил нет совместимого артефакта.",
+    "У пакета правил нет совместимого артефакта.",
   "error.reason.PLUGIN_RULE_PACK_RELEASE_INVALID":
-    "Выбранный релиз выбранного пакета правил должен содержать rule_pack_digests.",
+    "Релиз пакета правил должен содержать rule_pack_digests.",
   "error.reason.PLUGIN_RULE_PACK_RELEASE_VERSION_DUPLICATED":
-    "Повторяющаяся выбранная версия релиза для выбранного пакета правил.",
+    "В пакете правил одна и та же версия релиза указана несколько раз.",
   "error.reason.PLUGIN_RULE_PACK_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING":
-    "Выбранный артефакт выбранного пакета правил имеет неподдерживаемую кодировку.",
+    "Выбранный артефакт пакета правил имеет неподдерживаемую кодировку.",
   "error.reason.PLUGIN_RULE_PACK_USES_UNSUPPORTED_SCHEMA_VERSION":
-    "Выбранный пакет правил использует неподдерживаемую выбранную версию схемы.",
+    "Пакет правил использует неподдерживаемую версию схемы.",
   "error.reason.PLUGIN_SDK_CONSTRAINT_PLUGIN_INVALID":
-    "Недопустимое выбранное значение sdk_constraint для выбранного плагина.",
+    "У плагина некорректное значение sdk_constraint.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_BYTES_MISMATCH":
-    "Размер в байтах выбранного артефакта выбранного плагина не совпадает: ожидалось выбранное значение, получено выбранное значение.",
+    "Размер выбранного артефакта плагина не совпадает с указанным в каталоге.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_TOO_LARGE_VALIDATE_BYTES":
-    "Выбранный артефакт выбранного плагина слишком велик для проверки размера в байтах.",
+    "Выбранный артефакт плагина слишком велик для проверки.",
   "error.reason.PLUGIN_SELECTED_ARTIFACT_UNSUPPORTED_ENCODING":
-    "Выбранный артефакт выбранного плагина имеет неподдерживаемую кодировку.",
+    "Выбранный артефакт плагина имеет неподдерживаемую кодировку.",
   "error.reason.PLUGIN_SETTING_UNKNOWN": "Неизвестная настройка плагина.",
   "error.reason.PLUGIN_SETTING_VALUE_INVALID":
     "Недопустимое значение настройки плагина.",
   "error.reason.PLUGIN_SIGNATURE_VERIFICATION_NOT_COMPILED_INTO_TARGET":
     "Проверка подписей плагинов не включена в эту сборку.",
   "error.reason.PLUGIN_SIGNER_REPO_DOES_NOT_MATCH_SOURCE_REPO":
-    "Выбранный репозиторий подписанта выбранного плагина не совпадает с выбранным репозиторием исходного кода.",
+    "Репозиторий подписи плагина не совпадает с его исходным репозиторием.",
   "error.reason.PLUGIN_SUBTITLE_CONFIG_NOT_OBJECT":
     "Значение config_json провайдера субтитров должно быть объектом JSON.",
   "error.reason.PLUGIN_SUBTITLE_HOST_BINDING_REQUIRED":
@@ -9992,21 +9988,21 @@ const ru: LocaleDictionary = {
   "error.reason.PLUGIN_SUBTITLE_SYNC_OUTPUT_TOO_LARGE":
     "Результат синхронизации субтитров превышает ограничение размера.",
   "error.reason.PLUGIN_TEST_CONNECTION_UNSUPPORTED":
-    "Проверка подключения не поддерживается для выбранного типа клиента.",
+    "Проверка подключения не поддерживается для этого типа клиента.",
   "error.reason.PLUGIN_TYPE_BUILT_PREPARATION_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при подготовке встроенного плагина.",
+    "Этот тип плагина не поддерживается для подготовки встроенных плагинов.",
   "error.reason.PLUGIN_TYPE_BUILT_RESTORE_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при восстановлении встроенного плагина.",
+    "Этот тип плагина не поддерживается для восстановления встроенных плагинов.",
   "error.reason.PLUGIN_TYPE_RUNTIME_REMOVAL_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при удалении из среды выполнения.",
+    "Этот тип плагина не поддерживается для удаления во время работы.",
   "error.reason.PLUGIN_TYPE_RUNTIME_UPSERT_UNSUPPORTED":
-    "Выбранный plugin_type не поддерживается при добавлении или обновлении в среде выполнения.",
+    "Этот тип плагина не поддерживается для установки или обновления во время работы.",
   "error.reason.PLUGIN_URL_INVALID":
-    "Выбранный URL запрошенного значения должен использовать http или https; получен выбранный элемент.",
+    "URL некорректен; он должен использовать http или https.",
   "error.reason.PLUGIN_USES_UNSUPPORTED_DIGEST_ALGORITHM":
-    "Запрошенное значение использует выбранный неподдерживаемый алгоритм хеширования.",
+    "Дайджест использует неподдерживаемый алгоритм.",
   "error.reason.PLUGIN_WASM_ARTIFACT_TOO_LARGE":
-    "Заявленный размер WASM-артефакта выбранного плагина, равный выбранному значению, превышает максимальный размер — выбранное количество байт.",
+    "Артефакт WASM плагина превышает ограничение в 128 МиБ.",
   "error.reason.PLUGIN_ZSTD_COMPRESSION_NOT_COMPILED_INTO_TARGET":
     "Сжатие плагинов zstd не включено в эту сборку.",
   "error.reason.PLUGIN_ZSTD_DECOMPRESSION_NOT_COMPILED_INTO_TARGET":
@@ -10053,8 +10049,7 @@ const ru: LocaleDictionary = {
     "Не удалось проверить выбор релиза. Выполните поиск снова.",
   "error.reason.REQUEST_RULE_FAILED_BUILD_REQUEST_RULES_ENGINE":
     "Не удалось создать движок правил запросов.",
-  "error.reason.REQUEST_RULE_FIELD_REQUIRED":
-    "Запрошенное значение не должно быть пустым.",
+  "error.reason.REQUEST_RULE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.REQUEST_RULE_LEASE_OUT_OF_RANGE":
     "Срок действия должен быть от 1 до 3650 дней (десять лет) либо бессрочным.",
   "error.reason.REQUEST_RULE_LIBRARY_FACET_DOES_NOT_MATCH_REQUESTED_MEDIA_FACET":
@@ -10101,7 +10096,7 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_BUNDLED_TRASH_PACK_UNSUPPORTED_IDENTITY_SCHEMA":
     "Пакет TRaSH из комплекта поставки имеет неподдерживаемый идентификатор или схему.",
   "error.reason.RULE_CANNOT_ADOPT_DUPLICATE_LEGACY_LOCALE_RULES":
-    "Нельзя принять в управление повторяющиеся устаревшие правила локали для выбранного значения.",
+    "Невозможно принять повторяющиеся устаревшие правила локали для этого шаблона.",
   "error.reason.RULE_COPYING_TRACKED_RULE_REQUIRES_DISABLING_SOURCE":
     "Для копирования отслеживаемого правила необходимо отключить его источник.",
   "error.reason.RULE_COPY_DISABLES_SOURCE_REQUIRES_COPY_SOURCE_RULE_SET":
@@ -10111,7 +10106,7 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_EPISODE_CANNOT_SELECTED_WHEN_TESTING_MOVIE_RULE":
     "При проверке правила для фильма нельзя выбирать эпизод.",
   "error.reason.RULE_EPISODE_DOES_NOT_BELONG_TITLE":
-    "Эпизод с выбранным значением не относится к тайтлу с выбранным значением.",
+    "Эпизод не принадлежит этому тайтлу.",
   "error.reason.RULE_EPISODE_NOT_FOUND": "Эпизод не найден.",
   "error.reason.RULE_EPISODE_REQUIRED_WHEN_TESTING_SERIES_ANIME_RULE":
     "Для проверки правила сериала или аниме необходимо указать эпизод.",
@@ -10128,14 +10123,14 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_MANAGED_TRACKED_RULES_INVALID":
     "Управляемые или отслеживаемые правила необходимо скопировать перед редактированием.",
   "error.reason.RULE_MEDIA_FILE_DOES_NOT_COVER_EPISODE":
-    "Медиафайл с выбранным значением не содержит эпизод с выбранным значением.",
+    "Медиафайл не охватывает этот эпизод.",
   "error.reason.RULE_MEDIA_FILE_NOT_FOUND": "Медиафайл тайтла не найден.",
   "error.reason.RULE_ONLY_ONE_ENABLED_RULE_MAY_USE_EXCLUSIVE_GROUP":
-    "Только одно включённое правило может использовать выбранную группу взаимоисключения.",
+    "Эксклюзивную группу может использовать только одно включённое правило.",
   "error.reason.RULE_PACK_ALREADY_INSTALLED":
-    "Выбранный пакет правил уже установлен.",
+    "Этот пакет правил уже установлен.",
   "error.reason.RULE_PACK_FACET_INVALID":
-    "Недопустимый тип пакета правил с выбранным значением.",
+    "Некорректный тип медиа пакета правил.",
   "error.reason.RULE_PACK_INSTALLATION_CONFLICTED_ANOTHER_CHANGE":
     "Установка пакета правил вступила в конфликт с другим изменением.",
   "error.reason.RULE_PACK_PRIORITY_TEMPLATE_ID_DUPLICATED":
@@ -10155,7 +10150,7 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_PREVIEW_REQUIRES_EITHER_DRAFT_SAVED_RULE_SET":
     "Для предварительного просмотра необходим либо черновик, либо сохранённый набор правил.",
   "error.reason.RULE_PUBLISHED_INVALID":
-    "Дата публикации должна быть временной меткой RFC 2822 или RFC 3339; получено выбранное значение.",
+    "Дата публикации должна быть меткой времени в формате RFC 2822 или RFC 3339.",
   "error.reason.RULE_RELEASE_NAME_TOO_LARGE_SCORING_PREVIEW":
     "Название релиза слишком велико для предварительного расчёта оценки.",
   "error.reason.RULE_RULES_PACK_CANNOT_COPIED":
@@ -10192,11 +10187,11 @@ const ru: LocaleDictionary = {
   "error.reason.RULE_TRACKED_RULE_PACK_NOT_FOUND":
     "Отслеживаемый пакет правил не найден.",
   "error.reason.RULE_TRACKED_RULE_REQUIRED":
-    "Отсутствует отслеживаемое правило с выбранным значением.",
+    "Отслеживаемое правило отсутствует.",
   "error.reason.RULE_VALIDATION_ERROR": "Ошибка проверки правила.",
   "error.reason.RULE_VALIDATION_FAILED": "Проверка правила не пройдена.",
   "error.reason.RULE_VERSION_INVALID":
-    "Версия запрошенного значения не соответствует формату семантического версионирования.",
+    "Версия не соответствует формату семантического версионирования.",
   "error.reason.RULE_VOTES_CANNOT_NEGATIVE":
     "Количество голосов не может быть отрицательным.",
   "error.reason.SCRIPTS_SCHEDULE_INVALID": "Недопустимое расписание скрипта.",
@@ -10227,11 +10222,11 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_BACKUP_BUNDLE_STILL_BEING_CREATED":
     "Пакет резервной копии ещё создаётся.",
   "error.reason.SECURITY_BACKUP_BUNDLE_TABLE_SET_DOES_NOT_MATCH_CURRENT_RESTORE_CATALOG":
-    "Набор таблиц пакета резервной копии не соответствует текущему каталогу восстановления: отсутствуют [выбранное значение], лишние [выбранное значение]. Выбранное значение.",
+    "Таблицы резервной копии не совпадают с тем, что может восстановить эта версия Scryer.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MANIFEST_INCOMPLETE":
-    "Манифест контрольных сумм резервной копии неполон: отсутствуют [выбранное значение], лишние [выбранное значение].",
+    "Манифест контрольных сумм резервной копии неполон.",
   "error.reason.SECURITY_BACKUP_CHECKSUM_MISMATCH":
-    "Контрольная сумма резервной копии для выбранного значения не совпадает.",
+    "Контрольная сумма резервной копии не совпадает.",
   "error.reason.SECURITY_BACKUP_CREATION_FAILED":
     "Не удалось создать резервную копию.",
   "error.reason.SECURITY_BACKUP_DOWNLOAD_SUBJECT_UNKNOWN":
@@ -10255,7 +10250,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_BACKUP_FILENAME_INVALID":
     "Недопустимое имя файла резервной копии.",
   "error.reason.SECURITY_BACKUP_FORMAT_VERSION_UNSUPPORTED":
-    "Неподдерживаемая версия формата резервной копии с выбранным значением.",
+    "Эта версия формата резервной копии не поддерживается.",
   "error.reason.SECURITY_BACKUP_MANIFEST_INVALID":
     "Недопустимый манифест резервной копии.",
   "error.reason.SECURITY_BACKUP_MANIFEST_MISSING":
@@ -10301,13 +10296,13 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_CANNOT_RESET_OWN_AUTHENTICATION_FACTORS":
     "Нельзя сбросить собственные факторы аутентификации.",
   "error.reason.SECURITY_CANNOT_RESOLVE_BACKUP_DOWNLOAD_SIGNING_KEY_ACTOR":
-    "Не удалось определить ключ подписи загрузки резервной копии для субъекта с выбранным значением.",
+    "Не удалось получить ключ подписи загрузки резервной копии для этого пользователя.",
   "error.reason.SECURITY_CANNOT_RESOLVE_RELEASE_CANDIDATE_SIGNING_KEY_ACTOR":
-    "Не удалось определить ключ подписи кандидата релиза для субъекта с выбранным значением.",
+    "Не удалось получить ключ подписи кандидата релиза для этого пользователя.",
   "error.reason.SECURITY_CONNECTION_DISABLED":
-    "Подключение запрошенного значения отключено.",
+    "Это подключение для входа отключено.",
   "error.reason.SECURITY_CONNECTION_NOT_CONFIGURED":
-    "Подключение запрошенного значения не настроено для внешней аутентификации.",
+    "Это подключение для входа не настроено для внешнего входа.",
   "error.reason.SECURITY_COULD_NOT_ALLOCATE_SCRYER_USERNAME_EXTERNAL_ACCOUNT":
     "Не удалось выделить имя пользователя Scryer для внешней учётной записи.",
   "error.reason.SECURITY_CREDENTIALS_INVALID": "Недопустимые учётные данные.",
@@ -10349,7 +10344,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_ENCRYPTED_BACKUP_PAYLOAD_TRUNCATED_INVALID":
     "Данные зашифрованной резервной копии усечены или недопустимы.",
   "error.reason.SECURITY_ENCRYPTED_BACKUP_VERSION_UNSUPPORTED":
-    "Неподдерживаемая версия зашифрованной резервной копии с выбранным значением.",
+    "Эта версия зашифрованной резервной копии не поддерживается.",
   "error.reason.SECURITY_EXTERNALLY_MANAGED_USERS_CANNOT_SET_SCRYER_PASSWORD":
     "Пользователи под внешним управлением не могут установить пароль Scryer.",
   "error.reason.SECURITY_EXTERNAL_ACCOUNT_DISABLED":
@@ -10420,7 +10415,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_NEW_PASSWORD_MUST_DIFFER_TEMPORARY_PASSWORD":
     "Новый пароль должен отличаться от временного.",
   "error.reason.SECURITY_NOT_ENABLED":
-    "Запрошенное значение не включено для выбранного значения.",
+    "Этот поставщик входа не включён для этого использования.",
   "error.reason.SECURITY_OAUTH_CLIENT_UNAVAILABLE": "Клиент OAuth недоступен.",
   "error.reason.SECURITY_OAUTH_GRANT_UNAVAILABLE":
     "Разрешение OAuth не подходит для привязки Jellyfin.",
@@ -10498,7 +10493,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_PLEX_SERVER_DISCOVERY_REQUIRED_BEFORE_USING_PLEX_AUTH":
     "Перед использованием Plex для аутентификации необходимо обнаружить сервер Plex.",
   "error.reason.SECURITY_PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY":
-    "Подготовленный каталог резервной копии содержит неподдерживаемый элемент с выбранным значением.",
+    "Подготовленный каталог резервной копии содержит неподдерживаемый элемент.",
   "error.reason.SECURITY_RECOVERY_ADMIN_LOGIN_MANAGED_ENVIRONMENT":
     "Вход администратора восстановления управляется окружением.",
   "error.reason.SECURITY_RECOVERY_ADMIN_USER_EXTERNALLY_MANAGED_CANNOT_REPAIRED_LOCAL_LOGIN":
@@ -10530,11 +10525,11 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_RELEASE_CANDIDATE_TOKEN_UNKNOWN_SCOPE":
     "Неизвестная область действия токена кандидата на загрузку релиза.",
   "error.reason.SECURITY_RELEASE_REPORTS_SEEDERS_BELOW_MINIMUM_INDEXER":
-    "В релизе указано выбранное число сидов, что меньше выбранного минимального значения для этого индексатора.",
+    "У релиза меньше сидов, чем минимум для этого индексатора.",
   "error.reason.SECURITY_REQUESTED_LOGIN_VERIFICATION_FACTOR_UNAVAILABLE":
     "Запрошенный фактор проверки входа недоступен.",
   "error.reason.SECURITY_RESERVED_INSTANCE_RECOVERY":
-    "Запрошенное значение зарезервировано для восстановления экземпляра.",
+    "Имя пользователя recovery-admin зарезервировано для восстановления экземпляра.",
   "error.reason.SECURITY_RESTRICTED_AUTHENTICATION_TOKENS_CANNOT_CARRY_ACTOR_CAPABILITIES":
     "Токены аутентификации с ограничениями не могут содержать полномочия исполнителя.",
   "error.reason.SECURITY_SCRYER_ADMIN_USERNAME_CONFLICTS_EXISTING_USERNAME":
@@ -10563,7 +10558,7 @@ const ru: LocaleDictionary = {
   "error.reason.SECURITY_USERNAME_REQUIRED":
     "Необходимо указать имя пользователя.",
   "error.reason.SECURITY_USER_ALREADY_EXISTS":
-    "Пользователь с выбранным значением уже существует.",
+    "Этот пользователь уже существует.",
   "error.reason.SECURITY_USER_NOT_FOUND": "Пользователь не найден.",
   "error.reason.SECURITY_USE_CHANGE_OWN_PASSWORD_UPDATE_OWN_PASSWORD":
     "Чтобы изменить собственный пароль, используйте change_own_password.",
@@ -10578,7 +10573,7 @@ const ru: LocaleDictionary = {
   "error.reason.SERVICES_COMPLETED_DOWNLOAD_NOT_FOUND":
     "Завершённая загрузка не найдена.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_ASSIGNED_PROXY_WHICH_DISABLED":
-    "Клиенту загрузки с выбранным значением назначен прокси с выбранным значением, который отключён.",
+    "Клиенту загрузки назначен отключённый прокси.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_ITEM_ID_REQUIRED":
     "Необходим идентификатор элемента клиента загрузки.",
   "error.reason.SERVICES_DOWNLOAD_CLIENT_REFERENCES_PROXY_CONFIGURATION_WHICH_NOT_FOUND":
@@ -10610,23 +10605,23 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_CANNOT_REPLACED_CLEARED_SAME_REQUEST":
     "Нельзя одновременно заменить и удалить ключ автоматического резервного копирования в одном запросе.",
   "error.reason.SETTINGS_AUTOMATIC_BACKUP_KEY_OUT_OF_RANGE":
-    "Ключ автоматического резервного копирования должен содержать не менее выбранного числа непробельных символов.",
+    "Ключ автоматического резервного копирования должен содержать не менее 8 непробельных символов.",
   "error.reason.SETTINGS_BACKUP_PATH_INVALID":
     "Путь резервного копирования должен указывать на каталог.",
   "error.reason.SETTINGS_BACKUP_PATH_NOT_WRITABLE":
     "Путь резервного копирования недоступен для записи.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_GLOBAL_DEFAULT":
-    "Нельзя удалить выбранный профиль качества: он используется по умолчанию глобально.",
+    "Невозможно удалить этот профиль качества: он используется глобально по умолчанию.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_ALLOWS_REQUESTS":
-    "Нельзя удалить выбранный профиль качества: выбранная библиотека разрешает его для запросов.",
+    "Невозможно удалить этот профиль качества: библиотека разрешает его для запросов.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_LIBRARY_REFERENCES":
-    "Нельзя удалить выбранный профиль качества: на него ссылается выбранная библиотека.",
+    "Невозможно удалить этот профиль качества: его использует библиотека.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_NOT_CONFIGURED":
-    "Нельзя удалить выбранный профиль качества: он настроен для выбранного значения.",
+    "Невозможно удалить этот профиль качества: он настроен для типа медиа.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_PENDING_MEDIA_REQUEST_S_REFERENCE":
-    "Нельзя удалить выбранный профиль качества: на него ссылается выбранное число ожидающих запросов на медиаконтент.",
+    "Невозможно удалить этот профиль качества: его используют ожидающие запросы медиа.",
   "error.reason.SETTINGS_CANNOT_REMOVE_QUALITY_PROFILE_TITLE_S_REFERENCE":
-    "Нельзя удалить выбранный профиль качества: на него ссылается выбранное число тайтлов.",
+    "Невозможно удалить этот профиль качества: его используют тайтлы.",
   "error.reason.SETTINGS_CANNOT_SAVE_RESET_TRUSTED_PROXIES_TOGETHER":
     "Нельзя одновременно сохранить и сбросить доверенные прокси.",
   "error.reason.SETTINGS_CATALOG_VIEW_COLUMNS_INVALID":
@@ -10646,7 +10641,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_DELAY_PROFILE_ID_REQUIRED":
     "Необходим идентификатор профиля задержки.",
   "error.reason.SETTINGS_DELAY_PROFILE_NAMES_UNKNOWN_LIBRARY":
-    "Выбранный профиль задержки указывает на неизвестную выбранную библиотеку.",
+    "Профиль задержки ссылается на неизвестную библиотеку.",
   "error.reason.SETTINGS_DELAY_PROFILE_NOT_FOUND":
     "Профиль задержки не найден.",
   "error.reason.SETTINGS_DOWNLOAD_CLIENT_ROUTING_ENTRY_REQUIRES_CLIENT_ID":
@@ -10670,7 +10665,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_INDEXER_ROUTING_ENTRY_REQUIRES_INDEXER_ID":
     "Для записи маршрутизации индексатора необходим indexer_id.",
   "error.reason.SETTINGS_LANGUAGE_OUT_OF_RANGE":
-    "Язык должен быть задан кодом длиной не более выбранного числа букв, цифр или дефисов.",
+    "Язык должен быть кодом языка длиной не более 16 букв, цифр или дефисов.",
   "error.reason.SETTINGS_LIBRARY_ACCESS_DENIED":
     "У вас нет доступа к этой библиотеке.",
   "error.reason.SETTINGS_LIBRARY_NOT_FOUND": "Библиотека не найдена.",
@@ -10691,13 +10686,13 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_MOVIE_RELEASE_MARKET_INVALID":
     "Рынок выпуска фильма должен быть задан двухбуквенным кодом страны ISO-3166.",
   "error.reason.SETTINGS_MUST_ABSOLUTE_PATH_COMMAND_NAME_WITHOUT_PATH_SEPARATORS":
-    "Запрошенное значение должно быть абсолютным путём или именем команды без разделителей пути.",
+    "Интерпретатор должен быть абсолютным путём или именем команды без разделителей пути.",
   "error.reason.SETTINGS_MUST_RRGGBB_HEX_COLOR":
-    "Запрошенное значение должно быть шестнадцатеричным цветом в формате #RRGGBB.",
+    "Цвет должен быть шестнадцатеричным в формате #RRGGBB.",
   "error.reason.SETTINGS_PASSWORD_MINIMUM_LENGTH_OUT_OF_RANGE":
-    "Минимальная длина пароля должна быть не меньше выбранного значения.",
+    "Минимальная длина пароля должна быть не меньше 8.",
   "error.reason.SETTINGS_PERMISSIONS_CHOWN_GROUP_SETTING_VALUE_INVALID":
-    "Недопустимое выбранное значение настройки permissions.chown_group: числовой gid выходит за допустимый диапазон.",
+    "Некорректная группа для прав доступа: числовой идентификатор группы вне допустимого диапазона.",
   "error.reason.SETTINGS_PERSONA_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE":
     "Необходимо указать Persona, если inherit_global имеет значение false.",
   "error.reason.SETTINGS_PLEXMATCH_WRITE_IMPORT_ONLY_VALID_SERIES_ANIME":
@@ -10708,21 +10703,21 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_PROFILE_ID_REQUIRED_WHEN_INHERIT_GLOBAL_FALSE":
     "Необходимо указать Profile_id, если inherit_global имеет значение false.",
   "error.reason.SETTINGS_QUALITY_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE":
-    "Выбранные идентификаторы профилей качества отличаются только регистром ASCII.",
+    "Два идентификатора профилей качества отличаются только регистром букв.",
   "error.reason.SETTINGS_QUALITY_PROFILE_ID_AMBIGUOUS_PROFILE_IDS_DIFFER_ONLY_ASCII_CASE":
-    "Выбранный идентификатор профиля качества неоднозначен: идентификаторы профилей отличаются только регистром ASCII.",
+    "Этот идентификатор профиля качества неоднозначен: идентификаторы профилей отличаются только регистром букв.",
   "error.reason.SETTINGS_QUALITY_PROFILE_ID_REQUIRED":
     "Необходим идентификатор профиля качества.",
   "error.reason.SETTINGS_QUALITY_PROFILE_NOT_FOUND":
     "Профиль качества не найден.",
   "error.reason.SETTINGS_QUALITY_PROFILE_UNKNOWN":
-    "Неизвестный выбранный профиль качества.",
+    "Профиль качества неизвестен.",
   "error.reason.SETTINGS_RECYCLE_BIN_PATH_UNSAFE":
     "Путь корзины небезопасен или пересекается с управляемыми медиафайлами.",
   "error.reason.SETTINGS_RECYCLE_BIN_RETENTION_OUT_OF_RANGE":
-    "Срок хранения в корзине должен составлять от 1 до выбранного числа дней.",
+    "Срок хранения в корзине должен быть от 1 до 3650 дней.",
   "error.reason.SETTINGS_REQUEST_QUALITY_PROFILE_UNKNOWN":
-    "Неизвестный профиль качества запросов с выбранным значением.",
+    "Профиль качества для запросов неизвестен.",
   "error.reason.SETTINGS_RE_CONVERGE_BACKSTOP_CANNOT_NEGATIVE":
     "Предельный интервал повторного согласования не может быть отрицательным.",
   "error.reason.SETTINGS_ROOT_FOLDER_PATH_REQUIRED":
@@ -10736,7 +10731,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_SESSION_DURATION_OUT_OF_RANGE":
     "Продолжительность сеанса должна составлять от 1 до 365 дней.",
   "error.reason.SETTINGS_SETTING_VALUE_INVALID":
-    "Недопустимое выбранное значение выбранной настройки: ожидается восьмеричная маска из 3 или 4 цифр.",
+    "Некорректное значение настройки. Маска прав доступа задаётся восьмеричным числом из 3 или 4 цифр.",
   "error.reason.SETTINGS_SOURCE_REQUIRED": "Необходимо указать источник.",
   "error.reason.SETTINGS_SUBTITLE_MINIMUM_SCORE_PERCENTAGES_OUT_OF_RANGE":
     "Минимальная оценка субтитров в процентах должна быть от 0 до 100.",
@@ -10749,7 +10744,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_TABLE_COLUMN_ORDER_OUT_OF_RANGE":
     "Порядковый номер столбца таблицы должен быть не меньше 0.",
   "error.reason.SETTINGS_TABLE_COLUMN_UNSUPPORTED":
-    "Неподдерживаемый выбранный столбец выбранной таблицы.",
+    "Столбец таблицы не поддерживается.",
   "error.reason.SETTINGS_TITLE_IMAGE_CACHE_REFRESH_ALREADY_RUNNING":
     "Обновление кеша изображений тайтлов уже выполняется.",
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_INVALID":
@@ -10757,7 +10752,7 @@ const ru: LocaleDictionary = {
   "error.reason.SETTINGS_TRUSTED_CERTIFICATE_BUNDLE_MAY_ONLY_CONTAIN_X_509_CERTIFICATE_PEM_BLOCKS":
     "Набор доверенных сертификатов может содержать только блоки PEM сертификатов X.509.",
   "error.reason.SETTINGS_UI_TABLE_COLUMN_SETTING_COLUMN_DUPLICATED":
-    "Повторяющаяся настройка столбца таблицы интерфейса для выбранных значений и выбранного столбца.",
+    "В настройках столбцов таблицы один и тот же столбец указан несколько раз.",
   "error.reason.SETTINGS_VIEW_QUALITY_PROFILES_PERMISSION_DENIED":
     "У вас нет разрешения на просмотр профилей качества.",
   "error.reason.SETTINGS_VIEW_RECYCLE_BIN_SETTINGS_PERMISSION_DENIED":
@@ -10786,7 +10781,7 @@ const ru: LocaleDictionary = {
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_EXCEEDS_NESTING_INPUT_LIMITS":
     "Материал субтитров превышает ограничения вложенности или входных данных.",
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_EXPANDS_BEYOND_BYTE_LIMIT":
-    "После распаковки материал субтитров превышает выбранный лимит в байтах.",
+    "Артефакт субтитров после распаковки превышает ограничение в 128 МиБ.",
   "error.reason.SUBTITLES_SUBTITLE_ARTIFACT_FORMAT_UNSUPPORTED":
     "Неподдерживаемый формат материала субтитров.",
   "error.reason.SUBTITLES_SUBTITLE_FORMAT_UNSUPPORTED":
