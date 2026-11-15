@@ -4948,10 +4948,10 @@ const zh_TW: LocaleDictionary = {
     '注意：此範本會刪除作品及其檔案。任何包含檔案的項目都會老化淘汰，除非其帶有 "keep" 標籤。首先會執行 180 天的寬限期，且執行個體門檻以及此規則本身的授權必須一致同意，然後才會移除任何內容。',
   "settings.maintenanceTemplateAddedLongAgoTitle": "加入已超過 180 天",
   "settings.maintenanceTemplateAddedLongAgoDescription":
-    "真正的日期運算：days_since 將作品的 added_at 與評估時間比較，超過 180 天即符合。範圍會取消監控，檔案保留。沒有 added_at 值的作品會暫緩而非符合。",
+    "符合加入超過 180 天的作品。範圍會取消監控，檔案保留。沒有記錄加入日期的作品不會符合。",
   "settings.maintenanceTemplateOversizedTitle": "超大體積發行版本",
   "settings.maintenanceTemplateOversizedDescription":
-    "檔案總計超過 40 GB 的作品。將作品移至指定的品質設定檔並重新搜尋。儲存前，請將原始碼中的「Compact 1080p」預留名稱換成您的設定檔之一。",
+    "檔案總計超過 40 GB 的作品。將作品移至指定的品質設定檔並重新搜尋。儲存前，請將「Compact 1080p」預留名稱換成您的設定檔之一。",
   "settings.maintenanceTemplateFourKPurgeTitle": "4K 清理",
   "settings.maintenanceTemplateFourKPurgeDescription":
     "任何含有 2160p 檔案的作品。7 天寬限期後移至指定的品質設定檔並重新搜尋。儲存前，請將原始碼中的「Compact 1080p」預留名稱換成您的設定檔之一。",
@@ -4960,7 +4960,7 @@ const zh_TW: LocaleDictionary = {
     '注意：此範本會刪除作品及其檔案。來自請求的作品會在 120 天後淘汰，除非帶有 "keep" 標籤。',
   "settings.maintenanceTemplateDepartedRequesterTitle": "已離職/離開的請求者",
   "settings.maintenanceTemplateDepartedRequesterDescription":
-    '注意：此範本會刪除作品及其檔案。它比對由指定使用者請求的作品 — 在儲存前請將比對器中的 "departed-user" 預留位置編輯為您指定的名稱，否則將不符合任何內容。',
+    '注意：此範本會刪除作品及其檔案。它比對由指定使用者請求的作品 — 在儲存前請將 "departed-user" 預留位置改為您指定的使用者名稱，否則將不符合任何內容。',
   "settings.maintenanceTemplateSystemAddedTitle": "系統新增清理",
   "settings.maintenanceTemplateSystemAddedDescription":
     "由掃描發現而非由人員手動新增且包含檔案的作品。在 60 天過後，該範圍會被取消監控，檔案則保留在原處。",

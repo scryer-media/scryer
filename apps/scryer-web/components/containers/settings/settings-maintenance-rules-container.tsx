@@ -5,6 +5,7 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,7 +33,11 @@ import {
   loadQualityProfileNames,
   loadTitleTagLabels,
 } from "@/lib/utils/rule-builder-catalogs";
-import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
+import {
+  isIncompleteRuleBuilderDraft,
+  openRuleTemplateDraft,
+} from "@/lib/utils/rule-builder-mode";
+import { ruleTemplateBuilderModel } from "@/lib/constants/rule-template-builder-models";
 import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
 import { MAINTENANCE_RULE_BUILDER_BASE } from "@/lib/utils/maintenance-rule-builder-schema";
 import { Input } from "@/components/ui/input";
@@ -249,6 +254,11 @@ export function SettingsMaintenanceRulesContainer({
     [servedSchema.schema],
   );
   const whenSchemaReady = servedSchema.whenReady;
+  /// The draft the editor shows, for a template open that settles later.
+  const shownDraftRef = useRef(ruleSetDraft);
+  useLayoutEffect(() => {
+    shownDraftRef.current = ruleSetDraft;
+  }, [ruleSetDraft]);
   const builderEditor = useRuleBuilderEditor({
     binding: builderBinding,
     draft: ruleSetDraft,
@@ -357,23 +367,32 @@ export function SettingsMaintenanceRulesContainer({
   /// create themselves. `libraryIds` stays empty because which libraries a rule
   /// covers is an instance-specific decision no template can make.
   const openTemplateEditor = useCallback(
-    (template: MaintenanceRuleTemplate) => {
-      const next: MaintenanceRuleSetDraft = {
-        ...initialMaintenanceRuleDraft(),
-        name: template.name,
-        description: t(template.descriptionKey),
-        regoSource: template.regoSource,
-        subjectKind: template.subjectKind ?? "TITLE",
-        graceDays: template.graceDays,
-        maxTitlesPerRun: template.maxTitlesPerRun ?? null,
-      };
-      setEditingRuleSetId(null);
-      /// Baseline stays at the empty draft on purpose: a freshly applied
-      /// template counts as unsaved work, so navigating away from it asks.
-      startEditorSession(next, initialMaintenanceRuleDraft());
-      setIsEditorOpen(true);
-    },
-    [startEditorSession, t],
+    (template: MaintenanceRuleTemplate) =>
+      openRuleTemplateDraft<MaintenanceRuleSetDraft>({
+        schema: servedSchema.schema,
+        whenSchemaReady,
+        binding: maintenanceRuleBuilder,
+        draft: {
+          ...initialMaintenanceRuleDraft(),
+          name: template.name,
+          description: t(template.descriptionKey),
+          regoSource: template.regoSource,
+          subjectKind: template.subjectKind ?? "TITLE",
+          graceDays: template.graceDays,
+          maxTitlesPerRun: template.maxTitlesPerRun ?? null,
+        },
+        model: (schema) => ruleTemplateBuilderModel(schema, template.id),
+        open: (next) => {
+          shownDraftRef.current = next;
+          setEditingRuleSetId(null);
+          /// Baseline stays at the empty draft on purpose: a freshly applied
+          /// template counts as unsaved work, so navigating away from it asks.
+          startEditorSession(next, initialMaintenanceRuleDraft());
+          setIsEditorOpen(true);
+        },
+        isShowing: (draft) => shownDraftRef.current === draft,
+      }),
+    [servedSchema.schema, startEditorSession, t, whenSchemaReady],
   );
 
   const requestCreateEditor = useCallback(() => {

@@ -786,18 +786,17 @@ pub const EXAMPLE_SHORT_LEASE: &str = "package rules\nimport rego.v1\n\napprove 
 pub const EXAMPLE_LOW_RESOLUTION: &str = "package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == \"alice\"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n";
 
 /// Deny adult content, with a reason code the requester is shown.
-pub const EXAMPLE_DENY_ADULT_CONTENT: &str = "package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains \"adult_content\" if {\n\tinput.facts.is_adult\n}\n";
+pub const EXAMPLE_DENY_ADULT_CONTENT: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.is_adult == true\n}\n\ndeny if rule_applies\n\nreasons contains \"adult_content\" if rule_applies\n";
 
 /// A monthly quota: after five approvals a human looks at the sixth.
-pub const EXAMPLE_MONTHLY_QUOTA: &str =
-    "package rules\nimport rego.v1\n\nmanual if {\n\tinput.facts.approved_last_30d >= 5\n}\n";
+pub const EXAMPLE_MONTHLY_QUOTA: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.approved_last_30d >= 5\n}\n\nmanual if rule_applies\n";
 
 /// Hold every list request whose owner is on the Approval list policy for a
 /// person to look at.
-pub const EXAMPLE_HOLD_APPROVAL_POLICY_LISTS: &str = "package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == \"approval\"\n}\n";
+pub const EXAMPLE_HOLD_APPROVAL_POLICY_LISTS: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.owner_list_policy == \"approval\"\n}\n\nmanual if rule_applies\n";
 
 /// Deny personal-list requests for a quality profile above 1080p.
-pub const EXAMPLE_DENY_PERSONAL_LIST_ABOVE_1080P: &str = "package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == \"personal\"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n";
+pub const EXAMPLE_DENY_PERSONAL_LIST_ABOVE_1080P: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.scope == \"personal\"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n\ndeny if rule_applies\n";
 
 /// The shipped worked examples, keyed by the template ID the web gallery offers
 /// them under.

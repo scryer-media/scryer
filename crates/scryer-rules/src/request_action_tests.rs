@@ -618,3 +618,13 @@ fn the_builder_schema_copies_are_byte_identical() {
          apps/scryer-web/lib/contracts/request-builder-schema.json must stay byte-identical"
     );
 }
+
+#[test]
+fn the_title_builder_schema_copies_are_byte_identical() {
+    assert_eq!(
+        include_str!("../maintenance-builder-schema.json"),
+        include_str!("../../../apps/scryer-web/lib/contracts/maintenance-builder-schema.json"),
+        "crates/scryer-rules/maintenance-builder-schema.json and \
+         apps/scryer-web/lib/contracts/maintenance-builder-schema.json must stay byte-identical"
+    );
+}

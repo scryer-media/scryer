@@ -5,7 +5,9 @@ import {
   type FormEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useClient } from "urql";
@@ -58,8 +60,10 @@ import {
 } from "@/lib/utils/rule-builder-catalogs";
 import {
   isIncompleteRuleBuilderDraft,
+  openRuleTemplateDraft,
   withRuleSourceEdit,
 } from "@/lib/utils/rule-builder-mode";
+import { ruleTemplateBuilderModel } from "@/lib/constants/rule-template-builder-models";
 import { audioLanguageOptions } from "@/lib/constants/audio-languages";
 import {
   librariesQuery,
@@ -199,6 +203,11 @@ export function SettingsRequestRulesContainer() {
     [servedSchema.schema],
   );
   const whenSchemaReady = servedSchema.whenReady;
+  /// The draft the editor shows, for a template open that settles later.
+  const shownDraftRef = useRef(ruleSetDraft);
+  useLayoutEffect(() => {
+    shownDraftRef.current = ruleSetDraft;
+  }, [ruleSetDraft]);
   const builderEditor = useRuleBuilderEditor({
     binding: builderBinding,
     draft: ruleSetDraft,
@@ -299,23 +308,38 @@ export function SettingsRequestRulesContainer() {
   /// template can make, and the named people in a person-targeted template are
   /// placeholders the user picker replaces.
   const openTemplateEditor = useCallback(
-    (template: RequestRuleTemplate) => {
-      const next: RequestRuleSetDraft = {
-        ...initialRequestRuleDraft(),
-        name: template.name,
-        description: t(template.descriptionKey),
-        regoSource: template.regoSource,
-      };
-      setEditingRuleSetId(null);
-      setRuleSetDraft(next);
-      /// Baseline stays at the empty draft on purpose: a freshly applied
-      /// template counts as unsaved work, so navigating away from it asks.
-      setRuleSetDraftBaseline(initialRequestRuleDraft());
-      beginBuilderSession(next);
-      setValidationResult(null);
-      setIsEditorOpen(true);
-    },
-    [beginBuilderSession, setValidationResult, t],
+    (template: RequestRuleTemplate) =>
+      openRuleTemplateDraft<RequestRuleSetDraft>({
+        schema: servedSchema.schema,
+        whenSchemaReady,
+        binding: requestRuleBuilder,
+        draft: {
+          ...initialRequestRuleDraft(),
+          name: template.name,
+          description: t(template.descriptionKey),
+          regoSource: template.regoSource,
+        },
+        model: (schema) => ruleTemplateBuilderModel(schema, template.id),
+        open: (next) => {
+          shownDraftRef.current = next;
+          setEditingRuleSetId(null);
+          setRuleSetDraft(next);
+          /// Baseline stays at the empty draft on purpose: a freshly applied
+          /// template counts as unsaved work, so navigating away from it asks.
+          setRuleSetDraftBaseline(initialRequestRuleDraft());
+          beginBuilderSession(next);
+          setValidationResult(null);
+          setIsEditorOpen(true);
+        },
+        isShowing: (draft) => shownDraftRef.current === draft,
+      }),
+    [
+      beginBuilderSession,
+      servedSchema.schema,
+      setValidationResult,
+      t,
+      whenSchemaReady,
+    ],
   );
 
   const requestCreateEditor = useCallback(() => {
