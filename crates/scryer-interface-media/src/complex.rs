@@ -604,7 +604,8 @@ impl TitlePayload {
     }
 
     /// US certification label, such as `PG-13`, or null when the title has
-    /// none. It is the value the `certification_label` request rule fact reads.
+    /// none. It is chosen the way the `certification_label` request rule fact
+    /// chooses it, from the ratings stored at the last metadata refresh.
     async fn certification_label(&self, ctx: &Context<'_>) -> GqlResult<Option<String>> {
         let ratings = title_content_ratings(ctx, self.id.as_ref()).await?;
         Ok(scryer_application::request_rules::content_ratings_us_certification_label(&ratings))

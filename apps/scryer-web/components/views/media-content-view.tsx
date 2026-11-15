@@ -1462,6 +1462,7 @@ function TitleContextPanel({
                 {title.certificationLabel ? (
                   <span
                     id={selectorId("title-hero-certification", title.id)}
+                    title={title.certificationLabel}
                     className="inline-flex h-6 max-w-[8rem] items-center truncate rounded-[5px] border border-white/25 px-1.5 text-[11px] font-bold tracking-wide text-[#e6ebf7]"
                   >
                     {title.certificationLabel}

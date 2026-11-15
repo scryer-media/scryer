@@ -3553,5 +3553,24 @@ async fn hydrated_title_metadata_replaces_title_content_ratings() {
         "a successful empty response clears stale ratings"
     );
 
+    TitleRepository::update_title_hydrated_metadata(
+        &catalog,
+        &title.id,
+        update(Some(ratings.clone())),
+    )
+    .await
+    .expect("store ratings again");
+    TitleRepository::replace_match_state(&catalog, &title.id, Vec::new(), Vec::new())
+        .await
+        .expect("rematch");
+    assert_eq!(
+        load(vec![title.id.clone()])
+            .await
+            .get(&title.id)
+            .map(Vec::len),
+        Some(0),
+        "a rematch drops the previous match's ratings"
+    );
+
     let _ = std::fs::remove_file(db);
 }

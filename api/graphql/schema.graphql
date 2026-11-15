@@ -33839,7 +33839,8 @@ type TitlePayload {
 	contentRatings: [DiscoveryContentRatingPayload!]!
 	"""
 	US certification label, such as `PG-13`, or null when the title has
-	none. It is the value the `certification_label` request rule fact reads.
+	none. It is chosen the way the `certification_label` request rule fact
+	chooses it, from the ratings stored at the last metadata refresh.
 	"""
 	certificationLabel: String
 	"""

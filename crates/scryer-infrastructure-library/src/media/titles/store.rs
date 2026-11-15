@@ -3696,6 +3696,12 @@ impl TitleRepository for TitleStore {
                 replace_title_metadata_ratings_tx(tx, &title.id, &TitleRatingSummary::default())
                     .await?;
                 replace_title_credits_tx(tx, &title.id, &[]).await?;
+                crate::media::title_content_ratings::replace_title_content_ratings_tx(
+                    tx,
+                    &title.id,
+                    &[],
+                )
+                .await?;
                 load_title_tx_or_not_found(tx, &id, true).await
             })
         })
