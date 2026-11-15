@@ -16,7 +16,9 @@
       "template": "{head} := [{items}] if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": null,
+      "variants": [
+        "TITLE"
+      ],
       "conflictsWith": []
     },
     {
@@ -34,7 +36,9 @@
       "template": "{head} := [{items}] if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": null,
+      "variants": [
+        "TITLE"
+      ],
       "conflictsWith": []
     },
     {
@@ -52,7 +56,9 @@
       "template": "{head} := {value} if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": null,
+      "variants": [
+        "TITLE"
+      ],
       "conflictsWith": []
     },
     {
@@ -92,7 +98,9 @@
       "template": "{head} if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": null,
+      "variants": [
+        "TITLE"
+      ],
       "conflictsWith": []
     },
     {
@@ -226,7 +234,7 @@
       "min": null,
       "max": null,
       "maxItems": null,
-      "maxBytes": null,
+      "maxBytes": 500,
       "pattern": null,
       "template": "{head} := {value} if {helper}",
       "perItem": false,

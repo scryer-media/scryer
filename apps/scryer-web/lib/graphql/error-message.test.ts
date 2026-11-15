@@ -575,3 +575,31 @@ test("media review conditions translate in every supported language without pars
     }
   }
 });
+
+test("a missing per-run maximum names the delete actions that need it", () => {
+  const refusal = (destructiveActions: unknown) => ({
+    graphQLErrors: [
+      {
+        message: "server sentence",
+        extensions: {
+          code: "VALIDATION_ERROR",
+          reason: "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED",
+          destructiveActions,
+        },
+      },
+    ],
+  });
+  assert.equal(
+    userFacingGraphQlErrorMessage(
+      refusal(["delete_files", "delete_title"]),
+      "Failed",
+    ),
+    "Set titles per run: this rule can delete_files, delete_title.",
+  );
+  for (const destructiveActions of [undefined, [], [3], "delete_files"]) {
+    assert.equal(
+      userFacingGraphQlErrorMessage(refusal(destructiveActions), "Failed"),
+      "Set titles per run: this rule can delete.",
+    );
+  }
+});

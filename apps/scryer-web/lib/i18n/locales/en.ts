@@ -10037,6 +10037,159 @@ const en: LocaleDictionary = {
     "True when media metadata declares 3D video. False means not detected, including files not yet analyzed.",
   "settings.refMaintFileVideoWidth": "Video width in pixels",
   "settings.refMaintFileVideoHeight": "Video height in pixels",
+  "settings.refMaintFactsRuntimeMinutes":
+    "Runtime in minutes, as the metadata provider gave it",
+  "settings.refMaintFactsOriginalLanguage": "Original language of the title",
+  "settings.refMaintFactsSeriesStatus":
+    "Status of a show as the metadata provider gave it, such as continuing or ended",
+  "settings.refMaintFactsFirstAired": "Date the show first aired (YYYY-MM-DD)",
+  "settings.refMaintFactsNetwork": "Network that airs the show",
+  "settings.refMaintFactsStudio": "Studio that made the title",
+  "settings.refMaintFactsCountry": "Country of origin",
+  "settings.refMaintFactsPopularity":
+    "Popularity score from the metadata provider",
+  "settings.refMaintFactsTheatricalReleaseDate":
+    "Theatrical release date of a movie (YYYY-MM-DD)",
+  "settings.refMaintFactsDigitalReleaseDate":
+    "Digital release date of a movie (YYYY-MM-DD)",
+  "settings.refMaintFactsPhysicalReleaseDate":
+    "Physical release date of a movie (YYYY-MM-DD)",
+  "settings.refMaintFactsDaysSinceAdded":
+    "Whole days since the subject was added",
+  "settings.refMaintFactsMaxVideoHeight":
+    "Tallest video stream among the subject's files, in pixels",
+  "settings.refMaintFactsSeasonCount":
+    "Number of seasons of the show, specials left out",
+  "settings.refMaintFactsAiredEpisodeCount":
+    "Number of regular episodes of the show that have aired",
+  "settings.refMaintFactsUnairedEpisodeCount":
+    "Number of regular episodes of the show that have not aired",
+  "settings.refMaintFactsMissingEpisodeCount":
+    "Number of aired, monitored episodes of the show without a file",
+  "settings.refMaintFactsAiredEpisodeFilePercent":
+    "Aired episodes with a file, as a percentage of aired episodes",
+  "settings.refMaintFactsLatestSeasonNumber":
+    "Number of the show's latest season",
+  "settings.refMaintFactsLatestAiredEpisodeDate":
+    "Air date of the show's most recently aired episode (YYYY-MM-DD)",
+  "settings.refMaintFactsNextEpisodeAirDate":
+    "Air date of the show's next scheduled episode (YYYY-MM-DD)",
+  "settings.refMaintFactsGenres":
+    "Genre names from the title's stored metadata",
+  "settings.refMaintFactsRating": "The title's stored rating summary",
+  "settings.refMaintFactsRatings":
+    "Every external rating behind the rating summary",
+  "settings.refMaintFactsPlayCountTotal":
+    "Plays of the subject by every account on every enabled media server, summed; it names nobody",
+  "settings.refMaintFactsWatchlistedByUserIds":
+    "Users whose watchlists hold the title",
+  "settings.refMaintFactsWatchlistedByUsernames":
+    "Usernames of the users whose watchlists hold the title",
+  "settings.refMaintFactsWatchlistedByAnyone":
+    "Whether any user's watchlist holds the title",
+  "settings.refMaintFactsWatchlistedByAnyRequester":
+    "Whether a watchlist of one of the title's requesters holds it",
+  "settings.refMaintFactsWatchlistAddedAt":
+    "When Scryer first saw the title on any watchlist",
+  "settings.refMaintFactsWatchlistOrigins":
+    "Providers whose watchlists hold the title now",
+  "settings.refMaintFactsFavoritedByUserIds":
+    "Users who marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFactsFavoritedByUsernames":
+    "Usernames of the users who marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFactsFavoritedByAnyone":
+    "Whether any user marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFactsFavoritedByAnyRequester":
+    "Whether one of the title's requesters marked the subject a favorite on Jellyfin or Emby",
+  "settings.refMaintFileAudioCodec":
+    "Audio codec of the file's main audio stream",
+  "settings.refMaintFileAudioChannels": "Number of audio channels",
+  "settings.refMaintFileAudioBitrateKbps": "Audio bitrate in kbps",
+  "settings.refMaintFileVideoBitrateKbps": "Video bitrate in kbps",
+  "settings.refMaintFileVideoBitDepth": "Video bit depth",
+  "settings.refMaintFileVideoHdrFormat":
+    "HDR format of the video, such as HDR10 or Dolby Vision",
+  "settings.refMaintSectionRatings":
+    "— One entry per external rating in input.facts.ratings",
+  "settings.refMaintSectionObsRatings":
+    "— One entry per external rating in input.observations.ratings.value",
+  "settings.refMaintRatingSource": "Source of the rating",
+  "settings.refMaintRatingValue":
+    "The rating on the source's own scale, when the source gives one",
+  "settings.refMaintRatingNormalized":
+    "The rating on Scryer's common scale, comparable across sources",
+  "settings.refMaintRatingVotes":
+    "Number of votes behind the rating, when the source gives one",
+  "settings.refMaintFactsRuntimeMinutesValue":
+    "Runtime in minutes; absent when the metadata provider gave no value",
+  "settings.refMaintFactsOriginalLanguageValue":
+    "Original language; absent when the metadata provider gave no value",
+  "settings.refMaintFactsSeriesStatusValue":
+    "Show status as the provider gave it; absent when the provider gave no value",
+  "settings.refMaintFactsFirstAiredValue":
+    "First air date (YYYY-MM-DD), a date rather than a timestamp; absent when the provider gave no value",
+  "settings.refMaintFactsNetworkValue":
+    "Network name; absent when the provider gave no value",
+  "settings.refMaintFactsStudioValue":
+    "Studio name; absent when the provider gave no value",
+  "settings.refMaintFactsCountryValue":
+    "Country of origin; absent when the provider gave no value",
+  "settings.refMaintFactsPopularityValue":
+    "Popularity score; absent when the provider gave no value",
+  "settings.refMaintFactsTheatricalReleaseDateValue":
+    "Theatrical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+  "settings.refMaintFactsDigitalReleaseDateValue":
+    "Digital release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+  "settings.refMaintFactsPhysicalReleaseDateValue":
+    "Physical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
+  "settings.refMaintFactsDaysSinceAddedValue":
+    "Whole days since the subject was added, counted against the evaluation clock",
+  "settings.refMaintFactsMaxVideoHeightValue":
+    "Height in pixels of the tallest video stream among the files; absent when no file reports one",
+  "settings.refMaintFactsSeasonCountValue":
+    "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsAiredEpisodeCountValue":
+    "Regular episodes whose air date is on or before the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsUnairedEpisodeCountValue":
+    "Regular episodes with no air date or one after the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsMissingEpisodeCountValue":
+    "Regular episodes that have aired, are monitored and have no file; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+    "Percentage of aired episodes that have a file; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsLatestSeasonNumberValue":
+    "Highest regular season number; absent for movies or a show with no seasons, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+    "Air date (YYYY-MM-DD) of the most recently aired regular episode; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsNextEpisodeAirDateValue":
+    "Earliest air date (YYYY-MM-DD) after the evaluation day; absent with reason no_scheduled_episode when none is scheduled, unknown with reason episode_store_unreadable when the episode store could not be read",
+  "settings.refMaintFactsGenresValue":
+    "Genre names; unknown with reason metadata_unreadable when the stored metadata could not be read",
+  "settings.refMaintFactsRatingValue":
+    "Rating summary; absent when no source rated the title, unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refMaintFactsRatingsValue":
+    "One entry per external rating; unknown with reason metadata_unreadable when the rating store could not be read",
+  "settings.refMaintFactsPlayCountTotalValue":
+    "Plays by every account on every enabled media server, linked to a Scryer user or not, summed. Unknown with reason audience_not_read until every account has been read recently, and with the usual watch-fact reasons whenever watch facts are unknown.",
+  "settings.refMaintFactsWatchlistedByUserIdsValue":
+    "IDs of the users whose watchlists hold the title. A watchlist is a user's own enabled, signed-in Plex, Trakt, TMDb or MDBList watchlist, Simkl or MyAnimeList plan-to-watch list, or AniList planning list. Unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently.",
+  "settings.refMaintFactsWatchlistedByUsernamesValue":
+    "Usernames of the users whose watchlists hold the title; unknown with reason user_not_found when one of them no longer exists, and with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistedByAnyoneValue":
+    "True when any user's watchlist holds the title; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+    "True when a requester's watchlist holds the title; absent with reason title_not_requested when nobody requested it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistAddedAtValue":
+    "RFC3339 timestamp of when Scryer first saw the title on any watchlist; absent with reason not_on_a_watchlist when no watchlist holds it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsWatchlistOriginsValue":
+    "Providers whose watchlists hold the title now; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
+  "settings.refMaintFactsFavoritedByUserIdsValue":
+    "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. For a series, a favorite of the series or of any of its seasons or episodes counts; a season or episode counts its own favorites, and an episode also counts its season's and its series'. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable while a linked user can only be seen through Plex, with reason signal_identity_missing while a favorite belongs to an account not linked to a Scryer user, and with reason favorites_unreadable when the stored favorites could not be read.",
+  "settings.refMaintFactsFavoritedByUsernamesValue":
+    "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+  "settings.refMaintFactsFavoritedByAnyoneValue":
+    "True when any user marked the subject a favorite, counted as for favorited_by_user_ids. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
+  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+    "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account. Plex has no favorites: absent with reason favorites_unsupported when every enabled server is Plex, unknown with reason favorite_member_unobservable or favorites_unreadable.",
   "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
   "settings.refMaintFileSubtitleLanguages":
     "Subtitle languages present in the file",
@@ -10066,10 +10219,8 @@ const en: LocaleDictionary = {
     "Simple builds the rule from conditions and outcomes and writes the Rego for you. Advanced shows that Rego read-only, and you can switch back to Simple at any time. To change the Rego yourself, choose Edit as Rego; after that the rule can no longer be opened in the simple builder.",
   "settings.ruleBuilderUnavailable":
     "This rule's source was edited by hand or did not come from the simple builder, so it can only be edited as Rego.",
-  "settings.ruleBuilderEditAsRego":
-    "Edit as Rego",
-  "settings.ruleBuilderEditAsRegoTitle":
-    "Edit this rule as Rego?",
+  "settings.ruleBuilderEditAsRego": "Edit as Rego",
+  "settings.ruleBuilderEditAsRegoTitle": "Edit this rule as Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
     "Once you edit this rule as Rego, it can no longer be opened in the simple builder, even after you save it. The Rego it has now is kept as the starting point.",
   "settings.ruleBuilderIncomplete":
@@ -10087,7 +10238,8 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderDays": "Days",
   "settings.maintenanceBuilderActionsHelp":
     "Actions run in the order listed. Actions that cannot be combined are disabled once a conflicting one is chosen.",
-  "settings.maintenanceBuilderActionTitleOnly": "Only available for title rules.",
+  "settings.maintenanceBuilderActionTitleOnly":
+    "Only available for title rules.",
   "settings.ruleBuilderOutputConflict": "Cannot be combined with {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Choose a quality profile",
   "settings.maintenanceBuilderLibraryPlaceholder": "Choose a library",
@@ -10394,16 +10546,16 @@ const en: LocaleDictionary = {
   "settings.refReqOutputManual":
     "manual — the request goes to a person, whatever else voted.",
   "settings.refReqOutputTags":
-    "add_tags := [\"…\"] — tags for the title, applied only on an approval.",
+    'add_tags := ["…"] — tags for the title, applied only on an approval.',
   "settings.refReqOutputSetQualityProfile":
-    "set_quality_profile := \"Profile name\" — approve with this quality profile instead of the requested one.",
+    'set_quality_profile := "Profile name" — approve with this quality profile instead of the requested one.',
   "settings.refReqOutputSetLeaseDays":
     "set_lease_days := 30 — approve with this lease. 0 keeps the title forever; otherwise 1 to 3650 days.",
   "settings.refReqOutputSetMonitor":
-    "set_monitor := \"FUTURE_EPISODES\" — approve with this monitoring: MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime.",
+    'set_monitor := "FUTURE_EPISODES" — approve with this monitoring: MONITORED or UNMONITORED for movies; FUTURE_EPISODES, MISSING_AND_FUTURE_EPISODES, ALL_EPISODES or NONE for series and anime.',
   "settings.refReqOutputSetAudioLanguages":
-    "set_required_audio_languages := [\"eng\"] and set_preferred_audio_languages := [\"jpn\", \"eng\"] — replace the requested audio language lists.",
-  "settings.refReqOutputNotify": "notify := \"…\" — send this notification.",
+    'set_required_audio_languages := ["eng"] and set_preferred_audio_languages := ["jpn", "eng"] — replace the requested audio language lists.',
+  "settings.refReqOutputNotify": 'notify := "…" — send this notification.',
   "settings.refReqOutputShapingOutcome":
     "An automatically approved request gets these values. A request held for review shows them to the approver as suggestions, and a denied one lists them in its trace only. When two rules set different values for the same thing, the request is held for review.",
   "settings.refReqOutputNoSchedule":
@@ -12108,6 +12260,66 @@ const en: LocaleDictionary = {
     "Held: the media server could not confirm the watch history before acting.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
+  "settings.maintenanceRuleMaxTitlesPerRun": "Titles per run",
+  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+    "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
+  "settings.maintenanceRuleMaxTitlesPerRunNone": "No limit",
+  "settings.maintenanceRuleLoadRefused":
+    "This rule cannot be loaded and never runs. Replace its source to run it again.",
+  "settings.maintenanceSequenceStepMonitor": "Monitor",
+  "settings.maintenanceSequenceStepFetchSubtitles": "Fetch subtitles",
+  "settings.maintenanceSequenceStepMoveToLibrary": "Move to library",
+  "settings.maintenanceSequenceStepMoveToRoot": "Move to root folder",
+  "settings.notificationEvent.maintenanceRuleNotified":
+    "Maintenance Rule Notified",
+  "settings.maintenanceExecutionReason.tagNotDefined":
+    "Held: a tag this rule writes is no longer defined in Settings › Tags.",
+  "settings.maintenanceExecutionReason.tagPatchConflict":
+    "Held: another rule would add a tag this rule removes, or remove one it adds.",
+  "settings.maintenanceExecutionReason.monitoringConflict":
+    "Held: another rule recently did the opposite to this title's monitoring.",
+  "settings.maintenanceExecutionReason.actionsConflict":
+    "Held: the rule decided actions that cannot run together, so nothing was applied.",
+  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+    "Held: the library this move names no longer matches exactly one library.",
+  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+    "Held: the library this move names holds another kind of title.",
+  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+    "Held: the root folder this move names is not a root of the title's library.",
+  "settings.maintenanceExecutionReason.moveRefused":
+    "Held: the move was refused or its plan went stale. The files stay where they are and the move retries.",
+  "error.ruleActionRequired":
+    "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
+  "error.ruleActionHeadFunction":
+    "An action cannot be written as a function. Write it as a rule instead.",
+  "error.ruleForeignDataReference":
+    "This rule reads data outside its own package. Use input instead.",
+  "error.ruleWithTargetNotAllowed":
+    'This rule cannot replace {{path}} with "with". Its decision must rest on what Scryer observed.',
+  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+    "Set titles per run: this rule can {{actions}}.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+    "The rule defines no action, so it could never do anything.",
+  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
+    "The rule defines an action its scope cannot run.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+    "The library this move names holds another kind of title than the rule's libraries.",
+  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+    "The library this move names does not exist.",
+  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+    "The root folder this move names is not a configured library root.",
+  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+    "The rule gave this subject neither a decision nor an error.",
+  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+    "The quality profile this rule sets does not exist.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+    "Titles per run must be at least 1.",
+  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+    "Set titles per run: this rule can delete.",
+  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+    "Another save changed this rule first. Nothing was saved; reload the rule and try again.",
+  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+    "This rule was saved before rules declared their own actions, so it never runs. Replace its source to run it again.",
   "settings.refMaintFactsWatchedByAnyone":
     "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
   "settings.refMaintFactsLastWatchedByAnyoneAt":
@@ -12584,10 +12796,10 @@ const en: LocaleDictionary = {
     "Download, verify, and apply a signed application upgrade.",
   "jobs.builtin.MaintenanceRuleEvaluation.name": "Maintenance Rule Evaluation",
   "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action.",
+    "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
   "jobs.builtin.LifecycleActionHandling.name": "Maintenance Action Handling",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks.",
+    "Execute due maintenance candidates of armed rules, behind the instance effect gates and full safety rechecks. Each rule acts right after its own scheduled evaluation; running this now acts for every armed rule.",
   "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
   "jobs.builtin.MediaServerSignalSync.description":
     "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",

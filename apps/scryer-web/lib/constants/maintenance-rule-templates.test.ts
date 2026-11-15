@@ -139,6 +139,12 @@ test("every file-deleting template is marked and says so in its copy", () => {
       deletesFiles,
       `${template.id} disagrees with its source about deleting files`,
     );
+    // The server refuses a deleting rule without a per-run maximum.
+    assert.equal(
+      template.maxTitlesPerRun !== undefined,
+      deletesFiles,
+      `${template.id} disagrees with its source about needing a per-run maximum`,
+    );
     if (deletesFiles) {
       assert.match(
         en[template.descriptionKey],

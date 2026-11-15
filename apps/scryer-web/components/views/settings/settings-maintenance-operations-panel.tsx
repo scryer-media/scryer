@@ -120,6 +120,11 @@ function MaintenanceSequenceProgress({
             <span className="font-medium text-foreground">
               {index + 1}. {stepLabelKey ? t(stepLabelKey) : step.kind}
             </span>
+            {step.parameters.targetLibrary || step.parameters.targetRoot ? (
+              <span>
+                · {step.parameters.targetLibrary || step.parameters.targetRoot}
+              </span>
+            ) : null}
             {step.kind === "SEARCH" ? (
               acceptedReceipt ? (
                 <>

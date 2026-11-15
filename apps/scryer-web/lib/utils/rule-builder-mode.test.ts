@@ -66,7 +66,12 @@ import {
 
 const PREAMBLE = "package rules\nimport rego.v1\n\n";
 
-type Fixture = { id: string; scope: string | null; model: unknown; source: string };
+type Fixture = {
+  id: string;
+  scope: string | null;
+  model: unknown;
+  source: string;
+};
 
 /// One family's draft helpers, so every family is held to the same rules.
 type Family<D extends RuleBuilderDraft> = {
@@ -111,6 +116,8 @@ function maintenanceDetail(
       subjectKind,
       currentRevisionNumber: 1,
       graceDays: 0,
+      maxTitlesPerRun: null,
+      loadRefusal: null,
       declaredActions,
       schedule: {
         kind: "INTERVAL",
@@ -139,7 +146,10 @@ function maintenanceDetail(
   } as MaintenanceRuleSetDetail;
 }
 
-function scoringRecord(regoSource: string, builderModel: unknown): RuleSetRecord {
+function scoringRecord(
+  regoSource: string,
+  builderModel: unknown,
+): RuleSetRecord {
   return {
     id: "rule-sample",
     name: "Sample rule",
@@ -157,7 +167,10 @@ function scoringRecord(regoSource: string, builderModel: unknown): RuleSetRecord
   };
 }
 
-function requestDetail(regoSource: string, builderModel: unknown): RequestRuleSetDetail {
+function requestDetail(
+  regoSource: string,
+  builderModel: unknown,
+): RequestRuleSetDetail {
   return {
     ruleSet: {
       id: "rule-sample",
@@ -178,16 +191,26 @@ const maintenance: Family<ReturnType<typeof initialMaintenanceRuleDraft>> = {
   name: "maintenance",
   binding: MAINTENANCE_BUILDER,
   starter: MAINTENANCE_STARTER_SOURCE,
-  fixtures: (maintenanceFixtures as Fixture[]).filter((entry) => entry.scope === "TITLE"),
+  fixtures: (maintenanceFixtures as Fixture[]).filter(
+    (entry) => entry.scope === "TITLE",
+  ),
   newDraft: () => newMaintenanceRuleBuilderDraft(MAINTENANCE_BUILDER),
   handWrittenDraft: initialMaintenanceRuleDraft,
   fromStored: (source, model) =>
-    maintenanceRuleDraftFromDetail(maintenanceDetail(source, model), MAINTENANCE_BUILDER),
+    maintenanceRuleDraftFromDetail(
+      maintenanceDetail(source, model),
+      MAINTENANCE_BUILDER,
+    ),
   copy: (source, model) =>
-    copyMaintenanceRuleDraft(maintenanceDetail(source, model), MAINTENANCE_BUILDER),
-  createModel: (draft) => createMaintenanceRuleSetInput(draft, MAINTENANCE_BUILDER).builderModel,
+    copyMaintenanceRuleDraft(
+      maintenanceDetail(source, model),
+      MAINTENANCE_BUILDER,
+    ),
+  createModel: (draft) =>
+    createMaintenanceRuleSetInput(draft, MAINTENANCE_BUILDER).builderModel,
   updateModel: (draft) =>
-    updateMaintenanceRuleMatcherInput("rule-sample", draft, MAINTENANCE_BUILDER).builderModel,
+    updateMaintenanceRuleMatcherInput("rule-sample", draft, MAINTENANCE_BUILDER)
+      .builderModel,
 };
 
 const scoring: Family<typeof RULE_SET_INITIAL_DRAFT> = {
@@ -199,9 +222,12 @@ const scoring: Family<typeof RULE_SET_INITIAL_DRAFT> = {
   handWrittenDraft: () => ({ ...RULE_SET_INITIAL_DRAFT }),
   fromStored: (source, model) =>
     ruleSetDraftFromRecord(scoringRecord(source, model), SCORING_BUILDER),
-  copy: (source, model) => copyRuleSetDraft(scoringRecord(source, model), SCORING_BUILDER),
-  createModel: (draft) => createRuleSetInput(draft, SCORING_BUILDER).builderModel,
-  updateModel: (draft) => updateRuleSetInput("rule-sample", draft, SCORING_BUILDER).builderModel,
+  copy: (source, model) =>
+    copyRuleSetDraft(scoringRecord(source, model), SCORING_BUILDER),
+  createModel: (draft) =>
+    createRuleSetInput(draft, SCORING_BUILDER).builderModel,
+  updateModel: (draft) =>
+    updateRuleSetInput("rule-sample", draft, SCORING_BUILDER).builderModel,
 };
 
 const request: Family<ReturnType<typeof initialRequestRuleDraft>> = {
@@ -213,13 +239,19 @@ const request: Family<ReturnType<typeof initialRequestRuleDraft>> = {
   handWrittenDraft: initialRequestRuleDraft,
   fromStored: (source, model) =>
     requestRuleDraftFromDetail(requestDetail(source, model), REQUEST_BUILDER),
-  copy: (source, model) => copyRequestRuleDraft(requestDetail(source, model), REQUEST_BUILDER),
-  createModel: (draft) => createRequestRuleSetInput(draft, REQUEST_BUILDER).builderModel,
+  copy: (source, model) =>
+    copyRequestRuleDraft(requestDetail(source, model), REQUEST_BUILDER),
+  createModel: (draft) =>
+    createRequestRuleSetInput(draft, REQUEST_BUILDER).builderModel,
   updateModel: (draft) =>
-    updateRequestRuleMatcherInput("rule-sample", draft, REQUEST_BUILDER).builderModel,
+    updateRequestRuleMatcherInput("rule-sample", draft, REQUEST_BUILDER)
+      .builderModel,
 };
 
-function modelOf<D extends RuleBuilderDraft>(family: Family<D>, entry: Fixture): RuleBuilderModel {
+function modelOf<D extends RuleBuilderDraft>(
+  family: Family<D>,
+  entry: Fixture,
+): RuleBuilderModel {
   assert.ok(family.binding.schema);
   const model = parseRuleBuilderModel(family.binding.schema, entry.model);
   assert.ok(model, entry.id);
@@ -232,7 +264,10 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
   test(`${family.name}: a new rule opens in Simple with nothing to save, a hand-written one in Advanced edit`, () => {
     const draft = family.newDraft();
     assert.ok(family.binding.schema);
-    assert.deepEqual(draft.builderModel, emptyRuleBuilderModel(family.binding.schema));
+    assert.deepEqual(
+      draft.builderModel,
+      emptyRuleBuilderModel(family.binding.schema),
+    );
     assert.equal(draft.regoSource, "");
     assert.equal(initialRuleEditorMode(draft), "simple");
     assert.equal(isIncompleteRuleBuilderDraft(family.binding, draft), true);
@@ -242,27 +277,44 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     assert.equal(handWritten.builderModel, null);
     assert.equal(handWritten.regoSource, family.starter);
     assert.equal(initialRuleEditorMode(handWritten), "edit");
-    assert.equal(isIncompleteRuleBuilderDraft(family.binding, handWritten), false);
+    assert.equal(
+      isIncompleteRuleBuilderDraft(family.binding, handWritten),
+      false,
+    );
   });
 
   test(`${family.name}: a builder change writes the generated source and saves the model`, () => {
     const model = modelOf(family, first);
-    const draft = withRuleBuilderModel(family.binding, family.newDraft(), model);
+    const draft = withRuleBuilderModel(
+      family.binding,
+      family.newDraft(),
+      model,
+    );
     assert.equal(draft.regoSource, first.source);
     assert.deepEqual(ruleBuilderModelToSave(family.binding, draft), model);
     assert.deepEqual(family.createModel(draft), model);
     assert.deepEqual(family.updateModel(draft), model);
     assert.equal(isIncompleteRuleBuilderDraft(family.binding, draft), false);
 
-    const unfinished = withRuleBuilderModel(family.binding, draft, { ...model, outputs: {} });
+    const unfinished = withRuleBuilderModel(family.binding, draft, {
+      ...model,
+      outputs: {},
+    });
     assert.equal(unfinished.regoSource, "");
     assert.equal(ruleBuilderModelToSave(family.binding, unfinished), null);
-    assert.equal(isIncompleteRuleBuilderDraft(family.binding, unfinished), true);
+    assert.equal(
+      isIncompleteRuleBuilderDraft(family.binding, unfinished),
+      true,
+    );
   });
 
   test(`${family.name}: an attached draft moves between Simple and Advanced view and keeps its model`, () => {
     const model = modelOf(family, first);
-    const attached = withRuleBuilderModel(family.binding, family.newDraft(), model);
+    const attached = withRuleBuilderModel(
+      family.binding,
+      family.newDraft(),
+      model,
+    );
     assert.equal(nextRuleEditorMode(attached, "simple", "view"), "view");
     assert.equal(nextRuleEditorMode(attached, "view", "simple"), "simple");
     // Neither move touches the draft, so the model and source are what Simple left.
@@ -272,13 +324,24 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
   });
 
   test(`${family.name}: the Rego of an attached draft cannot be edited`, () => {
-    const attached = withRuleBuilderModel(family.binding, family.newDraft(), modelOf(family, first));
-    assert.equal(withRuleSourceEdit(attached, `${first.source}# note\n`), attached);
+    const attached = withRuleBuilderModel(
+      family.binding,
+      family.newDraft(),
+      modelOf(family, first),
+    );
+    assert.equal(
+      withRuleSourceEdit(attached, `${first.source}# note\n`),
+      attached,
+    );
   });
 
   test(`${family.name}: entering edit detaches the draft even with its source unchanged`, () => {
     const model = modelOf(family, first);
-    const attached = withRuleBuilderModel(family.binding, family.newDraft(), model);
+    const attached = withRuleBuilderModel(
+      family.binding,
+      family.newDraft(),
+      model,
+    );
     assert.equal(ruleRegoEditorNeedsConfirmation(attached), true);
 
     const editing = withRuleRegoEditor(family.binding, attached);
@@ -337,7 +400,10 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     assert.equal(served.regoSource, stripped);
     assert.deepEqual(family.updateModel(served), model);
 
-    const handEdited = family.fromStored(`${first.source}\n# note\n`, first.model);
+    const handEdited = family.fromStored(
+      `${first.source}\n# note\n`,
+      first.model,
+    );
     assert.equal(handEdited.builderModel, null);
     assert.equal(initialRuleEditorMode(handEdited), "edit");
 
@@ -345,7 +411,12 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     assert.equal(stale.builderModel, null);
     assert.equal(stale.regoSource, second.source);
 
-    for (const stored of [null, undefined, { version: 9 }, { ...model, family: "other" }])
+    for (const stored of [
+      null,
+      undefined,
+      { version: 9 },
+      { ...model, family: "other" },
+    ])
       assert.equal(family.fromStored(first.source, stored).builderModel, null);
   });
 
@@ -354,7 +425,10 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
     assert.deepEqual(copy.builderModel, modelOf(family, first));
     assert.equal(copy.regoSource, first.source);
     assert.deepEqual(family.createModel(copy), modelOf(family, first));
-    assert.equal(family.copy(`${first.source}# note\n`, first.model).builderModel, null);
+    assert.equal(
+      family.copy(`${first.source}# note\n`, first.model).builderModel,
+      null,
+    );
     assert.equal(family.copy(first.source, null).builderModel, null);
   });
 }
@@ -382,7 +456,10 @@ test("maintenance: a scope change rewrites an attached rule for the new scope", 
   });
   assert.equal(episode.regoSource, "");
   assert.deepEqual(episode.builderModel, model);
-  assert.equal(isIncompleteRuleBuilderDraft(MAINTENANCE_BUILDER, episode), true);
+  assert.equal(
+    isIncompleteRuleBuilderDraft(MAINTENANCE_BUILDER, episode),
+    true,
+  );
 
   // A rule stored for one scope does not open in the builder under another.
   assert.equal(
@@ -394,13 +471,19 @@ test("maintenance: a scope change rewrites an attached rule for the new scope", 
   );
 
   const detached = { ...attached, builderModel: null };
-  assert.equal(withRegeneratedRuleSource(MAINTENANCE_BUILDER, detached), detached);
+  assert.equal(
+    withRegeneratedRuleSource(MAINTENANCE_BUILDER, detached),
+    detached,
+  );
 });
 
 test("without the served schema a stored builder rule opens as Rego and an update keeps its model", () => {
   const entry = (requestFixtures as Fixture[])[0];
   const unserved = requestRuleBuilder(null);
-  const draft = requestRuleDraftFromDetail(requestDetail(entry.source, entry.model), unserved);
+  const draft = requestRuleDraftFromDetail(
+    requestDetail(entry.source, entry.model),
+    unserved,
+  );
   assert.equal(draft.builderModel, null);
   assert.equal(initialRuleEditorMode(draft), "edit");
   assert.equal(isIncompleteRuleBuilderDraft(unserved, draft), false);

@@ -35,6 +35,9 @@ export type MaintenanceRuleTemplate = {
   /// gallery marks these, and their copy says so, even though the instance
   /// gates and per-rule state still have to agree before anything is removed.
   destructive?: boolean;
+  /// The most titles one run acts on. Set exactly on the destructive
+  /// templates, since a rule that deletes cannot be saved without it.
+  maxTitlesPerRun?: number;
   regoSource: string;
 };
 
@@ -57,6 +60,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 180,
     subjectFacets: ["movie"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       'package rules\nimport rego.v1\n\naging_unkept if {\n\tinput.facts.has_file\n\tnot "keep" in input.facts.tags\n}\n\ndelete_title if aging_unkept\n',
   },
@@ -100,6 +104,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 120,
     subjectFacets: ["movie", "show"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       'package rules\nimport rego.v1\n\nrequested_unkept if {\n\tinput.facts.requested\n\tnot "keep" in input.facts.tags\n}\n\ndelete_title if requested_unkept\n',
   },
@@ -111,6 +116,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 30,
     subjectFacets: ["movie", "show"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       'package rules\nimport rego.v1\n\ndelete_title if {\n\t"departed-user" in input.facts.requested_by_usernames\n}\n',
   },
@@ -132,6 +138,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 30,
     subjectFacets: ["movie"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       "package rules\nimport rego.v1\n\nwatched_by_requesters if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n\ndelete_title if watched_by_requesters\n",
   },
@@ -143,6 +150,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 7,
     subjectFacets: ["movie", "show"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       'package rules\nimport rego.v1\n\ndelete_title if {\n\tinput.facts.request_lease_state == "expired"\n}\n',
   },
@@ -154,6 +162,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 7,
     subjectFacets: ["movie", "show"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       'package rules\nimport rego.v1\n\ndelete_title if {\n\t"remove" in input.facts.tags\n}\n',
   },
@@ -186,6 +195,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 7,
     subjectFacets: ["show"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       "package rules\nimport rego.v1\n\ndelete_files if input.facts.episode_position_by_air_date > 3\n",
   },
@@ -198,6 +208,7 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
     graceDays: 7,
     subjectFacets: ["show"],
     destructive: true,
+    maxTitlesPerRun: 10,
     regoSource:
       "package rules\nimport rego.v1\n\ndelete_files if input.facts.season_position_by_air_date > 2\n",
   },

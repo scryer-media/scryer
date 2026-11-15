@@ -44,6 +44,10 @@ const DIAGNOSTIC_KEYS: Readonly<Record<string, string>> = {
   RULE_ACTION_UNDEFINED_TAG: "error.ruleActionUndefinedTag",
   RULE_HOST_HELPER_REDEFINED: "error.ruleHostHelperRedefined",
   RULE_UNREFERENCED_RULE: "error.ruleUnreferencedRule",
+  RULE_ACTION_REQUIRED: "error.ruleActionRequired",
+  RULE_ACTION_HEAD_FUNCTION: "error.ruleActionHeadFunction",
+  RULE_FOREIGN_DATA_REFERENCE: "error.ruleForeignDataReference",
+  RULE_WITH_TARGET_NOT_ALLOWED: "error.ruleWithTargetNotAllowed",
 };
 
 /** Compiler-owned diagnostics keep their detail; owned conditions use i18n. */

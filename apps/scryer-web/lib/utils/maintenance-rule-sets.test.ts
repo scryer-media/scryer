@@ -92,6 +92,8 @@ const detail: MaintenanceRuleSetDetail = {
     subjectKind: "TITLE",
     currentRevisionNumber: 3,
     graceDays: 30,
+    maxTitlesPerRun: null,
+    loadRefusal: null,
     declaredActions: profileThenSearch,
     schedule: {
       kind: "WEEKLY",
@@ -161,11 +163,14 @@ test("copying a rule set renames the draft and keeps nothing that identifies the
 });
 
 test("create input sends the source as the whole rule and no separate action", () => {
-  const input = createMaintenanceRuleSetInput({
-    ...maintenanceRuleDraftFromDetail(detail, maintenance),
-    description: "  ",
-    libraryIds: [],
-  }, maintenance);
+  const input = createMaintenanceRuleSetInput(
+    {
+      ...maintenanceRuleDraftFromDetail(detail, maintenance),
+      description: "  ",
+      libraryIds: [],
+    },
+    maintenance,
+  );
 
   assert.equal(input.name, "Stale unmonitored titles");
   assert.equal(input.description, undefined);
@@ -178,13 +183,18 @@ test("create input sends the source as the whole rule and no separate action", (
 
 test("matcher and metadata updates split along the API's versioned and unversioned halves", () => {
   const draft = maintenanceRuleDraftFromDetail(detail, maintenance);
-  const matcher = updateMaintenanceRuleMatcherInput("rule-1", draft, maintenance);
+  const matcher = updateMaintenanceRuleMatcherInput(
+    "rule-1",
+    draft,
+    maintenance,
+  );
   const metadata = updateMaintenanceRuleMetadataInput("rule-1", draft);
 
   assert.deepEqual(Object.keys(matcher).sort(), [
     "builderModel",
     "graceDays",
     "id",
+    "maxTitlesPerRun",
     "regoSource",
     "storageRootId",
   ]);
@@ -192,9 +202,42 @@ test("matcher and metadata updates split along the API's versioned and unversion
     "description",
     "id",
     "libraryIds",
+    "maxTitlesPerRun",
     "name",
     "schedule",
   ]);
+});
+
+test("a per-run maximum change alone goes on the metadata half; a source change carries it on the matcher", () => {
+  const baseline = maintenanceRuleDraftFromDetail(detail, maintenance);
+  const limitOnly = maintenanceRuleUpdatePlan(
+    "rule-1",
+    baseline,
+    { ...baseline, maxTitlesPerRun: 5 },
+    maintenance,
+  );
+  assert.equal(limitOnly.matcher, null);
+  assert.equal(limitOnly.metadata?.maxTitlesPerRun, 5);
+
+  const withSource = maintenanceRuleUpdatePlan(
+    "rule-1",
+    baseline,
+    {
+      ...baseline,
+      regoSource: `${baseline.regoSource}\n`,
+      maxTitlesPerRun: 5,
+    },
+    maintenance,
+  );
+  assert.equal(withSource.matcher?.maxTitlesPerRun, 5);
+
+  const cleared = maintenanceRuleUpdatePlan(
+    "rule-1",
+    { ...baseline, maxTitlesPerRun: 5 },
+    baseline,
+    maintenance,
+  );
+  assert.equal(cleared.metadata?.maxTitlesPerRun, null);
 });
 
 test("a new rule runs every eight hours until the operator picks otherwise", () => {
@@ -206,9 +249,15 @@ test("a new rule runs every eight hours until the operator picks otherwise", () 
     expression: null,
   };
   assert.deepEqual(initialMaintenanceRuleDraft().schedule, expected);
-  assert.deepEqual(newMaintenanceRuleBuilderDraft(maintenance).schedule, expected);
   assert.deepEqual(
-    createMaintenanceRuleSetInput(newMaintenanceRuleBuilderDraft(maintenance), maintenance).schedule,
+    newMaintenanceRuleBuilderDraft(maintenance).schedule,
+    expected,
+  );
+  assert.deepEqual(
+    createMaintenanceRuleSetInput(
+      newMaintenanceRuleBuilderDraft(maintenance),
+      maintenance,
+    ).schedule,
     expected,
   );
 });
@@ -224,8 +273,14 @@ test("a saved rule's schedule is read into the draft and sent back on create and
   };
 
   assert.deepEqual(draft.schedule, weekly);
-  assert.deepEqual(copyMaintenanceRuleDraft(detail, maintenance).schedule, weekly);
-  assert.deepEqual(createMaintenanceRuleSetInput(draft, maintenance).schedule, weekly);
+  assert.deepEqual(
+    copyMaintenanceRuleDraft(detail, maintenance).schedule,
+    weekly,
+  );
+  assert.deepEqual(
+    createMaintenanceRuleSetInput(draft, maintenance).schedule,
+    weekly,
+  );
   assert.deepEqual(
     updateMaintenanceRuleMetadataInput("rule-1", draft).schedule,
     weekly,
@@ -258,7 +313,10 @@ test("a schedule input carries only the fields its kind reads", () => {
     expression: "0 3 * * *",
   };
 
-  assert.deepEqual(createMaintenanceRuleSetInput(draft, maintenance).schedule, cron);
+  assert.deepEqual(
+    createMaintenanceRuleSetInput(draft, maintenance).schedule,
+    cron,
+  );
   assert.deepEqual(
     updateMaintenanceRuleMetadataInput("rule-1", draft).schedule,
     cron,
@@ -267,16 +325,21 @@ test("a schedule input carries only the fields its kind reads", () => {
 
 test("a schedule change alone is saved through the metadata update, never the matcher", () => {
   const baseline = maintenanceRuleDraftFromDetail(detail, maintenance);
-  const plan = maintenanceRuleUpdatePlan("rule-1", baseline, {
-    ...baseline,
-    schedule: {
-      kind: "DAILY",
-      everySeconds: null,
-      timeLocal: "02:00",
-      days: null,
-      expression: null,
+  const plan = maintenanceRuleUpdatePlan(
+    "rule-1",
+    baseline,
+    {
+      ...baseline,
+      schedule: {
+        kind: "DAILY",
+        everySeconds: null,
+        timeLocal: "02:00",
+        days: null,
+        expression: null,
+      },
     },
-  }, maintenance);
+    maintenance,
+  );
 
   assert.equal(plan.matcher, null);
   assert.deepEqual(plan.metadata?.schedule, {
@@ -291,23 +354,36 @@ test("a schedule change alone is saved through the metadata update, never the ma
 test("an update sends only the halves the editor changed", () => {
   const baseline = maintenanceRuleDraftFromDetail(detail, maintenance);
 
-  assert.deepEqual(maintenanceRuleUpdatePlan("rule-1", baseline, baseline, maintenance), {
-    matcher: null,
-    metadata: null,
-  });
+  assert.deepEqual(
+    maintenanceRuleUpdatePlan("rule-1", baseline, baseline, maintenance),
+    {
+      matcher: null,
+      metadata: null,
+    },
+  );
 
-  const grace = maintenanceRuleUpdatePlan("rule-1", baseline, {
-    ...baseline,
-    graceDays: 21,
-  }, maintenance);
+  const grace = maintenanceRuleUpdatePlan(
+    "rule-1",
+    baseline,
+    {
+      ...baseline,
+      graceDays: 21,
+    },
+    maintenance,
+  );
   assert.equal(grace.matcher?.graceDays, 21);
   assert.equal(grace.metadata, null);
 
-  const both = maintenanceRuleUpdatePlan("rule-1", baseline, {
-    ...baseline,
-    regoSource: "search if input.facts.has_file\n",
-    name: "Renamed",
-  }, maintenance);
+  const both = maintenanceRuleUpdatePlan(
+    "rule-1",
+    baseline,
+    {
+      ...baseline,
+      regoSource: "search if input.facts.has_file\n",
+      name: "Renamed",
+    },
+    maintenance,
+  );
   assert.equal(both.matcher?.regoSource, "search if input.facts.has_file\n");
   assert.equal(both.metadata?.name, "Renamed");
 });
@@ -318,16 +394,21 @@ test("a selected root follows create, update, and inline preview inputs", () => 
     storageRootId: "root-a",
   };
 
-  assert.equal(createMaintenanceRuleSetInput(draft, maintenance).storageRootId, "root-a");
   assert.equal(
-    updateMaintenanceRuleMatcherInput("rule-1", draft, maintenance).storageRootId,
+    createMaintenanceRuleSetInput(draft, maintenance).storageRootId,
+    "root-a",
+  );
+  assert.equal(
+    updateMaintenanceRuleMatcherInput("rule-1", draft, maintenance)
+      .storageRootId,
     "root-a",
   );
   assert.equal(maintenancePreviewInput({ draft }).storageRootId, "root-a");
   assert.equal(
     updateMaintenanceRuleMatcherInput(
       "rule-1",
-      maintenanceRuleDraftFromDetail(detail, maintenance), maintenance
+      maintenanceRuleDraftFromDetail(detail, maintenance),
+      maintenance,
     ).storageRootId,
     null,
   );
@@ -419,17 +500,23 @@ test("declared actions keep each head once, with the values it carries, in the o
     sortByRuleOutputOrder(DESCRIPTORS, entries, (entry) => entry.head).map(
       (entry) => entry.head,
     ),
-    ["ADD_TAGS", "SET_QUALITY_PROFILE", "MOVE_TO_ROOT", "UNMONITOR", "DELETE_TITLE", "NOTIFY"],
+    [
+      "ADD_TAGS",
+      "SET_QUALITY_PROFILE",
+      "MOVE_TO_ROOT",
+      "UNMONITOR",
+      "DELETE_TITLE",
+      "NOTIFY",
+    ],
   );
   assert.deepEqual(declaredActionEntries(null), []);
   assert.deepEqual(declaredActionEntries(declared()), []);
 });
 
 test("a head the API does not carry values for is listed without values", () => {
-  assert.deepEqual(
-    declaredActionEntries(declared({ heads: ["ARCHIVE"] })),
-    [{ head: "ARCHIVE", values: [] }],
-  );
+  assert.deepEqual(declaredActionEntries(declared({ heads: ["ARCHIVE"] })), [
+    { head: "ARCHIVE", values: [] },
+  ]);
 });
 
 test("a subject's decided actions keep the server's order and single values", () => {
@@ -919,7 +1006,10 @@ test("scope is copied, sent on create and preview, and immutable on matcher upda
   };
   const draft = copyMaintenanceRuleDraft(scoped, maintenance);
   assert.equal(draft.subjectKind, "EPISODE");
-  assert.equal(createMaintenanceRuleSetInput(draft, maintenance).subjectKind, "EPISODE");
+  assert.equal(
+    createMaintenanceRuleSetInput(draft, maintenance).subjectKind,
+    "EPISODE",
+  );
   assert.equal(
     maintenancePreviewInput({ draft, libraryId: "series" }).subjectKind,
     "EPISODE",

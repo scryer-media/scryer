@@ -4167,6 +4167,8 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
       expression
     }
     nextRunAt
+    maxTitlesPerRun
+    loadRefusal
     createdAt
     updatedAt`;
 
@@ -4280,6 +4282,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
     }
@@ -4292,6 +4296,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
       run {
@@ -4376,6 +4382,8 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
     }
@@ -4388,6 +4396,8 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
           targetQualityProfileId
           searchCondition
           tags
+          targetLibrary
+          targetRoot
         }
       }
       run {

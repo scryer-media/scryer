@@ -70,13 +70,21 @@ export type MaintenanceActionStepKind =
   | "SEARCH"
   | "ADD_TAGS"
   | "REMOVE_TAGS"
-  | "DELETE_TITLE_AND_FILES";
+  | "DELETE_TITLE_AND_FILES"
+  | "MONITOR"
+  | "FETCH_SUBTITLES"
+  | "MOVE_TO_LIBRARY"
+  | "MOVE_TO_ROOT";
 
 export type MaintenanceActionStepParameters = {
   includeDescendants: boolean | null;
   targetQualityProfileId: string | null;
   searchCondition: MaintenanceSearchCondition | null;
   tags: string[];
+  /// The library a move step names, as the rule wrote it.
+  targetLibrary?: string | null;
+  /// The library root a move step names, as the rule wrote it.
+  targetRoot?: string | null;
 };
 
 export type MaintenanceSearchCondition =
@@ -123,6 +131,12 @@ export type MaintenanceRuleSetRecord = {
   schedule: import("./scripts").ScriptSchedule;
   /// Null for a manual schedule and for a disabled rule.
   nextRunAt: string | null;
+  /// The most titles one run acts on. Required while the source deletes
+  /// files or titles; null means no limit.
+  maxTitlesPerRun: number | null;
+  /// Set when the stored rule could not be loaded for evaluation, as a
+  /// reason code; the rule does not run until it is saved again.
+  loadRefusal: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -163,6 +177,8 @@ export type MaintenanceRuleSetDraft = {
   storageRootId: string;
   libraryIds: string[];
   schedule: import("./scripts").ScriptSchedule;
+  /// Null for no limit; required while the source deletes files or titles.
+  maxTitlesPerRun: number | null;
   /// Set while the rule is still the simple builder's: `regoSource` is then
   /// what the builder generated from this model. Null once the source is
   /// edited by hand, and for every rule the builder did not make.
@@ -204,6 +220,8 @@ export type MaintenancePreviewTitle = {
   outcome: MaintenancePreviewOutcome | null;
   reasonCodes: string[];
   error: string | null;
+  /// Stable code for `error`; null exactly when `error` is null.
+  errorCode?: string | null;
   /// What the rule decided for this subject. Null when it did not match.
   actions?: MaintenanceDecidedActions | null;
   /// The input document the rule evaluated for this subject. Null unless the

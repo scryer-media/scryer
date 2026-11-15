@@ -79,6 +79,8 @@ import {
   ruleStateLabelKey,
   ruleStateOptionsFor,
   maintenanceRuleBuilder,
+  maintenanceLoadRefusalKey,
+  maintenancePreviewErrorText,
 } from "@/lib/utils/maintenance-rule-sets";
 import { useRuleOutputDescriptors } from "@/lib/hooks/use-rule-builder-schema";
 import {
@@ -822,7 +824,7 @@ function MaintenancePreviewPanel({
                       <TableCell className="text-muted-foreground">
                         {title.error ? (
                           <span className="text-[var(--scry-danger-text)]">
-                            {title.error}
+                            {maintenancePreviewErrorText(title, t)}
                           </span>
                         ) : title.reasonCodes.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -1099,6 +1101,19 @@ export function SettingsMaintenanceRulesSection({
                                 record.id,
                               )}
                             />
+                            {record.loadRefusal ? (
+                              <p
+                                id={selectorId(
+                                  "settings-maintenance-rule-load-refusal",
+                                  record.id,
+                                )}
+                                className="mt-1 text-xs text-[var(--scry-danger-text)]"
+                              >
+                                {t(
+                                  maintenanceLoadRefusalKey(record.loadRefusal),
+                                )}
+                              </p>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-center">
                             {record.graceDays}
@@ -1350,6 +1365,32 @@ export function SettingsMaintenanceRulesSection({
                           }))
                         }
                         placeholder="0"
+                      />
+                    </label>
+
+                    <label className="block md:max-w-[50%]">
+                      <Label className="mb-2 block">
+                        <HelpLabel
+                          label={t("settings.maintenanceRuleMaxTitlesPerRun")}
+                          help={t("settings.maintenanceRuleMaxTitlesPerRunHelp")}
+                        />
+                      </Label>
+                      <Input
+                        id="settings-maintenance-rule-max-titles-per-run"
+                        {...integerInputProps}
+                        min={1}
+                        required={
+                          validationResult?.declaredActions?.destructive === true
+                        }
+                        value={ruleSetDraft.maxTitlesPerRun ?? ""}
+                        onChange={(event) => {
+                          const digits = sanitizeDigits(event.target.value);
+                          setRuleSetDraft((prev) => ({
+                            ...prev,
+                            maxTitlesPerRun: digits === "" ? null : Number(digits),
+                          }));
+                        }}
+                        placeholder={t("settings.maintenanceRuleMaxTitlesPerRunNone")}
                       />
                     </label>
 

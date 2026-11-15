@@ -130,6 +130,7 @@ export function initialMaintenanceRuleDraft(): MaintenanceRuleSetDraft {
     storageRootId: "",
     libraryIds: [],
     schedule: defaultMaintenanceRuleSchedule(),
+    maxTitlesPerRun: null,
     builderModel: null,
   };
 }
@@ -174,6 +175,7 @@ export function maintenanceRuleDraftFromDetail(
     schedule:
       normalizeScriptSchedule(detail.ruleSet.schedule) ??
       defaultMaintenanceRuleSchedule(),
+    maxTitlesPerRun: detail.ruleSet.maxTitlesPerRun ?? null,
     builderModel: attachedRuleBuilderModel(
       binding.schema,
       detail.builderModel,
@@ -207,11 +209,14 @@ export function createMaintenanceRuleSetInput(
     storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
     schedule: toScriptScheduleInput(draft.schedule),
+    maxTitlesPerRun: draft.maxTitlesPerRun ?? undefined,
     builderModel: ruleBuilderModelToSave(binding, draft),
   };
 }
 
-export function updateMaintenanceRuleMatcherInput(
+/// The matcher half without the per-run maximum: what decides whether a
+/// save writes a new revision.
+function maintenanceRuleMatcherRevision(
   id: string,
   draft: MaintenanceRuleSetDraft,
   binding: MaintenanceRuleBuilderBinding,
@@ -224,11 +229,25 @@ export function updateMaintenanceRuleMatcherInput(
     // preserve a root they cannot render; this client may intentionally clear it.
     storageRootId: draft.storageRootId || null,
     // Null clears a stored model, so a hand-edited rule stops claiming one.
-    // Without a schema nothing could be checked, so the field is left out and
-    // the stored model stays as it is.
+    // Without a schema nothing could be checked, so the field is left out:
+    // the server then keeps the stored model only while the source is
+    // unchanged.
     ...(binding.schema
       ? { builderModel: ruleBuilderModelToSave(binding, draft) }
       : {}),
+  };
+}
+
+/// The per-run maximum travels with the source, so a source that starts to
+/// delete is saved together with the limit it needs. Null clears it.
+export function updateMaintenanceRuleMatcherInput(
+  id: string,
+  draft: MaintenanceRuleSetDraft,
+  binding: MaintenanceRuleBuilderBinding,
+) {
+  return {
+    ...maintenanceRuleMatcherRevision(id, draft, binding),
+    maxTitlesPerRun: draft.maxTitlesPerRun,
   };
 }
 
@@ -242,27 +261,31 @@ export function updateMaintenanceRuleMetadataInput(
     description: draft.description.trim() || undefined,
     libraryIds: [...draft.libraryIds],
     schedule: toScriptScheduleInput(draft.schedule),
+    maxTitlesPerRun: draft.maxTitlesPerRun,
   };
 }
 
 /// What saving an edited rule sends. Each half goes only when the editor
 /// changed something it carries, so a schedule, name or library change alone
 /// never writes a new matcher revision, and so never drops an Enabled rule
-/// to Dry run.
+/// to Dry run. The per-run maximum is a rule setting: a change to it alone
+/// goes on the metadata half.
 export function maintenanceRuleUpdatePlan(
   id: string,
   baseline: MaintenanceRuleSetDraft,
   draft: MaintenanceRuleSetDraft,
   binding: MaintenanceRuleBuilderBinding,
 ) {
-  const matcher = updateMaintenanceRuleMatcherInput(id, draft, binding);
   const metadata = updateMaintenanceRuleMetadataInput(id, draft);
   const same = (left: unknown, right: unknown) =>
     JSON.stringify(left) === JSON.stringify(right);
   return {
-    matcher: same(matcher, updateMaintenanceRuleMatcherInput(id, baseline, binding))
+    matcher: same(
+      maintenanceRuleMatcherRevision(id, draft, binding),
+      maintenanceRuleMatcherRevision(id, baseline, binding),
+    )
       ? null
-      : matcher,
+      : updateMaintenanceRuleMatcherInput(id, draft, binding),
     metadata: same(metadata, updateMaintenanceRuleMetadataInput(id, baseline))
       ? null
       : metadata,
@@ -380,6 +403,10 @@ const ACTION_STEP_KIND_LABEL_KEYS: Record<MaintenanceActionStepKind, string> = {
   ADD_TAGS: "settings.maintenanceSequenceStepAddTags",
   REMOVE_TAGS: "settings.maintenanceSequenceStepRemoveTags",
   DELETE_TITLE_AND_FILES: "settings.maintenanceSequenceStepDeleteTitleAndFiles",
+  MONITOR: "settings.maintenanceSequenceStepMonitor",
+  FETCH_SUBTITLES: "settings.maintenanceSequenceStepFetchSubtitles",
+  MOVE_TO_LIBRARY: "settings.maintenanceSequenceStepMoveToLibrary",
+  MOVE_TO_ROOT: "settings.maintenanceSequenceStepMoveToRoot",
 };
 
 export function actionStepKindLabelKey(kind: string): string | null {
@@ -679,4 +706,33 @@ export function excludeMaintenanceSubjectInput(options: {
     ruleSetId: options.ruleSetId || undefined,
     reason: reason || undefined,
   };
+}
+
+/// Codes the server reports when a stored rule cannot be loaded for
+/// evaluation. Any other code reads as the generic notice.
+const MAINTENANCE_LOAD_REFUSAL_KEYS: Readonly<Record<string, string>> = {
+  MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED:
+    "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED",
+};
+
+export function maintenanceLoadRefusalKey(code: string): string {
+  return (
+    MAINTENANCE_LOAD_REFUSAL_KEYS[code] ?? "settings.maintenanceRuleLoadRefused"
+  );
+}
+
+/// Preview failures the web words itself. The evaluator's own failures carry
+/// the engine's detail, which only the server's text has.
+const MAINTENANCE_PREVIEW_ERROR_KEYS: Readonly<Record<string, string>> = {
+  MAINTENANCE_PREVIEW_NO_DECISION: "error.reason.MAINTENANCE_PREVIEW_NO_DECISION",
+};
+
+export function maintenancePreviewErrorText(
+  title: { error: string | null; errorCode?: string | null },
+  translate: (key: string) => string,
+): string {
+  const key = title.errorCode
+    ? MAINTENANCE_PREVIEW_ERROR_KEYS[title.errorCode]
+    : undefined;
+  return key ? translate(key) : (title.error ?? "");
 }

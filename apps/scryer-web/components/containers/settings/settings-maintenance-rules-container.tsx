@@ -55,6 +55,7 @@ import type {
   MaintenanceRuleSetDraft,
   MaintenanceRuleSetRecord,
   MaintenanceTriggerResult,
+  MaintenanceValidationResult,
 } from "@/lib/types/maintenance-rule-sets";
 import {
   MAINTENANCE_FILTER_ALL,
@@ -338,7 +339,10 @@ export function SettingsMaintenanceRulesContainer({
         whenSchemaReady(),
       ]);
       if (!detail) return;
-      const next = copyMaintenanceRuleDraft(detail, maintenanceRuleBuilder(schema));
+      const next = copyMaintenanceRuleDraft(
+        detail,
+        maintenanceRuleBuilder(schema),
+      );
       setEditingRuleSetId(null);
       startEditorSession(next, next);
       setIsEditorOpen(true);
@@ -361,6 +365,7 @@ export function SettingsMaintenanceRulesContainer({
         regoSource: template.regoSource,
         subjectKind: template.subjectKind ?? "TITLE",
         graceDays: template.graceDays,
+        maxTitlesPerRun: template.maxTitlesPerRun ?? null,
       };
       setEditingRuleSetId(null);
       /// Baseline stays at the empty draft on purpose: a freshly applied
@@ -714,6 +719,20 @@ export function SettingsMaintenanceRulesContainer({
     }
     const validation = await validateDraft();
     if (!validation?.valid) {
+      return;
+    }
+    if (
+      (validation as MaintenanceValidationResult).declaredActions
+        ?.destructive &&
+      ruleSetDraft.maxTitlesPerRun === null
+    ) {
+      setValidationResult({
+        ...validation,
+        valid: false,
+        errors: [
+          t("error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED"),
+        ],
+      });
       return;
     }
 

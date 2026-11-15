@@ -2917,6 +2917,7 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       outcome
       reasonCodes
       error
+      errorCode
       actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
       }
       facts
