@@ -4761,6 +4761,38 @@ async fn background_search_records_scope_indexer_coverage() {
 }
 
 #[tokio::test]
+async fn editing_custom_search_aliases_reopens_covered_convergence() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let configs = vec![synthetic_direct_nab_indexer_config("indexer-a", "newznab")];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let (mut title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    app.record_search_coverage(&title, &subject, &["indexer-a".into()], &[])
+        .await;
+    assert!(scope_is_converged(&app, &title, &subject).await);
+
+    // User-entered query names are persisted as reserved title tags. Old empty
+    // searches must not cover a newly corrected query after the next title walk.
+    title.tags.push(format!(
+        "{}Alternative Query Name",
+        scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+    ));
+    assert!(
+        !scope_is_converged(&app, &title, &subject).await,
+        "old coverage must not suppress the corrected custom query"
+    );
+    app.record_search_coverage(&title, &subject, &["indexer-a".into()], &[])
+        .await;
+    assert!(scope_is_converged(&app, &title, &subject).await);
+}
+
+#[tokio::test]
 async fn scope_converges_only_after_every_routed_indexer_is_covered() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let configs = vec![
