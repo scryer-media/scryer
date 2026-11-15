@@ -225,6 +225,9 @@ pub fn from_maintenance_rule_set(
         declared_actions: from_maintenance_declared_actions(&detail.declared_actions),
         load_refusal: detail.load_refusal.map(str::to_string),
         schedule: rule_set.schedule.clone().into(),
+        max_titles_per_run: rule_set
+            .max_titles_per_run
+            .map(|max| i32::try_from(max).unwrap_or(i32::MAX)),
         next_run_at,
         created_at: rule_set.created_at,
         updated_at: rule_set.updated_at,

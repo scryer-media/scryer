@@ -531,6 +531,7 @@ impl RecheckFixture {
             .create_maintenance_rule_set(
                 &self.user,
                 MaintenanceRuleDraft {
+                    max_titles_per_run: Some(100),
                     subject_kind: scope,
                     name: "Watched subjects".to_string(),
                     description: String::new(),

@@ -97,6 +97,9 @@ pub struct MaintenanceRuleDraft {
     pub storage_root_id: Option<String>,
     /// Empty means every library.
     pub library_ids: Vec<String>,
+    /// The most titles the rule acts on in one fire. Required when the rule
+    /// can delete; `None` is no limit otherwise.
+    pub max_titles_per_run: Option<u32>,
 }
 
 /// A replacement matcher for an existing rule set. Applying one always appends
@@ -350,6 +353,7 @@ impl AppUseCase {
             draft.grace_days,
             storage_root_id.is_some(),
         )?;
+        require_max_titles_per_run(&prepared.declared, draft.max_titles_per_run)?;
         self.require_declared_action_targets(
             &prepared.declared,
             &prepared.scan,
@@ -382,6 +386,7 @@ impl AppUseCase {
             system_owned: false,
             current_revision_number: 1,
             schedule,
+            max_titles_per_run: draft.max_titles_per_run,
             created_at: now,
             updated_at: now,
         };
@@ -501,6 +506,7 @@ impl AppUseCase {
                  period, libraries and state can.",
             ));
         }
+        require_max_titles_per_run(&prepared.declared, rule_set.max_titles_per_run)?;
         self.require_declared_action_targets(
             &prepared.declared,
             &prepared.scan,
@@ -602,13 +608,17 @@ impl AppUseCase {
             description,
             library_ids,
             None,
+            None,
         )
         .await
     }
 
     /// As [`Self::update_maintenance_rule_metadata`], also replacing the
-    /// rule's schedule when `schedule` is `Some`. A schedule is timing only:
-    /// changing it leaves arming alone.
+    /// rule's schedule when `schedule` is `Some`, and its per-fire maximum
+    /// when `max_titles_per_run` is `Some` (`Some(None)` clears it). Both are
+    /// limits on when and how much the rule acts, not on what it matches or
+    /// does, so changing them leaves arming alone.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_maintenance_rule_metadata_with_schedule(
         &self,
         actor: &User,
@@ -617,6 +627,7 @@ impl AppUseCase {
         description: String,
         library_ids: Vec<String>,
         schedule: Option<ScriptSchedule>,
+        max_titles_per_run: Option<Option<u32>>,
     ) -> AppResult<MaintenanceRuleSet> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
@@ -629,6 +640,15 @@ impl AppUseCase {
                 crate::error_reasons::maintenance::RULE_SHIPS_SCRYER_CANNOT_RENAMED,
                 "This rule ships with Scryer and cannot be renamed.",
             ));
+        }
+        let max_titles_per_run =
+            max_titles_per_run.filter(|max| *max != rule_set.max_titles_per_run);
+        if let Some(max) = max_titles_per_run {
+            let declared = self
+                .load_maintenance_rule_detail(rule_set.clone())
+                .await?
+                .declared_actions;
+            require_max_titles_per_run(&declared, max)?;
         }
         let now = Utc::now();
         let scope_changed = library_scope_changed(&rule_set.library_ids, &library_ids);
@@ -650,6 +670,14 @@ impl AppUseCase {
                 now,
             )
             .await?;
+        if let Some(max) = max_titles_per_run {
+            self.services
+                .customization
+                .maintenance_rule_sets
+                .set_rule_set_max_titles_per_run(&rule_set.id, max, now)
+                .await?;
+            rule_set.max_titles_per_run = max;
+        }
 
         let renamed = rule_set.name != name;
         rule_set.name = name;
@@ -799,6 +827,7 @@ impl AppUseCase {
             system_owned: true,
             current_revision_number: 1,
             schedule: scryer_domain::default_maintenance_rule_schedule(),
+            max_titles_per_run: Some(scryer_domain::SYSTEM_MAINTENANCE_RULE_MAX_TITLES_PER_RUN),
             created_at: now,
             updated_at: now,
         };
@@ -1853,6 +1882,34 @@ fn validated_rule_schedule(schedule: Option<ScriptSchedule>) -> AppResult<Option
     crate::scripts::schedule::validate_schedule(&schedule)
         .map_err(crate::scripts::schedule::ScheduleError::into_app_error)?;
     Ok(Some(schedule))
+}
+
+/// A rule's per-fire maximum is at least one title, and a rule that can
+/// delete must carry one. There is no upper bound: the operator picks it.
+pub(crate) fn require_max_titles_per_run(
+    declared: &super::MaintenanceDeclaredActions,
+    max_titles_per_run: Option<u32>,
+) -> AppResult<()> {
+    match max_titles_per_run {
+        Some(0) => Err(AppError::validation_refused(
+            crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_INVALID,
+            "the most titles a rule acts on in one run must be at least 1",
+        )),
+        None if declared.destructive => Err(AppError::validation_refused_with_facts(
+            crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED,
+            "a rule that deletes must say the most titles it may act on in one run",
+            vec![crate::RefusalFact::list(
+                crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT,
+                declared
+                    .heads
+                    .iter()
+                    .filter(|head| head.is_destructive())
+                    .map(|head| head.rule_name().to_string())
+                    .collect(),
+            )],
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn require_non_empty(value: &str, field: &str) -> AppResult<String> {

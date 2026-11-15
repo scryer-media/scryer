@@ -199,6 +199,9 @@ pub struct MaintenanceRuleSet {
     /// When the rule evaluates and then acts on what it decided. A rule saved
     /// without one runs every eight hours.
     pub schedule: ScriptSchedulePayload,
+    /// The most titles the rule acts on in one run. Due titles beyond it wait
+    /// for the next run. Null means no limit.
+    pub max_titles_per_run: Option<i32>,
     /// UTC time of the next scheduled run. Null while the rule is disabled,
     /// when its schedule is manual, or before the scheduler has loaded it.
     pub next_run_at: Option<DateTime<Utc>>,
@@ -755,6 +758,10 @@ pub struct CreateMaintenanceRuleSetInput {
     pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
     /// When the rule runs. Omitted means every eight hours.
     pub schedule: Option<ScriptScheduleInput>,
+    /// The most titles the rule may act on in one run, at least one.
+    /// Required when the rule deletes files or titles; omitted means no
+    /// limit otherwise.
+    pub max_titles_per_run: Option<i32>,
 }
 
 /// Replaces the matcher of an existing rule set, appending a revision.
@@ -789,6 +796,11 @@ pub struct UpdateMaintenanceRuleMetadataInput {
     /// Replacement schedule. Omitted keeps the current one. Changing it
     /// leaves the rule's state and arming alone.
     pub schedule: Option<ScriptScheduleInput>,
+    /// Replacement most titles the rule may act on in one run. Omitted keeps
+    /// the current value, null clears it, and a value of at least one
+    /// replaces it. A rule that deletes files or titles cannot be cleared.
+    /// Changing it leaves the rule's state and arming alone.
+    pub max_titles_per_run: MaybeUndefined<i32>,
 }
 
 /// What the operator reviewed before enabling a rule that can delete files.

@@ -253,6 +253,7 @@ async fn arm_storage_title_deletion_with_matcher(
         .create_maintenance_rule_set(
             &fixture.execution.user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 subject_kind: MaintenanceRuleSubjectKind::Title,
                 name: "Storage pressure".into(),
                 description: String::new(),

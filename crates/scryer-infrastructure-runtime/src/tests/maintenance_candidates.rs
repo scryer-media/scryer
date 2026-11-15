@@ -43,6 +43,7 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 system_owned: false,
                 current_revision_number: 1,
                 schedule: scryer_domain::default_maintenance_rule_schedule(),
+                max_titles_per_run: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -1503,7 +1504,7 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         .expect("create blocked");
 
     let due = store
-        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), 10)
+        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), None, 10)
         .await
         .expect("list due");
     let ids: Vec<&str> = due.iter().map(|row| row.id.as_str()).collect();
@@ -1512,6 +1513,45 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         vec!["cand-blocked", "cand-due"],
         "oldest due first; blocked re-checks, future stays out"
     );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn due_selection_pages_past_a_cursor_in_due_then_id_order() {
+    let (services, db) = temp_services("scryer_maintenance_due_cursor").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+    let tied = now - chrono::Duration::hours(2);
+    // Two rows share a due time, so the id breaks the tie across a page.
+    for (id, title, due_at) in [
+        ("cand-c", "title-3", now - chrono::Duration::hours(1)),
+        ("cand-b", "title-2", tied),
+        ("cand-a", "title-1", tied),
+        ("cand-d", "title-4", now - chrono::Duration::minutes(5)),
+    ] {
+        let mut row = candidate(id, "rule-a", title, 1);
+        row.due_at = due_at;
+        store.create_candidate(&row).await.expect("create due");
+    }
+
+    let stale_before = now - chrono::Duration::hours(1);
+    let mut walked = Vec::new();
+    let mut cursor: Option<scryer_application::MaintenanceDueCursor> = None;
+    loop {
+        let page = store
+            .list_due_candidates("rule-a", now, stale_before, cursor.as_ref(), 2)
+            .await
+            .expect("list a page");
+        let Some(last) = page.last() else { break };
+        cursor = Some(scryer_application::MaintenanceDueCursor::after(last));
+        walked.extend(page.iter().map(|row| row.id.clone()));
+        if page.len() < 2 {
+            break;
+        }
+    }
+    assert_eq!(walked, vec!["cand-a", "cand-b", "cand-c", "cand-d"]);
 
     let _ = std::fs::remove_file(db);
 }
@@ -1538,7 +1578,7 @@ async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
     // A worker holding a fresh lease is doing its job; selecting the row again
     // would put two workers on one candidate.
     let live = store
-        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), 10)
+        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), None, 10)
         .await
         .expect("list with a live lease");
     assert!(
@@ -1552,7 +1592,13 @@ async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
     // inflating the count destructive arming makes an operator acknowledge.
     let later = now + chrono::Duration::hours(2);
     let stranded = store
-        .list_due_candidates("rule-a", later, later - chrono::Duration::hours(1), 10)
+        .list_due_candidates(
+            "rule-a",
+            later,
+            later - chrono::Duration::hours(1),
+            None,
+            10,
+        )
         .await
         .expect("list with a stale lease");
     let ids: Vec<&str> = stranded.iter().map(|row| row.id.as_str()).collect();

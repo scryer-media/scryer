@@ -39,7 +39,6 @@ pub use action_catalog::{
 };
 pub use action_execution::{
     MAINTENANCE_HIGH_RISK_FAILURE_BREAKER, MAINTENANCE_MAX_ACTION_ATTEMPTS,
-    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN, MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN,
     MaintenanceActionHandlingReport, MaintenanceActionRunView, arming_kept_across_edit,
     derived_effect_arming, execution_reason, maintenance_rule_state,
 };

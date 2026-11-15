@@ -500,6 +500,7 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        after: Option<&crate::MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
         if self.fail_next_due_read.swap(false, Ordering::SeqCst) {
@@ -523,10 +524,14 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
                             | MaintenanceCandidateState::Blocked
                     ) || (candidate.state == MaintenanceCandidateState::Executing
                         && candidate.updated_at < stale_before))
+                    && after.is_none_or(|after| {
+                        (candidate.due_at, candidate.id.as_str())
+                            > (after.due_at, after.id.as_str())
+                    })
             })
             .cloned()
             .collect();
-        rows.sort_by_key(|candidate| candidate.due_at);
+        rows.sort_by(|left, right| (left.due_at, &left.id).cmp(&(right.due_at, &right.id)));
         rows.truncate(limit);
         Ok(rows)
     }
@@ -1568,6 +1573,7 @@ fn evaluation_app() -> EvaluationFixture {
 
 fn draft(rego_source: &str, grace_days: i64) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: String::new(),

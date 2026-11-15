@@ -40,6 +40,7 @@ pub(super) fn with_matcher(draft: &mut MaintenanceRuleDraft, matcher: &str) {
 
 pub(super) fn sequence_draft(steps: Vec<MaintenanceActionStep>) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: MaintenanceRuleSubjectKind::Title,
         name: "Sequence executor regression".to_string(),
         description: String::new(),
@@ -62,7 +63,7 @@ pub(super) async fn arm_and_evaluate(
     )
 }
 
-async fn arm_and_evaluate_all(
+pub(super) async fn arm_and_evaluate_all(
     fixture: &crate::lib_tests::maintenance_execution::ExecutionFixture,
     draft: MaintenanceRuleDraft,
 ) -> (String, Vec<scryer_domain::LifecycleCandidate>) {
@@ -1355,14 +1356,17 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
     assert!(stored.tags.iter().any(|tag| tag == "external-c"));
 }
 
+/// A title counts once toward the rule's maximum however many of its steps
+/// run, and the due titles past the maximum wait, untouched, for the next
+/// fire.
 #[tokio::test]
-async fn sequence_step_budget_stops_between_steps_then_resumes_without_replay() {
+async fn the_rule_maximum_counts_titles_and_leaves_the_rest_for_the_next_fire() {
     let fixture = execution_app(None);
     for index in 1..=4 {
         seed_title(
             &fixture.app,
             &fixture.user,
-            &format!("V2 pass step budget {index}"),
+            &format!("Synthetic maximum {index}"),
             false,
         )
         .await;
@@ -1370,29 +1374,32 @@ async fn sequence_step_budget_stops_between_steps_then_resumes_without_replay() 
     define_title_tags(&fixture, &["step-added", "step-removed"]).await;
     let (_rule_set_id, candidates) = arm_and_evaluate_all(
         &fixture,
-        sequence_draft(vec![
-            MaintenanceActionStep {
-                id: "add_tags".to_string(),
-                kind: MaintenanceActionStepKind::AddTags,
-                parameters: MaintenanceActionStepParameters::Tags {
-                    tags: vec!["step-added".to_string()],
+        MaintenanceRuleDraft {
+            max_titles_per_run: Some(3),
+            ..sequence_draft(vec![
+                MaintenanceActionStep {
+                    id: "add_tags".to_string(),
+                    kind: MaintenanceActionStepKind::AddTags,
+                    parameters: MaintenanceActionStepParameters::Tags {
+                        tags: vec!["step-added".to_string()],
+                    },
                 },
-            },
-            MaintenanceActionStep {
-                id: "remove_tags".to_string(),
-                kind: MaintenanceActionStepKind::RemoveTags,
-                parameters: MaintenanceActionStepParameters::Tags {
-                    tags: vec!["step-removed".to_string()],
+                MaintenanceActionStep {
+                    id: "remove_tags".to_string(),
+                    kind: MaintenanceActionStepKind::RemoveTags,
+                    parameters: MaintenanceActionStepParameters::Tags {
+                        tags: vec!["step-removed".to_string()],
+                    },
                 },
-            },
-            MaintenanceActionStep {
-                id: "unmonitor".to_string(),
-                kind: MaintenanceActionStepKind::Unmonitor,
-                parameters: MaintenanceActionStepParameters::Unmonitor {
-                    include_descendants: false,
+                MaintenanceActionStep {
+                    id: "unmonitor".to_string(),
+                    kind: MaintenanceActionStepKind::Unmonitor,
+                    parameters: MaintenanceActionStepParameters::Unmonitor {
+                        include_descendants: false,
+                    },
                 },
-            },
-        ]),
+            ])
+        },
     )
     .await;
     assert_eq!(candidates.len(), 4, "{candidates:?}");
@@ -1401,48 +1408,72 @@ async fn sequence_step_budget_stops_between_steps_then_resumes_without_replay() 
         .app
         .run_lifecycle_action_handling_job()
         .await
-        .expect("run sequence steps through the pass allowance");
+        .expect("run the rule up to its maximum");
     assert_eq!(first_pass.executed, 3, "{first_pass:?}");
-    assert_eq!(first_pass.held, 1, "{first_pass:?}");
-    let paused = fixture
-        .evaluation
-        .all_candidates()
-        .await
-        .into_iter()
-        .find(|candidate| candidate.state == MaintenanceCandidateState::Blocked)
-        .expect("candidate paused after its tenth dispatched step");
-    let paused_steps = fixture
-        .evaluation
-        .list_action_steps(&paused.id, paused.match_generation, paused.revision_number)
-        .await
-        .expect("read paused sequence steps");
-    assert_eq!(paused_steps.len(), 1, "{paused_steps:?}");
-    assert_eq!(paused_steps[0].key.step_id, "add_tags");
-    assert_eq!(paused_steps[0].attempt, 1);
-    assert_eq!(paused_steps[0].state, MaintenanceActionStepState::Succeeded);
+    assert_eq!(first_pass.held, 0, "{first_pass:?}");
+    assert_eq!(first_pass.rules_stopped_at_maximum, 1, "{first_pass:?}");
+    let after_first = fixture.evaluation.all_candidates().await;
+    let waiting: Vec<_> = after_first
+        .iter()
+        .filter(|candidate| candidate.state != MaintenanceCandidateState::Succeeded)
+        .collect();
+    assert_eq!(waiting.len(), 1, "{after_first:?}");
+    let waiting = waiting[0].clone();
+    let untouched = candidates
+        .iter()
+        .find(|candidate| candidate.id == waiting.id)
+        .expect("the waiting candidate was opened by evaluation");
+    assert_eq!(
+        (&waiting.state, &waiting.state_reason, waiting.updated_at),
+        (
+            &untouched.state,
+            &untouched.state_reason,
+            untouched.updated_at
+        ),
+        "a title past the maximum is not held, stamped or explained"
+    );
+    assert!(
+        fixture
+            .evaluation
+            .list_action_steps(
+                &waiting.id,
+                waiting.match_generation,
+                waiting.revision_number
+            )
+            .await
+            .expect("read waiting steps")
+            .is_empty()
+    );
+    for done in after_first
+        .iter()
+        .filter(|candidate| candidate.state == MaintenanceCandidateState::Succeeded)
+    {
+        let steps = fixture
+            .evaluation
+            .list_action_steps(&done.id, done.match_generation, done.revision_number)
+            .await
+            .expect("read finished steps");
+        assert_eq!(
+            steps.len(),
+            3,
+            "every step of a counted title runs: {steps:?}"
+        );
+    }
 
-    let resumed = fixture
+    let next_fire = fixture
         .app
         .run_lifecycle_action_handling_job()
         .await
-        .expect("resume the remaining sequence steps next pass");
-    assert_eq!(resumed.executed, 1, "{resumed:?}");
-    let resumed_steps = fixture
-        .evaluation
-        .list_action_steps(&paused.id, paused.match_generation, paused.revision_number)
-        .await
-        .expect("read completed sequence steps");
-    assert_eq!(resumed_steps.len(), 3, "{resumed_steps:?}");
-    let add = resumed_steps
-        .iter()
-        .find(|step| step.key.step_id == "add_tags")
-        .expect("persisted first step");
-    assert_eq!(add.state, MaintenanceActionStepState::Succeeded);
-    assert_eq!(add.attempt, 1, "resuming must not replay the first step");
+        .expect("the next fire continues");
+    assert_eq!(next_fire.executed, 1, "{next_fire:?}");
+    assert_eq!(next_fire.rules_stopped_at_maximum, 0, "{next_fire:?}");
     assert!(
-        resumed_steps
+        fixture
+            .evaluation
+            .all_candidates()
+            .await
             .iter()
-            .all(|step| step.state.is_completion_success())
+            .all(|candidate| candidate.state == MaintenanceCandidateState::Succeeded)
     );
 }
 
@@ -2013,6 +2044,7 @@ async fn a_storage_root_revision_with_a_whole_title_step_is_held() {
 
 fn decision_change_draft(rego_source: &str, grace_days: i64) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: MaintenanceRuleSubjectKind::Title,
         name: "Decision change regression".to_string(),
         description: String::new(),
@@ -2334,6 +2366,7 @@ async fn a_monitor_rule_monitors_the_title_and_notifies_once() {
 /// candidate with nothing left to do.
 fn self_retiring_draft(action_head: &str, message: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: MaintenanceRuleSubjectKind::Title,
         name: "Sequence executor regression".to_string(),
         description: String::new(),
@@ -2475,6 +2508,7 @@ async fn a_rule_that_would_undo_another_rules_monitoring_holds_instead_of_flippi
             .monitored
     };
     let draft = |name: &str, head: &str| MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         name: name.to_string(),
         rego_source: format!("{ALWAYS_MATCHER}\n{head}\n"),
         ..sequence_draft(Vec::new())
@@ -2825,6 +2859,7 @@ async fn a_rule_runs_on_the_default_schedule_until_one_is_chosen() {
             String::new(),
             Vec::new(),
             Some(ScriptSchedule::Interval { every_seconds: 5 }),
+            None,
         )
         .await
         .expect_err("an interval below the floor is refused");
@@ -2869,6 +2904,7 @@ async fn a_rule_runs_on_the_default_schedule_until_one_is_chosen() {
             String::new(),
             Vec::new(),
             Some(daily.clone()),
+            None,
         )
         .await
         .expect("reschedule");

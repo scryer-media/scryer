@@ -5976,9 +5976,18 @@ pub struct MaintenanceRuleSet {
     /// runs it only on request.
     #[serde(default = "default_maintenance_rule_schedule")]
     pub schedule: ScriptSchedule,
+    /// The most titles (subjects) the rule acts on in one fire, scheduled or
+    /// manual. `None` is no limit; a rule that can delete always has one.
+    /// Titles past it wait for the next fire.
+    #[serde(default)]
+    pub max_titles_per_run: Option<u32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+/// The `max_titles_per_run` the shipped expired-request-leases rule carries:
+/// the ten titles per fire it acted on before rules carried a maximum.
+pub const SYSTEM_MAINTENANCE_RULE_MAX_TITLES_PER_RUN: u32 = 10;
 
 /// Seconds between runs of a maintenance rule that has no schedule of its
 /// own, matching the cadence of the instance-wide evaluation job.

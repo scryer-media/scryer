@@ -123,6 +123,12 @@ fn preview_selection(
     }
 }
 
+/// A value below one reaches the service as zero, which refuses it with its
+/// own reason, so the API has a single refusal for an unusable maximum.
+fn max_titles_per_run(value: i32) -> u32 {
+    u32::try_from(value).unwrap_or(0)
+}
+
 #[derive(Default)]
 pub(crate) struct MaintenanceRuleMutations;
 
@@ -154,6 +160,7 @@ impl MaintenanceRuleMutations {
                     grace_days: grace_days(input.grace_days),
                     storage_root_id: input.storage_root_id,
                     library_ids: input.library_ids.unwrap_or_default(),
+                    max_titles_per_run: input.max_titles_per_run.map(max_titles_per_run),
                 },
                 super::rules::builder_model_change(input.builder_model),
                 schedule,
@@ -225,6 +232,11 @@ impl MaintenanceRuleMutations {
             input.description.unwrap_or_default(),
             input.library_ids.unwrap_or_default(),
             schedule,
+            match input.max_titles_per_run {
+                async_graphql::MaybeUndefined::Undefined => None,
+                async_graphql::MaybeUndefined::Null => Some(None),
+                async_graphql::MaybeUndefined::Value(max) => Some(Some(max_titles_per_run(max))),
+            },
         )
         .await
         .map_err(to_gql_error)?;

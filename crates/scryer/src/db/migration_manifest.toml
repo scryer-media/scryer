@@ -4177,6 +4177,23 @@ file = "postgres/migrations/0349_maintenance_step_attempt_window.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 350
+description = "maintenance rule max titles per run"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0350_maintenance_rule_max_titles_per_run.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0350_maintenance_rule_max_titles_per_run.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

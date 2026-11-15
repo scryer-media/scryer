@@ -2540,6 +2540,12 @@ input CreateMaintenanceRuleSetInput {
 	When the rule runs. Omitted means every eight hours.
 	"""
 	schedule: ScriptScheduleInput
+	"""
+	The most titles the rule may act on in one run, at least one.
+	Required when the rule deletes files or titles; omitted means no
+	limit otherwise.
+	"""
+	maxTitlesPerRun: Int
 }
 
 """
@@ -16616,6 +16622,11 @@ type MaintenanceRuleSet {
 	without one runs every eight hours.
 	"""
 	schedule: ScriptSchedulePayload!
+	"""
+	The most titles the rule acts on in one run. Due titles beyond it wait
+	for the next run. Null means no limit.
+	"""
+	maxTitlesPerRun: Int
 	"""
 	UTC time of the next scheduled run. Null while the rule is disabled,
 	when its schedule is manual, or before the scheduler has loaded it.
@@ -35155,6 +35166,13 @@ input UpdateMaintenanceRuleMetadataInput {
 	leaves the rule's state and arming alone.
 	"""
 	schedule: ScriptScheduleInput
+	"""
+	Replacement most titles the rule may act on in one run. Omitted keeps
+	the current value, null clears it, and a value of at least one
+	replaces it. A rule that deletes files or titles cannot be cleared.
+	Changing it leaves the rule's state and arming alone.
+	"""
+	maxTitlesPerRun: Int
 }
 
 """

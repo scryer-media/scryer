@@ -113,6 +113,7 @@ impl ClaimFixture {
 
 fn draft(rego_source: &str, kind: MaintenanceActionKind) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Lease rule".to_string(),
         description: String::new(),
@@ -713,6 +714,11 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
         "nothing is enabled by default"
     );
     assert!(rule.library_ids.is_empty(), "every library");
+    assert_eq!(
+        rule.max_titles_per_run,
+        Some(10),
+        "ships acting on ten a run"
+    );
     assert_eq!(
         rule.subject_kind,
         scryer_domain::MaintenanceRuleSubjectKind::Title

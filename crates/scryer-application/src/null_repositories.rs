@@ -1868,6 +1868,7 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         _rule_set_id: &str,
         _due_before: DateTime<Utc>,
         _stale_before: DateTime<Utc>,
+        _after: Option<&crate::MaintenanceDueCursor>,
         _limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
         Ok(vec![])

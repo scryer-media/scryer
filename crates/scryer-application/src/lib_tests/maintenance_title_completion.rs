@@ -206,6 +206,7 @@ async fn create_destructive_rule(
         .create_maintenance_rule_set(
             &fixture.user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 subject_kind,
                 name: "Completion acceptance".into(),
                 description: String::new(),

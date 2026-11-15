@@ -89,6 +89,7 @@ const ALWAYS_MATCHER: &str = "match := true\n";
 
 pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Unmonitor stale".to_string(),
         description: String::new(),
@@ -104,6 +105,7 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> MaintenanceRuleDraft {
 
 fn delete_draft() -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Retire".to_string(),
         description: String::new(),
@@ -645,7 +647,10 @@ async fn reversible_unmonitor_executes_and_records_the_evidence() {
 async fn action_result_write_failures_still_consume_the_rule_execution_budget() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(MaintenanceRuleDraft {
+            max_titles_per_run: Some(10),
+            ..unmonitor_draft(MONITORED_MATCHER)
+        })
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -672,7 +677,7 @@ async fn action_result_write_failures_still_consume_the_rule_execution_budget() 
     assert_eq!(report.failed, 10, "{report:?}");
     assert_eq!(
         report.candidates_considered, 10,
-        "errors must consume the ten-action rule budget"
+        "errors must count toward the rule's ten-title maximum"
     );
     let mut changed = 0;
     for title in titles {
@@ -755,6 +760,142 @@ async fn destructive_result_write_failures_trip_the_high_risk_breaker() {
         "result write failures must trip the destructive breaker"
     );
     assert_eq!(fixture.evaluation.all_action_runs().await.len(), 3);
+}
+
+// ── A rule acts on at most the titles its operator chose per run ────────────
+
+#[tokio::test]
+async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
+    let fixture = execution_app(None);
+    let error = fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: None,
+                ..delete_draft()
+            },
+        )
+        .await
+        .expect_err("a deleting rule needs a maximum");
+    assert_eq!(
+        error.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let facts = error.refusal_facts();
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(
+        facts[0].key,
+        crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT
+    );
+    assert!(
+        matches!(&facts[0].value, crate::RefusalFactValue::List(heads) if !heads.is_empty()),
+        "{facts:?}"
+    );
+
+    let zero = fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: Some(0),
+                ..unmonitor_draft(ALWAYS_MATCHER)
+            },
+        )
+        .await
+        .expect_err("a maximum of zero acts on nothing");
+    assert_eq!(
+        zero.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_INVALID)
+    );
+    assert!(
+        fixture
+            .rules
+            .list_rule_sets()
+            .await
+            .expect("list rules")
+            .is_empty()
+    );
+
+    // A rule that cannot delete needs none; null is no limit.
+    fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: None,
+                ..unmonitor_draft(ALWAYS_MATCHER)
+            },
+        )
+        .await
+        .expect("a reversible rule saves without a maximum");
+}
+
+#[tokio::test]
+async fn a_destructive_rule_cannot_lose_its_maximum_or_arm_without_one() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+
+    let cleared = fixture
+        .app
+        .update_maintenance_rule_metadata_with_schedule(
+            &fixture.user,
+            &rule_id,
+            "Retire".to_string(),
+            String::new(),
+            Vec::new(),
+            None,
+            Some(None),
+        )
+        .await
+        .expect_err("clearing a deleting rule's maximum is refused");
+    assert_eq!(
+        cleared.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+
+    let raised = fixture
+        .app
+        .update_maintenance_rule_metadata_with_schedule(
+            &fixture.user,
+            &rule_id,
+            "Retire".to_string(),
+            String::new(),
+            Vec::new(),
+            None,
+            Some(Some(100_000)),
+        )
+        .await
+        .expect("any maximum of at least one is accepted");
+    assert_eq!(raised.max_titles_per_run, Some(100_000));
+
+    // A row that reached the store without one (written by hand, say)
+    // cannot be armed to delete, and a pass never acts on it.
+    fixture
+        .rules
+        .set_rule_set_max_titles_per_run(&rule_id, None, Utc::now())
+        .await
+        .expect("strip the maximum");
+    seed_title(&fixture.app, &fixture.user, "Synthetic keeper", true).await;
+    fixture.evaluate().await;
+    let refused = fixture
+        .set_state(
+            &fixture.user,
+            &rule_id,
+            MaintenanceRuleState::Enabled,
+            Some(1),
+            None,
+        )
+        .await
+        .expect_err("arming a deleting rule without a maximum is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert!(fixture.evaluation.all_action_runs().await.is_empty());
 }
 
 #[tokio::test]

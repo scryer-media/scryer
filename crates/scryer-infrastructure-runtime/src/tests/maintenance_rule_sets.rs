@@ -481,6 +481,47 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     let _ = std::fs::remove_file(db);
 }
 
+#[tokio::test]
+async fn a_rule_maximum_round_trips_and_clears_without_touching_arming() {
+    let (services, db) = temp_services("scryer_maintenance_rule_maximum").await;
+    let store = maintenance_rule_set_store(&services).await;
+    let mut seeded = rule_set("bounded", vec![]);
+    seeded.max_titles_per_run = Some(7);
+    seeded.effect_arming = scryer_domain::MaintenanceEffectArming::Reversible;
+    store
+        .create_rule_set(&seeded, &revision("bounded", 1))
+        .await
+        .unwrap();
+    let read = store.get_rule_set("bounded").await.unwrap().unwrap();
+    assert_eq!(read.max_titles_per_run, Some(7));
+
+    store
+        .set_rule_set_max_titles_per_run("bounded", Some(100_000), Utc::now())
+        .await
+        .unwrap();
+    let raised = store.get_rule_set("bounded").await.unwrap().unwrap();
+    assert_eq!(raised.max_titles_per_run, Some(100_000));
+    assert_eq!(
+        raised.effect_arming,
+        scryer_domain::MaintenanceEffectArming::Reversible
+    );
+
+    store
+        .set_rule_set_max_titles_per_run("bounded", None, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_rule_set("bounded")
+            .await
+            .unwrap()
+            .unwrap()
+            .max_titles_per_run,
+        None
+    );
+    let _ = std::fs::remove_file(db);
+}
+
 fn rule_set(id: &str, library_ids: Vec<String>) -> MaintenanceRuleSet {
     let now = Utc::now();
     MaintenanceRuleSet {
@@ -496,6 +537,7 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> MaintenanceRuleSet {
         system_owned: false,
         current_revision_number: 1,
         schedule: scryer_domain::default_maintenance_rule_schedule(),
+        max_titles_per_run: None,
         created_at: now,
         updated_at: now,
     }

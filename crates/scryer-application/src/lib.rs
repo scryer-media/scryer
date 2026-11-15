@@ -713,7 +713,7 @@ pub use ports::{
     LogicalBackupExporter, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MaintenanceActionJobReceiptClaim,
     MaintenanceActionJobReceiptTransition, MaintenanceActionStepCandidateKey,
     MaintenanceActionStepClaim, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
-    MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
+    MaintenanceCandidateRepository, MaintenanceDueCursor, MaintenanceEvaluationRepository,
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
     MaintenanceRuleScheduleAnchor, MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
     MaintenanceSequenceCompletionRepository, MaintenanceStepAct, MediaAnalyzer,

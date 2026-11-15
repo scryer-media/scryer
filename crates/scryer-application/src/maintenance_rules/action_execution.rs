@@ -56,12 +56,10 @@ use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
 use crate::ports::MaintenanceActionStepCandidateKey;
 use crate::{AppError, AppResult, AppUseCase};
 
-/// Executed actions per rule per handler pass. Over-cap candidates simply stay
-/// due for the next pass (RFC 9.10's per-rule/per-run cap).
-pub const MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN: usize = 10;
-
-/// High-risk executions per handler pass across every rule.
-pub const MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN: usize = 10;
+/// Due candidates read per page while a pass walks one rule. The walk goes on
+/// page after page until the rule's own maximum is reached or nothing due is
+/// left; the page only bounds how many rows are held at once.
+pub(super) const MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE: usize = 200;
 
 /// High-risk failures in one pass that stop further high-risk work that pass —
 /// a circuit breaker against a systematically failing deletion path.
@@ -395,6 +393,9 @@ pub struct MaintenanceActionHandlingReport {
     pub canceled: usize,
     pub failed: usize,
     pub lease_lost: usize,
+    /// Rules that reached their own most-titles-per-run this pass. Their
+    /// remaining due candidates were left for the next fire, untouched.
+    pub rules_stopped_at_maximum: usize,
 }
 
 /// One action run with its title's display name resolved for rendering.
@@ -436,7 +437,6 @@ pub(super) struct MaintenanceSequencePassBudget {
     remaining_rule_steps: usize,
     remaining_high_risk_steps: usize,
     dispatched_steps: usize,
-    dispatched_high_risk_steps: usize,
     failed_high_risk_steps: usize,
     last_dispatch_was_high_risk: bool,
     last_dispatch_failure_recorded: bool,
@@ -448,7 +448,6 @@ impl MaintenanceSequencePassBudget {
             remaining_rule_steps,
             remaining_high_risk_steps,
             dispatched_steps: 0,
-            dispatched_high_risk_steps: 0,
             failed_high_risk_steps: 0,
             last_dispatch_was_high_risk: false,
             last_dispatch_failure_recorded: false,
@@ -474,7 +473,6 @@ impl MaintenanceSequencePassBudget {
         if high_risk {
             debug_assert!(self.remaining_high_risk_steps > 0);
             self.remaining_high_risk_steps -= 1;
-            self.dispatched_high_risk_steps += 1;
         }
     }
 
@@ -487,10 +485,6 @@ impl MaintenanceSequencePassBudget {
 
     pub(super) fn dispatched_steps(&self) -> usize {
         self.dispatched_steps
-    }
-
-    pub(super) fn dispatched_high_risk_steps(&self) -> usize {
-        self.dispatched_high_risk_steps
     }
 
     pub(super) fn failed_high_risk_steps(&self) -> usize {
@@ -664,6 +658,10 @@ impl AppUseCase {
         if arming == MaintenanceEffectArming::Destructive {
             self.require_app_permission(actor, AppPermission::ManageSystemSettings)
                 .await?;
+            super::service::require_max_titles_per_run(
+                &detail.declared_actions,
+                detail.rule_set.max_titles_per_run,
+            )?;
             if !confirmation
                 .as_ref()
                 .is_some_and(|reviewed| reviewed.matches(&detail.rule_set))
@@ -1063,7 +1061,6 @@ impl AppUseCase {
 
         let libraries = self.maintenance_library_refs().await?;
         let now = Utc::now();
-        let mut high_risk_executed = 0usize;
         let mut high_risk_failures = 0usize;
 
         // Every rule that could run this pass is resolved first, in one place.
@@ -1118,6 +1115,15 @@ impl AppUseCase {
                 && (!high_risk || gates.destructive_effects_enabled)
                 && (!declared.defines_reversible_action() || gates.reversible_effects_enabled);
             if !eligible {
+                continue;
+            }
+            if high_risk && detail.rule_set.max_titles_per_run.is_none() {
+                // Saving and arming refuse this shape; a row that reached it
+                // anyway acts on nothing rather than on everything.
+                warn!(
+                    rule_set_id = detail.rule_set.id.as_str(),
+                    "skipping destructive maintenance rule without a most-titles-per-run"
+                );
                 continue;
             }
             let quality_profile_ids = if declared.quality_profiles.is_empty() {
@@ -1194,64 +1200,86 @@ impl AppUseCase {
             // candidate whose worker died mid-run is `executing` with nothing
             // driving it, and only this pass can hand it back to the lease's
             // reclaim arm.
-            let due = self
-                .services
-                .customization
-                .maintenance_evaluation
-                .list_due_candidates(
-                    &detail.rule_set.id,
-                    now,
-                    self.maintenance_lease_stale_before(now),
-                    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN * 2,
-                )
-                .await?;
-
+            //
+            // The walk pages through everything due, in `(due_at, id)` order,
+            // until the rule has acted on its own most titles per fire. A
+            // candidate this pass rewrites is stamped later than `now`, so it
+            // never comes back in a later page of the same walk.
+            let maximum = detail
+                .rule_set
+                .max_titles_per_run
+                .map(|max| usize::try_from(max).unwrap_or(usize::MAX));
+            let stale_before = self.maintenance_lease_stale_before(now);
+            let mut titles_acted_on = 0usize;
+            let mut cursor: Option<crate::MaintenanceDueCursor> = None;
             // What other rules recently did to monitoring, read once for this
-            // rule, and only when another eligible rule declares the opposite.
-            let monitoring_acts = if due.is_empty() {
-                Some(Vec::new())
-            } else {
-                self.maintenance_monitoring_acts(&detail, &monitoring_sides, now)
-                    .await
-            };
-
-            let mut executed_this_rule = 0usize;
-            for candidate in due {
-                if executed_this_rule >= MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN {
-                    break;
-                }
-                // A restore or shutdown drain waits for this pass. Candidates
-                // not started yet stay due for the next one.
-                if self.restore_coordinator().shutdown_workers.is_cancelled() {
-                    break;
-                }
-                if high_risk
-                    && (high_risk_executed >= MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN
-                        || high_risk_failures >= MAINTENANCE_HIGH_RISK_FAILURE_BREAKER)
-                {
-                    break;
-                }
-                report.candidates_considered += 1;
-                let mut sequence_budget = Some({
-                    MaintenanceSequencePassBudget::new(
-                        MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN.saturating_sub(executed_this_rule),
-                        if high_risk_failures >= MAINTENANCE_HIGH_RISK_FAILURE_BREAKER {
-                            0
-                        } else {
-                            MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN
-                                .saturating_sub(high_risk_executed)
-                        },
+            // rule, only once something is due, and only when another
+            // eligible rule declares the opposite.
+            let mut monitoring_acts: Option<Option<Vec<crate::MaintenanceStepAct>>> = None;
+            'walk: loop {
+                let due = self
+                    .services
+                    .customization
+                    .maintenance_evaluation
+                    .list_due_candidates(
+                        &detail.rule_set.id,
+                        now,
+                        stale_before,
+                        cursor.as_ref(),
+                        MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
                     )
-                });
-                // A candidate runs only the steps built from what was decided
-                // for it; one without decided actions never runs.
-                let outcome =
-                    match declared_candidate_sequence(&candidate, &action.quality_profile_ids) {
+                    .await?;
+                let Some(last) = due.last() else {
+                    break;
+                };
+                cursor = Some(crate::MaintenanceDueCursor::after(last));
+                let last_page = due.len() < MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE;
+                if monitoring_acts.is_none() {
+                    monitoring_acts = Some(
+                        self.maintenance_monitoring_acts(&detail, &monitoring_sides, now)
+                            .await,
+                    );
+                }
+                let monitoring_acts = monitoring_acts
+                    .as_ref()
+                    .expect("monitoring acts are read before the first candidate");
+
+                for candidate in due {
+                    if maximum.is_some_and(|max| titles_acted_on >= max) {
+                        // The rest stay due, untouched, for the next fire.
+                        report.rules_stopped_at_maximum += 1;
+                        break 'walk;
+                    }
+                    // A restore or shutdown drain waits for this pass. Candidates
+                    // not started yet stay due for the next one.
+                    if self.restore_coordinator().shutdown_workers.is_cancelled() {
+                        break 'walk;
+                    }
+                    if high_risk && high_risk_failures >= MAINTENANCE_HIGH_RISK_FAILURE_BREAKER {
+                        break 'walk;
+                    }
+                    report.candidates_considered += 1;
+                    let mut sequence_budget = Some({
+                        MaintenanceSequencePassBudget::new(
+                            usize::MAX,
+                            if high_risk_failures >= MAINTENANCE_HIGH_RISK_FAILURE_BREAKER {
+                                0
+                            } else {
+                                usize::MAX
+                            },
+                        )
+                    });
+                    // A candidate runs only the steps built from what was decided
+                    // for it; one without decided actions never runs.
+                    let outcome = match declared_candidate_sequence(
+                        &candidate,
+                        &action.quality_profile_ids,
+                    ) {
                         // Another rule recently did the opposite to this
                         // title's monitoring: hold before any step runs.
                         Ok(sequence)
                             if let Some(code) =
-                                monitoring_conflict(&monitoring_acts, &candidate, &sequence) =>
+                                monitoring_conflict(monitoring_acts, &candidate, &sequence) =>
                         {
                             if candidate.state == MaintenanceCandidateState::Blocked
                                 && candidate.state_reason == code
@@ -1284,35 +1312,42 @@ impl AppUseCase {
                                 .await
                         }
                     };
-                if outcome.is_err() {
-                    // The dispatch may have reached its adapter before a
-                    // persistence failure escaped. Charge a high-risk last
-                    // dispatch conservatively, matching the v1 error path.
-                    if let Some(budget) = sequence_budget.as_mut() {
-                        budget.record_failed_dispatch();
+                    if outcome.is_err() {
+                        // The dispatch may have reached its adapter before a
+                        // persistence failure escaped. Charge a high-risk last
+                        // dispatch conservatively, matching the v1 error path.
+                        if let Some(budget) = sequence_budget.as_mut() {
+                            budget.record_failed_dispatch();
+                        }
+                    }
+                    if let Some(budget) = sequence_budget.as_ref() {
+                        // A title counts once however many of its steps ran,
+                        // including one resuming a sequence an earlier fire began.
+                        if budget.dispatched_steps() > 0 {
+                            titles_acted_on += 1;
+                        }
+                        high_risk_failures += budget.failed_high_risk_steps();
+                    }
+                    match outcome {
+                        Ok(CandidateOutcome::Executed) => {
+                            report.executed += 1;
+                        }
+                        Ok(CandidateOutcome::Held) => report.held += 1,
+                        Ok(CandidateOutcome::Canceled) => report.canceled += 1,
+                        Ok(CandidateOutcome::Failed) => {
+                            report.failed += 1;
+                        }
+                        Ok(CandidateOutcome::LeaseLost) => report.lease_lost += 1,
+                        Err(error) => {
+                            // The side effect may have completed before its result
+                            // failed to persist. Charge the attempt conservatively.
+                            report.failed += 1;
+                            warn!(error = %error, "maintenance action handling failed for one candidate");
+                        }
                     }
                 }
-                if let Some(budget) = sequence_budget.as_ref() {
-                    executed_this_rule += budget.dispatched_steps();
-                    high_risk_executed += budget.dispatched_high_risk_steps();
-                    high_risk_failures += budget.failed_high_risk_steps();
-                }
-                match outcome {
-                    Ok(CandidateOutcome::Executed) => {
-                        report.executed += 1;
-                    }
-                    Ok(CandidateOutcome::Held) => report.held += 1,
-                    Ok(CandidateOutcome::Canceled) => report.canceled += 1,
-                    Ok(CandidateOutcome::Failed) => {
-                        report.failed += 1;
-                    }
-                    Ok(CandidateOutcome::LeaseLost) => report.lease_lost += 1,
-                    Err(error) => {
-                        // The side effect may have completed before its result
-                        // failed to persist. Charge the attempt conservatively.
-                        report.failed += 1;
-                        warn!(error = %error, "maintenance action handling failed for one candidate");
-                    }
+                if last_page {
+                    break;
                 }
             }
         }
@@ -1333,9 +1368,11 @@ impl AppUseCase {
     /// win, which makes the catalog depend on rule iteration order; the honest
     /// answer is to hold both sides with a reason the operator can act on.
     ///
-    /// The scan re-lists due candidates for tag rules only. That is one extra
-    /// bounded read per tag rule per pass, and it buys a decision made before
-    /// the first write instead of after it.
+    /// The scan re-lists due candidates for tag rules only, in the same
+    /// bounded pages the walk uses. A rule's maximum does not shorten it: a
+    /// held candidate lets the walk reach past the first few due, so every
+    /// due title of a tag rule is one it could patch this pass. That buys a
+    /// decision made before the first write instead of after it.
     async fn maintenance_tag_patch_conflicts(
         &self,
         eligible_rules: &[(MaintenanceRuleSetDetail, EligibleRuleAction, bool)],
@@ -1349,48 +1386,61 @@ impl AppUseCase {
             if declared.add_tags.is_empty() && declared.remove_tags.is_empty() {
                 continue;
             }
-            let due = match self
-                .services
-                .customization
-                .maintenance_evaluation
-                .list_due_candidates(
-                    &detail.rule_set.id,
-                    now,
-                    self.maintenance_lease_stale_before(now),
-                    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN * 2,
-                )
-                .await
-            {
-                Ok(due) => due,
-                Err(error) => {
-                    // A later read may recover, but it cannot repair this
-                    // pass's incomplete conflict picture. Hold tag effects
-                    // without charging an attempt; unrelated effects may run.
-                    warn!(error = %error, "could not scan a tag rule for patch conflicts");
-                    return None;
-                }
-            };
-            for candidate in due {
-                // A candidate patches only what was decided for it; the
-                // source's full tag lists are only the reason to look. One
-                // without decided actions never runs, so it patches nothing.
-                let Some(decided) = super::declared_actions::decided_actions_from_json(
-                    candidate.decided_actions_json.as_deref(),
-                ) else {
-                    continue;
+            let stale_before = self.maintenance_lease_stale_before(now);
+            let mut cursor: Option<crate::MaintenanceDueCursor> = None;
+            loop {
+                let due = match self
+                    .services
+                    .customization
+                    .maintenance_evaluation
+                    .list_due_candidates(
+                        &detail.rule_set.id,
+                        now,
+                        stale_before,
+                        cursor.as_ref(),
+                        MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE,
+                    )
+                    .await
+                {
+                    Ok(due) => due,
+                    Err(error) => {
+                        // A later read may recover, but it cannot repair this
+                        // pass's incomplete conflict picture. Hold tag effects
+                        // without charging an attempt; unrelated effects may run.
+                        warn!(error = %error, "could not scan a tag rule for patch conflicts");
+                        return None;
+                    }
                 };
-                let (adds, removes) = (&decided.add_tags, &decided.remove_tags);
-                if !adds.is_empty() {
-                    added
-                        .entry(candidate.title_id.clone())
-                        .or_default()
-                        .extend(adds.iter().cloned());
+                let Some(last) = due.last() else {
+                    break;
+                };
+                cursor = Some(crate::MaintenanceDueCursor::after(last));
+                let last_page = due.len() < MAINTENANCE_DUE_CANDIDATE_PAGE_SIZE;
+                for candidate in due {
+                    // A candidate patches only what was decided for it; the
+                    // source's full tag lists are only the reason to look. One
+                    // without decided actions never runs, so it patches nothing.
+                    let Some(decided) = super::declared_actions::decided_actions_from_json(
+                        candidate.decided_actions_json.as_deref(),
+                    ) else {
+                        continue;
+                    };
+                    let (adds, removes) = (&decided.add_tags, &decided.remove_tags);
+                    if !adds.is_empty() {
+                        added
+                            .entry(candidate.title_id.clone())
+                            .or_default()
+                            .extend(adds.iter().cloned());
+                    }
+                    if !removes.is_empty() {
+                        removed
+                            .entry(candidate.title_id)
+                            .or_default()
+                            .extend(removes.iter().cloned());
+                    }
                 }
-                if !removes.is_empty() {
-                    removed
-                        .entry(candidate.title_id)
-                        .or_default()
-                        .extend(removes.iter().cloned());
+                if last_page {
+                    break;
                 }
             }
         }

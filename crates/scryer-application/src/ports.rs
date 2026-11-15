@@ -10897,6 +10897,19 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         ))
     }
 
+    /// Replaces the most titles the rule may act on in one fire. `None`
+    /// clears it. Arming is untouched.
+    async fn set_rule_set_max_titles_per_run(
+        &self,
+        _id: &str,
+        _max_titles_per_run: Option<u32>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule maximum is not configured".into(),
+        ))
+    }
+
     /// Atomically write a rule's mode and arming, derive `enabled` from the
     /// mode, and clear the edited-since-enabled flag. Destructive arming first
     /// checks the reviewed configuration under the row lock; a stale or missing
@@ -11067,11 +11080,16 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     /// without it a candidate whose worker died mid-run is never selected again,
     /// so it stays `executing` forever and keeps inflating the count destructive
     /// arming makes an operator acknowledge.
+    ///
+    /// Ordered by `(due_at, id)`. `after` continues a walk past the last row
+    /// of the previous page, so a fire can work through every due candidate
+    /// in bounded pages.
     async fn list_due_candidates(
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        after: Option<&MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
@@ -11174,6 +11192,22 @@ pub enum MaintenanceActionStepClaim {
     Claimed(scryer_domain::MaintenanceActionStepRun),
     Busy,
     Completed(scryer_domain::MaintenanceActionStepRun),
+}
+
+/// Where a walk of a rule's due candidates stopped: the last row it read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaintenanceDueCursor {
+    pub due_at: DateTime<Utc>,
+    pub id: String,
+}
+
+impl MaintenanceDueCursor {
+    pub fn after(candidate: &scryer_domain::LifecycleCandidate) -> Self {
+        Self {
+            due_at: candidate.due_at,
+            id: candidate.id.clone(),
+        }
+    }
 }
 
 /// One rule having changed one title with one step kind.

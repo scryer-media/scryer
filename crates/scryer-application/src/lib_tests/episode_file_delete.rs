@@ -1525,6 +1525,7 @@ impl ScopedMaintenanceFixture {
             .create_maintenance_rule_set(
                 actor,
                 MaintenanceRuleDraft {
+                    max_titles_per_run: Some(100),
                     subject_kind: scope,
                     name: "Scoped deletion".into(),
                     description: String::new(),

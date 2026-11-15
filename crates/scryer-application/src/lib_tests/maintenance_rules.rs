@@ -275,6 +275,22 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         self.delete_rule_set(id).await
     }
 
+    async fn set_rule_set_max_titles_per_run(
+        &self,
+        id: &str,
+        max_titles_per_run: Option<u32>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut rule_sets = self.rule_sets.lock().await;
+        let rule_set = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.id == id)
+            .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        rule_set.max_titles_per_run = max_titles_per_run;
+        rule_set.updated_at = updated_at;
+        Ok(())
+    }
+
     async fn update_rule_set_state(
         &self,
         id: &str,
@@ -396,6 +412,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
 
 fn draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: "Unwatched for a long time".to_string(),
@@ -922,6 +939,7 @@ async fn renaming_or_reordering_the_same_scope_leaves_arming_alone() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 library_ids: vec!["library-a".to_string(), "library-b".to_string()],
                 ..draft(MONITORED_MATCHER)
             },
@@ -1174,6 +1192,7 @@ async fn a_head_the_scope_cannot_run_is_refused_with_its_position() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Season,
                 rego_source: source.to_string(),
                 ..draft(MONITORED_MATCHER)
@@ -1202,6 +1221,7 @@ async fn a_head_the_scope_cannot_run_is_refused_with_its_position() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Season,
                 ..draft(MONITORED_MATCHER)
             },
@@ -1240,6 +1260,7 @@ async fn a_source_without_an_action_head_is_refused() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 rego_source: MONITORED_MATCHER.to_string(),
                 ..draft(MONITORED_MATCHER)
             },
@@ -1269,6 +1290,7 @@ async fn a_negative_grace_period_is_rejected() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 grace_days: -1,
                 ..draft(MONITORED_MATCHER)
             },
@@ -1298,6 +1320,7 @@ async fn the_grace_period_is_bounded_at_ten_years() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 grace_days: MAINTENANCE_MAX_GRACE_DAYS,
                 ..draft(MONITORED_MATCHER)
             },
@@ -1310,6 +1333,7 @@ async fn the_grace_period_is_bounded_at_ten_years() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
                 ..draft(MONITORED_MATCHER)
             },
@@ -1488,6 +1512,7 @@ async fn preview_reports_a_failed_subject_by_code() {
         .create_maintenance_rule_set(
             &user,
             MaintenanceRuleDraft {
+                max_titles_per_run: Some(100),
                 rego_source: "package rules\nimport rego.v1\n\nunmonitor := \"yes\" if {\n\tnot input.facts.monitored\n}\n"
                     .to_string(),
                 ..draft(MONITORED_MATCHER)
@@ -1927,6 +1952,7 @@ async fn a_move_target_that_does_not_exist_is_refused_with_its_position() {
             app.create_maintenance_rule_set(
                 user,
                 MaintenanceRuleDraft {
+                    max_titles_per_run: Some(100),
                     rego_source: source,
                     library_ids,
                     ..draft(MONITORED_MATCHER)

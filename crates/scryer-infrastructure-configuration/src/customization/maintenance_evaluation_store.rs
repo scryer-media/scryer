@@ -573,6 +573,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         rule_set_id: &str,
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
+        after: Option<&scryer_application::MaintenanceDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
         // `due_at <= due_before` still bounds both arms: a row that reached
@@ -580,18 +581,33 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         // always past its due time too. The second arm is what returns that
         // abandoned row — without it, the lease's own reclaim branch is
         // unreachable and the row is stranded for good.
+        //
+        // The walk is keyset paged on `(due_at, id)`, served by
+        // idx_lifecycle_candidates_rule_due.
+        let cursor_clause = if after.is_some() {
+            " AND (due_at > {} OR (due_at = {} AND id > {}))"
+        } else {
+            ""
+        };
         let sql = format!(
             "SELECT {CANDIDATE_COLUMNS}
                FROM lifecycle_candidates
-              WHERE rule_set_id = {{}} AND due_at <= {{}}
+              WHERE rule_set_id = {{}} AND due_at <= {{}}{cursor_clause}
                 AND (state IN ({{}}, {{}}, {{}}, {{}})
                      OR (state = {{}} AND updated_at < {{}}))
               ORDER BY due_at ASC, id ASC
               LIMIT {{}}"
         );
-        let args = vec![
+        let mut args = vec![
             SqlArg::Text(rule_set_id.to_string()),
             SqlArg::Timestamp(due_before),
+        ];
+        if let Some(after) = after {
+            args.push(SqlArg::Timestamp(after.due_at));
+            args.push(SqlArg::Timestamp(after.due_at));
+            args.push(SqlArg::Text(after.id.clone()));
+        }
+        args.extend([
             SqlArg::Text(
                 MaintenanceCandidateState::Observing
                     .as_storage_str()
@@ -615,7 +631,7 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
             ),
             SqlArg::Timestamp(stale_before),
             SqlArg::I64(limit as i64),
-        ];
+        ]);
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()

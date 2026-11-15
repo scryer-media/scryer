@@ -2013,6 +2013,13 @@ pub mod maintenance {
     pub const MOVE_LIBRARY_FACET_MISMATCH: &str = "MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH";
     /// A `move_to_root` literal names no configured library root.
     pub const MOVE_ROOT_NOT_FOUND: &str = "MAINTENANCE_MOVE_ROOT_NOT_FOUND";
+    /// A rule that can delete was saved or armed without the most titles it
+    /// may act on in one run. The `destructiveActions` extension names the
+    /// delete actions that require it.
+    pub const RULE_MAX_TITLES_PER_RUN_REQUIRED: &str =
+        "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
+    /// The most titles a rule acts on in one run is below one.
+    pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
@@ -2068,7 +2075,12 @@ pub mod maintenance {
         MOVE_LIBRARY_NOT_FOUND,
         MOVE_LIBRARY_FACET_MISMATCH,
         MOVE_ROOT_NOT_FOUND,
+        RULE_MAX_TITLES_PER_RUN_REQUIRED,
+        RULE_MAX_TITLES_PER_RUN_INVALID,
     ];
+
+    /// The deleting action heads that make a rule's per-run maximum required.
+    pub const RULE_MAX_TITLES_PER_RUN_DESTRUCTIVE_ACTIONS_FACT: &str = "destructiveActions";
 }
 
 pub mod acquisition {

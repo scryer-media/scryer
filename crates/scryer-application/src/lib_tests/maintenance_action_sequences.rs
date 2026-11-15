@@ -59,6 +59,7 @@ fn draft(
     storage_root_id: Option<String>,
 ) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: MaintenanceRuleSubjectKind::Title,
         name: "Declared rule".to_string(),
         description: "A declared-actions fixture".to_string(),

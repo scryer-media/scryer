@@ -314,6 +314,25 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         .await
     }
 
+    async fn set_rule_set_max_titles_per_run(
+        &self,
+        id: &str,
+        max_titles_per_run: Option<u32>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        execute_write(
+            &self.datastore,
+            "set_maintenance_rule_set_max_titles_per_run",
+            "UPDATE maintenance_rule_sets SET max_titles_per_run = {}, updated_at = {} WHERE id = {}",
+            vec![
+                SqlArg::OptI64(max_titles_per_run.map(i64::from)),
+                SqlArg::Timestamp(updated_at),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await
+    }
+
     async fn delete_rule_set(&self, id: &str) -> AppResult<()> {
         execute_write(
             &self.datastore,
@@ -444,7 +463,7 @@ fn disarm_args() -> [SqlArg; 3] {
 
 // Fetch metadata and scope in one snapshot, including global rules with no scope rows.
 const RULE_SET_SELECT: &str = "SELECT id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required,
-    subject_kind, system_owned, current_revision_number, schedule_json, created_at, updated_at, scope.library_id AS scope_library_id
+    subject_kind, system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at, scope.library_id AS scope_library_id
     FROM maintenance_rule_sets
     LEFT JOIN maintenance_rule_set_libraries scope ON scope.rule_set_id = maintenance_rule_sets.id";
 
@@ -456,8 +475,8 @@ const REVISION_KEY_CHUNK: usize = 400;
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO maintenance_rule_sets
         (id, name, description, enabled, evaluation_mode, effect_arming, destructive_rearm_required, subject_kind,
-         system_owned, current_revision_number, schedule_json, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         system_owned, current_revision_number, schedule_json, max_titles_per_run, created_at, updated_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO maintenance_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
@@ -494,6 +513,7 @@ fn rule_set_args(rule_set: &MaintenanceRuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Bool(rule_set.system_owned),
         SqlArg::I64(rule_set.current_revision_number),
         SqlArg::Text(schedule_json(&rule_set.schedule)?),
+        SqlArg::OptI64(rule_set.max_titles_per_run.map(i64::from)),
         SqlArg::Timestamp(rule_set.created_at),
         SqlArg::Timestamp(rule_set.updated_at),
     ])
@@ -557,6 +577,11 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<MaintenanceRuleSet> {
         system_owned: row.bool("system_owned")?,
         current_revision_number: row.i64("current_revision_number")?,
         schedule: stored_schedule(row)?,
+        // A stored value below one acts on nothing; it was never written
+        // through the service, which refuses it.
+        max_titles_per_run: row
+            .opt_i64("max_titles_per_run")?
+            .map(|max| u32::try_from(max.max(0)).unwrap_or(u32::MAX)),
         created_at: timestamp_or_now(row, "created_at")?,
         updated_at: timestamp_or_now(row, "updated_at")?,
     })

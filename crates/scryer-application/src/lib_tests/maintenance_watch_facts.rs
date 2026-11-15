@@ -201,6 +201,7 @@ async fn record_play(
 
 fn draft(rego_source: &str) -> MaintenanceRuleDraft {
     MaintenanceRuleDraft {
+        max_titles_per_run: Some(100),
         subject_kind: scryer_domain::MaintenanceRuleSubjectKind::Title,
         name: "Watched movies".to_string(),
         description: String::new(),
