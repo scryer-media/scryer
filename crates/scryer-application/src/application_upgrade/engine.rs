@@ -1428,7 +1428,7 @@ fn staging_space_requirement(artifact: &UpgradeArtifact) -> u64 {
 }
 
 fn ensure_available_space(path: &Path, required_bytes: u64) -> AppResult<()> {
-    let space = crate::storage_capacity::StorageCapacity::process()
+    let space = crate::disk::capacity::StorageCapacity::process()
         .refresh_blocking(path)
         .map_err(|error| {
             AppError::Repository(format!(

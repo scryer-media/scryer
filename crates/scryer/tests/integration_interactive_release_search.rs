@@ -7,6 +7,8 @@
 //! GraphQL smoke test over the shared TestContext.
 
 #![recursion_limit = "256"]
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
 
 mod common;
 

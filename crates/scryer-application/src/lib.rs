@@ -1,3 +1,6 @@
+// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
+#![allow(clippy::disallowed_methods)]
+
 mod acquisition;
 mod api_keys;
 pub mod application_upgrade;
@@ -9,6 +12,7 @@ pub mod delete_refusal;
 #[cfg(feature = "runtime-diagnostics")]
 pub mod diagnostics;
 mod discovery;
+pub mod disk;
 pub use discovery::{
     CatalogOwnershipDecisions, DISCOVERY_CREDIBLE_RATING_MIN_VOTES,
     DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT, DISCOVERY_NEIGHBORS_DEFAULT_LIMIT,
@@ -168,7 +172,6 @@ pub mod scripts;
 mod security;
 mod services;
 mod settings;
-pub(crate) mod storage_capacity;
 pub mod stored_paths;
 pub mod subtitles;
 pub mod testing;
@@ -439,6 +442,7 @@ pub use contracts::{
     TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
     UnconfirmedDownloadSubmission, WantedSearchOutcome, indexer_search_eligibility,
 };
+pub use disk::capacity::start_storage_capacity_sampler;
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{
     DownloadClientRemotePathMapping, apply_remote_path_mappings_to_completed_download,
@@ -560,7 +564,6 @@ pub use settings::settings::{
     UpdateSecuritySettings, UpdateServiceSettings, UpdateSubtitleSettings,
     validated_title_audio_overrides, validated_title_audio_patch,
 };
-pub use storage_capacity::start_storage_capacity_sampler;
 pub use subtitles::orchestration::{
     DownloadSubtitleForMediaFileRequest, SubtitleSearchOutcome, SubtitleSearchStatus,
     spawn_subtitle_search_for_file, start_background_subtitle_poller,

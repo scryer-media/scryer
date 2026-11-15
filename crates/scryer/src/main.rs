@@ -1,5 +1,7 @@
 // async-graphql schema expansion exceeded the default macro recursion depth.
 #![recursion_limit = "256"]
+// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
+#![allow(clippy::disallowed_methods)]
 
 // Scryer never uses the system allocator: glibc's does not plateau on a large
 // library (§15 of the load-test report: ~3 GB and still climbing after 30

@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

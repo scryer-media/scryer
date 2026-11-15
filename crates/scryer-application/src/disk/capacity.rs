@@ -40,6 +40,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use chrono::{DateTime, Duration, Utc};
 use tracing::{info, warn};
 
+use super::{DiskClock, Offloaded, SystemClock, offload, read, reusable, write};
 use crate::AppUseCase;
 use crate::helpers::FilesystemSpace;
 
@@ -112,20 +113,6 @@ pub(crate) struct CapacityProbeReading {
 /// The disk seam: the capacity call itself. Tests replace it.
 pub(crate) trait CapacityDisk: Send + Sync + 'static {
     fn probe(&self, path: &Path) -> io::Result<CapacityProbeReading>;
-}
-
-/// The clock samples are stamped and aged by. Tests replace it.
-pub(crate) trait CapacityClock: Send + Sync + 'static {
-    fn now(&self) -> DateTime<Utc>;
-}
-
-#[derive(Debug, Default)]
-struct SystemClock;
-
-impl CapacityClock for SystemClock {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -250,7 +237,7 @@ struct Entry {
 
 struct Inner {
     disk: Arc<dyn CapacityDisk>,
-    clock: Arc<dyn CapacityClock>,
+    clock: Arc<dyn DiskClock>,
     entries: RwLock<HashMap<String, Entry>>,
     passes: AtomicU64,
     #[cfg(test)]
@@ -270,15 +257,6 @@ impl std::fmt::Debug for StorageCapacity {
             .field("paths", &entries.len())
             .finish_non_exhaustive()
     }
-}
-
-fn read<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
-    lock.write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn key_of(path: &Path) -> String {
@@ -305,7 +283,7 @@ impl StorageCapacity {
             .clone()
     }
 
-    pub(crate) fn with_seams(disk: Arc<dyn CapacityDisk>, clock: Arc<dyn CapacityClock>) -> Self {
+    pub(crate) fn with_seams(disk: Arc<dyn CapacityDisk>, clock: Arc<dyn DiskClock>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 disk,
@@ -393,11 +371,10 @@ impl StorageCapacity {
         let _out = flight
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(sample) = self.sample(&key) {
-            let reuse = Duration::from_std(STORAGE_CAPACITY_REFRESH_REUSE).unwrap_or_default();
-            if sample.sampled_at >= asked_at || asked_at - sample.sampled_at < reuse {
-                return sample.space();
-            }
+        if let Some(sample) = self.sample(&key)
+            && reusable(sample.sampled_at, asked_at, STORAGE_CAPACITY_REFRESH_REUSE)
+        {
+            return sample.space();
         }
         let sample = self.call(path);
         let answer = sample.space();
@@ -416,11 +393,10 @@ impl StorageCapacity {
         let path = path.into();
         let owner = self.clone();
         let probed = path.clone();
-        let task = tokio::task::spawn_blocking(move || owner.refresh_blocking(&probed));
-        match tokio::time::timeout(timeout, task).await {
-            Ok(Ok(answer)) => answer,
-            Ok(Err(join)) => Err(io::Error::other(join.to_string())),
-            Err(_elapsed) => {
+        match offload(Some(timeout), move || owner.refresh_blocking(&probed)).await {
+            Offloaded::Done(answer) => answer,
+            Offloaded::Failed(join) => Err(io::Error::other(join)),
+            Offloaded::TimedOut => {
                 let failure = ProbeFailure {
                     kind: io::ErrorKind::TimedOut,
                     message: format!(
@@ -841,6 +817,7 @@ mod system {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk::test_support::ManualClock;
     use std::collections::VecDeque;
 
     fn at(seconds: i64) -> DateTime<Utc> {
@@ -851,24 +828,6 @@ mod tests {
         FilesystemSpace {
             total_bytes: total,
             available_bytes: available,
-        }
-    }
-
-    #[derive(Default)]
-    struct ManualClock(Mutex<Option<DateTime<Utc>>>);
-
-    impl ManualClock {
-        fn at(instant: DateTime<Utc>) -> Arc<Self> {
-            Arc::new(Self(Mutex::new(Some(instant))))
-        }
-        fn set(&self, instant: DateTime<Utc>) {
-            *self.0.lock().unwrap() = Some(instant);
-        }
-    }
-
-    impl CapacityClock for ManualClock {
-        fn now(&self) -> DateTime<Utc> {
-            self.0.lock().unwrap().expect("clock set")
         }
     }
 

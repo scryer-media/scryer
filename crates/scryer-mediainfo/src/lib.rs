@@ -1,3 +1,6 @@
+// disk-guard: this crate does not depend on scryer-application and is exempt from the disk guard.
+#![allow(clippy::disallowed_methods)]
+
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek};
 use std::path::Path;

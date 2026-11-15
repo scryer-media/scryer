@@ -1,0 +1,353 @@
+//! What the owner can say about a path, and why an operation failed.
+//!
+//! Every answer is typed. A path that cannot be read is never reported as
+//! absent: only the platform's "not found" makes a path [`PathReading::Missing`];
+//! a dead mount, a permission error or a timeout is
+//! [`PathReading::Unreachable`]. Nothing here names a filesystem or needs
+//! filesystem knowledge to interpret.
+
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use chrono::{DateTime, Utc};
+
+/// Stable codes for readings that are not an answer and for failed
+/// operations. Released codes are API: never rename, reuse or repurpose one.
+pub mod reason {
+    /// Nothing current is known about the path; the caller did not ask the
+    /// disk.
+    pub const DISK_NOT_OBSERVED: &str = "DISK_NOT_OBSERVED";
+    /// The path could not be read: the share did not answer, access was
+    /// refused, or the read failed.
+    pub const DISK_PATH_UNREACHABLE: &str = "DISK_PATH_UNREACHABLE";
+    /// The disk did not answer within the owner's bound.
+    pub const DISK_TIMED_OUT: &str = "DISK_TIMED_OUT";
+    /// The path does not exist.
+    pub const DISK_PATH_MISSING: &str = "DISK_PATH_MISSING";
+    /// The operation was refused for lack of permission.
+    pub const DISK_PERMISSION_DENIED: &str = "DISK_PERMISSION_DENIED";
+    /// The destination already holds something, and the operation never
+    /// replaces it.
+    pub const DISK_DESTINATION_EXISTS: &str = "DISK_DESTINATION_EXISTS";
+    /// A directory still has entries, so it was not removed.
+    pub const DISK_DIRECTORY_NOT_EMPTY: &str = "DISK_DIRECTORY_NOT_EMPTY";
+    /// The path is a directory where a file was expected, or the reverse.
+    pub const DISK_WRONG_KIND: &str = "DISK_WRONG_KIND";
+    /// The source and destination cannot be joined by a rename; the move
+    /// needs a copy.
+    pub const DISK_MOVE_NEEDS_COPY: &str = "DISK_MOVE_NEEDS_COPY";
+    /// Any other failure.
+    pub const DISK_OPERATION_FAILED: &str = "DISK_OPERATION_FAILED";
+
+    // Read by the distinctness test.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const ALL: &[&str] = &[
+        DISK_NOT_OBSERVED,
+        DISK_PATH_UNREACHABLE,
+        DISK_TIMED_OUT,
+        DISK_PATH_MISSING,
+        DISK_PERMISSION_DENIED,
+        DISK_DESTINATION_EXISTS,
+        DISK_DIRECTORY_NOT_EMPTY,
+        DISK_WRONG_KIND,
+        DISK_MOVE_NEEDS_COPY,
+        DISK_OPERATION_FAILED,
+    ];
+}
+
+/// What sits at a path. A link is reported as a link, never as what it
+/// points at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+/// An opaque identity for the file at a path, present only where the disk
+/// gives a usable one. Two readings with equal identities are the same file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl FileIdentity {
+    /// `None` for a zero inode, which some network and FUSE filesystems
+    /// report for every file: equality on it would prove nothing.
+    pub(crate) fn from_raw(device: u64, inode: u64) -> Option<Self> {
+        (inode != 0).then_some(Self { device, inode })
+    }
+}
+
+/// What may be said about a path at a given instant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathReading {
+    Known {
+        kind: EntryKind,
+        /// Absent when the reading came from a directory listing that did not
+        /// carry it.
+        len: Option<u64>,
+        modified: Option<SystemTime>,
+        identity: Option<FileIdentity>,
+        observed_at: DateTime<Utc>,
+    },
+    Missing {
+        observed_at: DateTime<Utc>,
+    },
+    Unreachable {
+        observed_at: DateTime<Utc>,
+    },
+    /// Nothing current is known; only [`super::Disk::observed`] answers this.
+    NotObserved,
+}
+
+impl PathReading {
+    /// The [`reason`] code for a reading that does not say what is there.
+    pub fn unknown_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Known { .. } | Self::Missing { .. } => None,
+            Self::Unreachable { .. } => Some(reason::DISK_PATH_UNREACHABLE),
+            Self::NotObserved => Some(reason::DISK_NOT_OBSERVED),
+        }
+    }
+
+    /// `Some(true)` when something is there, `Some(false)` when nothing is,
+    /// `None` when that is not known. Never collapse `None` into either.
+    pub fn exists(self) -> Option<bool> {
+        match self {
+            Self::Known { .. } => Some(true),
+            Self::Missing { .. } => Some(false),
+            Self::Unreachable { .. } | Self::NotObserved => None,
+        }
+    }
+
+    pub fn kind(self) -> Option<EntryKind> {
+        match self {
+            Self::Known { kind, .. } => Some(kind),
+            _ => None,
+        }
+    }
+
+    pub fn observed_at(self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Known { observed_at, .. }
+            | Self::Missing { observed_at }
+            | Self::Unreachable { observed_at } => Some(observed_at),
+            Self::NotObserved => None,
+        }
+    }
+
+    /// A probe of the path itself, not evidence seeded by a listing.
+    pub(crate) fn is_complete(self) -> bool {
+        !matches!(self, Self::Known { len: None, .. } | Self::NotObserved)
+    }
+
+    /// A reading from one call's outcome. Only "not found" is missing.
+    pub(crate) fn from_result(
+        result: &io::Result<super::backend::RawStat>,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        match result {
+            Ok(stat) => stat.reading(observed_at),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::Missing { observed_at },
+            Err(_) => Self::Unreachable { observed_at },
+        }
+    }
+}
+
+/// The operation a failure belongs to, named in the failure's sentence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskVerb {
+    Read,
+    List,
+    Resolve,
+    Remove,
+    Move,
+    Link,
+    CreateDir,
+    Write,
+    Sync,
+}
+
+impl DiskVerb {
+    fn sentence(self) -> &'static str {
+        match self {
+            Self::Read => "could not read",
+            Self::List => "could not list",
+            Self::Resolve => "could not resolve",
+            Self::Remove => "could not remove",
+            Self::Move => "could not move",
+            Self::Link => "could not link",
+            Self::CreateDir => "could not create directory",
+            Self::Write => "could not write",
+            Self::Sync => "could not sync",
+        }
+    }
+}
+
+/// A failed operation: a stable [`reason`] code, the path, and the
+/// platform's own words for people.
+#[derive(Debug, thiserror::Error)]
+#[error("{} {}: {source}", verb.sentence(), path.display())]
+pub struct DiskError {
+    verb: DiskVerb,
+    reason: &'static str,
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
+impl DiskError {
+    pub(crate) fn new(verb: DiskVerb, path: &Path, source: io::Error) -> Self {
+        Self {
+            verb,
+            reason: classify(&source),
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+
+    pub(crate) fn timed_out(verb: DiskVerb, path: &Path, timeout: std::time::Duration) -> Self {
+        Self::new(
+            verb,
+            path,
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("the disk did not answer within {} ms", timeout.as_millis()),
+            ),
+        )
+    }
+
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
+
+    pub fn verb(&self) -> DiskVerb {
+        self.verb
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl From<DiskError> for io::Error {
+    fn from(error: DiskError) -> Self {
+        error.source
+    }
+}
+
+/// The one place an I/O failure becomes a reason code. Typed kinds only.
+fn classify(error: &io::Error) -> &'static str {
+    use io::ErrorKind as K;
+    if crate::fs_safety::is_cross_device_error(error) {
+        return reason::DISK_MOVE_NEEDS_COPY;
+    }
+    match error.kind() {
+        K::NotFound => reason::DISK_PATH_MISSING,
+        K::PermissionDenied | K::ReadOnlyFilesystem => reason::DISK_PERMISSION_DENIED,
+        K::AlreadyExists => reason::DISK_DESTINATION_EXISTS,
+        K::DirectoryNotEmpty => reason::DISK_DIRECTORY_NOT_EMPTY,
+        K::NotADirectory | K::IsADirectory => reason::DISK_WRONG_KIND,
+        K::TimedOut => reason::DISK_TIMED_OUT,
+        K::StaleNetworkFileHandle
+        | K::NetworkDown
+        | K::NetworkUnreachable
+        | K::HostUnreachable
+        | K::ConnectionReset
+        | K::ConnectionAborted
+        | K::NotConnected => reason::DISK_PATH_UNREACHABLE,
+        _ => reason::DISK_OPERATION_FAILED,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reason_codes_are_distinct_area_prefixed_and_screaming_snake() {
+        let mut seen = std::collections::HashSet::new();
+        for code in reason::ALL {
+            assert!(seen.insert(*code), "{code} repeated");
+            assert!(code.starts_with("DISK_"), "{code}");
+            assert!(
+                code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
+                "{code}"
+            );
+        }
+        for reading in [
+            PathReading::NotObserved,
+            PathReading::Unreachable {
+                observed_at: Utc::now(),
+            },
+        ] {
+            assert!(reason::ALL.contains(&reading.unknown_reason().unwrap()));
+        }
+    }
+
+    #[test]
+    fn only_not_found_is_missing() {
+        let at = Utc::now();
+        let missing: io::Result<super::super::backend::RawStat> =
+            Err(io::ErrorKind::NotFound.into());
+        assert_eq!(
+            PathReading::from_result(&missing, at),
+            PathReading::Missing { observed_at: at }
+        );
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::StaleNetworkFileHandle,
+            io::ErrorKind::Other,
+        ] {
+            let failed: io::Result<super::super::backend::RawStat> = Err(kind.into());
+            assert_eq!(
+                PathReading::from_result(&failed, at),
+                PathReading::Unreachable { observed_at: at },
+                "{kind:?}"
+            );
+            assert_eq!(PathReading::from_result(&failed, at).exists(), None);
+        }
+    }
+
+    #[test]
+    fn failures_classify_by_kind() {
+        let path = Path::new("/srv/fixture-library/Invented Title");
+        let cases = [
+            (io::ErrorKind::NotFound, reason::DISK_PATH_MISSING),
+            (
+                io::ErrorKind::PermissionDenied,
+                reason::DISK_PERMISSION_DENIED,
+            ),
+            (
+                io::ErrorKind::AlreadyExists,
+                reason::DISK_DESTINATION_EXISTS,
+            ),
+            (
+                io::ErrorKind::DirectoryNotEmpty,
+                reason::DISK_DIRECTORY_NOT_EMPTY,
+            ),
+            (io::ErrorKind::IsADirectory, reason::DISK_WRONG_KIND),
+            (io::ErrorKind::CrossesDevices, reason::DISK_MOVE_NEEDS_COPY),
+            (io::ErrorKind::TimedOut, reason::DISK_TIMED_OUT),
+            (io::ErrorKind::Other, reason::DISK_OPERATION_FAILED),
+        ];
+        for (kind, code) in cases {
+            let error = DiskError::new(DiskVerb::Remove, path, kind.into());
+            assert_eq!(error.reason(), code, "{kind:?}");
+            assert_eq!(error.path(), path);
+            assert_eq!(io::Error::from(error).kind(), kind);
+        }
+    }
+
+    #[test]
+    fn identity_needs_a_real_inode() {
+        assert_eq!(FileIdentity::from_raw(7, 0), None);
+        assert_eq!(FileIdentity::from_raw(7, 9), FileIdentity::from_raw(7, 9));
+        assert_ne!(FileIdentity::from_raw(7, 9), FileIdentity::from_raw(8, 9));
+    }
+}

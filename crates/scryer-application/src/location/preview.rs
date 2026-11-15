@@ -813,7 +813,7 @@ pub trait VolumeProbe: Send + Sync {
 }
 
 /// The real probe: `dev` identity on unix, path prefix on Windows, and the
-/// canonical [`crate::storage_capacity::StorageCapacity`] for free space.
+/// canonical [`crate::disk::capacity::StorageCapacity`] for free space.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemVolumeProbe;
 
@@ -856,7 +856,7 @@ impl VolumeProbe for SystemVolumeProbe {
 
     fn available_bytes(&self, path: &Path) -> Option<u64> {
         let existing = Self::existing_ancestor(path)?;
-        crate::storage_capacity::StorageCapacity::process()
+        crate::disk::capacity::StorageCapacity::process()
             .refresh_blocking(&existing)
             .ok()
             .map(|space| space.available_bytes)

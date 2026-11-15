@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
+#![allow(clippy::disallowed_methods)]
 
 use async_graphql::{
     Context, Enum, ID, MaybeUndefined, MergedObject, Object, Result as GqlResult, SimpleObject,

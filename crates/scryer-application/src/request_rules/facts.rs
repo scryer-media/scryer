@@ -91,12 +91,12 @@ pub mod fact_reason {
     /// The target library has no usable root.
     pub const STORAGE_ROOT_UNAVAILABLE: &str = "storage_root_unavailable";
     /// No capacity sample of the root since startup.
-    pub const STORAGE_NOT_SAMPLED: &str = crate::storage_capacity::reason::STORAGE_NOT_SAMPLED;
+    pub const STORAGE_NOT_SAMPLED: &str = crate::disk::capacity::reason::STORAGE_NOT_SAMPLED;
     /// The root's capacity sample is older than two sampling intervals.
-    pub const STORAGE_SAMPLE_STALE: &str = crate::storage_capacity::reason::STORAGE_SAMPLE_STALE;
+    pub const STORAGE_SAMPLE_STALE: &str = crate::disk::capacity::reason::STORAGE_SAMPLE_STALE;
     /// The root's newest capacity sample could not read the filesystem.
     pub const STORAGE_CAPACITY_UNAVAILABLE: &str =
-        crate::storage_capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
+        crate::disk::capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
 
     pub const ALL: &[&str] = &[
         METADATA_UNAVAILABLE,
@@ -1501,10 +1501,10 @@ impl AppUseCase {
 }
 
 fn storage_figures(
-    reading: crate::storage_capacity::StorageCapacityReading,
+    reading: crate::disk::capacity::StorageCapacityReading,
 ) -> Result<RequestStorageFigures, &'static str> {
     match reading {
-        crate::storage_capacity::StorageCapacityReading::Known {
+        crate::disk::capacity::StorageCapacityReading::Known {
             sampled_at,
             available_bytes,
             total_bytes,

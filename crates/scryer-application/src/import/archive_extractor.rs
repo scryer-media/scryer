@@ -992,11 +992,11 @@ async fn extract_with_archive_plugin(
     // Staging output and final placement share the resolved destination volume.
     // Scratch is separately capped on the host's actual scratch volume.
     let scratch_dir = std::env::temp_dir();
-    let capacity = crate::storage_capacity::StorageCapacity::process();
+    let capacity = crate::disk::capacity::StorageCapacity::process();
     let output_space = capacity
         .refresh(
             output_dir.clone(),
-            crate::storage_capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
+            crate::disk::capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
         )
         .await
         .ok()
@@ -1004,7 +1004,7 @@ async fn extract_with_archive_plugin(
     let scratch_space = capacity
         .refresh(
             scratch_dir.clone(),
-            crate::storage_capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
+            crate::disk::capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
         )
         .await
         .ok()

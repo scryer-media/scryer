@@ -1,3 +1,6 @@
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;

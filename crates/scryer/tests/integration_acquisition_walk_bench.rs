@@ -13,6 +13,9 @@
 //! --run-ignored only`, and set `BENCH_OUT` to a file path to keep the report.
 //! Every name is synthetic.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use common::TestContext;

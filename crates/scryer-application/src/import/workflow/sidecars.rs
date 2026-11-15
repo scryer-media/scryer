@@ -381,7 +381,7 @@ impl SceneSubtitlePlan {
             )
         })?;
         validate_disk_allowance(
-            crate::storage_capacity::StorageCapacity::process()
+            crate::disk::capacity::StorageCapacity::process()
                 .refresh_blocking(parent)
                 .map_err(|error| AppError::Repository(error.to_string()))?
                 .available_bytes,

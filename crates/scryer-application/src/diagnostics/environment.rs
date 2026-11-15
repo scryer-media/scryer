@@ -310,7 +310,7 @@ fn probe_root(path: &str) -> RootFacts {
     let Ok(metadata) = std::fs::metadata(path) else {
         return RootFacts::default();
     };
-    let space = crate::storage_capacity::StorageCapacity::process()
+    let space = crate::disk::capacity::StorageCapacity::process()
         .refresh_blocking(path)
         .ok();
     RootFacts {

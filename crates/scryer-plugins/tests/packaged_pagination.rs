@@ -2,6 +2,9 @@
 //! optimized, descriptor-embedded artifacts emitted by `xtask plugin validate`,
 //! not raw compiler output or simulated plugin responses.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 use scryer_application::{
     IndexerPluginProvider, IndexerSearchPlanRequest, IndexerSearchStrategyEventSink,
     IndexerSearchStrategyRequest, PluginDescriptorLoader,

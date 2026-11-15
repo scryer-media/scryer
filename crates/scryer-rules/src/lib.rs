@@ -19,6 +19,9 @@
 //!   input/output and Regorus — never media deletion, requests, jobs,
 //!   GraphQL, or stores.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 pub(crate) mod builtins;
 pub mod diagnostic_codes;
 pub mod maintenance;

@@ -4,6 +4,9 @@
 //!
 //! Run with: cargo nextest run -E 'test(multi_indexer_url_trace)' --success-output immediate
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::sync::Arc;

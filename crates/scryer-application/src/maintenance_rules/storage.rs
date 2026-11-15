@@ -75,7 +75,7 @@ pub(crate) async fn install_maintenance_storage_capacity_probe_for_test(
 
 pub(crate) const STORAGE_ROOT_UNAVAILABLE: &str = "storage_root_unavailable";
 pub(crate) const STORAGE_CAPACITY_UNAVAILABLE: &str =
-    crate::storage_capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
+    crate::disk::capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
 
 /// How a pass reads a root's free space.
 #[derive(Clone, Copy, Debug)]
@@ -419,7 +419,7 @@ impl AppUseCase {
                 storage_capacity_values(space).ok_or(STORAGE_CAPACITY_UNAVAILABLE)
             }
             MaintenanceStorageRead::Sampled(now) => match capacity.reading(&path, now) {
-                crate::storage_capacity::StorageCapacityReading::Known {
+                crate::disk::capacity::StorageCapacityReading::Known {
                     available_bytes,
                     total_bytes,
                     ..

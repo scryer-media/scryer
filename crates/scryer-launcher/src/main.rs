@@ -1,3 +1,6 @@
+// disk-guard: this crate does not depend on scryer-application and is exempt from the disk guard.
+#![allow(clippy::disallowed_methods)]
+
 use std::env;
 use std::ffi::{CString, OsString};
 use std::fs;

@@ -1,3 +1,6 @@
+// disk-guard: this crate still calls the filesystem directly; remove this allow when it is converted to scryer_application::disk.
+#![allow(clippy::disallowed_methods)]
+
 pub mod assembly;
 pub mod backup_import_normalization;
 pub mod postgres_backup;

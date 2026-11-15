@@ -496,7 +496,7 @@ impl AppUseCase {
                     .storage_capacity
                     .current_or_refresh(
                         &root.path,
-                        crate::storage_capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
+                        crate::disk::capacity::STORAGE_CAPACITY_SAMPLE_TIMEOUT,
                     )
                     .await;
                 if let Some(space) = space {

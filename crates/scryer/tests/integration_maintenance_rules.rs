@@ -7,6 +7,9 @@
 //! evaluation or executes an action, so a rule always persists as disabled and
 //! preview persists nothing at all.
 
+// disk-guard: test, example and build-script code may call the filesystem directly.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use async_graphql::Variables;

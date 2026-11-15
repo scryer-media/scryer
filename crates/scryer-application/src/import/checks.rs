@@ -115,7 +115,7 @@ fn destination_directory(dest_path: &Path) -> &Path {
 }
 
 fn available_disk_space(path: &Path) -> std::io::Result<u64> {
-    Ok(crate::storage_capacity::StorageCapacity::process()
+    Ok(crate::disk::capacity::StorageCapacity::process()
         .refresh_blocking(path)?
         .available_bytes)
 }
