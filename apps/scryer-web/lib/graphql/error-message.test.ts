@@ -591,10 +591,10 @@ test("a missing per-run maximum names the delete actions that need it", () => {
   });
   assert.equal(
     userFacingGraphQlErrorMessage(
-      refusal(["delete_files", "delete_title"]),
+      refusal(["delete_files", "delete_title", "delete_shelf"]),
       "Failed",
     ),
-    "Set titles per run: this rule can delete_files, delete_title.",
+    "Set titles per run. These actions of the rule need it: Delete files, Delete title and files, delete_shelf.",
   );
   for (const destructiveActions of [undefined, [], [3], "delete_files"]) {
     assert.equal(

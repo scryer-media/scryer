@@ -5911,6 +5911,49 @@ const zh_HK: LocaleDictionary = {
     "已暫緩：執行前媒體伺服器無法確認觀看記錄。",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "已暫緩：已連線的媒體伺服器沒有相符的項目，執行前無法確認觀看記錄。",
+  "settings.maintenanceExecutionReason.ruleNotEligible":
+    "已暫緩：動作執行前，規則已停用、改為試執行或解除啟用，或其安全閘門已關閉。",
+  "settings.maintenanceExecutionReason.noMatchAtExecution":
+    "未執行：動作前重新檢查時，作品已不再符合規則。",
+  "settings.maintenanceExecutionReason.unknownAtExecution":
+    "已暫緩：動作前重新檢查時，規則無法做出決定。下次執行時會再檢查。",
+  "settings.maintenanceExecutionReason.activeAcquisition":
+    "已暫緩：此作品正在抓取、下載或匯入。",
+  "settings.maintenanceExecutionReason.acquisitionUnknown":
+    "已暫緩：Scryer 無法確定此作品是否正在抓取、下載或匯入。",
+  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+    "已暫緩：儲存空間清理正在刪除文件。動作會等待其完成。",
+  "settings.maintenanceExecutionReason.actionNotFullySupported":
+    "已暫緩：此動作無法用於此對象，例如對一季或一集執行整部作品的動作。",
+  "settings.maintenanceExecutionReason.titleMissing":
+    "此作品已不在媒體庫中，因此未執行任何動作。",
+  "settings.maintenanceExecutionReason.locationOperationHold":
+    "已暫緩：此作品的文件正在移動或重新命名。完成後才會執行動作。",
+  "settings.maintenanceExecutionReason.passActionStepBudget":
+    "由先前一次已用完動作步驟的執行暫緩。現在的執行已沒有此限制；動作會在下次執行時進行。",
+  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+    "已暫緩：本次執行中刪除多次失敗，其餘刪除會等到下次執行。",
+  "settings.maintenanceExecutionReason.actionSucceeded": "動作已完成。",
+  "settings.maintenanceExecutionReason.alreadySatisfied":
+    "無需變更：作品已是動作會使其成為的狀態。",
+  "settings.maintenanceExecutionReason.retryPending":
+    "動作因可能暫時的原因失敗，將會重試。",
+  "settings.maintenanceExecutionReason.actionFailed":
+    "動作失敗且不會重試。錯誤記錄在動作歷史中。",
+  "settings.maintenanceExecutionReason.leaseReclaimed":
+    "動作在完成前中斷，例如 Scryer 重新啟動時。它已釋出以便再次執行。",
+  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+    "已暫緩：部分文件無法對應到此季或此集的集數，因此刪除並不安全。",
+  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+    "已暫緩：此規則設定的質素設定檔已不再對應唯一一個設定檔。它已被重新命名或移除，或有兩個設定檔同名。",
+  "settings.maintenanceExecutionReason.actionsNotRunnable":
+    "已暫緩：為此對象決定的動作無法一起執行，例如加入又移除同一個標籤。",
+  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+    "已暫緩：動作前重新檢查時，規則決定了不同的動作。下次評估會取代此候選項目。",
+  "settings.maintenanceExecutionReason.actionNotDeclared":
+    "已暫緩：此候選項目帶有規則目前原始碼已不再宣告的動作，因此永遠不會執行。",
+  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+    "已暫緩：儲存根目錄規則無法執行其中一個動作。",
   "settings.maintenanceRuleMaxTitlesPerRun": "每次執行的作品數",
   "settings.maintenanceRuleMaxTitlesPerRunHelp":
     "此規則在一次執行中最多處理的作品數。會刪除文件或作品的規則必須設定此上限。",
@@ -5946,7 +5989,7 @@ const zh_HK: LocaleDictionary = {
   "error.ruleWithTargetNotAllowed":
     '此規則不能以 "with" 取代 {{path}}。其決定必須基於 Scryer 實際觀察到的內容。',
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
-    "請設定每次執行的作品數：此規則可以執行 {{actions}}。",
+    "請設定每次執行的作品數。此規則的以下動作需要它：{{actions}}。",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
     "規則未定義任何動作，因此永遠不會有作為。",
   "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":

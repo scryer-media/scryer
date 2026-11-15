@@ -7506,6 +7506,49 @@ const cs: LocaleDictionary = {
     "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
   "settings.maintenanceExecutionReason.watchRecheckUnmapped":
     "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
+  "settings.maintenanceExecutionReason.ruleNotEligible":
+    "Pozdrženo: před provedením akce bylo pravidlo vypnuto, přepnuto na zkušební běh nebo odjištěno, nebo se zavřela jeho bezpečnostní brána.",
+  "settings.maintenanceExecutionReason.noMatchAtExecution":
+    "Neprovedeno: při kontrole těsně před akcí už titul pravidlu neodpovídá.",
+  "settings.maintenanceExecutionReason.unknownAtExecution":
+    "Pozdrženo: při kontrole těsně před akcí pravidlo nedokázalo rozhodnout. Znovu se zkontroluje při příštím běhu.",
+  "settings.maintenanceExecutionReason.activeAcquisition":
+    "Pozdrženo: u titulu probíhá stahování, získávání nebo import.",
+  "settings.maintenanceExecutionReason.acquisitionUnknown":
+    "Pozdrženo: Scryer nedokázal zjistit, zda u titulu probíhá stahování, získávání nebo import.",
+  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+    "Pozdrženo: úklid úložiště právě maže soubory. Akce počká, až skončí.",
+  "settings.maintenanceExecutionReason.actionNotFullySupported":
+    "Pozdrženo: tuto akci nelze na tento subjekt použít, například akci pro celý titul na sérii nebo epizodu.",
+  "settings.maintenanceExecutionReason.titleMissing":
+    "Titul už v knihovně není, takže se nic neprovedlo.",
+  "settings.maintenanceExecutionReason.locationOperationHold":
+    "Pozdrženo: soubory titulu se přesouvají nebo přejmenovávají. Akce proběhne, až to skončí.",
+  "settings.maintenanceExecutionReason.passActionStepBudget":
+    "Pozdrženo dřívějším během, který vyčerpal své kroky akcí. Běhy už tento limit nemají; akce proběhne při příštím běhu.",
+  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+    "Pozdrženo: mazání v tomto běhu opakovaně selhalo, takže zbývající mazání počkají na příští běh.",
+  "settings.maintenanceExecutionReason.actionSucceeded": "Akce byla dokončena.",
+  "settings.maintenanceExecutionReason.alreadySatisfied":
+    "Není co měnit: titul už byl ve stavu, do kterého by ho akce uvedla.",
+  "settings.maintenanceExecutionReason.retryPending":
+    "Akce selhala z důvodu, který může pominout. Zkusí se znovu.",
+  "settings.maintenanceExecutionReason.actionFailed":
+    "Akce selhala a znovu se nezkusí. Chybu najdete v historii akcí.",
+  "settings.maintenanceExecutionReason.leaseReclaimed":
+    "Akce skončila dřív, než doběhla, například při restartu Scryeru. Byla uvolněna k novému spuštění.",
+  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+    "Pozdrženo: některé soubory nelze přiřadit k epizodám této série nebo epizody, takže jejich smazání není bezpečné.",
+  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+    "Pozdrženo: profil kvality, který pravidlo nastavuje, už neoznačuje právě jeden profil. Byl přejmenován nebo odstraněn, nebo dva profily mají stejný název.",
+  "settings.maintenanceExecutionReason.actionsNotRunnable":
+    "Pozdrženo: akce rozhodnuté pro tento subjekt nelze provést společně, například přidání a odebrání stejného štítku.",
+  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+    "Pozdrženo: při kontrole těsně před akcí pravidlo rozhodlo o jiných akcích. Příští vyhodnocení tohoto kandidáta nahradí.",
+  "settings.maintenanceExecutionReason.actionNotDeclared":
+    "Pozdrženo: kandidát nese akci, kterou aktuální zdroj pravidla už nedeklaruje, takže se nikdy neprovede.",
+  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+    "Pozdrženo: pravidlo pro kořen úložiště nemůže provést jednu z těchto akcí.",
   "settings.maintenanceRuleMaxTitlesPerRun": "Titulů na běh",
   "settings.maintenanceRuleMaxTitlesPerRunHelp":
     "Nejvyšší počet titulů, na které toto pravidlo v jednom běhu zasáhne. Pravidlo, které maže soubory nebo tituly, tento limit potřebuje.",
@@ -7543,7 +7586,7 @@ const cs: LocaleDictionary = {
   "error.ruleWithTargetNotAllowed":
     'Toto pravidlo nemůže pomocí "with" nahradit {{path}}. Jeho rozhodnutí musí vycházet z toho, co Scryer zjistil.',
   "error.maintenanceMaxTitlesPerRunRequiredNamed":
-    "Nastavte počet titulů na běh: toto pravidlo může provést {{actions}}.",
+    "Nastavte počet titulů na běh. Potřebují ho tyto akce pravidla: {{actions}}.",
   "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
     "Pravidlo nedefinuje žádnou akci, takže by nikdy nic neudělalo.",
   "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
