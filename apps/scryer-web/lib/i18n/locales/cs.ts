@@ -8151,7 +8151,7 @@ const cs: LocaleDictionary = {
     "Připojte Jellyfin, Plex nebo Emby, aby Scryer věděl, co jste viděli. Aby se server obnovil po každém importu ve Scryeru, nainstalujte také plugin daného serveru v Pluginech.",
   "tours.onboarding.notifications.title": "Oznámení",
   "tours.onboarding.notifications.body":
-    "Dozvíte se o stažených vydáních, importech a všem, co vyžaduje pozornost, tam, kde chcete.",
+    "Dozvíte se o stažených vydáních, importech a všem, co vyžaduje pozornost, tam, kde chcete. Služby přidáte z tohoto panelu Pluginy. Jsou tu i Jellyfin, Plex a Emby: server se po importu obnoví, až když z tohoto panelu nainstalujete jeho plugin, i když je už připojený v Mediálních serverech.",
   "tours.onboarding.plugins.title": "Pluginy",
   "tours.onboarding.plugins.body":
     "Pluginy přidávají indexery, klienty pro stahování a služby oznámení. Zde je instalujete a aktualizujete.",

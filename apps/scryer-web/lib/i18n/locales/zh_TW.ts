@@ -6627,7 +6627,7 @@ const zh_TW: LocaleDictionary = {
     "連接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看過什麼。若要在 Scryer 匯入後重新整理伺服器，還需在「外掛」中安裝該伺服器的外掛。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你想要的地方得知抓取、匯入以及需要處理的事項。",
+    "在你希望的地方得知擷取、匯入以及需要處理的事項。服務可從這個「外掛」面板加入。Jellyfin、Plex 和 Emby 也在這裡：即使已在「媒體伺服器」中連線，也要從這個面板安裝該伺服器的外掛，匯入後伺服器才會重新整理。",
   "tours.onboarding.plugins.title": "外掛",
   "tours.onboarding.plugins.body":
     "外掛可加入索引器、下載使用者端和通知服務。在這裡安裝和更新它們。",

@@ -94,6 +94,7 @@ export const TOUR_REGISTRY: readonly TourDefinition[] = [
         bodyKey: "tours.onboarding.qualityProfiles.body",
         icon: "settings",
         route: "/settings/quality-profiles",
+        via: ["root-sidebar-nav", "settings"],
         target: ["settings-quality-profiles-table-card"],
         when: (context) => context.permissions.canManageCatalogSettings,
       },
@@ -120,9 +121,13 @@ export const TOUR_REGISTRY: readonly TourDefinition[] = [
         titleKey: "tours.onboarding.notifications.title",
         bodyKey: "tours.onboarding.notifications.body",
         icon: "notifications",
-        target: ["root-sidebar-settings-shortcut", "notifications"],
-        when: (context) =>
-          onDesktop(context) && context.permissions.canManageSystemSettings,
+        route: "/integrations/notifications",
+        via: ["root-sidebar-settings-shortcut", "notifications"],
+        // The notification plugins tray: docked beside the page on a wide
+        // screen, behind its button on a narrower one.
+        target: ["settings-plugins-panel"],
+        fallbackTarget: ["settings-plugins-panel-toggle"],
+        when: (context) => context.permissions.canManageSystemSettings,
       },
       {
         id: "plugins",
@@ -130,6 +135,7 @@ export const TOUR_REGISTRY: readonly TourDefinition[] = [
         bodyKey: "tours.onboarding.plugins.body",
         icon: "plugins",
         route: "/settings/plugins",
+        via: ["root-sidebar-nav", "settings"],
         target: ["settings-plugins-installed-table"],
         when: (context) => context.permissions.canManageSystemSettings,
       },

@@ -28,7 +28,7 @@ import {
   type TourSize,
 } from "@/lib/tours/placement";
 import { tourArrow, type TourArrow } from "@/lib/tours/arrow";
-import type { TourIcon, TourStep } from "@/lib/tours/types";
+import type { TourIcon, TourStep, TourTarget } from "@/lib/tours/types";
 import { useTourTarget } from "./use-tour-target";
 
 const TOUR_ICONS: Record<TourIcon, LucideIcon> = {
@@ -52,6 +52,13 @@ const TOUR_ICONS: Record<TourIcon, LucideIcon> = {
 export type TourOverlayProps = {
   steps: readonly TourStep[];
   index: number;
+  /**
+   * Navigation to point at before the step's own target, on the way to the
+   * step's page. `onPointed` follows once the arrow has been drawn to it, or
+   * at once when it is not on screen.
+   */
+  pointAt?: TourTarget;
+  onPointed?: () => void;
   reduceMotion: boolean;
   onBack: () => void;
   onNext: () => void;
@@ -77,6 +84,8 @@ function TourStepOverlay({
   step,
   steps,
   index,
+  pointAt,
+  onPointed,
   reduceMotion,
   onBack,
   onNext,
@@ -84,7 +93,12 @@ function TourStepOverlay({
   onAction,
 }: TourOverlayProps & { step: TourStep }) {
   const t = useTranslate();
-  const { rect, settled } = useTourTarget(step.target, reduceMotion);
+  const target = pointAt ?? step.target;
+  const { rect, settled } = useTourTarget(
+    target,
+    reduceMotion,
+    pointAt ? undefined : step.fallbackTarget,
+  );
   // A callback ref: the portal mounts the card after this component does.
   const [card, setCard] = React.useState<HTMLDivElement | null>(null);
   const cardSize = useElementSize(card);
@@ -105,6 +119,31 @@ function TourStepOverlay({
     return () => window.cancelAnimationFrame(frame);
   }, [placed]);
 
+  // On the way to another page: hold on the navigation entry until its arrow
+  // is drawn, then go. An entry that is not on screen holds nothing up.
+  const pointing = pointAt !== undefined;
+  const pointedAt = pointing && settled && (!spot || placed);
+  const pointedAtNothing = !spot;
+  React.useEffect(() => {
+    if (!pointedAt || !onPointed) return;
+    if (pointedAtNothing) {
+      onPointed();
+      return;
+    }
+    const timer = window.setTimeout(
+      onPointed,
+      reduceMotion ? POINT_DWELL_REDUCED_MS : POINT_DWELL_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [pointedAt, pointedAtNothing, onPointed, reduceMotion]);
+  // However the pointing goes, the page changes within a bounded time: a card
+  // that cannot be placed never strands the tour on the navigation entry.
+  React.useEffect(() => {
+    if (!pointing || !onPointed) return;
+    const timer = window.setTimeout(onPointed, POINT_HOLD_LIMIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pointing, onPointed]);
+
   return (
     <DialogPrimitive.Root
       open
@@ -119,6 +158,8 @@ function TourStepOverlay({
         />
         {placement && cardSize && spot ? (
           <TourArrowLayer
+            // Redrawn from the start whenever it points somewhere new.
+            key={target?.join("/")}
             arrow={tourArrow(
               { top: placement.top, left: placement.left, ...cardSize },
               spot,
@@ -283,6 +324,13 @@ function TourBackdrop({
     </svg>
   );
 }
+
+/** The arrow's head is drawn by about 740 ms; the viewer then sees it a moment. */
+const POINT_DWELL_MS = 1100;
+/** With motion reduced the arrow shows at once, and still needs reading. */
+const POINT_DWELL_REDUCED_MS = 700;
+/** The longest a step holds on its navigation before opening its page. */
+const POINT_HOLD_LIMIT_MS = 3000;
 
 const ARROW_KEYFRAMES = `
 @keyframes tour-arrow-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }

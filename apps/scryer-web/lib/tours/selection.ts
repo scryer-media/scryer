@@ -26,11 +26,11 @@ export function visibleSteps(
 ): TourStep[] {
   return tour.steps
     .filter((step) => passes(step.when, context))
-    .map((step) =>
-      context.isMobile && step.mobileTarget
-        ? { ...step, target: step.mobileTarget }
-        : step,
-    );
+    .map((step) => {
+      if (!context.isMobile) return step;
+      const { via: _foldedAway, ...rest } = step;
+      return step.mobileTarget ? { ...rest, target: step.mobileTarget } : rest;
+    });
 }
 
 function isOfferable(tour: TourDefinition, context: TourGateContext): boolean {
@@ -138,6 +138,24 @@ export function registryProblems(
       }
       if (step.target && step.target.length === 0) {
         problems.push(`tour ${tour.id} step ${step.id} has an empty target`);
+      }
+      if (step.fallbackTarget && step.fallbackTarget.length === 0) {
+        problems.push(
+          `tour ${tour.id} step ${step.id} has an empty fallback target`,
+        );
+      }
+      if (step.fallbackTarget && !step.target) {
+        problems.push(
+          `tour ${tour.id} step ${step.id} has a fallback but no target`,
+        );
+      }
+      if (step.via && step.via.length === 0) {
+        problems.push(`tour ${tour.id} step ${step.id} has an empty via`);
+      }
+      if (step.via && !step.route) {
+        problems.push(
+          `tour ${tour.id} step ${step.id} points via navigation but opens no route`,
+        );
       }
       if (step.mobileTarget && step.mobileTarget.length === 0) {
         problems.push(

@@ -56,8 +56,19 @@ export type TourStep = {
    * different element (e.g. the search button that stands in for the bar).
    */
   mobileTarget?: TourTarget;
+  /**
+   * What to spotlight while `target` is hidden, e.g. the button that opens a
+   * panel which is closed on a narrower screen.
+   */
+  fallbackTarget?: TourTarget;
   /** Route to open before the step shows, when its target lives elsewhere. */
   route?: string;
+  /**
+   * The navigation entry that opens `route`. Before the page changes, the card
+   * points at it, so the viewer sees how the tour got there and can find the
+   * page again. Left out on a phone, where the sidebar is folded away.
+   */
+  via?: TourTarget;
   /**
    * A button that opens a route and ends the tour as completed, e.g. "Open
    * request rules" on the last stop of a highlight tour.

@@ -3608,7 +3608,7 @@ const zh_CN: LocaleDictionary = {
     "连接 Jellyfin、Plex 或 Emby，Scryer 就能知道你看过什么。若要在 Scryer 导入后刷新服务器，还需在“插件”中安装该服务器的插件。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "在你希望的地方获知抓取、导入以及需要处理的事项。",
+    "在你希望的地方获知抓取、导入以及需要处理的事项。服务可从这个“插件”面板添加。Jellyfin、Plex 和 Emby 也在这里：即使已在“媒体服务器”中连接，也要从这个面板安装该服务器的插件，导入后服务器才会刷新。",
   "tours.onboarding.plugins.title": "插件",
   "tours.onboarding.plugins.body":
     "插件可添加索引器、下载客户端和通知服务。在这里安装和更新它们。",
