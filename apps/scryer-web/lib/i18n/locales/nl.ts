@@ -4710,7 +4710,7 @@ const nl: LocaleDictionary = {
     "Koppel Jellyfin, Plex of Emby zodat Scryer weet wat je hebt gekeken. Wil je dat je server vernieuwt zodra Scryer iets importeert, installeer dan ook de plugin van die server via Plugins.",
   "tours.onboarding.notifications.title": "Meldingen",
   "tours.onboarding.notifications.body":
-    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt.",
+    "Hoor over grabs, imports en alles wat aandacht nodig heeft, waar je dat wilt. Diensten voeg je toe vanuit dit Plugins-paneel. Ook Jellyfin, Plex en Emby staan hier: je server vernieuwt na een import pas als je de plugin ervan uit dit paneel installeert, ook als hij al gekoppeld is onder Mediaservers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins voegen indexers, downloadclients en meldingsdiensten toe. Installeer en werk ze hier bij.",

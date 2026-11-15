@@ -3897,7 +3897,7 @@ const ja: LocaleDictionary = {
     "Jellyfin、Plex、Emby を接続すると、視聴済みのものが Scryer に伝わります。Scryer のインポート時にサーバーを更新するには、「プラグイン」からそのサーバーのプラグインもインストールしてください。",
   "tours.onboarding.notifications.title": "通知",
   "tours.onboarding.notifications.body":
-    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。",
+    "取得、インポート、対応が必要なことを、好きな場所で受け取れます。サービスはこの「プラグイン」パネルから追加します。Jellyfin、Plex、Emby もここにあります。「メディアサーバー」で接続済みでも、このパネルからそのサーバーのプラグインをインストールするまで、インポート後にサーバーは更新されません。",
   "tours.onboarding.plugins.title": "プラグイン",
   "tours.onboarding.plugins.body":
     "プラグインはインデクサー、ダウンロードクライアント、通知サービスを追加します。ここでインストールと更新ができます。",

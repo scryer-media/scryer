@@ -13237,7 +13237,7 @@ const en: LocaleDictionary = {
     "Connect Jellyfin, Plex or Emby so Scryer knows what you have watched. For your server to refresh when Scryer imports something, also install that server's plugin from Plugins.",
   "tours.onboarding.notifications.title": "Notifications",
   "tours.onboarding.notifications.body":
-    "Hear about grabs, imports and anything that needs attention, wherever you want to be told.",
+    "Hear about grabs, imports and anything that needs attention, wherever you want. Add services from this Plugins tray. Jellyfin, Plex and Emby are here too: your server refreshes after an import only once its plugin is installed from this tray, even when it is already connected under Media servers.",
   "tours.onboarding.plugins.title": "Plugins",
   "tours.onboarding.plugins.body":
     "Plugins add indexers, download clients and notification services. Install and update them here.",

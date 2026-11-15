@@ -19,6 +19,31 @@ function visibleRect(element: Element): TourRect | null {
   return { top: box.top, left: box.left, width: box.width, height: box.height };
 }
 
+/** Rendered and not hidden away, e.g. a closed panel slid off with `visibility: hidden`. */
+function isShown(element: HTMLElement): boolean {
+  return typeof element.checkVisibility === "function"
+    ? element.checkVisibility({
+        visibilityProperty: true,
+        opacityProperty: true,
+      })
+    : true;
+}
+
+/**
+ * The step's target when it is showing, otherwise its fallback when that is
+ * showing (e.g. the button that opens a closed panel), otherwise the target.
+ */
+function pickElement(
+  id: string,
+  fallbackId: string | null,
+): HTMLElement | null {
+  const primary = document.getElementById(id);
+  if (primary && isShown(primary)) return primary;
+  const fallback = fallbackId ? document.getElementById(fallbackId) : null;
+  if (fallback && isShown(fallback)) return fallback;
+  return primary;
+}
+
 function sameRect(a: TourRect | null, b: TourRect | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -34,15 +59,24 @@ function sameRect(a: TourRect | null, b: TourRect | null): boolean {
  * Finds a step's target by its durable id and follows it: the spotlight moves
  * with scrolling, resizing and layout shifts. A target that is not rendered
  * yet (a route still loading) is waited for briefly; one that never appears,
- * or is hidden, leaves the step to show centered without a spotlight.
+ * or is hidden, leaves the step to show centered without a spotlight. A
+ * `fallback` is spotlighted while the target is hidden, and the spotlight
+ * moves to the target once it shows.
  *
  * Mount once per step (key the caller by step) so each search starts fresh.
+ * When the target changes within a step, the spotlight stays on the old one
+ * until the new one appears, so it glides across instead of blinking out.
  */
 export function useTourTarget(
   target: TourTarget | undefined,
   reduceMotion: boolean,
+  fallback?: TourTarget,
 ): TourTargetState {
   const id = target && target.length > 0 ? selectorId(...target) : null;
+  const fallbackId =
+    id !== null && fallback && fallback.length > 0
+      ? selectorId(...fallback)
+      : null;
   const [state, setState] = React.useState<TourTargetState>(() => ({
     rect: null,
     settled: id === null,
@@ -65,18 +99,16 @@ export function useTourTarget(
 
     const measure = () => {
       frame = 0;
-      if (element && !element.isConnected) {
+      const next = pickElement(id, fallbackId);
+      if (next !== element) {
         resizeObserver?.disconnect();
-        element = null;
+        element = next;
+        if (element) resizeObserver?.observe(element);
       }
       if (!element) {
-        element = document.getElementById(id);
-        if (!element) {
-          // A target that went away takes its spotlight with it.
-          if (found) publish({ rect: null, settled: true });
-          return;
-        }
-        resizeObserver?.observe(element);
+        // A target that went away takes its spotlight with it.
+        if (found) publish({ rect: null, settled: true });
+        return;
       }
       const rect = visibleRect(element);
       if (rect && !scrolled) {
@@ -109,13 +141,18 @@ export function useTourTarget(
 
     resizeObserver = new ResizeObserver(schedule);
     const mutationObserver = new MutationObserver(schedule);
-    mutationObserver.observe(document.body, { childList: true, subtree: true });
+    // Attributes too: a closed panel opening is a class change, not a new node.
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "hidden"],
+    });
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
+    // A new target that never shows lets go of the one before it as well.
     const giveUp = window.setTimeout(() => {
-      setState((current) =>
-        current.settled ? current : { rect: null, settled: true },
-      );
+      if (!found) publish({ rect: null, settled: true });
     }, TARGET_WAIT_MS);
     schedule();
 
@@ -127,7 +164,7 @@ export function useTourTarget(
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", schedule, true);
     };
-  }, [id, reduceMotion]);
+  }, [id, fallbackId, reduceMotion]);
 
   return state;
 }

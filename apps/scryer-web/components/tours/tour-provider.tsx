@@ -102,17 +102,26 @@ export function TourProvider({
 
   // A step whose target lives on another page opens that page when the step
   // starts, and only then: the viewer is never pulled back to it afterwards.
-  const pathnameRef = React.useRef(location.pathname);
-  React.useEffect(() => {
-    pathnameRef.current = location.pathname;
-  }, [location.pathname]);
+  // A step that names the navigation it goes through first points at that
+  // entry, and the page changes once the arrow has been drawn to it.
   const stepKey = activeTour && step ? `${activeTour.id}/${step.id}` : null;
   const stepRoute = step?.route;
-  React.useEffect(() => {
-    if (stepKey && stepRoute && pathnameRef.current !== stepRoute) {
-      navigate(stepRoute);
-    }
+  const [routedKey, setRoutedKey] = React.useState<string | null>(null);
+  const needsRoute =
+    stepKey !== null &&
+    stepRoute !== undefined &&
+    routedKey !== stepKey &&
+    location.pathname !== stepRoute;
+  const pointAt = needsRoute ? step?.via : undefined;
+  const openStepRoute = React.useCallback(() => {
+    if (!stepKey || !stepRoute) return;
+    setRoutedKey(stepKey);
+    navigate(stepRoute);
   }, [stepKey, stepRoute, navigate]);
+  const routeDirectly = needsRoute && !pointAt;
+  React.useEffect(() => {
+    if (routeDirectly) openStepRoute();
+  }, [routeDirectly, openStepRoute]);
 
   const end = React.useCallback(
     (outcome: UiTourOutcome) => {
@@ -120,6 +129,7 @@ export function TourProvider({
       const tourIds = toursSettledBy(activeTour, registry, recorded);
       setEndedHere((current) => new Set([...current, ...tourIds]));
       setReplay(null);
+      setRoutedKey(null);
       setPosition({ tourId: "", index: 0 });
       void client
         .mutation<
@@ -141,6 +151,7 @@ export function TourProvider({
   const goTo = React.useCallback(
     (nextIndex: number) => {
       if (!activeTour) return;
+      setRoutedKey(null);
       setPosition({ tourId: activeTour.id, index: nextIndex });
     },
     [activeTour],
@@ -149,6 +160,7 @@ export function TourProvider({
   const contextValue = React.useMemo<ToursContextValue>(
     () => ({
       startTour: (tourId: string) => {
+        setRoutedKey(null);
         setPosition({ tourId, index: 0 });
         setReplay(tourId);
       },
@@ -166,6 +178,8 @@ export function TourProvider({
             key={activeTour.id}
             steps={steps}
             index={index}
+            pointAt={pointAt}
+            onPointed={openStepRoute}
             reduceMotion={uiSettings.reduceMotion}
             onBack={() => goTo(Math.max(0, index - 1))}
             onNext={() =>

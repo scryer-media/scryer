@@ -214,6 +214,78 @@ test("onboarding shows each account only the stops it can open", () => {
     "welcome",
     "search",
     "quality-profiles",
+    "notifications",
     "plugins",
+  ]);
+});
+
+test("a step points at the navigation it goes through only where the sidebar shows", () => {
+  const tour: TourDefinition = {
+    id: "onboarding",
+    kind: "onboarding",
+    steps: [
+      step("profiles", {
+        route: "/settings/quality-profiles",
+        via: ["root-sidebar-nav", "settings"],
+        target: ["settings-quality-profiles-table-card"],
+      }),
+    ],
+  };
+  assert.deepEqual(visibleSteps(tour, context)[0]?.via, [
+    "root-sidebar-nav",
+    "settings",
+  ]);
+  const [onPhone] = visibleSteps(tour, { ...context, isMobile: true });
+  assert.equal(onPhone?.via, undefined);
+  assert.equal(onPhone?.route, "/settings/quality-profiles");
+});
+
+test("every shipped step that changes page names the navigation it uses", () => {
+  for (const tour of TOUR_REGISTRY) {
+    for (const entry of tour.steps) {
+      if (entry.route) {
+        assert.ok(entry.via, `tour ${tour.id} step ${entry.id} has no via`);
+      }
+    }
+  }
+});
+
+test("registry problems name a via with no route and an empty via", () => {
+  const problems = registryProblems(
+    [
+      {
+        id: "onboarding",
+        kind: "onboarding",
+        steps: [
+          step("a", { via: ["root-sidebar-nav", "settings"] }),
+          step("b", { route: "/settings/plugins", via: [] }),
+        ],
+      },
+    ],
+    (key) => key in dictionary,
+  );
+  assert.deepEqual(problems, [
+    "tour onboarding step a points via navigation but opens no route",
+    "tour onboarding step b has an empty via",
+  ]);
+});
+
+test("registry problems name a fallback target with nothing to stand in for", () => {
+  const problems = registryProblems(
+    [
+      {
+        id: "onboarding",
+        kind: "onboarding",
+        steps: [
+          step("a", { fallbackTarget: ["settings-plugins-panel-toggle"] }),
+          step("b", { target: ["settings-plugins-panel"], fallbackTarget: [] }),
+        ],
+      },
+    ],
+    (key) => key in dictionary,
+  );
+  assert.deepEqual(problems, [
+    "tour onboarding step a has a fallback but no target",
+    "tour onboarding step b has an empty fallback target",
   ]);
 });
