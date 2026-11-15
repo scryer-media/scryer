@@ -111,6 +111,11 @@ pub struct MaintenanceMatcherDraft {
     /// `None` preserves the stored root for older GraphQL clients. `Some(None)`
     /// explicitly clears it, and `Some(Some(_))` replaces it.
     pub storage_root_id: Option<Option<String>>,
+    /// The most titles the rule may act on in one fire, saved with the new
+    /// source so a delete head and its maximum arrive in one save. `None`
+    /// keeps the stored maximum, `Some(None)` clears it, `Some(Some(_))`
+    /// replaces it.
+    pub max_titles_per_run: Option<Option<u32>>,
 }
 
 /// Which matcher a preview should run.
@@ -506,7 +511,15 @@ impl AppUseCase {
                  period, libraries and state can.",
             ));
         }
-        require_max_titles_per_run(&prepared.declared, rule_set.max_titles_per_run)?;
+        // The maximum is judged against the new source together: a save may
+        // add a delete head and its maximum at once.
+        let max_titles_per_run = draft
+            .max_titles_per_run
+            .filter(|max| *max != rule_set.max_titles_per_run);
+        require_max_titles_per_run(
+            &prepared.declared,
+            max_titles_per_run.unwrap_or(rule_set.max_titles_per_run),
+        )?;
         self.require_declared_action_targets(
             &prepared.declared,
             &prepared.scan,
@@ -538,14 +551,16 @@ impl AppUseCase {
         let destructive = prepared.declared.destructive;
         let rules = &self.services.customization.maintenance_rule_sets;
         if destructive {
-            rules.add_revision(&revision, now).await?;
+            rules
+                .add_revision(&revision, max_titles_per_run, now)
+                .await?;
         } else {
             let arming = crate::maintenance_rules::arming_kept_across_edit(
                 rule_set.effect_arming,
                 &prepared.declared,
             );
             rules
-                .add_revision_keeping_arming(&revision, arming, now)
+                .add_revision_keeping_arming(&revision, arming, max_titles_per_run, now)
                 .await?;
             // The store kept the lower of this arming and whatever another
             // admin wrote since the read above; report what it holds.
@@ -561,6 +576,9 @@ impl AppUseCase {
         }
 
         rule_set.current_revision_number = revision_number;
+        if let Some(max) = max_titles_per_run {
+            rule_set.max_titles_per_run = max;
+        }
         if destructive {
             // Mirrors what `add_revision` wrote in the same transaction, so the
             // detail this returns can never claim an arming the store just
@@ -666,16 +684,12 @@ impl AppUseCase {
                 &description,
                 &library_ids,
                 schedule.as_ref(),
+                max_titles_per_run,
                 scope_changed,
                 now,
             )
             .await?;
         if let Some(max) = max_titles_per_run {
-            self.services
-                .customization
-                .maintenance_rule_sets
-                .set_rule_set_max_titles_per_run(&rule_set.id, max, now)
-                .await?;
             rule_set.max_titles_per_run = max;
         }
 
@@ -896,10 +910,10 @@ impl AppUseCase {
                 &prepared.declared,
             );
             rules
-                .add_revision_keeping_arming(&revision, arming, now)
+                .add_revision_keeping_arming(&revision, arming, None, now)
                 .await?;
         } else {
-            rules.add_revision(&revision, now).await?;
+            rules.add_revision(&revision, None, now).await?;
         }
 
         if rule_set.description == PREVIOUS_EXPIRED_REQUEST_LEASES_DESCRIPTION {
@@ -909,6 +923,7 @@ impl AppUseCase {
                     &rule_set.name,
                     EXPIRED_REQUEST_LEASES_DESCRIPTION,
                     &rule_set.library_ids,
+                    None,
                     None,
                     false,
                     now,
@@ -1020,9 +1035,15 @@ impl AppUseCase {
         // Show inventory includes full episode/file ownership and watch
         // coverage. Keep one immutable snapshot per selected title so every
         // scoped subject in this preview derives from the same observation.
-        let mut episode_inventories_by_title = HashMap::new();
+        // The shows are read together; one the batch could not build is read
+        // on its own, which fails the preview exactly as it always did.
+        let mut episode_inventories_by_title = self
+            .maintenance_load_title_episode_inventories(&titles, None)
+            .await;
         for title in &titles {
-            if title.facet != MediaFacet::Movie {
+            if title.facet != MediaFacet::Movie
+                && !episode_inventories_by_title.contains_key(&title.id)
+            {
                 episode_inventories_by_title.insert(
                     title.id.clone(),
                     self.maintenance_load_title_episode_inventory(title).await?,
@@ -1059,7 +1080,13 @@ impl AppUseCase {
                 None
             }
         };
-        let lists_by_title = self.maintenance_list_facts_or_unknown(&titles).await;
+        let lists_by_title = self
+            .maintenance_list_facts_loading(
+                &titles,
+                super::list_facts::MaintenanceFactLoads::for_rule(&policy.rego_source, &policy.id),
+                Utc::now(),
+            )
+            .await;
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
@@ -1071,6 +1098,7 @@ impl AppUseCase {
         })?;
         let mut evaluator = engine.evaluator();
         let mut storage_facts = MaintenanceStorageFactCache::new();
+        let mut storage_roots = super::storage::MaintenanceStorageRootMemo::new();
 
         let evaluated_at = Utc::now();
         let mut results = Vec::with_capacity(titles.len());
@@ -1129,10 +1157,25 @@ impl AppUseCase {
                             .await?
                     }
                     Some(root_id) if subject.kind == MaintenanceRuleSubjectKind::Title => {
-                        match self.maintenance_title_deletion_files(&title).await {
+                        let owned_files =
+                            match super::subjects::maintenance_title_owned_files_in_hand(
+                                &title,
+                                files,
+                                episode_inventories_by_title
+                                    .get(&title.id)
+                                    .map(|inventory| inventory.as_ref()),
+                            ) {
+                                Some(owned_files) => Ok(owned_files),
+                                None => self.maintenance_title_deletion_files(&title).await,
+                            };
+                        match owned_files {
                             Ok(owned_files) => {
-                                self.maintenance_root_file_summary(&owned_files, Some(root_id))
-                                    .await?
+                                self.maintenance_root_file_summary_memo(
+                                    &owned_files,
+                                    Some(root_id),
+                                    &mut storage_roots,
+                                )
+                                .await?
                             }
                             Err(error) => {
                                 tracing::warn!(
@@ -1147,8 +1190,12 @@ impl AppUseCase {
                     }
                     Some(_) if subject.ambiguous_files => MaintenanceRootFileSummary::default(),
                     Some(root_id) => {
-                        self.maintenance_root_file_summary(&subject.files, Some(root_id))
-                            .await?
+                        self.maintenance_root_file_summary_memo(
+                            &subject.files,
+                            Some(root_id),
+                            &mut storage_roots,
+                        )
+                        .await?
                     }
                 };
                 if storage_root_id.is_some() && matches!(root_file_summary.file_count, Some(0)) {
@@ -1170,6 +1217,12 @@ impl AppUseCase {
                         .unwrap_or_default(),
                 );
                 super::list_facts::apply_list_facts(&mut input, &lists_by_title, &title.id);
+                super::list_facts::apply_watchlist_and_metadata_facts(
+                    &mut input,
+                    &lists_by_title,
+                    &title.id,
+                    people,
+                );
                 self.populate_maintenance_storage_facts_from_cache(
                     &mut input,
                     storage_root_id.as_deref(),

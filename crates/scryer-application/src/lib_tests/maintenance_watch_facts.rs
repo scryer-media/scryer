@@ -187,6 +187,7 @@ async fn record_play(
                 kind: MediaServerSignalKind::Movie,
                 scryer_title_id: Some(title_id.to_string()),
                 scryer_episode_id: None,
+                season_number: None,
                 played: true,
                 play_count: 1,
                 last_played_at: Some(Utc::now()),
@@ -799,6 +800,7 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
                 ),
                 grace_days: 0,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await

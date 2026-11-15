@@ -780,6 +780,11 @@ pub struct UpdateMaintenanceRuleMatcherInput {
     /// The simple builder's document. Omit to keep the current revision's
     /// document, pass null to clear it, or pass a document to replace it.
     pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
+    /// Replacement most titles the rule may act on in one run, checked with
+    /// the new source so a delete head and its maximum can be saved
+    /// together. Omitted keeps the current value, null clears it, and a
+    /// value of at least one replaces it.
+    pub max_titles_per_run: MaybeUndefined<i32>,
 }
 
 /// Renames and re-scopes a rule set without touching its matcher.

@@ -10,9 +10,10 @@
 //! signal store stands behind it, and it is fact-shaped like everything else:
 //! `watched_by_user_ids`, `last_watched_at`, the two requester rollups, and the
 //! anonymous `watched_by_anyone` pair are plain values that go missing when the
-//! host could not observe them. Watchlist
-//! and favorite signals are still absent — nothing collects them yet, and a
-//! fact rules cannot be told the truth about has no business in the contract.
+//! host could not observe them. Watchlists come from members' own list
+//! subscriptions. Favorites are still absent: the signal sync reads played
+//! items only, so a favorite nobody played is never seen, and a fact rules
+//! cannot be told the truth about has no business in the contract.
 //!
 //! Two things make a rule safe to write. The rule reads facts as plain values,
 //! so it says what it means (`input.facts.monitored`, not a status dance), and
@@ -266,6 +267,82 @@ pub struct MaintenanceFactsDoc {
     pub storage_available_bytes: Observation<i64>,
     pub storage_total_bytes: Observation<i64>,
     pub storage_available_percent: Observation<f64>,
+    /// Metadata Scryer already stores on the title row. Each is absent when
+    /// the metadata provider gave no value, and the movie release dates are
+    /// absent for a show. `first_aired` and the release dates are dates as the
+    /// provider gave them (`YYYY-MM-DD`), not timestamps.
+    pub runtime_minutes: Observation<i64>,
+    pub original_language: Observation<String>,
+    pub series_status: Observation<String>,
+    pub first_aired: Observation<String>,
+    pub network: Observation<String>,
+    pub studio: Observation<String>,
+    pub country: Observation<String>,
+    pub popularity: Observation<f64>,
+    pub theatrical_release_date: Observation<String>,
+    pub digital_release_date: Observation<String>,
+    pub physical_release_date: Observation<String>,
+    /// Whole days since the subject was added, against the evaluation clock.
+    pub days_since_added: Observation<i64>,
+    /// The tallest video stream among the subject's files, in pixels; absent
+    /// when no file reports one.
+    pub max_video_height: Observation<i64>,
+    /// The shape of a show's whole episode list, whatever the subject: its
+    /// seasons and its regular episodes, specials left out. An episode has
+    /// aired once its air date is on or before the evaluation day; one with
+    /// no air date or a later one has not. Missing means aired, monitored and
+    /// without a file. Absent for movies; unknown when the episode store
+    /// could not be read.
+    pub season_count: Observation<i64>,
+    pub aired_episode_count: Observation<i64>,
+    pub unaired_episode_count: Observation<i64>,
+    pub missing_episode_count: Observation<i64>,
+    /// Aired episodes with a file, as a percentage of aired episodes; absent
+    /// when nothing has aired.
+    pub aired_episode_file_percent: Observation<f64>,
+    pub latest_season_number: Observation<i64>,
+    pub latest_aired_episode_date: Observation<String>,
+    /// The earliest air date after the evaluation day; absent when none is
+    /// scheduled.
+    pub next_episode_air_date: Observation<String>,
+    /// Genre names from the stored metadata tags. Unknown when the tag store
+    /// could not be read.
+    pub genres: Observation<Vec<String>>,
+    /// The stored rating summary and every external rating behind it. Unknown
+    /// when the rating store could not be read; `rating` is absent when no
+    /// source rated the title.
+    pub rating: Observation<f64>,
+    pub ratings: Observation<Vec<MaintenanceRatingDoc>>,
+    /// Plays of the subject by every account on every enabled media server,
+    /// linked to a Scryer user or not, summed. Anonymous, and behind the same
+    /// gate as `watched_by_anyone`.
+    pub play_count_total: Observation<i64>,
+    /// Watch-later lists. A member's watchlist is one of their own personal
+    /// list subscriptions to a source that holds what they want to watch
+    /// (the Plex, Trakt, TMDb and MDBList watchlists, Simkl and MyAnimeList
+    /// plan-to-watch, and the AniList planning list), enabled and signed in.
+    /// Every one of these is unknown while any such list has failed its last
+    /// sync, never synced, or has not synced recently: a watchlist Scryer has
+    /// not read could hold the title. A member with no watchlist contributes
+    /// nothing.
+    pub watchlisted_by_user_ids: Observation<Vec<String>>,
+    pub watchlisted_by_usernames: Observation<Vec<String>>,
+    pub watchlisted_by_anyone: Observation<bool>,
+    pub watchlisted_by_any_requester: Observation<bool>,
+    /// When Scryer first saw the title on any watchlist (RFC3339), and the
+    /// providers whose watchlists hold it now.
+    pub watchlist_added_at: Observation<String>,
+    pub watchlist_origins: Observation<Vec<String>>,
+}
+
+/// One external rating as a rule sees it: the source's own value, its value on
+/// Scryer's common scale, and its vote count when the source gives one.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+pub struct MaintenanceRatingDoc {
+    pub source: String,
+    pub value: Option<f64>,
+    pub normalized: f64,
+    pub votes: Option<i64>,
 }
 
 /// Facts that name, or are computed from, identifiable people.
@@ -276,10 +353,11 @@ pub struct MaintenanceFactsDoc {
 /// lives here, beside the fact document, because it is a property of the facts
 /// themselves rather than of any one caller.
 ///
-/// `requested`, `last_watched_at`, `watched_by_anyone`, and
-/// `last_watched_by_anyone_at` are deliberately absent: they are anonymous
-/// aggregates that say something happened, never who did it.
-pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
+/// `requested`, `last_watched_at`, `watched_by_anyone`,
+/// `last_watched_by_anyone_at`, `play_count_total`, `watchlisted_by_anyone`,
+/// `watchlist_added_at` and `watchlist_origins` are deliberately absent: they
+/// are anonymous aggregates that say something happened, never who did it.
+pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 10] = [
     "added_by_user_id",
     "added_by_username",
     "requested_by_user_ids",
@@ -287,6 +365,37 @@ pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
     "watched_by_user_ids",
     "watched_by_any_requester",
     "watched_by_all_requesters",
+    "watchlisted_by_user_ids",
+    "watchlisted_by_usernames",
+    "watchlisted_by_any_requester",
+];
+
+/// Facts read from members' watch-later lists. The host loads the list
+/// subscriptions behind them only for a rule that reads one.
+pub const WATCHLIST_MAINTENANCE_FACTS: [&str; 6] = [
+    "watchlisted_by_user_ids",
+    "watchlisted_by_usernames",
+    "watchlisted_by_anyone",
+    "watchlisted_by_any_requester",
+    "watchlist_added_at",
+    "watchlist_origins",
+];
+
+/// Facts read from the stored metadata tags and ratings. The host reads those
+/// stores only for a rule that reads one.
+pub const METADATA_MAINTENANCE_FACTS: [&str; 3] = ["genres", "rating", "ratings"];
+
+/// Facts read from one grouped count over a show's stored episodes. The host
+/// reads it only for a rule that reads one.
+pub const EPISODE_SHAPE_MAINTENANCE_FACTS: [&str; 8] = [
+    "season_count",
+    "aired_episode_count",
+    "unaired_episode_count",
+    "missing_episode_count",
+    "aired_episode_file_percent",
+    "latest_season_number",
+    "latest_aired_episode_date",
+    "next_episode_air_date",
 ];
 
 /// Facts computed from media-server watch history.
@@ -294,13 +403,14 @@ pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
 /// A rule that reads one decided on plays stored by the last sweep, so the
 /// executor reads the server again before acting on it: a play since that
 /// sweep is evidence the stored facts do not have yet.
-pub const WATCH_MAINTENANCE_FACTS: [&str; 6] = [
+pub const WATCH_MAINTENANCE_FACTS: [&str; 7] = [
     "watched_by_user_ids",
     "last_watched_at",
     "watched_by_any_requester",
     "watched_by_all_requesters",
     "watched_by_anyone",
     "last_watched_by_anyone_at",
+    "play_count_total",
 ];
 
 /// One series movie as a rule sees it.
@@ -333,6 +443,12 @@ pub struct MaintenanceFileDoc {
     pub video_height: Option<i32>,
     pub audio_languages: Vec<String>,
     pub subtitle_languages: Vec<String>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i32>,
+    pub audio_bitrate_kbps: Option<i32>,
+    pub video_bitrate_kbps: Option<i32>,
+    pub video_bit_depth: Option<i32>,
+    pub video_hdr_format: Option<String>,
     pub added_at: Option<String>,
 }
 
@@ -699,6 +815,12 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
                 video_height: Some(2160),
                 audio_languages: vec!["eng".to_string()],
                 subtitle_languages: vec!["eng".to_string()],
+                audio_codec: Some("eac3".to_string()),
+                audio_channels: Some(6),
+                audio_bitrate_kbps: Some(640),
+                video_bitrate_kbps: Some(16_000),
+                video_bit_depth: Some(10),
+                video_hdr_format: Some("hdr10".to_string()),
                 added_at: Some("2024-01-02T00:00:00Z".to_string()),
             }]),
             episode_count: Observation::known(0),
@@ -744,6 +866,43 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             storage_available_bytes: Observation::absent(),
             storage_total_bytes: Observation::absent(),
             storage_available_percent: Observation::absent(),
+            runtime_minutes: Observation::known(118),
+            original_language: Observation::known("en".to_string()),
+            // A movie subject: a show's status does not apply to it.
+            series_status: Observation::absent(),
+            first_aired: Observation::absent(),
+            network: Observation::absent(),
+            studio: Observation::known("Fixture Studio".to_string()),
+            country: Observation::known("us".to_string()),
+            popularity: Observation::known(12.5),
+            theatrical_release_date: Observation::known("2023-11-10".to_string()),
+            digital_release_date: Observation::known("2024-01-05".to_string()),
+            physical_release_date: Observation::known("2024-02-20".to_string()),
+            days_since_added: Observation::known(120),
+            max_video_height: Observation::known(2160),
+            season_count: Observation::known(3),
+            aired_episode_count: Observation::known(28),
+            unaired_episode_count: Observation::known(2),
+            missing_episode_count: Observation::known(1),
+            aired_episode_file_percent: Observation::known(96.4),
+            latest_season_number: Observation::known(3),
+            latest_aired_episode_date: Observation::known("2024-02-01".to_string()),
+            next_episode_air_date: Observation::known("2024-02-08".to_string()),
+            genres: Observation::known(vec!["Drama".to_string()]),
+            rating: Observation::known(7.4),
+            ratings: Observation::known(vec![MaintenanceRatingDoc {
+                source: "imdb".to_string(),
+                value: Some(7.4),
+                normalized: 7.4,
+                votes: Some(1200),
+            }]),
+            play_count_total: Observation::known(3),
+            watchlisted_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            watchlisted_by_usernames: Observation::known(vec!["operator".to_string()]),
+            watchlisted_by_anyone: Observation::known(true),
+            watchlisted_by_any_requester: Observation::known(true),
+            watchlist_added_at: Observation::known("2023-12-01T00:00:00Z".to_string()),
+            watchlist_origins: Observation::known(vec!["trakt".to_string()]),
         },
     }
 }
@@ -797,6 +956,12 @@ mod tests {
                 video_height: None,
                 audio_languages: vec![],
                 subtitle_languages: vec![],
+                audio_codec: None,
+                audio_channels: None,
+                audio_bitrate_kbps: None,
+                video_bitrate_kbps: None,
+                video_bit_depth: None,
+                video_hdr_format: None,
                 added_at: None,
             }]);
             let result = evaluate_against(std::slice::from_ref(&policy), input);

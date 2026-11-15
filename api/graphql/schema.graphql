@@ -35139,6 +35139,13 @@ input UpdateMaintenanceRuleMatcherInput {
 	document, pass null to clear it, or pass a document to replace it.
 	"""
 	builderModel: JSON
+	"""
+	Replacement most titles the rule may act on in one run, checked with
+	the new source so a delete head and its maximum can be saved
+	together. Omitted keeps the current value, null clears it, and a
+	value of at least one replaces it.
+	"""
+	maxTitlesPerRun: Int
 }
 
 """

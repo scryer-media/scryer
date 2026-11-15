@@ -141,6 +141,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
     async fn add_revision(
         &self,
         revision: &MaintenanceRuleRevision,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
@@ -159,6 +160,9 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         // permissive double here would hide an arming that survived a matcher
         // swap.
         rule_set.disarm_after_edit();
+        if let Some(max) = max_titles_per_run {
+            rule_set.max_titles_per_run = max;
+        }
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
         Ok(())
@@ -168,6 +172,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         &self,
         revision: &MaintenanceRuleRevision,
         effect_arming: scryer_domain::MaintenanceEffectArming,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
@@ -192,6 +197,9 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         };
         if rank(effect_arming) < rank(rule_set.effect_arming) {
             rule_set.effect_arming = effect_arming;
+        }
+        if let Some(max) = max_titles_per_run {
+            rule_set.max_titles_per_run = max;
         }
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
@@ -234,6 +242,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         description: &str,
         library_ids: &[String],
         schedule: Option<&scryer_domain::ScriptSchedule>,
+        max_titles_per_run: Option<Option<u32>>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -247,6 +256,9 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         rule_set.library_ids = library_ids.to_vec();
         if let Some(schedule) = schedule {
             rule_set.schedule = schedule.clone();
+        }
+        if let Some(max) = max_titles_per_run {
+            rule_set.max_titles_per_run = max;
         }
         // The SQL store disarms inside the same UPDATE; a permissive double here
         // would hide an arming that survived a scope change.
@@ -651,6 +663,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
         ),
         grace_days,
         storage_root_id: None,
+        max_titles_per_run: None,
     };
 
     // Omitted: the new revision carries the current document forward.
@@ -675,6 +688,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
                 ),
                 grace_days: 8,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -762,6 +776,7 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
                 ),
                 grace_days: 30,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -820,6 +835,7 @@ async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_
                 ),
                 grace_days: 7,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -840,6 +856,7 @@ async fn matcher_update_preserves_an_omitted_storage_root_and_explicitly_clears_
                 ),
                 grace_days: 7,
                 storage_root_id: Some(None),
+                max_titles_per_run: None,
             },
         )
         .await
@@ -1239,6 +1256,7 @@ async fn a_head_the_scope_cannot_run_is_refused_with_its_position() {
                 ),
                 grace_days: 7,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -1366,6 +1384,7 @@ async fn the_grace_period_is_bounded_at_ten_years() {
                 ),
                 grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await

@@ -1508,6 +1508,22 @@ impl TitleListProjection {
     }
 }
 
+/// The shape of one show's stored episode list, specials left out, as of one
+/// day. An episode has aired when its air date is on or before that day.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleEpisodeShape {
+    pub season_count: i64,
+    pub aired_episode_count: i64,
+    pub unaired_episode_count: i64,
+    /// Aired episodes with a live primary file.
+    pub aired_episode_file_count: i64,
+    /// Aired, monitored episodes without a live primary file.
+    pub missing_episode_count: i64,
+    pub latest_season_number: Option<i64>,
+    pub latest_aired_episode_date: Option<String>,
+    pub next_episode_air_date: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleCounts {
     pub total: usize,
@@ -2738,6 +2754,45 @@ pub trait TitleRepository: Send + Sync {
             ratings.push((title_id.clone(), self.get_title_ratings(title_id).await?));
         }
         Ok(ratings)
+    }
+    /// The stored genre names of each title, in tag order, for a batch of
+    /// titles. A title with no stored genre has an empty list. The default
+    /// reads the titles' tags; a store answers it with one bounded read.
+    async fn list_title_genres(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<(String, Vec<String>)>> {
+        let mut by_id: std::collections::HashMap<String, Vec<String>> = self
+            .get_by_ids(title_ids)
+            .await?
+            .into_iter()
+            .map(|title| {
+                let genres = title
+                    .canonical_tags
+                    .into_iter()
+                    .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
+                    .map(|tag| tag.name)
+                    .collect();
+                (title.id, genres)
+            })
+            .collect();
+        Ok(title_ids
+            .iter()
+            .map(|id| (id.clone(), by_id.remove(id).unwrap_or_default()))
+            .collect())
+    }
+    /// The episode-list shape of each listed show, as of `today`, in one
+    /// grouped read per bounded chunk of ids. A title with no regular episode
+    /// is left out. A store that cannot answer it refuses, so the facts built
+    /// from it read unknown rather than zero.
+    async fn list_title_episode_shapes(
+        &self,
+        _title_ids: &[String],
+        _today: chrono::NaiveDate,
+    ) -> AppResult<Vec<(String, TitleEpisodeShape)>> {
+        Err(AppError::Repository(
+            "this store does not read episode shapes".into(),
+        ))
     }
     /// Title-local cache of the credits SMG returned for the title's last successful
     /// hydration, in SMG's order.
@@ -10810,9 +10865,15 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// the revision it was granted against. A new revision that left the rule
     /// armed would execute destructively under an acknowledgement given for a
     /// matcher that no longer exists.
+    ///
+    /// `max_titles_per_run` replaces the rule's per-fire maximum in the same
+    /// write when `Some` (`Some(None)` clears it); `None` keeps the stored
+    /// one, so a source that gains a delete head can gain its maximum in the
+    /// same save.
     async fn add_revision(
         &self,
         revision: &MaintenanceRuleRevision,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
@@ -10831,10 +10892,14 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// shipped rule from its `match` form to the source that deletes exactly
     /// the same titles, so the acknowledgement already given still describes
     /// it.
+    ///
+    /// `max_titles_per_run` is written in the same transaction, as in
+    /// [`Self::add_revision`].
     async fn add_revision_keeping_arming(
         &self,
         revision: &MaintenanceRuleRevision,
         effect_arming: scryer_domain::MaintenanceEffectArming,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
@@ -10873,7 +10938,8 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// under the old scope's arming.
     ///
     /// `schedule` replaces the rule's schedule in the same write; `None`
-    /// keeps the stored one.
+    /// keeps the stored one. `max_titles_per_run` does the same for the
+    /// per-fire maximum, with `Some(None)` clearing it.
     #[allow(clippy::too_many_arguments)]
     async fn update_rule_set_metadata(
         &self,
@@ -10882,6 +10948,7 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         description: &str,
         library_ids: &[String],
         schedule: Option<&scryer_domain::ScriptSchedule>,
+        max_titles_per_run: Option<Option<u32>>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -14206,7 +14273,8 @@ pub struct ProviderPlayedItem {
     pub kind: scryer_domain::MediaServerSignalKind,
     pub name: Option<String>,
     pub external_ids: std::collections::BTreeMap<String, String>,
-    /// Series-scoped ids for an episode. Empty for a movie.
+    /// Series-scoped ids for an episode or a season. Empty for a movie or a
+    /// series, which carry their own in `external_ids`.
     pub series_external_ids: std::collections::BTreeMap<String, String>,
     pub series_provider_item_id: Option<String>,
     pub season_number: Option<i64>,
@@ -14318,6 +14386,18 @@ pub trait MediaServerSignalReader: Send + Sync {
         external_user_id: &str,
     ) -> Result<Vec<ProviderPlayedItem>, SignalReadFailure>;
 
+    /// Every item the person marked as a favourite, played or not: movies,
+    /// series, seasons and episodes. `Ok(None)` is a server with no
+    /// favourites at all (Plex), which is not the same answer as an empty
+    /// list. An `Err` is this participant's failure, exactly as for
+    /// [`Self::fetch_played_items`]: their stored rows stay as they are.
+    async fn fetch_favorite_items(
+        &self,
+        _external_user_id: &str,
+    ) -> Result<Option<Vec<ProviderPlayedItem>>, SignalReadFailure> {
+        Ok(None)
+    }
+
     /// Items' played state as the server reports it now, read just before an
     /// action that a watch fact allowed. Nothing is stored from it.
     ///
@@ -14426,6 +14506,9 @@ pub trait MediaServerSignalRepository: Send + Sync {
     /// is a meaningful write, not a no-op: it means this person has nothing
     /// played any more, and every prior row for them is removed.
     ///
+    /// A set identical to the stored one writes no signal row at all; only
+    /// the roster entry below is recorded.
+    ///
     /// `read_through` is the link the sweep read these signals through. It is
     /// recorded in the signal roster in the same transaction as the swap, so
     /// the roster never names a link whose signals were not stored, and a
@@ -14475,6 +14558,18 @@ pub trait MediaServerSignalRepository: Send + Sync {
         &self,
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    /// Every favourite row (`is_favorite`, any kind: movie, series, season or
+    /// episode) grouped by the owning title id. A title nobody favourited is
+    /// absent from the map.
+    async fn favorite_signals_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        Err(AppError::Repository(
+            "favourite signals are not configured".into(),
+        ))
+    }
 
     /// Atomically replace one connection's audience plays and record the read
     /// that produced them. Rows the read did not return are removed: an

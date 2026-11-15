@@ -525,6 +525,243 @@ async fn evaluation_pass_probes_each_file_once_and_sees_what_a_fresh_load_sees()
     assert_ne!(fresh_after, later_rule);
 }
 
+/// The batched page read builds the same inventory, probes the same files
+/// and proves the same owned files as loading each title on its own, over
+/// several shows, a movie and a show with no episodes.
+#[tokio::test]
+async fn a_page_of_inventories_read_together_matches_loading_each_title() {
+    use crate::lib_tests::maintenance_title_completion::{add_episode_file, season_and_episode};
+    use crate::maintenance_rules::subjects::{
+        MaintenancePassFilePresence, maintenance_title_owned_files_in_hand,
+    };
+
+    let fixture = title_fixture("Quillmarsh", MediaFacet::Series).await;
+    let (_, first) = season_and_episode(&fixture, 1, 1, "2024-01-01").await;
+    let (_, second) = season_and_episode(&fixture, 2, 1, "2024-02-01").await;
+    let (_, gone) = season_and_episode(&fixture, 3, 1, "2024-03-01").await;
+    let (_, _unfiled) = season_and_episode(&fixture, 3, 2, "2024-03-08").await;
+    add_episode_file(&fixture, &first, "Quillmarsh/S01E01.mkv").await;
+    add_episode_file(&fixture, &second, "Quillmarsh/S02E01.mkv").await;
+    add_episode_file(&fixture, &gone, "Quillmarsh/S03E01.mkv").await;
+    std::fs::remove_file(fixture.root.join("Quillmarsh/S03E01.mkv")).expect("remove one file");
+
+    let app = &fixture.execution.app;
+    let user = &fixture.execution.user;
+    let add = |name: &str, facet: MediaFacet| {
+        let name = name.to_string();
+        async move {
+            app.add_title(
+                user,
+                NewTitle {
+                    name,
+                    facet,
+                    monitored: true,
+                    tags: vec![],
+                    external_ids: vec![],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create title")
+        }
+    };
+    let second_show = add("Brackenfold", MediaFacet::Series).await;
+    let empty_show = add("Thistledown", MediaFacet::Series).await;
+    let movie_root = fixture
+        .root
+        .parent()
+        .expect("fixture parent")
+        .join("movies");
+    std::fs::create_dir_all(&movie_root).expect("movie root");
+    update_default_library_roots(
+        app,
+        user,
+        MediaFacet::Movie,
+        vec![build_root_folder_entry(&movie_root, true)],
+    )
+    .await
+    .expect("save movie root");
+    let movie = add("Lanternwick", MediaFacet::Movie).await;
+    let movie_path = movie_root.join("Lanternwick/Lanternwick.mkv");
+    std::fs::create_dir_all(movie_path.parent().unwrap()).expect("movie folder");
+    std::fs::write(&movie_path, b"video").expect("movie file");
+    app.services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: movie.id.clone(),
+            file_path: movie_path.to_string_lossy().to_string(),
+            size_bytes: 7,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("insert movie file");
+
+    let season = app
+        .create_collection(
+            user,
+            second_show.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create season");
+    let mut other_episodes = Vec::new();
+    for (number, air_date) in [(1, "2023-05-01"), (2, "2023-05-08")] {
+        other_episodes.push(
+            app.create_episode(
+                user,
+                second_show.id.clone(),
+                Some(season.id.clone()),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".to_string()),
+                None,
+                Some(format!("Episode 1-{number}")),
+                Some(air_date.to_string()),
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("create episode"),
+        );
+    }
+    let other_path = fixture.root.join("Brackenfold/S01E01.mkv");
+    std::fs::create_dir_all(other_path.parent().unwrap()).expect("show folder");
+    std::fs::write(&other_path, b"video").expect("show file");
+    let other_file = app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: second_show.id.clone(),
+            file_path: other_path.to_string_lossy().to_string(),
+            size_bytes: 9,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("insert show file");
+    app.services
+        .library
+        .media_files
+        .link_file_to_episode(&other_file, &other_episodes[0].id)
+        .await
+        .expect("link show file");
+
+    let mut titles = Vec::new();
+    for id in [
+        &fixture.title.id,
+        &movie.id,
+        &second_show.id,
+        &empty_show.id,
+    ] {
+        titles.push(
+            app.services
+                .catalog
+                .titles
+                .get_by_id(id)
+                .await
+                .expect("read title")
+                .expect("title exists"),
+        );
+    }
+
+    // Preview's form: no pass memo.
+    let batched = app
+        .maintenance_load_title_episode_inventories(&titles, None)
+        .await;
+    let mut shows = Vec::new();
+    for title in &titles {
+        if title.facet == MediaFacet::Movie {
+            assert!(!batched.contains_key(&title.id), "a movie has no inventory");
+            continue;
+        }
+        let alone = app
+            .maintenance_load_title_episode_inventory(title)
+            .await
+            .expect("per-title inventory");
+        assert_eq!(
+            batched[&title.id].comparable(),
+            alone.comparable(),
+            "{} inventory",
+            title.name
+        );
+        shows.push(title.id.clone());
+    }
+    let mut keys: Vec<_> = batched.keys().cloned().collect();
+    keys.sort();
+    shows.sort();
+    assert_eq!(keys, shows);
+
+    // Owned files proven from rows in hand match the per-title read, for the
+    // movie, the shows and the show with no episodes.
+    let page_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_titles(&titles.iter().map(|t| t.id.clone()).collect::<Vec<_>>())
+        .await
+        .expect("page files");
+    for title in &titles {
+        let files: Vec<_> = page_files
+            .iter()
+            .filter(|file| file.title_id == title.id)
+            .cloned()
+            .collect();
+        let in_hand = maintenance_title_owned_files_in_hand(
+            title,
+            &files,
+            batched.get(&title.id).map(|inventory| inventory.as_ref()),
+        )
+        .expect("owned files in hand");
+        let read = app
+            .maintenance_title_deletion_files(title)
+            .await
+            .expect("owned files read");
+        let ids = |files: &[crate::types::TitleMediaFile]| {
+            files
+                .iter()
+                .map(|file| (file.id.clone(), file.file_path.clone(), file.size_bytes))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&in_hand), ids(&read), "{} owned files", title.name);
+    }
+    assert!(
+        maintenance_title_owned_files_in_hand(&titles[0], &[], None).is_none(),
+        "a show without its inventory falls back to the read"
+    );
+
+    // The evaluation pass's form: one probe per file, as the per-title loads
+    // would make, and the same inventories.
+    let mut batched_presence = MaintenancePassFilePresence::default();
+    let with_memo = app
+        .maintenance_load_title_episode_inventories(&titles, Some(&mut batched_presence))
+        .await;
+    let mut per_title_presence = MaintenancePassFilePresence::default();
+    for title in titles
+        .iter()
+        .filter(|title| title.facet != MediaFacet::Movie)
+    {
+        let alone = app
+            .maintenance_load_title_episode_inventory_for_pass(title, &mut per_title_presence)
+            .await
+            .expect("per-title pass inventory");
+        assert_eq!(with_memo[&title.id].comparable(), alone.comparable());
+    }
+    assert_eq!(batched_presence.probed_paths(), 4);
+    assert_eq!(
+        batched_presence.probed_paths(),
+        per_title_presence.probed_paths()
+    );
+}
+
 #[tokio::test]
 async fn storage_recovery_stops_before_the_next_file() {
     // Low through the first file, then a recovered capacity before the second

@@ -351,6 +351,161 @@
           "field": "storage_available_percent",
           "type": "number",
           "descKey": "settings.refMaintFactsStorageAvailablePercent"
+        },
+        {
+          "field": "runtime_minutes",
+          "type": "number",
+          "descKey": "settings.refMaintFactsRuntimeMinutes"
+        },
+        {
+          "field": "original_language",
+          "type": "string",
+          "descKey": "settings.refMaintFactsOriginalLanguage"
+        },
+        {
+          "field": "series_status",
+          "type": "string",
+          "descKey": "settings.refMaintFactsSeriesStatus"
+        },
+        {
+          "field": "first_aired",
+          "type": "string",
+          "descKey": "settings.refMaintFactsFirstAired"
+        },
+        {
+          "field": "network",
+          "type": "string",
+          "descKey": "settings.refMaintFactsNetwork"
+        },
+        {
+          "field": "studio",
+          "type": "string",
+          "descKey": "settings.refMaintFactsStudio"
+        },
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refMaintFactsCountry"
+        },
+        {
+          "field": "popularity",
+          "type": "number",
+          "descKey": "settings.refMaintFactsPopularity"
+        },
+        {
+          "field": "theatrical_release_date",
+          "type": "string",
+          "descKey": "settings.refMaintFactsTheatricalReleaseDate"
+        },
+        {
+          "field": "digital_release_date",
+          "type": "string",
+          "descKey": "settings.refMaintFactsDigitalReleaseDate"
+        },
+        {
+          "field": "physical_release_date",
+          "type": "string",
+          "descKey": "settings.refMaintFactsPhysicalReleaseDate"
+        },
+        {
+          "field": "days_since_added",
+          "type": "number",
+          "descKey": "settings.refMaintFactsDaysSinceAdded"
+        },
+        {
+          "field": "max_video_height",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMaxVideoHeight"
+        },
+        {
+          "field": "season_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsSeasonCount"
+        },
+        {
+          "field": "aired_episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsAiredEpisodeCount"
+        },
+        {
+          "field": "unaired_episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsUnairedEpisodeCount"
+        },
+        {
+          "field": "missing_episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMissingEpisodeCount"
+        },
+        {
+          "field": "aired_episode_file_percent",
+          "type": "number",
+          "descKey": "settings.refMaintFactsAiredEpisodeFilePercent"
+        },
+        {
+          "field": "latest_season_number",
+          "type": "number",
+          "descKey": "settings.refMaintFactsLatestSeasonNumber"
+        },
+        {
+          "field": "latest_aired_episode_date",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLatestAiredEpisodeDate"
+        },
+        {
+          "field": "next_episode_air_date",
+          "type": "string",
+          "descKey": "settings.refMaintFactsNextEpisodeAirDate"
+        },
+        {
+          "field": "genres",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsGenres"
+        },
+        {
+          "field": "rating",
+          "type": "number",
+          "descKey": "settings.refMaintFactsRating"
+        },
+        {
+          "field": "ratings",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsRatings"
+        },
+        {
+          "field": "play_count_total",
+          "type": "number",
+          "descKey": "settings.refMaintFactsPlayCountTotal"
+        },
+        {
+          "field": "watchlisted_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchlistedByUserIds"
+        },
+        {
+          "field": "watchlisted_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchlistedByUsernames"
+        },
+        {
+          "field": "watchlisted_by_anyone",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchlistedByAnyone"
+        },
+        {
+          "field": "watchlisted_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchlistedByAnyRequester"
+        },
+        {
+          "field": "watchlist_added_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsWatchlistAddedAt"
+        },
+        {
+          "field": "watchlist_origins",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchlistOrigins"
         }
       ]
     },
@@ -435,9 +590,65 @@
           "descKey": "settings.refMaintFileSubtitleLanguages"
         },
         {
+          "field": "audio_codec",
+          "type": "string?",
+          "descKey": "settings.refMaintFileAudioCodec"
+        },
+        {
+          "field": "audio_channels",
+          "type": "number?",
+          "descKey": "settings.refMaintFileAudioChannels"
+        },
+        {
+          "field": "audio_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refMaintFileAudioBitrateKbps"
+        },
+        {
+          "field": "video_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoBitrateKbps"
+        },
+        {
+          "field": "video_bit_depth",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoBitDepth"
+        },
+        {
+          "field": "video_hdr_format",
+          "type": "string?",
+          "descKey": "settings.refMaintFileVideoHdrFormat"
+        },
+        {
           "field": "added_at",
           "type": "string?",
           "descKey": "settings.refMaintFileAddedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionRatings",
+      "path": "input.facts.ratings[]",
+      "fields": [
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refMaintRatingSource"
+        },
+        {
+          "field": "value",
+          "type": "number?",
+          "descKey": "settings.refMaintRatingValue"
+        },
+        {
+          "field": "normalized",
+          "type": "number",
+          "descKey": "settings.refMaintRatingNormalized"
+        },
+        {
+          "field": "votes",
+          "type": "number?",
+          "descKey": "settings.refMaintRatingVotes"
         }
       ]
     },
@@ -709,6 +920,161 @@
           "field": "storage_available_percent",
           "type": "object",
           "descKey": "settings.refMaintFactsStorageAvailablePercent"
+        },
+        {
+          "field": "runtime_minutes",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRuntimeMinutes"
+        },
+        {
+          "field": "original_language",
+          "type": "object",
+          "descKey": "settings.refMaintFactsOriginalLanguage"
+        },
+        {
+          "field": "series_status",
+          "type": "object",
+          "descKey": "settings.refMaintFactsSeriesStatus"
+        },
+        {
+          "field": "first_aired",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFirstAired"
+        },
+        {
+          "field": "network",
+          "type": "object",
+          "descKey": "settings.refMaintFactsNetwork"
+        },
+        {
+          "field": "studio",
+          "type": "object",
+          "descKey": "settings.refMaintFactsStudio"
+        },
+        {
+          "field": "country",
+          "type": "object",
+          "descKey": "settings.refMaintFactsCountry"
+        },
+        {
+          "field": "popularity",
+          "type": "object",
+          "descKey": "settings.refMaintFactsPopularity"
+        },
+        {
+          "field": "theatrical_release_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsTheatricalReleaseDate"
+        },
+        {
+          "field": "digital_release_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsDigitalReleaseDate"
+        },
+        {
+          "field": "physical_release_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsPhysicalReleaseDate"
+        },
+        {
+          "field": "days_since_added",
+          "type": "object",
+          "descKey": "settings.refMaintFactsDaysSinceAdded"
+        },
+        {
+          "field": "max_video_height",
+          "type": "object",
+          "descKey": "settings.refMaintFactsMaxVideoHeight"
+        },
+        {
+          "field": "season_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsSeasonCount"
+        },
+        {
+          "field": "aired_episode_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAiredEpisodeCount"
+        },
+        {
+          "field": "unaired_episode_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsUnairedEpisodeCount"
+        },
+        {
+          "field": "missing_episode_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsMissingEpisodeCount"
+        },
+        {
+          "field": "aired_episode_file_percent",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAiredEpisodeFilePercent"
+        },
+        {
+          "field": "latest_season_number",
+          "type": "object",
+          "descKey": "settings.refMaintFactsLatestSeasonNumber"
+        },
+        {
+          "field": "latest_aired_episode_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsLatestAiredEpisodeDate"
+        },
+        {
+          "field": "next_episode_air_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsNextEpisodeAirDate"
+        },
+        {
+          "field": "genres",
+          "type": "object",
+          "descKey": "settings.refMaintFactsGenres"
+        },
+        {
+          "field": "rating",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRating"
+        },
+        {
+          "field": "ratings",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRatings"
+        },
+        {
+          "field": "play_count_total",
+          "type": "object",
+          "descKey": "settings.refMaintFactsPlayCountTotal"
+        },
+        {
+          "field": "watchlisted_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchlistedByUserIds"
+        },
+        {
+          "field": "watchlisted_by_usernames",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchlistedByUsernames"
+        },
+        {
+          "field": "watchlisted_by_anyone",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchlistedByAnyone"
+        },
+        {
+          "field": "watchlisted_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchlistedByAnyRequester"
+        },
+        {
+          "field": "watchlist_added_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchlistAddedAt"
+        },
+        {
+          "field": "watchlist_origins",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchlistOrigins"
         }
       ]
     },
@@ -2091,6 +2457,812 @@
       ]
     },
     {
+      "titleKey": "settings.refMaintFactsRuntimeMinutes",
+      "path": "input.observations.runtime_minutes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsRuntimeMinutesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsOriginalLanguage",
+      "path": "input.observations.original_language",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsOriginalLanguageValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsSeriesStatus",
+      "path": "input.observations.series_status",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsSeriesStatusValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFirstAired",
+      "path": "input.observations.first_aired",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsFirstAiredValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsNetwork",
+      "path": "input.observations.network",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsNetworkValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsStudio",
+      "path": "input.observations.studio",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsStudioValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsCountry",
+      "path": "input.observations.country",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsCountryValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsPopularity",
+      "path": "input.observations.popularity",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsPopularityValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsTheatricalReleaseDate",
+      "path": "input.observations.theatrical_release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsTheatricalReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsDigitalReleaseDate",
+      "path": "input.observations.digital_release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsDigitalReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsPhysicalReleaseDate",
+      "path": "input.observations.physical_release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsPhysicalReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsDaysSinceAdded",
+      "path": "input.observations.days_since_added",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsDaysSinceAddedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsMaxVideoHeight",
+      "path": "input.observations.max_video_height",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMaxVideoHeightValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsSeasonCount",
+      "path": "input.observations.season_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsSeasonCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAiredEpisodeCount",
+      "path": "input.observations.aired_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsAiredEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsUnairedEpisodeCount",
+      "path": "input.observations.unaired_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsUnairedEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsMissingEpisodeCount",
+      "path": "input.observations.missing_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMissingEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAiredEpisodeFilePercent",
+      "path": "input.observations.aired_episode_file_percent",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsAiredEpisodeFilePercentValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsLatestSeasonNumber",
+      "path": "input.observations.latest_season_number",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsLatestSeasonNumberValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsLatestAiredEpisodeDate",
+      "path": "input.observations.latest_aired_episode_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLatestAiredEpisodeDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsNextEpisodeAirDate",
+      "path": "input.observations.next_episode_air_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsNextEpisodeAirDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsGenres",
+      "path": "input.observations.genres",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsGenresValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRating",
+      "path": "input.observations.rating",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsRatingValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRatings",
+      "path": "input.observations.ratings",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsRatingsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsPlayCountTotal",
+      "path": "input.observations.play_count_total",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsPlayCountTotalValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchlistedByUserIds",
+      "path": "input.observations.watchlisted_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchlistedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchlistedByUsernames",
+      "path": "input.observations.watchlisted_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchlistedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchlistedByAnyone",
+      "path": "input.observations.watchlisted_by_anyone",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchlistedByAnyoneValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchlistedByAnyRequester",
+      "path": "input.observations.watchlisted_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchlistedByAnyRequesterValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchlistAddedAt",
+      "path": "input.observations.watchlist_added_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsWatchlistAddedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchlistOrigins",
+      "path": "input.observations.watchlist_origins",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchlistOriginsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refMaintSectionObsSeriesMovies",
       "path": "input.observations.series_movies.value[]",
       "fields": [
@@ -2171,9 +3343,65 @@
           "descKey": "settings.refMaintFileSubtitleLanguages"
         },
         {
+          "field": "audio_codec",
+          "type": "string?",
+          "descKey": "settings.refMaintFileAudioCodec"
+        },
+        {
+          "field": "audio_channels",
+          "type": "number?",
+          "descKey": "settings.refMaintFileAudioChannels"
+        },
+        {
+          "field": "audio_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refMaintFileAudioBitrateKbps"
+        },
+        {
+          "field": "video_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoBitrateKbps"
+        },
+        {
+          "field": "video_bit_depth",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoBitDepth"
+        },
+        {
+          "field": "video_hdr_format",
+          "type": "string?",
+          "descKey": "settings.refMaintFileVideoHdrFormat"
+        },
+        {
           "field": "added_at",
           "type": "string?",
           "descKey": "settings.refMaintFileAddedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionObsRatings",
+      "path": "input.observations.ratings.value[]",
+      "fields": [
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refMaintRatingSource"
+        },
+        {
+          "field": "value",
+          "type": "number?",
+          "descKey": "settings.refMaintRatingValue"
+        },
+        {
+          "field": "normalized",
+          "type": "number",
+          "descKey": "settings.refMaintRatingNormalized"
+        },
+        {
+          "field": "votes",
+          "type": "number?",
+          "descKey": "settings.refMaintRatingVotes"
         }
       ]
     }

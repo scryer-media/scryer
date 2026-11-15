@@ -624,6 +624,7 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
                 kind: signal.kind,
                 scryer_title_id: signal.scryer_title_id.clone(),
                 scryer_episode_id: signal.scryer_episode_id.clone(),
+                season_number: signal.season_number,
                 played: signal.played,
                 play_count: signal.play_count,
                 last_played_at: signal.last_played_at,

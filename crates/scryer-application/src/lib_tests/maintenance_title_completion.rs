@@ -754,6 +754,7 @@ async fn record_episode_plays(
             kind: MediaServerSignalKind::Episode,
             scryer_title_id: Some(title_id.to_string()),
             scryer_episode_id: Some(episode_id.clone()),
+            season_number: None,
             played: true,
             play_count: 1,
             last_played_at: Some(Utc::now()),

@@ -75,6 +75,7 @@ fn matcher(rego_source: &str, grace_days: i64) -> MaintenanceMatcherDraft {
         rego_source: rego_source.to_string(),
         grace_days,
         storage_root_id: None,
+        max_titles_per_run: None,
     }
 }
 
@@ -312,6 +313,7 @@ async fn an_edit_without_delete_heads_drops_destructive_arming() {
         .add_revision_keeping_arming(
             &stale,
             MaintenanceEffectArming::Reversible,
+            None,
             chrono::Utc::now(),
         )
         .await

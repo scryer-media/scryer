@@ -1495,5 +1495,6 @@ pub(crate) mod lib_tests;
 pub(crate) mod test_wait;
 
 pub use ports::TitleCounts;
+pub use ports::TitleEpisodeShape;
 pub use ports::TitleRecyclePurge;
 pub use types::{DashboardImportEvidence, DashboardImportKind, DashboardRecentImport};

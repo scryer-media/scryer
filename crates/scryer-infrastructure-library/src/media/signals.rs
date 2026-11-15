@@ -43,7 +43,8 @@ use scryer_domain::{
 };
 use std::collections::{HashMap, HashSet};
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
+use crate::media::id_list_statements::{id_list_statements, max_binds};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 #[derive(Clone)]
 pub struct MediaServerSignalStore {
@@ -57,13 +58,14 @@ impl MediaServerSignalStore {
 }
 
 const SIGNAL_COLUMNS: &str = "id, connection_id, provider, external_user_id, scryer_user_id,
-    provider_item_id, kind, scryer_title_id, scryer_episode_id, played, play_count,
-    last_played_at, is_favorite, observed_at, sync_generation, created_at, updated_at";
+    provider_item_id, kind, scryer_title_id, scryer_episode_id, season_number, played,
+    play_count, last_played_at, is_favorite, observed_at, sync_generation, created_at,
+    updated_at";
 
 const SIGNAL_INSERT_PREFIX: &str = "INSERT INTO media_server_user_media_signals
         (id, connection_id, provider, external_user_id, scryer_user_id, provider_item_id, kind,
-         scryer_title_id, scryer_episode_id, played, play_count, last_played_at, is_favorite,
-         observed_at, sync_generation, created_at, updated_at)";
+         scryer_title_id, scryer_episode_id, season_number, played, play_count, last_played_at,
+         is_favorite, observed_at, sync_generation, created_at, updated_at)";
 
 /// The conflict target is the table's natural key. `id` and `created_at` are
 /// deliberately absent from the update list: a row that survives a sweep is the
@@ -75,6 +77,7 @@ const SIGNAL_UPSERT_SUFFIX: &str =
          kind = excluded.kind,
          scryer_title_id = excluded.scryer_title_id,
          scryer_episode_id = excluded.scryer_episode_id,
+         season_number = excluded.season_number,
          played = excluded.played,
          play_count = excluded.play_count,
          last_played_at = excluded.last_played_at,
@@ -83,7 +86,7 @@ const SIGNAL_UPSERT_SUFFIX: &str =
          sync_generation = excluded.sync_generation,
          updated_at = excluded.updated_at";
 
-const SIGNAL_ROW_WIDTH: usize = 17;
+const SIGNAL_ROW_WIDTH: usize = 18;
 
 const SYNC_STATE_COLUMNS: &str = "connection_id, provider, enabled, last_started_at,
     last_success_at, last_error, last_error_code, participant_count, signal_count, updated_at";
@@ -171,6 +174,36 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                         SqlArg::Text(external_user_id.clone()),
                     ];
 
+                    // A sweep that read back exactly what is stored changes
+                    // nothing, so it writes no signal row: the swap below
+                    // would rewrite every row only to restamp it. Only the
+                    // roster entry is still recorded.
+                    let stored = SqlRuntime::fetch_all(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "SELECT {SIGNAL_COMPARED_COLUMNS}
+                               FROM media_server_user_media_signals
+                              WHERE connection_id = {{}} AND external_user_id = {{}}"
+                        ),
+                        &participant_args,
+                    )
+                    .await?
+                    .iter()
+                    .map(compared_row)
+                    .collect::<AppResult<HashSet<ComparedSignal>>>()?;
+                    let unchanged = stored.len() == owned.len()
+                        && owned
+                            .iter()
+                            .all(|signal| stored.contains(&compared_signal(signal)));
+
+                    if unchanged {
+                        if let Some(link) = read_through.as_ref() {
+                            record_roster_entry(tx, &connection_id, &external_user_id, link)
+                                .await?;
+                        }
+                        return Ok(owned.len() as u64);
+                    }
+
                     // Read inside the transaction: two sweeps of the same
                     // participant must not pick the same generation and leave
                     // each other's rows looking current.
@@ -235,30 +268,8 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
                     // Last, so a roster entry is only ever committed with the
                     // swap it vouches for: if this write fails, the swap rolls
                     // back with it.
-                    if let Some(link) = read_through {
-                        SqlRuntime::execute(
-                            SqlExec::Tx(tx),
-                            "INSERT INTO media_server_signal_roster
-                                 (connection_id, link_id, external_user_id, scryer_user_id,
-                                  link_verified_at, sweep_started_at, read_at)
-                             VALUES ({}, {}, {}, {}, {}, {}, {})
-                             ON CONFLICT (connection_id, link_id) DO UPDATE SET
-                                 external_user_id = excluded.external_user_id,
-                                 scryer_user_id = excluded.scryer_user_id,
-                                 link_verified_at = excluded.link_verified_at,
-                                 sweep_started_at = excluded.sweep_started_at,
-                                 read_at = excluded.read_at",
-                            &[
-                                SqlArg::Text(connection_id.clone()),
-                                SqlArg::Text(link.link_id.clone()),
-                                SqlArg::Text(external_user_id.clone()),
-                                SqlArg::Text(link.scryer_user_id.clone()),
-                                SqlArg::OptTimestamp(link.link_verified_at),
-                                SqlArg::Timestamp(link.sweep_started_at),
-                                SqlArg::Timestamp(now),
-                            ],
-                        )
-                        .await?;
+                    if let Some(link) = read_through.as_ref() {
+                        record_roster_entry(tx, &connection_id, &external_user_id, link).await?;
                     }
 
                     Ok(remaining.max(0) as u64)
@@ -281,6 +292,14 @@ impl MediaServerSignalRepository for MediaServerSignalStore {
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<UserMediaSignal>>> {
         self.signals_by_title(title_ids, MediaServerSignalKind::Episode)
+            .await
+    }
+
+    async fn favorite_signals_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<UserMediaSignal>>> {
+        self.title_signal_rows(title_ids, "is_favorite = {}", vec![SqlArg::Bool(true)])
             .await
     }
 
@@ -543,42 +562,166 @@ impl MediaServerSignalStore {
     /// by the title that owns the observation. A title with no rows is simply
     /// absent from the map: an empty vector would claim "asked and nobody
     /// watched it", which is not what a missing row means.
+    ///
+    /// A favourite nobody played is stored as an unplayed favourite row. It
+    /// says nothing about plays, so the watch reads leave it out and see
+    /// exactly the rows they saw before favourites were read.
     async fn signals_by_title(
         &self,
         title_ids: &[String],
         kind: MediaServerSignalKind,
     ) -> AppResult<HashMap<String, Vec<UserMediaSignal>>> {
+        self.title_signal_rows(
+            title_ids,
+            "kind = {} AND (played = {} OR is_favorite = {})",
+            vec![
+                SqlArg::Text(kind.as_storage_str().to_string()),
+                SqlArg::Bool(true),
+                SqlArg::Bool(false),
+            ],
+        )
+        .await
+    }
+
+    /// Rows matching `filter` (bound by `filter_args`, ahead of the ids) for
+    /// the titles, grouped by title, one statement per id chunk.
+    async fn title_signal_rows(
+        &self,
+        title_ids: &[String],
+        filter: &str,
+        filter_args: Vec<SqlArg>,
+    ) -> AppResult<HashMap<String, Vec<UserMediaSignal>>> {
         if title_ids.is_empty() {
             return Ok(HashMap::new());
         }
-
-        let placeholders = title_ids
-            .iter()
-            .map(|_| "{}")
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT {SIGNAL_COLUMNS}
-               FROM media_server_user_media_signals
-              WHERE kind = {{}}
-                AND scryer_title_id IN ({placeholders})
-              ORDER BY scryer_title_id, external_user_id, provider_item_id"
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) = id_list_statements(
+            title_ids,
+            1,
+            filter_args.len(),
+            max_binds(&exec),
+            SIGNAL_TITLE_ID_CHUNK,
         );
-        let mut args = vec![SqlArg::Text(kind.as_storage_str().to_string())];
-        args.extend(title_ids.iter().cloned().map(SqlArg::Text));
-
-        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
         let mut grouped: HashMap<String, Vec<UserMediaSignal>> = HashMap::new();
-        for row in rows.iter() {
-            let signal = row_to_signal(row)?;
-            // The `IN` clause already excludes NULLs; the guard is here so an
-            // unmapped row can never be filed under an empty title id.
-            if let Some(title_id) = signal.scryer_title_id.clone() {
-                grouped.entry(title_id).or_default().push(signal);
+        for chunk in ids.chunks(per_statement) {
+            let placeholders = chunk.iter().map(|_| "{}").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT {SIGNAL_COLUMNS}
+                   FROM media_server_user_media_signals
+                  WHERE {filter}
+                    AND scryer_title_id IN ({placeholders})
+                  ORDER BY scryer_title_id, external_user_id, provider_item_id"
+            );
+            let mut args = filter_args.clone();
+            args.extend(chunk.iter().cloned().map(SqlArg::Text));
+            let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+            for row in rows.iter() {
+                let signal = row_to_signal(row)?;
+                // The `IN` clause already excludes NULLs; the guard is here so
+                // an unmapped row can never be filed under an empty title id.
+                if let Some(title_id) = signal.scryer_title_id.clone() {
+                    grouped.entry(title_id).or_default().push(signal);
+                }
             }
         }
         Ok(grouped)
     }
+}
+
+/// Title ids per statement once a list is too long for one.
+const SIGNAL_TITLE_ID_CHUNK: usize = 900;
+
+/// The columns a sweep's read is compared on to tell whether anything changed.
+/// Bookkeeping (`id`, `observed_at`, `sync_generation`, the row timestamps) is
+/// left out: it changes on every write and says nothing about the person.
+const SIGNAL_COMPARED_COLUMNS: &str = "provider, scryer_user_id, provider_item_id, kind,
+    scryer_title_id, scryer_episode_id, season_number, played, play_count, last_played_at,
+    is_favorite";
+
+/// One row as the change check compares it. Play times are compared to the
+/// microsecond, the finest a Postgres timestamp keeps: the servers report
+/// 100 ns ticks, which would otherwise never read back equal.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ComparedSignal {
+    provider: String,
+    scryer_user_id: Option<String>,
+    provider_item_id: String,
+    kind: String,
+    scryer_title_id: Option<String>,
+    scryer_episode_id: Option<String>,
+    season_number: Option<i64>,
+    played: bool,
+    play_count: i64,
+    last_played_micros: Option<i64>,
+    is_favorite: bool,
+}
+
+fn compared_signal(signal: &NewUserMediaSignal) -> ComparedSignal {
+    ComparedSignal {
+        provider: signal.provider.as_str().to_string(),
+        scryer_user_id: signal.scryer_user_id.clone(),
+        provider_item_id: signal.provider_item_id.clone(),
+        kind: signal.kind.as_storage_str().to_string(),
+        scryer_title_id: signal.scryer_title_id.clone(),
+        scryer_episode_id: signal.scryer_episode_id.clone(),
+        season_number: signal.season_number,
+        played: signal.played,
+        play_count: signal.play_count,
+        last_played_micros: signal.last_played_at.map(|at| at.timestamp_micros()),
+        is_favorite: signal.is_favorite,
+    }
+}
+
+fn compared_row(row: &SqlRow) -> AppResult<ComparedSignal> {
+    Ok(ComparedSignal {
+        provider: row.text("provider")?,
+        scryer_user_id: row.opt_text("scryer_user_id")?,
+        provider_item_id: row.text("provider_item_id")?,
+        kind: row.text("kind")?,
+        scryer_title_id: row.opt_text("scryer_title_id")?,
+        scryer_episode_id: row.opt_text("scryer_episode_id")?,
+        season_number: row.opt_i64("season_number")?,
+        played: row.bool("played")?,
+        play_count: row.i64("play_count")?,
+        last_played_micros: row
+            .opt_timestamp("last_played_at")?
+            .map(|at| at.timestamp_micros()),
+        is_favorite: row.bool("is_favorite")?,
+    })
+}
+
+/// Record the link a participant's read went through, in the transaction of
+/// that participant's write.
+async fn record_roster_entry(
+    tx: &mut SqlTx<'_>,
+    connection_id: &str,
+    external_user_id: &str,
+    link: &SignalRosterLink,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO media_server_signal_roster
+             (connection_id, link_id, external_user_id, scryer_user_id,
+              link_verified_at, sweep_started_at, read_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {})
+         ON CONFLICT (connection_id, link_id) DO UPDATE SET
+             external_user_id = excluded.external_user_id,
+             scryer_user_id = excluded.scryer_user_id,
+             link_verified_at = excluded.link_verified_at,
+             sweep_started_at = excluded.sweep_started_at,
+             read_at = excluded.read_at",
+        &[
+            SqlArg::Text(connection_id.to_string()),
+            SqlArg::Text(link.link_id.clone()),
+            SqlArg::Text(external_user_id.to_string()),
+            SqlArg::Text(link.scryer_user_id.clone()),
+            SqlArg::OptTimestamp(link.link_verified_at),
+            SqlArg::Timestamp(link.sweep_started_at),
+            SqlArg::Timestamp(chrono::Utc::now()),
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 fn signal_args(
@@ -598,6 +741,7 @@ fn signal_args(
         SqlArg::Text(signal.kind.as_storage_str().to_string()),
         SqlArg::OptText(signal.scryer_title_id.clone()),
         SqlArg::OptText(signal.scryer_episode_id.clone()),
+        SqlArg::OptI64(signal.season_number),
         SqlArg::Bool(signal.played),
         SqlArg::I64(signal.play_count),
         SqlArg::OptTimestamp(signal.last_played_at),
@@ -624,6 +768,7 @@ fn row_to_signal(row: &SqlRow) -> AppResult<UserMediaSignal> {
         kind,
         scryer_title_id: row.opt_text("scryer_title_id")?,
         scryer_episode_id: row.opt_text("scryer_episode_id")?,
+        season_number: row.opt_i64("season_number")?,
         played: row.bool("played")?,
         play_count: row.i64("play_count")?,
         last_played_at: row.opt_timestamp("last_played_at")?,

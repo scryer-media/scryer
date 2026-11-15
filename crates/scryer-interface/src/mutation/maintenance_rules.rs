@@ -129,6 +129,15 @@ fn max_titles_per_run(value: i32) -> u32 {
     u32::try_from(value).unwrap_or(0)
 }
 
+/// Omitted keeps the stored maximum, null clears it, a value replaces it.
+fn max_titles_per_run_change(value: async_graphql::MaybeUndefined<i32>) -> Option<Option<u32>> {
+    match value {
+        async_graphql::MaybeUndefined::Undefined => None,
+        async_graphql::MaybeUndefined::Null => Some(None),
+        async_graphql::MaybeUndefined::Value(max) => Some(Some(max_titles_per_run(max))),
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct MaintenanceRuleMutations;
 
@@ -198,6 +207,7 @@ impl MaintenanceRuleMutations {
                             Some(Some(root_id.to_string()))
                         }
                     },
+                    max_titles_per_run: max_titles_per_run_change(input.max_titles_per_run),
                 },
                 super::rules::builder_model_change(input.builder_model),
             )
@@ -232,11 +242,7 @@ impl MaintenanceRuleMutations {
             input.description.unwrap_or_default(),
             input.library_ids.unwrap_or_default(),
             schedule,
-            match input.max_titles_per_run {
-                async_graphql::MaybeUndefined::Undefined => None,
-                async_graphql::MaybeUndefined::Null => Some(None),
-                async_graphql::MaybeUndefined::Value(max) => Some(Some(max_titles_per_run(max))),
-            },
+            max_titles_per_run_change(input.max_titles_per_run),
         )
         .await
         .map_err(to_gql_error)?;

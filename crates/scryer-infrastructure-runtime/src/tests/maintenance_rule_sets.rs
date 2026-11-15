@@ -120,7 +120,7 @@ async fn destructive_arming_atomically_rechecks_the_reviewed_configuration() {
     );
 
     store
-        .add_revision(&revision("reviewed", 2), Utc::now())
+        .add_revision(&revision("reviewed", 2), None, Utc::now())
         .await
         .unwrap();
     assert!(
@@ -253,7 +253,7 @@ async fn postgres_destructive_arming_waits_for_scope_edits_before_checking_confi
             .unwrap()
     );
     store
-        .add_revision(&revision("reviewed", 2), Utc::now())
+        .add_revision(&revision("reviewed", 2), None, Utc::now())
         .await
         .unwrap();
     assert!(
@@ -387,6 +387,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
                 "bad scope",
                 &["library-9".into(), "missing-library".into()],
                 None,
+                None,
                 true,
                 Utc::now()
             )
@@ -411,6 +412,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
             "Scoped",
             "",
             &["library-1".into()],
+            None,
             None,
             true,
             Utc::now(),
@@ -441,7 +443,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     );
 
     store
-        .update_rule_set_metadata("scoped", "Global", "", &[], None, true, Utc::now())
+        .update_rule_set_metadata("scoped", "Global", "", &[], None, None, true, Utc::now())
         .await
         .unwrap();
     assert!(
@@ -463,6 +465,7 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
             "Scoped again",
             "",
             &["library-2".into()],
+            None,
             None,
             true,
             Utc::now(),
@@ -520,6 +523,84 @@ async fn a_rule_maximum_round_trips_and_clears_without_touching_arming() {
         None
     );
     let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn a_rule_maximum_rides_in_the_revision_and_metadata_writes() {
+    let (services, db) = temp_services("scryer_maintenance_rule_maximum_writes").await;
+    let store = maintenance_rule_set_store(&services).await;
+    store
+        .create_rule_set(&rule_set("bounded", vec![]), &revision("bounded", 1))
+        .await
+        .unwrap();
+    store
+        .add_revision(&revision("bounded", 2), Some(Some(3)), Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(stored_maximum(&store).await, Some(3));
+    store
+        .add_revision_keeping_arming(
+            &revision("bounded", 3),
+            scryer_domain::MaintenanceEffectArming::None,
+            None,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_maximum(&store).await,
+        Some(3),
+        "omitted keeps the maximum"
+    );
+    store
+        .add_revision_keeping_arming(
+            &revision("bounded", 4),
+            scryer_domain::MaintenanceEffectArming::None,
+            Some(Some(9)),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored_maximum(&store).await, Some(9));
+
+    store
+        .update_rule_set_metadata(
+            "bounded",
+            "Bounded",
+            "",
+            &[],
+            None,
+            Some(Some(11)),
+            false,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored_maximum(&store).await, Some(11));
+    store
+        .update_rule_set_metadata(
+            "bounded",
+            "Bounded",
+            "",
+            &[],
+            None,
+            Some(None),
+            true,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored_maximum(&store).await, None);
+    let _ = std::fs::remove_file(db);
+}
+
+async fn stored_maximum(store: &crate::MaintenanceRuleSetStore) -> Option<u32> {
+    store
+        .get_rule_set("bounded")
+        .await
+        .unwrap()
+        .unwrap()
+        .max_titles_per_run
 }
 
 fn rule_set(id: &str, library_ids: Vec<String>) -> MaintenanceRuleSet {
@@ -614,7 +695,7 @@ async fn rule_sets_and_revisions_round_trip() {
     let mut built = revision("rule-a", 2);
     built.builder_model_json = Some(r#"{"family":"maintenance","version":2}"#.to_string());
     store
-        .add_revision(&built, Utc::now())
+        .add_revision(&built, None, Utc::now())
         .await
         .expect("append revision with builder model");
     assert_eq!(
@@ -651,7 +732,7 @@ async fn batched_revision_reads_match_the_per_key_reads() {
             .await
             .expect("create rule set");
         store
-            .add_revision(&revision(id, 2), Utc::now())
+            .add_revision(&revision(id, 2), None, Utc::now())
             .await
             .expect("add revision");
     }
@@ -718,7 +799,7 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
 
     let updated_at = Utc::now();
     store
-        .add_revision(&revision("rule-b", 2), updated_at)
+        .add_revision(&revision("rule-b", 2), None, updated_at)
         .await
         .expect("add revision");
 
@@ -752,7 +833,7 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
             .unwrap()
     );
     store
-        .add_revision(&revision("rule-b", 3), Utc::now())
+        .add_revision(&revision("rule-b", 3), None, Utc::now())
         .await
         .expect("add revision to an unarmed rule");
     let unarmed = store.get_rule_set("rule-b").await.unwrap().unwrap();
@@ -802,6 +883,7 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
             "New description",
             &["library-9".to_string()],
             None,
+            None,
             false,
             Utc::now(),
         )
@@ -842,6 +924,7 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
             "New description",
             &["library-9".to_string()],
             Some(&weekly),
+            None,
             false,
             Utc::now(),
         )
@@ -889,6 +972,7 @@ async fn a_scope_change_disarms_in_the_same_write() {
             "Unwatched for a long time",
             &["library-1".to_string(), "library-2".to_string()],
             None,
+            None,
             true,
             Utc::now(),
         )
@@ -927,7 +1011,7 @@ async fn deleting_a_rule_set_cascades_to_its_revisions() {
         .await
         .expect("create rule set");
     store
-        .add_revision(&revision("rule-d", 2), Utc::now())
+        .add_revision(&revision("rule-d", 2), None, Utc::now())
         .await
         .expect("add revision");
 
@@ -952,7 +1036,7 @@ async fn a_duplicate_revision_number_is_rejected() {
         .expect("create rule set");
 
     store
-        .add_revision(&revision("rule-e", 1), Utc::now())
+        .add_revision(&revision("rule-e", 1), None, Utc::now())
         .await
         .expect_err("the unique constraint must reject a replayed revision number");
 
@@ -1007,6 +1091,7 @@ async fn a_revision_keeping_arming_never_raises_a_concurrently_lowered_arming() 
         .add_revision_keeping_arming(
             &revision("lowered", 2),
             MaintenanceEffectArming::Reversible,
+            None,
             Utc::now(),
         )
         .await
@@ -1028,6 +1113,7 @@ async fn a_revision_keeping_arming_never_raises_a_concurrently_lowered_arming() 
         .add_revision_keeping_arming(
             &revision("armed", 2),
             MaintenanceEffectArming::Reversible,
+            None,
             Utc::now(),
         )
         .await
@@ -1067,6 +1153,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
         .add_revision_keeping_arming(
             &revision("kept", 2),
             MaintenanceEffectArming::Reversible,
+            None,
             Utc::now(),
         )
         .await
@@ -1079,7 +1166,12 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
     let mut stale = revision("kept", 2);
     stale.id = "kept-stale-2".into();
     let refused = store
-        .add_revision_keeping_arming(&stale, MaintenanceEffectArming::Reversible, Utc::now())
+        .add_revision_keeping_arming(
+            &stale,
+            MaintenanceEffectArming::Reversible,
+            None,
+            Utc::now(),
+        )
         .await
         .expect_err("a stale save is refused");
     assert_eq!(
@@ -1091,6 +1183,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
         .add_revision_keeping_arming(
             &revision("kept", 4),
             MaintenanceEffectArming::None,
+            None,
             Utc::now(),
         )
         .await
@@ -1109,7 +1202,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
     let mut stale_disarm = revision("kept", 2);
     stale_disarm.id = "kept-stale-disarm-2".into();
     let refused = store
-        .add_revision(&stale_disarm, Utc::now())
+        .add_revision(&stale_disarm, None, Utc::now())
         .await
         .expect_err("a stale disarming save is refused");
     assert_eq!(
@@ -1122,7 +1215,7 @@ async fn a_revision_keeping_arming_moves_only_from_the_revision_it_follows() {
     assert_eq!(current.effect_arming, MaintenanceEffectArming::Reversible);
 
     store
-        .add_revision(&revision("kept", 3), Utc::now())
+        .add_revision(&revision("kept", 3), None, Utc::now())
         .await
         .expect("a disarming save that follows the current revision");
     let current = store.get_rule_set("kept").await.unwrap().unwrap();

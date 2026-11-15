@@ -23,6 +23,10 @@
 //! `StartIndex`/`Limit`. Keys are read case-insensitively, so a server that
 //! serializes `userData` rather than `UserData` is still read.
 //!
+//! Favourites are a second listing of the same shape, `Filters=IsFavorite`
+//! over `Movie,Series,Season,Episode`, so a favourite nobody played is seen,
+//! and a whole series or one season can be a favourite.
+//!
 //! # Paging
 //!
 //! Every listing is paged until the server's own total is reached
@@ -491,7 +495,9 @@ impl HttpMediaServerSignalSource {
 
     // ── Jellyfin and Emby ───────────────────────────────────────────────────
 
-    /// Every played movie and episode for one Jellyfin or Emby user.
+    /// Every played movie and episode for one Jellyfin or Emby user, or with
+    /// [`UserItemListing::Favorites`] every movie, series, season and episode
+    /// they marked as a favourite.
     async fn fetch_user_items(
         &self,
         connection: &MediaServerConnection,
@@ -499,6 +505,7 @@ impl HttpMediaServerSignalSource {
         auth: SignalAuth<'_>,
         fields: &str,
         external_user_id: &str,
+        listing: UserItemListing,
     ) -> ReadResult<Vec<ProviderPlayedItem>> {
         let mut items: Vec<ProviderPlayedItem> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -508,7 +515,7 @@ impl HttpMediaServerSignalSource {
         let mut first_total: Option<i64> = None;
 
         loop {
-            let url = played_items_url(base, external_user_id, start_index, fields)?;
+            let url = user_items_url(base, external_user_id, start_index, fields, listing)?;
             let body = self.fetch_json(url, auth, None).await?;
             // Jellyfin echoes the page's start; a server that answers from
             // elsewhere is not paging as asked. Emby does not echo it.
@@ -524,7 +531,10 @@ impl HttpMediaServerSignalSource {
                 .ok_or_else(unreadable_listing)?;
             let total = field(&body, "TotalRecordCount").and_then(integer_field);
 
-            let (mut normalized, page_skipped) = normalize_jellyfin_items(&page);
+            let (mut normalized, page_skipped) = match listing {
+                UserItemListing::Played => normalize_jellyfin_items(&page),
+                UserItemListing::Favorites => normalize_jellyfin_favorites(&page)?,
+            };
             skipped += page_skipped;
             // A server that ignores `StartIndex` but stays inside its total
             // would otherwise hand back the same rows until the total is
@@ -561,26 +571,38 @@ impl HttpMediaServerSignalSource {
             return Err(unreadable_items());
         }
 
-        self.attach_series_ids(base, auth, external_user_id, &mut items)
+        let resolved = self
+            .attach_series_ids(base, auth, external_user_id, &mut items)
             .await;
+        // A played episode whose series cannot be looked up only goes
+        // unmapped. A favourite season or episode that went unmapped would
+        // read as "nobody favourited this title", so that read fails instead
+        // and the stored favourites stay as they were.
+        if !resolved && listing == UserItemListing::Favorites {
+            return Err(SignalReadFailure::new(
+                reasons::RESPONSE_UNREADABLE,
+                "the series of favourite seasons or episodes could not be looked up",
+            ));
+        }
         Ok(items)
     }
 
     /// Resolve the external ids of every distinct series the episodes belong
     /// to, in batches, and attach them.
     ///
-    /// Failure here is not fatal: episodes simply stay unmapped, which is the
-    /// honest outcome. That is why this returns `()` rather than a result.
+    /// Failure here is not fatal to a played read: episodes simply stay
+    /// unmapped, which is the honest outcome. Returns whether every batch was
+    /// answered, so a favourites read can refuse to go on without them.
     async fn attach_series_ids(
         &self,
         base: &Url,
         auth: SignalAuth<'_>,
         external_user_id: &str,
         items: &mut [ProviderPlayedItem],
-    ) {
+    ) -> bool {
         let series_ids = distinct_series_ids(items);
         if series_ids.is_empty() {
-            return;
+            return true;
         }
 
         let mut resolved: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
@@ -589,7 +611,7 @@ impl HttpMediaServerSignalSource {
                 Ok(url) => url,
                 Err(error) => {
                     warn!(error = %error, "could not build the series lookup URL");
-                    return;
+                    return false;
                 }
             };
             match self.fetch_json(url, auth, None).await {
@@ -621,12 +643,13 @@ impl HttpMediaServerSignalSource {
                 }
                 Err(error) => {
                     warn!(error = %error, "could not resolve series ids; those episodes stay unmapped");
-                    return;
+                    return false;
                 }
             }
         }
 
         apply_series_ids(items, &resolved);
+        true
     }
 
     // ── Plex ────────────────────────────────────────────────────────────────
@@ -1283,8 +1306,37 @@ impl MediaServerSignalReader for UserItemsReader {
         let external_user_id = participant_id(external_user_id)?;
         let (auth, fields) = self.auth_and_fields();
         self.source
-            .fetch_user_items(&self.connection, &self.base, auth, fields, external_user_id)
+            .fetch_user_items(
+                &self.connection,
+                &self.base,
+                auth,
+                fields,
+                external_user_id,
+                UserItemListing::Played,
+            )
             .await
+    }
+
+    /// `GET /Users/{userId}/Items` with `Filters=IsFavorite`, paged exactly as
+    /// the played read: one more listing per user per sweep, plus a series
+    /// lookup when favourite seasons or episodes name series.
+    async fn fetch_favorite_items(
+        &self,
+        external_user_id: &str,
+    ) -> Result<Option<Vec<ProviderPlayedItem>>, SignalReadFailure> {
+        let external_user_id = participant_id(external_user_id)?;
+        let (auth, fields) = self.auth_and_fields();
+        self.source
+            .fetch_user_items(
+                &self.connection,
+                &self.base,
+                auth,
+                fields,
+                external_user_id,
+                UserItemListing::Favorites,
+            )
+            .await
+            .map(Some)
     }
 
     /// Every user the admin key can list (`GET /Users`), each read exactly as
@@ -1298,7 +1350,14 @@ impl MediaServerSignalReader for UserItemsReader {
         for user_id in self.list_user_ids().await? {
             let items = self
                 .source
-                .fetch_user_items(&self.connection, &self.base, auth, fields, &user_id)
+                .fetch_user_items(
+                    &self.connection,
+                    &self.base,
+                    auth,
+                    fields,
+                    &user_id,
+                    UserItemListing::Played,
+                )
                 .await?;
             plays.extend(items.into_iter().map(|item| ProviderAudiencePlay {
                 external_account_id: user_id.clone(),
@@ -1873,6 +1932,77 @@ pub fn normalize_jellyfin_item(entry: &Value) -> Option<ProviderPlayedItem> {
     })
 }
 
+/// One page of a Jellyfin or Emby favourites listing.
+///
+/// Returns `(items, skipped)` like [`normalize_jellyfin_items`]. A row whose
+/// user data says it is not a favourite means the filter was ignored, and the
+/// whole read fails as `WATCH_SYNC_FILTER_NOT_HONOURED`.
+pub fn normalize_jellyfin_favorites(
+    page: &[Value],
+) -> ReadResult<(Vec<ProviderPlayedItem>, usize)> {
+    let mut items = Vec::with_capacity(page.len());
+    let mut skipped = 0;
+    for entry in page {
+        let flagged = field(entry, "UserData")
+            .and_then(|data| field(data, "IsFavorite"))
+            .and_then(Value::as_bool);
+        if flagged == Some(false) {
+            return Err(SignalReadFailure::new(
+                reasons::FILTER_NOT_HONOURED,
+                "the favourites listing returned an item that is not a favourite",
+            ));
+        }
+        match normalize_jellyfin_favorite(entry) {
+            Some(item) => items.push(item),
+            None => skipped += 1,
+        }
+    }
+    Ok((items, skipped))
+}
+
+/// One favourite: a movie, series, season or episode, or `None` when it
+/// cannot be read as one.
+///
+/// A series carries its own provider ids. A season is placed by its series
+/// (`SeriesId`, resolved by the batched series lookup) and its number
+/// (`IndexNumber`). Play state comes from the played read, not from here.
+pub fn normalize_jellyfin_favorite(entry: &Value) -> Option<ProviderPlayedItem> {
+    let kind = match string_field(entry, "Type")?.to_ascii_lowercase().as_str() {
+        "series" => MediaServerSignalKind::Series,
+        "season" => MediaServerSignalKind::Season,
+        _ => {
+            let mut item = normalize_jellyfin_item(entry)?;
+            item.played = false;
+            item.is_favorite = true;
+            return Some(item);
+        }
+    };
+    let provider_item_id = string_field(entry, "Id")?;
+    let (external_ids, series_provider_item_id, season_number) = match kind {
+        MediaServerSignalKind::Series => (external_ids(entry), None, None),
+        _ => (
+            BTreeMap::new(),
+            Some(string_field(entry, "SeriesId")?),
+            Some(field(entry, "IndexNumber").and_then(integer_field)?),
+        ),
+    };
+    Some(ProviderPlayedItem {
+        file_paths: Vec::new(),
+        provider_item_id,
+        kind,
+        name: string_field(entry, "Name"),
+        external_ids,
+        series_external_ids: BTreeMap::new(),
+        series_provider_item_id,
+        season_number,
+        episode_number: None,
+        played: false,
+        play_count: 0,
+        last_played_at: None,
+        is_favorite: true,
+    })
+}
+
 /// One Plex movie or episode, or `None` when it cannot be read as one.
 ///
 /// Used for the owner's watched set as read, and for history items before
@@ -2052,7 +2182,7 @@ fn plex_external_ids(entry: &Value) -> BTreeMap<String, String> {
 fn distinct_series_ids(items: &[ProviderPlayedItem]) -> Vec<String> {
     items
         .iter()
-        .filter(|item| item.kind == MediaServerSignalKind::Episode)
+        .filter(|item| item.kind.is_within_series())
         .filter_map(|item| item.series_provider_item_id.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -2152,20 +2282,50 @@ fn invalid_base_url() -> SignalReadFailure {
     )
 }
 
+/// Which of a user's item listings a read pages through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UserItemListing {
+    /// `Filters=IsPlayed` over movies and episodes.
+    Played,
+    /// `Filters=IsFavorite` over movies, series, seasons and episodes.
+    Favorites,
+}
+
+#[cfg(test)]
 fn played_items_url(
     base: &Url,
     external_user_id: &str,
     start_index: usize,
     fields: &str,
 ) -> ReadResult<Url> {
+    user_items_url(
+        base,
+        external_user_id,
+        start_index,
+        fields,
+        UserItemListing::Played,
+    )
+}
+
+fn user_items_url(
+    base: &Url,
+    external_user_id: &str,
+    start_index: usize,
+    fields: &str,
+    listing: UserItemListing,
+) -> ReadResult<Url> {
+    let (filter, item_types) = match listing {
+        UserItemListing::Played => ("IsPlayed", "Movie,Episode"),
+        UserItemListing::Favorites => ("IsFavorite", "Movie,Series,Season,Episode"),
+    };
     let mut url = base
         .join(&format!("Users/{external_user_id}/Items"))
         .map_err(|_| invalid_base_url())?;
     url.query_pairs_mut()
         .append_pair("Recursive", "true")
         .append_pair("IsMissing", "false")
-        .append_pair("Filters", "IsPlayed")
-        .append_pair("IncludeItemTypes", "Movie,Episode")
+        .append_pair("Filters", filter)
+        .append_pair("IncludeItemTypes", item_types)
         .append_pair("Fields", fields)
         .append_pair("EnableUserData", "true")
         .append_pair("StartIndex", &start_index.to_string())

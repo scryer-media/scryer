@@ -1894,6 +1894,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
                 ),
                 grace_days: 3,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -1931,6 +1932,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
                 ),
                 grace_days: 4,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -1973,6 +1975,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
                 ),
                 grace_days: 5,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -2180,6 +2183,7 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
                 ),
                 grace_days: 30,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await

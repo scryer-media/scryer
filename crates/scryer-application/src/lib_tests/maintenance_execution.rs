@@ -229,6 +229,7 @@ async fn replacing_the_matcher_disarms_the_rule() {
                 ),
                 grace_days: 0,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await
@@ -832,6 +833,67 @@ async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
 }
 
 #[tokio::test]
+async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
+    let fixture = execution_app(None);
+    let created = fixture
+        .app
+        .create_maintenance_rule_set(
+            &fixture.user,
+            MaintenanceRuleDraft {
+                max_titles_per_run: None,
+                ..unmonitor_draft(ALWAYS_MATCHER)
+            },
+        )
+        .await
+        .expect("a reversible rule saves without a maximum");
+    let rule_id = created.rule_set.id.clone();
+    let deleting_source = crate::lib_tests::legacy_source(
+        ALWAYS_MATCHER,
+        crate::maintenance_rules::MaintenanceActionKind::DeleteTitleAndFiles,
+    );
+    let save = |max_titles_per_run| crate::maintenance_rules::MaintenanceMatcherDraft {
+        rego_source: deleting_source.clone(),
+        grace_days: 0,
+        storage_root_id: None,
+        max_titles_per_run,
+    };
+
+    let refused = fixture
+        .app
+        .update_maintenance_rule_matcher(&fixture.user, &rule_id, save(None))
+        .await
+        .expect_err("a delete head without a maximum is refused");
+    assert_eq!(
+        refused.validation_reason(),
+        Some(crate::error_reasons::maintenance::RULE_MAX_TITLES_PER_RUN_REQUIRED)
+    );
+    let unchanged = fixture
+        .rules
+        .get_rule_set(&rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(unchanged.current_revision_number, 1);
+    assert_eq!(unchanged.max_titles_per_run, None);
+
+    let saved = fixture
+        .app
+        .update_maintenance_rule_matcher(&fixture.user, &rule_id, save(Some(Some(7))))
+        .await
+        .expect("a delete head saved with its maximum");
+    assert_eq!(saved.rule_set.max_titles_per_run, Some(7));
+    assert!(saved.declared_actions.destructive);
+    let stored = fixture
+        .rules
+        .get_rule_set(&rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(stored.current_revision_number, 2);
+    assert_eq!(stored.max_titles_per_run, Some(7));
+}
+
+#[tokio::test]
 async fn a_destructive_rule_cannot_lose_its_maximum_or_arm_without_one() {
     let fixture = execution_app(None);
     let rule_id = fixture.observed_rule(delete_draft()).await;
@@ -1121,6 +1183,7 @@ async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same
                 rego_source: draft.rego_source,
                 grace_days: 0,
                 storage_root_id: None,
+                max_titles_per_run: None,
             },
         )
         .await

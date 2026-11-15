@@ -789,6 +789,7 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
             rego_source: rego_source.to_string(),
             grace_days,
             storage_root_id: None,
+            max_titles_per_run: None,
         };
     let refused = |result: AppResult<_>| {
         matches!(
@@ -946,7 +947,7 @@ async fn startup_replaces_the_previously_shipped_matcher() {
         ..seeded.revision.clone()
     };
     store
-        .add_revision(&previous, now)
+        .add_revision(&previous, None, now)
         .await
         .expect("old revision");
     store
@@ -956,9 +957,9 @@ async fn startup_replaces_the_previously_shipped_matcher() {
             "Deletes a requested title and its files once its request lease has expired, unless someone keeps it.",
             &[],
             None,
+            None,
             false,
-            now,
-        )
+            now,)
         .await
         .expect("old description");
 
@@ -1033,7 +1034,7 @@ async fn startup_moves_the_match_form_rule_to_the_current_source_keeping_its_sta
         ..armed.revision.clone()
     };
     store
-        .add_revision_keeping_arming(&match_form, armed.rule_set.effect_arming, now)
+        .add_revision_keeping_arming(&match_form, armed.rule_set.effect_arming, None, now)
         .await
         .expect("match-form revision");
 

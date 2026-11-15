@@ -69,6 +69,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
     async fn add_revision(
         &self,
         revision: &MaintenanceRuleRevision,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
@@ -77,13 +78,21 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         // be no instant at which the new revision is in force under the old
         // revision's arming. The pointer moves first and only from the
         // revision this one follows, as in `add_revision_keeping_arming`.
+        // A new maximum rides in the same statement, so a source that gains a
+        // delete head is never stored without the maximum it was saved with.
         let mut pointer_args = vec![SqlArg::I64(revision.revision_number)];
         pointer_args.extend(disarm_args());
+        let max_set = max_titles_per_run_set(max_titles_per_run, &mut pointer_args);
         pointer_args.extend([
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(revision.rule_set_id.clone()),
             SqlArg::I64(revision.revision_number - 1),
         ]);
+        let pointer_sql = format!(
+            "UPDATE maintenance_rule_sets
+                SET current_revision_number = {{}}, {DISARM_AFTER_EDIT_SET}{max_set}, updated_at = {{}}
+              WHERE id = {{}} AND current_revision_number = {{}}"
+        );
 
         SqlRuntime::run_in_transaction(
             &self.datastore,
@@ -91,17 +100,10 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
             move |tx| {
                 let revision_args = revision_args.clone();
                 let pointer_args = pointer_args.clone();
+                let pointer_sql = pointer_sql.clone();
                 Box::pin(async move {
-                    let moved = SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        &format!(
-                            "UPDATE maintenance_rule_sets
-                                SET current_revision_number = {{}}, {DISARM_AFTER_EDIT_SET}, updated_at = {{}}
-                              WHERE id = {{}} AND current_revision_number = {{}}"
-                        ),
-                        &pointer_args,
-                    )
-                    .await?;
+                    let moved =
+                        SqlRuntime::execute(SqlExec::Tx(tx), &pointer_sql, &pointer_args).await?;
                     if moved != 1 {
                         return Err(revision_conflict());
                     }
@@ -118,6 +120,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         &self,
         revision: &MaintenanceRuleRevision,
         effect_arming: MaintenanceEffectArming,
+        max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
@@ -153,6 +156,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                 vec!["{}"; below.len()].join(", ")
             )
         };
+        let max_set = max_titles_per_run_set(max_titles_per_run, &mut pointer_args);
         pointer_args.extend([
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(revision.rule_set_id.clone()),
@@ -160,7 +164,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         ]);
         let pointer_sql = format!(
             "UPDATE maintenance_rule_sets
-                SET current_revision_number = {{}}, {arming_set}, updated_at = {{}}
+                SET current_revision_number = {{}}, {arming_set}{max_set}, updated_at = {{}}
               WHERE id = {{}} AND current_revision_number = {{}}"
         );
 
@@ -268,6 +272,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         description: &str,
         library_ids: &[String],
         schedule: Option<&scryer_domain::ScriptSchedule>,
+        max_titles_per_run: Option<Option<u32>>,
         disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
@@ -280,6 +285,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
             set.push_str(", schedule_json = {}");
             args.push(SqlArg::Text(schedule_json(schedule)?));
         }
+        set.push_str(&max_titles_per_run_set(max_titles_per_run, &mut args));
         // The disarm rides in the same transaction as the scope that invalidated it,
         // exactly as `add_revision` carries its own: there must be no instant at
         // which a re-scoped rule is in force under the previous scope's arming.
@@ -450,6 +456,22 @@ fn revision_conflict() -> AppError {
         scryer_application::error_reasons::maintenance::RULE_REVISION_CONFLICT,
         "the rule was changed by another save; reload it and save again".to_string(),
     )
+}
+
+/// The `, max_titles_per_run = {}` assignment a write adds when it replaces
+/// the rule's per-fire maximum, pushing its bind onto `args`; empty when the
+/// write keeps the stored one.
+fn max_titles_per_run_set(
+    max_titles_per_run: Option<Option<u32>>,
+    args: &mut Vec<SqlArg>,
+) -> String {
+    match max_titles_per_run {
+        Some(max) => {
+            args.push(SqlArg::OptI64(max.map(i64::from)));
+            ", max_titles_per_run = {}".to_string()
+        }
+        None => String::new(),
+    }
 }
 
 fn disarm_args() -> [SqlArg; 3] {

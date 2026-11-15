@@ -248,6 +248,7 @@ mod rail_labels;
 mod records;
 mod section;
 mod watchlist;
+pub(crate) use watchlist::discovery_watchlist_source_matches;
 
 use catalog::*;
 use context::*;

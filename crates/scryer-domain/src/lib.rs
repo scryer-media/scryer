@@ -7178,16 +7178,22 @@ pub struct MediaServerPlaybackItem {
 
 /// What a watch signal is about.
 ///
-/// Deliberately only the two granularities the RFC records observations at.
-/// There is no `Show` variant: a series-level "watched" is an aggregate over
-/// its episodes, and storing it would create a second answer that the next
-/// sweep could contradict.
+/// Plays are recorded per movie and per episode only: a series-level
+/// "watched" is an aggregate over its episodes, and storing it would create a
+/// second answer that the next sweep could contradict.
+///
+/// `Series` and `Season` exist for favourites alone. Jellyfin and Emby let a
+/// person favourite a whole series or one season, and that mark lives on the
+/// series or season item, not on any episode, so it has nowhere else to be
+/// stored. A row of either kind is never a play.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaServerSignalKind {
     #[default]
     Movie,
     Episode,
+    Series,
+    Season,
 }
 
 impl MediaServerSignalKind {
@@ -7195,6 +7201,8 @@ impl MediaServerSignalKind {
         match self {
             Self::Movie => "movie",
             Self::Episode => "episode",
+            Self::Series => "series",
+            Self::Season => "season",
         }
     }
 
@@ -7202,8 +7210,16 @@ impl MediaServerSignalKind {
         match value {
             "movie" => Some(Self::Movie),
             "episode" => Some(Self::Episode),
+            "series" => Some(Self::Series),
+            "season" => Some(Self::Season),
             _ => None,
         }
+    }
+
+    /// Whether the item belongs to a series: its title is found through the
+    /// series' external ids rather than its own.
+    pub const fn is_within_series(self) -> bool {
+        matches!(self, Self::Episode | Self::Season)
     }
 }
 
@@ -7228,12 +7244,16 @@ pub struct NewUserMediaSignal {
     pub kind: MediaServerSignalKind,
     pub scryer_title_id: Option<String>,
     pub scryer_episode_id: Option<String>,
+    /// The provider's season number, for a season or an episode. It places a
+    /// season favourite, which has no episode id, and an episode, on the
+    /// season subject a rule is asked about.
+    pub season_number: Option<i64>,
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,
     /// The person marked the item as a favourite on the server. An intent
     /// signal beside the played state; always `false` for Plex, which has no
-    /// favourite.
+    /// favourite. A favourite nobody played is stored too, unplayed.
     pub is_favorite: bool,
     pub observed_at: DateTime<Utc>,
 }
@@ -7250,6 +7270,7 @@ pub struct UserMediaSignal {
     pub kind: MediaServerSignalKind,
     pub scryer_title_id: Option<String>,
     pub scryer_episode_id: Option<String>,
+    pub season_number: Option<i64>,
     pub played: bool,
     pub play_count: i64,
     pub last_played_at: Option<DateTime<Utc>>,

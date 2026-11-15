@@ -1926,9 +1926,22 @@ impl AppUseCase {
         // that cannot be read leaves the list facts unknown, which holds any
         // rule that reads them.
         let lists_by_title = self
-            .maintenance_list_facts_or_unknown(std::slice::from_ref(&title))
+            .maintenance_list_facts_loading(
+                std::slice::from_ref(&title),
+                super::list_facts::MaintenanceFactLoads::for_rule(
+                    &detail.revision.rego_source,
+                    &detail.rule_set.id,
+                ),
+                recheck_time,
+            )
             .await;
         super::list_facts::apply_list_facts(&mut input, &lists_by_title, &title.id);
+        super::list_facts::apply_watchlist_and_metadata_facts(
+            &mut input,
+            &lists_by_title,
+            &title.id,
+            people,
+        );
         // The capacity snapshot must be fresh for this lease. Baseline restore
         // below deliberately excludes storage facts, so a resumed deletion
         // cannot match against the capacity it observed before deleting.

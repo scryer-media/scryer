@@ -1240,8 +1240,15 @@ impl AppUseCase {
         // The watch gate is whole-instance and, like the roster, is read once
         // per rule rather than per chunk.
         let watch_context = self.maintenance_watch_context().await?;
+        // The fact groups with a read of their own are read only for a rule
+        // that names one of their facts.
+        let fact_loads = super::list_facts::MaintenanceFactLoads::for_rule(
+            &detail.revision.rego_source,
+            &rule_set.id,
+        );
 
         let mut counts = RuleCounts::default();
+        let mut storage_roots = super::storage::MaintenanceStorageRootMemo::new();
         let mut after_id = None;
         loop {
             // The rule's libraries filter in the page read (none means all).
@@ -1285,7 +1292,22 @@ impl AppUseCase {
                     None
                 }
             };
-            let lists_by_title = self.maintenance_list_facts_or_unknown(chunk).await;
+            let lists_by_title = self
+                .maintenance_list_facts_loading(chunk, fact_loads, evaluation_time)
+                .await;
+            // The chunk's shows the pass has not read yet are read together. A
+            // show the batch could not build loads on its own below, as before.
+            let uncached: Vec<Title> = chunk
+                .iter()
+                .filter(|title| !batch_cache.inventories.contains_key(&title.id))
+                .cloned()
+                .collect();
+            let mut chunk_inventories = self
+                .maintenance_load_title_episode_inventories(
+                    &uncached,
+                    Some(&mut batch_cache.file_presence),
+                )
+                .await;
             for title in chunk {
                 let files = files_by_title
                     .get(&title.id)
@@ -1307,20 +1329,28 @@ impl AppUseCase {
                         .map(Vec::as_slice),
                     store_readable: claims_by_title.is_some(),
                 };
-                let subjects = if title.facet == scryer_domain::MediaFacet::Movie {
-                    self.maintenance_subjects_for_title(rule_set.subject_kind, title, files)
-                        .await?
+                let (subjects, title_inventory) = if title.facet == scryer_domain::MediaFacet::Movie
+                {
+                    (
+                        self.maintenance_subjects_for_title(rule_set.subject_kind, title, files)
+                            .await?,
+                        None,
+                    )
                 } else {
                     let inventory = if let Some(inventory) = batch_cache.inventories.get(&title.id)
                     {
                         inventory.clone()
                     } else {
-                        let inventory = self
-                            .maintenance_load_title_episode_inventory_for_pass(
-                                title,
-                                &mut batch_cache.file_presence,
-                            )
-                            .await?;
+                        let inventory = match chunk_inventories.remove(&title.id) {
+                            Some(inventory) => inventory,
+                            None => {
+                                self.maintenance_load_title_episode_inventory_for_pass(
+                                    title,
+                                    &mut batch_cache.file_presence,
+                                )
+                                .await?
+                            }
+                        };
                         if batch_cache.inventories.len() < MAINTENANCE_EVALUATION_TITLE_CHUNK {
                             batch_cache
                                 .inventories
@@ -1328,22 +1358,35 @@ impl AppUseCase {
                         }
                         inventory
                     };
-                    self.maintenance_subjects_from_episode_inventory(
-                        rule_set.subject_kind,
-                        title,
-                        files,
-                        &inventory,
-                    )?
+                    (
+                        self.maintenance_subjects_from_episode_inventory(
+                            rule_set.subject_kind,
+                            title,
+                            files,
+                            &inventory,
+                        )?,
+                        Some(inventory),
+                    )
                 };
                 for subject in subjects {
                     if detail.revision.storage_root_id.is_some() {
                         let root_files =
                             if subject.kind == scryer_domain::MaintenanceRuleSubjectKind::Title {
-                                match self.maintenance_title_deletion_files(title).await {
+                                let owned_files =
+                                    match super::subjects::maintenance_title_owned_files_in_hand(
+                                        title,
+                                        files,
+                                        title_inventory.as_deref(),
+                                    ) {
+                                        Some(owned_files) => Ok(owned_files),
+                                        None => self.maintenance_title_deletion_files(title).await,
+                                    };
+                                match owned_files {
                                     Ok(owned_files) => {
-                                        self.maintenance_root_file_summary(
+                                        self.maintenance_root_file_summary_memo(
                                             &owned_files,
                                             detail.revision.storage_root_id.as_deref(),
+                                            &mut storage_roots,
                                         )
                                         .await?
                                     }
@@ -1352,9 +1395,10 @@ impl AppUseCase {
                             } else if subject.ambiguous_files {
                                 MaintenanceRootFileSummary::default()
                             } else {
-                                self.maintenance_root_file_summary(
+                                self.maintenance_root_file_summary_memo(
                                     &subject.files,
                                     detail.revision.storage_root_id.as_deref(),
+                                    &mut storage_roots,
                                 )
                                 .await?
                             };
@@ -1871,6 +1915,7 @@ impl AppUseCase {
             completed_retention_episode_ids.as_ref(),
         );
         super::list_facts::apply_list_facts(&mut input, lists, &title.id);
+        super::list_facts::apply_watchlist_and_metadata_facts(&mut input, lists, &title.id, people);
         // An evaluation pass samples each configured root once. A deletion
         // checkpoint may restore the action's own monitoring/file facts below,
         // but it must never restore or overwrite the root capacity snapshot.

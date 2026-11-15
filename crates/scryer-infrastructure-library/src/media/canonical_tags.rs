@@ -203,8 +203,8 @@ pub async fn load_title_metadata_tags(
 }
 
 /// Load a title's tags whose `LOWER(category)` is one of `lowered_categories`
-/// (already lowercase), with their sources and source keys.
-#[cfg(test)]
+/// (already lowercase), with their sources and source keys. Owners are read in
+/// bounded chunks, so any number of ids is bind-safe.
 pub async fn load_title_metadata_tags_in_lowered_categories(
     exec: SqlExec<'_, '_>,
     title_ids: &[String],

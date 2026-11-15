@@ -22,11 +22,15 @@ fn personal(id: &str) -> ListSubscription {
 
 /// A subject input built at ten days past the fixture epoch.
 fn built_input() -> MaintenanceInput {
+    built_input_for(&super::super::facts::tests::title(None))
+}
+
+fn built_input_for(title: &Title) -> MaintenanceInput {
     let usernames = HashMap::new();
     let watch = super::super::facts::MaintenanceWatchContext::default();
     super::super::facts::build_title_input(
         at(10 * 24 * 60),
-        &super::super::facts::tests::title(None),
+        title,
         &super::super::facts::MaintenanceLibraryRef {
             id: "library-1".to_string(),
             name: "Movies".to_string(),
@@ -48,6 +52,9 @@ fn built_input() -> MaintenanceInput {
 
 fn loaded(lists: ListFactsByTitle) -> MaintenanceListFacts {
     MaintenanceListFacts {
+        watchlists: WatchlistLoad::NotLoaded,
+        metadata: MetadataLoad::default(),
+        episode_shapes: EpisodeShapeLoad::default(),
         lists: Some(lists),
         origins: Some(HashMap::new()),
     }
@@ -153,6 +160,9 @@ fn no_fact_names_a_personal_list() {
     apply_list_facts(
         &mut input,
         &MaintenanceListFacts {
+            watchlists: WatchlistLoad::NotLoaded,
+            metadata: MetadataLoad::default(),
+            episode_shapes: EpisodeShapeLoad::default(),
             lists: Some(list_facts_from_rows(&rows, &subscriptions)),
             origins: Some(origins),
         },
@@ -374,6 +384,9 @@ fn unread_list_facts_stay_unknown() {
     apply_list_facts(
         &mut input,
         &MaintenanceListFacts {
+            watchlists: WatchlistLoad::NotLoaded,
+            metadata: MetadataLoad::default(),
+            episode_shapes: EpisodeShapeLoad::default(),
             lists: None,
             origins: Some(HashMap::from([(
                 "title-alpha".to_string(),
@@ -415,6 +428,9 @@ fn an_unread_request_store_leaves_only_origin_facts_unknown() {
     apply_list_facts(
         &mut input,
         &MaintenanceListFacts {
+            watchlists: WatchlistLoad::NotLoaded,
+            metadata: MetadataLoad::default(),
+            episode_shapes: EpisodeShapeLoad::default(),
             lists: Some(facts),
             origins: None,
         },
@@ -454,6 +470,9 @@ fn request_origin_names_only_a_public_list_the_store_holds() {
         &[subscription("list-a")],
     );
     let lists = MaintenanceListFacts {
+        watchlists: WatchlistLoad::NotLoaded,
+        metadata: MetadataLoad::default(),
+        episode_shapes: EpisodeShapeLoad::default(),
         lists: Some(HashMap::new()),
         origins: Some(origins),
     };
@@ -521,4 +540,565 @@ fn applied_facts_are_known_or_absent() {
     assert_eq!(observations["lists_days_on_list"], absent("not_on_a_list"));
     assert_eq!(observations["lists_left_handled"], absent("no_list_left"));
     assert_eq!(observations["lists_public_count"], known(0.into()));
+}
+
+// ── Watchlists ─────────────────────────────────────────────────────────────
+
+const WATCHLIST_FACTS: [&str; 6] = [
+    "watchlisted_by_user_ids",
+    "watchlisted_by_usernames",
+    "watchlisted_by_anyone",
+    "watchlisted_by_any_requester",
+    "watchlist_added_at",
+    "watchlist_origins",
+];
+
+/// A member's synced watchlist from `provider`, read with their account.
+fn watchlist(id: &str, owner: &str, provider: &str, source_type: &str) -> ListSubscription {
+    let mut watchlist = personal(id);
+    watchlist.owner_user_id = owner.to_string();
+    watchlist.source.provider = provider.to_string();
+    watchlist.source.source_type = source_type.to_string();
+    watchlist.source.params.clear();
+    watchlist.credential_id = Some(format!("{id}-credential"));
+    watchlist.sync.state = ListSyncState::Ok;
+    watchlist.sync.last_at = Some(at(9 * 24 * 60));
+    watchlist
+}
+
+fn anilist_planning(id: &str, owner: &str) -> ListSubscription {
+    let mut planning = watchlist(id, owner, "anilist", "status");
+    planning
+        .source
+        .params
+        .insert("status".to_string(), "planning".to_string());
+    planning
+}
+
+fn seen(mut row: ListMembership, minutes: i64) -> ListMembership {
+    row.first_seen_at = at(minutes);
+    row
+}
+
+fn people_with<'a>(
+    requesters: Option<&'a [String]>,
+    usernames: &'a HashMap<String, String>,
+) -> MaintenanceTitlePeople<'a> {
+    MaintenanceTitlePeople {
+        requester_user_ids: requesters,
+        usernames,
+    }
+}
+
+fn with_watchlists(watchlists: WatchlistLoad) -> MaintenanceListFacts {
+    MaintenanceListFacts {
+        watchlists,
+        metadata: MetadataLoad::default(),
+        episode_shapes: EpisodeShapeLoad::default(),
+        lists: Some(HashMap::new()),
+        origins: Some(HashMap::new()),
+    }
+}
+
+fn usernames() -> HashMap<String, String> {
+    HashMap::from([
+        ("user-anna".to_string(), "anna".to_string()),
+        ("user-boris".to_string(), "boris".to_string()),
+    ])
+}
+
+/// Every watchlist source Discovery reads counts the same, the anime status
+/// lists included once their rows resolved to a title: who wants the title,
+/// the earliest sighting, and which providers said so.
+#[test]
+fn a_title_on_members_watchlists_names_who_wants_it() {
+    let now = at(10 * 24 * 60);
+    let subscriptions = [
+        watchlist("plex-anna", "user-anna", "plex", "watchlist"),
+        watchlist("mal-boris", "user-boris", "mal", "status:plan_to_watch"),
+        anilist_planning("anilist-boris", "user-boris"),
+    ];
+    let rows = [
+        seen(on_list("plex-anna", "alpha-plex", "title-alpha"), 600),
+        seen(on_list("mal-boris", "alpha-mal", "title-alpha"), 300),
+        seen(on_list("anilist-boris", "beta-anilist", "title-beta"), 900),
+    ];
+    let WatchlistLoad::Loaded(by_title) = watchlists_from_rows(&rows, &subscriptions, now) else {
+        panic!("synced watchlists load");
+    };
+    assert_eq!(
+        by_title["title-beta"].owner_user_ids,
+        BTreeSet::from(["user-boris".to_string()]),
+        "an AniList planning row resolved to a title counts like any other"
+    );
+
+    let names = usernames();
+    let requesters = vec!["user-boris".to_string()];
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &with_watchlists(WatchlistLoad::Loaded(by_title.clone())),
+        "title-alpha",
+        people_with(Some(&requesters), &names),
+    );
+    let observations = observations(&input);
+    assert_eq!(
+        observations["watchlisted_by_user_ids"],
+        known(serde_json::json!(["user-anna", "user-boris"]))
+    );
+    assert_eq!(
+        observations["watchlisted_by_usernames"],
+        known(serde_json::json!(["anna", "boris"]))
+    );
+    assert_eq!(observations["watchlisted_by_anyone"], known(true.into()));
+    assert_eq!(
+        observations["watchlisted_by_any_requester"],
+        known(true.into())
+    );
+    assert_eq!(
+        observations["watchlist_added_at"],
+        known(at(300).to_rfc3339().into()),
+        "the earliest sighting on any watchlist"
+    );
+    assert_eq!(
+        observations["watchlist_origins"],
+        known(serde_json::json!(["mal", "plex"]))
+    );
+
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &with_watchlists(WatchlistLoad::Loaded(by_title)),
+        "title-gamma",
+        people_with(None, &names),
+    );
+    let observations = self::observations(&input);
+    assert_eq!(
+        observations["watchlisted_by_user_ids"],
+        known(serde_json::json!([]))
+    );
+    assert_eq!(observations["watchlisted_by_anyone"], known(false.into()));
+    assert_eq!(
+        observations["watchlisted_by_any_requester"],
+        absent("title_not_requested")
+    );
+    assert_eq!(
+        observations["watchlist_added_at"],
+        absent("not_on_a_watchlist")
+    );
+}
+
+/// Only a member's own synced watchlist counts. A public list, a disabled
+/// one, one read without the member's account, a list that is not a
+/// watchlist, and a row that left contribute nothing, and none of them can
+/// hold the facts either.
+#[test]
+fn only_members_own_watchlists_count() {
+    let now = at(10 * 24 * 60);
+    let mut public = watchlist("public-plex", "user-anna", "plex", "watchlist");
+    public.scope = ListScope::Public;
+    let mut disabled = watchlist("disabled-plex", "user-anna", "plex", "watchlist");
+    disabled.enabled = false;
+    disabled.sync.state = ListSyncState::Fail;
+    let mut no_account = watchlist("anon-trakt", "user-anna", "trakt", "watchlist");
+    no_account.credential_id = None;
+    no_account.sync.state = ListSyncState::New;
+    let mut rss = watchlist("plex-rss", "user-anna", "plex", "watchlist_rss");
+    rss.sync.state = ListSyncState::Fail;
+    let mut not_planning = watchlist("anilist-done", "user-anna", "anilist", "status");
+    not_planning
+        .source
+        .params
+        .insert("status".to_string(), "completed".to_string());
+    let kept = watchlist("plex-boris", "user-boris", "plex", "watchlist");
+    let subscriptions = [public, disabled, no_account, rss, not_planning, kept];
+    let rows = [
+        on_list("public-plex", "a", "title-alpha"),
+        on_list("disabled-plex", "b", "title-alpha"),
+        on_list("anon-trakt", "c", "title-alpha"),
+        on_list("plex-rss", "d", "title-alpha"),
+        on_list("anilist-done", "e", "title-alpha"),
+        left(on_list("plex-boris", "f", "title-alpha"), 60),
+    ];
+
+    assert_eq!(
+        watchlists_from_rows(&rows, &subscriptions, now),
+        WatchlistLoad::Loaded(HashMap::new())
+    );
+}
+
+/// A watchlist Scryer has not read lately could hold any title, so every
+/// watchlist fact is unknown for every title until it syncs again.
+#[test]
+fn an_unsynced_or_stale_watchlist_holds_every_watchlist_fact() {
+    let now = at(10 * 24 * 60);
+    let rows = [on_list("plex-anna", "alpha", "title-alpha")];
+
+    let mut failed = watchlist("plex-anna", "user-anna", "plex", "watchlist");
+    failed.sync.state = ListSyncState::Fail;
+    let mut never = watchlist("trakt-boris", "user-boris", "trakt", "watchlist");
+    never.sync.state = ListSyncState::New;
+    never.sync.last_at = None;
+    let fresh = watchlist("plex-anna", "user-anna", "plex", "watchlist");
+    for subscriptions in [vec![failed], vec![fresh.clone(), never]] {
+        assert_eq!(
+            watchlists_from_rows(&rows, &subscriptions, now),
+            WatchlistLoad::Unknown(unknown_reason::WATCHLIST_NOT_SYNCED)
+        );
+    }
+
+    // Six-hour polling: a sync two days old is inside the window, one past
+    // two days is not.
+    let mut stale = fresh.clone();
+    stale.sync.last_at = Some(now - chrono::Duration::hours(49));
+    let mut recent = fresh;
+    recent.sync.last_at = Some(now - chrono::Duration::hours(47));
+    assert_eq!(
+        watchlists_from_rows(&rows, &[stale], now),
+        WatchlistLoad::Unknown(unknown_reason::WATCHLIST_STALE)
+    );
+    assert!(matches!(
+        watchlists_from_rows(&rows, &[recent], now),
+        WatchlistLoad::Loaded(_)
+    ));
+
+    let names = usernames();
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &with_watchlists(WatchlistLoad::Unknown(unknown_reason::WATCHLIST_STALE)),
+        "title-alpha",
+        people_with(None, &names),
+    );
+    let observations = observations(&input);
+    for fact in WATCHLIST_FACTS {
+        assert_eq!(observations[fact], unknown("watchlist_stale"), "{fact}");
+    }
+}
+
+/// A watchlist owner who no longer exists makes the names unknown rather
+/// than a shorter list a rule would read as "this person does not want it".
+#[test]
+fn a_missing_watchlist_owner_makes_the_names_unknown() {
+    let mut by_title = HashMap::new();
+    by_title.insert(
+        "title-alpha".to_string(),
+        TitleWatchlist {
+            owner_user_ids: BTreeSet::from(["user-anna".to_string(), "user-gone".to_string()]),
+            added_at: Some(at(0)),
+            origins: BTreeSet::from(["plex".to_string()]),
+        },
+    );
+    let names = usernames();
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &with_watchlists(WatchlistLoad::Loaded(by_title)),
+        "title-alpha",
+        people_with(None, &names),
+    );
+    let observations = observations(&input);
+    assert_eq!(
+        observations["watchlisted_by_usernames"],
+        unknown("user_not_found")
+    );
+    assert_eq!(
+        observations["watchlisted_by_user_ids"],
+        known(serde_json::json!(["user-anna", "user-gone"]))
+    );
+}
+
+/// Facts a batch did not load stay unknown, so a rule can never read a
+/// group it was not evaluated with as an answer.
+#[test]
+fn groups_a_batch_did_not_load_stay_unknown() {
+    let names = usernames();
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &with_watchlists(WatchlistLoad::NotLoaded),
+        "title-alpha",
+        people_with(None, &names),
+    );
+    let observations = observations(&input);
+    for fact in WATCHLIST_FACTS
+        .iter()
+        .chain(scryer_rules::maintenance::METADATA_MAINTENANCE_FACTS.iter())
+    {
+        assert_eq!(observations[*fact], unknown("not_yet_collected"), "{fact}");
+    }
+}
+
+#[test]
+fn a_rule_loads_only_the_groups_it_reads() {
+    let reads = |body: &str| {
+        MaintenanceFactLoads::for_rule(
+            &format!("package whatever\nimport rego.v1\n\nunmonitor if {{\n\t{body}\n}}\n"),
+            "rule-fixture",
+        )
+    };
+    assert_eq!(
+        reads("input.facts.monitored"),
+        MaintenanceFactLoads::default()
+    );
+    assert_eq!(
+        reads("not input.facts.watchlisted_by_anyone"),
+        MaintenanceFactLoads {
+            watchlists: true,
+            metadata: false,
+            episode_shapes: false,
+        }
+    );
+    assert_eq!(
+        reads("\"Horror\" in input.facts.genres"),
+        MaintenanceFactLoads {
+            watchlists: false,
+            metadata: true,
+            episode_shapes: false,
+        }
+    );
+    assert_eq!(
+        reads("input.facts.missing_episode_count > 0"),
+        MaintenanceFactLoads {
+            watchlists: false,
+            metadata: false,
+            episode_shapes: true,
+        }
+    );
+    assert_eq!(
+        MaintenanceFactLoads::for_rule("not rego", "rule-fixture"),
+        MaintenanceFactLoads::ALL,
+        "a source whose facts cannot be listed loads everything"
+    );
+}
+
+// ── Genres and ratings ─────────────────────────────────────────────────────
+
+#[test]
+fn stored_genres_and_ratings_become_facts() {
+    let loaded = MetadataLoad {
+        loaded: true,
+        genres: Some(HashMap::from([(
+            "title-alpha".to_string(),
+            vec!["Drama".to_string(), "Mystery".to_string()],
+        )])),
+        ratings: Some(HashMap::from([(
+            "title-alpha".to_string(),
+            TitleRatingSummary {
+                rating: Some(7.4),
+                rating_sources: vec!["fixture-source".to_string()],
+                external_ratings: vec![crate::TitleExternalRating {
+                    source: "fixture-source".to_string(),
+                    value: Some(74.0),
+                    score: None,
+                    normalized: 7.4,
+                    votes: Some(1200),
+                    url: String::new(),
+                }],
+            },
+        )])),
+    };
+    let lists = MaintenanceListFacts {
+        metadata: loaded,
+        ..with_watchlists(WatchlistLoad::NotLoaded)
+    };
+    let names = usernames();
+
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &lists,
+        "title-alpha",
+        people_with(None, &names),
+    );
+    let observations_alpha = observations(&input);
+    assert_eq!(
+        observations_alpha["genres"],
+        known(serde_json::json!(["Drama", "Mystery"]))
+    );
+    assert_eq!(observations_alpha["rating"], known(7.4.into()));
+    assert_eq!(
+        observations_alpha["ratings"],
+        known(serde_json::json!([
+            {"source": "fixture-source", "value": 74.0, "normalized": 7.4, "votes": 1200}
+        ]))
+    );
+
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(&mut input, &lists, "title-bare", people_with(None, &names));
+    let observations_bare = observations(&input);
+    assert_eq!(observations_bare["genres"], known(serde_json::json!([])));
+    assert_eq!(
+        observations_bare["rating"],
+        serde_json::json!({"status": "absent"})
+    );
+    assert_eq!(observations_bare["ratings"], known(serde_json::json!([])));
+
+    let unreadable = MaintenanceListFacts {
+        metadata: MetadataLoad {
+            loaded: true,
+            genres: None,
+            ratings: None,
+        },
+        ..with_watchlists(WatchlistLoad::NotLoaded)
+    };
+    let mut input = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &unreadable,
+        "title-alpha",
+        people_with(None, &names),
+    );
+    let observations = observations(&input);
+    for fact in ["genres", "rating", "ratings"] {
+        assert_eq!(observations[fact], unknown("metadata_unreadable"), "{fact}");
+    }
+}
+
+// ── Episode shapes ─────────────────────────────────────────────────────────
+
+fn show_input() -> MaintenanceInput {
+    let mut show = super::super::facts::tests::faceted_title(None, MediaFacet::Series);
+    show.id = "title-show".to_string();
+    built_input_for(&show)
+}
+
+fn with_episode_shapes(episode_shapes: EpisodeShapeLoad) -> MaintenanceListFacts {
+    MaintenanceListFacts {
+        episode_shapes,
+        ..with_watchlists(WatchlistLoad::NotLoaded)
+    }
+}
+
+fn shape_load(shapes: Option<HashMap<String, TitleEpisodeShape>>) -> EpisodeShapeLoad {
+    EpisodeShapeLoad {
+        loaded: true,
+        show_title_ids: HashSet::from(["title-show".to_string(), "title-empty-show".to_string()]),
+        shapes,
+    }
+}
+
+#[test]
+fn a_show_with_unaired_and_missing_episodes_reports_its_shape() {
+    let lists = with_episode_shapes(shape_load(Some(HashMap::from([(
+        "title-show".to_string(),
+        TitleEpisodeShape {
+            season_count: 2,
+            aired_episode_count: 8,
+            unaired_episode_count: 2,
+            aired_episode_file_count: 6,
+            missing_episode_count: 1,
+            latest_season_number: Some(2),
+            latest_aired_episode_date: Some("2024-02-01".to_string()),
+            next_episode_air_date: Some("2024-02-08".to_string()),
+        },
+    )]))));
+    let names = usernames();
+    let mut input = show_input();
+    apply_watchlist_and_metadata_facts(&mut input, &lists, "title-show", people_with(None, &names));
+    let observations = observations(&input);
+    assert_eq!(observations["season_count"], known(2.into()));
+    assert_eq!(observations["aired_episode_count"], known(8.into()));
+    assert_eq!(observations["unaired_episode_count"], known(2.into()));
+    assert_eq!(observations["missing_episode_count"], known(1.into()));
+    assert_eq!(
+        observations["aired_episode_file_percent"],
+        known(75.0.into())
+    );
+    assert_eq!(observations["latest_season_number"], known(2.into()));
+    assert_eq!(
+        observations["latest_aired_episode_date"],
+        known("2024-02-01".into())
+    );
+    assert_eq!(
+        observations["next_episode_air_date"],
+        known("2024-02-08".into())
+    );
+}
+
+#[test]
+fn a_show_with_no_regular_episode_has_zero_counts_and_no_dates() {
+    let lists = with_episode_shapes(shape_load(Some(HashMap::new())));
+    let names = usernames();
+    let mut input = show_input();
+    apply_watchlist_and_metadata_facts(
+        &mut input,
+        &lists,
+        "title-empty-show",
+        people_with(None, &names),
+    );
+    let observations = observations(&input);
+    for fact in [
+        "season_count",
+        "aired_episode_count",
+        "unaired_episode_count",
+        "missing_episode_count",
+    ] {
+        assert_eq!(observations[fact], known(0.into()), "{fact}");
+    }
+    assert_eq!(
+        observations["aired_episode_file_percent"],
+        absent("no_aired_episode")
+    );
+    assert_eq!(
+        observations["latest_season_number"],
+        serde_json::json!({"status": "absent"})
+    );
+    assert_eq!(
+        observations["latest_aired_episode_date"],
+        absent("no_aired_episode")
+    );
+    assert_eq!(
+        observations["next_episode_air_date"],
+        absent("no_scheduled_episode")
+    );
+}
+
+#[test]
+fn an_unreadable_episode_store_leaves_the_shape_unknown_not_zero() {
+    let lists = with_episode_shapes(shape_load(None));
+    let names = usernames();
+    let mut input = show_input();
+    apply_watchlist_and_metadata_facts(&mut input, &lists, "title-show", people_with(None, &names));
+    let observations = observations(&input);
+    for fact in scryer_rules::maintenance::EPISODE_SHAPE_MAINTENANCE_FACTS {
+        assert_eq!(
+            observations[fact],
+            unknown("episode_store_unreadable"),
+            "{fact}"
+        );
+    }
+}
+
+#[test]
+fn a_movie_has_no_episode_shape_and_an_unloaded_show_stays_unknown() {
+    let names = usernames();
+    let mut movie = built_input();
+    apply_watchlist_and_metadata_facts(
+        &mut movie,
+        &with_episode_shapes(shape_load(Some(HashMap::new()))),
+        "title-1",
+        people_with(None, &names),
+    );
+    let movie_observations = observations(&movie);
+    let mut show = show_input();
+    apply_watchlist_and_metadata_facts(
+        &mut show,
+        &with_watchlists(WatchlistLoad::NotLoaded),
+        "title-show",
+        people_with(None, &names),
+    );
+    let show_observations = observations(&show);
+    for fact in scryer_rules::maintenance::EPISODE_SHAPE_MAINTENANCE_FACTS {
+        assert_eq!(
+            movie_observations[fact],
+            serde_json::json!({"status": "absent"}),
+            "{fact}"
+        );
+        assert_eq!(
+            show_observations[fact],
+            unknown("not_yet_collected"),
+            "{fact}"
+        );
+    }
 }

@@ -1688,6 +1688,7 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
     async fn add_revision(
         &self,
         _revision: &MaintenanceRuleRevision,
+        _max_titles_per_run: Option<Option<u32>>,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         Err(AppError::Repository(
@@ -1698,6 +1699,7 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
         &self,
         _revision: &MaintenanceRuleRevision,
         _effect_arming: scryer_domain::MaintenanceEffectArming,
+        _max_titles_per_run: Option<Option<u32>>,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         Err(AppError::Repository(
@@ -1721,6 +1723,7 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
         _description: &str,
         _library_ids: &[String],
         _schedule: Option<&scryer_domain::ScriptSchedule>,
+        _max_titles_per_run: Option<Option<u32>>,
         _disarm: bool,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
