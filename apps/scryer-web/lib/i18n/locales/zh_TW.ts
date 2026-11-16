@@ -4420,7 +4420,7 @@ const zh_TW: LocaleDictionary = {
   "settings.lifecycleTemplateListAddedUnwatchedDescription":
     "為清單在 90 天前加入且無人播放過的作品加上 needs-review 標籤。只要觀看資訊不完整就暫緩。不會刪除任何東西。",
   "settings.lifecycleRunActionsHeldHelp":
-    "立即執行動作會略過被執行暫緩的作品，直到規則再次評估為止。每次排程執行都會先評估，因此會重新檢視被暫緩的作品。",
+    "立即執行動作會先評估規則，與每次排程執行相同，因此會重新檢視被暫緩的作品。評估新加入且已到期的作品（例如沒有寬限期的規則）會在同一次執行中處理，包括刪除。",
   "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
     "請選擇要執行動作的規則。規則只會為自己執行動作，因此立即執行需要指定一條規則。",
   "settings.lifecycleRunStarted": "執行已啟動。",
@@ -4938,7 +4938,7 @@ const zh_TW: LocaleDictionary = {
   "settings.refLifecycleActionsNotify":
     "notify 會在套用操作時傳送一次訊息。預覽與試執行絕不會傳送。",
   "settings.refLifecycleActionsConflicts":
-    "同一對象的衝突操作（例如同時 monitor 與 unmonitor，或同一標籤既加入又移除）會附上原因暫緩該對象，而不套用其中任何一項。",
+    "衝突的操作會附上原因暫緩，而不套用其中任何一項。這包括同一對象的衝突（例如同時 monitor 與 unmonitor，或同一標籤既加入又移除），也包括作品與其季或集之間、季與其集之間的衝突（例如監控一部影集的同時刪除其中一季的檔案）。",
   "settings.refLifecycleTagActionsTitle": "標籤操作",
   "settings.refLifecycleTagActionsNote":
     "add_tags 與 remove_tags 在符合條件的作品上寫入使用者標籤。每個標籤都必須存在於管理員在「設定」中維護的標籤註冊表中，且標籤以小寫形式儲存 — 引用了後續已刪除標籤的規則將暫緩並顯示 tag_not_defined，而不是寫入它。",

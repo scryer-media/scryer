@@ -38,7 +38,6 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 effect_arming: scryer_domain::LifecycleEffectArming::None,
                 destructive_rearm_required: false,
                 library_ids: Vec::new(),
-                subject_kind: LifecycleRuleSubjectKind::Title,
                 system_owned: false,
                 current_revision_number: 1,
                 schedule: scryer_domain::default_lifecycle_rule_schedule(),
@@ -54,7 +53,6 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#
                     .to_string(),
                 grace_days: 7,
-                storage_root_id: None,
                 matcher_content_hash: "hash-1".to_string(),
                 created_by: None,
                 created_at: now,
@@ -90,6 +88,7 @@ fn candidate(id: &str, rule_set_id: &str, title_id: &str, generation: i64) -> Li
         held_since: None,
         action_attempts: 0,
         decided_actions_json: None,
+        actions_conflict: None,
         created_at: now,
         updated_at: now,
     }
@@ -168,6 +167,104 @@ async fn candidates_round_trip_with_their_reason_codes_and_timestamps() {
         created.first_matched_at.timestamp()
     );
     assert_eq!(loaded.due_at.timestamp(), created.due_at.timestamp());
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// One title's cross-level markers land in one batch: each row is set or
+/// cleared to its own value, a row outside the expected states is left
+/// alone, and the count is the rows written.
+#[tokio::test]
+async fn conflict_markers_are_written_in_one_batch_with_a_per_row_state_check() {
+    let (services, db) = temp_services("scryer_lifecycle_candidate_conflict_batch").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    for (id, title) in [
+        ("cand-1", "title-1"),
+        ("cand-2", "title-2"),
+        ("cand-3", "title-3"),
+    ] {
+        store
+            .create_candidate(&candidate(id, "rule-a", title, 1))
+            .await
+            .expect("create candidate");
+    }
+    store
+        .transition_candidate_state(
+            "cand-3",
+            LifecycleCandidateState::Canceled,
+            "no_match",
+            &[LifecycleCandidateState::Observing],
+            Utc::now(),
+        )
+        .await
+        .expect("cancel");
+    let marker = |other: &str| scryer_domain::LifecycleActionsConflict {
+        head: "monitor".into(),
+        other_subject_kind: "season".into(),
+        other_subject_id: other.into(),
+        other_head: "delete_season_files".into(),
+    };
+    let expected = [
+        LifecycleCandidateState::Observing,
+        LifecycleCandidateState::Blocked,
+    ];
+
+    let written = store
+        .set_candidate_actions_conflicts(
+            &[
+                ("cand-1".to_string(), Some(marker("season-1"))),
+                ("cand-2".to_string(), Some(marker("season-2"))),
+                ("cand-3".to_string(), Some(marker("season-3"))),
+            ],
+            &expected,
+            Utc::now(),
+        )
+        .await
+        .expect("set markers");
+    assert_eq!(
+        written, 2,
+        "the canceled row is outside the expected states"
+    );
+    let markers = |rows: Vec<LifecycleCandidate>| {
+        let mut markers: Vec<_> = rows
+            .into_iter()
+            .map(|row| (row.id, row.actions_conflict))
+            .collect();
+        markers.sort_by(|a, b| a.0.cmp(&b.0));
+        markers
+    };
+    let ids = ["cand-1", "cand-2", "cand-3"].map(String::from).to_vec();
+    assert_eq!(
+        markers(store.get_candidates_by_ids(&ids).await.expect("read")),
+        vec![
+            ("cand-1".to_string(), Some(marker("season-1"))),
+            ("cand-2".to_string(), Some(marker("season-2"))),
+            ("cand-3".to_string(), None),
+        ]
+    );
+
+    // A clear and a change in the same batch.
+    let written = store
+        .set_candidate_actions_conflicts(
+            &[
+                ("cand-1".to_string(), None),
+                ("cand-2".to_string(), Some(marker("season-9"))),
+            ],
+            &expected,
+            Utc::now(),
+        )
+        .await
+        .expect("change markers");
+    assert_eq!(written, 2);
+    assert_eq!(
+        markers(store.get_candidates_by_ids(&ids).await.expect("read")),
+        vec![
+            ("cand-1".to_string(), None),
+            ("cand-2".to_string(), Some(marker("season-9"))),
+            ("cand-3".to_string(), None),
+        ]
+    );
 
     let _ = std::fs::remove_file(db);
 }

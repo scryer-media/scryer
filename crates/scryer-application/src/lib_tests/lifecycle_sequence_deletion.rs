@@ -1126,8 +1126,8 @@ async fn a_manual_schedule_rule_acts_only_through_its_own_trigger() {
         .await
         .expect("trigger while the rule runs");
     assert!(!busy.started, "{busy:?}");
-    let fired = app
-        .run_lifecycle_action_handling(Some(&rule_set_id))
+    let (_, fired) = app
+        .run_scheduled_lifecycle_rule(&rule_set_id)
         .await
         .expect("the rule's manual run");
     assert_eq!(fired.executed, 5, "{fired:?}");
@@ -1237,4 +1237,537 @@ async fn an_armed_deleting_rule_without_a_maximum_shows_its_refusal_and_acts_on_
     );
     assert_eq!(remaining(&paths), 5, "nothing is deleted");
     assert!(stray.exists());
+}
+
+// ── Conflicts across levels ─────────────────────────────────────────────────
+
+fn cross_level_draft(rego_source: &str) -> crate::lifecycle_rules::LifecycleRuleDraft {
+    crate::lifecycle_rules::LifecycleRuleDraft {
+        name: "Synthetic cross-level rule".to_string(),
+        description: String::new(),
+        rego_source: rego_source.to_string(),
+        grace_days: 0,
+        library_ids: Vec::new(),
+        max_titles_per_run: Some(100),
+    }
+}
+
+/// Arm the rule for deletion, acknowledging the candidates it opened.
+async fn arm_destructive(fixture: &TitleFixture, rule_set_id: &str) {
+    let live = fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .iter()
+        .filter(|candidate| !candidate.state.is_terminal())
+        .count();
+    super::lifecycle_rules::arm_rule(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        rule_set_id,
+        LifecycleEffectArming::Destructive,
+        Some(i64::try_from(live).expect("candidate count")),
+    )
+    .await;
+}
+
+async fn assert_no_steps(fixture: &TitleFixture, candidate: &scryer_domain::LifecycleCandidate) {
+    assert!(
+        fixture
+            .execution
+            .evaluation
+            .list_action_steps(
+                &candidate.id,
+                candidate.match_generation,
+                candidate.revision_number,
+            )
+            .await
+            .expect("read steps")
+            .is_empty(),
+        "{candidate:?}"
+    );
+}
+
+/// A title the rule monitors while it deletes the files of one of its
+/// seasons: both candidates are held with `actions_conflict`, nothing runs,
+/// and the season's file stays on disk.
+#[tokio::test]
+async fn a_title_monitor_and_a_season_delete_hold_both_and_delete_nothing() {
+    let fixture = title_fixture("Synthetic Cross Hold", MediaFacet::Series).await;
+    let (_, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Cross Hold/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Cross Hold/Season 01/S01E01.mkv").await;
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             monitor if input.facts.monitored\n\n\
+             delete_season_files if input.subject.season_number == 1\n",
+        ),
+    )
+    .await;
+    assert_eq!(candidates.len(), 2, "{candidates:?}");
+    arm_destructive(&fixture, &rule_set_id).await;
+
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("action pass");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert_eq!(report.held, 2, "{report:?}");
+    for held in fixture.execution.evaluation.all_candidates().await {
+        assert_eq!(
+            held.state,
+            scryer_domain::LifecycleCandidateState::Blocked,
+            "{held:?}"
+        );
+        assert_eq!(
+            held.state_reason,
+            crate::lifecycle_rules::execution_reason::ACTIONS_CONFLICT
+        );
+        assert!(held.actions_conflict.is_some(), "{held:?}");
+        assert_no_steps(&fixture, &held).await;
+    }
+    assert!(path.exists(), "the season's file stays on disk");
+}
+
+/// A held candidate still shows the sequence it would run, and a fire that
+/// finds it already held for the conflict writes nothing to it.
+#[tokio::test]
+async fn a_marked_candidate_keeps_its_sequence_view_and_a_second_hold_writes_nothing() {
+    let fixture = title_fixture("Synthetic Cross View", MediaFacet::Series).await;
+    let (season, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Cross View/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Cross View/Season 01/S01E01.mkv").await;
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             monitor if input.facts.monitored\n\n\
+             delete_season_files if input.subject.season_number == 1\n",
+        ),
+    )
+    .await;
+    assert_eq!(candidates.len(), 2, "{candidates:?}");
+    arm_destructive(&fixture, &rule_set_id).await;
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("first action pass");
+    assert_eq!(report.held, 2, "{report:?}");
+
+    let views = fixture
+        .execution
+        .app
+        .list_lifecycle_candidates(
+            &fixture.execution.user,
+            crate::lifecycle_rules::LifecycleCandidateFilter {
+                rule_set_id: Some(rule_set_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("list candidates");
+    let season_view = views
+        .iter()
+        .find(|view| view.candidate.subject_id == season.id)
+        .expect("season candidate view");
+    assert!(season_view.candidate.actions_conflict.is_some());
+    assert!(
+        season_view.action_sequence.is_some(),
+        "a marked candidate still shows its sequence: {season_view:?}"
+    );
+
+    let before = fixture.execution.evaluation.all_candidates().await;
+    fixture.execution.evaluation.begin_next_evaluation().await;
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("second action pass");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert_eq!(report.held, 2, "both were examined again: {report:?}");
+    let after = fixture.execution.evaluation.all_candidates().await;
+    for held in &after {
+        let earlier = before
+            .iter()
+            .find(|candidate| candidate.id == held.id)
+            .expect("same candidate");
+        assert_eq!(
+            held.state_reason,
+            crate::lifecycle_rules::execution_reason::ACTIONS_CONFLICT
+        );
+        assert_eq!(
+            held.updated_at, earlier.updated_at,
+            "already held for the conflict: nothing is written {held:?}"
+        );
+        assert_no_steps(&fixture, held).await;
+    }
+    assert!(path.exists(), "the season's file stays on disk");
+}
+
+/// A pass in which the season's write fails cannot judge the title free of
+/// the season's decision: the title keeps its marker and nothing runs.
+#[tokio::test]
+async fn a_failed_season_write_keeps_the_title_held() {
+    let fixture = title_fixture("Synthetic Cross Failed", MediaFacet::Series).await;
+    let (season, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Cross Failed/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Cross Failed/Season 01/S01E01.mkv").await;
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             monitor if input.facts.monitored\n\n\
+             delete_season_files if input.subject.season_number == 1\n",
+        ),
+    )
+    .await;
+    assert_eq!(candidates.len(), 2, "{candidates:?}");
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.actions_conflict.is_some()),
+        "{candidates:?}"
+    );
+    arm_destructive(&fixture, &rule_set_id).await;
+
+    *fixture
+        .execution
+        .evaluation
+        .fail_record_match_for_subject
+        .lock()
+        .unwrap() = Some(season.id.clone());
+    fixture
+        .execution
+        .app
+        .run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("evaluate with the season's write failing");
+    let title = fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .into_iter()
+        .find(|candidate| candidate.subject_id == fixture.title.id)
+        .expect("title candidate");
+    assert!(
+        title.actions_conflict.is_some(),
+        "the title keeps its marker: {title:?}"
+    );
+
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("action pass");
+    assert_eq!(report.executed, 0, "{report:?}");
+    for held in fixture.execution.evaluation.all_candidates().await {
+        assert_no_steps(&fixture, &held).await;
+    }
+    assert!(path.exists(), "the season's file stays on disk");
+}
+
+/// Once an evaluation no longer finds the conflict, the held candidates are
+/// examined again and each runs what it decided.
+#[tokio::test]
+async fn a_cleared_cross_level_conflict_lets_both_sides_proceed() {
+    let fixture = title_fixture("Synthetic Cross Clear", MediaFacet::Series).await;
+    let (_, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Cross Clear/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Cross Clear/Season 01/S01E01.mkv").await;
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor title");
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             monitor if not input.facts.monitored\n\n\
+             notify := \"Synthetic review\" if input.subject.title_id != \"\"\n\n\
+             delete_season_files if input.subject.season_number == 1\n",
+        ),
+    )
+    .await;
+    assert_eq!(candidates.len(), 2, "{candidates:?}");
+    arm_destructive(&fixture, &rule_set_id).await;
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("held action pass");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert!(path.exists());
+
+    // The title is monitored now, so the rule decides only `notify` for it.
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, true)
+        .await
+        .expect("monitor title");
+    fixture
+        .execution
+        .app
+        .run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("evaluate again");
+    let live: Vec<_> = fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .into_iter()
+        .filter(|candidate| !candidate.state.is_terminal())
+        .collect();
+    assert_eq!(live.len(), 2, "{live:?}");
+    assert!(
+        live.iter()
+            .all(|candidate| candidate.actions_conflict.is_none()),
+        "{live:?}"
+    );
+
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("action pass after the conflict cleared");
+    assert_eq!(report.executed, 2, "{report:?}");
+    assert!(
+        !path.exists(),
+        "the season's delete ran once nothing contradicted it"
+    );
+}
+
+/// A season candidate opened while its title decided nothing holds at its
+/// execution recheck when the title now decides a conflicting action, even
+/// with no evaluation in between, and its file stays on disk.
+#[tokio::test]
+async fn a_title_conflict_that_appears_after_evaluation_holds_at_execution() {
+    let fixture = title_fixture("Synthetic Cross Late", MediaFacet::Series).await;
+    let (season, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Cross Late/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Cross Late/Season 01/S01E01.mkv").await;
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor title");
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             monitor if input.facts.monitored\n\n\
+             delete_season_files if input.subject.season_number == 1\n",
+        ),
+    )
+    .await;
+    assert_eq!(
+        candidates.len(),
+        1,
+        "only the season is decided: {candidates:?}"
+    );
+    assert_eq!(candidates[0].subject_id, season.id);
+    assert_eq!(candidates[0].actions_conflict, None);
+    arm_destructive(&fixture, &rule_set_id).await;
+
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, true)
+        .await
+        .expect("monitor title");
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("action pass");
+    assert_eq!(report.executed, 0, "{report:?}");
+    let held = fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .remove(0);
+    assert_eq!(
+        held.state_reason,
+        crate::lifecycle_rules::execution_reason::ACTIONS_CONFLICT,
+        "{held:?}"
+    );
+    assert!(!held.state.is_terminal(), "{held:?}");
+    assert!(path.exists(), "the season's file stays on disk");
+}
+
+// ── Manual runs evaluate first ──────────────────────────────────────────────
+
+/// Trigger one rule's manual run and wait for the run it spawns, which holds
+/// the rule's claim until it finishes.
+async fn manual_run(fixture: &TitleFixture, rule_set_id: &str) {
+    let app = &fixture.execution.app;
+    let trigger = app
+        .run_lifecycle_action_handler_now(&fixture.execution.user, Some(rule_set_id.to_string()))
+        .await
+        .expect("manual run");
+    assert!(trigger.started, "{trigger:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while app.claim_lifecycle_rule_run(rule_set_id).is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the manual run finishes");
+}
+
+/// A title whose delete was decided cleanly, and a season of it that starts
+/// deciding a monitor after that evaluation: the manual run evaluates first,
+/// sees the conflict, holds both and deletes nothing.
+#[tokio::test]
+async fn a_manual_run_evaluates_first_and_holds_a_new_cross_level_conflict() {
+    let fixture = title_fixture("Synthetic Manual Conflict", MediaFacet::Series).await;
+    let (season, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Manual Conflict/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Manual Conflict/Season 01/S01E01.mkv").await;
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             delete_files if input.subject.title_id != \"\"\n\n\
+             monitor_season if {\n\
+             \tinput.subject.season_number == 1\n\
+             \tnot input.facts.monitored\n\
+             }\n",
+        ),
+    )
+    .await;
+    assert_eq!(
+        candidates.len(),
+        1,
+        "only the title is decided: {candidates:?}"
+    );
+    assert_eq!(candidates[0].subject_id, fixture.title.id);
+    assert_eq!(candidates[0].actions_conflict, None);
+    arm_destructive(&fixture, &rule_set_id).await;
+
+    // The title is unmonitored now, so the season decides a monitor.
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor title");
+    manual_run(&fixture, &rule_set_id).await;
+
+    let live: Vec<_> = fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .into_iter()
+        .filter(|candidate| !candidate.state.is_terminal())
+        .collect();
+    assert_eq!(live.len(), 2, "{live:?}");
+    assert!(
+        live.iter()
+            .any(|candidate| candidate.subject_id == season.id)
+    );
+    for held in &live {
+        assert!(held.actions_conflict.is_some(), "{held:?}");
+        assert_eq!(held.state, scryer_domain::LifecycleCandidateState::Blocked);
+        assert_eq!(
+            held.state_reason,
+            crate::lifecycle_rules::execution_reason::ACTIONS_CONFLICT
+        );
+        assert_no_steps(&fixture, held).await;
+    }
+    assert!(path.exists(), "nothing is deleted");
+}
+
+/// A dry-run rule's manual run evaluates it and acts on nothing.
+#[tokio::test]
+async fn a_manual_run_of_a_dry_run_rule_acts_on_nothing() {
+    let fixture = title_fixture("Synthetic Manual Dry", MediaFacet::Series).await;
+    let (_, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Manual Dry/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Manual Dry/Season 01/S01E01.mkv").await;
+    let (rule_set_id, _) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             delete_files if not input.facts.monitored\n",
+        ),
+    )
+    .await;
+    super::lifecycle_rules::arm_rule(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        &rule_set_id,
+        LifecycleEffectArming::None,
+        None,
+    )
+    .await;
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor title");
+
+    manual_run(&fixture, &rule_set_id).await;
+
+    let candidates = fixture.execution.evaluation.all_candidates().await;
+    assert_eq!(candidates.len(), 1, "the evaluation ran: {candidates:?}");
+    assert_no_steps(&fixture, &candidates[0]).await;
+    assert!(path.exists(), "a dry-run rule deletes nothing");
+}
+
+/// A manual run whose evaluation opens a candidate that is already due acts
+/// on it in the same run.
+#[tokio::test]
+async fn a_manual_run_acts_on_a_candidate_its_evaluation_opens_already_due() {
+    let fixture = title_fixture("Synthetic Manual Due", MediaFacet::Series).await;
+    let (_, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Manual Due/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Manual Due/Season 01/S01E01.mkv").await;
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             delete_files if not input.facts.monitored\n",
+        ),
+    )
+    .await;
+    assert!(candidates.is_empty(), "{candidates:?}");
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor title");
+
+    manual_run(&fixture, &rule_set_id).await;
+
+    let candidates = fixture.execution.evaluation.all_candidates().await;
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    assert_eq!(
+        candidates[0].state,
+        scryer_domain::LifecycleCandidateState::Succeeded,
+        "{:?}",
+        candidates[0]
+    );
+    assert!(!path.exists(), "the due delete ran in the same manual run");
 }

@@ -963,10 +963,11 @@ impl AppUseCase {
             .collect())
     }
 
-    /// Manual trigger for one rule's actions: the rule's due candidates are
-    /// acted on now, exactly as its own scheduled fire would act on them,
-    /// under the same claim. Rules act only through their own fires, so a
-    /// trigger that names no rule is refused.
+    /// Manual trigger for one rule: one fire of the rule now, exactly as its
+    /// schedule runs it and under the same claim. The rule is evaluated first,
+    /// so a candidate the evaluation opens that is already due is acted on in
+    /// the same run; then its due candidates are acted on. Rules act only
+    /// through their own fires, so a trigger that names no rule is refused.
     pub async fn run_lifecycle_action_handler_now(
         &self,
         actor: &User,
@@ -1016,7 +1017,8 @@ impl AppUseCase {
         // the database under it.
         self.restore_coordinator().spawn_task(async move {
             let _claim = claim;
-            if let Err(error) = app.run_lifecycle_action_handling(Some(&rule_set_id)).await {
+            // The same fire a schedule runs: evaluate, then act on what is due.
+            if let Err(error) = app.run_scheduled_lifecycle_rule(&rule_set_id).await {
                 warn!(rule_set_id = %rule_set_id, error = %error, "manual lifecycle rule action run failed");
             }
         });
@@ -1024,7 +1026,7 @@ impl AppUseCase {
         Ok(LifecycleEvaluationTrigger {
             started: true,
             message: Some(format!(
-                "Lifecycle rule {} is acting on its due titles",
+                "Lifecycle rule {} is evaluating, then acting on its due titles",
                 rule_set.name
             )),
         })
@@ -1343,10 +1345,15 @@ impl AppUseCase {
                     });
                     // A candidate runs only the steps built from what was decided
                     // for it; one without decided actions never runs.
-                    let outcome = match declared_candidate_sequence(
-                        &candidate,
-                        &action.quality_profile_ids,
-                    ) {
+                    // The latest evaluation found a conflict between this
+                    // subject and one that encloses it or that it encloses:
+                    // it holds before anything is built or run.
+                    let built = if candidate.actions_conflict.is_some() {
+                        Err(execution_reason::ACTIONS_CONFLICT)
+                    } else {
+                        declared_candidate_sequence(&candidate, &action.quality_profile_ids)
+                    };
+                    let outcome = match built {
                         // Another rule recently did the opposite to this
                         // title's monitoring: hold before any step runs.
                         Ok(sequence)
@@ -1380,6 +1387,13 @@ impl AppUseCase {
                                 },
                             )
                             .await
+                        }
+                        Err(reason)
+                            if candidate.state == LifecycleCandidateState::Blocked
+                                && candidate.state_reason == reason =>
+                        {
+                            // Already held for it; nothing is written.
+                            Ok(CandidateOutcome::Held)
                         }
                         Err(reason) => {
                             self.hold_unbuilt_lifecycle_candidate(&candidate, reason)
@@ -2004,6 +2018,31 @@ impl AppUseCase {
             )
             .await;
         }
+        // A season or episode whose decided heads include one that conflicts
+        // with a title head the rule declares is checked against what the
+        // rule decides for its title now, from the title input built above.
+        // The stored heads gate the copy: the recheck below holds before the
+        // title is evaluated unless the fresh decision equals the stored one.
+        // Any other subject keeps no copy and evaluates nothing more.
+        let candidate_level = super::evaluation::subject_level(&candidate.subject_kind)
+            .filter(|level| *level != scryer_rules::lifecycle::LifecycleSubjectKind::Title);
+        let cross_level_title_input = match (title_input.as_ref(), candidate_level) {
+            (Some(title_input), Some(level))
+                if super::declared_actions::decided_actions_from_json(
+                    candidate.decided_actions_json.as_deref(),
+                )
+                .is_some_and(|stored| {
+                    super::cross_level::heads_conflict_with_declared(
+                        &super::cross_level::heads_at_level(&stored, level),
+                        &detail.declared_actions,
+                        scryer_rules::lifecycle::LifecycleSubjectKind::Title,
+                    )
+                }) =>
+            {
+                Some((title_input.clone(), level))
+            }
+            _ => None,
+        };
         let mut input = match title_input {
             Some(title_input) => {
                 super::facts::nest_subject_input(title_input, subject_input, &subject)
@@ -2282,6 +2321,40 @@ impl AppUseCase {
                         );
                     }
                 }
+                // The title now deciding an action that conflicts with this
+                // season's or episode's holds it, as the evaluator's marker
+                // would. A title the rule does not match, or cannot decide,
+                // adds nothing here: the marker the latest evaluation wrote
+                // already covers a conflict it saw.
+                if let (Some((title_input, level)), Some(decision)) =
+                    (cross_level_title_input, decision.as_ref())
+                    && super::cross_level::heads_conflict_with_declared(
+                        &super::cross_level::heads_at_level(&decision.actions, level),
+                        &detail.declared_actions,
+                        scryer_rules::lifecycle::LifecycleSubjectKind::Title,
+                    )
+                {
+                    let title_decision = evaluator.evaluate(&title_input).ok().and_then(|result| {
+                        result
+                            .records
+                            .into_iter()
+                            .next()
+                            .map(|record| record.decision)
+                    });
+                    if let Some(title_decision) = title_decision
+                        && title_decision.outcome == LifecycleOutcome::Match
+                        && super::cross_level::first_conflict(
+                            &super::cross_level::heads_at_level(&decision.actions, level),
+                            &super::cross_level::heads_at_level(
+                                &title_decision.actions,
+                                scryer_rules::lifecycle::LifecycleSubjectKind::Title,
+                            ),
+                        )
+                        .is_some()
+                    {
+                        return SafetyDecision::Hold(execution_reason::ACTIONS_CONFLICT);
+                    }
+                }
             }
             Some(LifecycleOutcome::NoMatch) => {
                 return SafetyDecision::Cancel(execution_reason::NO_MATCH_AT_EXECUTION);
@@ -2412,6 +2485,8 @@ fn declared_candidate_sequence(
         "episode" => ActionSubjectKind::Episode,
         _ => return Err(execution_reason::ACTIONS_NOT_RUNNABLE),
     };
+    // A cross-level conflict marker is checked by the executor, not here, so
+    // a marked candidate still shows its sequence and step progress.
     if actions.conflict().is_some() {
         return Err(execution_reason::ACTIONS_CONFLICT);
     }

@@ -11308,6 +11308,19 @@ pub trait LifecycleCandidateRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 
+    /// Compare-and-set, for each `(candidate id, marker)` pair, the
+    /// conflicting action the rule decided for an enclosing or contained
+    /// subject, or clear it with `None`. All pairs are written in one
+    /// transaction; each lands only while its row is in one of
+    /// `expected_states`, and no row's state is changed. Returns how many
+    /// rows were written.
+    async fn set_candidate_actions_conflicts(
+        &self,
+        changes: &[(String, Option<scryer_domain::LifecycleActionsConflict>)],
+        expected_states: &[scryer_domain::LifecycleCandidateState],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<usize>;
+
     /// Finish a candidate only while this worker still owns the exact
     /// `Executing` lease it acquired. Sequence holds and retryable failures
     /// must use this stronger form so a stale worker cannot overwrite a newer

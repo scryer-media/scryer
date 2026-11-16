@@ -1851,6 +1851,16 @@ impl crate::ports::LifecycleCandidateRepository for NullLifecycleEvaluationRepos
             LIFECYCLE_EVALUATION_NOT_CONFIGURED.to_string(),
         ))
     }
+    async fn set_candidate_actions_conflicts(
+        &self,
+        _changes: &[(String, Option<scryer_domain::LifecycleActionsConflict>)],
+        _expected_states: &[scryer_domain::LifecycleCandidateState],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        Err(AppError::Repository(
+            LIFECYCLE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
     async fn finish_leased_candidate(
         &self,
         _id: &str,

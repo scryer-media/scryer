@@ -1524,12 +1524,18 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // A rule builder field's subject levels arrive as RuleBuilderSubject, and
+    // a candidate held for a cross-level conflict names the other side in
+    // LifecycleActionsConflict: public types 1045->1047, OBJECT 568->570.
+    for name in ["RuleBuilderSubject", "LifecycleActionsConflict"] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
     assert_eq!(
         public_types.len(),
-        1045,
+        1047,
         "public types: {public_type_names:?}"
     );
-    assert_eq!(kind_count("OBJECT"), 568);
+    assert_eq!(kind_count("OBJECT"), 570);
     // Library roots are no longer sent by path: UpdateLibraryPathsInput and
     // RootFolderInput are gone (-2). EpisodeSubtitleSearchInput arrived
     // without a census update (+1).

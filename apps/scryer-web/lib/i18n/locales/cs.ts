@@ -5054,7 +5054,7 @@ const cs: LocaleDictionary = {
   "settings.lifecycleRunActionsNeedsRule":
     "Vyberte výše jedno pravidlo, které má teď zasáhnout.",
   "settings.lifecycleRunActionsHeldHelp":
-    "Okamžité spuštění akcí přeskočí tituly, které běh pozdržel, dokud se pravidlo znovu nevyhodnotí. Každý plánovaný běh nejprve vyhodnocuje, takže se na pozdržené tituly podívá znovu.",
+    "Okamžité spuštění akcí nejprve vyhodnotí pravidlo, stejně jako každý plánovaný běh, takže se na pozdržené tituly podívá znovu. Titul, který vyhodnocení přidá a který je už splatný, například u pravidla bez ochranné lhůty, se zpracuje v témže běhu, včetně mazání.",
   "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
     "Vyberte pravidlo, které má zasáhnout. Pravidla jednají jen sama za sebe, takže okamžitý zásah potřebuje jedno pravidlo.",
   "settings.lifecycleRunStarted": "Běh spuštěn.",
@@ -5713,7 +5713,7 @@ const cs: LocaleDictionary = {
   "settings.refLifecycleActionsNotify":
     "notify odešle zprávu jednou, když se akce použijí. Náhledy a zkušební běhy ji nikdy neodešlou.",
   "settings.refLifecycleActionsConflicts":
-    "Protichůdné akce pro jeden subjekt, například monitor spolu s unmonitor nebo tentýž štítek přidaný i odebraný, subjekt podrží s důvodem, místo aby se použila kterákoli z nich.",
+    "Protichůdné akce se podrží s důvodem, místo aby se použila kterákoli z nich. Platí to pro jeden subjekt, například monitor spolu s unmonitor nebo tentýž štítek přidaný i odebraný, a také pro titul proti jeho sezónám či epizodám a pro sezónu proti jejím epizodám, například když se seriál monitoruje a zároveň se mažou soubory jedné z jeho sezón.",
   "settings.refLifecycleTagActionsTitle": "Akce se štítky",
   "settings.refLifecycleTagActionsNote":
     "add_tags a remove_tags zapisují uživatelské štítky na odpovídající titul. Každý název musí existovat v registru štítků, který spravuje administrátor v Nastavení, a štítky se ukládají malými písmeny — pravidlo odkazující na štítek, který byl mezitím smazán, se pozdrží s tag_not_defined místo zápisu.",

@@ -414,6 +414,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
         held_since: None,
         action_attempts: 0,
         decided_actions_json: None,
+        actions_conflict: None,
         created_at: now,
         updated_at: now,
     }

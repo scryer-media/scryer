@@ -513,6 +513,14 @@ pub fn from_lifecycle_candidate(
             )
         },
         actions,
+        actions_conflict: candidate
+            .actions_conflict
+            .map(|conflict| LifecycleActionsConflict {
+                head: conflict.head,
+                other_subject_kind: conflict.other_subject_kind,
+                other_subject_id: ID::from(conflict.other_subject_id),
+                other_head: conflict.other_head,
+            }),
         action_sequence,
         sequence_steps: sequence_steps
             .iter()
@@ -775,6 +783,7 @@ mod tests {
             last_evaluated_at: now,
             held_since: Some(now),
             decided_actions_json: None,
+            actions_conflict: None,
             action_attempts: 0,
             created_at: now,
             updated_at: now,

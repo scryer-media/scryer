@@ -45,14 +45,14 @@ impl LifecycleEvaluationStore {
 const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash, title_id,
     library_id, facet, subject_kind, subject_id, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
-    held_since, action_attempts, created_at, updated_at, decided_actions_json";
+    held_since, action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
         (id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id, facet,
          subject_kind, subject_id, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
-         action_attempts, created_at, updated_at, decided_actions_json)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         action_attempts, created_at, updated_at, decided_actions_json, actions_conflict_json)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const ACTION_RUN_COLUMNS: &str =
     "id, candidate_id, rule_set_id, revision_number, title_id, subject_kind, subject_id,
@@ -457,6 +457,67 @@ impl LifecycleCandidateRepository for LifecycleEvaluationStore {
         )
         .await?;
         Ok(affected == 1)
+    }
+
+    async fn set_candidate_actions_conflicts(
+        &self,
+        changes: &[(String, Option<scryer_domain::LifecycleActionsConflict>)],
+        expected_states: &[LifecycleCandidateState],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        if expected_states.is_empty() {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::CONFIGURATION_CANDIDATE_EXPECTED_STATES_REQUIRED,
+                "a candidate transition must name the states it expects".to_string(),
+            ));
+        }
+        if changes.is_empty() {
+            return Ok(0);
+        }
+        let state_placeholders = id_placeholders(expected_states.len());
+        // One statement per chunk: each row's marker is chosen by a CASE on
+        // its id, and the state predicate keeps the compare-and-set per row.
+        // A chunk binds three values per row, far below either bind limit.
+        let mut statements: Vec<(String, Vec<SqlArg>)> = Vec::new();
+        for chunk in changes.chunks(CANDIDATE_ID_LIST_CHUNK) {
+            let mut args = Vec::with_capacity(chunk.len() * 3 + expected_states.len() + 1);
+            for (id, conflict) in chunk {
+                args.push(SqlArg::Text(id.clone()));
+                args.push(SqlArg::OptText(actions_conflict_text(conflict.as_ref())?));
+            }
+            args.push(SqlArg::Timestamp(updated_at));
+            args.extend(chunk.iter().map(|(id, _)| SqlArg::Text(id.clone())));
+            args.extend(
+                expected_states
+                    .iter()
+                    .map(|state| SqlArg::Text(state.as_storage_str().to_string())),
+            );
+            let sql = format!(
+                "UPDATE lifecycle_candidates
+                    SET actions_conflict_json = CASE id {} ELSE actions_conflict_json END,
+                        updated_at = {{}}
+                  WHERE id IN ({}) AND state IN ({state_placeholders})",
+                vec!["WHEN {} THEN {}"; chunk.len()].join(" "),
+                id_placeholders(chunk.len()),
+            );
+            statements.push((sql, args));
+        }
+        let affected = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "set_lifecycle_candidate_actions_conflicts",
+            move |tx| {
+                let statements = statements.clone();
+                Box::pin(async move {
+                    let mut affected = 0;
+                    for (sql, args) in &statements {
+                        affected += SqlRuntime::execute(SqlExec::Tx(&mut *tx), sql, args).await?;
+                    }
+                    Ok(affected)
+                })
+            },
+        )
+        .await?;
+        Ok(usize::try_from(affected).unwrap_or(usize::MAX))
     }
 
     async fn finish_leased_candidate(
@@ -1973,7 +2034,25 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::Timestamp(candidate.created_at),
         SqlArg::Timestamp(candidate.updated_at),
         SqlArg::OptText(candidate.decided_actions_json.clone()),
+        SqlArg::OptText(actions_conflict_text(candidate.actions_conflict.as_ref())?),
     ])
+}
+
+fn actions_conflict_text(
+    conflict: Option<&scryer_domain::LifecycleActionsConflict>,
+) -> AppResult<Option<String>> {
+    conflict.map(canonical_json_text).transpose()
+}
+
+/// A stored conflict this build cannot read still holds the candidate: it
+/// reads back as a conflict naming nothing rather than as none.
+fn actions_conflict_from_text(text: &str) -> scryer_domain::LifecycleActionsConflict {
+    serde_json::from_str(text).unwrap_or_else(|_| scryer_domain::LifecycleActionsConflict {
+        head: String::new(),
+        other_subject_kind: String::new(),
+        other_subject_id: String::new(),
+        other_head: String::new(),
+    })
 }
 
 fn action_run_args(run: &LifecycleActionRun) -> Vec<SqlArg> {
@@ -2665,6 +2744,9 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         reason_codes: reason_codes(row)?,
         action_kind: row.text("action_kind")?,
         decided_actions_json: row.opt_text("decided_actions_json")?,
+        actions_conflict: row
+            .opt_text("actions_conflict_json")?
+            .map(|text| actions_conflict_from_text(&text)),
         grace_days: row.i64("grace_days")?,
         first_matched_at: row.timestamp("first_matched_at")?,
         last_matched_at: row.timestamp("last_matched_at")?,

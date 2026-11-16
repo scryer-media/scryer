@@ -477,6 +477,20 @@ pub struct LifecyclePreviewPayload {
     pub titles: Vec<LifecyclePreviewTitle>,
 }
 
+/// A conflicting action one rule decided for a title and a season or episode
+/// of it, as seen from one side of the pair.
+#[derive(SimpleObject, Clone)]
+pub struct LifecycleActionsConflict {
+    /// This candidate's head in the pair, such as `delete_season_files`.
+    pub head: String,
+    /// The other subject's scope: title, season, or episode.
+    pub other_subject_kind: String,
+    /// Scryer title, collection, or episode ID of the other subject.
+    pub other_subject_id: ID,
+    /// The other subject's head in the pair, such as `monitor`.
+    pub other_head: String,
+}
+
 /// One subject's durable membership in one lifecycle rule set.
 ///
 /// A candidate records that a rule matched the subject, how long its grace
@@ -525,6 +539,11 @@ pub struct LifecycleCandidate {
     /// What the rule decided for this subject on its latest match. Null only
     /// for candidates opened before rules declared their own actions.
     pub actions: Option<LifecycleDecidedActions>,
+    /// The action the same rule decided for an enclosing or contained subject
+    /// that conflicts with this candidate's, as the latest evaluation found
+    /// it. While set, the candidate is held with `actions_conflict` and runs
+    /// nothing. Null when there is none.
+    pub actions_conflict: Option<LifecycleActionsConflict>,
     /// The immutable schema-2 sequence that opened this candidate. Legacy
     /// candidates retain their original `actionKind` and leave this null.
     pub action_sequence: Option<LifecycleActionSequence>,

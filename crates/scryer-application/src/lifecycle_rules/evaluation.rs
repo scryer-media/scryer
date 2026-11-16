@@ -41,6 +41,7 @@ use tracing::{debug, warn};
 
 use crate::jobs::{JobKey, JobTriggerSource};
 use crate::lifecycle_rules::action_sequence::{ACTION_SEQUENCE_KIND, LifecycleActionSequence};
+use crate::lifecycle_rules::cross_level::{LifecycleDecidedCandidate, LifecycleSubjectDecision};
 use crate::lifecycle_rules::facts::{
     LifecycleLibraryRef, LifecycleTitleClaims, LifecycleTitlePeople, LifecycleTitleWatch,
     LifecycleWatchContext, WatchSignalFreshness, build_subject_input,
@@ -125,6 +126,38 @@ pub(crate) fn subject_level(
         "episode" => Some(Level::Episode),
         _ => None,
     }
+}
+
+/// What this evaluation decided for one subject, kept for pairing it with
+/// the title's other subjects. `None` unless `track` is set, the actions are
+/// known and the subject kind names a level.
+fn tracked_decision(
+    track: bool,
+    subject: &super::subjects::LifecycleSubject,
+    actions: Option<&scryer_rules::lifecycle_actions::LifecycleActions>,
+    candidate: Option<&LifecycleCandidate>,
+) -> Option<LifecycleSubjectDecision> {
+    if !track {
+        return None;
+    }
+    let actions = actions?;
+    let level = subject_level(subject.kind.as_storage_str())?;
+    Some(LifecycleSubjectDecision {
+        level,
+        subject_id: subject.id.clone(),
+        season_id: match level {
+            scryer_rules::lifecycle::LifecycleSubjectKind::Title => None,
+            _ => subject
+                .collection
+                .as_ref()
+                .map(|collection| collection.id.clone()),
+        },
+        heads: super::cross_level::heads_at_level(actions, level),
+        candidate: candidate.map(|candidate| LifecycleDecidedCandidate {
+            id: candidate.id.clone(),
+            actions_conflict: candidate.actions_conflict.clone(),
+        }),
+    })
 }
 
 /// The storage kind of a level.
@@ -897,8 +930,9 @@ impl AppUseCase {
         }
     }
 
-    /// One scheduled fire of one rule: evaluate it, then act on what it
-    /// decided. Both halves keep every gate, hold and re-check of the
+    /// One fire of one rule, on its schedule or by its manual trigger:
+    /// evaluate it, then act on what it decided. The caller holds the rule's
+    /// claim. Both halves keep every gate, hold and re-check of the
     /// instance-wide passes; neither touches another rule's candidates.
     pub(crate) async fn run_scheduled_lifecycle_rule(
         &self,
@@ -1162,6 +1196,11 @@ impl AppUseCase {
             .collect();
         let evaluates_titles =
             levels.contains(&scryer_rules::lifecycle::LifecycleSubjectKind::Title);
+        // Whether two of the rule's declared heads at different levels can
+        // conflict. A rule where none can keeps no decisions and writes no
+        // conflict marker.
+        let cross_level =
+            super::cross_level::cross_level_conflict_possible(&detail.declared_actions);
         let mut after_id = None;
         loop {
             // The rule's libraries filter in the page read (none means all).
@@ -1343,6 +1382,11 @@ impl AppUseCase {
                     .await;
                     title_input = Some(input);
                 }
+                let mut decisions: Vec<LifecycleSubjectDecision> = Vec::new();
+                // A subject that failed or lost a write this pass is missing
+                // from `decisions`, so its partners cannot be judged free of
+                // it: markers may then be set but never cleared.
+                let mut incomplete = false;
                 for subject in subjects {
                     if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title
                         && !evaluates_titles
@@ -1350,8 +1394,9 @@ impl AppUseCase {
                         continue;
                     }
                     in_scope.insert(subject.id.clone());
-                    if let Err(error) = self
+                    match self
                         .reconcile_lifecycle_title(
+                            cross_level,
                             detail,
                             &mut evaluator,
                             title,
@@ -1367,20 +1412,39 @@ impl AppUseCase {
                             evaluation_time,
                             &mut batch_cache.storage,
                             &mut counts,
+                            &mut incomplete,
                         )
                         .await
                     {
-                        // One subject's write or evaluation failing is bounded to
-                        // that subject: the rule keeps going and the count carries
-                        // the failure into the run row.
-                        counts.errors += 1;
-                        warn!(
-                            rule_set_id = rule_set.id.as_str(),
-                            title_id = title.id.as_str(),
-                            error = %error,
-                            "lifecycle evaluation failed for one subject"
-                        );
+                        Ok(decision) => decisions.extend(decision),
+                        Err(error) => {
+                            // One subject's write or evaluation failing is
+                            // bounded to that subject: the rule keeps going
+                            // and the count carries the failure into the run
+                            // row.
+                            incomplete = true;
+                            counts.errors += 1;
+                            warn!(
+                                rule_set_id = rule_set.id.as_str(),
+                                title_id = title.id.as_str(),
+                                error = %error,
+                                "lifecycle evaluation failed for one subject"
+                            );
+                        }
                     }
+                }
+                if cross_level
+                    && let Err(error) = self
+                        .mark_cross_level_conflicts(&decisions, !incomplete, evaluation_time)
+                        .await
+                {
+                    counts.errors += 1;
+                    warn!(
+                        rule_set_id = rule_set.id.as_str(),
+                        title_id = title.id.as_str(),
+                        error = %error,
+                        "could not record a lifecycle cross-level conflict"
+                    );
                 }
             }
         }
@@ -1394,6 +1458,46 @@ impl AppUseCase {
         .await?;
 
         Ok(counts)
+    }
+
+    /// Record on each of one title's live candidates whether the rule decided
+    /// a conflicting action for a subject that encloses it or that it
+    /// encloses, from the decisions this evaluation already made.
+    ///
+    /// The marker only ever holds: the executor blocks a marked candidate with
+    /// [`super::execution_reason::ACTIONS_CONFLICT`] before building any step,
+    /// and an evaluation that finds the conflict gone clears it, after which
+    /// the candidate runs through the full execution recheck as any other. A
+    /// row is written only when its marker changes, with the same
+    /// compare-and-set every other evaluator write uses, and one title's
+    /// changes land together in one transaction. With `may_clear` unset, some
+    /// subject of the title is missing from `decisions`, and no marker is
+    /// cleared.
+    async fn mark_cross_level_conflicts(
+        &self,
+        decisions: &[LifecycleSubjectDecision],
+        may_clear: bool,
+        evaluation_time: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let changes: Vec<(String, Option<scryer_domain::LifecycleActionsConflict>)> =
+            super::cross_level::cross_level_markers(decisions)
+                .into_iter()
+                .filter_map(|(index, desired)| {
+                    let candidate = decisions[index].candidate.as_ref()?;
+                    let changed =
+                        candidate.actions_conflict != desired && (desired.is_some() || may_clear);
+                    changed.then(|| (candidate.id.clone(), desired))
+                })
+                .collect();
+        if changes.is_empty() {
+            return Ok(());
+        }
+        self.services
+            .customization
+            .lifecycle_evaluation
+            .set_candidate_actions_conflicts(&changes, EVALUATOR_WRITABLE_STATES, evaluation_time)
+            .await
+            .map(|_| ())
     }
 
     /// Close the rule's live candidates whose subject is no longer in its
@@ -1450,9 +1554,18 @@ impl AppUseCase {
     }
 
     /// Reconcile one subject. Every branch is RFC 7.5 stated literally.
+    ///
+    /// With `track` set, returns what was decided for the subject and its
+    /// live candidate, for [`Self::mark_cross_level_conflicts`]. A subject
+    /// this pass cannot decide (unknown, an error, or a leased candidate) is
+    /// paired on the actions its candidate stored, so a conflict it took part
+    /// in keeps holding the other side. `incomplete` is set when the subject
+    /// errored or another writer won one of its writes, since its partners
+    /// then cannot be judged free of it.
     #[allow(clippy::too_many_arguments)]
     async fn reconcile_lifecycle_title(
         &self,
+        track: bool,
         detail: &LifecycleRuleSetDetail,
         evaluator: &mut LifecycleRulesEvaluator,
         title: &Title,
@@ -1468,13 +1581,31 @@ impl AppUseCase {
         evaluation_time: DateTime<Utc>,
         storage: &mut LifecyclePassStorage,
         counts: &mut RuleCounts,
-    ) -> AppResult<()> {
+        incomplete: &mut bool,
+    ) -> AppResult<Option<LifecycleSubjectDecision>> {
         let rule_set_id = detail.rule_set.id.as_str();
         let candidates = &self.services.customization.lifecycle_evaluation;
 
         let mut active = candidates
             .get_active_subject_candidate(rule_set_id, subject.kind.as_storage_str(), &subject.id)
             .await?;
+        // The pairing a subject gets when this pass cannot decide it: the
+        // actions its live candidate stored. With `as_candidate` unset the
+        // candidate pairs but is not itself marked.
+        let stored_decision = |candidate: &LifecycleCandidate, as_candidate: bool| {
+            if !track {
+                return None;
+            }
+            let stored = super::declared_actions::decided_actions_from_json(
+                candidate.decided_actions_json.as_deref(),
+            );
+            tracked_decision(
+                track,
+                subject,
+                stored.as_ref(),
+                as_candidate.then_some(candidate),
+            )
+        };
 
         // A candidate under an execution lease belongs to the action handler for
         // the length of that lease, so this pass leaves it entirely alone — no
@@ -1492,15 +1623,16 @@ impl AppUseCase {
                 candidate_id = candidate.id.as_str(),
                 "skipping a candidate the action handler holds a lease on"
             );
-            return Ok(());
+            // A leased row cannot be marked; its stored actions still pair.
+            return Ok(stored_decision(candidate, false));
         }
 
         // Exclusions are honoured from the first evaluation:
         // an excluded subject is never evaluated, and an existing candidate for
         // it becomes terminal rather than lingering as live membership.
         if subject.excluded_by(&title.id, excluded) {
-            if let Some(candidate) = active
-                && candidates
+            if let Some(candidate) = active {
+                if candidates
                     .transition_candidate_state(
                         &candidate.id,
                         LifecycleCandidateState::Excluded,
@@ -1509,10 +1641,13 @@ impl AppUseCase {
                         evaluation_time,
                     )
                     .await?
-            {
-                counts.excluded += 1;
+                {
+                    counts.excluded += 1;
+                } else {
+                    *incomplete = true;
+                }
             }
-            return Ok(());
+            return Ok(None);
         }
 
         // A candidate recorded against an older revision no longer describes
@@ -1533,6 +1668,8 @@ impl AppUseCase {
                 .await?
             {
                 counts.superseded += 1;
+            } else {
+                *incomplete = true;
             }
             // The row is no longer this pass's to continue either way: it either
             // closed here, or another writer moved it and owns what happens next.
@@ -1560,7 +1697,7 @@ impl AppUseCase {
                     Some(checkpoint)
                 }
                 super::scoped_deletion::LifecycleDeletionJournal::WrittenForOneRoot => {
-                    candidates
+                    if !candidates
                         .transition_candidate_state(
                             &candidate.id,
                             LifecycleCandidateState::Canceled,
@@ -1568,7 +1705,10 @@ impl AppUseCase {
                             EVALUATOR_WRITABLE_STATES,
                             evaluation_time,
                         )
-                        .await?;
+                        .await?
+                    {
+                        *incomplete = true;
+                    }
                     // Closed here or moved by another writer: either way it
                     // is no longer this pass's to continue.
                     active = None;
@@ -1625,13 +1765,15 @@ impl AppUseCase {
             // No record means the rule errored for this subject. An error is
             // never rendered as a no-match, so it holds exactly like unknown.
             counts.errors += 1;
+            *incomplete = true;
             if let Some(candidate) = active {
                 candidates
                     .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
                     .await?;
                 counts.held += 1;
+                return Ok(stored_decision(&candidate, true));
             }
-            return Ok(());
+            return Ok(None);
         };
 
         match decision.outcome {
@@ -1687,7 +1829,8 @@ impl AppUseCase {
                         } else {
                             // Another writer owns the row now; the next pass
                             // decides again.
-                            return Ok(());
+                            *incomplete = true;
+                            return Ok(None);
                         }
                     }
                 }
@@ -1704,6 +1847,12 @@ impl AppUseCase {
                                 evaluation_time,
                             )
                             .await?;
+                        return Ok(tracked_decision(
+                            track,
+                            subject,
+                            Some(&decision.actions),
+                            Some(&candidate),
+                        ));
                     }
                     None => {
                         // A terminal sequence membership is distinct from an
@@ -1727,7 +1876,14 @@ impl AppUseCase {
                             let same_steps = latch.expected_step_ids
                                 == super::declared_actions::declared_step_ids(&decision.actions);
                             if same_steps {
-                                return Ok(());
+                                // A finished membership has no row to mark,
+                                // but what it decided still pairs.
+                                return Ok(tracked_decision(
+                                    track,
+                                    subject,
+                                    Some(&decision.actions),
+                                    None,
+                                ));
                             }
                             candidates
                                 .release_sequence_completion_on_confirmed_non_match(
@@ -1754,40 +1910,46 @@ impl AppUseCase {
                             // instant it matches.
                             evaluation_time + Duration::days(grace_days),
                         ));
-                        candidates
-                            .create_candidate(&LifecycleCandidate {
-                                id: Id::new().0,
-                                rule_set_id: rule_set_id.to_string(),
-                                revision_number: detail.rule_set.current_revision_number,
-                                matcher_content_hash: detail.revision.matcher_content_hash.clone(),
-                                title_id: title.id.clone(),
-                                subject_id: subject.id.clone(),
-                                library_id: title.library_id.clone(),
-                                facet: title.facet.as_str().to_string(),
-                                subject_kind: subject.kind.as_storage_str().to_string(),
-                                match_generation: generation,
-                                state: LifecycleCandidateState::Observing,
-                                state_reason: if carried_clock.is_some() {
-                                    candidate_reason::ACTIONS_CHANGED
-                                } else {
-                                    candidate_reason::FIRST_MATCH
-                                }
-                                .to_string(),
-                                reason_codes: decision.reason_codes.clone(),
-                                action_kind: ACTION_SEQUENCE_KIND.to_string(),
-                                decided_actions_json: decided_json,
-                                grace_days,
-                                first_matched_at,
-                                last_matched_at: evaluation_time,
-                                due_at,
-                                last_evaluated_at: evaluation_time,
-                                held_since: None,
-                                action_attempts: carried_attempts,
-                                created_at: evaluation_time,
-                                updated_at: evaluation_time,
-                            })
-                            .await?;
+                        let created = LifecycleCandidate {
+                            id: Id::new().0,
+                            rule_set_id: rule_set_id.to_string(),
+                            revision_number: detail.rule_set.current_revision_number,
+                            matcher_content_hash: detail.revision.matcher_content_hash.clone(),
+                            title_id: title.id.clone(),
+                            subject_id: subject.id.clone(),
+                            library_id: title.library_id.clone(),
+                            facet: title.facet.as_str().to_string(),
+                            subject_kind: subject.kind.as_storage_str().to_string(),
+                            match_generation: generation,
+                            state: LifecycleCandidateState::Observing,
+                            state_reason: if carried_clock.is_some() {
+                                candidate_reason::ACTIONS_CHANGED
+                            } else {
+                                candidate_reason::FIRST_MATCH
+                            }
+                            .to_string(),
+                            reason_codes: decision.reason_codes.clone(),
+                            action_kind: ACTION_SEQUENCE_KIND.to_string(),
+                            decided_actions_json: decided_json,
+                            actions_conflict: None,
+                            grace_days,
+                            first_matched_at,
+                            last_matched_at: evaluation_time,
+                            due_at,
+                            last_evaluated_at: evaluation_time,
+                            held_since: None,
+                            action_attempts: carried_attempts,
+                            created_at: evaluation_time,
+                            updated_at: evaluation_time,
+                        };
+                        candidates.create_candidate(&created).await?;
                         counts.created += 1;
+                        return Ok(tracked_decision(
+                            track,
+                            subject,
+                            Some(&decision.actions),
+                            Some(&created),
+                        ));
                     }
                 }
             }
@@ -1806,8 +1968,8 @@ impl AppUseCase {
                         evaluation_time,
                     )
                     .await?;
-                if let Some(candidate) = active
-                    && candidates
+                if let Some(candidate) = active {
+                    if candidates
                         .transition_candidate_state(
                             &candidate.id,
                             LifecycleCandidateState::Canceled,
@@ -1816,8 +1978,11 @@ impl AppUseCase {
                             evaluation_time,
                         )
                         .await?
-                {
-                    counts.canceled += 1;
+                    {
+                        counts.canceled += 1;
+                    } else {
+                        *incomplete = true;
+                    }
                 }
             }
             LifecycleOutcome::Unknown => {
@@ -1828,11 +1993,12 @@ impl AppUseCase {
                         .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
                         .await?;
                     counts.held += 1;
+                    return Ok(stored_decision(&candidate, true));
                 }
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 
     /// One batched media-file load per chunk, grouped by title, exactly as

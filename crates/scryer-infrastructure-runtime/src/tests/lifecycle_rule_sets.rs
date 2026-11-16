@@ -1,8 +1,6 @@
 use super::*;
 use scryer_application::LifecycleRuleSetRepository;
-use scryer_domain::{
-    LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet, LifecycleRuleSubjectKind,
-};
+use scryer_domain::{LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet};
 
 pub(super) async fn seed_rule_libraries(
     datastore: &scryer_infrastructure_sql::runtime::StoreDatastore,
@@ -688,7 +686,6 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> LifecycleRuleSet {
         effect_arming: scryer_domain::LifecycleEffectArming::None,
         destructive_rearm_required: false,
         library_ids,
-        subject_kind: LifecycleRuleSubjectKind::Title,
         system_owned: false,
         current_revision_number: 1,
         schedule: scryer_domain::default_lifecycle_rule_schedule(),
@@ -706,11 +703,20 @@ fn revision(rule_set_id: &str, number: i64) -> LifecycleRuleRevision {
         rego_source: format!("package scryer.maintenance.user.{rule_set_id}\nmatch := true\n"),
         action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#.to_string(),
         grace_days: 7 * number,
-        storage_root_id: None,
         matcher_content_hash: format!("hash-{number}"),
         created_by: Some("user-1".to_string()),
         created_at: Utc::now(),
         builder_model_json: None,
+    }
+}
+
+fn title_and_season_revision(rule_set_id: &str, number: i64) -> LifecycleRuleRevision {
+    LifecycleRuleRevision {
+        action_spec_json: format!(
+            r#"{{"schema_version":{},"heads":["unmonitor","unmonitor_season"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}}"#,
+            scryer_application::lifecycle_rules::LIFECYCLE_DECLARED_ACTIONS_SCHEMA_VERSION
+        ),
+        ..revision(rule_set_id, number)
     }
 }
 
@@ -719,9 +725,12 @@ async fn rule_sets_and_revisions_round_trip() {
     let (services, db) = temp_services("scryer_lifecycle_rules").await;
     let store = lifecycle_rule_set_store(&services).await;
 
+    // A rule no longer stores the level it acts at: its revision's declared
+    // heads carry it, so the round trip keeps a title head and a season head.
     let created = rule_set("rule-a", vec!["library-1".to_string()]);
+    let first = title_and_season_revision("rule-a", 1);
     store
-        .create_rule_set(&created, &revision("rule-a", 1))
+        .create_rule_set(&created, &first)
         .await
         .expect("create rule set");
 
@@ -733,7 +742,6 @@ async fn rule_sets_and_revisions_round_trip() {
     assert_eq!(loaded.name, created.name);
     assert!(!loaded.enabled);
     assert_eq!(loaded.evaluation_mode, LifecycleEvaluationMode::Disabled);
-    assert_eq!(loaded.subject_kind, LifecycleRuleSubjectKind::Title);
     assert_eq!(loaded.library_ids, vec!["library-1".to_string()]);
     assert_eq!(loaded.current_revision_number, 1);
     assert!(!loaded.system_owned);
@@ -758,9 +766,17 @@ async fn rule_sets_and_revisions_round_trip() {
         .await
         .expect("read revision")
         .expect("revision exists");
-    let expected = revision("rule-a", 1);
+    let expected = first;
     assert_eq!(stored_revision.rego_source, expected.rego_source);
     assert_eq!(stored_revision.action_spec_json, expected.action_spec_json);
+    let declared = |json: &str| {
+        scryer_application::lifecycle_rules::LifecycleDeclaredActions::from_persisted_json(json)
+            .expect("declared actions parse")
+            .expect("declared actions are current")
+    };
+    let stored_levels = declared(&stored_revision.action_spec_json).levels();
+    assert_eq!(stored_levels.len(), 2, "title and season levels survive");
+    assert_eq!(stored_levels, declared(&expected.action_spec_json).levels());
     assert_eq!(stored_revision.matcher_content_hash, "hash-1");
     assert_eq!(stored_revision.grace_days, 7);
     assert_eq!(stored_revision.created_by.as_deref(), Some("user-1"));

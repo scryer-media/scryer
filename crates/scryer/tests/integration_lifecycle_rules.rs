@@ -123,7 +123,6 @@ const DETAIL_FIELDS: &str = r#"
         enabledArming
         editedSinceEnabled
         libraryIds
-        subjectKind
         currentRevisionNumber
         graceDays
         declaredActions { heads destructive qualityProfiles addTags removeTags }
@@ -178,7 +177,6 @@ const LIST_QUERY: &str = r#"query {
         id
         name
         state
-        subjectKind
         libraryIds
         currentRevisionNumber
         graceDays
@@ -356,7 +354,6 @@ async fn lifecycle_rule_create_list_and_get_round_trip() {
     assert_eq!(rule_set["state"], "DISABLED");
     assert_eq!(rule_set["enabledArming"], "DESTRUCTIVE");
     assert_eq!(rule_set["editedSinceEnabled"], false);
-    assert_eq!(rule_set["subjectKind"], "TITLE");
     assert_eq!(rule_set["libraryIds"], json!([movie_library_id()]));
     assert_eq!(rule_set["currentRevisionNumber"], 1);
 
@@ -2020,7 +2017,7 @@ async fn a_reversible_unmonitor_journey_needs_no_confirmation() {
 }
 
 #[tokio::test]
-async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
+async fn a_subject_that_stopped_matching_is_canceled_before_it_is_acted_on() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-kept", "Rewatched Movie", true).await;
     let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER).await;
@@ -2039,8 +2036,9 @@ async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
     )
     .await;
 
-    // The subject stops matching between evaluation and handling; the fresh
-    // re-evaluation at execution time must cancel rather than delete.
+    // The subject stops matching after the first evaluation. Acting now
+    // evaluates the rule again first, and that evaluation cancels the
+    // candidate rather than letting it delete.
     ctx.titles
         .update_monitored("title-kept", false)
         .await
@@ -2055,7 +2053,7 @@ async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
     assert_no_errors(&handled);
 
     let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "CANCELED").await;
-    assert_eq!(candidate["stateReason"], "no_match_at_execution");
+    assert_eq!(candidate["stateReason"], "no_match");
 
     let survivor = ctx
         .titles

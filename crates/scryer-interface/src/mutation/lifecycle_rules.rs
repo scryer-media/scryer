@@ -376,7 +376,9 @@ impl LifecycleRuleMutations {
         ))
     }
 
-    /// Act on one rule's due titles now instead of waiting for its next fire.
+    /// Fire one rule now instead of waiting for its next scheduled fire: it is
+    /// evaluated first, as a scheduled fire does, then its due titles are
+    /// acted on, including any the evaluation adds that are already due.
     /// Rules act only through their own fires, so a call that names no rule
     /// is refused with `LIFECYCLE_ACTION_RUN_RULE_REQUIRED`.
     async fn run_lifecycle_action_handler_now(

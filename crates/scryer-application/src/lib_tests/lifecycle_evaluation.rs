@@ -65,6 +65,13 @@ pub(super) type LifecycleActionJobReceipts = Arc<Mutex<Vec<LifecycleActionJobRec
 pub(super) struct InMemoryLifecycleEvaluationRepo {
     pub(super) fail_action_completion: AtomicBool,
     pub(super) fail_next_due_read: AtomicBool,
+    /// How many cross-level conflict markers were written.
+    pub(super) actions_conflict_writes: std::sync::atomic::AtomicUsize,
+    /// How many batches those markers were written in.
+    pub(super) actions_conflict_batches: std::sync::atomic::AtomicUsize,
+    /// When set to a subject id, recording a continuing match for that
+    /// subject's candidate fails, as a lost database write would.
+    pub(super) fail_record_match_for_subject: std::sync::Mutex<Option<String>>,
     candidates: Mutex<Vec<LifecycleCandidate>>,
     exclusions: Mutex<Vec<LifecycleRuleExclusion>>,
     runs: Mutex<Vec<LifecycleEvaluationRun>>,
@@ -415,6 +422,17 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
             .iter_mut()
             .find(|candidate| candidate.id == id)
             .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        if self
+            .fail_record_match_for_subject
+            .lock()
+            .unwrap()
+            .as_deref()
+            == Some(candidate.subject_id.as_str())
+        {
+            return Err(AppError::Repository(
+                "injected candidate match write failure".into(),
+            ));
+        }
         candidate.last_matched_at = last_matched_at;
         candidate.last_evaluated_at = last_matched_at;
         candidate.reason_codes = reason_codes.to_vec();
@@ -469,6 +487,30 @@ impl LifecycleCandidateRepository for InMemoryLifecycleEvaluationRepo {
         candidate.last_evaluated_at = updated_at;
         candidate.updated_at = updated_at;
         Ok(true)
+    }
+
+    async fn set_candidate_actions_conflicts(
+        &self,
+        changes: &[(String, Option<scryer_domain::LifecycleActionsConflict>)],
+        expected_states: &[LifecycleCandidateState],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        self.actions_conflict_writes
+            .fetch_add(changes.len(), std::sync::atomic::Ordering::SeqCst);
+        self.actions_conflict_batches
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut rows = self.candidates.lock().await;
+        let mut written = 0;
+        for (id, conflict) in changes {
+            if let Some(candidate) = rows.iter_mut().find(|candidate| &candidate.id == id)
+                && expected_states.contains(&candidate.state)
+            {
+                candidate.actions_conflict = conflict.clone();
+                candidate.updated_at = updated_at;
+                written += 1;
+            }
+        }
+        Ok(written)
     }
 
     async fn finish_leased_candidate(
@@ -2889,4 +2931,312 @@ async fn a_candidate_with_a_root_deletion_journal_is_closed_not_failed_every_pas
     let runs = fixture.evaluation.all_action_runs().await;
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert_eq!(runs[0].detail, journal, "the journal is kept as it was");
+}
+
+// ── Conflicts across levels ─────────────────────────────────────────────────
+
+/// A show with two seasons: season 1 holds two episodes, season 2 one.
+struct TwoSeasons {
+    title: Title,
+    season_one: String,
+    season_one_episode: String,
+    season_two: String,
+    season_two_episode: String,
+}
+
+async fn seed_series_with_two_seasons(fixture: &EvaluationFixture) -> TwoSeasons {
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Synthetic Cross Levels".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let mut seasons = Vec::new();
+    for (season_number, episode_count) in [(1, 2), (2, 1)] {
+        let season = fixture
+            .app
+            .create_collection(
+                &fixture.user,
+                title.id.clone(),
+                "season".into(),
+                season_number.to_string(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("season");
+        let mut episodes = Vec::new();
+        for number in 1..=episode_count {
+            let episode = fixture
+                .app
+                .create_episode(
+                    &fixture.user,
+                    title.id.clone(),
+                    Some(season.id.clone()),
+                    "standard".into(),
+                    Some(number.to_string()),
+                    Some(season_number.to_string()),
+                    None,
+                    Some(format!("Episode {season_number}-{number}")),
+                    Some("2020-01-01".into()),
+                    None,
+                    false,
+                    false,
+                )
+                .await
+                .expect("episode");
+            episodes.push(episode.id);
+        }
+        seasons.push((season.id, episodes));
+    }
+    let (season_two, season_two_episodes) = seasons.pop().expect("season 2");
+    let (season_one, season_one_episodes) = seasons.pop().expect("season 1");
+    TwoSeasons {
+        title,
+        season_one,
+        season_one_episode: season_one_episodes[0].clone(),
+        season_two,
+        season_two_episode: season_two_episodes[0].clone(),
+    }
+}
+
+fn live_candidate<'a>(
+    candidates: &'a [LifecycleCandidate],
+    subject_id: &str,
+) -> &'a LifecycleCandidate {
+    candidates
+        .iter()
+        .find(|candidate| candidate.subject_id == subject_id && !candidate.state.is_terminal())
+        .unwrap_or_else(|| panic!("a live candidate for {subject_id}: {candidates:?}"))
+}
+
+fn conflict_writes(fixture: &EvaluationFixture) -> usize {
+    fixture
+        .evaluation
+        .actions_conflict_writes
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A title the rule monitors while it deletes one of its seasons' files:
+/// both candidates carry a marker that names the other side, and the
+/// season the rule does not decide carries none.
+#[tokio::test]
+async fn a_title_head_and_a_season_head_that_conflict_mark_both_candidates() {
+    let fixture = evaluation_app();
+    let show = seed_series_with_two_seasons(&fixture).await;
+    armed_source(
+        &fixture,
+        "package rules\nimport rego.v1\n\n\
+         monitor if input.facts.monitored\n\n\
+         delete_season_files if input.subject.season_number == 1\n",
+    )
+    .await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(candidates.len(), 2, "{candidates:?}");
+    let title = live_candidate(&candidates, &show.title.id);
+    assert_eq!(
+        title.actions_conflict,
+        Some(scryer_domain::LifecycleActionsConflict {
+            head: "monitor".into(),
+            other_subject_kind: "season".into(),
+            other_subject_id: show.season_one.clone(),
+            other_head: "delete_season_files".into(),
+        })
+    );
+    let season = live_candidate(&candidates, &show.season_one);
+    assert_eq!(
+        season.actions_conflict,
+        Some(scryer_domain::LifecycleActionsConflict {
+            head: "delete_season_files".into(),
+            other_subject_kind: "title".into(),
+            other_subject_id: show.title.id.clone(),
+            other_head: "monitor".into(),
+        })
+    );
+    // The marker is the only thing that changed: the decision, the state and
+    // the clock are the ones a candidate without a conflict gets.
+    assert_eq!(season.state, LifecycleCandidateState::Observing);
+    assert_eq!(season.state_reason, candidate_reason::FIRST_MATCH);
+    assert_eq!(conflict_writes(&fixture), 2);
+
+    // A second pass that decides the same writes nothing.
+    fixture.evaluate().await;
+    assert_eq!(conflict_writes(&fixture), 2);
+}
+
+/// A season pairs with its own episodes only: `monitor_season` on season 1
+/// conflicts with `delete_episode_files` on an episode of season 1, and not
+/// with the same head on an episode of season 2.
+#[tokio::test]
+async fn a_season_head_conflicts_only_with_its_own_episodes() {
+    for same_season in [true, false] {
+        let fixture = evaluation_app();
+        let show = seed_series_with_two_seasons(&fixture).await;
+        let episode = if same_season {
+            show.season_one_episode.clone()
+        } else {
+            show.season_two_episode.clone()
+        };
+        armed_source(
+            &fixture,
+            &format!(
+                "package rules\nimport rego.v1\n\n\
+                 monitor_season if input.subject.season_number == 1\n\n\
+                 delete_episode_files if input.subject.episode_id == {episode:?}\n"
+            ),
+        )
+        .await;
+        fixture.open_evaluation_gate().await;
+        fixture.evaluate().await;
+
+        let candidates = fixture.evaluation.all_candidates().await;
+        assert_eq!(candidates.len(), 2, "{candidates:?}");
+        let season = live_candidate(&candidates, &show.season_one);
+        let episode_candidate = live_candidate(&candidates, &episode);
+        if same_season {
+            assert_eq!(
+                season
+                    .actions_conflict
+                    .as_ref()
+                    .map(|conflict| conflict.other_subject_id.as_str()),
+                Some(episode.as_str())
+            );
+            assert_eq!(
+                episode_candidate.actions_conflict.as_ref().map(|conflict| (
+                    conflict.other_head.as_str(),
+                    conflict.other_subject_id.as_str()
+                )),
+                Some(("monitor_season", show.season_one.as_str()))
+            );
+        } else {
+            assert_eq!(season.actions_conflict, None, "{season:?}");
+            assert_eq!(episode_candidate.actions_conflict, None);
+            assert_eq!(conflict_writes(&fixture), 0);
+        }
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.subject_id != show.season_two)
+        );
+    }
+}
+
+/// The marker goes once the rule stops deciding one side of the pair: the
+/// title no longer matches, and the season's marker is cleared on that pass.
+#[tokio::test]
+async fn a_cleared_conflict_clears_the_marker_on_the_next_evaluation() {
+    let fixture = evaluation_app();
+    let show = seed_series_with_two_seasons(&fixture).await;
+    armed_source(
+        &fixture,
+        "package rules\nimport rego.v1\n\n\
+         monitor if not input.facts.monitored\n\n\
+         notify := \"Synthetic review\" if input.subject.title_id != \"\"\n\n\
+         delete_season_files if input.subject.season_number == 1\n",
+    )
+    .await;
+    fixture
+        .app
+        .set_title_monitored(&fixture.user, &show.title.id, false)
+        .await
+        .expect("unmonitor title");
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert!(
+        live_candidate(&candidates, &show.title.id)
+            .actions_conflict
+            .is_some()
+    );
+    assert!(
+        live_candidate(&candidates, &show.season_one)
+            .actions_conflict
+            .is_some()
+    );
+
+    fixture
+        .app
+        .set_title_monitored(&fixture.user, &show.title.id, true)
+        .await
+        .expect("monitor title");
+    fixture.evaluate().await;
+    let candidates = fixture.evaluation.all_candidates().await;
+    // The title now decides only `notify`, a different intent, so its old
+    // candidate closed and a new one opened without a marker.
+    let title = live_candidate(&candidates, &show.title.id);
+    assert_eq!(title.actions_conflict, None, "{title:?}");
+    let season = live_candidate(&candidates, &show.season_one);
+    assert_eq!(season.actions_conflict, None, "{season:?}");
+}
+
+/// Mixes that do not contradict each other are never marked: deleting a
+/// title's files and a season's, or unmonitoring a title while deleting an
+/// episode's files.
+#[tokio::test]
+async fn allowed_mixes_across_levels_are_not_marked() {
+    for source in [
+        "package rules\nimport rego.v1\n\n\
+         delete_files if input.facts.monitored\n\n\
+         delete_season_files if input.subject.season_number == 1\n",
+        "package rules\nimport rego.v1\n\n\
+         unmonitor if input.facts.monitored\n\n\
+         delete_episode_files if input.subject.season_number == 1\n",
+    ] {
+        let fixture = evaluation_app();
+        seed_series_with_two_seasons(&fixture).await;
+        armed_source(&fixture, source).await;
+        fixture.open_evaluation_gate().await;
+        fixture.evaluate().await;
+        let candidates = fixture.evaluation.all_candidates().await;
+        assert!(candidates.len() >= 2, "{candidates:?}");
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.actions_conflict.is_none()),
+            "{candidates:?}"
+        );
+        assert_eq!(conflict_writes(&fixture), 0, "{source}");
+    }
+}
+
+/// A rule whose declared heads cannot pair across levels keeps no decisions
+/// and writes no marker, even with a candidate at every level it acts on.
+#[tokio::test]
+async fn a_rule_that_cannot_conflict_across_levels_writes_no_marker() {
+    let fixture = evaluation_app();
+    seed_series_with_two_seasons(&fixture).await;
+    armed_source(
+        &fixture,
+        "package rules\nimport rego.v1\n\n\
+         monitor if input.facts.monitored\n\n\
+         monitor_season if input.subject.season_number == 1\n\n\
+         notify_episode := \"Synthetic\" if input.subject.season_number == 1\n",
+    )
+    .await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    fixture.evaluate().await;
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(
+        candidate_levels(&candidates),
+        vec!["episode", "episode", "season", "title"]
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.actions_conflict.is_none())
+    );
+    assert_eq!(conflict_writes(&fixture), 0);
 }

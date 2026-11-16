@@ -9727,7 +9727,7 @@ const en: LocaleDictionary = {
   "settings.lifecycleRunActionsNeedsRule":
     "Choose one rule above to act on it now.",
   "settings.lifecycleRunActionsHeldHelp":
-    "Acting now skips titles a run has held until the rule evaluates again. Each scheduled run evaluates first, so it looks at held titles again.",
+    "Acting now evaluates the rule first, as each scheduled run does, so it looks at held titles again. A title the evaluation adds that is already due, for example under a rule with no grace period, is acted on in the same run, deletes included.",
   "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
     "Choose the rule to act on. Rules act only for themselves, so acting now needs one rule.",
   "settings.lifecycleRunStarted": "Run started.",
@@ -10391,7 +10391,7 @@ const en: LocaleDictionary = {
   "settings.refLifecycleActionsNotify":
     "notify sends its message once, when the actions are applied. Previews and dry runs never send it.",
   "settings.refLifecycleActionsConflicts":
-    "Conflicting actions for one subject, such as monitor with unmonitor, or the same tag both added and removed, hold that subject with a reason instead of applying either.",
+    "Conflicting actions hold with a reason instead of applying either. That covers one subject, such as monitor with unmonitor or the same tag both added and removed, and also a title against its seasons or episodes and a season against its episodes, such as monitoring a show while deleting one of its seasons' files.",
   "settings.refLifecycleTagActionsTitle": "Tag actions",
   "settings.refLifecycleTagActionsNote":
     "add_tags and remove_tags write user tags on the matched title. Every label has to exist in the tag registry an administrator maintains in Settings, and labels are stored lowercase — a rule naming a tag that was deleted afterwards holds with tag_not_defined instead of writing it.",

@@ -6219,6 +6219,12 @@ pub struct LifecycleCandidate {
     /// stored JSON of its decided actions. Null on candidates written before
     /// rules declared their own actions.
     pub decided_actions_json: Option<String>,
+    /// An action the same rule decided, in its latest evaluation of the
+    /// title, for a subject enclosing or inside this one that cannot be
+    /// applied together with this candidate's own. While set, the candidate
+    /// is held with `actions_conflict` and acts on nothing.
+    #[serde(default)]
+    pub actions_conflict: Option<LifecycleActionsConflict>,
     pub grace_days: i64,
     pub first_matched_at: DateTime<Utc>,
     pub last_matched_at: DateTime<Utc>,
@@ -6235,6 +6241,21 @@ pub struct LifecycleCandidate {
     pub action_attempts: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// One head a candidate decided and the head the same rule decided for an
+/// enclosing or contained subject of the same title that cannot be applied
+/// with it, such as a title's `monitor` against a season's
+/// `delete_season_files`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleActionsConflict {
+    /// This candidate's own head, by its Rego rule name.
+    pub head: String,
+    /// The other subject's kind: `title`, `season` or `episode`.
+    pub other_subject_kind: String,
+    pub other_subject_id: String,
+    /// The other subject's head, by its Rego rule name.
+    pub other_head: String,
 }
 
 /// A subject a lifecycle rule must never act on (RFC 137 section 11).
