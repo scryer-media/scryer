@@ -1275,14 +1275,20 @@ pub(crate) async fn write_nfo_if_absent(path: &Path, content: &str) -> NfoWriteO
         tracing::warn!(error = %error, path = %path.display(), "failed to write NFO sidecar");
         return NfoWriteOutcome::Failed;
     }
-    let published = disk.link(&staged, path, Link::Hard).await;
-    let _ = disk.remove(&staged, Remove::File).await;
+    publish_staged(&disk, &staged, path, content).await
+}
+
+/// Link the staged content to `path`, never replacing a file there, and drop
+/// the staging file whatever the outcome.
+async fn publish_staged(disk: &Disk, staged: &Path, path: &Path, content: &str) -> NfoWriteOutcome {
+    let published = disk.link(staged, path, Link::Hard).await;
+    let _ = disk.remove(staged, Remove::File).await;
     let written = match published {
         Ok(LinkOutcome::Linked) => Ok(()),
         Err(error) if error.reason() == DISK_DESTINATION_EXISTS => Err(error),
         _ => {
             tracing::debug!(path = %path.display(), "hard links are unavailable here; writing the NFO sidecar in place");
-            write_new(&disk, path, content, false).await
+            write_new(disk, path, content, false).await
         }
     };
     match written {
@@ -3213,6 +3219,54 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
         assert_eq!(outcome, NfoWriteOutcome::Failed);
         assert!(!path.exists());
         assert_eq!(stdfs::read_to_string(&blocker).unwrap(), "not a directory");
+    }
+
+    /// The publish step links rather than renames, so a file that appeared
+    /// after the existence check keeps its own bytes.
+    #[tokio::test]
+    async fn publishing_never_clobbers_a_file_that_appeared_after_the_check() {
+        let disk = Disk::process();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Invented Show - S01E01.nfo");
+        let existing = "<episodedetails><title>Someone else's</title></episodedetails>\n";
+        let ours = "<episodedetails><title>Ours</title></episodedetails>\n";
+        let staged = crate::disk::staging_path_for(&path);
+        write_new(&disk, &staged, ours, true).await.unwrap();
+        stdfs::write(&path, existing).unwrap();
+
+        let outcome = publish_staged(&disk, &staged, &path, ours).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::SkippedExisting);
+        assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
+        assert!(!staged.exists(), "the staging file outlived the publish");
+    }
+
+    #[tokio::test]
+    async fn write_new_refuses_an_existing_file_and_keeps_its_bytes() {
+        let disk = Disk::process();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tvshow.nfo");
+        let existing = "<tvshow><title>Invented Show</title></tvshow>\n";
+        stdfs::write(&path, existing).unwrap();
+
+        for durable in [false, true] {
+            let error = write_new(&disk, &path, "<tvshow/>\n", durable)
+                .await
+                .expect_err("an existing file is refused");
+            assert_eq!(error.reason(), DISK_DESTINATION_EXISTS);
+            assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
+        }
+    }
+
+    #[tokio::test]
+    async fn write_new_writes_a_missing_file() {
+        let disk = Disk::process();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tvshow.nfo");
+
+        write_new(&disk, &path, "<tvshow/>\n", false).await.unwrap();
+
+        assert_eq!(stdfs::read_to_string(&path).unwrap(), "<tvshow/>\n");
     }
 
     #[test]
