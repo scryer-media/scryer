@@ -10667,10 +10667,105 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
+    /// The title's mismatch-recovery scopes, the rows
+    /// `AcquisitionScopeStatesQuery::mismatch_recovery_eligible_only` selects,
+    /// with an id after `after_id`, in id order, at most `limit` of them, and
+    /// with `latest_release_decision` left empty. Paging on the id, which
+    /// never changes, keeps every eligible row in exactly one page while rows
+    /// are updated or share an `updated_at`. The default reads the eligible
+    /// rows through [`Self::list_acquisition_scope_states`]; SQL stores
+    /// override it with one keyset read without the decision join.
+    async fn list_mismatch_recovery_scopes_for_title(
+        &self,
+        title_id: &str,
+        after_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                statuses: vec![AcquisitionScopeStatus::Wanted.as_str().to_string()],
+                title_id: Some(title_id.to_string()),
+                mismatch_recovery_eligible_only: true,
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?;
+        states.retain(|state| after_id.is_none_or(|after| state.id.as_str() > after));
+        states.sort_by(|left, right| left.id.cmp(&right.id));
+        states.truncate(usize::try_from(limit).unwrap_or(0));
+        for state in &mut states {
+            state.latest_release_decision = None;
+        }
+        Ok(states)
+    }
+
+    /// The newest release decision of each acquisition scope state in `ids`,
+    /// keyed by state id: the decision
+    /// [`Self::list_acquisition_scope_states_by_ids`] attaches. A state with
+    /// no decision, or a missing id, is absent. The default reads whole rows;
+    /// SQL stores override it with a read of the decision columns, chunked to
+    /// stay under the bind limit.
+    async fn list_latest_release_decisions_for_acquisition_scope_states(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, ReleaseDecision>> {
+        Ok(self
+            .list_acquisition_scope_states_by_ids(ids)
+            .await?
+            .into_iter()
+            .filter_map(|state| {
+                state
+                    .latest_release_decision
+                    .map(|decision| (state.id, decision))
+            })
+            .collect())
+    }
+
     async fn count_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<i64>;
+
+    /// The acquisition state rows of `title_id` counted per status, in no
+    /// particular order; a status with no rows is absent. The default reads
+    /// the title's rows; SQL stores override it with one grouped count.
+    async fn tally_acquisition_scope_states_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<Vec<AcquisitionScopeStatusTally>> {
+        let states = self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                title_id: Some(title_id.to_string()),
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?;
+        let mut tallies: Vec<AcquisitionScopeStatusTally> = Vec::new();
+        for state in states {
+            let index = match tallies
+                .iter()
+                .position(|tally| tally.status == state.status)
+            {
+                Some(index) => index,
+                None => {
+                    tallies.push(AcquisitionScopeStatusTally {
+                        status: state.status,
+                        count: 0,
+                        mismatch_recovery_eligible: 0,
+                        latest_search_at: None,
+                    });
+                    tallies.len() - 1
+                }
+            };
+            let tally = &mut tallies[index];
+            tally.count += 1;
+            tally.mismatch_recovery_eligible += i64::from(state.mismatch_recovery_eligible);
+            if state.last_search_at > tally.latest_search_at {
+                tally.latest_search_at = state.last_search_at;
+            }
+        }
+        Ok(tallies)
+    }
 
     async fn list_release_decisions_for_title(
         &self,
@@ -10782,6 +10877,10 @@ pub trait PendingReleaseRepository: Send + Sync {
         grabbed_at: Option<&str>,
     ) -> AppResult<()>;
     /// Terminal policy rejection is retained as audit history, not deleted.
+    /// Only an active row (waiting, standby, processing or needs review) is
+    /// expired; a row that has already left the active set, such as one
+    /// grabbed or superseded meanwhile, keeps its status, and the call still
+    /// returns `Ok(())`.
     async fn expire_pending_release(&self, id: &str, decision_code: &str) -> AppResult<()>;
     async fn mark_release_age_unknown_pending_release_needs_review(
         &self,

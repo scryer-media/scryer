@@ -67,6 +67,20 @@ impl ReleaseDecisionExplanationEncoder {
         }
     }
 
+    /// Encodes text `serde_json` wrote from a value to exactly the bytes
+    /// [`Self::encode`] produces for it. Text a value parse reads back as
+    /// written is already canonical and is compressed as it is; any other
+    /// text, including text a parse rejects, goes through [`Self::encode`].
+    pub fn encode_serialized(
+        &mut self,
+        serialized: &str,
+    ) -> Result<Option<Vec<u8>>, ReleaseDecisionExplanationCodecError> {
+        match check_value_parse(serialized.as_bytes()) {
+            Ok(ValueParseShape::Plain) => self.compress_canonical(serialized.as_bytes()).map(Some),
+            Ok(ValueParseShape::ExpandsRawValue) | Err(_) => self.encode(Some(serialized)),
+        }
+    }
+
     fn compress_canonical(
         &mut self,
         canonical: &[u8],
@@ -401,6 +415,39 @@ mod tests {
                     assert_eq!(decoded, Some(serialized));
                 }
                 Err(_) => assert!(reparsed.is_err(), "both paths reject it"),
+            }
+        }
+    }
+
+    #[test]
+    fn serialized_values_encode_byte_identically_to_a_reparse() {
+        let mut encoder = ReleaseDecisionExplanationEncoder::new();
+        let mut values = mixed_explanations()
+            .into_iter()
+            .flatten()
+            .filter_map(|text| serde_json::from_str::<Value>(&text).ok())
+            .collect::<Vec<_>>();
+        // A raw-value token object, floats, deep nesting a parse refuses, and
+        // a value past the size limit.
+        values.push(serde_json::json!({"$serde_json::private::RawValue": "{\"a\":1}"}));
+        values
+            .push(serde_json::json!({"score": 0.1, "ratio": 1e-7, "big": 1.7976931348623157e308}));
+        let mut deep = Value::Null;
+        for _ in 0..200 {
+            deep = Value::Array(vec![deep]);
+        }
+        values.push(deep);
+        values.push(Value::String("x".repeat(MAX_EXPLANATION_BYTES)));
+        for value in values {
+            let serialized = serde_json::to_string(&value).unwrap();
+            let direct = encoder.encode_serialized(&serialized);
+            let old = encode_release_decision_explanation(Some(&serialized));
+            match (direct, old) {
+                (Ok(direct), Ok(old)) => assert_eq!(direct, old, "{serialized:.80}"),
+                (Err(direct), Err(old)) => {
+                    assert_eq!(direct.to_string(), old.to_string(), "{serialized:.80}")
+                }
+                _ => panic!("both paths must agree: {serialized:.80}"),
             }
         }
     }

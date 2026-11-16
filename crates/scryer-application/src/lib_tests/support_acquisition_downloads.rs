@@ -413,6 +413,10 @@ pub(super) struct TrackingAcquisitionScopeStateRepo {
     /// is not running. Set this and each of this repository's writes behaves the
     /// same way.
     pub(super) writer_gate: Option<Arc<Mutex<()>>>,
+    /// Stands in for another writer between reads: after each list read, the
+    /// next id here is updated, which moves it to the front of the list's
+    /// `updated_at` order.
+    pub(super) update_after_each_list: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
 
 impl TrackingAcquisitionScopeStateRepo {
@@ -448,6 +452,18 @@ impl TrackingAcquisitionScopeStateRepo {
             .filter(|existing| existing.as_str() == id)
             .count()
     }
+}
+
+/// The SQL store's mismatch-recovery rule: a wanted scope with at least one
+/// release decision, every one of them a title mismatch.
+fn mismatch_recovery_eligible(item: &AcquisitionScopeState, decisions: &[ReleaseDecision]) -> bool {
+    let mut decisions = decisions
+        .iter()
+        .filter(|decision| decision.wanted_item_id == item.id)
+        .peekable();
+    item.status == AcquisitionScopeStatus::Wanted
+        && decisions.peek().is_some()
+        && decisions.all(|decision| decision.decision_code == "title_mismatch")
 }
 
 #[derive(Clone)]
@@ -640,17 +656,20 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             title_id,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             limit,
             offset,
             library_ids: _,
+            skip_total: _,
         } = query;
         let latest_decisions = self.release_decisions.lock().await.clone();
         let normalized_title_search = title_search.as_deref().map(str::to_lowercase);
-        let items: Vec<AcquisitionScopeState> = self
-            .store
-            .lock()
-            .await
-            .iter()
+        let mut store = self.store.lock().await;
+        // The SQL store's order: newest update first.
+        let mut ordered = store.iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let items: Vec<AcquisitionScopeState> = ordered
+            .into_iter()
             .filter(|item| {
                 let latest_decision = latest_decisions
                     .iter()
@@ -673,11 +692,19 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
                                 .as_ref()
                                 .is_some_and(|decision| decision.decision_code == *code)
                         }))
+                    && (!mismatch_recovery_eligible_only
+                        || mismatch_recovery_eligible(item, &latest_decisions))
             })
             .skip(offset.max(0) as usize)
             .take(limit.max(0) as usize)
             .cloned()
             .collect();
+        if let Some(id) = self.update_after_each_list.lock().await.pop_front()
+            && let Some(item) = store.iter_mut().find(|item| item.id == id)
+        {
+            item.updated_at = Utc::now().to_rfc3339();
+        }
+        drop(store);
         Ok(items)
     }
 
@@ -691,6 +718,7 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             title_id,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             ..
         } = query;
         let latest_decisions = self.release_decisions.lock().await.clone();
@@ -722,6 +750,8 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
                                 .as_ref()
                                 .is_some_and(|decision| decision.decision_code == *code)
                         }))
+                    && (!mismatch_recovery_eligible_only
+                        || mismatch_recovery_eligible(item, &latest_decisions))
             })
             .count() as i64)
     }
@@ -2219,7 +2249,21 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
         Ok(())
     }
 
+    /// Like the SQL store, a row that has left the active set is left alone.
     async fn expire_pending_release(&self, id: &str, _: &str) -> AppResult<()> {
+        let active = self.store.lock().await.iter().any(|release| {
+            release.id == id
+                && matches!(
+                    release.status,
+                    PendingReleaseStatus::Waiting
+                        | PendingReleaseStatus::Standby
+                        | PendingReleaseStatus::Processing
+                        | PendingReleaseStatus::NeedsReview
+                )
+        });
+        if !active {
+            return Ok(());
+        }
         self.update_pending_release_status(id, PendingReleaseStatus::Expired, None)
             .await
     }

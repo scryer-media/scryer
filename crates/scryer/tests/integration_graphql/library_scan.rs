@@ -801,6 +801,8 @@ async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_ti
                 limit: 10,
                 offset: 0,
                 library_ids: Vec::new(),
+                mismatch_recovery_eligible_only: false,
+                skip_total: false,
             },
         )
         .await
@@ -2102,6 +2104,8 @@ async fn library_movie_scan_creates_unmonitored_title_and_collection() {
                 limit: 10,
                 offset: 0,
                 library_ids: Vec::new(),
+                mismatch_recovery_eligible_only: false,
+                skip_total: false,
             },
         )
         .await

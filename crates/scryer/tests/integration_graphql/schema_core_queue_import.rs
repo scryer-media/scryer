@@ -1983,6 +1983,271 @@ async fn graphql_traverses_core_graph_relationships() {
     );
 }
 
+/// A wanted item's latest decision fills each explanation-derived field
+/// whenever the query reads it — directly, through a fragment, an inline
+/// fragment or an alias — on the title's wanted page and on a single item.
+#[tokio::test]
+async fn graphql_wanted_latest_decision_explanation_follows_the_selection() {
+    let ctx = TestContext::new().await;
+    let title = ctx
+        .titles
+        .create(Title {
+            id: Id::new().0,
+            name: "Selection Probe Film".to_string(),
+            facet: MediaFacet::Movie,
+            library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+            monitored: true,
+            tags: vec![],
+            canonical_tags: vec![],
+            external_ids: vec![],
+            root_folder_id: scryer_domain::root_folder_id_for_path("/data/movies"),
+            created_by: None,
+            created_at: chrono::Utc::now(),
+            year: Some(2024),
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            movie_release_dates: None,
+            folder_path: None,
+        })
+        .await
+        .expect("create title");
+    let wanted_item = AcquisitionScopeState {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        title_name: Some(title.name.clone()),
+        title_slug: None,
+        title_facet: Some(title.facet.as_str().to_string()),
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: None,
+        status: scryer_application::AcquisitionScopeStatus::Wanted,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: "2026-03-20T00:00:00Z".to_string(),
+        updated_at: "2026-03-20T00:00:00Z".to_string(),
+    };
+    ctx.library_state
+        .upsert_acquisition_scope_state(&wanted_item)
+        .await
+        .expect("seed wanted item");
+    let decision = ReleaseDecision {
+        id: Id::new().0,
+        wanted_item_id: wanted_item.id.clone(),
+        title_id: title.id.clone(),
+        release_title: "Selection.Probe.Film.2024.1080p.WEB-DL-GRP".to_string(),
+        release_url: None,
+        release_size_bytes: Some(4_096),
+        decision_code: "rejected".to_string(),
+        candidate_score: 90,
+        current_score: None,
+        score_delta: None,
+        explanation_json: Some(scryer_application::ReleaseDecisionExplanation::from_value(
+            &json!({ "auto_decision": { "decided_by": "quality_tier" } }),
+        )),
+        created_at: "2026-03-20T00:04:00Z".to_string(),
+    };
+    scryer_infrastructure_library::media::libraries::state_store::WantedStore::new(
+        ctx.db.datastore(),
+    )
+    .insert_release_decision(&decision)
+    .await
+    .expect("seed release decision");
+
+    let body = gql(
+        &ctx,
+        r#"
+        query WantedLatestDecision($titleId: ID!) {
+          title(id: $titleId) {
+            explained: wantedItems {
+              items { latestReleaseDecision { id ...Explained } }
+            }
+            deciding: wantedItems {
+              items {
+                latestReleaseDecision { ... on ReleaseDecisionPayload { step: decidedBy } }
+              }
+            }
+            lean: wantedItems {
+              items { latestReleaseDecision { decisionCode createdAt } }
+            }
+            releaseDecisions(limit: 1) {
+              items { wantedItem { latestReleaseDecision { explanationJson } } }
+            }
+          }
+        }
+
+        fragment Explained on ReleaseDecisionPayload {
+          explanationJson
+          decidedBy
+        }
+        "#,
+        json!({ "titleId": title.id }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let title_data = &body["data"]["title"];
+    let explained = &title_data["explained"]["items"][0]["latestReleaseDecision"];
+    assert_eq!(explained["id"], decision.id);
+    assert_eq!(
+        explained["explanationJson"],
+        json!({ "auto_decision": { "decided_by": "quality_tier" } })
+    );
+    assert_eq!(explained["decidedBy"], "QUALITY_TIER");
+    assert_eq!(
+        title_data["deciding"]["items"][0]["latestReleaseDecision"]["step"],
+        "QUALITY_TIER"
+    );
+    let lean = &title_data["lean"]["items"][0]["latestReleaseDecision"];
+    assert_eq!(lean["decisionCode"], "rejected");
+    assert!(lean["createdAt"].is_string());
+    assert_eq!(
+        title_data["releaseDecisions"]["items"][0]["wantedItem"]["latestReleaseDecision"]["explanationJson"],
+        json!({ "auto_decision": { "decided_by": "quality_tier" } })
+    );
+
+    // The top-level wanted item, wanted list and title diagnostics read the
+    // same selection from their own fields. The film is released, so the
+    // Missing list derives it.
+    let release_dates = scryer_domain::MovieReleaseDates {
+        market: "US".to_string(),
+        fetched: true,
+        theatrical_dates: vec!["2020-01-01".to_string()],
+        digital_dates: vec!["2020-04-01".to_string()],
+        physical_dates: vec![],
+        ..Default::default()
+    };
+    sqlx::query(
+        "UPDATE titles
+            SET min_availability = 'released', movie_release_dates_json = ?
+          WHERE id = ?",
+    )
+    .bind(serde_json::to_string(&release_dates).expect("serialize release dates"))
+    .bind(&title.id)
+    .execute(ctx.db.pool())
+    .await
+    .expect("mark the film released");
+    let body = gql(
+        &ctx,
+        r#"
+        query TopLevelLatestDecision($titleId: ID!, $wantedItemId: ID!, $titleSearch: String) {
+          explainedItem: wantedItem(id: $wantedItemId) {
+            latestReleaseDecision { id ...Explained }
+          }
+          leanItem: wantedItem(id: $wantedItemId) {
+            latestReleaseDecision { decisionCode }
+          }
+          explainedList: wantedItems(wantedKind: MISSING, titleSearch: $titleSearch) {
+            items {
+              latestReleaseDecision { ... on ReleaseDecisionPayload { explanationJson step: decidedBy } }
+            }
+          }
+          leanList: wantedItems(wantedKind: MISSING, titleSearch: $titleSearch) {
+            items { latestReleaseDecision { decisionCode } }
+          }
+          explainedDiagnostics: titleAcquisitionDiagnostics(titleId: $titleId) {
+            recentDecisions { id ...Explained }
+          }
+          leanDiagnostics: titleAcquisitionDiagnostics(titleId: $titleId) {
+            recentDecisions { decisionCode }
+          }
+        }
+
+        fragment Explained on ReleaseDecisionPayload {
+          explanationJson
+          decidedBy
+        }
+        "#,
+        json!({
+            "titleId": title.id,
+            "wantedItemId": wanted_item.id,
+            "titleSearch": title.name,
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let data = &body["data"];
+    let explanation = json!({ "auto_decision": { "decided_by": "quality_tier" } });
+    for explained in [
+        &data["explainedItem"]["latestReleaseDecision"],
+        &data["explainedDiagnostics"]["recentDecisions"][0],
+    ] {
+        assert_eq!(explained["id"], decision.id);
+        assert_eq!(explained["explanationJson"], explanation);
+        assert_eq!(explained["decidedBy"], "QUALITY_TIER");
+    }
+    let listed = &data["explainedList"]["items"][0]["latestReleaseDecision"];
+    assert_eq!(listed["explanationJson"], explanation);
+    assert_eq!(listed["step"], "QUALITY_TIER");
+    for lean in [
+        &data["leanItem"]["latestReleaseDecision"],
+        &data["leanList"]["items"][0]["latestReleaseDecision"],
+        &data["leanDiagnostics"]["recentDecisions"][0],
+    ] {
+        assert_eq!(lean, &json!({ "decisionCode": "rejected" }));
+    }
+
+    // A caller that reads no total gets the same page, uncounted.
+    let admin = scryer_domain::User::new_admin("admin");
+    let query = scryer_application::AcquisitionScopeStatesQuery {
+        title_id: Some(title.id.clone()),
+        limit: 10,
+        ..Default::default()
+    };
+    let (counted, total) = ctx
+        .app
+        .list_acquisition_scope_states(&admin, query.clone())
+        .await
+        .expect("list wanted items");
+    let (uncounted, skipped_total) = ctx
+        .app
+        .list_acquisition_scope_states(
+            &admin,
+            scryer_application::AcquisitionScopeStatesQuery {
+                skip_total: true,
+                ..query
+            },
+        )
+        .await
+        .expect("list wanted items without a total");
+    assert_eq!(total, 1);
+    assert_eq!(skipped_total, 0);
+    assert_eq!(counted.len(), 1);
+    assert_eq!(
+        format!("{uncounted:?}"),
+        format!("{counted:?}"),
+        "the uncounted page is the same page"
+    );
+}
+
 #[tokio::test]
 async fn graphql_introspection_exposes_queue_and_source_enums() {
     let ctx = TestContext::new().await;
