@@ -1069,8 +1069,15 @@ pub struct AcquisitionScopeStatesQuery {
     pub library_ids: Vec<String>,
     pub title_search: Option<String>,
     pub latest_decision_codes: Vec<String>,
+    /// Only scopes eligible for title-mismatch recovery: wanted, with at
+    /// least one release decision, and every decision a title mismatch.
+    /// The same rule sets `AcquisitionScopeState::mismatch_recovery_eligible`.
+    pub mismatch_recovery_eligible_only: bool,
     pub limit: i64,
     pub offset: i64,
+    /// The caller reads no total, so it is not counted and comes back as 0.
+    /// Only the use case's paged read looks at it; a store ignores it.
+    pub skip_total: bool,
 }
 
 /// Which scope an acquisition state row is about, without the rest of the row.
@@ -1080,6 +1087,17 @@ pub struct AcquisitionScopeCoordinates {
     pub episode_id: Option<String>,
     pub collection_id: Option<String>,
     pub series_movie_link_id: Option<String>,
+}
+
+/// The acquisition state rows of one title in one status, counted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcquisitionScopeStatusTally {
+    pub status: AcquisitionScopeStatus,
+    pub count: i64,
+    /// How many of these rows are eligible for title-mismatch recovery.
+    pub mismatch_recovery_eligible: i64,
+    /// The newest `last_search_at` among these rows.
+    pub latest_search_at: Option<String>,
 }
 
 /// One scope under a title, as the acquisition state row for it is keyed.

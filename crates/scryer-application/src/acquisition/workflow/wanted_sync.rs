@@ -542,8 +542,10 @@ impl AppUseCase {
             library_ids: _,
             title_search,
             latest_decision_codes,
+            mismatch_recovery_eligible_only,
             limit,
             offset,
+            skip_total,
         } = query;
         let title_search = title_search.and_then(|value| {
             let trimmed = value.trim();
@@ -563,10 +565,15 @@ impl AppUseCase {
                 library_ids: library_ids.clone(),
                 title_search: title_search.clone(),
                 latest_decision_codes: latest_decision_codes.clone(),
+                mismatch_recovery_eligible_only,
                 limit,
                 offset,
+                skip_total,
             })
             .await?;
+        if skip_total {
+            return Ok((items, 0));
+        }
         let total = self
             .services
             .workflow
@@ -578,6 +585,7 @@ impl AppUseCase {
                 library_ids,
                 title_search,
                 latest_decision_codes,
+                mismatch_recovery_eligible_only,
                 ..AcquisitionScopeStatesQuery::default()
             })
             .await?;

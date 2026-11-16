@@ -5,6 +5,7 @@ use sqlx::types::Json;
 
 use scryer_application::AppResult;
 
+use super::compressed_blob::{compress_with_thread_context, decompress_with_thread_context};
 use super::runtime::{SqlArg, SqlRow, repo_err};
 
 const COMPRESSED_JSON_MAX_BYTES: usize = 1024 * 1024;
@@ -27,11 +28,12 @@ pub fn encode_compressed_json<T: Serialize>(value: &T) -> AppResult<Vec<u8>> {
             COMPRESSED_JSON_MAX_BYTES
         )));
     }
-    zstd::bulk::compress(&json, COMPRESSED_JSON_LEVEL).map_err(repo_err)
+    compress_with_thread_context(&json, COMPRESSED_JSON_LEVEL, false).map_err(repo_err)
 }
 
 pub fn decode_compressed_json<T: DeserializeOwned>(encoded: &[u8]) -> AppResult<T> {
-    let json = zstd::bulk::decompress(encoded, COMPRESSED_JSON_MAX_BYTES).map_err(repo_err)?;
+    let json =
+        decompress_with_thread_context(encoded, COMPRESSED_JSON_MAX_BYTES).map_err(repo_err)?;
     serde_json::from_slice(&json).map_err(repo_err)
 }
 

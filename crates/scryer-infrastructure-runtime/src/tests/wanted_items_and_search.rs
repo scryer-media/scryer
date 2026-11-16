@@ -1408,12 +1408,17 @@ fn grab_batch_candidates() -> Vec<AcquisitionScopeState> {
         .into_iter()
         .enumerate()
         .map(|(index, episode_id)| {
-            episode_scope_view(
+            let mut candidate = episode_scope_view(
                 "emberfall",
                 &format!("candidate-{index}-{episode_id}"),
                 episode_id,
                 "emberfall-s1",
-            )
+            );
+            // A new row seeded with a search time keeps it through the grab.
+            if episode_id == "ep-3" {
+                candidate.last_search_at = Some("2026-04-22T00:00:00Z".to_string());
+            }
+            candidate
         })
         .collect()
 }
@@ -1476,6 +1481,11 @@ async fn grab_batch_writes_the_same_rows_as_the_per_row_path() {
         .expect("existing row kept its id");
     assert_eq!(existing.2, "grabbed");
     assert_eq!(existing.3.as_deref(), Some("2026-04-20T00:00:00Z"));
+    let seeded = batch_rows
+        .iter()
+        .find(|row| row.1.as_deref() == Some("ep-3"))
+        .expect("new row for the third episode");
+    assert_eq!(seeded.3.as_deref(), Some("2026-04-22T00:00:00Z"));
     assert!(batch_rows.iter().all(|row| row.2 == "grabbed"));
 
     let _ = std::fs::remove_file(batch_db);

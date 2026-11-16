@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult, restore_resets_hydration_derived_state};
 use scryer_domain::MediaFacet;
-use scryer_infrastructure_library::media::libraries::state_store::encode_release_decision_explanation;
+use scryer_infrastructure_library::media::libraries::state_store::ReleaseDecisionExplanationEncoder;
 use scryer_infrastructure_sql::domain_event_payload::{
     DomainEventPayloadEncoder, derive_domain_event_projections,
 };
@@ -49,11 +49,27 @@ pub fn normalize_import_object_for_target(
         now,
         columns,
         line_number,
-        &mut DomainEventPayloadEncoder::new(),
+        &mut RestoreEncoders::new(),
     )
 }
 
-/// [`normalize_import_object_for_target`] with an encoder that the rows of
+/// The payload encoders the rows of one table part share, so each row reuses
+/// the compressor state instead of building its own.
+pub(crate) struct RestoreEncoders {
+    events: DomainEventPayloadEncoder,
+    explanations: ReleaseDecisionExplanationEncoder,
+}
+
+impl RestoreEncoders {
+    pub(crate) fn new() -> Self {
+        Self {
+            events: DomainEventPayloadEncoder::new(),
+            explanations: ReleaseDecisionExplanationEncoder::new(),
+        }
+    }
+}
+
+/// [`normalize_import_object_for_target`] with encoders that the rows of
 /// one table part share.
 fn normalize_import_object_with(
     table: &str,
@@ -61,10 +77,10 @@ fn normalize_import_object_with(
     now: DateTime<Utc>,
     columns: &[ImportColumnRule],
     line_number: usize,
-    encoder: &mut DomainEventPayloadEncoder,
+    encoders: &mut RestoreEncoders,
 ) -> AppResult<()> {
     strip_nonportable_backup_fields(table, object);
-    normalize_import_object(table, object, now, encoder)?;
+    normalize_import_object(table, object, now, encoders)?;
     if table == "titles"
         && columns
             .iter()
@@ -109,14 +125,16 @@ fn normalize_import_object(
     table: &str,
     object: &mut JsonMap<String, JsonValue>,
     now: DateTime<Utc>,
-    encoder: &mut DomainEventPayloadEncoder,
+    encoders: &mut RestoreEncoders,
 ) -> AppResult<()> {
     match table {
         "settings_definitions" => normalize_settings_definition_import_object(object, now),
         "settings_values" => normalize_settings_value_import_object(object, now),
         "titles" => normalize_title_import_object(object, now),
-        "domain_events" => normalize_domain_event_import_object(object, encoder)?,
-        "release_decisions" => normalize_release_decision_import_object(object)?,
+        "domain_events" => normalize_domain_event_import_object(object, &mut encoders.events)?,
+        "release_decisions" => {
+            normalize_release_decision_import_object(object, &mut encoders.explanations)?
+        }
         _ => {}
     }
     Ok(())
@@ -184,6 +202,7 @@ fn normalize_domain_event_import_object(
 
 fn normalize_release_decision_import_object(
     object: &mut JsonMap<String, JsonValue>,
+    encoder: &mut ReleaseDecisionExplanationEncoder,
 ) -> AppResult<()> {
     // Taken rather than copied; both outcomes below write the field again.
     let Some(explanation) = object
@@ -205,7 +224,8 @@ fn normalize_release_decision_import_object(
                 format!("failed to compact restored release explanation: {error}"),
             )
         })?;
-        encode_release_decision_explanation(Some(&compact))
+        encoder
+            .encode_serialized(&compact)
             .map_err(|error| {
                 AppError::validation_refused(
                     crate::error_reasons::DATASTORE_RESTORED_EXPLANATION_INVALID,
@@ -577,7 +597,7 @@ struct RestoreRowReaderState {
     lines: RestoreLines,
     table: String,
     columns: Vec<ImportColumnRule>,
-    encoder: DomainEventPayloadEncoder,
+    encoders: RestoreEncoders,
 }
 
 impl RestoreRowReader {
@@ -608,7 +628,7 @@ impl RestoreRowReader {
                 lines,
                 table: table.to_owned(),
                 columns,
-                encoder: DomainEventPayloadEncoder::new(),
+                encoders: RestoreEncoders::new(),
             }),
         })
     }
@@ -670,7 +690,7 @@ impl RestoreRowReaderState {
                     Utc::now(),
                     &self.columns,
                     line_number,
-                    &mut self.encoder,
+                    &mut self.encoders,
                 )?;
                 Ok(Some(object))
             })();
@@ -720,6 +740,7 @@ mod tests {
 
     use super::{
         DomainEventPayloadEncoder, ImportColumnKind, ImportColumnRule,
+        ReleaseDecisionExplanationEncoder, blob_value, legacy_json_value,
         normalize_domain_event_import_object, normalize_import_object_for_target,
         normalize_release_decision_import_object, normalize_title_import_object,
         strip_nonportable_backup_fields, validate_restore_manifest_table_set,
@@ -1329,7 +1350,11 @@ mod tests {
         let mut object =
             JsonMap::from_iter([("explanation_json".to_string(), explanation.clone())]);
 
-        normalize_release_decision_import_object(&mut object).unwrap();
+        normalize_release_decision_import_object(
+            &mut object,
+            &mut ReleaseDecisionExplanationEncoder::new(),
+        )
+        .unwrap();
 
         let bytes = blob_marker_bytes(object.get("explanation_json").unwrap());
         let decoded = scryer_infrastructure_library::media::libraries::state_store::decode_release_decision_explanation(Some(&bytes))
@@ -1358,10 +1383,54 @@ mod tests {
                 ("explanation_json".to_string(), explanation),
             ]);
 
-            normalize_release_decision_import_object(&mut object)
-                .expect("invalid diagnostics must not abort restore");
+            normalize_release_decision_import_object(
+                &mut object,
+                &mut ReleaseDecisionExplanationEncoder::new(),
+            )
+            .expect("invalid diagnostics must not abort restore");
 
             assert_eq!(object.get("explanation_json"), Some(&JsonValue::Null));
+        }
+    }
+
+    #[test]
+    fn a_shared_explanation_encoder_restores_the_bytes_a_fresh_encode_writes() {
+        use scryer_infrastructure_library::media::libraries::state_store::encode_release_decision_explanation;
+
+        let mut deep = JsonValue::Null;
+        for _ in 0..200 {
+            deep = JsonValue::Array(vec![deep]);
+        }
+        let explanations = [
+            // A legacy row that stored the explanation as JSON text, written
+            // with spacing and key order a reparse changes.
+            JsonValue::String(r#"{ "z": 1, "a": { "delta": -5, "code": "size" } }"#.to_string()),
+            json!({"quality_profile_decision": {"scoring_log": [{"code": "quality_tier", "delta": 10}]}}),
+            json!({"score": 0.1, "ratio": 1e-7, "big": 1.7976931348623157e308}),
+            json!({"$serde_json::private::RawValue": "{\"a\":1}"}),
+            deep,
+            JsonValue::String(
+                serde_json::to_string(&"x".repeat(70 * 1024))
+                    .expect("oversized explanation should serialize"),
+            ),
+            JsonValue::String("not-json".to_string()),
+        ];
+        let mut shared = ReleaseDecisionExplanationEncoder::new();
+        for explanation in explanations {
+            let expected = legacy_json_value(explanation.clone(), "explanation_json")
+                .ok()
+                .and_then(|value| serde_json::to_string(&value).ok())
+                .and_then(|compact| encode_release_decision_explanation(Some(&compact)).ok())
+                .flatten()
+                .map_or(JsonValue::Null, |bytes| blob_value(&bytes));
+            let mut object =
+                JsonMap::from_iter([("explanation_json".to_string(), explanation.clone())]);
+            normalize_release_decision_import_object(&mut object, &mut shared).unwrap();
+            assert_eq!(
+                object.get("explanation_json"),
+                Some(&expected),
+                "{explanation:.80}"
+            );
         }
     }
 
@@ -1373,7 +1442,11 @@ mod tests {
         ] {
             let mut object =
                 JsonMap::from_iter([("explanation_json".to_string(), explanation.clone())]);
-            normalize_release_decision_import_object(&mut object).unwrap();
+            normalize_release_decision_import_object(
+                &mut object,
+                &mut ReleaseDecisionExplanationEncoder::new(),
+            )
+            .unwrap();
             assert_eq!(object.get("explanation_json"), Some(&explanation));
         }
     }

@@ -495,13 +495,16 @@ impl AppUseCase {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        // A title's rows are every scope it has (each episode of a series), so
+        // they are read without their decisions; only the page's own rows get
+        // their latest decision, in one read below.
         let states = self
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(&title_ids)
+            .list_acquisition_scope_states_for_title_ids_without_decisions(&title_ids)
             .await?;
-        let mut states_by_scope = HashMap::new();
+        let mut states_by_scope: HashMap<String, AcquisitionScopeState> = HashMap::new();
         for state in states {
             let scope = SubmissionScope::from_persisted(
                 &state.title_id,
@@ -517,8 +520,33 @@ impl AppUseCase {
                 states_by_scope.insert(scope_key, state);
             }
         }
+        let kept_ids = states_by_scope
+            .values()
+            .map(|state| state.id.clone())
+            .collect::<Vec<_>>();
+        let mut latest_decisions = self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .list_latest_release_decisions_for_acquisition_scope_states(&kept_ids)
+            .await?;
+        for state in states_by_scope.values_mut() {
+            state.latest_release_decision = latest_decisions.remove(&state.id);
+        }
+        // Each row moves to the last view of its scope; an earlier view of the
+        // same scope, if the page ever repeats one, gets a copy.
+        let mut remaining_views = HashMap::<String, usize>::new();
+        for view in page.iter() {
+            *remaining_views.entry(view.scope_key.clone()).or_default() += 1;
+        }
         for view in page.iter_mut() {
-            view.state = states_by_scope.get(&view.scope_key).cloned();
+            let remaining = remaining_views.entry(view.scope_key.clone()).or_default();
+            *remaining = remaining.saturating_sub(1);
+            view.state = if *remaining == 0 {
+                states_by_scope.remove(&view.scope_key)
+            } else {
+                states_by_scope.get(&view.scope_key).cloned()
+            };
         }
         // One grouped query for the page's items — never a read of the whole
         // standby table, which is uncapped by design.

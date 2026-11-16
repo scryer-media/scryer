@@ -130,8 +130,25 @@ pub(crate) struct DownloadClientComponentRuntime {
 }
 
 impl DownloadClientComponentRuntime {
-    pub(crate) fn new(engine: &Engine, wasm: &[u8]) -> Result<Self, String> {
-        let component = module_cache::download_client_component(wasm)?;
+    /// The runtime for `wasm`, linked once per cached module and shared by
+    /// every invocation of the same bytes. Each invocation still builds its own
+    /// `Store` in [`Self::instantiate`], so nothing a guest does outlives it.
+    pub(crate) fn new(engine: &Engine, wasm: &[u8]) -> Result<Arc<Self>, String> {
+        let (component, runtime) = module_cache::binding_for(
+            module_cache::ModuleFlavor::DownloadClient,
+            wasm,
+            |component| Self::link(engine, Arc::clone(component)),
+        )?;
+        if !Engine::same(component.engine(), engine) {
+            return Err(
+                "download client component cache returned an artifact for a different engine"
+                    .into(),
+            );
+        }
+        Ok(runtime)
+    }
+
+    fn link(engine: &Engine, component: Arc<Component>) -> Result<Self, String> {
         if !Engine::same(component.engine(), engine) {
             return Err(
                 "download client component cache returned an artifact for a different engine"
@@ -253,7 +270,7 @@ async fn describe_async(wasm: &[u8]) -> Result<PluginDescriptor, String> {
 async fn prepare_download_client_component(
     wasm: Arc<Vec<u8>>,
     timeout: Duration,
-) -> Result<DownloadClientComponentRuntime, String> {
+) -> Result<Arc<DownloadClientComponentRuntime>, String> {
     let prepare = tokio::task::spawn_blocking(move || {
         DownloadClientComponentRuntime::new(engine::shared_async_engine(), &wasm)
     });
@@ -887,6 +904,44 @@ pub(crate) mod tests {
     fn the_fixture_component_passes_world_validation() {
         validate_download_client_component(&fixture_component())
             .expect("the fixture must satisfy scryer:download-client/download-client@1.0.0");
+    }
+
+    /// Invocations of the same bytes share one linked binding, each still
+    /// running in a fresh `Store`, while different bytes never receive it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invocations_share_a_binding_only_for_the_same_module() {
+        let wasm = Arc::new(fixture_component());
+        let first = prepare_download_client_component(Arc::clone(&wasm), Duration::from_secs(30))
+            .await
+            .expect("the fixture must prepare");
+        let second = prepare_download_client_component(
+            Arc::new(fixture_component()),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("the same bytes must prepare again");
+        let changed = prepare_download_client_component(
+            Arc::new(read_only_fixture_component()),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("a changed module must prepare");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(!Arc::ptr_eq(&first.component, &changed.component));
+
+        let spec = test_spec(fixture_component(), configured_command_host());
+        for _ in 0..2 {
+            let response =
+                process_download_client_component(&spec, &test_connection_request(), invocation())
+                    .await
+                    .expect("each invocation must complete on the shared binding");
+            assert!(matches!(
+                test_connection_result(response),
+                PluginResult::Ok(_)
+            ));
+        }
     }
 
     /// The archive world exports the same two functions and is told apart only
