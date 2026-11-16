@@ -4231,6 +4231,10 @@ const en: LocaleDictionary = {
     "Enter a quality profile identifier.",
   "error.reason.INTERFACE_QUALITY_PROFILE_NAME_REQUIRED":
     "Enter a quality profile name.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID":
+    "Enter at least 1 for the minimum missing episodes for a pack.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID":
+    "Enter a percentage from 0 to 100 for multi-season packs.",
   "error.reason.INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED":
     "Add at least one quality tier.",
   "error.reason.INTERFACE_QUALITY_PROFILE_VALUE_INVALID":
@@ -5463,6 +5467,14 @@ const en: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Same-tier minimum score delta",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "A release in the same quality tier must beat the current file's score by at least this much.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Minimum missing episodes for a pack",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "A season pack is searched only when at least this many episodes of the season are missing. Default 2. At 1, an automatic search for one missing episode can also take a pack, which can download episodes you already have.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Minimum missing episodes for a multi-season pack (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "A multi-season pack is considered only when more than this percentage of the series' episodes is missing. Default 30. At 0, any missing episode qualifies; at 100, multi-season packs are never taken.",
   "settings.acquisitionConvergence": "Convergence & pacing",
   "settings.acquisitionPollIntervalSeconds": "Poll interval (seconds)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -7869,10 +7881,6 @@ const en: LocaleDictionary = {
     "Allow BD/Disc image releases (ISO/Blu-ray disk style releases) to pass the profile.",
   "qualityProfile.allowDv": "Dolby Vision",
   "qualityProfile.allowUpgrades": "Upgrades allowed",
-  "qualityProfile.allowPackForSingleEpisode":
-    "Allow packs for one missing episode",
-  "qualityProfile.allowPackForSingleEpisodeInfo":
-    "Off by default. Allow automatic episode searches to consider packs even when only one episode is wanted. This can download already-owned episodes. Title, episode, monitoring, quality and upgrade checks still apply.",
   "qualityProfile.allowUpgradesInfo":
     "Allow managed copies to be replaced later by a better match, but never above the selected archival quality.",
   "qualityProfile.sourceAllowlist": "Sources",

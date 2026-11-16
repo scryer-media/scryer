@@ -1423,7 +1423,6 @@ const qualityProfileCriteriaFields = `
       allowBdDisk
       allowUpgrades
       ignoreProperRepack
-      allowPackForSingleEpisode
       scoringOverrides {
         allowX265Non4K
         blockDvWithoutFallback
@@ -1435,6 +1434,8 @@ const qualityProfileCriteriaFields = `
       minScoreToGrab
       cutoffScore
       minUpgradeScoreDelta
+      minMissingEpisodesForPack
+      minMissingPercentForSeriesPack
       decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `

@@ -874,6 +874,14 @@ const zh_TW: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同級最小分數差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一品質級別的資源必須比當前檔案的分數至少高出此值。",
+  "qualityProfile.minMissingEpisodesForPack":
+    "劇集包所需的最少缺失集數",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "只有當該季缺失至少這麼多集時才搜尋季包。預設 2。設為 1 時，針對單一缺失集的自動搜尋也可以選擇劇集包，這可能會下載你已有的劇集。",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "多季劇集包所需的最少缺失比例（%）",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "只有當劇集缺失的集數超過此百分比時才考慮多季劇集包。預設 30。設為 0 時任何缺失集都符合；設為 100 時從不選擇多季劇集包。",
   "settings.acquisitionCrossTierMinDelta": "跨級最小分數差",
   "settings.acquisitionCrossTierMinDeltaHelp":
     "更高品質級別的資源必須比當前檔案的分數至少高出此值。",

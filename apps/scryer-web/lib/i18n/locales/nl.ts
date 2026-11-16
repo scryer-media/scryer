@@ -835,6 +835,14 @@ const nl: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "Minimale scoreverschil binnen niveau",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Een release in dezelfde kwaliteitsniveaumoet de score van het huidige bestand met minstens deze waarde overtreffen.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Minimum aantal ontbrekende afleveringen voor een pakket",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Een seizoenspakket wordt alleen gezocht wanneer er minstens zoveel afleveringen van het seizoen ontbreken. Standaard 2. Bij 1 kan een automatische zoekopdracht naar één ontbrekende aflevering ook een pakket nemen, waardoor afleveringen die je al hebt opnieuw kunnen worden gedownload.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Minimum ontbrekende afleveringen voor een pakket met meerdere seizoenen (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Een pakket met meerdere seizoenen wordt alleen overwogen wanneer meer dan dit percentage van de afleveringen van de serie ontbreekt. Standaard 30. Bij 0 volstaat elke ontbrekende aflevering; bij 100 worden zulke pakketten nooit genomen.",
   "settings.acquisitionConvergence": "Convergentie & timing",
   "settings.acquisitionPollIntervalSeconds": "Pollinterval (seconden)",
   "settings.acquisitionPollIntervalSecondsHelp":

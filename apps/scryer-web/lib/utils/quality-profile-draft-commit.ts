@@ -102,13 +102,15 @@ function qualityProfileCatalogEntryFromDraft(
       prefer_remux: draft.prefer_remux,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
-      allow_pack_for_single_episode: draft.allow_pack_for_single_episode,
       ignore_proper_repack: ignoresProperRepack(draft.decision_pipeline),
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
       cutoff_score: draft.cutoff_score,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
+      min_missing_episodes_for_pack: draft.min_missing_episodes_for_pack,
+      min_missing_percent_for_series_pack:
+        draft.min_missing_percent_for_series_pack,
       decision_pipeline: [...draft.decision_pipeline],
     },
   };

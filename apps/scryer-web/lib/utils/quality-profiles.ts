@@ -120,10 +120,6 @@ export function normalizeQualityProfileEntry(
       prefer_remux: readBoolean(criteria.prefer_remux, false),
       allow_bd_disk: readBoolean(criteria.allow_bd_disk, false),
       allow_upgrades: readBoolean(criteria.allow_upgrades, false),
-      allow_pack_for_single_episode: readBoolean(
-        criteria.allow_pack_for_single_episode,
-        false,
-      ),
       ignore_proper_repack: ignoresProperRepack(decisionPipeline),
       scoring_overrides: readScoringOverrides(criteria.scoring_overrides),
       cutoff_tier:
@@ -140,6 +136,12 @@ export function normalizeQualityProfileEntry(
           : null,
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         criteria.min_upgrade_score_delta,
+      ),
+      min_missing_episodes_for_pack: readMinMissingEpisodesForPack(
+        criteria.min_missing_episodes_for_pack,
+      ),
+      min_missing_percent_for_series_pack: readMinMissingPercentForSeriesPack(
+        criteria.min_missing_percent_for_series_pack,
       ),
       decision_pipeline: decisionPipeline,
     },
@@ -228,8 +230,6 @@ export function qualityProfileEntryFromGraph(
       prefer_remux: profile.criteria.preferRemux,
       allow_bd_disk: profile.criteria.allowBdDisk,
       allow_upgrades: profile.criteria.allowUpgrades,
-      allow_pack_for_single_episode:
-        profile.criteria.allowPackForSingleEpisode ?? false,
       ignore_proper_repack: ignoresProperRepack(decisionPipeline),
       scoring_overrides: scoringOverridesFromGraph(
         profile.criteria.scoringOverrides,
@@ -239,6 +239,12 @@ export function qualityProfileEntryFromGraph(
       cutoff_score: profile.criteria.cutoffScore ?? null,
       min_upgrade_score_delta: readMinUpgradeScoreDelta(
         profile.criteria.minUpgradeScoreDelta,
+      ),
+      min_missing_episodes_for_pack: readMinMissingEpisodesForPack(
+        profile.criteria.minMissingEpisodesForPack,
+      ),
+      min_missing_percent_for_series_pack: readMinMissingPercentForSeriesPack(
+        profile.criteria.minMissingPercentForSeriesPack,
       ),
       decision_pipeline: decisionPipeline,
     },
@@ -291,11 +297,28 @@ export function qualityProfileSettingsToCategoryPersonaSelections(
 
 /** The same-tier upgrade delta a profile uses when it does not set one. */
 export const DEFAULT_MIN_UPGRADE_SCORE_DELTA = 120;
+export const DEFAULT_MIN_MISSING_EPISODES_FOR_PACK = 2;
+export const DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK = 30;
 
 function readMinUpgradeScoreDelta(raw: unknown): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 0
     ? raw
     : DEFAULT_MIN_UPGRADE_SCORE_DELTA;
+}
+
+function readMinMissingEpisodesForPack(raw: unknown): number {
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 1
+    ? raw
+    : DEFAULT_MIN_MISSING_EPISODES_FOR_PACK;
+}
+
+function readMinMissingPercentForSeriesPack(raw: unknown): number {
+  return typeof raw === "number" &&
+    Number.isInteger(raw) &&
+    raw >= 0 &&
+    raw <= 100
+    ? raw
+    : DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK;
 }
 
 function readScoringOverrides(raw: unknown): ScoringOverridesPayload {
@@ -500,12 +523,14 @@ export function buildQualityProfileTemplate(
     prefer_remux: false,
     allow_bd_disk: true,
     allow_upgrades: true,
-    allow_pack_for_single_episode: false,
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
     cutoff_score: null,
     min_upgrade_score_delta: DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+    min_missing_episodes_for_pack: DEFAULT_MIN_MISSING_EPISODES_FOR_PACK,
+    min_missing_percent_for_series_pack:
+      DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
     decision_pipeline: [...DEFAULT_DECISION_PIPELINE],
   };
 }
@@ -577,8 +602,6 @@ export function toQualityProfileDraft(
       typeof entry.criteria.allow_bd_disk === "boolean"
         ? entry.criteria.allow_bd_disk
         : true,
-    allow_pack_for_single_episode:
-      entry.criteria.allow_pack_for_single_episode === true,
     allow_upgrades:
       typeof entry.criteria.allow_upgrades === "boolean"
         ? entry.criteria.allow_upgrades
@@ -599,6 +622,12 @@ export function toQualityProfileDraft(
         : null,
     min_upgrade_score_delta: readMinUpgradeScoreDelta(
       entry.criteria.min_upgrade_score_delta,
+    ),
+    min_missing_episodes_for_pack: readMinMissingEpisodesForPack(
+      entry.criteria.min_missing_episodes_for_pack,
+    ),
+    min_missing_percent_for_series_pack: readMinMissingPercentForSeriesPack(
+      entry.criteria.min_missing_percent_for_series_pack,
     ),
     decision_pipeline:
       normalizeDecisionPipeline(entry.criteria.decision_pipeline) ??
@@ -642,13 +671,15 @@ export function qualityProfileCatalogEntryFromDraft(
       prefer_remux: draft.prefer_remux,
       allow_bd_disk: draft.allow_bd_disk,
       allow_upgrades: draft.allow_upgrades,
-      allow_pack_for_single_episode: draft.allow_pack_for_single_episode,
       ignore_proper_repack: ignoresProperRepack(draft.decision_pipeline),
       scoring_overrides: draft.scoring_overrides,
       cutoff_tier: draft.cutoff_tier || null,
       min_score_to_grab: draft.min_score_to_grab,
       cutoff_score: draft.cutoff_score,
       min_upgrade_score_delta: draft.min_upgrade_score_delta,
+      min_missing_episodes_for_pack: draft.min_missing_episodes_for_pack,
+      min_missing_percent_for_series_pack:
+        draft.min_missing_percent_for_series_pack,
       decision_pipeline: [...draft.decision_pipeline],
     },
   };
@@ -675,7 +706,6 @@ export function qualityProfileEntryToMutationInput(
       preferRemux: entry.criteria.prefer_remux,
       allowBdDisk: entry.criteria.allow_bd_disk,
       allowUpgrades: entry.criteria.allow_upgrades,
-      allowPackForSingleEpisode: entry.criteria.allow_pack_for_single_episode,
       ignoreProperRepack: ignoresProperRepack(entry.criteria.decision_pipeline),
       scoringOverrides: scoringOverridesToGraphInput(
         entry.criteria.scoring_overrides,
@@ -684,6 +714,9 @@ export function qualityProfileEntryToMutationInput(
       minScoreToGrab: entry.criteria.min_score_to_grab,
       cutoffScore: entry.criteria.cutoff_score,
       minUpgradeScoreDelta: entry.criteria.min_upgrade_score_delta,
+      minMissingEpisodesForPack: entry.criteria.min_missing_episodes_for_pack,
+      minMissingPercentForSeriesPack:
+        entry.criteria.min_missing_percent_for_series_pack,
       decisionPipeline: [...entry.criteria.decision_pipeline],
     },
   };

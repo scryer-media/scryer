@@ -1011,6 +1011,14 @@ const cs: LocaleDictionary = {
     "Minimální rozdíl skóre ve stejné úrovni",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Vydání ve stejné úrovni kvality musí překonat skóre aktuálního souboru alespoň o tuto hodnotu.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Minimum chybějících epizod pro balík",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Balík sezóny se hledá jen tehdy, když v sezóně chybí alespoň tolik epizod. Výchozí 2. Při hodnotě 1 může automatické hledání jedné chybějící epizody vzít i balík, což může stáhnout epizody, které už máte.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Minimum chybějících epizod pro vícesezónní balík (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Vícesezónní balík se zvažuje jen tehdy, když chybí více než toto procento epizod seriálu. Výchozí 30. Při 0 stačí jakákoli chybějící epizoda; při 100 se vícesezónní balíky nikdy neberou.",
   "settings.acquisitionConvergence": "Konvergence a tempo",
   "settings.acquisitionPollIntervalSeconds": "Interval kontroly (sekundy)",
   "settings.acquisitionPollIntervalSecondsHelp":

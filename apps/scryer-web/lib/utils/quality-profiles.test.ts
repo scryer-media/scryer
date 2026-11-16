@@ -49,13 +49,14 @@ function makeEntry(id: string, name: string): ParsedQualityProfileEntry {
       prefer_remux: false,
       allow_bd_disk: true,
       allow_upgrades: true,
-      allow_pack_for_single_episode: false,
       ignore_proper_repack: false,
       scoring_overrides: {},
       cutoff_tier: null,
       min_score_to_grab: null,
       cutoff_score: null,
       min_upgrade_score_delta: 120,
+      min_missing_episodes_for_pack: 2,
+      min_missing_percent_for_series_pack: 30,
       decision_pipeline: [
         "QUALITY_TIER",
         "REVISION",
@@ -84,12 +85,13 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
     prefer_remux: false,
     allow_bd_disk: true,
     allow_upgrades: true,
-    allow_pack_for_single_episode: false,
     scoring_overrides: {},
     cutoff_tier: "",
     min_score_to_grab: null,
     cutoff_score: null,
     min_upgrade_score_delta: 120,
+    min_missing_episodes_for_pack: 2,
+    min_missing_percent_for_series_pack: 30,
     decision_pipeline: [
       "QUALITY_TIER",
       "REVISION",
@@ -99,38 +101,61 @@ function makeDraft(id: string, name: string): QualityProfileDraft {
   };
 }
 
-test("single-episode pack opt-in survives profile editing and mutation serialization", () => {
-  const raw = makeEntry("packs", "Explicit packs");
+test("pack thresholds survive profile editing and mutation serialization", () => {
+  const raw = makeEntry("packs", "Pack thresholds");
   const entry = normalizeQualityProfileEntry({
     ...raw,
-    criteria: { ...raw.criteria, allow_pack_for_single_episode: true },
+    criteria: {
+      ...raw.criteria,
+      min_missing_episodes_for_pack: 1,
+      min_missing_percent_for_series_pack: 55,
+    },
   });
   assert.ok(entry);
-  assert.equal(entry.criteria.allow_pack_for_single_episode, true);
+  assert.equal(entry.criteria.min_missing_episodes_for_pack, 1);
+  assert.equal(entry.criteria.min_missing_percent_for_series_pack, 55);
   const draft = toQualityProfileDraft(entry, "fallback", "Fallback");
-  assert.equal(draft.allow_pack_for_single_episode, true);
+  assert.equal(draft.min_missing_episodes_for_pack, 1);
+  assert.equal(draft.min_missing_percent_for_series_pack, 55);
   const committed = commitQualityProfileDraftToEntries([entry], draft);
-  assert.equal(
-    committed.draftEntry.criteria.allow_pack_for_single_episode,
-    true,
-  );
-  assert.equal(
-    qualityProfileEntryToMutationInput(committed.draftEntry).criteria
-      .allowPackForSingleEpisode,
-    true,
-  );
-  assert.equal(
-    normalizeQualityProfileEntry(raw)?.criteria.allow_pack_for_single_episode,
-    false,
-  );
-  for (const enabled of [false, true]) {
-    const hydrated = qualityProfileEntryFromGraph({
-      id: "packs",
-      name: "Explicit packs",
-      criteria: graphCriteria({ allowPackForSingleEpisode: enabled }),
-    });
-    assert.equal(hydrated.criteria.allow_pack_for_single_episode, enabled);
-  }
+  const input = qualityProfileEntryToMutationInput(committed.draftEntry);
+  assert.equal(input.criteria.minMissingEpisodesForPack, 1);
+  assert.equal(input.criteria.minMissingPercentForSeriesPack, 55);
+
+  const hydrated = qualityProfileEntryFromGraph({
+    id: "packs",
+    name: "Pack thresholds",
+    criteria: graphCriteria({
+      minMissingEpisodesForPack: 3,
+      minMissingPercentForSeriesPack: 0,
+    }),
+  });
+  assert.equal(hydrated.criteria.min_missing_episodes_for_pack, 3);
+  assert.equal(hydrated.criteria.min_missing_percent_for_series_pack, 0);
+});
+
+test("absent or out-of-range pack thresholds read as the defaults", () => {
+  const raw = makeEntry("packs", "Pack thresholds");
+  const { min_missing_episodes_for_pack, min_missing_percent_for_series_pack, ...rest } =
+    raw.criteria;
+  void min_missing_episodes_for_pack;
+  void min_missing_percent_for_series_pack;
+  const absent = normalizeQualityProfileEntry({ ...raw, criteria: rest });
+  assert.equal(absent?.criteria.min_missing_episodes_for_pack, 2);
+  assert.equal(absent?.criteria.min_missing_percent_for_series_pack, 30);
+  const invalid = normalizeQualityProfileEntry({
+    ...raw,
+    criteria: {
+      ...raw.criteria,
+      min_missing_episodes_for_pack: 0,
+      min_missing_percent_for_series_pack: 101,
+    },
+  });
+  assert.equal(invalid?.criteria.min_missing_episodes_for_pack, 2);
+  assert.equal(invalid?.criteria.min_missing_percent_for_series_pack, 30);
+  const template = toQualityProfileDraft(null, "new", "New");
+  assert.equal(template.min_missing_episodes_for_pack, 2);
+  assert.equal(template.min_missing_percent_for_series_pack, 30);
 });
 
 test("commitQualityProfileDraftToEntries preserves id when renaming an existing profile", () => {
@@ -310,6 +335,8 @@ function graphCriteria(
     minScoreToGrab: null,
     cutoffScore: null,
     minUpgradeScoreDelta: 120,
+    minMissingEpisodesForPack: 2,
+    minMissingPercentForSeriesPack: 30,
     decisionPipeline: [
       "QUALITY_TIER",
       "REVISION",

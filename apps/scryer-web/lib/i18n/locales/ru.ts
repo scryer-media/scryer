@@ -987,6 +987,14 @@ const ru: LocaleDictionary = {
     "Минимальная разница оценки в одном уровне качества",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Релиз того же уровня качества должен превзойти оценку текущего файла как минимум на указанное значение.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Минимум недостающих серий для пакета",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Пакет сезона ищется, только если в сезоне не хватает как минимум столько серий. По умолчанию 2. При значении 1 автоматический поиск одной недостающей серии может взять и пакет, из-за чего могут скачиваться уже имеющиеся серии.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Минимум недостающих серий для многосезонного пакета (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Многосезонный пакет рассматривается, только если не хватает более указанного процента серий сериала. По умолчанию 30. При 0 подходит любая недостающая серия; при 100 многосезонные пакеты не берутся.",
   "settings.acquisitionConvergence": "Сходимость и распределение нагрузки",
   "settings.acquisitionPollIntervalSeconds": "Интервал опроса (секунды)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -3127,10 +3135,6 @@ const ru: LocaleDictionary = {
     "Разрешить релизы в формате BD/образов дисков (ISO и релизы в формате Blu-ray Disc).",
   "qualityProfile.allowDv": "Dolby Vision",
   "qualityProfile.allowUpgrades": "Разрешить обновления",
-  "qualityProfile.allowPackForSingleEpisode":
-    "Разрешать пакет ради одной недостающей серии",
-  "qualityProfile.allowPackForSingleEpisodeInfo":
-    "По умолчанию выключено. Автоматический поиск одной серии сможет рассматривать пакеты, даже если нужна только одна серия. При этом могут скачиваться уже имеющиеся серии. Проверки названия, номеров серий, мониторинга, качества и улучшений сохраняются.",
   "qualityProfile.allowUpgradesInfo":
     "Разрешить замену существующих копий более качественными версиями, но не выше выбранного архивного качества.",
   "qualityProfile.sourceAllowlist": "Источники",
@@ -11092,6 +11096,10 @@ const ru: LocaleDictionary = {
     "Введите идентификатор профиля качества.",
   "error.reason.INTERFACE_QUALITY_PROFILE_NAME_REQUIRED":
     "Введите имя профиля качества.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID":
+    "Минимум недостающих серий для пакета должен быть не меньше 1.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID":
+    "Укажите процент от 0 до 100 для многосезонных пакетов.",
   "error.reason.INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED":
     "Добавьте хотя бы один уровень качества.",
   "error.reason.INTERFACE_QUALITY_PROFILE_VALUE_INVALID":

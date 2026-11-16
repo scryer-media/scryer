@@ -720,6 +720,14 @@ const ko: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "동일 등급 최소 점수 차",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "팩에 필요한 누락 에피소드 최소 수",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "시즌에서 이 수 이상의 에피소드가 누락된 경우에만 시즌 팩을 검색합니다. 기본값 2. 1로 설정하면 누락된 에피소드 하나에 대한 자동 검색도 팩을 받을 수 있으며, 이미 보유한 에피소드가 다운로드될 수 있습니다.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "멀티 시즌 팩에 필요한 누락 에피소드 최소 비율(%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "시리즈 에피소드 중 이 비율을 초과하여 누락된 경우에만 멀티 시즌 팩을 고려합니다. 기본값 30. 0이면 누락된 에피소드가 하나라도 있으면 해당되고, 100이면 멀티 시즌 팩을 받지 않습니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
   "settings.acquisitionPollIntervalSecondsHelp":

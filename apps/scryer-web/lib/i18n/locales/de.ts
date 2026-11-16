@@ -738,6 +738,14 @@ const de: LocaleDictionary = {
     "Mindest-Punktabstand innerhalb derselben Stufe",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Ein Release derselben Qualitätsstufe muss den Score der aktuellen Datei um mindestens diesen Wert übertreffen.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Mindestanzahl fehlender Episoden für ein Paket",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Ein Staffelpaket wird nur gesucht, wenn mindestens so viele Episoden der Staffel fehlen. Standard 2. Bei 1 kann eine automatische Suche nach einer einzelnen fehlenden Episode auch ein Paket nehmen, wodurch bereits vorhandene Episoden heruntergeladen werden können.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Mindestanteil fehlender Episoden für ein Mehrstaffelpaket (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Ein Mehrstaffelpaket wird nur berücksichtigt, wenn mehr als dieser Prozentsatz der Episoden der Serie fehlt. Standard 30. Bei 0 genügt jede fehlende Episode; bei 100 werden nie Mehrstaffelpakete genommen.",
   "settings.acquisitionConvergence": "Konvergenz & Taktung",
   "settings.acquisitionPollIntervalSeconds": "Abfrageintervall (Sekunden)",
   "settings.acquisitionPollIntervalSecondsHelp":
