@@ -2490,6 +2490,31 @@ mod tests {
     }
 
     #[test]
+    fn dovi_descriptor_without_base_layer_skips_dependency_pid() {
+        // Profile 7 enhancement-layer stream: bl_present 0, then a 13-bit dependency_pid
+        // (0x1011) with 3 reserved bits, then compatibility id 6.
+        let descriptors = [
+            DOVI_VIDEO_STREAM_DESCRIPTOR,
+            7,
+            1,
+            0,
+            0x0E,
+            0x36,
+            0x80,
+            0x8F,
+            0x60,
+        ];
+        let dovi = extract_dovi_config(&descriptors).unwrap();
+        assert_eq!(dovi, vec![1, 0, 0x0E, 0x36, 0x60]);
+
+        // Without a trailing compatibility byte the id defaults to 0.
+        let mut short = descriptors;
+        short[1] = 6;
+        let dovi = extract_dovi_config(&short[..8]).unwrap();
+        assert_eq!(dovi, vec![1, 0, 0x0E, 0x36, 0x00]);
+    }
+
+    #[test]
     fn transport_enrichment_reports_packet_payload_and_short_source_limits() {
         for (pid, packets, exhausted) in [
             (0x1fff_u16, STREAM_PROBE_PACKET_LIMIT + 10, true),

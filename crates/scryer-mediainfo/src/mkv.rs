@@ -84,7 +84,14 @@ const EBML_ID_BLOCK_ADDITION_MAPPING: u32 = 0x41E4;
 const EBML_ID_BLOCK_ADD_ID_TYPE: u32 = 0x41E7;
 const EBML_ID_BLOCK_ADD_ID_EXTRA_DATA: u32 = 0x41ED;
 const MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35: u64 = 4;
-const DOVI_BLOCK_ADD_ID_TYPE: u64 = 0x6476;
+/// BlockAddIDType FourCCs for the Dolby Vision configuration record: 'dvcC' (profiles 0-7)
+/// and 'dvvC' (profiles 8-10 and 20), per the Matroska Block Additional Mappings registry.
+const MATROSKA_BLOCK_ADD_ID_TYPE_DVCC: u64 = u32::from_be_bytes(*b"dvcC") as u64;
+const MATROSKA_BLOCK_ADD_ID_TYPE_DVVC: u64 = u32::from_be_bytes(*b"dvvC") as u64;
+const DOVI_BLOCK_ADD_ID_TYPES: [u64; 2] = [
+    MATROSKA_BLOCK_ADD_ID_TYPE_DVCC,
+    MATROSKA_BLOCK_ADD_ID_TYPE_DVVC,
+];
 const MATROSKA_TRACK_ENCODING_SCOPE_FRAME_CONTENTS: u64 = 1;
 const MATROSKA_TRACK_ENCODING_TYPE_COMPRESSION: u64 = 0;
 const MATROSKA_TRACK_ENCODING_COMP_HEADERSTRIP: u64 = 3;
@@ -2444,7 +2451,7 @@ fn track_entry_signals(track_entry_payload: &[u8]) -> MkvTrackSignals {
             }
             if signals.dovi_config.is_none() {
                 signals.dovi_config =
-                    block_addition_mapping_extra_data(payload, DOVI_BLOCK_ADD_ID_TYPE);
+                    block_addition_mapping_extra_data(payload, &DOVI_BLOCK_ADD_ID_TYPES);
             }
         } else if id == EBML_ID_TRACK_CONTENT_ENCODINGS && signals.header_strip_prefix.is_none() {
             signals.header_strip_prefix = track_header_strip_prefix(payload);
@@ -2533,8 +2540,9 @@ fn block_addition_mapping_has_type(payload: &[u8], target_type: u64) -> bool {
     block_addition_mapping_type(payload) == Some(target_type)
 }
 
-fn block_addition_mapping_extra_data(payload: &[u8], target_type: u64) -> Option<Vec<u8>> {
-    (block_addition_mapping_type(payload) == Some(target_type))
+fn block_addition_mapping_extra_data(payload: &[u8], target_types: &[u64]) -> Option<Vec<u8>> {
+    block_addition_mapping_type(payload)
+        .is_some_and(|mapping_type| target_types.contains(&mapping_type))
         .then(|| find_first_direct_ebml_child(payload, EBML_ID_BLOCK_ADD_ID_EXTRA_DATA))
         .flatten()
         .map(|payload| payload.to_vec())
@@ -3459,27 +3467,46 @@ mod tests {
 
     #[test]
     fn track_entry_signals_detect_t35_mapping_and_dovi_config() {
-        let dovi_config = vec![1, 0, 0x10, 0x00, 0x10];
-        let track_entry = [
-            make_uint_element(&[0xD7], 1),
-            make_ebml_element(
-                &[0x41, 0xE4],
-                &make_uint_element(&[0x41, 0xE7], MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35),
-            ),
-            make_ebml_element(
-                &[0x41, 0xE4],
-                &[
-                    make_uint_element(&[0x41, 0xE7], DOVI_BLOCK_ADD_ID_TYPE),
-                    make_ebml_element(&[0x41, 0xED], &dovi_config),
-                ]
-                .concat(),
-            ),
-        ]
-        .concat();
+        let track_entry_with_dovi = |block_add_id_type: u64, dovi_config: &[u8]| {
+            [
+                make_uint_element(&[0xD7], 1),
+                make_ebml_element(
+                    &[0x41, 0xE4],
+                    &make_uint_element(&[0x41, 0xE7], MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35),
+                ),
+                make_ebml_element(
+                    &[0x41, 0xE4],
+                    &[
+                        make_uint_element(&[0x41, 0xE7], block_add_id_type),
+                        make_ebml_element(&[0x41, 0xED], dovi_config),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat()
+        };
 
-        let signals = track_entry_signals(&track_entry);
+        // Wire values as muxers write them: the FourCCs 'dvcC' (profile 7 here) and
+        // 'dvvC' (profile 8 here).
+        for (block_add_id_type, dovi_config) in [
+            (0x6476_6343, vec![1, 0, 0x0E, 0x37, 0x60]),
+            (0x6476_7643, vec![1, 0, 0x10, 0x35, 0x10]),
+        ] {
+            let signals =
+                track_entry_signals(&track_entry_with_dovi(block_add_id_type, &dovi_config));
+            assert!(signals.has_itu_t_t35_mapping);
+            assert_eq!(
+                signals.dovi_config,
+                Some(dovi_config),
+                "{block_add_id_type:#x}"
+            );
+        }
+
+        // A truncated two-byte type is not a Dolby Vision mapping.
+        let signals =
+            track_entry_signals(&track_entry_with_dovi(0x6476, &[1, 0, 0x10, 0x35, 0x10]));
         assert!(signals.has_itu_t_t35_mapping);
-        assert_eq!(signals.dovi_config, Some(dovi_config));
+        assert_eq!(signals.dovi_config, None);
     }
 
     #[test]

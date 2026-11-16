@@ -97,12 +97,15 @@ pub fn authored_bytes(name: &str, explicit: bool) -> Option<Vec<u8>> {
     if profile != 0 {
         let mut dovi = vec![0; 24];
         dovi[..5].copy_from_slice(&[1, 0, profile << 1, 0x30, compatibility << 4]);
+        // Muxers store the configuration under the FourCC 'dvcC' for profiles up to 7
+        // and 'dvvC' for profile 8 and later.
+        let fourcc = if profile <= 7 { b"dvcC" } else { b"dvvC" };
         video.extend(element(
             0x41e4,
             &[
                 uint(0x41f0, 1),
-                element(0x41a4, b"dvcC"),
-                uint(0x41e7, 0x6476),
+                element(0x41a4, fourcc),
+                uint(0x41e7, u32::from_be_bytes(*fourcc).into()),
                 element(0x41ed, &dovi),
             ]
             .concat(),

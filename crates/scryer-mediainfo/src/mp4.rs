@@ -21,7 +21,8 @@ use crate::scan;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 
 const HDR10PLUS_SAMPLE_LIMIT_BYTES: u64 = 4 * 1024 * 1024;
-const MP4_DOVI_TYPES: [&str; 2] = ["dvcC", "dvvC"];
+/// Dolby Vision configuration boxes: 'dvcC' (profiles 0-7), 'dvvC' (8-10), 'dvwC' (above 10).
+const MP4_DOVI_TYPES: [&str; 3] = ["dvcC", "dvvC", "dvwC"];
 const MOV_TKHD_FLAG_ENABLED: u32 = 0x000001;
 const MP4_BOX_MAX_DEPTH: usize = 10;
 const MP4_KEEP_BOX_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -1343,8 +1344,8 @@ fn parse_stsd(data: &[u8], track: &mut Mp4TrackMetadata) {
                 if mp4_box_name_present(
                     children,
                     &[
-                        *b"avcC", *b"hvcC", *b"av1C", *b"dvcC", *b"dvvC", *b"colr", *b"pasp",
-                        *b"vpcC", *b"st3d",
+                        *b"avcC", *b"hvcC", *b"av1C", *b"dvcC", *b"dvvC", *b"dvwC", *b"colr",
+                        *b"pasp", *b"vpcC", *b"st3d",
                     ],
                 ) {
                     for_each_mp4_box(children, |child, child_payload| {
@@ -2737,6 +2738,28 @@ mod tests {
             let mut truncated = Mp4TrackMetadata::default();
             parse_stsd(&stsd, &mut truncated);
             assert!(!truncated.details.is_3d);
+        }
+    }
+
+    #[test]
+    fn every_dolby_vision_configuration_box_yields_the_record() {
+        for (name, record) in [
+            (b"dvcC", [1, 0, 0x0E, 0x37, 0x60]),
+            (b"dvvC", [1, 0, 0x10, 0x35, 0x10]),
+            (b"dvwC", [1, 0, 0x28, 0x35, 0x10]),
+        ] {
+            let mut entry = vec![0_u8; 78];
+            entry.extend(make_box(name, &record));
+            let mut stsd = vec![0, 0, 0, 0, 0, 0, 0, 1];
+            stsd.extend(make_box(b"hvc1", &entry));
+            let mut track = Mp4TrackMetadata::default();
+            parse_stsd(&stsd, &mut track);
+            assert_eq!(
+                track.dovi_config.as_deref(),
+                Some(&record[..]),
+                "{}",
+                String::from_utf8_lossy(name)
+            );
         }
     }
 

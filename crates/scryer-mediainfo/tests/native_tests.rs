@@ -771,6 +771,62 @@ fn mkv_dv_profile8() {
     assert!(is_valid_video(&a));
 }
 
+#[test]
+fn mkv_dolby_vision_mapping_is_read_from_the_header_without_extra_io() {
+    // The same file with the BlockAddIDType replaced by a same-length unregistered value
+    // must cost exactly the same reads and seeks under every profile.
+    for (name, fourcc) in [
+        ("dv_profile5.mkv", b"dvcC"),
+        ("dv_profile7.mkv", b"dvcC"),
+        ("dv_profile8.mkv", b"dvvC"),
+    ] {
+        let dv = std::fs::read(media(name)).unwrap();
+        let needle = [&[0x41, 0xE7, 0x84][..], fourcc].concat();
+        let at = dv
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .unwrap_or_else(|| panic!("{name}: BlockAddIDType {fourcc:?} not stored"));
+        let mut plain = dv.clone();
+        plain[at + 3..at + 7].copy_from_slice(b"xxxx");
+
+        for profile in [
+            AnalysisProfile::ContentProbe,
+            AnalysisProfile::Fast,
+            AnalysisProfile::DefaultRich,
+            AnalysisProfile::FfprobeParity,
+        ] {
+            let analyze = |bytes: &[u8]| {
+                scryer_mediainfo::analyze_source(
+                    &mut std::io::Cursor::new(bytes.to_vec()),
+                    "mkv",
+                    AnalyzeOptions { profile },
+                )
+                .unwrap()
+            };
+            let with_dv = analyze(&dv);
+            let without_dv = analyze(&plain);
+            assert_eq!(
+                with_dv.video_hdr_format.as_deref(),
+                Some("Dolby Vision"),
+                "{name} {profile:?}"
+            );
+            assert_eq!(without_dv.video_hdr_format, None, "{name} {profile:?}");
+            assert_eq!(
+                (
+                    with_dv.details.report.bytes_read,
+                    with_dv.details.report.seeks
+                ),
+                (
+                    without_dv.details.report.bytes_read,
+                    without_dv.details.report.seeks
+                ),
+                "{name} {profile:?}"
+            );
+            assert!(with_dv.details.report.bytes_read > 0, "{name} {profile:?}");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dolby Vision (MP4)
 // ---------------------------------------------------------------------------
