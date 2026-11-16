@@ -2297,14 +2297,6 @@ const en: LocaleDictionary = {
     "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "The destination did not pass verification.",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
-    "The lifecycle action configuration is invalid.",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "Lifecycle action is not valid for a title-scoped rule.",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE":
-    "Lifecycle action is not storable.",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
-    "This lifecycle action is not supported for titles.",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -2330,8 +2322,6 @@ const en: LocaleDictionary = {
     "Grace period must be zero or more days.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Grace period must be at most 3650 days (ten years).",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "A matcher that reads storage facts must select a configured library root.",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "Movie titles do not have an episode inventory.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -2342,8 +2332,6 @@ const en: LocaleDictionary = {
     "Preview requires between one and fifty subjects.",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Quality-profile action has no target profile.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "The rule changed while confirming; review it again before arming deletion.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -2364,20 +2352,14 @@ const en: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "This rule's action never changes anything, so it can only run as a dry run.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "Rule validation failed.",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "Sequence actions must use the sequence executor.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Lifecycle sequence step parameters are invalid.",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "The storage root the rule selects is not configured.",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
     "Lifecycle subject ID is required.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Invalid lifecycle subject kind.",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "The lifecycle subject was not found, or no longer belongs to this title.",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Tag action has no tags configured.",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "The target quality profile does not exist.",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -12428,8 +12410,6 @@ const en: LocaleDictionary = {
     "Held: checked again just before acting, the rule now decides different actions. The next evaluation replaces this candidate.",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "Held: this candidate carries an action the rule's current source no longer declares, so it never runs.",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "Held: a storage-root rule cannot run one of these actions.",
   "settings.lifecycleRuleMaxTitlesPerRun": "Titles per run",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",

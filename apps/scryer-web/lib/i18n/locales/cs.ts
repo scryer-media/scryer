@@ -7772,13 +7772,6 @@ const cs: LocaleDictionary = {
     "Otisk mazání pravidly životního cyklu se změnil.",
   "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
     "Cíle mazání pravidly životního cyklu se změnily; je nutné nové vyhodnocení.",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
-    "Konfigurace akce životního cyklu je neplatná.",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "Akce životního cyklu není platná pro pravidlo v rozsahu titulu.",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE": "Akci životního cyklu nelze uložit.",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
-    "Tato akce životního cyklu není pro tituly podporována.",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "Toto pravidlo už ve vaší knihovně provedlo akce a jeho smazání by vymazalo záznam o tom, co udělalo. Místo toho ho nastavte na Vypnuto: pravidlo se okamžitě zastaví a jeho historie zůstane.",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -7804,8 +7797,6 @@ const cs: LocaleDictionary = {
     "Ochranná lhůta musí být nula nebo více dní.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Ochranná lhůta smí být nejvýše 3650 dní (deset let).",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "Podmínka, která čte fakty o úložišti, musí vybrat nakonfigurovaný kořen knihovny.",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "Filmové tituly nemají seznam epizod.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -7816,8 +7807,6 @@ const cs: LocaleDictionary = {
     "Náhled vyžaduje jeden až padesát subjektů.",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Subjekt náhledu chybí, leží mimo knihovny pravidla, nebo nepatří k vybraným titulům a rozsahu.",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Akce profilu kvality nemá cílový profil.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Pravidlo se během potvrzování změnilo; před zapnutím mazání ho zkontrolujte znovu.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -7840,20 +7829,14 @@ const cs: LocaleDictionary = {
     "Akce tohoto pravidla nikdy nic nemění, takže může běžet jen jako zkušební běh.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Ověření pravidla selhalo.",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "Akce sekvence musí používat vykonavatele sekvencí.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Parametry kroku sekvence životního cyklu jsou neplatné.",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Kořen úložiště, který pravidlo vybírá, není nakonfigurován.",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
     "ID subjektu životního cyklu je povinné.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Neplatný druh subjektu životního cyklu.",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "Subjekt životního cyklu nebyl nalezen, nebo už k tomuto titulu nepatří.",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Akce štítku nemá nastavené žádné štítky.",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "Cílový profil kvality neexistuje.",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -7919,8 +7902,6 @@ const cs: LocaleDictionary = {
     "Pozdrženo: při kontrole těsně před akcí pravidlo rozhodlo o jiných akcích. Příští vyhodnocení tohoto kandidáta nahradí.",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "Pozdrženo: kandidát nese akci, kterou aktuální zdroj pravidla už nedeklaruje, takže se nikdy neprovede.",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "Pozdrženo: pravidlo pro kořen úložiště nemůže provést jednu z těchto akcí.",
   "settings.lifecycleRuleMaxTitlesPerRun": "Titulů na běh",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "Nejvyšší počet titulů, na které toto pravidlo v jednom běhu zasáhne. Pravidlo, které maže soubory nebo tituly, tento limit potřebuje.",

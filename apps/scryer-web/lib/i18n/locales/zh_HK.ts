@@ -6272,11 +6272,6 @@ const zh_HK: LocaleDictionary = {
     "生命週期刪除的指紋已變更。",
   "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
     "生命週期刪除的目標已變更；需要重新評估。",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID": "生命週期動作設定無效。",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "此生命週期動作不適用於作品範圍的規則。",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE": "此生命週期動作無法儲存。",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED": "作品不支援此生命週期動作。",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "此規則已在您的媒體庫執行過動作，刪除它會抹去其所做事項的紀錄。請改為設為停用：規則會立即停止，紀錄也會保留。",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -6299,8 +6294,6 @@ const zh_HK: LocaleDictionary = {
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID": "寬限期必須為零天或以上。",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "寬限期最多為 3650 天（十年）。",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "讀取儲存空間事實的條件必須選擇已設定的媒體庫根目錄。",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "電影作品沒有集數清單。",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -6311,8 +6304,6 @@ const zh_HK: LocaleDictionary = {
     "預覽需要一至五十個主體。",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "預覽主體不存在、不在規則的媒體庫中，或不屬於所選的作品與範圍。",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "質素設定檔動作沒有目標設定檔。",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "確認期間規則已變更；啟用刪除前請再次檢查。",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -6330,18 +6321,12 @@ const zh_HK: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "此規則的動作永遠不會變更任何東西，因此只能以試執行方式執行。",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "序列動作必須使用序列執行器。",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "生命週期序列步驟參數無效。",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "規則所選的儲存根目錄尚未設定。",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED": "必須提供生命週期主體 ID。",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID": "生命週期主體類型無效。",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "找不到生命週期主體，或它已不屬於此作品。",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "標籤動作沒有設定任何標籤。",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "目標質素設定檔不存在。",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -6404,8 +6389,6 @@ const zh_HK: LocaleDictionary = {
     "已暫緩：動作前重新檢查時，規則決定了不同的動作。下次評估會取代此候選項目。",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "已暫緩：此候選項目帶有規則目前原始碼已不再宣告的動作，因此永遠不會執行。",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "已暫緩：儲存根目錄規則無法執行其中一個動作。",
   "settings.lifecycleRuleMaxTitlesPerRun": "每次執行的作品數",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "此規則在一次執行中最多處理的作品數。會刪除文件或作品的規則必須設定此上限。",

@@ -6897,8 +6897,6 @@ const ru: LocaleDictionary = {
     "Отложено: при повторной проверке перед действием правило выбрало другие действия. Следующая оценка заменит этого кандидата.",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "Отложено: у кандидата есть действие, которое текущий исходный код правила больше не объявляет, поэтому оно никогда не выполнится.",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "Отложено: правило для корня хранилища не может выполнить одно из этих действий.",
   "settings.lifecycleRuleMaxTitlesPerRun": "Тайтлов за запуск",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "Наибольшее число тайтлов, с которыми правило работает за один запуск. Правилу, удаляющему файлы или тайтлы, этот лимит обязателен.",
@@ -9183,14 +9181,6 @@ const ru: LocaleDictionary = {
     "Проверка перенесённого файла не пройдена.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "Файл в месте назначения не прошёл проверку.",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
-    "Недопустимая конфигурация действия жизненного цикла.",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "Это действие жизненного цикла недопустимо для правила уровня тайтла.",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE":
-    "Действие жизненного цикла нельзя сохранить.",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
-    "Это действие жизненного цикла не поддерживается для тайтлов.",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "Это правило уже выполняло действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -9216,8 +9206,6 @@ const ru: LocaleDictionary = {
     "Период ожидания должен составлять ноль или более дней.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Период ожидания не должен превышать 3650 дней (десять лет).",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "Условие, использующее сведения о хранилище, должно выбирать настроенный корень библиотеки.",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "У фильмов нет списка серий.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -9228,8 +9216,6 @@ const ru: LocaleDictionary = {
     "Для предварительного просмотра требуется от одного до пятидесяти объектов.",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Объект предварительного просмотра отсутствует, находится вне библиотек правила или не относится к выбранным тайтлам и области действия.",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Для действия изменения профиля качества не указан целевой профиль.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Правило изменилось во время подтверждения; проверьте его ещё раз перед разрешением удаления.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -9252,20 +9238,14 @@ const ru: LocaleDictionary = {
     "Действие этого правила ничего не изменяет, поэтому оно доступно только в режиме проверки без применения.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Проверка правила не удалась.",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "Действия последовательности должны использовать исполнитель последовательностей.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Недопустимые параметры шага последовательности жизненного цикла.",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Корень хранилища, выбранный правилом, не настроен.",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
     "Требуется идентификатор объекта жизненного цикла.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Недопустимый тип объекта жизненного цикла.",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "Объект жизненного цикла не найден или больше не относится к этому тайтлу.",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Для действия назначения тегов не заданы теги.",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "Целевой профиль качества не существует.",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
