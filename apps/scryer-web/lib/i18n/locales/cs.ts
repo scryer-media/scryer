@@ -5725,10 +5725,10 @@ const cs: LocaleDictionary = {
   "settings.lifecycleTemplateAddedLongAgoTitle":
     "Přidáno před více než 180 dny",
   "settings.lifecycleTemplateAddedLongAgoDescription":
-    "Skutečná práce s daty: days_since porovná added_at titulu s časem vyhodnocení a odpovídá po 180 dnech. Sledování se zruší a soubory zůstanou. Titul bez hodnoty added_at se podrží, místo aby odpovídal.",
+    "Odpovídá titulům, které byly přidány před více než 180 dny. Sledování se zruší a soubory zůstanou. Titul, u kterého není zaznamenáno datum přidání, neodpovídá.",
   "settings.lifecycleTemplateOversizedTitle": "Předimenzovaná vydání",
   "settings.lifecycleTemplateOversizedDescription":
-    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na pojmenovaný profil kvality a znovu vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
+    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na pojmenovaný profil kvality a znovu vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ jedním ze svých profilů.",
   "settings.lifecycleTemplateFourKPurgeTitle": "Čištění 4K",
   "settings.lifecycleTemplateFourKPurgeDescription":
     "Jakýkoli titul se souborem 2160p. Po 7denní lhůtě se přesune na pojmenovaný profil kvality a znovu se vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
@@ -5738,7 +5738,7 @@ const cs: LocaleDictionary = {
     "Pozor: tato šablona maže titul a jeho soubory. Tituly, které přišly na základě žádosti, zestárnou po 120 dnech, pokud nenesou štítek „keep“.",
   "settings.lifecycleTemplateDepartedRequesterTitle": "Žadatel, který odešel",
   "settings.lifecycleTemplateDepartedRequesterDescription":
-    "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům požadovaným jedním konkrétním uživatelem — před uložením upravte zástupný text „departed-user“ v porovnávání na jméno uživatele, které máte na mysli, jinak nebude odpovídat ničemu.",
+    "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům požadovaným jedním konkrétním uživatelem — před uložením změňte zástupný text „departed-user“ na jméno uživatele, které máte na mysli, jinak nebude odpovídat ničemu.",
   "settings.lifecycleTemplateSystemAddedTitle": "Úklid po systémovém přidání",
   "settings.lifecycleTemplateSystemAddedDescription":
     "Tituly, které objevilo prohledávání a ne osoba, a mají soubor. Po 60 dnech se rozsah přestane sledovat a soubory zůstanou tam, kde jsou.",

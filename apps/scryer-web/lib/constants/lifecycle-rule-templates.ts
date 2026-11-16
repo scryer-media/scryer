@@ -50,7 +50,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 30,
     subjectFacets: ["movie", "show"],
     regoSource:
-      "package rules\nimport rego.v1\n\nwanted_without_files if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n\nunmonitor if wanted_without_files\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored == true\n\tinput.facts.has_file == false\n}\n\nunmonitor if rule_applies\n",
   },
   {
     id: "library-aging",
@@ -62,7 +62,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      'package rules\nimport rego.v1\n\naging_unkept if {\n\tinput.facts.has_file\n\tnot "keep" in input.facts.tags\n}\n\ndelete_title if aging_unkept\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.has_file == true\n\tis_array(input.facts.tags)\n\tnot "keep" in input.facts.tags\n}\n\ndelete_title if rule_applies\n',
   },
   {
     id: "added-over-180-days-ago",
@@ -72,7 +72,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 0,
     subjectFacets: ["movie"],
     regoSource:
-      "package rules\nimport rego.v1\n\nunmonitor if days_since(input.facts.added_at) > 180\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tdays_since(input.facts.added_at) > 180\n}\n\nunmonitor if rule_applies\n",
   },
   {
     id: "oversized-releases",
@@ -83,7 +83,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 0,
     subjectFacets: ["movie"],
     regoSource:
-      'package rules\nimport rego.v1\n\noversized if input.facts.total_file_size_bytes > 40000000000\n\n# Replace with the name of the quality profile to move these titles to.\nset_quality_profile := "Compact 1080p" if oversized\n\nsearch if oversized\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.facts.total_file_size_bytes)\n\tinput.facts.total_file_size_bytes > 40000000000\n}\n\nset_quality_profile := "Compact 1080p" if rule_applies\n\nsearch if rule_applies\n',
   },
   {
     id: "four-k-purge",
@@ -106,7 +106,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      'package rules\nimport rego.v1\n\nrequested_unkept if {\n\tinput.facts.requested\n\tnot "keep" in input.facts.tags\n}\n\ndelete_title if requested_unkept\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.requested == true\n\tis_array(input.facts.tags)\n\tnot "keep" in input.facts.tags\n}\n\ndelete_title if rule_applies\n',
   },
   {
     id: "departed-requester",
@@ -118,7 +118,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      'package rules\nimport rego.v1\n\ndelete_title if {\n\t"departed-user" in input.facts.requested_by_usernames\n}\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\t"departed-user" in input.facts.requested_by_usernames\n}\n\ndelete_title if rule_applies\n',
   },
   {
     id: "system-added-cleanup",
@@ -128,7 +128,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 60,
     subjectFacets: ["movie", "show"],
     regoSource:
-      "package rules\nimport rego.v1\n\nsystem_added_with_files if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n\nunmonitor if system_added_with_files\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tnot input.facts.added_by_user_id != null\n\tinput.facts.has_file == true\n}\n\nunmonitor if rule_applies\n",
   },
   {
     id: "watched-by-every-requester",
@@ -140,7 +140,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      "package rules\nimport rego.v1\n\nwatched_by_requesters if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n\ndelete_title if watched_by_requesters\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.requested == true\n\tinput.facts.watched_by_all_requesters == true\n}\n\ndelete_title if rule_applies\n",
   },
   {
     id: "expired-request-leases",
@@ -164,7 +164,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      'package rules\nimport rego.v1\n\ndelete_title if {\n\t"remove" in input.facts.tags\n}\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\t"remove" in input.facts.tags\n}\n\ndelete_title if rule_applies\n',
   },
   {
     id: "flag-for-review",
@@ -174,7 +174,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 0,
     subjectFacets: ["movie", "show"],
     regoSource:
-      'package rules\nimport rego.v1\n\nimported_over_a_year_ago if {\n\tinput.facts.has_file\n\tdays_since(input.facts.first_imported_at) > 365\n}\n\nadd_tags := ["needs-review"] if imported_over_a_year_ago\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.has_file == true\n\tdays_since(input.facts.first_imported_at) > 365\n}\n\nadd_tags := ["needs-review"] if rule_applies\n',
   },
   {
     id: "no-quality-profile",
@@ -184,7 +184,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 0,
     subjectFacets: ["movie", "show"],
     regoSource:
-      'package rules\nimport rego.v1\n\nadd_tags := ["needs-review"] if not input.facts.quality_profile_id\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tnot input.facts.quality_profile_id != null\n}\n\nadd_tags := ["needs-review"] if rule_applies\n',
   },
   {
     id: "keep-newest-three-downloaded-episodes",
@@ -197,7 +197,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      "package rules\nimport rego.v1\n\ndelete_files if input.facts.episode_position_by_air_date > 3\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.facts.episode_position_by_air_date)\n\tinput.facts.episode_position_by_air_date > 3\n}\n\ndelete_files if rule_applies\n",
   },
   {
     id: "keep-newest-two-downloaded-seasons",
@@ -210,7 +210,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     destructive: true,
     maxTitlesPerRun: 10,
     regoSource:
-      "package rules\nimport rego.v1\n\ndelete_files if input.facts.season_position_by_air_date > 2\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tis_number(input.facts.season_position_by_air_date)\n\tinput.facts.season_position_by_air_date > 2\n}\n\ndelete_files if rule_applies\n",
   },
   {
     id: "left-every-public-list",
@@ -220,7 +220,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 0,
     subjectFacets: ["movie", "show"],
     regoSource:
-      "package rules\nimport rego.v1\n\nleft_lists_a_month_ago if {\n\tinput.facts.lists_left_all\n\tinput.facts.lists_left_handled\n\tdays_since(input.facts.lists_left_at) > 30\n}\n\nunmonitor if left_lists_a_month_ago\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.lists_left_all == true\n\tinput.facts.lists_left_handled == true\n\tdays_since(input.facts.lists_left_at) > 30\n}\n\nunmonitor if rule_applies\n",
   },
   {
     id: "list-added-never-watched",
@@ -230,7 +230,7 @@ export const LIFECYCLE_RULE_TEMPLATES: LifecycleRuleTemplate[] = [
     graceDays: 0,
     subjectFacets: ["movie", "show"],
     regoSource:
-      'package rules\nimport rego.v1\n\nlist_added_unwatched if {\n\tinput.facts.lists_added_by_list\n\tinput.facts.lists_days_on_list > 90\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n\nadd_tags := ["needs-review"] if list_added_unwatched\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.lists_added_by_list == true\n\tis_number(input.facts.lists_days_on_list)\n\tinput.facts.lists_days_on_list > 90\n\tcount(input.facts.watched_by_user_ids) == 0\n}\n\nadd_tags := ["needs-review"] if rule_applies\n',
   },
 ];
 

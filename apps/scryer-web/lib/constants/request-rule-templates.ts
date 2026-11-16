@@ -61,7 +61,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateDenyAdultTitle",
     descriptionKey: "settings.requestTemplateDenyAdultDescription",
     regoSource:
-      'package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains "adult_content" if {\n\tinput.facts.is_adult\n}\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.is_adult == true\n}\n\ndeny if rule_applies\n\nreasons contains "adult_content" if rule_applies\n',
   },
   {
     id: "monthly-approval-quota",
@@ -69,7 +69,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateMonthlyQuotaTitle",
     descriptionKey: "settings.requestTemplateMonthlyQuotaDescription",
     regoSource:
-      "package rules\nimport rego.v1\n\nmanual if {\n\tinput.facts.approved_last_30d >= 5\n}\n",
+      "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.approved_last_30d >= 5\n}\n\nmanual if rule_applies\n",
   },
   {
     id: "hold-approval-policy-list-requests",
@@ -77,7 +77,7 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     titleKey: "settings.requestTemplateHoldApprovalListsTitle",
     descriptionKey: "settings.requestTemplateHoldApprovalListsDescription",
     regoSource:
-      'package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n\nmanual if rule_applies\n',
   },
   {
     id: "deny-personal-list-above-1080p",
@@ -86,6 +86,6 @@ export const REQUEST_RULE_TEMPLATES: RequestRuleTemplate[] = [
     descriptionKey:
       "settings.requestTemplateDenyPersonalListAbove1080pDescription",
     regoSource:
-      'package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n',
+      'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n\ndeny if rule_applies\n',
   },
 ];

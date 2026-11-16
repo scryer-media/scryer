@@ -10403,10 +10403,10 @@ const en: LocaleDictionary = {
     'Caution: this template deletes the title and its files. Anything holding a file ages out unless it carries the "keep" tag. A 180-day grace period runs first, and the instance gates plus this rule\'s own arming still have to agree before anything is removed.',
   "settings.lifecycleTemplateAddedLongAgoTitle": "Added over 180 days ago",
   "settings.lifecycleTemplateAddedLongAgoDescription":
-    "Real date math: days_since compares the title's added_at with the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
+    "Matches titles added more than 180 days ago. The scope is unmonitored and the files stay. A title with no recorded added date does not match.",
   "settings.lifecycleTemplateOversizedTitle": "Oversized releases",
   "settings.lifecycleTemplateOversizedDescription":
-    'Titles whose files total more than 40 GB. Moves the title onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
+    'Titles whose files total more than 40 GB. Moves the title onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder with one of your profiles before saving.',
   "settings.lifecycleTemplateFourKPurgeTitle": "4K purge",
   "settings.lifecycleTemplateFourKPurgeDescription":
     'Any title holding a 2160p file. After a 7-day grace period it moves onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
@@ -10415,7 +10415,7 @@ const en: LocaleDictionary = {
     'Caution: this template deletes the title and its files. Titles that came in from a request age out after 120 days unless they carry the "keep" tag.',
   "settings.lifecycleTemplateDepartedRequesterTitle": "Departed requester",
   "settings.lifecycleTemplateDepartedRequesterDescription":
-    'Caution: this template deletes the title and its files. It matches titles requested by one named user — edit the "departed-user" placeholder in the matcher to the username you mean before saving, or it will match nothing.',
+    'Caution: this template deletes the title and its files. It matches titles requested by one named user — change the "departed-user" placeholder to the username you mean before saving, or it will match nothing.',
   "settings.lifecycleTemplateSystemAddedTitle": "System-added cleanup",
   "settings.lifecycleTemplateSystemAddedDescription":
     "Titles a scan discovered rather than a person adding them, and that hold a file. After 60 days the scope is unmonitored and the files stay where they are.",
@@ -12864,7 +12864,7 @@ const en: LocaleDictionary = {
   "rules.template.block-old-releases.title":
     "Penalize releases older than 1 year",
   "rules.template.block-old-releases.description":
-    "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library",
+    "Strongly penalize releases that were more than 365 days old when found or grabbed. Age is frozen at the grab, so a file never turns old by sitting in the library. A release whose age is not known is not penalized",
   "rules.template.block-obfuscated-retagged.title":
     "Penalize obfuscated or retagged releases",
   "rules.template.block-obfuscated-retagged.description":
