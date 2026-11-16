@@ -1771,3 +1771,235 @@ async fn a_manual_run_acts_on_a_candidate_its_evaluation_opens_already_due() {
     );
     assert!(!path.exists(), "the due delete ran in the same manual run");
 }
+
+// ── Monitoring conflicts across rules and levels ────────────────────────────
+
+/// Create, arm and evaluate a rule, acknowledging the candidates it opened
+/// when it deletes, then run one action pass over every rule.
+async fn add_rule_and_act(
+    fixture: &ExecutionFixture,
+    name: &str,
+    rego_source: &str,
+) -> (
+    String,
+    crate::lifecycle_rules::LifecycleActionHandlingReport,
+) {
+    let (rule_set_id, _) = arm_and_evaluate_all(
+        fixture,
+        crate::lifecycle_rules::LifecycleRuleDraft {
+            name: name.to_string(),
+            ..cross_level_draft(rego_source)
+        },
+    )
+    .await;
+    let rule = fixture
+        .app
+        .require_lifecycle_rule_set(&rule_set_id)
+        .await
+        .expect("rule");
+    if rule.effect_arming == LifecycleEffectArming::Destructive {
+        let live = fixture
+            .evaluation
+            .all_candidates()
+            .await
+            .iter()
+            .filter(|candidate| {
+                candidate.rule_set_id == rule_set_id && !candidate.state.is_terminal()
+            })
+            .count();
+        super::lifecycle_rules::arm_rule(
+            &fixture.app,
+            &fixture.user,
+            &rule_set_id,
+            LifecycleEffectArming::Destructive,
+            Some(i64::try_from(live).expect("candidate count")),
+        )
+        .await;
+    }
+    let report = fixture
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("action pass");
+    (rule_set_id, report)
+}
+
+async fn rule_candidates(
+    fixture: &ExecutionFixture,
+    rule_set_id: &str,
+) -> Vec<scryer_domain::LifecycleCandidate> {
+    fixture
+        .evaluation
+        .all_candidates()
+        .await
+        .into_iter()
+        .filter(|candidate| candidate.rule_set_id == rule_set_id)
+        .collect()
+}
+
+/// One rule monitored a show; another rule's season delete on the same show
+/// would undo that, so it holds with `monitoring_conflict` and deletes
+/// nothing.
+#[tokio::test]
+async fn a_season_delete_holds_after_another_rule_monitored_its_title() {
+    let fixture = title_fixture("Synthetic Season Tug", MediaFacet::Series).await;
+    let (season, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let path = fixture.root.join("Season Tug/Season 01/S01E01.mkv");
+    add_episode_file(&fixture, &episode, "Season Tug/Season 01/S01E01.mkv").await;
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor title");
+
+    let (_, report) = add_rule_and_act(
+        &fixture.execution,
+        "Synthetic title monitor",
+        "package rules\nimport rego.v1\n\nmonitor if not input.facts.monitored\n",
+    )
+    .await;
+    assert_eq!(report.executed, 1, "{report:?}");
+
+    let (delete_rule, report) = add_rule_and_act(
+        &fixture.execution,
+        "Synthetic season delete",
+        "package rules\nimport rego.v1\n\n\
+         delete_season_files if input.subject.season_number == 1\n",
+    )
+    .await;
+    assert_eq!(report.executed, 0, "{report:?}");
+    let candidates = rule_candidates(&fixture.execution, &delete_rule).await;
+    let held = candidates
+        .iter()
+        .find(|candidate| candidate.subject_id == season.id)
+        .unwrap_or_else(|| panic!("the season has a candidate: {candidates:?}"));
+    assert_eq!(held.state, scryer_domain::LifecycleCandidateState::Blocked);
+    assert_eq!(
+        held.state_reason,
+        crate::lifecycle_rules::execution_reason::MONITORING_CONFLICT
+    );
+    assert_no_steps(&fixture, held).await;
+    assert!(path.exists(), "the season's file stays on disk");
+}
+
+/// One rule monitored an episode; another rule unmonitoring the episode's
+/// show would undo that, so it holds with `monitoring_conflict`.
+#[tokio::test]
+async fn a_title_unmonitor_holds_after_another_rule_monitored_one_of_its_episodes() {
+    let fixture = title_fixture("Synthetic Episode Tug", MediaFacet::Series).await;
+    let (_, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    fixture
+        .execution
+        .app
+        .set_episode_monitored(&fixture.execution.user, &episode.id, false)
+        .await
+        .expect("unmonitor episode");
+
+    let (_, report) = add_rule_and_act(
+        &fixture.execution,
+        "Synthetic episode monitor",
+        &format!(
+            "package rules\nimport rego.v1\n\n\
+             monitor_episode if input.subject.episode_id == {:?}\n",
+            episode.id
+        ),
+    )
+    .await;
+    assert_eq!(report.executed, 1, "{report:?}");
+
+    let (unmonitor_rule, report) = add_rule_and_act(
+        &fixture.execution,
+        "Synthetic title unmonitor",
+        &format!(
+            "package rules\nimport rego.v1\n\n\
+             unmonitor if input.subject.title_id == {:?}\n",
+            fixture.title.id
+        ),
+    )
+    .await;
+    assert_eq!(report.executed, 0, "{report:?}");
+    let candidates = rule_candidates(&fixture.execution, &unmonitor_rule).await;
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    assert_eq!(
+        candidates[0].state,
+        scryer_domain::LifecycleCandidateState::Blocked
+    );
+    assert_eq!(
+        candidates[0].state_reason,
+        crate::lifecycle_rules::execution_reason::MONITORING_CONFLICT
+    );
+    assert!(
+        fixture
+            .execution
+            .app
+            .get_title(&fixture.execution.user, &fixture.title.id)
+            .await
+            .expect("read title")
+            .expect("title exists")
+            .monitored,
+        "the show stays monitored"
+    );
+}
+
+/// A monitoring change on one show never holds an opposite change on an
+/// unrelated title.
+#[tokio::test]
+async fn an_opposite_monitoring_change_on_an_unrelated_title_does_not_hold() {
+    let fixture = title_fixture("Synthetic Episode Side", MediaFacet::Series).await;
+    let (_, episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    fixture
+        .execution
+        .app
+        .set_episode_monitored(&fixture.execution.user, &episode.id, false)
+        .await
+        .expect("unmonitor episode");
+    let other = seed_title(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        "Synthetic Unrelated Title",
+        true,
+    )
+    .await;
+
+    let (_, report) = add_rule_and_act(
+        &fixture.execution,
+        "Synthetic episode monitor",
+        &format!(
+            "package rules\nimport rego.v1\n\n\
+             monitor_episode if input.subject.episode_id == {:?}\n",
+            episode.id
+        ),
+    )
+    .await;
+    assert_eq!(report.executed, 1, "{report:?}");
+
+    let (unmonitor_rule, report) = add_rule_and_act(
+        &fixture.execution,
+        "Synthetic unrelated unmonitor",
+        &format!(
+            "package rules\nimport rego.v1\n\n\
+             unmonitor if input.subject.title_id == {:?}\n",
+            other.id
+        ),
+    )
+    .await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    let candidates = rule_candidates(&fixture.execution, &unmonitor_rule).await;
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.state != scryer_domain::LifecycleCandidateState::Blocked),
+        "{candidates:?}"
+    );
+    assert!(
+        !fixture
+            .execution
+            .app
+            .get_title(&fixture.execution.user, &other.id)
+            .await
+            .expect("read title")
+            .expect("title exists")
+            .monitored
+    );
+}

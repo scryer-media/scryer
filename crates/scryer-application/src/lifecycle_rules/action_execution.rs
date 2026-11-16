@@ -91,13 +91,19 @@ pub(super) struct MonitoringSides {
 }
 
 impl MonitoringSides {
+    /// Judged by each head's base action, so a season or episode head counts
+    /// the same as its title head: monitoring part of a show opposes
+    /// unmonitoring or deleting any part of it.
     fn declared(declared: &LifecycleDeclaredActions) -> Self {
         use scryer_rules::lifecycle_actions::LifecycleActionHead as Head;
         Self {
-            monitors: declared.heads.contains(&Head::Monitor),
+            monitors: declared
+                .heads
+                .iter()
+                .any(|head| head.base() == Head::Monitor),
             unmonitors: declared.heads.iter().any(|head| {
                 matches!(
-                    head,
+                    head.base(),
                     Head::Unmonitor | Head::DeleteFiles | Head::DeleteTitle
                 )
             }),
