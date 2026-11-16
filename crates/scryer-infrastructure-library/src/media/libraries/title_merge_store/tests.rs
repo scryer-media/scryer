@@ -1221,3 +1221,135 @@ async fn a_merge_advances_the_title_folder_write_counter() {
         "retiring the source title changes the title set"
     );
 }
+
+async fn insert_monitor_selection(
+    datastore: &StoreDatastore,
+    owner_kind: &str,
+    owner_id: &str,
+    season: &str,
+) {
+    run(
+        datastore,
+        "INSERT INTO monitor_selections (owner_kind, owner_id, entry_kind, entry_key, label,
+                                         external_ids_json, created_at, updated_at)
+         VALUES ({}, {}, 'season', {}, NULL, '[]', '2026-01-01T00:00:00Z',
+                 '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(owner_kind.to_string()),
+            SqlArg::Text(owner_id.to_string()),
+            SqlArg::Text(season.to_string()),
+        ],
+    )
+    .await;
+}
+
+async fn monitor_selection_seasons(
+    datastore: &StoreDatastore,
+    owner_kind: &str,
+    owner_id: &str,
+) -> Vec<String> {
+    SqlRuntime::fetch_all(
+        datastore.read_exec(),
+        "SELECT entry_key FROM monitor_selections
+          WHERE owner_kind = {} AND owner_id = {}
+          ORDER BY entry_key",
+        &[
+            SqlArg::Text(owner_kind.to_string()),
+            SqlArg::Text(owner_id.to_string()),
+        ],
+    )
+    .await
+    .expect("the selection query should run")
+    .iter()
+    .map(|row| row.text("entry_key").expect("an entry key"))
+    .collect()
+}
+
+async fn insert_media_request_for_title(
+    datastore: &StoreDatastore,
+    id: &str,
+    library_id: &str,
+    created_title_id: &str,
+) {
+    run(
+        datastore,
+        "INSERT INTO media_requests (id, library_id, facet, status, identity_fingerprint, title,
+                                     created_title_id, created_by_user_id, created_at,
+                                     updated_at)
+         VALUES ({}, {}, 'series', 'approved', {}, {}, {}, 'requester-under-test',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(library_id.to_string()),
+            SqlArg::Text(format!("fingerprint-{id}")),
+            SqlArg::Text(format!("Request {id}")),
+            SqlArg::Text(created_title_id.to_string()),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_merge_clears_the_retired_titles_monitor_selections_and_keeps_the_survivors() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    for (library_id, slug) in [("library-a", "a"), ("library-b", "b")] {
+        run(
+            &datastore,
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ({}, 'series', {}, {}, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            vec![
+                SqlArg::Text(library_id.to_string()),
+                SqlArg::Text(slug.to_uppercase()),
+                SqlArg::Text(slug.to_string()),
+            ],
+        )
+        .await;
+    }
+    run(
+        &datastore,
+        "INSERT INTO users (id, username, password_hash, password_change_required, account_kind,
+                            status)
+         VALUES ('requester-under-test', 'requester-under-test', NULL, 0, 'local', 'active')",
+        vec![],
+    )
+    .await;
+    insert_monitor_selection(&datastore, "title", SOURCE, "1").await;
+    insert_monitor_selection(&datastore, "title", SOURCE, "2").await;
+    insert_monitor_selection(&datastore, "title", DESTINATION, "2").await;
+    // The source's request retires with the merge; the destination's stays.
+    insert_media_request_for_title(&datastore, "request-source", "library-a", SOURCE).await;
+    insert_media_request_for_title(&datastore, "request-destination", "library-b", DESTINATION)
+        .await;
+    insert_monitor_selection(&datastore, "media_request", "request-source", "1").await;
+    insert_monitor_selection(&datastore, "media_request", "request-destination", "2").await;
+
+    let plan = plan_for(&store).await;
+    store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 0);
+    assert!(
+        monitor_selection_seasons(&datastore, "title", SOURCE)
+            .await
+            .is_empty(),
+        "the retired title keeps no monitor selection"
+    );
+    assert_eq!(
+        monitor_selection_seasons(&datastore, "title", DESTINATION).await,
+        vec!["2".to_string()],
+        "the surviving title's selection is untouched"
+    );
+    assert!(
+        monitor_selection_seasons(&datastore, "media_request", "request-source")
+            .await
+            .is_empty(),
+        "the retired request keeps no monitor selection"
+    );
+    assert_eq!(
+        monitor_selection_seasons(&datastore, "media_request", "request-destination").await,
+        vec!["2".to_string()],
+    );
+}

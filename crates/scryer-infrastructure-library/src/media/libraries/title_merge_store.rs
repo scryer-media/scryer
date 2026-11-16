@@ -32,6 +32,10 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::media::monitor_selections::{
+    OWNER_KIND_TITLE, delete_monitor_selections_for_requests_created_title_tx,
+    replace_monitor_selection_tx,
+};
 use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use scryer_infrastructure_sql::domain_event_payload::{
@@ -964,6 +968,9 @@ async fn purge_title_dependent_records(
     current_operation_id: Option<&str>,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
+    // The source's media requests retire below, and their monitor selections
+    // have no foreign key to go with them.
+    delete_monitor_selections_for_requests_created_title_tx(tx, &map.source_title_id).await?;
     for (table, column) in DROPPED_TITLE_TABLES {
         let removed = if *table == OPERATION_VERIFICATIONS_TABLE {
             // The merging operation's own proofs stay: its cleanup step, which
@@ -1017,6 +1024,9 @@ async fn retire_source_title(
     map: &MergeIdentityMap,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
+    // `monitor_selections` has no foreign key to the title, so its rows are
+    // cleared the way a title delete clears them.
+    replace_monitor_selection_tx(tx, OWNER_KIND_TITLE, &map.source_title_id, None).await?;
     let removed = tx
         .execute(
             "DELETE FROM titles WHERE id = {}",

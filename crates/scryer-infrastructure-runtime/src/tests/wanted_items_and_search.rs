@@ -1832,3 +1832,167 @@ async fn scope_coordinates_by_status_match_the_full_state_read() {
 
     let _ = std::fs::remove_file(db);
 }
+
+#[tokio::test]
+async fn scope_reads_find_the_oldest_rows_of_a_title_with_many_scopes() {
+    use scryer_application::AcquisitionScopeKey;
+
+    let (services, db) = temp_services("scryer_scope_read_by_key").await;
+    let (catalog, workflow, _index_dir) = super::search_stores(&services).await;
+    TitleRepository::create(&catalog, make_test_title("title-cinderwick", None))
+        .await
+        .expect("title should insert");
+
+    // More episode rows than one list page, all newer than the collection and
+    // link rows, so a newest-first page of the title's rows never reaches them.
+    // Every episode row carries the collection id, as episode scopes do.
+    let mut conn = services.pool().acquire().await.expect("connection");
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("waive foreign keys");
+    sqlx::query("BEGIN")
+        .execute(&mut *conn)
+        .await
+        .expect("begin");
+    for n in 0..520_usize {
+        sqlx::query(
+            "INSERT INTO wanted_items
+                (id, title_id, episode_id, collection_id, media_type, status, created_at,
+                 updated_at)
+             VALUES (?, 'title-cinderwick', ?, 'collection-cinderwick', 'episode', 'wanted',
+                     '2026-01-01T00:00:00Z', ?)",
+        )
+        .bind(format!("wanted-episode-{n:03}"))
+        .bind(format!("episode-{n:03}"))
+        .bind(format!("2026-03-01T00:{:02}:{:02}Z", n / 60, n % 60))
+        .execute(&mut *conn)
+        .await
+        .expect("episode row should insert");
+    }
+    for (id, collection_id, link_id, media_type) in [
+        (
+            "wanted-collection",
+            Some("collection-cinderwick"),
+            None,
+            "episode",
+        ),
+        ("wanted-link", None, Some("link-cinderwick"), "series_movie"),
+    ] {
+        sqlx::query(
+            "INSERT INTO wanted_items
+                (id, title_id, episode_id, collection_id, series_movie_link_id, media_type,
+                 status, created_at, updated_at)
+             VALUES (?, 'title-cinderwick', NULL, ?, ?, ?, 'wanted',
+                     '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(collection_id)
+        .bind(link_id)
+        .bind(media_type)
+        .execute(&mut *conn)
+        .await
+        .expect("scope row should insert");
+    }
+    sqlx::query("COMMIT")
+        .execute(&mut *conn)
+        .await
+        .expect("commit");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await
+        .expect("restore foreign keys");
+    drop(conn);
+
+    // A title-mismatch decision on the link row, so the joined projection has
+    // something to carry.
+    workflow
+        .insert_release_decision(&scryer_application::ReleaseDecision {
+            id: "decision-link".to_string(),
+            wanted_item_id: "wanted-link".to_string(),
+            title_id: "title-cinderwick".to_string(),
+            release_title: "Cinderwick.Special.1080p".to_string(),
+            release_url: None,
+            release_size_bytes: Some(1_000),
+            decision_code: "title_mismatch".to_string(),
+            candidate_score: 5,
+            current_score: None,
+            score_delta: None,
+            explanation_json: None,
+            created_at: "2026-04-20T00:00:00Z".to_string(),
+        })
+        .await
+        .expect("decision should insert");
+
+    let collection = workflow
+        .get_acquisition_scope_state_for_scope(
+            "title-cinderwick",
+            AcquisitionScopeKey::Collection("collection-cinderwick"),
+        )
+        .await
+        .expect("collection read")
+        .expect("the collection row is found past the episode rows");
+    assert_eq!(collection.id, "wanted-collection");
+    assert_eq!(
+        collection.episode_id, None,
+        "an episode row sharing the collection id is not the collection's row"
+    );
+
+    let link = workflow
+        .get_acquisition_scope_state_for_scope(
+            "title-cinderwick",
+            AcquisitionScopeKey::SeriesMovieLink("link-cinderwick"),
+        )
+        .await
+        .expect("link read")
+        .expect("the link row is found past the episode rows");
+    assert_eq!(link.id, "wanted-link");
+    assert_eq!(
+        link.latest_release_decision
+            .as_ref()
+            .map(|decision| decision.id.as_str()),
+        Some("decision-link")
+    );
+    assert!(link.mismatch_recovery_eligible);
+
+    // The scope read returns the same projection as the full-row reads.
+    for state in [&collection, &link] {
+        let by_id = workflow
+            .get_acquisition_scope_state_by_id(&state.id)
+            .await
+            .expect("by-id read")
+            .expect("row exists");
+        assert_eq!(format!("{state:?}"), format!("{by_id:?}"));
+    }
+
+    // A collection with only episode rows has no collection row of its own.
+    sqlx::query("DELETE FROM wanted_items WHERE id = 'wanted-collection'")
+        .execute(services.pool())
+        .await
+        .expect("drop the collection row");
+    assert!(
+        workflow
+            .get_acquisition_scope_state_for_scope(
+                "title-cinderwick",
+                AcquisitionScopeKey::Collection("collection-cinderwick"),
+            )
+            .await
+            .expect("collection read")
+            .is_none(),
+        "episode rows never answer for their collection"
+    );
+
+    // Another title's key finds nothing.
+    assert!(
+        workflow
+            .get_acquisition_scope_state_for_scope(
+                "title-elsewhere",
+                AcquisitionScopeKey::SeriesMovieLink("link-cinderwick"),
+            )
+            .await
+            .expect("link read")
+            .is_none()
+    );
+
+    let _ = std::fs::remove_file(db);
+}

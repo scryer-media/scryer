@@ -525,6 +525,20 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             .cloned())
     }
 
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .find(|item| item.title_id == title_id && scope.matches(item))
+            .cloned())
+    }
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()> {
         self.store
             .lock()

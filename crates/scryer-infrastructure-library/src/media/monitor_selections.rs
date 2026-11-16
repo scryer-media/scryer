@@ -125,6 +125,26 @@ pub(crate) async fn delete_monitor_selections_for_library_tx(
     Ok(())
 }
 
+/// The selections of every media request that created `title_id`, for a
+/// caller about to delete those requests. The rows have no foreign key to
+/// their request, so they would outlive it.
+pub(crate) async fn delete_monitor_selections_for_requests_created_title_tx(
+    tx: &mut SqlTx<'_>,
+    title_id: &str,
+) -> AppResult<()> {
+    tx.execute(
+        "DELETE FROM monitor_selections
+          WHERE owner_kind = {}
+            AND owner_id IN (SELECT id FROM media_requests WHERE created_title_id = {})",
+        &[
+            SqlArg::Text(OWNER_KIND_MEDIA_REQUEST.to_string()),
+            SqlArg::Text(title_id.to_string()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn load_monitor_selection(
     exec: SqlExec<'_, '_>,
     owner_kind: &str,
