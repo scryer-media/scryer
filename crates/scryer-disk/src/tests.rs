@@ -47,9 +47,13 @@ fn dir() -> RawStat {
 /// `open_dir_entered`. `list_read_gate`, when set, holds the reading of a
 /// listing's first entry, after its open, the same way. A rename without
 /// replacement of a path in `ambiguous_renames` is refused as one that these
-/// paths alone may draw.
+/// paths alone may draw. A hidden `.scryer-` name the owner chose at random,
+/// which no script can name, answers stat calls from `staged_stat` and reads
+/// from `staged_contents`.
 #[derive(Default)]
 struct Scripted {
+    staged_stat: Mutex<Option<Result<RawStat, io::ErrorKind>>>,
+    staged_contents: Mutex<Option<Vec<u8>>>,
     stats: Mutex<HashMap<PathBuf, Result<RawStat, io::ErrorKind>>>,
     listings: Mutex<HashMap<PathBuf, Vec<RawEntry>>>,
     failures: Mutex<HashMap<(&'static str, PathBuf), io::ErrorKind>>,
@@ -178,9 +182,14 @@ impl Scripted {
         if gated && let Some(gate) = self.gate.lock().unwrap().as_ref() {
             let _ = gate.recv();
         }
-        match self.stats.lock().unwrap().get(path) {
-            Some(Ok(stat)) => Ok(*stat),
-            Some(Err(kind)) => Err((*kind).into()),
+        let scripted = self.stats.lock().unwrap().get(path).copied();
+        let staged = || match is_staging_name(path) {
+            true => *self.staged_stat.lock().unwrap(),
+            false => None,
+        };
+        match scripted.or_else(staged) {
+            Some(Ok(stat)) => Ok(stat),
+            Some(Err(kind)) => Err(kind.into()),
             None => Err(io::ErrorKind::NotFound.into()),
         }
     }
@@ -332,13 +341,12 @@ impl DiskBackend for Scripted {
         if open.mode != OpenMode::Read {
             return SystemBackend.open(&handle, Open::create_or_keep());
         }
-        let bytes = self
-            .contents
-            .lock()
-            .unwrap()
-            .get(path)
-            .cloned()
-            .ok_or(io::ErrorKind::NotFound)?;
+        let scripted = self.contents.lock().unwrap().get(path).cloned();
+        let staged = || match is_staging_name(path) {
+            true => self.staged_contents.lock().unwrap().clone(),
+            false => None,
+        };
+        let bytes = scripted.or_else(staged).ok_or(io::ErrorKind::NotFound)?;
         SystemBackend.write(&handle, &bytes, Replace::Never, Access::Default)?;
         SystemBackend.open(&handle, Open::read())
     }
@@ -380,6 +388,11 @@ impl DiskBackend for Scripted {
     }
 }
 
+fn is_staging_name(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with(".scryer-"))
+}
+
 fn owner(clock: &Arc<ManualClock>) -> (Disk, Arc<Scripted>) {
     let backend = Arc::new(Scripted::default());
     let disk = Disk::with_seams(backend.clone(), clock.clone());
@@ -390,6 +403,8 @@ fn owner(clock: &Arc<ManualClock>) -> (Disk, Arc<Scripted>) {
 fn p(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
+
+mod place;
 
 #[test]
 fn an_observed_read_never_calls_the_backend() {

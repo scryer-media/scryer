@@ -58,7 +58,9 @@ pub(crate) mod backend;
 pub(crate) mod cache;
 pub mod capacity;
 mod pass;
+mod place;
 mod reading;
+mod sample;
 pub mod stored_paths;
 mod volume;
 
@@ -77,9 +79,13 @@ use volume::Volumes;
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
 pub use pass::DiskPass;
+pub use place::{
+    CannotLink, Done, Fallback, Method, PlaceRefusal, Placed, Placement, Refused, Side, Verify,
+};
 pub use reading::{
     DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, is_cross_device_error, reason,
 };
+pub use sample::{CONTENT_SAMPLE_BYTES, ContentSample, SampleStep, sample_reader};
 pub use volume::VolumeClass;
 #[doc(hidden)]
 pub use volume::{configured_volumes, path_is_under_configured_root};
@@ -88,6 +94,11 @@ pub use volume::{configured_volumes, path_is_under_configured_root};
 #[doc(hidden)]
 pub trait DiskClock: Send + Sync + 'static {
     fn now(&self) -> DateTime<Utc>;
+
+    /// Let `duration` pass on the calling blocking thread.
+    fn pause(&self, duration: std::time::Duration) {
+        std::thread::sleep(duration);
+    }
 }
 
 #[doc(hidden)]
@@ -1193,7 +1204,7 @@ impl Disk {
             if durable {
                 synced.required().map_err(backend::WriteFailure::created)?;
             }
-            self.place(&staged, path, replace)
+            self.land(&staged, path, replace)
                 .map(|()| synced)
                 .map_err(backend::WriteFailure::created)
         });
@@ -1587,11 +1598,23 @@ impl Disk {
 
     /// Rename a staging file this owner created onto `dest`, as `replace`
     /// says.
-    fn place(&self, staged: &Path, dest: &Path, replace: Replace) -> io::Result<()> {
+    fn land(&self, staged: &Path, dest: &Path, replace: Replace) -> io::Result<()> {
         match replace {
             Replace::Allowed => self.call("rename", || self.inner.backend.rename(staged, dest)),
             Replace::Never => self.rename_exclusive(staged, dest),
         }
+    }
+
+    /// A hard link with the platform's own refusal, for the one caller that
+    /// tells a different volume from a filesystem without links.
+    fn hard_link_unclassified(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        let result = self.call("hard_link", || self.inner.backend.hard_link(source, dest));
+        self.inner.cache.evict(&key_of(dest));
+        if result.is_ok() {
+            // A new hard link changed the source's link count.
+            self.inner.cache.evict(&key_of(source));
+        }
+        result
     }
 
     /// An exclusive rename where the filesystem offers one, else a claim of
@@ -1856,7 +1879,7 @@ impl Staged {
             if durable {
                 outcome.required()?;
             }
-            disk.place(&self.staged, &self.dest, replace)
+            disk.land(&self.staged, &self.dest, replace)
                 .map(|()| outcome)
         });
         disk.inner.cache.evict(&key_of(&self.dest));
@@ -1983,6 +2006,13 @@ pub mod test_support {
     impl DiskClock for ManualClock {
         fn now(&self) -> DateTime<Utc> {
             self.0.lock().unwrap().expect("clock set")
+        }
+
+        /// The pause passes at once, and shows on the clock.
+        fn pause(&self, duration: std::time::Duration) {
+            if let Some(now) = self.0.lock().unwrap().as_mut() {
+                *now += chrono::Duration::from_std(duration).unwrap_or_default();
+            }
         }
     }
 }

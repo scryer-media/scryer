@@ -453,7 +453,8 @@ async fn relocate_titleless_archive_workspace_for_title(
     );
     // Keep the name recorded by the ownership marker and never replace an
     // existing directory. Unsupported filesystems can extract under the title.
-    let Some(result) = crate::fs_safety::exclusive_rename(&extracted_dir, &target).await else {
+    let disk = crate::disk::Disk::process();
+    let Some(result) = disk.exclusive_rename(&extracted_dir, &target).await else {
         crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
         return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
     };

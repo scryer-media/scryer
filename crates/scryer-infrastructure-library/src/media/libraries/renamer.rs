@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use scryer_application::disk::{Disk, EntryKind, Parents};
-use scryer_application::fs_safety::MoveOptions;
+use scryer_application::disk::{Disk, EntryKind, Parents, PlaceRefusal, placement};
 use scryer_application::stored_paths::stored_path_to_path_buf;
 use scryer_application::{
     AppError, AppResult, ImportFilePermissions, LibraryRenamer, RenameApplyItemResult,
@@ -146,7 +145,7 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                         continue;
                     }
 
-                    match move_file(&item.current_path, target, false).await {
+                    match move_file(&item.current_path, target).await {
                         Ok(()) => {
                             // Configured permissions take precedence over
                             // whatever the file carried at its old path.
@@ -192,7 +191,7 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                 continue;
             }
 
-            move_file(final_path, &item.current_path, false)
+            move_file(final_path, &item.current_path)
                 .await
                 .map_err(|err| AppError::Repository(err.to_string()))?;
         }
@@ -246,7 +245,9 @@ async fn prepare_move_target(
     }
 
     if !rename_paths_equivalent(current_path, target_path)
-        && !scryer_application::fs_safety::destination_is_free_for(&source, &target).await
+        && !Disk::process()
+            .destination_is_free_for(&source, &target)
+            .await
     {
         return Err((
             "target_exists".to_string(),
@@ -257,16 +258,14 @@ async fn prepare_move_target(
     Ok(())
 }
 
-async fn move_file(source: &str, target: &str, replace: bool) -> std::io::Result<()> {
-    scryer_application::fs_safety::move_file_exclusive(
-        &stored_path_to_path_buf(source),
-        &stored_path_to_path_buf(target),
-        MoveOptions {
-            overwrite: replace,
-            ..MoveOptions::default()
-        },
-    )
-    .await
+async fn move_file(source: &str, target: &str) -> Result<(), PlaceRefusal> {
+    let (source, target) = (
+        stored_path_to_path_buf(source),
+        stored_path_to_path_buf(target),
+    );
+    let disk = Disk::process();
+    let placed = disk.place(source, target, placement::library_rename());
+    placed.await.map(|_| ())
 }
 
 fn rename_paths_equivalent(source: &str, target: &str) -> bool {
@@ -318,10 +317,13 @@ mod tests {
         std::fs::write(&source, b"source-payload").expect("write source");
         std::fs::write(&target, b"target-payload").expect("write target");
 
-        let error = move_file(&source.to_string_lossy(), &target.to_string_lossy(), false)
+        let error = move_file(&source.to_string_lossy(), &target.to_string_lossy())
             .await
             .expect_err("an occupied destination must not be replaced");
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            error.refused,
+            scryer_application::disk::Refused::DestinationExists
+        );
 
         assert_eq!(
             std::fs::read(&target).expect("target still present"),
@@ -344,7 +346,7 @@ mod tests {
         let target = dir.path().join("ONE PIECE.mkv");
         std::fs::write(&source, b"payload").expect("write source");
 
-        move_file(&source.to_string_lossy(), &target.to_string_lossy(), false)
+        move_file(&source.to_string_lossy(), &target.to_string_lossy())
             .await
             .expect("case-only rename should succeed");
 

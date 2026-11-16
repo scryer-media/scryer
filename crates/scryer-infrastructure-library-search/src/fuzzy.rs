@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use scryer_application::disk::{
-    Disk, DiskError, EntryKind, Open, Parents, PathReading, Remove, reason,
+    Disk, DiskError, EntryKind, Open, Parents, PathReading, PlaceRefusal, Remove, placement, reason,
 };
 use scryer_application::{AppError, AppResult};
 use tantivy::collector::{DocSetCollector, TopDocs};
@@ -1123,13 +1123,13 @@ fn open_owned_index(dir: &Path) -> AppResult<(std::fs::File, Index, IndexReader)
 }
 
 /// Move the index directory to a name inside a directory this pass just
-/// created, so nothing can be there to replace. The owner's exclusive move
-/// claims its destination with a file where the filesystem has no exclusive
-/// rename, which a directory cannot be renamed over.
-// disk-guard: a directory rename into a freshly reserved empty directory has no owner verb yet.
-#[allow(clippy::disallowed_methods)]
-fn move_into_reserved_dir(dir: &Path, dest: &Path) -> std::io::Result<()> {
-    std::fs::rename(dir, dest)
+/// created, so nothing can be there to replace: a rename alone, which a
+/// reservation by an empty file would refuse for a directory.
+fn move_into_reserved_dir(dir: &Path, dest: &Path) -> Result<(), PlaceRefusal> {
+    let policy = placement::rename_onto_held_name();
+    Disk::process()
+        .place_blocking(dir, dest, policy)
+        .map(|_| ())
 }
 
 fn term_clause(field: Field, value: &str) -> Box<dyn Query> {

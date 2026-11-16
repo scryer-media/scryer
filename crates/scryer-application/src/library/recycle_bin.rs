@@ -1,6 +1,7 @@
-use crate::disk::reason::{DISK_MOVE_NEEDS_COPY, DISK_PATH_MISSING};
+use crate::disk::reason::{DISK_DESTINATION_EXISTS, DISK_PATH_MISSING};
 use crate::disk::{
-    Access, Disk, DiskError, EntryKind, Parents, PathReading, Removal, Remove, Replace, Visited,
+    Access, Disk, DiskError, EntryKind, Open, Parents, PathReading, Refused, Removal, Remove,
+    Replace, Visited, placement,
 };
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
@@ -1152,9 +1153,10 @@ async fn recycle_source_to_destination(
     source_path: PathBuf,
     recycled_path: PathBuf,
 ) -> AppResult<()> {
-    match (Disk::process().move_replacing(&source_path, &recycled_path)).await {
+    let policy = placement::rename_onto_held_name();
+    match (Disk::process().place(&source_path, &recycled_path, policy)).await {
         Ok(_) => return Ok(()),
-        Err(error) if error.reason() == DISK_MOVE_NEEDS_COPY => {
+        Err(error) if error.refused == Refused::NeedsCopy => {
             info!(
                 source = %source_path.display(),
                 recycled = %recycled_path.display(),
@@ -1164,9 +1166,10 @@ async fn recycle_source_to_destination(
         }
         Err(error) => {
             return Err(AppError::Repository(format!(
-                "failed to move {} to recycle bin {}: {}",
+                "failed to move {} to recycle bin {}: could not move {}: {}",
                 source_path.display(),
                 recycled_path.display(),
+                source_path.display(),
                 error
             )));
         }
@@ -1382,9 +1385,6 @@ async fn copy_recycled_to_claimed_destination(
     .await
 }
 
-// disk-guard: a hard link that fails for any reason but an existing name falls back to an
-// exclusive claim and a verified copy; the owner's link does not report that split.
-#[allow(clippy::disallowed_methods)]
 async fn restore_without_overwrite(
     recycled_path: &Path,
     original_path: &Path,
@@ -1395,27 +1395,24 @@ async fn restore_without_overwrite(
         if let Some(roots) = allowed_roots {
             ensure_restore_destination_within_roots(&destination, roots)?;
         }
-        match tokio::fs::hard_link(recycled_path, &destination).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+        let disk = Disk::process();
+        let policy = placement::recycle_restore_link();
+        match disk.place(recycled_path, &destination, policy).await {
+            Ok(_) => {}
+            Err(refusal) if refusal.refused == Refused::DestinationExists => continue,
             Err(link_error) => {
                 // Hard links are preferred but impossible across devices and on
                 // filesystems without link support; claim the destination and
                 // copy with verification instead.
-                match tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&destination)
-                    .await
-                {
+                match disk.open(&destination, Open::create_new()).await {
                     Ok(claimed) => drop(claimed),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) if error.reason() == DISK_DESTINATION_EXISTS => continue,
                     Err(error) => {
                         return Err(AppError::Repository(format!(
                             "failed to claim restore destination {} after hard link failed ({}): {}",
                             destination.display(),
                             link_error,
-                            error
+                            std::io::Error::from(error)
                         )));
                     }
                 };
@@ -1497,16 +1494,15 @@ pub(crate) async fn restore_recycled_file_exact(
 ///
 /// Callers that need to perform fallible work between exposing the restored file
 /// and removing its recycle entry can use this to retain a rollback source.
-// disk-guard: a hard link that fails for any reason but an existing name falls back to an
-// exclusive claim and a verified copy; the owner's link does not report that split.
-#[allow(clippy::disallowed_methods)]
 pub(crate) async fn link_recycled_file_to_exact_destination(
     recycled_path: &Path,
     destination: &Path,
 ) -> AppResult<()> {
     ensure_recycled_restore_source_is_regular(recycled_path).await?;
-    match tokio::fs::symlink_metadata(destination).await {
-        Ok(_) => {
+    let disk = Disk::process();
+    let reading = disk.uncached(destination).await;
+    match reading.exists() {
+        Some(true) => {
             return Err(AppError::validation_refused(
                 crate::error_reasons::library::DESTINATION_OCCUPIED,
                 format!(
@@ -1516,18 +1512,19 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
                 ),
             ));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
+        Some(false) => {}
+        None => {
             return Err(AppError::Repository(format!(
                 "failed to stat recycle restore destination {}: {}",
                 destination.display(),
-                error
+                reading.absence()
             )));
         }
     }
 
     if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+        let made = disk.create_dir(parent, Parents::Create).await;
+        made.map_err(std::io::Error::from).map_err(|error| {
             AppError::Repository(format!(
                 "failed to create restore parent directory {}: {}",
                 parent.display(),
@@ -1536,25 +1533,22 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
         })?;
     }
 
-    match tokio::fs::hard_link(recycled_path, destination).await {
-        Ok(()) => Ok(()),
+    let policy = placement::recycle_restore_link();
+    match disk.place(recycled_path, destination, policy).await {
+        Ok(_) => Ok(()),
         Err(link_error) => {
             // Same fallback as restore_without_overwrite; either way the
             // recycled source is retained, so callers keep their rollback
             // point until they explicitly remove it.
-            let claimed = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(destination)
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to claim exact restore destination {} after hard link failed ({}): {}",
-                        destination.display(),
-                        link_error,
-                        error
-                    ))
-                })?;
+            let claimed = disk.open(destination, Open::create_new()).await;
+            let claimed = claimed.map_err(std::io::Error::from).map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to claim exact restore destination {} after hard link failed ({}): {}",
+                    destination.display(),
+                    link_error,
+                    error
+                ))
+            })?;
             drop(claimed);
             copy_recycled_to_claimed_destination(recycled_path, destination, CopyProgress::none())
                 .await
@@ -1618,20 +1612,19 @@ async fn restore_from_recycle_inner(
         return Ok(destination);
     }
 
-    match Disk::process()
-        .move_replacing(recycled_path, original_path)
-        .await
-    {
+    let policy = placement::rename_onto_held_name();
+    match (Disk::process().place(recycled_path, original_path, policy)).await {
         Ok(_) => {}
-        Err(error) if error.reason() == DISK_MOVE_NEEDS_COPY => {
+        Err(error) if error.refused == Refused::NeedsCopy => {
             restore_over_by_verified_copy(recycled_path, original_path, CopyProgress::none())
                 .await?;
         }
         Err(error) => {
             return Err(AppError::Repository(format!(
-                "failed to move recycled file {} to {}: {}",
+                "failed to move recycled file {} to {}: could not move {}: {}",
                 recycled_path.display(),
                 original_path.display(),
+                recycled_path.display(),
                 error
             )));
         }
@@ -2563,7 +2556,7 @@ async fn relocate_entry(
         // is only ever in one place and there is no copy to verify. Only the
         // no-replace rename is used: a plain rename would replace an empty
         // directory that appeared at the destination.
-        match crate::fs_safety::exclusive_rename(entry_dir, dest).await {
+        match Disk::process().exclusive_rename(entry_dir, dest).await {
             Some(Ok(())) => return Ok(RelocatedEntry::Moved),
             Some(Err(error)) => match error.reason() {
                 crate::disk::reason::DISK_DESTINATION_EXISTS

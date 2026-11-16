@@ -71,7 +71,7 @@
 //! A copy that claims its own destination never writes under the destination's
 //! real name. It writes to a sibling [`partial_destination_path`] and promotes
 //! that name onto the destination with
-//! [`crate::fs_safety::promote_staged_file`], which never replaces anything.
+//! [`crate::disk::Disk::promote_staged`], which never replaces anything.
 //! The consequence is the one resume depends on: after a crash, ENOSPC, or a
 //! dropped network mount, the destination name either does not exist (so the
 //! resumed run copies it cleanly) or holds a complete file (so the resumed run
@@ -651,7 +651,11 @@ impl VerifiedCopier {
             }
         };
 
-        if let Err(error) = crate::fs_safety::promote_staged_file(&partial, destination).await {
+        if let Err(error) = crate::disk::Disk::process()
+            .promote_staged(&partial, destination)
+            .await
+            .map_err(std::io::Error::from)
+        {
             remove_partial_best_effort(&partial).await;
             return Err(AppError::Repository(format!(
                 "failed to place the completed copy at {}: {error}",

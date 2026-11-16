@@ -427,16 +427,19 @@ impl DiskBackend for SystemBackend {
         std::fs::rename(source, dest).inspect_err(|_| {
             // Release the empty reservation, and only that: a share can apply
             // the rename and lose the reply, leaving the only copy here.
-            if self
-                .lstat(dest)
-                .is_ok_and(|stat| stat.kind == EntryKind::File && stat.len == 0)
-            {
-                let _ = std::fs::remove_file(dest);
-            } else {
-                tracing::warn!(
+            match self.lstat(dest) {
+                Ok(stat) if stat.kind == EntryKind::File && stat.len == 0 => {
+                    let _ = std::fs::remove_file(dest);
+                }
+                Ok(_) => tracing::warn!(
                     path = %dest.display(),
                     "a rename reported failure and its reserved name is not an empty file; it is left in place"
-                );
+                ),
+                Err(error) => tracing::warn!(
+                    path = %dest.display(),
+                    error = %error,
+                    "a rename reported failure and its reserved name could not be read; it is left in place"
+                ),
             }
         })
     }

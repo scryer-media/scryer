@@ -42,6 +42,15 @@ pub mod reason {
     pub const DISK_NO_SPACE: &str = "DISK_NO_SPACE";
     /// The path is a link, and the operation was asked not to follow links.
     pub const DISK_LINK_NOT_FOLLOWED: &str = "DISK_LINK_NOT_FOLLOWED";
+    /// The destination is on another volume than the source, so it cannot
+    /// hold a hard link to it.
+    pub const DISK_LINK_DIFFERENT_VOLUME: &str = "DISK_LINK_DIFFERENT_VOLUME";
+    /// The destination's filesystem has no hard links, or no room for
+    /// another one to this file.
+    pub const DISK_LINK_NOT_SUPPORTED: &str = "DISK_LINK_NOT_SUPPORTED";
+    /// A copy did not match its source, so it does not count and the source
+    /// was kept.
+    pub const DISK_COPY_NOT_VERIFIED: &str = "DISK_COPY_NOT_VERIFIED";
     /// Any other failure.
     pub const DISK_OPERATION_FAILED: &str = "DISK_OPERATION_FAILED";
 
@@ -59,6 +68,9 @@ pub mod reason {
         DISK_MOVE_NEEDS_COPY,
         DISK_NO_SPACE,
         DISK_LINK_NOT_FOLLOWED,
+        DISK_LINK_DIFFERENT_VOLUME,
+        DISK_LINK_NOT_SUPPORTED,
+        DISK_COPY_NOT_VERIFIED,
         DISK_OPERATION_FAILED,
     ];
 }

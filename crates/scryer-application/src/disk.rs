@@ -7,13 +7,16 @@
 //! which samples the library roots.
 
 pub(crate) mod capacity;
+pub mod placement;
 
 pub use scryer_disk::{
-    Access, DISK_STAT_REUSE, Disk, DiskError, DiskPass, DiskVerb, EntryKind, FileIdentity,
-    IfPresent, KeptPermissions, Link, LinkOutcome, Listed, MoveOutcome, Open, OwnerOnly, Parents,
-    PathReading, Removal, Remove, Replace, ScratchDir, Staged, Staging, SyncOutcome, Visited,
+    Access, CannotLink, DISK_STAT_REUSE, Disk, DiskError, DiskPass, DiskVerb, Done, EntryKind,
+    Fallback, FileIdentity, IfPresent, KeptPermissions, Link, LinkOutcome, Listed, Method,
+    MoveOutcome, Open, OwnerOnly, Parents, PathReading, PlaceRefusal, Placed, Placement, Refused,
+    Removal, Remove, Replace, ScratchDir, Side, Staged, Staging, SyncOutcome, Verify, Visited,
     VolumeClass, is_cross_device_error, reason,
 };
+pub(crate) use scryer_disk::{CONTENT_SAMPLE_BYTES, SampleStep, sample_reader};
 
 #[cfg(test)]
 pub(crate) use scryer_disk::test_support;

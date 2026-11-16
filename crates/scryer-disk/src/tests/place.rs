@@ -1,0 +1,993 @@
+//! Placing a file: each outcome and refusal against the scripted backend,
+//! then the same verb on synthetic files in a temporary directory.
+
+use super::*;
+use crate::place::{Job, StagedHolds, paths_are_same_file};
+
+const SOURCE: &str = "/srv/fixture-media/incoming/sample.mkv";
+const DEST: &str = "/srv/fixture-media/Fixture Show/sample.mkv";
+const STAGED: &str = "/srv/fixture-media/Fixture Show/.scryer-0a1b2c3d4.partial";
+
+fn policy(method: Method, fallback: Fallback) -> Placement {
+    Placement {
+        method,
+        fallback,
+        replace: Replace::Never,
+        verify: Verify::Quick,
+        parents: Parents::MustExist,
+    }
+}
+
+fn scripted() -> (Disk, Arc<Scripted>, Arc<ManualClock>) {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    (disk, backend, clock)
+}
+
+fn place(disk: &Disk, policy: Placement) -> Result<Placed, PlaceRefusal> {
+    disk.place_blocking(&p(SOURCE), &p(DEST), policy)
+}
+
+fn refusal(disk: &Disk, policy: Placement) -> Refused {
+    let refusal = place(disk, policy).expect_err("the placement is refused");
+    assert_eq!(refusal.asked, policy.method);
+    refusal.refused
+}
+
+/// A source that holds `bytes`, and a staged copy that reads back as `copy`.
+fn copies(backend: &Scripted, bytes: &[u8], copy: &[u8]) {
+    backend.stat_is(SOURCE, Ok(file(bytes.len() as u64)));
+    backend.holds(SOURCE, bytes);
+    *backend.staged_contents.lock().unwrap() = Some(copy.to_vec());
+    *backend.staged_stat.lock().unwrap() = Some(Ok(file(copy.len() as u64)));
+}
+
+/// Every removal was of a staging name this placement chose.
+fn removed_only_staging(backend: &Scripted) -> usize {
+    let removed = backend.paths_of("remove_file");
+    assert!(
+        removed.iter().all(|path| is_staging_name(path)),
+        "{removed:?}"
+    );
+    removed.len()
+}
+
+fn job<'a>(disk: &'a Disk, source: &'a Path, dest: &'a Path, policy: Placement) -> Job<'a> {
+    Job {
+        disk,
+        source,
+        dest,
+        policy,
+    }
+}
+
+#[test]
+fn a_move_renames_and_says_so() {
+    let (disk, backend, _) = scripted();
+    let placed = place(&disk, policy(Method::Move, Fallback::Copy)).expect("placed");
+    assert_eq!(placed.asked, Method::Move);
+    assert_eq!(placed.done, Done::Renamed);
+    assert!(!placed.fell_back());
+    assert_eq!(backend.paths_of("rename_no_replace"), [p(SOURCE)]);
+    assert_eq!(backend.calls_of("open"), 0);
+    assert_eq!(backend.calls_of("lstat"), 0, "a rename probes nothing");
+    assert_eq!(backend.calls_of("create_dir_all"), 0);
+}
+
+#[test]
+fn only_a_policy_that_creates_folders_creates_them_and_never_for_a_link() {
+    let (disk, backend, _) = scripted();
+    let mut creating = policy(Method::Move, Fallback::None);
+    creating.parents = Parents::Create;
+    place(&disk, creating).expect("placed");
+    assert_eq!(
+        backend.paths_of("create_dir_all"),
+        [p("/srv/fixture-media/Fixture Show")]
+    );
+    creating.method = Method::HardLink;
+    place(&disk, creating).expect("linked");
+    assert_eq!(backend.calls_of("create_dir_all"), 1);
+}
+
+#[test]
+fn an_occupied_destination_is_refused_and_nothing_is_touched() {
+    for method in [Method::Move, Method::HardLink] {
+        let (disk, backend, _) = scripted();
+        backend.fails("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists);
+        backend.fails("hard_link", DEST, io::ErrorKind::AlreadyExists);
+        let refused = place(&disk, policy(method, Fallback::Copy)).expect_err("refused");
+        assert_eq!(refused.refused, Refused::DestinationExists);
+        assert_eq!(refused.refused.reason(), reason::DISK_DESTINATION_EXISTS);
+        assert_eq!(backend.calls_of("open"), 0, "no copy is tried instead");
+        assert_eq!(backend.calls_of("remove_file"), 0);
+    }
+}
+
+#[test]
+fn a_move_to_another_volume_copies_proves_and_only_then_removes_the_source() {
+    let (disk, backend, _) = scripted();
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::CrossesDevices);
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+
+    let placed = place(&disk, policy(Method::Move, Fallback::Copy)).expect("placed");
+    assert_eq!(placed.done, Done::CopiedThenRemovedSource);
+    assert!(placed.fell_back());
+    assert_eq!(backend.paths_of("remove_file"), [p(SOURCE)]);
+    // The copy went under a staging name and reached the real one by a
+    // rename that replaces nothing.
+    let promoted = backend.paths_of("rename_no_replace");
+    assert_eq!(promoted.len(), 2);
+    assert!(is_staging_name(&promoted[1]));
+    assert_eq!(backend.paths_of("lstat"), [p(SOURCE)], "one probe");
+}
+
+#[test]
+fn a_move_to_another_volume_is_refused_when_no_copy_is_allowed() {
+    let (disk, backend, _) = scripted();
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::CrossesDevices);
+    let refused = refusal(&disk, policy(Method::Move, Fallback::None));
+    assert_eq!(refused, Refused::NeedsCopy);
+    assert_eq!(refused.reason(), reason::DISK_MOVE_NEEDS_COPY);
+    assert_eq!(backend.calls_of("open"), 0);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+    assert_eq!(backend.calls_of("lstat"), 0);
+}
+
+/// Where the filesystem has no exclusive rename the move reserves a name
+/// beside the destination; a move that then needs a copy it may not make
+/// releases only that empty reservation.
+#[test]
+fn a_reserved_name_is_released_when_the_move_is_refused() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+    *backend.staged_stat.lock().unwrap() = Some(Ok(file(0)));
+    assert_eq!(
+        refusal(&disk, policy(Method::Move, Fallback::None)),
+        Refused::NeedsCopy
+    );
+    assert_eq!(removed_only_staging(&backend), 1);
+}
+
+#[test]
+fn a_move_without_an_exclusive_rename_goes_through_a_reserved_name() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    let placed = place(&disk, policy(Method::Move, Fallback::Copy)).expect("placed");
+    assert_eq!(placed.done, Done::Renamed);
+    assert_eq!(backend.paths_of("rename"), [p(SOURCE)]);
+    // Linked onto the real name, which refuses an occupant in the same call.
+    assert_eq!(backend.paths_of("hard_link"), [p(DEST)]);
+    assert_eq!(removed_only_staging(&backend), 1);
+}
+
+/// The source was renamed to the reserved name and the destination was then
+/// taken: the file goes back to its own name and is never removed.
+#[test]
+fn a_file_stranded_at_its_reserved_name_is_put_back() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.fails("hard_link", DEST, io::ErrorKind::AlreadyExists);
+    *backend.staged_stat.lock().unwrap() = Some(Ok(file(17)));
+    assert_eq!(
+        refusal(&disk, policy(Method::Move, Fallback::Copy)),
+        Refused::DestinationExists
+    );
+    assert_eq!(backend.paths_of("hard_link"), [p(DEST), p(SOURCE)]);
+    // The one removal is of the staging link, after the source name holds
+    // the file again.
+    assert_eq!(removed_only_staging(&backend), 1);
+}
+
+/// A destination that appears while the copy is written wins: the copy is
+/// taken back and the source stays.
+#[test]
+fn a_copy_that_finds_the_destination_taken_is_removed_and_the_source_kept() {
+    let (disk, backend, _) = scripted();
+    backend.always_fails("rename_no_replace", io::ErrorKind::Unsupported);
+    backend.fails("rename", SOURCE, io::ErrorKind::CrossesDevices);
+    backend.fails("hard_link", DEST, io::ErrorKind::AlreadyExists);
+    copies(&backend, b"synthetic payload", b"synthetic payload");
+    assert_eq!(
+        refusal(&disk, policy(Method::Move, Fallback::Copy)),
+        Refused::DestinationExists
+    );
+    assert_eq!(removed_only_staging(&backend), 1);
+}
+
+/// A copy that does not match is looked at once more after a pause, which
+/// the manual clock passes at once; still wrong, it is removed and the
+/// source kept.
+#[test]
+fn a_copy_that_does_not_match_is_refused_after_one_more_look() {
+    for method in [Method::Move, Method::Copy, Method::HardLink] {
+        let (disk, backend, clock) = scripted();
+        backend.fails("rename_no_replace", SOURCE, io::ErrorKind::CrossesDevices);
+        backend.fails("hard_link", DEST, io::ErrorKind::CrossesDevices);
+        copies(&backend, b"synthetic payload", b"synthetic pay");
+        let refused = refusal(&disk, policy(method, Fallback::Copy));
+        assert_eq!(refused, Refused::NotVerified);
+        assert_eq!(refused.reason(), reason::DISK_COPY_NOT_VERIFIED);
+        assert_eq!(clock.now(), at(3), "one pause before the second look");
+        assert_eq!(removed_only_staging(&backend), 1);
+    }
+}
+
+/// A caller that proves the copy itself is still not trusted with a copy the
+/// filesystem could not sync.
+#[test]
+fn an_unsynced_copy_is_proven_whatever_the_policy_says() {
+    let run = |unconfirmed: bool| {
+        let (disk, backend, _) = scripted();
+        if unconfirmed {
+            backend.always_fails("unconfirmed_sync", io::ErrorKind::Other);
+        }
+        copies(&backend, b"synthetic payload", b"something else");
+        let mut policy = policy(Method::Copy, Fallback::None);
+        policy.verify = Verify::None;
+        place(&disk, policy).map(|placed| placed.done)
+    };
+    assert_eq!(run(false).expect("unproven by request"), Done::Copied);
+    assert_eq!(
+        run(true).expect_err("proven anyway").refused,
+        Refused::NotVerified
+    );
+}
+
+#[test]
+fn a_copy_keeps_its_source_and_replaces_only_when_told() {
+    for replace in [Replace::Never, Replace::Allowed] {
+        let (disk, backend, _) = scripted();
+        copies(&backend, b"synthetic payload", b"synthetic payload");
+        let mut policy = policy(Method::Copy, Fallback::None);
+        policy.replace = replace;
+        let placed = place(&disk, policy).expect("copied");
+        assert_eq!(placed.done, Done::Copied);
+        assert!(!placed.fell_back());
+        assert_eq!(backend.calls_of("remove_file"), 0);
+        let replacing = backend.calls_of("rename");
+        assert_eq!(replacing, usize::from(replace == Replace::Allowed));
+        assert_eq!(backend.calls_of("rename_no_replace"), 1 - replacing);
+    }
+}
+
+#[test]
+fn a_hard_link_is_made_or_refused_with_the_reason_it_cannot_be() {
+    let (disk, backend, _) = scripted();
+    let placed = place(&disk, policy(Method::HardLink, Fallback::None)).expect("linked");
+    assert_eq!(placed.done, Done::HardLinked);
+    assert!(!placed.fell_back());
+    assert_eq!(backend.paths_of("hard_link"), [p(DEST)]);
+
+    let cases = [
+        (
+            io::ErrorKind::CrossesDevices,
+            CannotLink::DifferentVolume,
+            reason::DISK_LINK_DIFFERENT_VOLUME,
+        ),
+        (
+            io::ErrorKind::Unsupported,
+            CannotLink::NotSupported,
+            reason::DISK_LINK_NOT_SUPPORTED,
+        ),
+    ];
+    for (kind, cannot, code) in cases {
+        let (disk, backend, _) = scripted();
+        backend.fails("hard_link", DEST, kind);
+        let refused = refusal(&disk, policy(Method::HardLink, Fallback::None));
+        assert_eq!(refused, Refused::CannotLink(cannot));
+        assert_eq!(refused.reason(), code);
+        assert_eq!(backend.calls_of("open"), 0, "the fallback was refused");
+    }
+}
+
+#[test]
+fn a_link_that_cannot_be_made_is_copied_when_the_policy_allows() {
+    for kind in [io::ErrorKind::CrossesDevices, io::ErrorKind::Other] {
+        let (disk, backend, _) = scripted();
+        backend.fails("hard_link", DEST, kind);
+        copies(&backend, b"synthetic payload", b"synthetic payload");
+        let placed = place(&disk, policy(Method::HardLink, Fallback::Copy)).expect("copied");
+        assert_eq!(
+            (placed.asked, placed.done),
+            (Method::HardLink, Done::Copied)
+        );
+        assert!(placed.fell_back());
+        assert_eq!(backend.calls_of("remove_file"), 0, "the source is kept");
+    }
+}
+
+#[test]
+fn failures_are_classified_once_into_typed_refusals() {
+    let moved = |kind: io::ErrorKind| {
+        let (disk, backend, _) = scripted();
+        backend.fails("rename_no_replace", SOURCE, kind);
+        refusal(&disk, policy(Method::Move, Fallback::Copy))
+    };
+    assert_eq!(moved(io::ErrorKind::NotFound), Refused::SourceMissing);
+    assert_eq!(moved(io::ErrorKind::PermissionDenied), Refused::Denied);
+    assert_eq!(moved(io::ErrorKind::StorageFull), Refused::NoSpace);
+    assert_eq!(
+        moved(io::ErrorKind::NotConnected),
+        Refused::Unreachable(Side::Either)
+    );
+    assert_eq!(moved(io::ErrorKind::InvalidInput), Refused::Failed);
+
+    // The reservation of the copy's name is the destination's answer.
+    let claimed = |kind: io::ErrorKind| {
+        let (disk, backend, _) = scripted();
+        backend.always_fails("open", kind);
+        refusal(&disk, policy(Method::Copy, Fallback::None))
+    };
+    assert_eq!(claimed(io::ErrorKind::StorageFull), Refused::NoSpace);
+    assert_eq!(
+        claimed(io::ErrorKind::NotConnected),
+        Refused::Unreachable(Side::Destination)
+    );
+
+    // A source that cannot be read is not a source that is gone.
+    let copied_from = |stat: Option<io::ErrorKind>| {
+        let (disk, backend, _) = scripted();
+        backend.fails("rename_no_replace", SOURCE, io::ErrorKind::CrossesDevices);
+        if let Some(kind) = stat {
+            backend.stat_is(SOURCE, Err(kind));
+        }
+        let refused = refusal(&disk, policy(Method::Move, Fallback::Copy));
+        assert_eq!(backend.calls_of("open"), 0);
+        refused
+    };
+    assert_eq!(copied_from(None), Refused::SourceMissing);
+    assert_eq!(
+        copied_from(Some(io::ErrorKind::PermissionDenied)),
+        Refused::Unreachable(Side::Source)
+    );
+}
+
+#[test]
+fn a_refusal_reads_as_the_systems_own_words() {
+    let (disk, backend, _) = scripted();
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists);
+    let refused = place(&disk, policy(Method::Move, Fallback::Copy)).expect_err("refused");
+    assert_eq!(
+        refused.to_string(),
+        io::Error::from(io::ErrorKind::AlreadyExists).to_string()
+    );
+}
+
+/// What a failed move does with the name it reserved, by what the name and
+/// the source read as. `put_back` is the non-replacing promotion back to the
+/// source's name.
+#[test]
+fn a_rollback_removes_only_a_copy_or_an_empty_claim_and_puts_the_only_copy_back() {
+    type Stat = Option<Result<RawStat, io::ErrorKind>>;
+    let unread: Stat = Some(Err(io::ErrorKind::PermissionDenied));
+    let (claim, data, present): (Stat, Stat, Stat) =
+        (Some(Ok(file(0))), Some(Ok(file(9))), Some(Ok(file(9))));
+    let unproven = StagedHolds::Copy { proven: false };
+    let proven = StagedHolds::Copy { proven: true };
+    // (held, staged reads, source reads) -> (removed, put back)
+    let cases: [(StagedHolds, Stat, Stat, bool, bool); 14] = [
+        (StagedHolds::EmptyClaim, claim, None, true, false),
+        (StagedHolds::EmptyClaim, None, None, false, false),
+        // An unread claim goes back only when the source reads as gone.
+        (StagedHolds::EmptyClaim, unread, None, false, true),
+        (StagedHolds::EmptyClaim, unread, present, false, false),
+        (StagedHolds::EmptyClaim, unread, unread, false, false),
+        // A claim that holds data may be the source itself.
+        (StagedHolds::EmptyClaim, data, present, false, true),
+        (unproven, data, present, true, false),
+        (unproven, data, None, false, false),
+        (unproven, data, unread, false, false),
+        (proven, data, present, true, false),
+        (proven, data, None, false, true),
+        (proven, data, unread, false, false),
+        (StagedHolds::OnlyCopy, data, present, false, true),
+        (StagedHolds::OnlyCopy, unread, present, false, true),
+    ];
+    for (index, (held, staged, source, removed, put_back)) in cases.into_iter().enumerate() {
+        let (disk, backend, _) = scripted();
+        if let Some(stat) = staged {
+            backend.stat_is(STAGED, stat);
+        }
+        if let Some(stat) = source {
+            backend.stat_is(SOURCE, stat);
+        }
+        let (source, dest) = (p(SOURCE), p(DEST));
+        job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
+            .roll_back(&p(STAGED), held);
+        let removals = backend.paths_of("remove_file");
+        assert_eq!(
+            removals,
+            vec![p(STAGED); usize::from(removed)],
+            "case {index}"
+        );
+        let promoted = backend.paths_of("rename_no_replace");
+        assert_eq!(
+            promoted,
+            vec![p(STAGED); usize::from(put_back)],
+            "case {index}"
+        );
+        // Never more than one look at each of the two names.
+        assert!(backend.calls_of("lstat") <= 2, "case {index}");
+    }
+}
+
+/// Once the copy is in place the source is unlinked. When that fails, one
+/// look at the source decides.
+#[test]
+fn a_source_that_cannot_be_unlinked_decides_by_whether_it_is_still_there() {
+    let run = |source: Option<Result<RawStat, io::ErrorKind>>| {
+        let (disk, backend, _) = scripted();
+        backend.fails("remove_file", SOURCE, io::ErrorKind::PermissionDenied);
+        if let Some(stat) = source {
+            backend.stat_is(SOURCE, stat);
+        }
+        let (source, dest) = (p(SOURCE), p(DEST));
+        let done = job(&disk, &source, &dest, policy(Method::Move, Fallback::Copy))
+            .unlink_moved_source()
+            .map_err(|fail| fail.refused);
+        (
+            done,
+            backend.paths_of("remove_file"),
+            backend.calls_of("lstat"),
+        )
+    };
+    // Gone: the move finished.
+    let (done, removed, looks) = run(None);
+    assert_eq!(done, Ok(Done::CopiedThenRemovedSource));
+    assert_eq!((removed, looks), (vec![p(SOURCE)], 1));
+    // Still there: the new destination is taken back, so a retry is not
+    // refused by a duplicate.
+    let (done, removed, _) = run(Some(Ok(file(9))));
+    assert_eq!(done, Err(Refused::Denied));
+    assert_eq!(removed, [p(SOURCE), p(DEST)]);
+    // Unknown: both are left.
+    let (done, removed, _) = run(Some(Err(io::ErrorKind::TimedOut)));
+    assert_eq!(done, Err(Refused::Denied));
+    assert_eq!(removed, [p(SOURCE)]);
+}
+
+/// A name that differs only in case is the same file on a case-insensitive
+/// volume: it is renamed through a reserved sibling, and neither hop
+/// replaces anything.
+#[test]
+fn a_case_only_rename_goes_through_an_intermediate_name() {
+    let (disk, backend, _) = scripted();
+    let (source, dest) = (p(SOURCE), p("/srv/fixture-media/incoming/SAMPLE.mkv"));
+    let placed = disk
+        .place_blocking(&source, &dest, policy(Method::Move, Fallback::Copy))
+        .expect("renamed");
+    assert_eq!(placed.done, Done::Renamed);
+    assert_eq!(backend.paths_of("rename"), [p(SOURCE)]);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+
+    // A rename that reports failure may still have landed: an intermediate
+    // name that is not the empty claim is left alone.
+    let (disk, backend, _) = scripted();
+    backend.fails("rename", SOURCE, io::ErrorKind::TimedOut);
+    *backend.staged_stat.lock().unwrap() = Some(Ok(file(9)));
+    let refused = disk
+        .place_blocking(&source, &dest, policy(Method::Move, Fallback::Copy))
+        .expect_err("refused");
+    assert_eq!(refused.refused, Refused::Unreachable(Side::Either));
+    assert_eq!(backend.calls_of("rename"), 1, "no second attempt");
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+#[tokio::test]
+async fn the_async_form_reports_like_the_blocking_one() {
+    let (disk, backend, _) = scripted();
+    let placed = disk.place(SOURCE, DEST, policy(Method::Move, Fallback::None));
+    assert_eq!(placed.await.expect("placed").done, Done::Renamed);
+    backend.fails("rename_no_replace", SOURCE, io::ErrorKind::AlreadyExists);
+    let refused = disk.place(SOURCE, DEST, policy(Method::Move, Fallback::None));
+    assert_eq!(
+        refused.await.expect_err("refused").refused,
+        Refused::DestinationExists
+    );
+    assert!(disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
+    backend.stat_is(DEST, Ok(file(1)));
+    assert!(!disk.destination_is_free_for(&p(SOURCE), &p(DEST)).await);
+}
+
+/// A name written precomposed comes back decomposed from an SMB share, so
+/// the two spellings have to be recognized as one file.
+#[test]
+fn paths_differing_only_by_unicode_form_are_the_same_file() {
+    let nfc = Path::new("/media/Pok\u{e9}mon/ep.mkv");
+    let nfd = Path::new("/media/Poke\u{301}mon/ep.mkv");
+    assert_ne!(nfc, nfd, "the two spellings differ as byte strings");
+    assert!(paths_are_same_file(nfc, nfd));
+}
+
+#[test]
+fn paths_differing_by_more_than_form_are_not_the_same_file() {
+    assert!(!paths_are_same_file(
+        Path::new("/media/one.mkv"),
+        Path::new("/media/two.mkv")
+    ));
+}
+
+mod real {
+    //! The verb over the real filesystem, on synthetic files in a temporary
+    //! directory. The clock is the manual one, so no path here waits.
+    use super::*;
+
+    fn disk() -> Disk {
+        Disk::with_seams(Arc::new(SystemBackend), ManualClock::at(at(0)))
+    }
+
+    fn moving() -> Placement {
+        Placement {
+            parents: Parents::Create,
+            ..policy(Method::Move, Fallback::Copy)
+        }
+    }
+
+    fn write(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).expect("write fixture");
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(dir)
+            .expect("list")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("name")
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    fn crossing(source: &Path) -> DiskError {
+        DiskError::new(DiskVerb::Move, source, io::ErrorKind::CrossesDevices.into())
+    }
+
+    /// `rename(2)` replaces the destination silently. This is the guarantee
+    /// that stops any mover from destroying a file it was not asked to touch.
+    #[test]
+    fn refuses_to_replace_an_existing_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"source-payload");
+        write(&dest, b"dest-payload");
+
+        let refused = disk()
+            .place_blocking(&source, &dest, moving())
+            .expect_err("an occupied destination must not be replaced");
+        assert_eq!(refused.refused, Refused::DestinationExists);
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
+        assert_eq!(std::fs::read(&source).expect("source"), b"source-payload");
+    }
+
+    #[test]
+    fn replaces_only_when_the_caller_asks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"source-payload");
+        write(&dest, b"dest-payload");
+
+        let replacing = Placement {
+            replace: Replace::Allowed,
+            ..moving()
+        };
+        disk()
+            .place_blocking(&source, &dest, replacing)
+            .expect("an explicit overwrite should succeed");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"source-payload");
+        assert!(!source.exists());
+    }
+
+    /// On a case-insensitive volume the destination resolves to the source,
+    /// so this is a rename to perform rather than a collision to reject.
+    #[test]
+    fn performs_a_case_only_rename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("sample show.mkv");
+        let dest = dir.path().join("SAMPLE SHOW.mkv");
+        write(&source, b"payload");
+
+        disk()
+            .place_blocking(&source, &dest, moving())
+            .expect("case-only rename should succeed");
+        assert_eq!(std::fs::read(&dest).expect("renamed"), b"payload");
+        assert_eq!(names(dir.path()), ["SAMPLE SHOW.mkv"]);
+    }
+
+    /// The destination name must never exist as an empty file, and no
+    /// staging name is left behind.
+    #[test]
+    fn moves_into_a_folder_it_creates_and_leaves_nothing_else() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("nested").join("dest.mkv");
+        write(&source, b"payload");
+
+        let placed = disk()
+            .place_blocking(&source, &dest, moving())
+            .expect("a free destination should accept the move");
+        assert_eq!(placed.done, Done::Renamed);
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+        assert_eq!(names(dir.path()), ["nested"]);
+        assert_eq!(names(&dir.path().join("nested")), ["dest.mkv"]);
+    }
+
+    /// A failed move must never consume the file. Sonarr's
+    /// RollbackPartialMove only deletes the target after confirming the
+    /// source survived, and RollbackMove puts the file back when it did not.
+    #[test]
+    fn a_failed_move_leaves_the_file_where_it_started() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&dest, b"occupied");
+        // The source has moved to the staging name, the way it does on a
+        // filesystem without an exclusive rename.
+        let staged = staging_path_for(&dest);
+        write(&staged, b"irreplaceable");
+
+        let disk = disk();
+        job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::OnlyCopy);
+
+        assert_eq!(std::fs::read(&source).expect("back"), b"irreplaceable");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"occupied");
+        assert!(!staged.exists(), "the staging name is released");
+    }
+
+    /// What each rollback leaves on a real volume: `(source, staged)` before
+    /// and after, `None` for a name that holds nothing.
+    #[test]
+    fn rollbacks_never_remove_the_only_copy() {
+        type Held = Option<&'static [u8]>;
+        let unproven = StagedHolds::Copy { proven: false };
+        let cases: [(StagedHolds, Held, Held, Held, Held); 6] = [
+            // The source survived, so the staged file is a partial.
+            (
+                unproven,
+                Some(b"payload"),
+                Some(b"half"),
+                Some(b"payload"),
+                None,
+            ),
+            // A newcomer at the source neither costs the only copy nor is
+            // replaced by it.
+            (
+                StagedHolds::OnlyCopy,
+                Some(b"newcomer"),
+                Some(b"only"),
+                Some(b"newcomer"),
+                Some(b"only"),
+            ),
+            // An empty claim is released, never put under the source's name.
+            (StagedHolds::EmptyClaim, None, Some(b""), None, None),
+            // An unproven copy is not promoted even when the source is gone.
+            (unproven, None, Some(b"half"), None, Some(b"half")),
+            // A claim that holds data may be the source: it goes back, and
+            // never over a file there.
+            (
+                StagedHolds::EmptyClaim,
+                None,
+                Some(b"only"),
+                Some(b"only"),
+                None,
+            ),
+            (
+                StagedHolds::EmptyClaim,
+                Some(b"newcomer"),
+                Some(b"only"),
+                Some(b"newcomer"),
+                Some(b"only"),
+            ),
+        ];
+        for (index, (held, source_before, staged_before, source_after, staged_after)) in
+            cases.into_iter().enumerate()
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+            let staged = dir.path().join(".scryer-move.partial");
+            for (path, bytes) in [(&source, source_before), (&staged, staged_before)] {
+                if let Some(bytes) = bytes {
+                    write(path, bytes);
+                }
+            }
+            let disk = disk();
+            job(&disk, &source, &dest, moving()).roll_back(&staged, held);
+            let read = |path: &Path| std::fs::read(path).ok();
+            assert_eq!(read(&source).as_deref(), source_after, "case {index}");
+            assert_eq!(read(&staged).as_deref(), staged_after, "case {index}");
+        }
+    }
+
+    /// Installing the roots changes only reuse and timeouts: placing a file
+    /// into a root, and refusing one onto an occupied name, end the same way.
+    #[test]
+    fn a_placement_ends_the_same_with_the_roots_installed() {
+        fn run(disk: &Disk, root: &Path) -> (Vec<(String, Vec<u8>)>, Option<Refused>) {
+            let downloads = root.join("downloads");
+            let season = root.join("Invented Show").join("Season 01");
+            std::fs::create_dir_all(&downloads).expect("downloads");
+            std::fs::create_dir_all(&season).expect("season");
+            write(&downloads.join("one.mkv"), b"episode-one");
+            write(&downloads.join("two.mkv"), b"episode-two");
+            write(&season.join("Invented Show - S01E02.mkv"), b"already-here");
+            let first = season.join("Invented Show - S01E01.mkv");
+            disk.place_blocking(&downloads.join("one.mkv"), &first, moving())
+                .expect("place the first episode");
+            let second = season.join("Invented Show - S01E02.mkv");
+            let refused = disk
+                .place_blocking(&downloads.join("two.mkv"), &second, moving())
+                .err()
+                .map(|refusal| refusal.refused);
+            let mut tree = Vec::new();
+            for dir in [&downloads, &season] {
+                for name in names(dir) {
+                    let bytes = std::fs::read(dir.join(&name)).expect("read");
+                    tree.push((name, bytes));
+                }
+            }
+            (tree, refused)
+        }
+
+        let unset = tempfile::tempdir().expect("tempdir");
+        let installed = tempfile::tempdir().expect("tempdir");
+        let without = run(&disk(), unset.path());
+        let rooted = disk();
+        rooted.set_volumes([(installed.path().to_path_buf(), VolumeClass::LibraryRoot)]);
+        let with = run(&rooted, installed.path());
+
+        assert_eq!(without.1, Some(Refused::DestinationExists));
+        assert_eq!(with, without);
+    }
+
+    /// A cross-device copy is written under the staging name, so nothing is
+    /// under the real name while it is unproven, and a destination that
+    /// appears meanwhile is neither replaced nor costs the source.
+    #[cfg(unix)]
+    #[test]
+    fn a_cross_device_copy_never_shows_an_unproven_file_or_replaces_a_newcomer() {
+        use std::io::Write;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A pipe as the source holds the copy open until the test lets it end.
+        let source = dir.path().join("source.mkv");
+        let source_c = std::ffi::CString::new(source.as_os_str().as_bytes()).expect("path");
+        // SAFETY: the path is NUL-terminated and outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(source_c.as_ptr(), 0o600) }, 0);
+        let dest = dir.path().join("dest.mkv");
+
+        let mover = std::thread::spawn({
+            let (source, dest) = (source.clone(), dest.clone());
+            move || {
+                let unverified = Placement {
+                    verify: Verify::None,
+                    ..moving()
+                };
+                let disk = disk();
+                job(&disk, &source, &dest, unverified)
+                    .across_volumes(crossing(&source))
+                    .map_err(|fail| fail.refused)
+            }
+        });
+        // Opening the pipe for writing returns once the copy has opened it.
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .expect("open the pipe");
+        writer.write_all(b"payload").expect("feed the copy");
+
+        // Only the source and the staged copy: nothing under the real name.
+        let mid_copy = names(dir.path());
+        assert_eq!(mid_copy.len(), 2, "{mid_copy:?}");
+        assert!(mid_copy[0].starts_with(".scryer-") && mid_copy[0].ends_with(".partial"));
+        assert_eq!(mid_copy[1], "source.mkv");
+        write(&dest, b"newcomer");
+        drop(writer);
+
+        let refused = mover.join().expect("join").expect_err("the newcomer wins");
+        assert_eq!(refused, Refused::DestinationExists);
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"newcomer");
+        // The source is untouched and the staged copy is taken back.
+        assert_eq!(names(dir.path()), ["dest.mkv", "source.mkv"]);
+    }
+
+    /// On a case-sensitive volume two names that differ only in case are two
+    /// files, so the case-only path must refuse rather than replace. Runs
+    /// only where the temporary directory is case-sensitive.
+    #[test]
+    fn a_case_only_name_of_a_different_file_is_not_replaced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write(&dir.path().join("case-probe"), b"probe");
+        if dir.path().join("CASE-PROBE").exists() {
+            return;
+        }
+        std::fs::remove_file(dir.path().join("case-probe")).expect("remove probe");
+        let source = dir.path().join("sample show.mkv");
+        let dest = dir.path().join("SAMPLE SHOW.mkv");
+        write(&source, b"source-payload");
+        write(&dest, b"dest-payload");
+
+        let refused = disk()
+            .place_blocking(&source, &dest, moving())
+            .expect_err("a different file under the case-only name must not be replaced");
+        assert_eq!(refused.refused, Refused::DestinationExists);
+        assert_eq!(std::fs::read(&source).expect("source"), b"source-payload");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
+        assert_eq!(names(dir.path()).len(), 2);
+    }
+
+    /// A source that cannot be unlinked but is still there fails the move
+    /// and takes the proven copy back, leaving no duplicate.
+    #[cfg(unix)]
+    #[test]
+    fn a_proven_copy_is_dropped_while_the_source_is_still_there() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root unlinks anywhere, so the locked folder would refuse nothing.
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = dir.path().join("held");
+        std::fs::create_dir(&held).expect("source folder");
+        let (source, dest) = (held.join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"payload");
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555))
+            .expect("lock the source folder");
+
+        let disk = disk();
+        let outcome = job(&disk, &source, &dest, moving()).across_volumes(crossing(&source));
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock the source folder");
+
+        assert!(outcome.is_err(), "the source could not be unlinked");
+        assert_eq!(std::fs::read(&source).expect("source"), b"payload");
+        assert!(!dest.exists(), "the source survives, so no duplicate stays");
+    }
+
+    /// A source whose own permissions forbid writing it is unlinked after
+    /// its copy is proven, as an unlink has always done on Unix, where only
+    /// the folder decides.
+    #[cfg(unix)]
+    #[test]
+    fn a_cross_device_move_unlinks_a_source_without_write_permission() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"payload");
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444))
+            .expect("make the source unwritable");
+
+        let disk = disk();
+        let done = job(&disk, &source, &dest, moving()).across_volumes(crossing(&source));
+        assert_eq!(done.ok(), Some(Done::CopiedThenRemovedSource));
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+    }
+
+    /// On Windows a read-only source refuses the unlink until its attribute
+    /// is cleared, which a cross-device move does once the copy is in place.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_cross_device_move_unlinks_a_read_only_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"payload");
+        set_read_only(&source, true);
+
+        let disk = disk();
+        let done = job(&disk, &source, &dest, moving()).across_volumes(crossing(&source));
+        assert_eq!(done.ok(), Some(Done::CopiedThenRemovedSource));
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+        set_read_only(&dest, false);
+    }
+
+    #[cfg(windows)]
+    fn set_read_only(path: &Path, read_only: bool) {
+        let mut permissions = std::fs::metadata(path).expect("metadata").permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(read_only);
+        std::fs::set_permissions(path, permissions).expect("set read-only");
+    }
+
+    /// A source that cannot be read might still be there or might not, so
+    /// the staged file is neither removed nor moved over it.
+    #[cfg(unix)]
+    #[test]
+    fn a_rollback_that_cannot_read_the_source_leaves_the_staged_file() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root reads anywhere, so the locked folder would hide nothing.
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let held = dir.path().join("held");
+        std::fs::create_dir(&held).expect("source folder");
+        let (source, dest) = (held.join("source.mkv"), dir.path().join("dest.mkv"));
+        let staged = dir.path().join(".scryer-partial.partial");
+        write(&source, b"payload");
+        write(&staged, b"staged-payload");
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the source folder");
+
+        let disk = disk();
+        job(&disk, &source, &dest, moving()).roll_back(&staged, StagedHolds::Copy { proven: true });
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock the source folder");
+
+        assert_eq!(std::fs::read(&staged).expect("staged"), b"staged-payload");
+        assert_eq!(std::fs::read(&source).expect("source"), b"payload");
+    }
+
+    /// NTFS renames without replacing, so an occupied destination is refused
+    /// in the one call and both files are left as they were.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_exclusive_rename_refuses_an_occupied_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"source-payload");
+        write(&dest, b"dest-payload");
+
+        let refused = disk().exclusive_rename_blocking(&source, &dest);
+        let Some(Err(error)) = refused else {
+            panic!("an occupied destination must be refused: {refused:?}");
+        };
+        assert_eq!(error.reason(), reason::DISK_DESTINATION_EXISTS);
+        assert_eq!(std::fs::read(&source).expect("source"), b"source-payload");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_exclusive_rename_moves_to_a_free_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"payload");
+
+        assert!(matches!(
+            disk().exclusive_rename_blocking(&source, &dest),
+            Some(Ok(()))
+        ));
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+    }
+
+    /// A read-only file moves by rename, so no staging link is left behind
+    /// that its attribute would keep from being unlinked.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_read_only_file_moves_without_a_staging_leftover() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = (dir.path().join("source.mkv"), dir.path().join("dest.mkv"));
+        write(&source, b"payload");
+        set_read_only(&source, true);
+
+        disk()
+            .place_blocking(&source, &dest, moving())
+            .expect("the move succeeds");
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+        assert_eq!(names(dir.path()), ["dest.mkv"]);
+        set_read_only(&dest, false);
+    }
+
+    #[test]
+    fn blocking_claim_refuses_an_occupied_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (staged, dest) = (dir.path().join("staged.tmp"), dir.path().join("dest.mkv"));
+        write(&staged, b"staged-payload");
+        write(&dest, b"dest-payload");
+
+        let error = disk()
+            .move_claimed_blocking(&staged, &dest)
+            .expect_err("a claimed move must not replace an existing destination");
+        assert_eq!(error.reason(), reason::DISK_DESTINATION_EXISTS);
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
+        assert_eq!(std::fs::read(&staged).expect("staged"), b"staged-payload");
+    }
+}
