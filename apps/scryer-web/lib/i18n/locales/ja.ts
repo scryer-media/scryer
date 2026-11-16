@@ -732,6 +732,14 @@ const ja: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同一ティア内の最小スコア差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同じ品質ティアのリリースは、現在のファイルのスコアを少なくともこの値だけ上回る必要があります。",
+  "qualityProfile.minMissingEpisodesForPack":
+    "パックに必要な欠落エピソード数の最小値",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "シーズン内でこの数以上のエピソードが欠落している場合にのみ、シーズンパックを検索します。既定値は 2。1 にすると、欠落エピソード 1 件の自動検索でもパックを取得でき、既に所有しているエピソードがダウンロードされることがあります。",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "マルチシーズンパックに必要な欠落エピソードの最小割合（%）",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "シリーズのエピソードのうちこの割合を超えて欠落している場合にのみ、マルチシーズンパックを検討します。既定値は 30。0 では欠落エピソードが 1 件でもあれば対象となり、100 ではマルチシーズンパックは取得されません。",
   "settings.acquisitionConvergence": "収束とペース",
   "settings.acquisitionPollIntervalSeconds": "ポーリング間隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":

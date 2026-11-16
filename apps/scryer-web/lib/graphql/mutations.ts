@@ -1434,6 +1434,8 @@ const qualityProfileCriteriaFields = `
       minScoreToGrab
       cutoffScore
       minUpgradeScoreDelta
+      minMissingEpisodesForPack
+      minMissingPercentForSeriesPack
       decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `

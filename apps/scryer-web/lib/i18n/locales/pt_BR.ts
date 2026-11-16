@@ -738,6 +738,14 @@ const pt_BR: LocaleDictionary = {
     "Delta mínimo de pontuação no mesmo nível",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Um lançamento do mesmo nível de qualidade deve superar a pontuação do arquivo atual em pelo menos este valor.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Mínimo de episódios faltando para um pacote",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Um pacote de temporada só é buscado quando faltam pelo menos esta quantidade de episódios da temporada. Padrão 2. Com 1, uma busca automática por um único episódio faltando também pode pegar um pacote, o que pode baixar episódios que você já tem.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Mínimo de episódios faltando para um pacote de várias temporadas (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Um pacote de várias temporadas só é considerado quando falta mais do que esta porcentagem dos episódios da série. Padrão 30. Com 0, qualquer episódio faltando basta; com 100, pacotes de várias temporadas nunca são usados.",
   "settings.acquisitionConvergence": "Convergência e ritmo",
   "settings.acquisitionPollIntervalSeconds": "Intervalo de sondagem (segundos)",
   "settings.acquisitionPollIntervalSecondsHelp":

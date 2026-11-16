@@ -223,6 +223,11 @@ pub fn from_quality_profile_criteria(
         .copied()
         .map(QualityDecisionGateValue::from_application)
         .collect();
+    let min_missing_episodes_for_pack =
+        i32::try_from(criteria.min_missing_episodes_for_pack_or_default()).unwrap_or(i32::MAX);
+    let min_missing_percent_for_series_pack =
+        i32::try_from(criteria.min_missing_percent_for_series_pack_or_default())
+            .unwrap_or(i32::MAX);
     QualityProfileCriteriaPayload {
         quality_tiers: criteria.quality_tiers,
         archival_quality: criteria.archival_quality,
@@ -271,6 +276,8 @@ pub fn from_quality_profile_criteria(
         min_upgrade_score_delta: criteria
             .min_upgrade_score_delta
             .unwrap_or(scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+        min_missing_episodes_for_pack,
+        min_missing_percent_for_series_pack,
     }
 }
 
