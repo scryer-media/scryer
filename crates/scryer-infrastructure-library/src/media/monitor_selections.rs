@@ -28,14 +28,7 @@ pub(crate) async fn replace_monitor_selection_tx(
     owner_id: &str,
     selection: Option<&MonitorSelection>,
 ) -> AppResult<()> {
-    tx.execute(
-        "DELETE FROM monitor_selections WHERE owner_kind = {} AND owner_id = {}",
-        &[
-            SqlArg::Text(owner_kind.to_string()),
-            SqlArg::Text(owner_id.to_string()),
-        ],
-    )
-    .await?;
+    delete_monitor_selection_tx(tx, owner_kind, owner_id).await?;
 
     let Some(selection) = selection else {
         return Ok(());
@@ -97,6 +90,63 @@ pub(crate) async fn replace_monitor_selection_tx(
     Ok(())
 }
 
+/// Delete every row for one owner and return how many went.
+pub(crate) async fn delete_monitor_selection_tx(
+    tx: &mut SqlTx<'_>,
+    owner_kind: &str,
+    owner_id: &str,
+) -> AppResult<u64> {
+    tx.execute(
+        "DELETE FROM monitor_selections WHERE owner_kind = {} AND owner_id = {}",
+        &[
+            SqlArg::Text(owner_kind.to_string()),
+            SqlArg::Text(owner_id.to_string()),
+        ],
+    )
+    .await
+}
+
+/// How many rows one owner holds, served by the table's primary key.
+pub(crate) async fn count_monitor_selection_rows(
+    exec: SqlExec<'_, '_>,
+    owner_kind: &str,
+    owner_id: &str,
+) -> AppResult<i64> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        "SELECT COUNT(*) AS row_count FROM monitor_selections
+          WHERE owner_kind = {} AND owner_id = {}",
+        &[
+            SqlArg::Text(owner_kind.to_string()),
+            SqlArg::Text(owner_id.to_string()),
+        ],
+    )
+    .await?
+    .ok_or_else(|| AppError::Repository("missing count for monitor_selections".to_string()))?;
+    row.i64("row_count")
+}
+
+/// How many rows the media requests that created `title_id` hold: the rows
+/// `delete_monitor_selections_for_requests_created_title_tx` would remove.
+pub(crate) async fn count_monitor_selections_for_requests_created_title(
+    exec: SqlExec<'_, '_>,
+    title_id: &str,
+) -> AppResult<i64> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        "SELECT COUNT(*) AS row_count FROM monitor_selections
+          WHERE owner_kind = {}
+            AND owner_id IN (SELECT id FROM media_requests WHERE created_title_id = {})",
+        &[
+            SqlArg::Text(OWNER_KIND_MEDIA_REQUEST.to_string()),
+            SqlArg::Text(title_id.to_string()),
+        ],
+    )
+    .await?
+    .ok_or_else(|| AppError::Repository("missing count for monitor_selections".to_string()))?;
+    row.i64("row_count")
+}
+
 /// Deleting a library cascades to its titles and media requests, but
 /// `monitor_selections` has no foreign key to either, so its rows have to be
 /// cleared explicitly before the cascade removes the owners.
@@ -127,11 +177,11 @@ pub(crate) async fn delete_monitor_selections_for_library_tx(
 
 /// The selections of every media request that created `title_id`, for a
 /// caller about to delete those requests. The rows have no foreign key to
-/// their request, so they would outlive it.
+/// their request, so they would outlive it. Returns how many rows went.
 pub(crate) async fn delete_monitor_selections_for_requests_created_title_tx(
     tx: &mut SqlTx<'_>,
     title_id: &str,
-) -> AppResult<()> {
+) -> AppResult<u64> {
     tx.execute(
         "DELETE FROM monitor_selections
           WHERE owner_kind = {}
@@ -141,8 +191,7 @@ pub(crate) async fn delete_monitor_selections_for_requests_created_title_tx(
             SqlArg::Text(title_id.to_string()),
         ],
     )
-    .await?;
-    Ok(())
+    .await
 }
 
 pub(crate) async fn load_monitor_selection(

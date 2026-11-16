@@ -100,6 +100,7 @@ mod unconfirmed_grab_release;
 mod user_permissions;
 mod users_admin_titles;
 mod verification_settings;
+mod wanted_scope_lookup;
 
 mod request_rules_support;
 mod support_acquisition_downloads;

@@ -1324,11 +1324,49 @@ async fn a_merge_clears_the_retired_titles_monitor_selections_and_keeps_the_surv
     insert_monitor_selection(&datastore, "media_request", "request-source", "1").await;
     insert_monitor_selection(&datastore, "media_request", "request-destination", "2").await;
 
+    let selections_before = scalar(
+        &datastore,
+        "SELECT COUNT(*) AS row_count FROM monitor_selections",
+        vec![],
+    )
+    .await;
     let plan = plan_for(&store).await;
-    store
+    let outcome = store
         .execute_title_merge(&plan)
         .await
         .expect("the merge should commit");
+
+    // The preview counts the selections the merge removes, and the outcome
+    // records each delete.
+    let selections_removed = selections_before
+        - scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM monitor_selections",
+            vec![],
+        )
+        .await;
+    assert_eq!(selections_removed, 3);
+    assert_eq!(
+        outcome.rows_affected.get("retire:monitor_selections_title"),
+        Some(&2)
+    );
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("retire:monitor_selections_media_request"),
+        Some(&1)
+    );
+    let retired_records: u64 = outcome
+        .rows_affected
+        .iter()
+        .filter(|(key, _)| key.starts_with("retire:") && key.as_str() != "retire:titles")
+        .map(|(_, rows)| *rows)
+        .sum();
+    assert_eq!(
+        plan.summary.source_records_dropped,
+        i64::try_from(retired_records).expect("a small count"),
+        "the preview's dropped count matches the rows the merge removed"
+    );
 
     assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 0);
     assert!(
