@@ -8052,6 +8052,19 @@ pub trait DownloadSubmissionRepository: Send + Sync {
         Ok(submissions)
     }
 
+    /// The submissions whose client item id is one of `item_ids`, whatever
+    /// their client or title, newest submission first. For a caller that
+    /// holds item ids without a client type. SQL stores read them through the
+    /// item-id index, so callers may pass a selection of any size. The
+    /// default answers none, which is right only for a repository that holds
+    /// no submissions: every repository that stores them overrides it.
+    async fn list_for_client_item_ids(
+        &self,
+        _item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        Ok(Vec::new())
+    }
+
     /// On-demand recovery rows for durable password retries with an active,
     /// matching client binding, including jobs absent from the native queue.
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
@@ -10729,6 +10742,28 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         for state in &mut states {
             state.latest_release_decision = None;
         }
+        Ok(states)
+    }
+
+    /// The `grabbed` scopes of the titles in `title_ids`, newest `updated_at`
+    /// first and then by id, with `latest_release_decision` left empty. The
+    /// default filters
+    /// [`Self::list_acquisition_scope_states_for_title_ids_without_decisions`];
+    /// SQL stores override it with a read that filters on the status.
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states_for_title_ids_without_decisions(title_ids)
+            .await?;
+        states.retain(|state| state.status == AcquisitionScopeStatus::Grabbed);
+        states.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok(states)
     }
 

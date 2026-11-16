@@ -403,6 +403,15 @@ fn opt_json_arg_for_datastore(
     }
 }
 
+/// A scope's `updated_at`, as read back through `timestamp_text`, as an
+/// instant, so rows of several statements order the way one statement orders
+/// them. Text that is not RFC 3339 has none and orders by its text.
+fn wanted_updated_at_instant(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
 fn wanted_seed_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
     let status = row.text("status")?;
     Ok(AcquisitionScopeState {
@@ -1324,6 +1333,48 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .iter()
             .map(|row| wanted_projected_row_to_item(row, WantedProjection::WithoutLatestDecision))
             .collect()
+    }
+
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        if title_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // The title filter is served by the leading column of the
+        // `(title_id, episode_id)` unique key; the status is checked on those
+        // titles' rows and the order is a sort of what is left.
+        let projection = WantedProjection::WithoutLatestDecision;
+        let select = wanted_item_projection_sql(projection);
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) =
+            id_list_statements(title_ids, 1, 0, max_binds(&exec), ID_LIST_CHUNK);
+        let mut states = Vec::new();
+        let mut statements = 0usize;
+        for chunk in ids.chunks(per_statement) {
+            statements += 1;
+            let sql = format!(
+                "{select} WHERE w.title_id IN ({}) AND w.status = 'grabbed'
+                 ORDER BY w.updated_at DESC, w.id",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                states.push(wanted_projected_row_to_item(&row, projection)?);
+            }
+        }
+        if statements > 1 {
+            // Each statement is ordered; a list read in several is merged
+            // into the one order here.
+            states.sort_by(|left, right| {
+                wanted_updated_at_instant(&right.updated_at)
+                    .cmp(&wanted_updated_at_instant(&left.updated_at))
+                    .then_with(|| right.updated_at.cmp(&left.updated_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+        }
+        Ok(states)
     }
 
     async fn list_acquisition_scope_coordinates_for_statuses(

@@ -1140,3 +1140,97 @@ async fn sqlite_title_scope_tally_counts_every_scope_past_the_old_500_row_read()
     assert_eq!(movie[0].count, 1);
     assert_eq!(movie[0].mismatch_recovery_eligible, 1);
 }
+
+#[tokio::test]
+async fn sqlite_grabbed_scopes_for_titles_are_exactly_the_named_titles_grabbed_scopes() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+        &pool, None, true,
+    )
+    .await
+    .unwrap();
+    let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+    let titles = TitleStore::new(datastore.clone());
+    seed(&datastore, &titles).await;
+    const SCOPES: usize = 260;
+    seed_series_with_many_episodes(&datastore, &titles, SCOPES).await;
+    for n in 0..SCOPES {
+        // The oldest scopes share their `updated_at` in pairs, so the id
+        // breaks ties; the newest are all distinct.
+        let tick = if n < 100 { n / 2 } else { n };
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "UPDATE wanted_items SET status = {}, updated_at = {} WHERE id = {}",
+            &[
+                SqlArg::Text(if n % 5 == 0 { "wanted" } else { "grabbed" }.to_string()),
+                SqlArg::Text(format!(
+                    "2031-03-01T00:{:02}:{:02}+00:00",
+                    tick / 60,
+                    tick % 60
+                )),
+                SqlArg::Text(format!("wl-many-w-{n}")),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+    // Every seeded scope of the other titles is grabbed too, so a read that
+    // ignored the title list would return them.
+    SqlRuntime::execute(
+        datastore.read_exec(),
+        "UPDATE wanted_items SET status = 'grabbed' WHERE title_id <> 'wl-series-many'",
+        &[],
+    )
+    .await
+    .unwrap();
+    let wanted = WantedStore::new(datastore.clone());
+
+    // What the check read before: every grabbed scope, newest first.
+    let mut all_grabbed = wanted
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+            statuses: vec!["grabbed".into()],
+            limit: i64::MAX,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    all_grabbed.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    for row in &mut all_grabbed {
+        row.latest_release_decision = None;
+    }
+    assert_eq!(all_grabbed.len(), 208 + WANTED.len());
+
+    let named = strings(&["wl-series-many", "wl-movie-a", "wl-title-without-rows"]);
+    let expected = all_grabbed
+        .iter()
+        .filter(|row| named.contains(&row.title_id))
+        .collect::<Vec<_>>();
+    assert!(expected.len() > 208 && expected.len() < all_grabbed.len());
+    for max_binds in [None, Some(2)] {
+        let _lowered = max_binds.map(crate::media::id_list_statements::lower_max_binds_for_tests);
+        let read = wanted
+            .list_grabbed_acquisition_scopes_for_titles(&named)
+            .await
+            .unwrap();
+        assert_eq!(
+            format!("{read:?}"),
+            format!("{expected:?}"),
+            "max_binds {max_binds:?}"
+        );
+    }
+    assert!(
+        wanted
+            .list_grabbed_acquisition_scopes_for_titles(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

@@ -942,6 +942,19 @@ async fn retain_adopted_passwords_tx(
     Ok(())
 }
 
+/// The submissions with one of `count` client item ids, newest first. The
+/// item-id index answers the filter; the order is a sort of the few matches.
+fn submissions_for_client_item_ids_sql(datastore: &StoreDatastore, count: usize) -> String {
+    download_submission_select_sql(
+        datastore,
+        &format!(
+            "WHERE download_client_item_id IN ({})
+             ORDER BY submitted_at DESC, id DESC",
+            placeholders(count)
+        ),
+    )
+}
+
 #[async_trait]
 impl DownloadSubmissionRepository for DownloadSubmissionStore {
     async fn claim_password_retry(
@@ -2113,6 +2126,23 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         Ok(out)
     }
 
+    async fn list_for_client_item_ids(
+        &self,
+        item_ids: &[String],
+    ) -> AppResult<Vec<DownloadSubmission>> {
+        // Distinct ids in byte order, so the statements and the rows they
+        // return are the same however the caller listed them.
+        let item_ids = item_ids.iter().collect::<std::collections::BTreeSet<_>>();
+        let item_ids = item_ids.into_iter().cloned().collect::<Vec<_>>();
+        let mut out = Vec::new();
+        for chunk in item_ids.chunks(DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE) {
+            let sql = submissions_for_client_item_ids_sql(&self.datastore, chunk.len());
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            out.extend(fetch_download_submissions(self.datastore.read_exec(), &sql, &args).await?);
+        }
+        Ok(out)
+    }
+
     async fn list_password_retry_recovery_submissions(&self) -> AppResult<Vec<DownloadSubmission>> {
         let sql = download_submission_select_sql(
             &self.datastore,
@@ -3073,6 +3103,12 @@ mod seed_goal_tests {
         .execute(&pool)
         .await
         .expect("grabbed file names migration should apply");
+        sqlx::raw_sql(include_str!(
+            "../../../../scryer/src/db/migrations/0361_download_submissions_client_item_id_index.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("client item id index migration should apply");
         DownloadSubmissionStore::new(StoreDatastore::Sqlite {
             pool,
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -7778,6 +7814,126 @@ mod seed_goal_tests {
                 .iter()
                 .any(|line| line.starts_with("SCAN download_submissions")),
             "the legacy fallback must never scan the submissions table: {plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn submissions_by_client_item_id_are_found_through_the_item_id_index() {
+        let store = store().await;
+        let sql = submissions_for_client_item_ids_sql(&store.datastore, 3);
+        let args = ["job-a", "job-b", "job-c"]
+            .map(|id| SqlArg::Text(id.to_string()))
+            .to_vec();
+        let plan = query_plan(&store, &sql, &args).await;
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("SEARCH download_submissions")
+                    && line.contains("idx_download_submissions_client_item_id")),
+            "submissions must be searched by item id: {plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line.starts_with("SCAN download_submissions")),
+            "the submissions table must never be scanned: {plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn submissions_by_client_item_id_match_the_title_reads_past_a_bind_chunk() {
+        let store = store().await;
+        // The same item id under two clients and two titles, an item id with
+        // a colon, and one more title than a chunk holds.
+        let mut seeded = vec![
+            ("shared-job".to_string(), Some("primary"), "item-title-a"),
+            ("shared-job".to_string(), Some("secondary"), "item-title-b"),
+            ("colon:job".to_string(), None, "item-title-a"),
+            (
+                "unrequested-job".to_string(),
+                Some("primary"),
+                "item-title-a",
+            ),
+        ];
+        for index in 0..=DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE {
+            seeded.push((
+                format!("chunk-job-{index:04}"),
+                Some("primary"),
+                "item-title-c",
+            ));
+        }
+        for (item_id, client_id, title_id) in &seeded {
+            let download_id = DownloadId::new();
+            store
+                .record_submission_with_identity(
+                    DownloadSubmission {
+                        download_client_id: client_id.map(str::to_string),
+                        ..submission(download_id, item_id, title_id)
+                    },
+                    submission_identity(download_id),
+                    None,
+                )
+                .await
+                .expect("the grab should persist");
+        }
+        // An unconfirmed intent has no item id and is never returned.
+        store
+            .record_pending_submission(pending_intent(DownloadId::new()))
+            .await
+            .expect("the intent should persist");
+
+        let mut requested = seeded
+            .iter()
+            .map(|(item_id, _, _)| item_id.clone())
+            .filter(|item_id| item_id != "unrequested-job")
+            .collect::<Vec<_>>();
+        requested.push("job-without-a-submission".to_string());
+        requested.push("shared-job".to_string());
+        assert!(requested.len() > DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE);
+
+        let read = store
+            .list_for_client_item_ids(&requested)
+            .await
+            .expect("submissions should list by item id");
+        let key = |submission: &DownloadSubmission| {
+            (
+                submission.download_client_item_id.clone(),
+                submission.download_client_id.clone(),
+                submission.title_id.clone(),
+                submission.download_id.to_string(),
+            )
+        };
+        let mut actual = read.iter().map(key).collect::<Vec<_>>();
+        actual.sort();
+
+        // The same rows, picked out of the per-title read the check used.
+        let mut expected = Vec::new();
+        for title_id in ["item-title-a", "item-title-b", "item-title-c"] {
+            for submission in store.list_for_title(title_id).await.expect("title read") {
+                if requested.contains(&submission.download_client_item_id) {
+                    expected.push(key(&submission));
+                }
+            }
+        }
+        expected.sort();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), seeded.len() - 1);
+
+        // The answer does not depend on how the caller ordered the ids.
+        requested.reverse();
+        let again = store
+            .list_for_client_item_ids(&requested)
+            .await
+            .expect("submissions should list by item id");
+        assert_eq!(
+            again.iter().map(key).collect::<Vec<_>>(),
+            read.iter().map(key).collect::<Vec<_>>()
+        );
+        assert!(
+            store
+                .list_for_client_item_ids(&[])
+                .await
+                .expect("an empty list reads nothing")
+                .is_empty()
         );
     }
 

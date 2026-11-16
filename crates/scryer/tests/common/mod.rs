@@ -329,6 +329,15 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
             .await
     }
 
+    async fn list_grabbed_acquisition_scopes_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .list_grabbed_acquisition_scopes_for_titles(title_ids)
+            .await
+    }
+
     async fn list_latest_release_decisions_for_acquisition_scope_states(
         &self,
         ids: &[String],
