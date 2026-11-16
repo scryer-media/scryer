@@ -770,17 +770,7 @@ async fn fetch_seed_target_tx(
                           last_search_at, status,
                           grabbed_release, created_at, updated_at
                      FROM wanted_items";
-    // The episode identity wins, then the remaining scope keys, then the bare
-    // title.
-    let scope = if let Some(episode_id) = item.episode_id.as_deref() {
-        AcquisitionScopeKey::Episode(episode_id)
-    } else if let Some(collection_id) = item.collection_id.as_deref() {
-        AcquisitionScopeKey::Collection(collection_id)
-    } else if let Some(series_movie_link_id) = item.series_movie_link_id.as_deref() {
-        AcquisitionScopeKey::SeriesMovieLink(series_movie_link_id)
-    } else {
-        AcquisitionScopeKey::Title
-    };
+    let scope = AcquisitionScopeKey::of(item);
     let (predicate, args) = wanted_scope_predicate("", &item.title_id, scope);
     let sql = format!("{columns} WHERE {predicate}");
 

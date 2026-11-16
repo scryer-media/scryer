@@ -1095,7 +1095,21 @@ pub enum AcquisitionScopeKey<'a> {
     Title,
 }
 
-impl AcquisitionScopeKey<'_> {
+impl<'a> AcquisitionScopeKey<'a> {
+    /// The key `state`'s own row is stored under. The episode identity wins,
+    /// then the collection, then the series-movie link, then the bare title.
+    pub fn of(state: &'a AcquisitionScopeState) -> Self {
+        if let Some(episode_id) = state.episode_id.as_deref() {
+            Self::Episode(episode_id)
+        } else if let Some(collection_id) = state.collection_id.as_deref() {
+            Self::Collection(collection_id)
+        } else if let Some(link_id) = state.series_movie_link_id.as_deref() {
+            Self::SeriesMovieLink(link_id)
+        } else {
+            Self::Title
+        }
+    }
+
     /// Whether `state` is this scope's row, given it belongs to the title.
     pub fn matches(&self, state: &AcquisitionScopeState) -> bool {
         match *self {
