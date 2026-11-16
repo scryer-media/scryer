@@ -1530,9 +1530,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     for name in ["RuleBuilderSubject", "LifecycleActionsConflict"] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
+    // Request rules have no evaluation mode, so RequestRuleEvaluationModeValue
+    // is gone: public types 1047->1046, ENUM 218->217.
+    assert!(!public_type_names.contains(&"RequestRuleEvaluationModeValue"));
     assert_eq!(
         public_types.len(),
-        1047,
+        1046,
         "public types: {public_type_names:?}"
     );
     assert_eq!(kind_count("OBJECT"), 570);
@@ -1543,7 +1546,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert_eq!(kind_count("INPUT_OBJECT"), 247);
     // The search walk intensity setting adds AcquisitionWalkIntensityValue:
     // ENUM 208->209.
-    assert_eq!(kind_count("ENUM"), 218);
+    assert_eq!(kind_count("ENUM"), 217);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
