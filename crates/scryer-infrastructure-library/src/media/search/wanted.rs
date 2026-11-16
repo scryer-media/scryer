@@ -4,7 +4,7 @@ use scryer_application::{
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
-use crate::media::libraries::state_store::decode_release_decision_explanation;
+use crate::media::libraries::state_store::decode_release_decision_explanation_record;
 
 pub async fn list_wanted_items_query(
     pool: &SqlitePool,
@@ -329,11 +329,11 @@ fn row_to_wanted_item(row: &SqliteRow) -> AppResult<AcquisitionScopeState> {
 fn latest_release_decision_explanation(
     row: &SqliteRow,
     decision_id: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<scryer_application::ReleaseDecisionExplanation>> {
     let encoded = row
         .try_get::<Option<Vec<u8>>, _>("latest_decision_explanation_json")
         .map_err(|error| AppError::Repository(error.to_string()))?;
-    match decode_release_decision_explanation(encoded.as_deref()) {
+    match decode_release_decision_explanation_record(encoded.as_deref()) {
         Ok(explanation) => Ok(explanation),
         Err(error) => {
             tracing::warn!(

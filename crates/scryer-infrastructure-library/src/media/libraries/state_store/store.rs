@@ -30,7 +30,7 @@ use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
-use super::decode_release_decision_explanation;
+use super::decode_release_decision_explanation_record;
 use super::release_decision_explanation::ReleaseDecisionExplanationEncoder;
 
 // Throttle the SQLite full VACUUM so it does not run on every
@@ -493,9 +493,9 @@ fn release_decision_explanation_from_row(
     row: &SqlRow,
     column: &str,
     decision_id: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<scryer_application::ReleaseDecisionExplanation>> {
     let encoded = row.opt_bytes(column)?;
-    match decode_release_decision_explanation(encoded.as_deref()) {
+    match decode_release_decision_explanation_record(encoded.as_deref()) {
         Ok(explanation) => Ok(explanation),
         Err(error) => {
             tracing::warn!(
@@ -886,7 +886,8 @@ impl PreparedReleaseDecision {
         decision: &ReleaseDecision,
         encoder: &mut ReleaseDecisionExplanationEncoder,
     ) -> AppResult<Self> {
-        let explanation_json = match encoder.encode(decision.explanation_json.as_deref()) {
+        let explanation_json = match encoder.encode_explanation(decision.explanation_json.as_ref())
+        {
             Ok(encoded) => encoded,
             Err(error) => {
                 tracing::warn!(
