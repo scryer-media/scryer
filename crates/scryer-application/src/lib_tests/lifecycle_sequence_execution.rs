@@ -2090,11 +2090,12 @@ async fn a_changed_decision_that_deletes_something_new_restarts_grace() {
     assert_eq!(next.due_at, next.first_matched_at + Duration::days(7));
 }
 
-/// The delete budget follows the subject across a recreate. Here the
-/// recreate is the natural one: the first pass unmonitors and its delete
-/// fails, so the next evaluation no longer decides `unmonitor` and replaces
-/// the candidate. The new candidate's delete continues at attempt two, and
-/// the delete is attempted three times in all, never more.
+/// The delete budget follows the subject across a recreate. The first pass
+/// unmonitors and its delete fails; evaluation does not count that unmonitor
+/// against the rule, so the recreate comes from outside: a tag added since
+/// means the rule no longer decides `unmonitor`, and the next evaluation
+/// replaces the candidate. The new candidate's delete continues at attempt
+/// two, and the delete is attempted three times in all, never more.
 #[tokio::test]
 async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     let fixture = title_fixture("Carried delete budget", MediaFacet::Movie).await;
@@ -2111,9 +2112,11 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     )
     .await;
     let mut draft = storage_sequence_deletion_draft();
-    draft.rego_source = "match := true\n\nunmonitor if {\n\tinput.facts.monitored\n}\n\n\
+    draft.rego_source = "match := true\n\nunmonitor if {\n\tinput.facts.monitored\n\
+                         \tnot \"synthetic-settled\" in input.facts.tags\n}\n\n\
                          delete_files if {\n\tmatch\n}\n"
         .to_string();
+    define_title_tags(&fixture.execution, &["synthetic-settled"]).await;
     sample_fixture_root(&fixture);
     let (rule_set_id, candidates) = arm_and_evaluate_all(&fixture.execution, draft).await;
     assert_eq!(candidates.len(), 1, "{candidates:?}");
@@ -2155,7 +2158,18 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
     // The injected fault is in the catalog cleanup after the file left the
     // disk; put the file back so the root still holds the title.
     std::fs::write(&path, b"admit the configured-root title").expect("restore file");
-    // Unmonitored now: the decision changed without deleting more.
+    // Tagged from outside: the decision changes without deleting more.
+    fixture
+        .execution
+        .app
+        .update_title_tags(
+            &fixture.execution.user,
+            std::slice::from_ref(&fixture.title.id),
+            &["synthetic-settled".to_string()],
+            &[],
+        )
+        .await
+        .expect("tag the title from outside");
     fixture
         .execution
         .app

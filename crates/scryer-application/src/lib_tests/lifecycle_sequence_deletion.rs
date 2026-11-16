@@ -2003,3 +2003,300 @@ async fn an_opposite_monitoring_change_on_an_unrelated_title_does_not_hold() {
             .monitored
     );
 }
+
+// ── Evaluation of a delete that has started ─────────────────────────────────
+
+/// A storage matcher with one more condition, so deletion rechecks capacity
+/// per file and the probe can hold the sequence between its files.
+fn storage_matcher_with(condition: &str) -> String {
+    format!(
+        "match if {{\n\tsome root in input.facts.storage_roots\n\troot.available_percent >= 0\n\t{condition}\n}}\n"
+    )
+}
+
+struct HeldDelete {
+    fixture: TitleFixture,
+    rule_set_id: String,
+    candidate: scryer_domain::LifecycleCandidate,
+    remaining_path: PathBuf,
+    capacity_recovered: Arc<AtomicBool>,
+    _probe: crate::lifecycle_rules::storage::LifecycleStorageCapacityProbeGuard,
+}
+
+impl HeldDelete {
+    /// Run a full evaluation pass and read this candidate back.
+    async fn reevaluate(&self) -> scryer_domain::LifecycleCandidate {
+        self.fixture
+            .execution
+            .app
+            .run_lifecycle_rule_evaluation_job()
+            .await
+            .expect("re-evaluate the held delete");
+        let candidates = rule_candidates(&self.fixture.execution, &self.rule_set_id).await;
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        let candidate = candidates.into_iter().next().expect("candidate");
+        assert_eq!(candidate.id, self.candidate.id);
+        candidate
+    }
+
+    async fn act(&self) -> crate::lifecycle_rules::LifecycleActionHandlingReport {
+        self.fixture
+            .execution
+            .app
+            .run_every_rule_action_pass_for_tests()
+            .await
+            .expect("action pass")
+    }
+}
+
+/// Two five-byte movie files; the sequence unmonitors the title, deletes the
+/// lower-id file, then holds on capacity before the other. Capacity reads
+/// again once the hold returns.
+async fn hold_movie_delete_after_one_file(name: &str, condition: &str) -> HeldDelete {
+    let fixture = title_fixture(name, MediaFacet::Movie).await;
+    let first_path = fixture.root.join("Held/first.mkv");
+    let first_file_id =
+        add_movie_file(&fixture.execution.app, &fixture.title.id, &first_path).await;
+    let second_path = fixture.root.join("Held/second.mkv");
+    let second_file_id =
+        add_movie_file(&fixture.execution.app, &fixture.title.id, &second_path).await;
+    let mut ordered = [(first_file_id, first_path), (second_file_id, second_path)];
+    ordered.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let [(_, deleted_path), (_, remaining_path)] = ordered;
+    let (probe, capacity_recovered) = capacity_holds_after_file_removal(deleted_path.clone());
+    let probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
+    let mut draft = sequence_draft(deletion_steps());
+    with_matcher(&mut draft, &storage_matcher_with(condition));
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    super::lifecycle_rules::arm_rule(
+        &fixture.execution.app,
+        &fixture.execution.user,
+        &rule_set_id,
+        LifecycleEffectArming::Destructive,
+        Some(1),
+    )
+    .await;
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("delete the first file, then hold");
+    assert_eq!(report.held, 1, "{report:?}");
+    assert!(!deleted_path.exists(), "the first file is deleted");
+    assert!(remaining_path.exists(), "the second file waits");
+    capacity_recovered.store(true, Ordering::SeqCst);
+    HeldDelete {
+        fixture,
+        rule_set_id,
+        candidate,
+        remaining_path,
+        capacity_recovered,
+        _probe: probe,
+    }
+}
+
+/// A rule that matches ten bytes or more still matches once its own delete
+/// removed half of them, and the held sequence resumes to the end.
+#[tokio::test]
+async fn a_size_rule_still_matches_after_its_own_delete_removed_half_the_files() {
+    let held = hold_movie_delete_after_one_file(
+        "Synthetic Size Hold",
+        "input.facts.total_file_size_bytes >= 10",
+    )
+    .await;
+
+    let candidate = held.reevaluate().await;
+    assert!(!candidate.state.is_terminal(), "{candidate:?}");
+
+    let report = held.act().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert!(!held.remaining_path.exists(), "the sequence resumes");
+}
+
+/// A rule conditioned on `monitored` still matches after its own unmonitor
+/// step ran.
+#[tokio::test]
+async fn a_monitored_rule_still_matches_after_its_own_unmonitor_step() {
+    let held =
+        hold_movie_delete_after_one_file("Synthetic Monitored Hold", "input.facts.monitored").await;
+    assert!(
+        !held
+            .fixture
+            .execution
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&held.fixture.title.id)
+            .await
+            .expect("read title")
+            .expect("title exists")
+            .monitored,
+        "the sequence's own unmonitor step ran"
+    );
+
+    let candidate = held.reevaluate().await;
+    assert!(!candidate.state.is_terminal(), "{candidate:?}");
+
+    let report = held.act().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert!(!held.remaining_path.exists(), "the sequence resumes");
+}
+
+/// A season head conditioned on the season's and the show's file counts
+/// still matches after its own delete removed one of the season's two files.
+#[tokio::test]
+async fn a_season_file_count_rule_still_matches_after_its_own_partial_delete() {
+    let fixture = title_fixture("Synthetic Season Count", MediaFacet::Series).await;
+    let (season, first_episode) = season_and_episode(&fixture, 1, 1, "2020-01-01").await;
+    let second_episode = fixture
+        .execution
+        .app
+        .create_episode(
+            &fixture.execution.user,
+            fixture.title.id.clone(),
+            Some(season.id.clone()),
+            "standard".into(),
+            Some("2".to_string()),
+            Some("1".to_string()),
+            None,
+            Some("Episode 1-2".to_string()),
+            Some("2020-01-02".to_string()),
+            None,
+            false,
+            false,
+        )
+        .await
+        .expect("create the season's second episode");
+    let first_rel = "Season Count/Season 01/S01E01.mkv";
+    let second_rel = "Season Count/Season 01/S01E02.mkv";
+    let first_file_id = add_episode_file(&fixture, &first_episode, first_rel).await;
+    let second_file_id = add_episode_file(&fixture, &second_episode, second_rel).await;
+    let mut ordered = [
+        (first_file_id, fixture.root.join(first_rel)),
+        (second_file_id, fixture.root.join(second_rel)),
+    ];
+    ordered.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let [(_, deleted_path), (_, remaining_path)] = ordered;
+    let (probe, capacity_recovered) = capacity_holds_after_file_removal(deleted_path.clone());
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
+
+    let (rule_set_id, candidates) = arm_and_evaluate_all(
+        &fixture.execution,
+        cross_level_draft(
+            "package rules\nimport rego.v1\n\n\
+             delete_season_files if {\n\
+             \tinput.subject.season_number == 1\n\
+             \tinput.season.facts.file_count >= 2\n\
+             \tinput.facts.file_count >= 2\n\
+             \tsome root in input.facts.storage_roots\n\
+             \troot.available_percent >= 0\n\
+             }\n",
+        ),
+    )
+    .await;
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    let candidate = candidates.into_iter().next().expect("season candidate");
+    assert_eq!(candidate.subject_id, season.id);
+    arm_destructive(&fixture, &rule_set_id).await;
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("delete one season file, then hold");
+    assert_eq!(report.held, 1, "{report:?}");
+    assert!(!deleted_path.exists(), "one season file is deleted");
+    assert!(remaining_path.exists(), "the other season file waits");
+
+    capacity_recovered.store(true, Ordering::SeqCst);
+    let held = HeldDelete {
+        fixture,
+        rule_set_id,
+        candidate,
+        remaining_path,
+        capacity_recovered,
+        _probe,
+    };
+    let candidate = held.reevaluate().await;
+    assert!(!candidate.state.is_terminal(), "{candidate:?}");
+
+    let report = held.act().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert!(!held.remaining_path.exists(), "the sequence resumes");
+}
+
+/// A file imported from outside while the delete is held is not the
+/// sequence's own change: the facts read as they are, the size rule no longer
+/// matches, the candidate ends, and the waiting file stays.
+#[tokio::test]
+async fn an_outside_file_change_mid_delete_ends_the_candidate_and_keeps_the_file() {
+    let held = hold_movie_delete_after_one_file(
+        "Synthetic Outside Import",
+        "input.facts.total_file_size_bytes >= 10",
+    )
+    .await;
+    let imported_path = held.fixture.root.join("Held/imported.mkv");
+    write_media_file(&imported_path);
+    held.fixture
+        .execution
+        .app
+        .services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: held.fixture.title.id.clone(),
+            file_path: imported_path.to_string_lossy().to_string(),
+            size_bytes: 1,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("import a file from outside the sequence");
+
+    let candidate = held.reevaluate().await;
+    assert!(candidate.state.is_terminal(), "{candidate:?}");
+
+    let report = held.act().await;
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert!(held.remaining_path.exists(), "the waiting file stays");
+    assert!(imported_path.exists(), "the imported file stays");
+    assert!(held.capacity_recovered.load(Ordering::SeqCst));
+}
+
+/// A candidate whose sequence never started is judged on the facts as they
+/// are: an outside unmonitor ends a rule conditioned on `monitored`.
+#[tokio::test]
+async fn a_candidate_without_a_started_delete_is_judged_on_live_facts() {
+    let fixture = title_fixture("Synthetic Unstarted", MediaFacet::Movie).await;
+    let path = fixture.root.join("Unstarted/movie.mkv");
+    add_movie_file(&fixture.execution.app, &fixture.title.id, &path).await;
+    let _probe =
+        install_lifecycle_storage_capacity_probe_for_test(stable_capacity_probe(capacity(100)))
+            .await;
+    let mut draft = sequence_draft(deletion_steps());
+    with_matcher(&mut draft, &storage_matcher_with("input.facts.monitored"));
+    let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
+    assert_no_steps(&fixture, &candidate).await;
+    fixture
+        .execution
+        .app
+        .set_title_monitored(&fixture.execution.user, &fixture.title.id, false)
+        .await
+        .expect("unmonitor from outside");
+
+    fixture
+        .execution
+        .app
+        .run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("re-evaluate");
+    let candidates = rule_candidates(&fixture.execution, &rule_set_id).await;
+    let reread = candidates
+        .iter()
+        .find(|reread| reread.id == candidate.id)
+        .expect("candidate");
+    assert!(reread.state.is_terminal(), "{reread:?}");
+    assert!(path.exists());
+}

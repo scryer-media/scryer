@@ -207,17 +207,6 @@ impl InMemoryLifecycleEvaluationRepo {
             Some(crate::lifecycle_rules::declared_actions::decided_actions_to_json(actions));
     }
 
-    /// Give a candidate the action kind a row written before rules declared
-    /// their actions carries.
-    pub(super) async fn set_action_kind(&self, id: &str, action_kind: &str) {
-        let mut rows = self.candidates.lock().await;
-        let candidate = rows
-            .iter_mut()
-            .find(|candidate| candidate.id == id)
-            .expect("candidate exists");
-        candidate.action_kind = action_kind.to_string();
-    }
-
     /// Record execution attempts already spent on a candidate.
     pub(super) async fn set_action_attempts(&self, id: &str, attempts: i64) {
         let mut rows = self.candidates.lock().await;
@@ -2690,97 +2679,6 @@ async fn a_mixed_level_rule_opens_a_candidate_at_each_level_it_acts_on() {
             .iter()
             .all(|candidate| candidate.title_id == title.id)
     );
-}
-
-/// A candidate whose deletion journal was written when deletion narrowed to
-/// one configured root is closed by evaluation, never resumed and never left
-/// failing the pass: the journal stays as it was, and the subject, still
-/// matching, earns a new candidate with its own generation and clock.
-#[tokio::test]
-async fn a_candidate_with_a_root_deletion_journal_is_closed_not_failed_every_pass() {
-    let fixture = evaluation_app();
-    let title = fixture
-        .app
-        .add_title(
-            &fixture.user,
-            NewTitle {
-                name: "Synthetic Root Journal".to_string(),
-                facet: MediaFacet::Movie,
-                monitored: true,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create title");
-    armed_source(
-        &fixture,
-        "package rules\nimport rego.v1\n\nunmonitor if input.facts.monitored\n",
-    )
-    .await;
-    fixture.open_evaluation_gate().await;
-    fixture.evaluate().await;
-    let opened = fixture.evaluation.all_candidates().await;
-    assert_eq!(opened.len(), 1, "{opened:?}");
-    let legacy_kind = "unmonitor_title_delete_all_files";
-    fixture
-        .evaluation
-        .set_action_kind(&opened[0].id, legacy_kind)
-        .await;
-    let candidate = fixture.evaluation.all_candidates().await.remove(0);
-    let journal =
-        crate::lifecycle_rules::scoped_deletion::root_deletion_journal_for_test(&candidate);
-    let now = Utc::now();
-    fixture
-        .evaluation
-        .start_action_run(&LifecycleActionRun {
-            id: scryer_domain::Id::new().0,
-            candidate_id: candidate.id.clone(),
-            rule_set_id: candidate.rule_set_id.clone(),
-            revision_number: candidate.revision_number,
-            title_id: title.id.clone(),
-            subject_kind: candidate.subject_kind.clone(),
-            subject_id: candidate.subject_id.clone(),
-            action_kind: legacy_kind.to_string(),
-            match_generation: candidate.match_generation,
-            idempotency_key: "synthetic-root-journal".to_string(),
-            attempt: 1,
-            status: LifecycleActionRunStatus::Held,
-            hold_reason: Some("synthetic".to_string()),
-            error: None,
-            detail: journal.clone(),
-            started_at: now,
-            finished_at: Some(now),
-            created_at: now,
-        })
-        .await
-        .expect("store the root journal");
-
-    for pass in ["first pass", "second pass"] {
-        fixture.evaluate().await;
-        let candidates = fixture.evaluation.all_candidates().await;
-        let closed = candidates
-            .iter()
-            .find(|row| row.id == candidate.id)
-            .expect("the old candidate stays as history");
-        assert_eq!(closed.state, LifecycleCandidateState::Canceled, "{pass}");
-        assert_eq!(
-            closed.state_reason,
-            crate::lifecycle_rules::candidate_reason::ROOT_DELETION_JOURNAL_DISCARDED,
-            "{pass}"
-        );
-        let open: Vec<_> = candidates
-            .iter()
-            .filter(|row| !row.state.is_terminal())
-            .collect();
-        assert_eq!(open.len(), 1, "{pass}: {candidates:?}");
-        assert!(
-            open[0].match_generation > candidate.match_generation,
-            "{pass}: a new generation, never the journal's"
-        );
-    }
-    let runs = fixture.evaluation.all_action_runs().await;
-    assert_eq!(runs.len(), 1, "{runs:?}");
-    assert_eq!(runs[0].detail, journal, "the journal is kept as it was");
 }
 
 // ── Conflicts across levels ─────────────────────────────────────────────────

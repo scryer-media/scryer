@@ -2061,13 +2061,6 @@ impl AppUseCase {
         {
             return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
         }
-        if let Some(checkpoint) = deletion_checkpoint.as_ref() {
-            checkpoint.restore_sequence_owned_file_deltas(&mut input);
-        }
-        // Sequence baselines are intentionally narrow. A completed Unmonitor
-        // may keep only its own monitored fact stable for later steps, and
-        // only after the persisted postcondition still holds. An external
-        // re-monitor is live evidence, so it is never hidden by a baseline.
         {
             let completed_steps = match self
                 .services
@@ -2083,224 +2076,19 @@ impl AppUseCase {
                 Ok(steps) => steps,
                 Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
             };
-            let sequence_hash = match sequence.content_hash() {
-                Ok(hash) => hash,
-                Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
-            };
-            for step in &sequence.steps {
-                let Some(run) = completed_steps
-                    .iter()
-                    .find(|run| run.key.step_id == step.id)
-                else {
-                    continue;
-                };
-                if !run.state.is_completion_success() {
-                    continue;
-                }
-                if !super::sequence_execution::persisted_sequence_step_is_compatible(
-                    run,
+            if let Err(reason) = self
+                .restore_sequence_own_effects(
                     candidate,
-                    &sequence_hash,
-                    step,
-                ) {
-                    return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
-                }
-                let before = serde_json::from_str::<serde_json::Value>(&run.before_state_json)
-                    .map_err(|_| ())
-                    .ok();
-                let provenance = serde_json::from_str::<serde_json::Value>(&run.provenance_json)
-                    .map_err(|_| ())
-                    .ok();
-                match step.kind {
-                    crate::lifecycle_rules::LifecycleActionStepKind::Unmonitor => {
-                        let crate::lifecycle_rules::LifecycleActionStepParameters::Unmonitor {
-                            include_descendants,
-                        } = &step.parameters
-                        else {
-                            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
-                        };
-                        match self
-                            .lifecycle_unmonitoring_is_confirmed(
-                                candidate,
-                                &title,
-                                *include_descendants,
-                            )
-                            .await
-                        {
-                            Ok(true) => {
-                                let monitoring_changed = provenance
-                                    .as_ref()
-                                    .and_then(|value| value.get("monitoring_changed"))
-                                    .and_then(serde_json::Value::as_bool)
-                                    == Some(true);
-                                let before_monitored = before
-                                    .as_ref()
-                                    .and_then(|value| value.get("facts_monitored"))
-                                    .and_then(serde_json::Value::as_bool);
-                                if monitoring_changed {
-                                    if let Some(before_monitored) = before_monitored {
-                                        input.subject_facts_mut().monitored =
-                                            scryer_rules::lifecycle::Observation::known(
-                                                before_monitored,
-                                            );
-                                    }
-                                    if let Some(before_count) = before
-                                        .as_ref()
-                                        .and_then(|value| {
-                                            value.get("facts_monitored_episode_count")
-                                        })
-                                        .and_then(serde_json::Value::as_i64)
-                                    {
-                                        input.subject_facts_mut().monitored_episode_count =
-                                            scryer_rules::lifecycle::Observation::known(
-                                                before_count,
-                                            );
-                                    }
-                                }
-                            }
-                            // A later external re-monitor is live input for
-                            // the matcher. Do not restore our earlier value
-                            // or manufacture a no-match here: DeleteFiles
-                            // independently rechecks this destructive
-                            // prerequisite immediately before every unlink.
-                            Ok(false) => {}
-                            Err(_) => {
-                                return SafetyDecision::Hold(
-                                    execution_reason::UNKNOWN_AT_EXECUTION,
-                                );
-                            }
-                        }
-                    }
-                    crate::lifecycle_rules::LifecycleActionStepKind::Monitor => {
-                        let monitoring_changed = provenance
-                            .as_ref()
-                            .and_then(|value| value.get("monitoring_changed"))
-                            .and_then(serde_json::Value::as_bool)
-                            == Some(true);
-                        if !monitoring_changed {
-                            continue;
-                        }
-                        // Same terms as Unmonitor: our own write is hidden
-                        // from the matcher only while it still holds. An
-                        // external unmonitor since is live input.
-                        match self
-                            .lifecycle_monitoring_is_confirmed(candidate, &title)
-                            .await
-                        {
-                            Ok(true) => {
-                                if let Some(before_monitored) = before
-                                    .as_ref()
-                                    .and_then(|value| value.get("facts_monitored"))
-                                    .and_then(serde_json::Value::as_bool)
-                                {
-                                    input.subject_facts_mut().monitored =
-                                        scryer_rules::lifecycle::Observation::known(
-                                            before_monitored,
-                                        );
-                                }
-                            }
-                            Ok(false) => {}
-                            Err(_) => {
-                                return SafetyDecision::Hold(
-                                    execution_reason::UNKNOWN_AT_EXECUTION,
-                                );
-                            }
-                        }
-                    }
-                    crate::lifecycle_rules::LifecycleActionStepKind::MoveToLibrary
-                    | crate::lifecycle_rules::LifecycleActionStepKind::MoveToRoot => {
-                        // A title this sequence moved is matched on the
-                        // library it was in before the move, while it is
-                        // still where the move sent it.
-                        let landed = provenance.as_ref().is_some_and(|value| {
-                            super::sequence_execution::sequence_move_landed(value, &title)
-                        });
-                        if landed
-                            && let Some(before) = before.as_ref()
-                            && let (Some(id), Some(name)) = (
-                                before.get("library_id").and_then(serde_json::Value::as_str),
-                                before
-                                    .get("library_name")
-                                    .and_then(serde_json::Value::as_str),
-                            )
-                        {
-                            input.library = scryer_rules::lifecycle::LifecycleLibraryDoc {
-                                id: id.to_string(),
-                                name: name.to_string(),
-                            };
-                        }
-                    }
-                    crate::lifecycle_rules::LifecycleActionStepKind::AddTags
-                    | crate::lifecycle_rules::LifecycleActionStepKind::RemoveTags => {
-                        let changed_tags = provenance
-                            .as_ref()
-                            .and_then(|value| value.get("changed_tags"))
-                            .and_then(serde_json::Value::as_array)
-                            .map(|tags| {
-                                tags.iter()
-                                    .filter_map(serde_json::Value::as_str)
-                                    .map(str::to_string)
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        if let scryer_rules::lifecycle::Observation::Known { value, .. } =
-                            &mut input.facts.tags
-                        {
-                            for tag in changed_tags {
-                                match step.kind {
-                                    crate::lifecycle_rules::LifecycleActionStepKind::AddTags
-                                        if value.contains(&tag) =>
-                                    {
-                                        value.retain(|current| current != &tag)
-                                    }
-                                    crate::lifecycle_rules::LifecycleActionStepKind::RemoveTags
-                                        if !value.contains(&tag) =>
-                                    {
-                                        value.push(tag)
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    crate::lifecycle_rules::LifecycleActionStepKind::ChangeQualityProfile => {
-                        let profile_changed = provenance
-                            .as_ref()
-                            .and_then(|value| value.get("profile_changed"))
-                            .and_then(serde_json::Value::as_bool)
-                            == Some(true);
-                        let target = provenance
-                            .as_ref()
-                            .and_then(|value| value.get("quality_profile_id"))
-                            .and_then(serde_json::Value::as_str);
-                        let current_matches_target = target.is_some_and(|target| {
-                            matches!(
-                                &input.facts.quality_profile_id,
-                                scryer_rules::lifecycle::Observation::Known { value, .. }
-                                    if crate::settings::runtime::quality_profile_ids_equal(value, target)
-                            )
-                        });
-                        if profile_changed && current_matches_target {
-                            match before
-                                .as_ref()
-                                .and_then(|value| value.get("quality_profile_id"))
-                                .and_then(serde_json::Value::as_str)
-                            {
-                                Some(previous) => {
-                                    input.facts.quality_profile_id =
-                                        scryer_rules::lifecycle::Observation::known(
-                                            previous.to_string(),
-                                        );
-                                }
-                                None => {
-                                    input.facts.quality_profile_id =
-                                        scryer_rules::lifecycle::Observation::absent();
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+                    &title,
+                    &sequence,
+                    &completed_steps,
+                    deletion_checkpoint.as_ref(),
+                    &mut input,
+                    SequenceOwnEffects::All,
+                )
+                .await
+            {
+                return SafetyDecision::Hold(reason);
             }
         }
         let decision = evaluator.evaluate(&input).ok().and_then(|result| {
@@ -2469,9 +2257,360 @@ impl AppUseCase {
     }
 }
 
+/// Which of a sequence's own effects [`AppUseCase::restore_sequence_own_effects`]
+/// puts back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SequenceOwnEffects {
+    /// Everything a completed step can change: monitoring, files, library,
+    /// tags, and quality profile. The executor's recheck before a step.
+    All,
+    /// Monitoring and file facts only: what a delete and its unmonitor
+    /// prerequisite change. Evaluation of a candidate whose delete started.
+    MonitoringAndFiles,
+}
+
+impl AppUseCase {
+    /// Put back onto `input` what this candidate's own completed steps
+    /// changed, so the rule is judged on the subject as it was before its own
+    /// work rather than on that work half done.
+    ///
+    /// File counts and sizes come back only for the deletion journal's own
+    /// completed targets, and only while the live figures equal the baseline
+    /// minus exactly those targets: an import or an outside removal leaves
+    /// them live. Capacity figures are never restored.
+    ///
+    /// Sequence baselines are intentionally narrow. A completed Unmonitor
+    /// may keep only its own monitored fact stable for later steps, and
+    /// only after the persisted postcondition still holds. An external
+    /// re-monitor is live evidence, so it is never hidden by a baseline.
+    ///
+    /// `completed_steps` is the candidate's step rows for its current match
+    /// generation and revision. An `Err` is the hold reason.
+    pub(super) async fn restore_sequence_own_effects(
+        &self,
+        candidate: &LifecycleCandidate,
+        title: &Title,
+        sequence: &LifecycleActionSequence,
+        completed_steps: &[LifecycleActionStepRun],
+        deletion_checkpoint: Option<&super::scoped_deletion::ScopedDeletionCheckpoint>,
+        input: &mut scryer_rules::lifecycle::LifecycleInput,
+        effects: SequenceOwnEffects,
+    ) -> Result<(), &'static str> {
+        if let Some(checkpoint) = deletion_checkpoint {
+            checkpoint.restore_sequence_owned_file_deltas(input);
+        }
+        let sequence_hash = match sequence.content_hash() {
+            Ok(hash) => hash,
+            Err(_) => return Err(execution_reason::RULE_NOT_ELIGIBLE),
+        };
+        for step in &sequence.steps {
+            let Some(run) = completed_steps
+                .iter()
+                .find(|run| run.key.step_id == step.id)
+            else {
+                continue;
+            };
+            if !run.state.is_completion_success() {
+                continue;
+            }
+            if !super::sequence_execution::persisted_sequence_step_is_compatible(
+                run,
+                candidate,
+                &sequence_hash,
+                step,
+            ) {
+                return Err(execution_reason::RULE_NOT_ELIGIBLE);
+            }
+            let before = serde_json::from_str::<serde_json::Value>(&run.before_state_json)
+                .map_err(|_| ())
+                .ok();
+            let provenance = serde_json::from_str::<serde_json::Value>(&run.provenance_json)
+                .map_err(|_| ())
+                .ok();
+            match step.kind {
+                crate::lifecycle_rules::LifecycleActionStepKind::Unmonitor => {
+                    let crate::lifecycle_rules::LifecycleActionStepParameters::Unmonitor {
+                        include_descendants,
+                    } = &step.parameters
+                    else {
+                        return Err(execution_reason::RULE_NOT_ELIGIBLE);
+                    };
+                    match self
+                        .lifecycle_unmonitoring_is_confirmed(
+                            candidate,
+                            &title,
+                            *include_descendants,
+                        )
+                        .await
+                    {
+                        Ok(true) => {
+                            let monitoring_changed = provenance
+                                .as_ref()
+                                .and_then(|value| value.get("monitoring_changed"))
+                                .and_then(serde_json::Value::as_bool)
+                                == Some(true);
+                            let before_monitored = before
+                                .as_ref()
+                                .and_then(|value| value.get("facts_monitored"))
+                                .and_then(serde_json::Value::as_bool);
+                            if monitoring_changed {
+                                if let Some(before_monitored) = before_monitored {
+                                    input.subject_facts_mut().monitored =
+                                        scryer_rules::lifecycle::Observation::known(
+                                            before_monitored,
+                                        );
+                                }
+                                if let Some(before_count) = before
+                                    .as_ref()
+                                    .and_then(|value| value.get("facts_monitored_episode_count"))
+                                    .and_then(serde_json::Value::as_i64)
+                                {
+                                    input.subject_facts_mut().monitored_episode_count =
+                                        scryer_rules::lifecycle::Observation::known(before_count);
+                                }
+                            }
+                        }
+                        // A later external re-monitor is live input for
+                        // the matcher. Do not restore our earlier value
+                        // or manufacture a no-match here: DeleteFiles
+                        // independently rechecks this destructive
+                        // prerequisite immediately before every unlink.
+                        Ok(false) => {}
+                        Err(_) => {
+                            return Err(execution_reason::UNKNOWN_AT_EXECUTION);
+                        }
+                    }
+                }
+                crate::lifecycle_rules::LifecycleActionStepKind::Monitor => {
+                    let monitoring_changed = provenance
+                        .as_ref()
+                        .and_then(|value| value.get("monitoring_changed"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true);
+                    if !monitoring_changed {
+                        continue;
+                    }
+                    // Same terms as Unmonitor: our own write is hidden
+                    // from the matcher only while it still holds. An
+                    // external unmonitor since is live input.
+                    match self
+                        .lifecycle_monitoring_is_confirmed(candidate, &title)
+                        .await
+                    {
+                        Ok(true) => {
+                            if let Some(before_monitored) = before
+                                .as_ref()
+                                .and_then(|value| value.get("facts_monitored"))
+                                .and_then(serde_json::Value::as_bool)
+                            {
+                                input.subject_facts_mut().monitored =
+                                    scryer_rules::lifecycle::Observation::known(before_monitored);
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(_) => {
+                            return Err(execution_reason::UNKNOWN_AT_EXECUTION);
+                        }
+                    }
+                }
+                crate::lifecycle_rules::LifecycleActionStepKind::MoveToLibrary
+                | crate::lifecycle_rules::LifecycleActionStepKind::MoveToRoot
+                    if effects == SequenceOwnEffects::All =>
+                {
+                    // A title this sequence moved is matched on the
+                    // library it was in before the move, while it is
+                    // still where the move sent it.
+                    let landed = provenance.as_ref().is_some_and(|value| {
+                        super::sequence_execution::sequence_move_landed(value, &title)
+                    });
+                    if landed
+                        && let Some(before) = before.as_ref()
+                        && let (Some(id), Some(name)) = (
+                            before.get("library_id").and_then(serde_json::Value::as_str),
+                            before
+                                .get("library_name")
+                                .and_then(serde_json::Value::as_str),
+                        )
+                    {
+                        input.library = scryer_rules::lifecycle::LifecycleLibraryDoc {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                        };
+                    }
+                }
+                crate::lifecycle_rules::LifecycleActionStepKind::AddTags
+                | crate::lifecycle_rules::LifecycleActionStepKind::RemoveTags
+                    if effects == SequenceOwnEffects::All =>
+                {
+                    let changed_tags = provenance
+                        .as_ref()
+                        .and_then(|value| value.get("changed_tags"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|tags| {
+                            tags.iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if let scryer_rules::lifecycle::Observation::Known { value, .. } =
+                        &mut input.facts.tags
+                    {
+                        for tag in changed_tags {
+                            match step.kind {
+                                crate::lifecycle_rules::LifecycleActionStepKind::AddTags
+                                    if value.contains(&tag) =>
+                                {
+                                    value.retain(|current| current != &tag)
+                                }
+                                crate::lifecycle_rules::LifecycleActionStepKind::RemoveTags
+                                    if !value.contains(&tag) =>
+                                {
+                                    value.push(tag)
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                crate::lifecycle_rules::LifecycleActionStepKind::ChangeQualityProfile
+                    if effects == SequenceOwnEffects::All =>
+                {
+                    let profile_changed = provenance
+                        .as_ref()
+                        .and_then(|value| value.get("profile_changed"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true);
+                    let target = provenance
+                        .as_ref()
+                        .and_then(|value| value.get("quality_profile_id"))
+                        .and_then(serde_json::Value::as_str);
+                    let current_matches_target = target.is_some_and(|target| {
+                        matches!(
+                            &input.facts.quality_profile_id,
+                            scryer_rules::lifecycle::Observation::Known { value, .. }
+                                if crate::settings::runtime::quality_profile_ids_equal(value, target)
+                        )
+                    });
+                    if profile_changed && current_matches_target {
+                        match before
+                            .as_ref()
+                            .and_then(|value| value.get("quality_profile_id"))
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            Some(previous) => {
+                                input.facts.quality_profile_id =
+                                    scryer_rules::lifecycle::Observation::known(
+                                        previous.to_string(),
+                                    );
+                            }
+                            None => {
+                                input.facts.quality_profile_id =
+                                    scryer_rules::lifecycle::Observation::absent();
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A delete a candidate's own sequence already began: the sequence, its step
+/// rows, and the deletion journal once the delete itself has started.
+pub(super) struct StartedSequenceDelete {
+    pub(super) sequence: LifecycleActionSequence,
+    pub(super) steps: Vec<LifecycleActionStepRun>,
+    pub(super) checkpoint: Option<super::scoped_deletion::ScopedDeletionCheckpoint>,
+}
+
+impl AppUseCase {
+    /// The delete this candidate's sequence already began, if any: its
+    /// Unmonitor prerequisite succeeded, or its DeleteFiles step left
+    /// `pending`. Reads nothing for a candidate the executor has never
+    /// leased (`observing`) or whose decided actions delete no files; for
+    /// any other it reads its step rows once, and the deletion journal only
+    /// when the DeleteFiles step itself has begun. An `Err` is a picture that
+    /// could not be completed.
+    pub(super) async fn lifecycle_started_sequence_delete(
+        &self,
+        candidate: &LifecycleCandidate,
+    ) -> AppResult<Option<StartedSequenceDelete>> {
+        if candidate.action_kind != ACTION_SEQUENCE_KIND
+            || matches!(
+                candidate.state,
+                LifecycleCandidateState::Observing | LifecycleCandidateState::Executing
+            )
+        {
+            return Ok(None);
+        }
+        let Some(actions) = super::declared_actions::decided_actions_from_json(
+            candidate.decided_actions_json.as_deref(),
+        ) else {
+            return Ok(None);
+        };
+        if !actions.delete_files || actions.delete_title {
+            return Ok(None);
+        }
+        let quality_profile_ids = if actions.set_quality_profile.is_some() {
+            self.lifecycle_quality_profile_ids_by_name().await?
+        } else {
+            HashMap::new()
+        };
+        let Ok(sequence) = declared_candidate_sequence(candidate, &quality_profile_ids) else {
+            return Ok(None);
+        };
+        let step_of = |kind: LifecycleActionStepKind| {
+            sequence
+                .steps
+                .iter()
+                .find(|step| step.kind == kind)
+                .map(|step| step.id.clone())
+        };
+        let Some(delete_step_id) = step_of(LifecycleActionStepKind::DeleteFiles) else {
+            return Ok(None);
+        };
+        let unmonitor_step_id = step_of(LifecycleActionStepKind::Unmonitor);
+        let steps = self
+            .services
+            .customization
+            .lifecycle_evaluation
+            .list_action_steps(
+                &candidate.id,
+                candidate.match_generation,
+                candidate.revision_number,
+            )
+            .await?;
+        let delete_started = steps.iter().any(|run| {
+            run.key.step_id == delete_step_id
+                && run.state != scryer_domain::LifecycleActionStepState::Pending
+        });
+        let unmonitored = steps.iter().any(|run| {
+            Some(&run.key.step_id) == unmonitor_step_id.as_ref()
+                && run.state.is_completion_success()
+        });
+        if !delete_started && !unmonitored {
+            return Ok(None);
+        }
+        let checkpoint = if delete_started {
+            self.lifecycle_deletion_checkpoint_for_step(candidate, Some(&delete_step_id))
+                .await?
+        } else {
+            None
+        };
+        Ok(Some(StartedSequenceDelete {
+            sequence,
+            steps,
+            checkpoint,
+        }))
+    }
+}
+
 /// The sequence a declared rule runs for one candidate, built from the
 /// actions stored on it. An `Err` is the hold reason.
-fn declared_candidate_sequence(
+pub(super) fn declared_candidate_sequence(
     candidate: &LifecycleCandidate,
     quality_profile_ids: &HashMap<String, String>,
 ) -> Result<LifecycleActionSequence, &'static str> {

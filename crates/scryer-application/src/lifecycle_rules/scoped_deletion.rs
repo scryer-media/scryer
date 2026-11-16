@@ -36,19 +36,6 @@ impl ScopeFactSnapshot {
             monitored_episode_count: facts.monitored_episode_count.clone(),
         }
     }
-    /// Only restore facts this action changes. Watch signals, claims, identity,
-    /// exclusions, and the rule's authorization are still rechecked live.
-    pub fn restore(&self, input: &mut LifecycleInput) {
-        let facts = input.subject_facts_mut();
-        facts.monitored = self.monitored.clone();
-        facts.has_file = self.has_file.clone();
-        facts.file_count = self.file_count.clone();
-        facts.total_file_size_bytes = self.total_file_size_bytes.clone();
-        facts.files = self.files.clone();
-        facts.first_imported_at = self.first_imported_at.clone();
-        facts.episode_file_count = self.episode_file_count.clone();
-        facts.monitored_episode_count = self.monitored_episode_count.clone();
-    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct FileCheckpoint {
@@ -185,12 +172,6 @@ pub(super) fn record_hold_detail(run: &mut LifecycleActionRun, hold_detail: &ser
 }
 
 impl ScopedDeletionCheckpoint {
-    pub(super) fn restore_baseline_if_started(&self, input: &mut LifecycleInput) {
-        if self.mutation_started {
-            self.baseline.restore(input);
-        }
-    }
-
     pub(super) fn completed_retention_episode_ids(&self) -> BTreeSet<String> {
         if self.mutation_started {
             self.files
@@ -245,12 +226,12 @@ impl ScopedDeletionCheckpoint {
         } else {
             None
         };
-        restore_known_delta(
+        let count_restored = restore_known_delta(
             &self.baseline.file_count,
             &mut input.subject_facts_mut().file_count,
             completed_count,
         );
-        restore_known_delta(
+        let size_restored = restore_known_delta(
             &self.baseline.total_file_size_bytes,
             &mut input.subject_facts_mut().total_file_size_bytes,
             completed_size,
@@ -258,10 +239,29 @@ impl ScopedDeletionCheckpoint {
         if let Some(baseline_has_file) = restore_has_file {
             input.subject_facts_mut().has_file = Observation::known(baseline_has_file);
         }
+        // A season's or episode's files are also its title's, and the rule
+        // reads the title's facts beside the subject's. Once the subject shows
+        // nothing but this delete's own removals, the same removals are added
+        // back to the title's live figures; any other change to the title's
+        // files still reads as it is.
+        let narrow_subject = !std::ptr::eq(input.subject_facts(), &input.facts);
+        if narrow_subject && count_restored && size_restored && completed_count > 0 {
+            add_known_delta(&mut input.facts.file_count, completed_count);
+            add_known_delta(&mut input.facts.total_file_size_bytes, completed_size);
+            if matches!(input.facts.has_file, Observation::Known { .. }) {
+                input.facts.has_file = Observation::known(true);
+            }
+        }
     }
 }
 
-fn restore_known_delta(baseline: &Observation<i64>, current: &mut Observation<i64>, delta: i64) {
+/// Put `delta` back on `current` when it reads exactly `baseline - delta`.
+/// Returns whether it did.
+fn restore_known_delta(
+    baseline: &Observation<i64>,
+    current: &mut Observation<i64>,
+    delta: i64,
+) -> bool {
     if let (
         Observation::Known {
             value: baseline, ..
@@ -274,6 +274,14 @@ fn restore_known_delta(baseline: &Observation<i64>, current: &mut Observation<i6
         && *current_value == *baseline - delta
     {
         *current_value = *baseline;
+        return true;
+    }
+    false
+}
+
+fn add_known_delta(current: &mut Observation<i64>, delta: i64) {
+    if let Observation::Known { value, .. } = current {
+        *value += delta;
     }
 }
 fn catalog_proof(file: &crate::types::TitleMediaFile) -> String {
