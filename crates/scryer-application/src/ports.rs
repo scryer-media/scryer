@@ -10644,10 +10644,13 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
-    /// The same rows, in the same order, as
+    /// The same set of rows as
     /// [`Self::list_acquisition_scope_states_for_title_ids`], with
     /// `latest_release_decision` left empty. For callers that never read the
-    /// decision; SQL stores skip its join and blob.
+    /// decision; SQL stores skip its join and blob. Row order is not part of
+    /// the contract: a long id list is read in several statements, and the two
+    /// calls may return the rows in different orders. A caller that needs an
+    /// order sorts or groups the result itself.
     async fn list_acquisition_scope_states_for_title_ids_without_decisions(
         &self,
         title_ids: &[String],
