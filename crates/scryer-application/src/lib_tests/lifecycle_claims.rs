@@ -572,6 +572,69 @@ async fn an_import_starts_the_lease_clock() {
     );
 }
 
+/// Activate one dormant claim seeded with `duration_days` and `expires_at`,
+/// and return what the claim stores afterwards.
+async fn activate_seeded(
+    duration_days: Option<i64>,
+    expires_at: Option<DateTime<Utc>>,
+    started_at: DateTime<Utc>,
+) -> LifecycleClaim {
+    let fixture = claims_app();
+    let title = seed_title(&fixture.app, &fixture.user, "Extended").await;
+    fixture
+        .claims
+        .seed(LifecycleClaim {
+            duration_days,
+            expires_at,
+            ..lease("claim-1", &title.id, LifecycleClaimState::Dormant)
+        })
+        .await;
+    fixture
+        .app
+        .activate_dormant_claims_for_title(&title.id, started_at)
+        .await
+        .expect("activate");
+    let claim = fixture.only_claim().await;
+    assert_eq!(claim.state, LifecycleClaimState::Active);
+    claim
+}
+
+#[tokio::test]
+async fn activation_keeps_a_stored_expiry_when_the_claim_has_no_duration() {
+    let started_at = Utc::now();
+    let extended = started_at + chrono::Duration::days(90);
+    let claim = activate_seeded(None, Some(extended), started_at).await;
+    assert_eq!(claim.expires_at, Some(extended));
+}
+
+#[tokio::test]
+async fn activation_keeps_the_later_of_a_stored_expiry_and_the_duration() {
+    let started_at = Utc::now();
+    let window_end = started_at + chrono::Duration::days(30);
+
+    let later = started_at + chrono::Duration::days(90);
+    let claim = activate_seeded(Some(30), Some(later), started_at).await;
+    assert_eq!(
+        claim.expires_at,
+        Some(later),
+        "the extension outlasts the window"
+    );
+
+    let earlier = started_at + chrono::Duration::days(5);
+    let claim = activate_seeded(Some(30), Some(earlier), started_at).await;
+    assert_eq!(
+        claim.expires_at,
+        Some(window_end),
+        "the window outlasts the extension"
+    );
+}
+
+#[tokio::test]
+async fn activation_without_a_duration_or_a_stored_expiry_never_expires() {
+    let claim = activate_seeded(None, None, Utc::now()).await;
+    assert_eq!(claim.expires_at, None);
+}
+
 /// The safety net: an import that happened while the hook was missing or
 /// failing still starts the clock, and it starts it at the import.
 #[tokio::test]

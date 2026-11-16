@@ -223,15 +223,19 @@ impl AppUseCase {
     }
 }
 
-/// When a claim's window closes, given the instant its clock starts. A claim
-/// without a positive duration never closes.
+/// When a claim's window closes, given the instant its clock starts. An
+/// operator's explicit expiry, even one granted before the first import
+/// starts the clock, is kept: with a positive duration the later of it and
+/// the duration's end wins, and without one it stands as stored. A claim
+/// with neither never closes.
 fn claim_expiry(claim: &LifecycleClaim, starts_at: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    claim.duration_days.filter(|days| *days > 0).map(|days| {
-        // An operator's explicit extension is a minimum expiry, even
-        // when granted before the first import starts the clock.
-        let duration_expiry = starts_at + Duration::days(days);
+    let Some(days) = claim.duration_days.filter(|days| *days > 0) else {
+        return claim.expires_at;
+    };
+    let duration_expiry = starts_at + Duration::days(days);
+    Some(
         claim
             .expires_at
-            .map_or(duration_expiry, |expiry| expiry.max(duration_expiry))
-    })
+            .map_or(duration_expiry, |expiry| expiry.max(duration_expiry)),
+    )
 }
