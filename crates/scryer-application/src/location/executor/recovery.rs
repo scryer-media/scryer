@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::disk::{Disk, EntryKind};
+
 /// How often a waiting transfer probes its disconnected storage.
 ///
 /// A brief hiccup (a switch reboot, an SMB session renegotiating) should
@@ -105,11 +107,10 @@ impl StorageWatch {
             for path in paths {
                 let mut parent = path.parent()?;
                 loop {
-                    match std::fs::metadata(parent) {
-                        Ok(metadata) if metadata.is_dir() => break,
-                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                            parent = parent.parent()?;
-                        }
+                    let reading = Disk::process().follow_blocking(parent);
+                    match reading.exists() {
+                        _ if reading.is(EntryKind::Directory) => break,
+                        Some(false) => parent = parent.parent()?,
                         _ => return None,
                     }
                 }
@@ -141,8 +142,7 @@ impl StorageWatch {
             let _done = Done(probing);
             anchors.iter().all(|(path, expected)| {
                 volume_identity(path).is_ok_and(|actual| &actual == expected)
-                    && std::fs::read_dir(path)
-                        .is_ok_and(|mut entries| entries.next().transpose().is_ok())
+                    && Disk::process().has_entries_blocking(path).is_ok()
             })
         });
         match tokio::time::timeout(Self::PROBE_TIMEOUT, probe).await {

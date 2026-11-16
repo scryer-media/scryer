@@ -17,6 +17,7 @@ use super::preview::{
     LocationPlan, LocationPlanBuilder, LocationPlanHeader, PlanItem, PlanItemKind,
 };
 use super::root_move::{RootMoveExecutionPlan, RootMoveFileExecution, RootMoveTitleExecution};
+use crate::disk::{Disk, EntryKind, PathReading, Removal, Remove};
 use crate::stored_paths::{folder_paths_match, path_to_stored_string, stored_path_to_path_buf};
 use crate::{
     AppError, AppResult, AppUseCase, InsertMediaFileInput, MediaFileRole, PendingImportStatus,
@@ -238,6 +239,10 @@ fn refused(reason: &'static str, message: impl Into<String>) -> AppError {
     AppError::validation_refused(reason, message)
 }
 
+fn unread(reading: PathReading) -> AppError {
+    AppError::Repository(reading.absence().into())
+}
+
 fn conflict_io_error(error: std::io::Error) -> AppError {
     let (reason, message) = match error.kind() {
         std::io::ErrorKind::NotFound => (
@@ -260,6 +265,7 @@ fn conflict_io_error(error: std::io::Error) -> AppError {
     refused(reason, message)
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: io-kind refusals
 async fn conflict_path_metadata(path: &str) -> AppResult<std::fs::Metadata> {
     if !crate::stored_paths::stored_path_is_native(path) {
         return Err(refused(
@@ -576,6 +582,7 @@ fn folder_rank_external_id<'a>(title: &'a Title, source: &str) -> Option<&'a str
         .map(|id| id.value.trim())
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: io-kind refusals, entry lengths
 async fn enumerate(folder: &str, root: &str) -> AppResult<(Vec<ConflictFile>, Vec<String>)> {
     let base = stored_path_to_path_buf(folder);
     super::title_folder_recovery::inspect_path(&base, false).await?;
@@ -1657,6 +1664,7 @@ fn inode_key(version: &str) -> Option<String> {
 }
 
 /// A directory's physical `(dev, ino)`, or `None` on platforms without inodes.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino folder identity
 async fn directory_identity(path: &std::path::Path) -> AppResult<Option<(u64, u64)>> {
     #[cfg(unix)]
     {
@@ -1735,9 +1743,8 @@ async fn disposal_version_current(
     if !same_content_version(&actual, expected) {
         return Ok(false);
     }
-    let source_absent = tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
-        .await
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+    let source = stored_path_to_path_buf(&row.source_path);
+    let source_absent = Disk::process().fresh(source).await.exists() == Some(false);
     if !source_absent {
         return Ok(!row.completed
             && proof.after_versions.get(path) == Some(&actual)
@@ -1793,8 +1800,11 @@ async fn conflict_resolution_current(
         return Ok(false);
     }
     if let Some(source_expected) = &row.source_version {
-        match tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path)).await {
-            Ok(_) => {
+        let reading = Disk::process()
+            .fresh(stored_path_to_path_buf(&row.source_path))
+            .await;
+        match reading.exists() {
+            Some(true) => {
                 let actual =
                     super::resolution::file_version(&stored_path_to_path_buf(&row.source_path))
                         .await?;
@@ -1805,8 +1815,8 @@ async fn conflict_resolution_current(
                     return Ok(false);
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(AppError::Repository(error.to_string())),
+            Some(false) => {}
+            None => return Err(unread(reading)),
         }
     }
     Ok(true)
@@ -1866,10 +1876,8 @@ async fn preview_version_current(
             {
                 added.insert(&row.destination_path);
             }
-            if tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
-                .await
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-            {
+            let source = stored_path_to_path_buf(&row.source_path);
+            if Disk::process().fresh(source).await.exists() == Some(false) {
                 removed.insert(&row.source_path);
             }
         }
@@ -2542,8 +2550,9 @@ impl AppUseCase {
                 continue;
             }
             let path = stored_path_to_path_buf(&file.path);
-            match tokio::fs::symlink_metadata(&path).await {
-                Ok(_) => {
+            let reading = Disk::process().fresh(&path).await;
+            match reading.exists() {
+                Some(true) => {
                     super::title_folder_recovery::inspect_path(&path, false).await?;
                     if !preview_version_current(file, &resolutions, conflict).await? {
                         return Err(refused(
@@ -2552,11 +2561,9 @@ impl AppUseCase {
                         ));
                     }
                 }
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && operation_id.is_some()
-                        && conflict.dispose_paths.contains(&file.path) => {}
-                Err(error) => return Err(AppError::Repository(error.to_string())),
+                Some(false)
+                    if operation_id.is_some() && conflict.dispose_paths.contains(&file.path) => {}
+                _ => return Err(unread(reading)),
             }
         }
         // The survivor's folder is recorded after its files move and before
@@ -2891,10 +2898,7 @@ impl AppUseCase {
             .collect();
         for path in candidates {
             let native = stored_path_to_path_buf(&path);
-            if tokio::fs::symlink_metadata(&native)
-                .await
-                .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-            {
+            if Disk::process().fresh(&native).await.is(EntryKind::File) {
                 let current = super::resolution::file_version(&native).await?;
                 if same_inode_version(&version, &current) {
                     before_versions.insert(path, current);
@@ -2951,10 +2955,8 @@ impl AppUseCase {
             return Ok(());
         }
         let source_version = row.source_version.as_deref().expect("disposal version");
-        if !tokio::fs::symlink_metadata(stored_path_to_path_buf(&row.source_path))
-            .await
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
+        let source = stored_path_to_path_buf(&row.source_path);
+        if Disk::process().fresh(source).await.exists() != Some(false) {
             return Err(refused(
                 refusal::FILE_CHANGED,
                 "A disposal pathname is still occupied; its files were preserved",
@@ -3001,13 +3003,12 @@ impl AppUseCase {
         let mut verified_content = false;
         for path in candidates {
             let native = stored_path_to_path_buf(&path);
-            match tokio::fs::symlink_metadata(&native).await {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AppError::Repository(error.to_string())),
-                Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
-                    continue;
-                }
-                Ok(_) => {}
+            let reading = Disk::process().fresh(&native).await;
+            match reading.exists() {
+                Some(false) => continue,
+                None => return Err(unread(reading)),
+                Some(true) if !reading.is(EntryKind::File) => continue,
+                Some(true) => {}
             }
             let version = super::resolution::file_version(&native).await?;
             if !same_inode_version(&version, source_version) {
@@ -3093,9 +3094,11 @@ impl AppUseCase {
             .iter()
             .filter(|path| !retained.contains(*path))
         {
-            if tokio::fs::symlink_metadata(stored_path_to_path_buf(path))
+            if Disk::process()
+                .fresh(stored_path_to_path_buf(path))
                 .await
-                .is_ok()
+                .exists()
+                == Some(true)
             {
                 disposal_remaining = true;
                 break;
@@ -3116,12 +3119,7 @@ impl AppUseCase {
                     .collect();
                 for path in candidates {
                     let native = stored_path_to_path_buf(&path);
-                    if !tokio::fs::symlink_metadata(&native)
-                        .await
-                        .is_ok_and(|metadata| {
-                            metadata.is_file() && !metadata.file_type().is_symlink()
-                        })
-                    {
+                    if !Disk::process().fresh(&native).await.is(EntryKind::File) {
                         continue;
                     }
                     let version = super::resolution::file_version(&native).await?;
@@ -3200,12 +3198,13 @@ impl AppUseCase {
             let mut disposal_index = resolutions
                 .iter()
                 .position(|row| row.is_disposal() && row.source_path == *path);
-            match tokio::fs::symlink_metadata(&source).await {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(AppError::Repository(error.to_string())),
-                Ok(metadata) => {
+            let reading = Disk::process().fresh(&source).await;
+            match reading.exists() {
+                Some(false) => {}
+                None => return Err(unread(reading)),
+                Some(true) => {
                     super::title_folder_recovery::inspect_path(&source, false).await?;
-                    if !metadata.is_file()
+                    if !reading.is(EntryKind::File)
                         || disposal_index.is_some_and(|index| resolutions[index].completed)
                         || !preview_version_current(file, &resolutions, conflict).await?
                     {
@@ -3362,9 +3361,12 @@ impl AppUseCase {
                                 ));
                             }
                         }
-                        tokio::fs::remove_file(&source)
-                            .await
-                            .map_err(|error| AppError::Repository(error.to_string()))?;
+                        let removal = Disk::process().remove(&source, Remove::File).await;
+                        if removal.map_err(|error| AppError::Repository(error.to_string()))?
+                            == Removal::AlreadyAbsent
+                        {
+                            return Err(AppError::Repository("it is not there".into()));
+                        }
                     }
                 }
             }

@@ -38,6 +38,7 @@ impl FileResolution {
         matches!(self.disposition, ResolutionDisposition::Disposal(_))
     }
 
+    #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino hardlink proof
     pub async fn proof_is_current(&self) -> bool {
         if !self.completed || self.is_disposal() {
             return false;
@@ -121,6 +122,7 @@ use super::model::{
     AppliedVerificationDepth, FileVerificationOutcome, KnownSourceContent, VerificationDepth,
 };
 use super::verify::{CopyProgress, VerifiedFile, hash_existing_file_with_progress};
+use crate::disk::{Disk, EntryKind, PathReading, Remove};
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult, LocationOperationRepository};
 use std::{
@@ -378,8 +380,9 @@ impl ConflictResolver {
                 warning: None,
                 reason_code: None,
             };
-            let existing = match tokio::fs::symlink_metadata(&destination).await {
-                Ok(_) => {
+            let reading = Disk::process().fresh(&destination).await;
+            let existing = match reading.exists() {
+                Some(true) => {
                     record.destination_version = Some(file_version(&destination).await?);
                     let read = Arc::new(std::sync::atomic::AtomicU64::new(0));
                     let count = read.clone();
@@ -404,8 +407,8 @@ impl ConflictResolver {
                         .saturating_add(read.load(std::sync::atomic::Ordering::Relaxed));
                     Some(proof)
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(file_error(&destination, error)),
+                Some(false) => None,
+                None => return Err(unread(&destination, reading)),
             };
             let preserved = destination != *original;
             if let Some(proof) = existing.as_ref() {
@@ -478,12 +481,11 @@ impl ConflictResolver {
                 ));
             }
             if verified.hashes.is_none() {
-                record.disposition = if tokio::fs::symlink_metadata(source)
-                    .await
-                    .map_err(|error| file_error(source, error))?
-                    .file_type()
-                    .is_symlink()
-                {
+                let reading = Disk::process().fresh(source).await;
+                if reading.exists() != Some(true) {
+                    return Err(unread(source, reading));
+                }
+                record.disposition = if reading.is(EntryKind::Symlink) {
                     ResolutionDisposition::Symlink
                 } else {
                     ResolutionDisposition::Hardlink
@@ -603,17 +605,16 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
         return Ok(());
     }
     let partial = super::verify::partial_destination_path(destination);
-    let metadata = match tokio::fs::symlink_metadata(&partial).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(file_error(&partial, error)),
-    };
-    let source = stored_path_to_path_buf(&row.source_path);
-    let source_len = tokio::fs::symlink_metadata(&source)
-        .await
-        .map(|metadata| metadata.len())
-        .unwrap_or_default();
-    if !metadata.is_file() || metadata.len() > source_len {
+    let reading = Disk::process().fresh(&partial).await;
+    match reading.exists() {
+        Some(false) => return Ok(()),
+        None => return Err(unread(&partial, reading)),
+        Some(true) => {}
+    }
+    let source = Disk::process()
+        .fresh(stored_path_to_path_buf(&row.source_path))
+        .await;
+    if !reading.is(EntryKind::File) || reading.size() > Some(source.size().unwrap_or_default()) {
         return Err(AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_OCCUPIED,
             format!(
@@ -622,12 +623,15 @@ async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -
             ),
         ));
     }
-    tokio::fs::remove_file(&partial).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to clear this move's abandoned partial copy at {}: {error}",
-            partial.display()
-        ))
-    })?;
+    Disk::process()
+        .remove(&partial, Remove::File)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to clear this move's abandoned partial copy at {}: {error}",
+                partial.display()
+            ))
+        })?;
     tracing::info!(
         operation_id = %row.operation_id,
         title_id = %row.title_id,
@@ -650,6 +654,10 @@ fn numbered_name(base: &str, number: u32) -> String {
         &stored_path_to_path_buf(base),
         &format!(" ({number})"),
     ))
+}
+
+fn unread(path: &Path, reading: PathReading) -> AppError {
+    file_error(path, reading.absence())
 }
 
 fn file_error(path: &Path, error: impl std::fmt::Display) -> AppError {
@@ -686,6 +694,7 @@ fn copy_disagrees_with_stored_hash(
 
 /// [`file_version`] together with the metadata it was read from, for a caller
 /// that needs both from the one probe.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
 async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::Metadata)> {
     let metadata = tokio::fs::symlink_metadata(path)
         .await
@@ -694,6 +703,7 @@ async fn file_version_and_metadata(path: &Path) -> AppResult<(String, std::fs::M
     Ok((version, metadata))
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: symlink target versions
 async fn file_version_from_metadata(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -738,6 +748,7 @@ async fn file_version_from_metadata(
     }
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
 pub async fn compare_existing(
     source: &Path,
     destination: &Path,

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::{Disk, PathReading};
 use crate::{AppError, AppResult};
 
 /// The link count of one file, or the fact that this platform does not report
@@ -85,13 +86,21 @@ impl HardlinkFact {
 /// still stat'ed — so a missing or unreadable path is still an error — but the
 /// count comes back as [`LinkCount::Unsupported`].
 pub fn link_count(path: &Path) -> AppResult<LinkCount> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to stat path for hardlink detection: {}: {error}",
-            path.display()
-        ))
-    })?;
-    Ok(link_count_from_metadata(&metadata))
+    let reading = Disk::process().fresh_blocking(path);
+    if reading.exists() != Some(true) {
+        return Err(unreadable_for_hardlinks(path, reading));
+    }
+    Ok(reading
+        .link_count()
+        .map_or(LinkCount::Unsupported, LinkCount::Known))
+}
+
+fn unreadable_for_hardlinks(path: &Path, reading: PathReading) -> AppError {
+    AppError::Repository(format!(
+        "failed to stat path for hardlink detection: {}: {}",
+        path.display(),
+        reading.absence()
+    ))
 }
 
 /// Read the link count and size of `path` (blocking).
@@ -107,32 +116,18 @@ pub fn hardlink_fact(path: &Path) -> AppResult<HardlinkFact> {
 /// Read the link count and size of `path` (blocking), returning `Ok(None)` when
 /// the path no longer exists.
 pub fn hardlink_fact_optional(path: &Path) -> AppResult<Option<HardlinkFact>> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to stat path for hardlink detection: {}: {error}",
-                path.display()
-            )));
-        }
-    };
-    Ok(Some(HardlinkFact {
-        path: path.display().to_string(),
-        link_count: link_count_from_metadata(&metadata),
-        size_bytes: metadata.len(),
-    }))
-}
-
-#[cfg(unix)]
-pub(crate) fn link_count_from_metadata(metadata: &std::fs::Metadata) -> LinkCount {
-    use std::os::unix::fs::MetadataExt;
-    LinkCount::Known(metadata.nlink())
-}
-
-#[cfg(not(unix))]
-pub(crate) fn link_count_from_metadata(_metadata: &std::fs::Metadata) -> LinkCount {
-    LinkCount::Unsupported
+    let reading = Disk::process().fresh_blocking(path);
+    match reading.exists() {
+        Some(true) => Ok(Some(HardlinkFact {
+            path: path.display().to_string(),
+            link_count: reading
+                .link_count()
+                .map_or(LinkCount::Unsupported, LinkCount::Known),
+            size_bytes: reading.size().unwrap_or(0),
+        })),
+        Some(false) => Ok(None),
+        None => Err(unreadable_for_hardlinks(path, reading)),
+    }
 }
 
 /// Detect hardlink facts for a batch of source paths on a blocking thread, so a

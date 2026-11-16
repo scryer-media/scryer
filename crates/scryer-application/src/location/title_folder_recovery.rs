@@ -5,6 +5,7 @@ mod execute;
 mod tests;
 
 use super::model::*;
+use crate::disk::{Disk, EntryKind, PathReading, Visited};
 use crate::stored_paths::{folder_paths_match, path_to_stored_string, stored_path_to_path_buf};
 use crate::title_folder_rules::{
     path_is_strictly_within, stored_path_is_inside_folder, title_folder_from_media_paths,
@@ -13,6 +14,7 @@ use crate::{AppError, AppResult, AppUseCase};
 use scryer_domain::{LibraryRoot, Title};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 pub const RECOVERY_VERSION: &str = "title-folder-recovery-v1";
@@ -101,6 +103,50 @@ fn fail(reason: &'static str, message: impl Into<String>) -> AppError {
 // application condition is inferred from the external sentence.
 fn relay_failure(message: String) -> AppError {
     AppError::Validation(message)
+}
+
+/// A reading that does not say what is at a path, relayed as its reason.
+fn unreadable(reading: PathReading) -> AppError {
+    relay_failure(reading.absence().to_owned())
+}
+
+/// Up to `budget` entries of `directory` in listing order, each with what
+/// `read` takes from it, reading no further than an entry `read` breaks on.
+/// One more entry stops the listing with `limit`, and an entry the listing
+/// failed on stops it with that failure; the stop comes back beside the
+/// entries, for the caller to raise once those are done.
+async fn listed<T: Send + 'static>(
+    directory: &Path,
+    budget: usize,
+    limit: (&'static str, &'static str),
+    mut read: impl FnMut(&Visited) -> ControlFlow<T, T> + Send + 'static,
+) -> AppResult<(Vec<(PathBuf, T)>, AppResult<()>)> {
+    let disk = Disk::process();
+    let visit = disk.visit(
+        directory,
+        (Vec::new(), Ok(())),
+        move |(entries, end), entry| {
+            let entry = match entry {
+                Ok(entry) if entries.len() < budget => entry,
+                stopped => {
+                    *end = Err(match stopped {
+                        Ok(_) => fail(limit.0, limit.1),
+                        Err(error) => relay_failure(error.to_string()),
+                    });
+                    return ControlFlow::Break(());
+                }
+            };
+            let (taken, flow) = match read(&entry) {
+                ControlFlow::Continue(taken) => (taken, ControlFlow::Continue(())),
+                ControlFlow::Break(taken) => (taken, ControlFlow::Break(())),
+            };
+            entries.push((entry.into_path(), taken));
+            flow
+        },
+    );
+    visit
+        .await
+        .map_err(|error| relay_failure(error.to_string()))
 }
 
 fn path_key(path: &str) -> String {
@@ -227,6 +273,7 @@ pub fn validate_catalog(plan: &RecoveryPlan, catalog: &RecoveryCatalog) -> AppRe
 
 /// Reject links in every existing component, including Windows junctions.
 /// Missing final components are allowed only for a destination about to be created.
+#[allow(clippy::disallowed_methods)] // disk-guard: Windows reparse attribute
 pub(crate) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<()> {
     if !path.is_absolute() {
         return Err(fail(
@@ -279,6 +326,7 @@ pub(crate) async fn inspect_path(path: &Path, allow_missing: bool) -> AppResult<
 
 /// A content version also includes the filesystem identity, so replacing a file
 /// with equal length and timestamps cannot reuse an old verification receipt.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
 async fn recovery_file_version(path: &Path) -> AppResult<String> {
     inspect_path(path, false).await?;
     let metadata = tokio::fs::symlink_metadata(path)
@@ -391,24 +439,25 @@ async fn folder_identity_matches(
     for name in ["tvshow.nfo", "movie.nfo"] {
         let file = path.join(name);
         let content: AppResult<Option<String>> = async {
-            match tokio::fs::symlink_metadata(&file).await {
-                Ok(meta)
-                    if meta.is_file()
-                        && !meta.file_type().is_symlink()
-                        && meta.len() <= 1024 * 1024 =>
+            let reading = Disk::process().fresh(&file).await;
+            match reading.exists() {
+                Some(true)
+                    if reading.is(EntryKind::File)
+                        && reading.size().is_some_and(|len| len <= 1024 * 1024) =>
                 {
                     inspect_path(&file, false).await?;
-                    tokio::fs::read_to_string(&file)
+                    Disk::process()
+                        .read_to_string(&file)
                         .await
                         .map(Some)
                         .map_err(|e| relay_failure(e.to_string()))
                 }
-                Ok(_) => Err(fail(
+                Some(true) => Err(fail(
                     crate::error_reasons::location::RECOVERY_IDENTITY_SIDECAR_INVALID,
                     "Identity sidecar is unsupported or too large",
                 )),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(relay_failure(e.to_string())),
+                Some(false) => Ok(None),
+                None => Err(unreadable(reading)),
             }
         }
         .await;
@@ -484,44 +533,37 @@ async fn locate_hashed_destination(
     let mut seen = 0usize;
     while let Some(directory) = pending.pop() {
         inspect_path(&directory, false).await?;
-        let mut entries = tokio::fs::read_dir(&directory)
-            .await
-            .map_err(|e| relay_failure(e.to_string()))?;
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| relay_failure(e.to_string()))?
-        {
-            seen += 1;
-            if seen > MAX_DISCOVERY_ENTRIES {
-                return Err(fail(
-                    crate::error_reasons::location::RECOVERY_CONTENT_DISCOVERY_LIMIT_REACHED,
-                    "Content discovery limit reached",
-                ));
-            }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
+        let limit = (
+            crate::error_reasons::location::RECOVERY_CONTENT_DISCOVERY_LIMIT_REACHED,
+            "Content discovery limit reached",
+        );
+        let budget = MAX_DISCOVERY_ENTRIES - seen;
+        let (entries, end) =
+            listed(&directory, budget, limit, |_| ControlFlow::Continue(())).await?;
+        seen += entries.len();
+        for (path, ()) in entries {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name == ".scryer-recycle"
                 || crate::is_upgrade_replacement_name(&name)
                 || is_recovery_staging_name(&name)
             {
                 continue;
             }
-            let path = entry.path();
             if recycle
                 .is_some_and(|r| stored_path_is_inside_folder(r, &path_to_stored_string(&path)))
             {
                 continue;
             }
             inspect_path(&path, false).await?;
-            let metadata = tokio::fs::symlink_metadata(&path)
-                .await
-                .map_err(|e| relay_failure(e.to_string()))?;
-            if metadata.is_dir() {
+            let reading = Disk::process().fresh(&path).await;
+            if reading.exists().is_none() {
+                return Err(unreadable(reading));
+            }
+            if reading.is(EntryKind::Directory) {
                 pending.push(path);
                 continue;
             }
-            if !metadata.is_file() || metadata.len() != size {
+            if !reading.is(EntryKind::File) || reading.size() != Some(size) {
                 continue;
             }
             let before = recovery_file_version(&path).await?;
@@ -546,6 +588,7 @@ async fn locate_hashed_destination(
                 found = Some(path);
             }
         }
+        end?;
     }
     found.ok_or_else(|| {
         fail(
@@ -662,31 +705,24 @@ impl AppUseCase {
         for root in &roots {
             let path = stored_path_to_path_buf(&root.path);
             inspect_path(&path, false).await?;
-            let mut entries = tokio::fs::read_dir(&path)
-                .await
-                .map_err(|e| relay_failure(e.to_string()))?;
-            while let Some(entry) = entries
-                .next_entry()
-                .await
-                .map_err(|e| relay_failure(e.to_string()))?
-            {
-                seen += 1;
-                if seen > MAX_DISCOVERY_ENTRIES {
-                    return Err(fail(
-                        crate::error_reasons::location::RECOVERY_FOLDER_DISCOVERY_LIMIT_REACHED,
-                        "Folder discovery limit reached; no automatic repair",
-                    ));
-                }
-                let kind = entry
-                    .file_type()
-                    .await
-                    .map_err(|e| relay_failure(e.to_string()))?;
-                if !kind.is_dir() || kind.is_symlink() {
+            let limit = (
+                crate::error_reasons::location::RECOVERY_FOLDER_DISCOVERY_LIMIT_REACHED,
+                "Folder discovery limit reached; no automatic repair",
+            );
+            let budget = MAX_DISCOVERY_ENTRIES - seen;
+            let entries = listed(&path, budget, limit, |entry| match entry.kind() {
+                Ok(kind) => ControlFlow::Continue(Ok(kind)),
+                Err(error) => ControlFlow::Break(Err(error)),
+            });
+            let (entries, end) = entries.await?;
+            seen += entries.len();
+            for (folder, kind) in entries {
+                if kind.map_err(|error| relay_failure(error.to_string()))? != EntryKind::Directory {
                     continue;
                 }
-                let folder = entry.path();
                 let stored = path_to_stored_string(&folder);
-                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                let name = folder.file_name().unwrap_or_default();
+                let name = name.to_string_lossy().to_ascii_lowercase();
                 // Scryer's own working folders, under the long or short spelling.
                 if name.starts_with(".scryer-")
                     || name.starts_with(".scry-")
@@ -703,6 +739,7 @@ impl AppUseCase {
                     candidates.insert(path_key(&folder), folder);
                 }
             }
+            end?;
         }
         if candidates.len() > 1 {
             return Err(fail(
@@ -824,10 +861,13 @@ impl AppUseCase {
                     )
                 })?)
             };
-            let source_version = match tokio::fs::symlink_metadata(&source).await {
-                Ok(meta) => {
+            let reading = Disk::process().fresh(&source).await;
+            let source_version = match reading.exists() {
+                Some(true) => {
                     inspect_path(&source, false).await?;
-                    if !meta.is_file() || meta.len() != media.size_bytes.max(0) as u64 {
+                    if !reading.is(EntryKind::File)
+                        || reading.size() != Some(media.size_bytes.max(0) as u64)
+                    {
                         return Err(fail(
                             crate::error_reasons::location::RECOVERY_SOURCE_CHANGED,
                             "Source size or type changed",
@@ -835,8 +875,8 @@ impl AppUseCase {
                     }
                     Some(recovery_file_version(&source).await?)
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(relay_failure(e.to_string())),
+                Some(false) => None,
+                None => return Err(unreadable(reading)),
             };
             let expected_hash = media
                 .content_hashes
@@ -908,16 +948,17 @@ impl AppUseCase {
             return Ok(());
         }
         let path = stored_path_to_path_buf(destination);
-        match tokio::fs::symlink_metadata(&path).await {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(relay_failure(error.to_string())),
-            Ok(meta) if !meta.is_dir() => {
+        let reading = Disk::process().fresh(&path).await;
+        match reading.exists() {
+            Some(false) => return Ok(()),
+            None => return Err(unreadable(reading)),
+            Some(true) if !reading.is(EntryKind::Directory) => {
                 return Err(fail(
                     crate::error_reasons::location::RECOVERY_GENERATED_DESTINATION_NOT_DIRECTORY,
                     "Generated destination is not a directory",
                 ));
             }
-            Ok(_) => {}
+            Some(true) => {}
         }
         inspect_path(&path, false).await?;
         let store = &self.services.library.location_operations;
@@ -953,37 +994,35 @@ impl AppUseCase {
                 .into_iter()
                 .map(|path| path_key(&path)),
         );
-        let mut entries = tokio::fs::read_dir(&path)
-            .await
-            .map_err(|error| relay_failure(error.to_string()))?;
-        let mut seen = 0usize;
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| relay_failure(error.to_string()))?
-        {
-            seen += 1;
-            if seen > MAX_DISCOVERY_ENTRIES {
-                return Err(fail(
-                    crate::error_reasons::location::RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED,
-                    "Generated destination inventory limit exceeded",
-                ));
-            }
-            let entry_path = entry.path();
+        let limit = (
+            crate::error_reasons::location::RECOVERY_DESTINATION_INVENTORY_LIMIT_REACHED,
+            "Generated destination inventory limit exceeded",
+        );
+        // Reading stops at the first entry that is not one of this recovery's files.
+        let (entries, end) = listed(
+            &path,
+            MAX_DISCOVERY_ENTRIES,
+            limit,
+            move |entry| match entry.kind() {
+                Ok(EntryKind::File)
+                    if allowed.contains(&path_key(&path_to_stored_string(entry.path()))) =>
+                {
+                    ControlFlow::Continue(Ok(true))
+                }
+                Ok(_) => ControlFlow::Break(Ok(false)),
+                Err(error) => ControlFlow::Break(Err(error)),
+            },
+        )
+        .await?;
+        for (entry_path, owned) in entries {
             inspect_path(&entry_path, false).await?;
-            if !entry
-                .file_type()
-                .await
-                .map_err(|error| relay_failure(error.to_string()))?
-                .is_file()
-                || !allowed.contains(&path_key(&path_to_stored_string(&entry_path)))
-            {
+            if !owned.map_err(|error| relay_failure(error.to_string()))? {
                 return Err(fail(
                     crate::error_reasons::location::RECOVERY_DESTINATION_UNRELATED_CONTENT,
                     "Generated destination contains unrelated content; ownership remains unresolved",
                 ));
             }
         }
-        Ok(())
+        end
     }
 }

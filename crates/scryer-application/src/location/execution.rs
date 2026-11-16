@@ -34,6 +34,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_domain::MediaFacet;
 
+use crate::disk::reason::DISK_PATH_MISSING;
+use crate::disk::{Disk, EntryKind, Parents, Removal, Remove};
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
     TitleFileMover, TitleReconciler, TitleStepOutcome,
@@ -491,12 +493,15 @@ impl TitleFileMover for RootMoveFileMover {
         if let Some(parent) = destination.parent()
             && !parent.as_os_str().is_empty()
         {
-            tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to create destination directory {}: {error}",
-                    parent.display()
-                ))
-            })?;
+            Disk::process()
+                .create_dir(parent, Parents::Create)
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to create destination directory {}: {error}",
+                        parent.display()
+                    ))
+                })?;
             // The directory is destination content too, so the operator's
             // configured folder modes apply to it (FR-031).
             self.permissions.apply_to_directory(parent).await?;
@@ -507,7 +512,7 @@ impl TitleFileMover for RootMoveFileMover {
             && stage_same_filesystem_file(source, destination).await?
         {
             VerifiedFile::same_filesystem_rename(source.clone(), destination.clone(), request.depth)
-        } else if tokio::fs::symlink_metadata(destination).await.is_ok() {
+        } else if Disk::process().fresh(destination).await.exists() == Some(true) {
             // The runner only asks for files it has no verification record for,
             // so a destination that is already there is the crash window
             // between a completed copy's promotion and the record that should
@@ -558,6 +563,7 @@ impl TitleFileMover for RootMoveFileMover {
 /// source survives a crash before the verification journal is durable; cleanup
 /// removes that name only after the catalog has moved. Unsupported filesystems
 /// and platforms take the ordinary verified-copy path.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
 async fn stage_same_filesystem_file(source: &Path, destination: &Path) -> AppResult<bool> {
     let source_metadata = tokio::fs::symlink_metadata(source).await.map_err(|error| {
         AppError::Repository(format!("cannot inspect {}: {error}", source.display()))
@@ -664,11 +670,15 @@ pub(super) async fn shared_inode(
     source_metadata: &std::fs::Metadata,
     destination_metadata: &std::fs::Metadata,
 ) -> SharedInode {
+    #[cfg(unix)]
+    let links = Some(std::os::unix::fs::MetadataExt::nlink(destination_metadata));
+    #[cfg(not(unix))]
+    let links = None;
     let decision = shared_inode_decision(
         same_regular_file(source_metadata, destination_metadata),
         source_metadata.len(),
         destination_metadata.len(),
-        super::hardlinks::link_count_from_metadata(destination_metadata).count(),
+        links,
     );
     #[cfg(unix)]
     if decision == SharedInode::SecondLink && !distinct_directory_entries(source, destination).await
@@ -691,6 +701,7 @@ pub(super) fn one_entry_refusal() -> AppError {
 /// directories are; names in one directory are only when they differ and the
 /// listing holds both exactly.
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // disk-guard: raw parent dev/ino, early-exit listing
 async fn distinct_directory_entries(source: &Path, destination: &Path) -> bool {
     let (Some(source_parent), Some(destination_parent)) = (source.parent(), destination.parent())
     else {
@@ -984,7 +995,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             && let Some(folder) = planned.destination_folder_path.as_deref()
         {
             let folder = stored_path_to_path_buf(folder);
-            if tokio::fs::symlink_metadata(&folder).await.is_ok() {
+            if Disk::process().fresh(&folder).await.exists() == Some(true) {
                 self.permissions.apply_to_directory(&folder).await?;
             }
         }
@@ -1200,10 +1211,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .find(|row| row.source_path == file.source_path);
             let mut resolved = file.clone();
             if let Some(row) = resolution {
-                if tokio::fs::symlink_metadata(file.source())
-                    .await
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                {
+                if Disk::process().fresh(file.source()).await.exists() == Some(false) {
                     continue;
                 }
                 if !row.proof_is_current().await {
@@ -1239,15 +1247,15 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                             ));
                 }
                 let source = stored_path_to_path_buf(&file.source_path);
-                match tokio::fs::remove_file(&source).await {
-                    Ok(()) => tracing::info!(
+                match Disk::process().remove(&source, Remove::File).await {
+                    Ok(Removal::Removed) => tracing::info!(
                         operation_id = %operation.id,
                         title_id = %title.title_id,
                         source = %file.source_path,
                         destination = %file.destination_path,
                         "dropped a source copy proven identical to the destination's"
                     ),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(Removal::AlreadyAbsent) => {}
                     Err(error) => {
                         return Err(AppError::Repository(format!(
                             "failed to remove the identical source {}: {error}",
@@ -1265,71 +1273,26 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                         "source and destination are the same path",
                     ));
                 }
-                let source_metadata = match tokio::fs::symlink_metadata(&source).await {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(AppError::Repository(error.to_string())),
-                };
-                let destination_metadata = tokio::fs::symlink_metadata(file.destination())
-                    .await
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
-                let same_link = if source_metadata.file_type().is_symlink()
-                    && destination_metadata.file_type().is_symlink()
-                {
-                    match (
-                        tokio::fs::read_link(&source).await,
-                        tokio::fs::read_link(file.destination()).await,
-                    ) {
-                        (Ok(source_target), Ok(destination_target)) => {
-                            source_target == destination_target
-                        }
-                        _ => false,
-                    }
-                } else {
-                    false
-                };
-                let same_file = same_regular_file(&source_metadata, &destination_metadata);
-                if same_file
-                    && shared_inode(
-                        &source,
-                        &file.destination(),
-                        &source_metadata,
-                        &destination_metadata,
-                    )
-                    .await
-                        != SharedInode::SecondLink
-                {
-                    // Removing the source would remove the only entry.
-                    return Err(one_entry_refusal());
-                }
-                if !same_file && !same_link {
-                    return Err(AppError::validation_refused(
-                        crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
-                        format!(
-                            "source or destination changed before cleanup: {}",
-                            file.source_path
-                        ),
-                    ));
-                }
-                tokio::fs::remove_file(&source)
-                    .await
-                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                retire_linked_source(&source, &file.destination(), &file.source_path).await?;
                 continue;
             }
             let source = stored_path_to_path_buf(&file.source_path);
             // A durable copy receipt describes the bytes copied, not whatever
             // occupies the source name after an interruption. Recheck both
             // copies and their versions before handing this path to disposal.
-            match tokio::fs::symlink_metadata(&source).await {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AppError::Repository(error.to_string())),
-                Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
+            let reading = Disk::process().fresh(&source).await;
+            match reading.exists() {
+                Some(false) => continue,
+                None => {
+                    return Err(AppError::Repository(reading.absence().into()));
+                }
+                Some(true) if !reading.is(EntryKind::File) => {
                     return Err(AppError::validation_refused(
                         crate::error_reasons::location::SOURCE_CHANGED_BEFORE_CLEANUP,
                         "Source changed before cleanup; preserved it.",
                     ));
                 }
-                Ok(_) => {}
+                Some(true) => {}
             }
             let source_version = super::resolution::file_version(&source).await?;
             let destination = file.destination();
@@ -1379,15 +1342,15 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             // source is the redundant half of a finished move and is removed,
             // not recycled: a recycle entry would only be a second copy of
             // content the library already holds.
-            match tokio::fs::remove_file(&source).await {
-                Ok(()) => tracing::info!(
+            match Disk::process().remove(&source, Remove::File).await {
+                Ok(Removal::Removed) => tracing::info!(
                     operation_id = %operation.id,
                     title_id = %title.title_id,
                     source = %file.source_path,
                     destination = %file.destination_path,
                     "removed a source copy verified at its destination"
                 ),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(Removal::AlreadyAbsent) => {}
                 Err(error) => {
                     return Err(AppError::Repository(format!(
                         "failed to remove the verified source {}: {error}",
@@ -1425,6 +1388,57 @@ impl TitleReconciler for RootMoveReconciler<'_> {
 
         Ok(outcome)
     }
+}
+
+/// Retire a source whose placement was a second link (or the same symlink), so
+/// no content hashes were recorded. Missing already is retired.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino and link count guard
+async fn retire_linked_source(
+    source: &Path,
+    destination: &Path,
+    source_path: &str,
+) -> AppResult<()> {
+    let source_metadata = match tokio::fs::symlink_metadata(source).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(AppError::Repository(error.to_string())),
+    };
+    let destination_metadata = tokio::fs::symlink_metadata(destination)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    let same_link = if source_metadata.file_type().is_symlink()
+        && destination_metadata.file_type().is_symlink()
+    {
+        match (
+            tokio::fs::read_link(source).await,
+            tokio::fs::read_link(destination).await,
+        ) {
+            (Ok(source_target), Ok(destination_target)) => source_target == destination_target,
+            _ => false,
+        }
+    } else {
+        false
+    };
+    let same_file = same_regular_file(&source_metadata, &destination_metadata);
+    if same_file
+        && shared_inode(source, destination, &source_metadata, &destination_metadata).await
+            != SharedInode::SecondLink
+    {
+        // Removing the source would remove the only entry.
+        return Err(one_entry_refusal());
+    }
+    if !same_file && !same_link {
+        return Err(AppError::validation_refused(
+            crate::error_reasons::location::SOURCE_DESTINATION_CHANGED_BEFORE_CLEANUP,
+            format!(
+                "source or destination changed before cleanup: {}",
+                source_path
+            ),
+        ));
+    }
+    tokio::fs::remove_file(source)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 /// The one line a merge leaves in the title's outcome.
@@ -1484,21 +1498,16 @@ pub(super) enum DirectoryPrune {
 /// first is what lets the caller *report* "still holds content" rather than an
 /// errno the user cannot act on (C3).
 pub(super) async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
-    let mut entries = match tokio::fs::read_dir(path).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return DirectoryPrune::AlreadyAbsent;
-        }
-        Err(error) => return DirectoryPrune::Failed(error.to_string()),
-    };
-    match entries.next_entry().await {
-        Ok(None) => {}
-        Ok(Some(_)) => return DirectoryPrune::NotEmpty,
+    let disk = Disk::process();
+    match disk.has_entries(path).await {
+        Ok(false) => {}
+        Ok(true) => return DirectoryPrune::NotEmpty,
+        Err(error) if error.reason() == DISK_PATH_MISSING => return DirectoryPrune::AlreadyAbsent,
         Err(error) => return DirectoryPrune::Failed(error.to_string()),
     }
-    match tokio::fs::remove_dir(path).await {
-        Ok(()) => DirectoryPrune::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DirectoryPrune::AlreadyAbsent,
+    match disk.remove(path, Remove::EmptyDir).await {
+        Ok(Removal::Removed) => DirectoryPrune::Removed,
+        Ok(Removal::AlreadyAbsent) => DirectoryPrune::AlreadyAbsent,
         Err(error) => DirectoryPrune::Failed(error.to_string()),
     }
 }
@@ -1668,7 +1677,7 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
                     file.source_path
                 ),
             );
-            if tokio::fs::symlink_metadata(&path).await.is_err() {
+            if Disk::process().fresh(&path).await.exists() != Some(true) {
                 return Ok(stale(PlanInputChange::UnprocessedSourceItem, detail));
             }
         }
@@ -1720,13 +1729,11 @@ impl SourceRecycler for RemoveVerifiedSource {
         _media_file_id: Option<&str>,
         _size_bytes: u64,
     ) -> AppResult<SourceDisposal> {
-        match tokio::fs::remove_file(source).await {
-            Ok(()) => Ok(SourceDisposal::RemovedRecycleUnavailable(
+        match Disk::process().remove(source, Remove::File).await {
+            Ok(Removal::Removed) => Ok(SourceDisposal::RemovedRecycleUnavailable(
                 "no recycle bin is configured for this root",
             )),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(SourceDisposal::AlreadyAbsent)
-            }
+            Ok(Removal::AlreadyAbsent) => Ok(SourceDisposal::AlreadyAbsent),
             Err(error) => Err(AppError::Repository(format!(
                 "failed to remove the verified source {}: {error}",
                 source.display()
@@ -1766,7 +1773,7 @@ impl SourceRecycler for RecycleBinSourceRecycler {
         media_file_id: Option<&str>,
         size_bytes: u64,
     ) -> AppResult<SourceDisposal> {
-        if tokio::fs::symlink_metadata(source).await.is_err() {
+        if Disk::process().fresh(source).await.exists() != Some(true) {
             return Ok(SourceDisposal::AlreadyAbsent);
         }
 

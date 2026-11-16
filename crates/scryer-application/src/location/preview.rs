@@ -821,24 +821,22 @@ impl SystemVolumeProbe {
     /// Destination directories usually do not exist yet, so both queries walk up
     /// to the nearest ancestor that does.
     fn existing_ancestor(path: &Path) -> Option<PathBuf> {
-        let mut current = Some(path);
-        while let Some(candidate) = current {
-            if candidate.exists() {
-                return Some(candidate.to_path_buf());
-            }
-            current = candidate.parent();
-        }
-        None
+        let disk = crate::disk::Disk::process();
+        let mut ancestors = path.ancestors();
+        let found = ancestors.find(|at| disk.follow_blocking(at).exists() == Some(true));
+        found.map(Path::to_path_buf)
     }
 }
 
 impl VolumeProbe for SystemVolumeProbe {
+    #[allow(clippy::disallowed_methods)] // disk-guard: raw st_dev volume
     fn volume_id(&self, path: &Path) -> Option<VolumeId> {
-        let existing = Self::existing_ancestor(path)?;
         #[cfg(unix)]
         {
+            // The first ancestor that answers is the existing one; its own
+            // stat carries the device, so it is not probed twice.
             use std::os::unix::fs::MetadataExt;
-            let metadata = std::fs::metadata(&existing).ok()?;
+            let metadata = path.ancestors().find_map(|at| std::fs::metadata(at).ok())?;
             Some(VolumeId(format!("dev:{}", metadata.dev())))
         }
         #[cfg(not(unix))]
@@ -846,6 +844,7 @@ impl VolumeProbe for SystemVolumeProbe {
             // Windows has no cheap device id through `std`; the path prefix
             // (drive letter or UNC share) is the volume for the purposes of
             // "will this move be a rename or a copy".
+            let existing = Self::existing_ancestor(path)?;
             let prefix = existing.components().next()?;
             Some(VolumeId(format!(
                 "prefix:{}",

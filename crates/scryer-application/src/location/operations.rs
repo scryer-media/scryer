@@ -49,6 +49,7 @@
 //! itself.
 
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -57,6 +58,7 @@ use scryer_domain::{
     LibraryPermission, MediaFacet, Title, User,
 };
 
+use crate::disk::{Disk, EntryKind};
 use crate::domain_events::{DomainEventActor, new_job_run_domain_event};
 
 use crate::location::classify::{
@@ -1988,9 +1990,10 @@ async fn unavailable_plan_root(
             })
         }) {
             if seen.insert(&root.path)
-                && !tokio::fs::metadata(stored_path_to_path_buf(&root.path))
+                && !Disk::process()
+                    .follow(stored_path_to_path_buf(&root.path))
                     .await
-                    .is_ok_and(|metadata| metadata.is_dir())
+                    .is(EntryKind::Directory)
             {
                 return Some(format!("a conflict root {}", root.path));
             }
@@ -2011,11 +2014,7 @@ async fn unavailable_plan_root(
                 continue;
             }
             let path = stored_path_to_path_buf(root);
-            let available = tokio::fs::metadata(&path)
-                .await
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false);
-            if !available {
+            if !Disk::process().follow(&path).await.is(EntryKind::Directory) {
                 return Some(format!("{label} {root}"));
             }
         }
@@ -3531,9 +3530,8 @@ pub(super) async fn collect_source_files(
                             .files
                             .into_iter()
                             .map(|path| {
-                                let size_bytes = std::fs::symlink_metadata(&path)
-                                    .map(|metadata| metadata.len())
-                                    .unwrap_or(0);
+                                let reading = Disk::process().fresh_blocking(&path);
+                                let size_bytes = reading.size().unwrap_or(0);
                                 (path, size_bytes)
                             })
                             .collect(),
@@ -3586,9 +3584,7 @@ pub(super) async fn collect_source_files(
             paths
                 .into_iter()
                 .map(|path| {
-                    let size_bytes = std::fs::symlink_metadata(&path)
-                        .map(|metadata| metadata.len())
-                        .ok();
+                    let size_bytes = Disk::process().fresh_blocking(&path).size();
                     (path, size_bytes)
                 })
                 .collect::<Vec<_>>()
@@ -3632,33 +3628,29 @@ pub(super) async fn read_destination_entries(
     // One blocking task for the listing and every `stat` in it; the folder is
     // usually absent (a fresh move) or one title deep (a merge).
     tokio::task::spawn_blocking(move || {
-        let mut items = Vec::new();
-        let mut pending = vec![destination_folder.clone()];
+        let disk = Disk::process();
+        let (mut items, mut pending) = (Vec::new(), vec![destination_folder.clone()]);
         while let Some(folder) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&folder) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
-                    continue;
+            // Unreadable folders and entries are skipped.
+            let _ = disk.visit_blocking(&folder, |entry| {
+                let Ok(entry) = entry else {
+                    return ControlFlow::Continue(());
                 };
-                if metadata.is_dir() {
-                    pending.push(entry.path());
-                    continue;
+                let reading = disk.fresh_blocking(entry.path());
+                if reading.is(EntryKind::Directory) {
+                    pending.push(entry.into_path());
+                } else if let Some(len) = reading.size() {
+                    let name = entry.path().strip_prefix(&destination_folder);
+                    let name = name.expect("walked child").to_string_lossy().to_string();
+                    let path = path_to_stored_string(entry.path());
+                    items.push(
+                        DestinationItem::companion(name, len)
+                            .with_content(ContentFacts::new(len))
+                            .with_path(path),
+                    );
                 }
-                let name = entry
-                    .path()
-                    .strip_prefix(&destination_folder)
-                    .expect("walked child")
-                    .to_string_lossy()
-                    .to_string();
-                let path = path_to_stored_string(entry.path());
-                items.push(
-                    DestinationItem::companion(name, metadata.len())
-                        .with_content(ContentFacts::new(metadata.len()))
-                        .with_path(path),
-                );
-            }
+                ControlFlow::Continue(())
+            });
         }
         items.sort_by(|left, right| left.name.cmp(&right.name));
         items
@@ -3682,6 +3674,7 @@ pub(super) async fn read_destination_entries(
 /// - different sizes need no sample: the planner rules the pair out on size;
 /// - equal sizes get a sampled proof on each side; a side that cannot be read
 ///   stays `None`, which the planner reports rather than guessing.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino same-file check
 pub(crate) async fn quick_check_name_collisions(
     files: &mut [SourceFile],
     destination_entries: &mut [DestinationItem],

@@ -73,6 +73,7 @@ fn worker_limit(value: Option<&str>) -> usize {
 
 /// Match import's volume identity. File safety is checked by the placement
 /// adapter; an unavailable identity conservatively shares the unknown bucket.
+#[allow(clippy::disallowed_methods)] // disk-guard: raw st_dev volume
 pub fn destination_volume_key(path: &Path) -> String {
     #[cfg(unix)]
     {
@@ -95,6 +96,7 @@ pub fn destination_volume_key(path: &Path) -> String {
 }
 
 #[cfg(windows)]
+#[allow(clippy::disallowed_methods)] // disk-guard: Windows file index handle
 pub fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{

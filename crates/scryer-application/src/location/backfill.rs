@@ -570,6 +570,7 @@ impl AppUseCase {
 
     /// One file: check the skips, hash it, persist it. `Ok(Some(bytes))` when
     /// the file was hashed.
+    #[allow(clippy::disallowed_methods)] // disk-guard: raw dev/ino/ctime versions
     async fn backfill_one_media_file(
         &self,
         candidate: &MediaFileHashCandidate,
@@ -588,7 +589,7 @@ impl AppUseCase {
         // directory" instantly, where opening the file itself can block on a
         // dead network mount.
         if let Some(parent) = path.parent()
-            && tokio::fs::metadata(parent).await.is_err()
+            && crate::disk::Disk::process().follow(parent).await.exists() != Some(true)
         {
             return Err(BackfillOutcome::Skipped(BackfillSkip::UnavailableMount));
         }
@@ -757,6 +758,7 @@ fn duration_ms(value: Duration) -> u64 {
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
 /// means a later move can compare a destination read-back against a stored
 /// value instead of re-reading the source.
+#[allow(clippy::disallowed_methods)] // disk-guard: hinted handle, raw file versions
 async fn hash_file_cancellable(
     path: PathBuf,
     io: std::sync::Arc<HashIoStats>,
@@ -856,6 +858,7 @@ async fn hash_file_cancellable(
 }
 
 /// Opens a buffered, read-only handle with a sequential access hint where supported.
+#[allow(clippy::disallowed_methods)] // disk-guard: sequential-scan open hint
 fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);

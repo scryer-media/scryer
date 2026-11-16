@@ -95,6 +95,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use crc_turbo::CrcAlgorithm;
 
+use crate::disk::{Disk, Remove};
 use crate::location::model::{
     AppliedVerificationDepth, FileVerificationOutcome, FileVerificationRecord, MoveCrcAlgorithm,
     StreamedContentHashes, VerificationDepth,
@@ -846,13 +847,15 @@ where
 /// prove ownership from its own durable record clears the partial before it
 /// asks for the copy (see [`crate::location::resolution::ConflictResolver`]).
 async fn ensure_partial_path_free(partial: &Path) -> AppResult<()> {
-    match tokio::fs::symlink_metadata(partial).await {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to inspect the destination staging path {}: {error}",
-            partial.display()
+    let reading = Disk::process().fresh(partial).await;
+    match reading.exists() {
+        Some(false) => Ok(()),
+        None => Err(AppError::Repository(format!(
+            "failed to inspect the destination staging path {}: {}",
+            partial.display(),
+            reading.absence()
         ))),
-        Ok(_) => Err(AppError::validation_refused(
+        Some(true) => Err(AppError::validation_refused(
             crate::error_reasons::location::DESTINATION_OCCUPIED,
             format!(
                 "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
@@ -866,9 +869,7 @@ async fn ensure_partial_path_free(partial: &Path) -> AppResult<()> {
 /// partial costs a stat on the next attempt, never correctness, and the source
 /// it was copied from is untouched.
 async fn remove_partial_best_effort(partial: &Path) {
-    if let Err(error) = tokio::fs::remove_file(partial).await
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
+    if let Err(error) = Disk::process().remove(partial, Remove::File).await {
         tracing::warn!(
             partial = %partial.display(),
             %error,
@@ -892,6 +893,7 @@ fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
     hash_source_with_progress(source, &CopyProgress::none())
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn hash_source_with_progress(
     source: &Path,
     progress: &CopyProgress,
@@ -944,6 +946,7 @@ struct CopyFailure {
     claimed: bool,
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn copy_claiming_destination(
     source: &Path,
     destination: &Path,
@@ -1035,6 +1038,7 @@ fn write_claimed_destination(
     Ok(hasher.finalize())
 }
 
+#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn open_destination(destination: &Path, claim: DestinationClaim) -> AppResult<File> {
     let mut options = std::fs::OpenOptions::new();
     match claim {
@@ -1053,6 +1057,7 @@ fn open_destination(destination: &Path, claim: DestinationClaim) -> AppResult<Fi
 }
 
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn sync_parent_directory_best_effort(destination: &Path) {
     let Some(parent) = destination.parent() else {
         return;
@@ -1075,6 +1080,7 @@ fn sync_parent_directory_best_effort(destination: &Path) {
 fn sync_parent_directory_best_effort(_destination: &Path) {}
 
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn carry_source_mode_best_effort(source: &Path, destination: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1171,6 +1177,7 @@ fn bypass_note(bypass: CacheBypass) -> Option<String> {
 ///
 /// Everywhere else: no mechanism is wired, so the read-back runs uncached and
 /// says so — FR-042 asks for bypass "where the platform allows".
+#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 pub fn open_cache_bypassed(path: &Path) -> ReadBackHandle {
     let file = match File::open(path) {
         Ok(file) => file,
@@ -1272,17 +1279,16 @@ fn quick_check(
     destination: &Path,
     hashes: &StreamedContentHashes,
 ) -> (FileVerificationOutcome, Option<String>) {
-    let destination_size = match std::fs::metadata(destination) {
-        Ok(metadata) => metadata.len(),
-        Err(error) => {
-            return (
-                FileVerificationOutcome::Unavailable,
-                Some(format!(
-                    "could not stat the destination: {}: {error}",
-                    destination.display()
-                )),
-            );
-        }
+    let reading = Disk::process().follow_blocking(destination);
+    let Some(destination_size) = reading.size() else {
+        return (
+            FileVerificationOutcome::Unavailable,
+            Some(format!(
+                "could not stat the destination: {}: {}",
+                destination.display(),
+                reading.absence()
+            )),
+        );
     };
     if destination_size != hashes.size_bytes {
         return (
@@ -1358,6 +1364,7 @@ pub async fn same_filesystem(source: &Path, destination: &Path) -> bool {
 }
 
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // disk-guard: raw st_dev volume
 fn same_filesystem_blocking(source: &Path, destination: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
 
@@ -1389,7 +1396,7 @@ fn nearest_existing_ancestor(path: &Path) -> Option<&Path> {
         if current.as_os_str().is_empty() {
             return None;
         }
-        if std::fs::symlink_metadata(current).is_ok() {
+        if Disk::process().fresh_blocking(current).exists() == Some(true) {
             return Some(current);
         }
         candidate = current.parent();
