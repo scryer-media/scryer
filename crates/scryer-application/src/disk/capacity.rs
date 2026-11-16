@@ -103,6 +103,9 @@ pub(crate) trait CapacityDisk: Send + Sync + 'static {
 struct SystemDisk;
 
 impl CapacityDisk for SystemDisk {
+    // disk-guard: the capacity owner is the one caller of the platform's
+    // free-space call; it bounds, shares and caches it.
+    #[allow(clippy::disallowed_methods)]
     fn probe(&self, path: &Path) -> io::Result<CapacityProbeReading> {
         scryer_disk::capacity::probe(path)
     }

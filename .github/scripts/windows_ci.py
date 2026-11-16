@@ -13,9 +13,11 @@ WINDOWS_TESTS = {
     "scryer-application": [
         "windows_disk_space_query_smoke_test",
         "source_root_containment_accepts_windows_case_and_separator_variants",
+        "current_is_windows_on_windows",
+    ],
+    "scryer-disk": [
         "non_utf8_windows_paths_round_trip",
         "unix_paths_decode_lossily_on_windows",
-        "current_is_windows_on_windows",
     ],
     "scryer-infrastructure-library": [
         "rename_path_key_folds_case_and_separators_on_windows",

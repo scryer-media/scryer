@@ -1752,7 +1752,7 @@ impl Disk {
     }
 
     /// The class of the root `path` is under, for tests.
-    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     pub fn class_of(&self, path: &Path) -> VolumeClass {
         read(&self.inner.volumes).class_of(path)
     }
@@ -1963,7 +1963,7 @@ fn fixed_staging_path_for(dest: &Path) -> PathBuf {
     parent.join(format!(".scry-sf-{}.partial", &digest[..9]))
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub mod test_support {
     use super::*;
 

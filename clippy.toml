@@ -158,6 +158,7 @@ disallowed-methods = [
     { path = "filetime::set_symlink_file_times", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
     { path = "glob::glob", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
     { path = "glob::glob_with", reason = "disk operations go through scryer_application::disk", allow-invalid = true },
+    { path = "scryer_disk::capacity::probe", reason = "free space goes through StorageCapacity", allow-invalid = true },
 ]
 
 disallowed-types = [

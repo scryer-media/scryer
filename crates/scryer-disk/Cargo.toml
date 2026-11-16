@@ -3,12 +3,6 @@ name = "scryer-disk"
 version = "0.22.4"
 edition.workspace = true
 
-[features]
-default = []
-# Seams for the tests of crates that build on the disk service: a clock moved
-# by hand and the class a path resolves to. Never enabled in a shipped build.
-test-support = []
-
 [dependencies]
 blake3 = "1"
 chrono = { workspace = true }
