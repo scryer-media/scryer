@@ -9,7 +9,7 @@
 //!
 //! | Step | What | Why it must be here |
 //! |---|---|---|
-//! | 1 | `subtitle_downloads` → `media_files` → `file_episode_map` → `file_series_movie_link_map` | A carried file's subtitle rows are recorded against the title, so they move first, while the file still identifies them. `media_files` CASCADEs from `titles`; repointing it is what saves every file-keyed child from step 3's cascade. `file_episode_map` CASCADEs from `media_files` **and** `episodes`, so the episode side must be remapped while both sets of episodes still exist. |
+//! | 1 | `media_files` → `file_episode_map` → `file_series_movie_link_map` | `media_files` CASCADEs from `titles`; repointing it is what saves every file-keyed child from step 3's cascade. `file_episode_map` CASCADEs from `media_files` **and** `episodes`, so the episode side must be remapped while both sets of episodes still exist. |
 //! | 2 | `history_events` + `domain_events` | `history_events.title_id` is `ON DELETE SET NULL`, so an un-repointed row survives step 3 with no title at all. |
 //! | 3 | `DELETE FROM titles` | Everything else recorded against the source title goes with it, by cascade or through the ordinary title-delete path the caller runs afterwards. |
 //!
@@ -66,10 +66,6 @@ const LIVE_TRACKED_STATES: &str = "'downloading', 'import_pending', 'importing',
 /// retirement step that also owns their client bindings, tracked state and
 /// pending cleanup; a download it cannot hand over retires there, exactly as
 /// a deleted title's does.
-///
-/// `subtitle_downloads` is here only for the rows whose media file the merge
-/// does not carry: a subtitle row for a carried file moves with the file in
-/// step 1, so only the rest are counted and retired.
 const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
     ("wanted_items", "title_id"),
     ("download_import_artifacts", "title_id"),
@@ -100,18 +96,6 @@ const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
 /// there — its cleanup step reads them to decide which verified sources it may
 /// drop — so they are neither counted nor deleted as source records.
 const OPERATION_VERIFICATIONS_TABLE: &str = "location_operation_verifications";
-
-/// Subtitle records are found through the media file they were fetched for,
-/// so the ones whose file the merge carries move with it.
-const SUBTITLE_DOWNLOADS_TABLE: &str = "subtitle_downloads";
-
-/// A `subtitle_downloads` row whose media file belongs to the same title as
-/// the row. Before step 1 moves the files, that is exactly a source subtitle
-/// whose file the merge carries.
-const SUBTITLE_FILE_ON_ITS_TITLE: &str = "EXISTS (
-    SELECT 1 FROM media_files AS file
-     WHERE file.id = subtitle_downloads.media_file_id
-       AND file.title_id = subtitle_downloads.title_id)";
 
 /// The candidates of the source's manual-import selections. The table has no
 /// foreign key to its selection, so the merge deletes them with the
@@ -187,8 +171,6 @@ impl TitleMergeRepository for TitleMergeStore {
                     current_operation_id,
                 )
                 .await?
-            } else if *table == SUBTITLE_DOWNLOADS_TABLE {
-                count_uncarried_subtitle_rows(exec(), source_title_id).await?
             } else {
                 count_rows(exec(), table, column, source_title_id).await?
             };
@@ -632,25 +614,6 @@ async fn count_rows(
     row.i64("row_count")
 }
 
-/// Source subtitle rows whose media file the merge does not carry: the only
-/// ones it drops.
-async fn count_uncarried_subtitle_rows(
-    exec: SqlExec<'_, '_>,
-    source_title_id: &str,
-) -> AppResult<i64> {
-    let row = SqlRuntime::fetch_optional(
-        exec,
-        &format!(
-            "SELECT COUNT(*) AS row_count FROM {SUBTITLE_DOWNLOADS_TABLE}
-              WHERE title_id = {{}} AND NOT {SUBTITLE_FILE_ON_ITS_TITLE}"
-        ),
-        &[SqlArg::Text(source_title_id.to_string())],
-    )
-    .await?
-    .ok_or_else(|| AppError::Repository(format!("missing count for {SUBTITLE_DOWNLOADS_TABLE}")))?;
-    row.i64("row_count")
-}
-
 async fn count_manual_import_selection_candidates(
     exec: SqlExec<'_, '_>,
     source_title_id: &str,
@@ -813,9 +776,6 @@ async fn repoint_media_files(
     map: &MergeIdentityMap,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
-    // Before the files move, while a carried file still sits on the source.
-    carry_subtitle_downloads(tx, map, outcome).await?;
-
     let moved = tx
         .execute(
             "UPDATE media_files SET title_id = {} WHERE title_id = {}",
@@ -922,85 +882,7 @@ async fn repoint_media_files(
     Ok(())
 }
 
-/// Part of step 1. Subtitle records are found through the media file they
-/// were fetched for, so the rows of a file the merge carries move with it:
-/// their episode through the merge's episode map, then their title. An episode
-/// the map does not name is left as it is. `subtitle_downloads` has no unique
-/// key besides its id, so moving a row can never collide with a destination
-/// row. Rows whose file the merge does not carry stay on the source and retire
-/// with it, as before.
-async fn carry_subtitle_downloads(
-    tx: &mut SqlTx<'_>,
-    map: &MergeIdentityMap,
-    outcome: &mut MergeOutcome,
-) -> AppResult<()> {
-    let rows = SqlRuntime::fetch_all(
-        SqlExec::Tx(tx),
-        &format!(
-            "SELECT DISTINCT episode_id FROM {SUBTITLE_DOWNLOADS_TABLE}
-              WHERE title_id = {{}} AND episode_id IS NOT NULL
-                AND {SUBTITLE_FILE_ON_ITS_TITLE}
-              ORDER BY episode_id"
-        ),
-        &[SqlArg::Text(map.source_title_id.clone())],
-    )
-    .await?;
-    let mut remaps = Vec::new();
-    for row in &rows {
-        let source_episode = row.text("episode_id")?;
-        if let Some(destination_episode) = map.episode(&source_episode) {
-            remaps.push((source_episode, destination_episode.to_string()));
-        }
-    }
-    // Three binds per remapped episode (the CASE pair and the IN list) plus
-    // the title.
-    let per_statement =
-        ((crate::media::id_list_statements::max_binds(&SqlExec::Tx(tx)) - 1) / 3).max(1);
-    for chunk in remaps.chunks(per_statement) {
-        let cases = vec!["WHEN {} THEN {}"; chunk.len()].join(" ");
-        let placeholders = vec!["{}"; chunk.len()].join(", ");
-        let mut args = Vec::with_capacity(chunk.len() * 3 + 1);
-        for (source_episode, destination_episode) in chunk {
-            args.push(SqlArg::Text(source_episode.clone()));
-            args.push(SqlArg::Text(destination_episode.clone()));
-        }
-        args.push(SqlArg::Text(map.source_title_id.clone()));
-        args.extend(
-            chunk
-                .iter()
-                .map(|(source_episode, _)| SqlArg::Text(source_episode.clone())),
-        );
-        let remapped = tx
-            .execute(
-                &format!(
-                    "UPDATE {SUBTITLE_DOWNLOADS_TABLE}
-                        SET episode_id = CASE episode_id {cases} END
-                      WHERE title_id = {{}} AND {SUBTITLE_FILE_ON_ITS_TITLE}
-                        AND episode_id IN ({placeholders})"
-                ),
-                &args,
-            )
-            .await?;
-        record(outcome, "files:subtitle_downloads_episode", remapped);
-    }
-
-    let moved = tx
-        .execute(
-            &format!(
-                "UPDATE {SUBTITLE_DOWNLOADS_TABLE} SET title_id = {{}}
-                  WHERE title_id = {{}} AND {SUBTITLE_FILE_ON_ITS_TITLE}"
-            ),
-            &[
-                SqlArg::Text(map.destination_title_id.clone()),
-                SqlArg::Text(map.source_title_id.clone()),
-            ],
-        )
-        .await?;
-    record(outcome, "files:subtitle_downloads", moved);
-    Ok(())
-}
-
-/// Step 2. History follows the content:`history_events.title_id` and
+/// Step 2. History follows the content: `history_events.title_id` and
 /// `domain_events`' `title_id` / title `stream_id` are rewritten for every row,
 /// so the merged title's Activity feed stays whole. Payloads are decompressed,
 /// remapped, and recompressed only for the event types that carry

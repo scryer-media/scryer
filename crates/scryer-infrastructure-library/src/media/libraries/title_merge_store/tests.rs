@@ -1393,47 +1393,6 @@ async fn a_merge_clears_the_retired_titles_monitor_selections_and_keeps_the_surv
     );
 }
 
-async fn insert_subtitle_download(
-    datastore: &StoreDatastore,
-    id: &str,
-    media_file_id: &str,
-    title_id: &str,
-    episode_id: Option<&str>,
-) {
-    run(
-        datastore,
-        "INSERT INTO subtitle_downloads (id, media_file_id, title_id, episode_id, language,
-                                         provider, file_path, downloaded_at)
-         VALUES ({}, {}, {}, {}, 'eng', 'provider-under-test', {}, '2026-01-01T00:00:00Z')",
-        vec![
-            SqlArg::Text(id.to_string()),
-            SqlArg::Text(media_file_id.to_string()),
-            SqlArg::Text(title_id.to_string()),
-            SqlArg::OptText(episode_id.map(str::to_string)),
-            SqlArg::Text(format!("/subtitles/{id}.eng.srt")),
-        ],
-    )
-    .await;
-}
-
-/// The title and episode one subtitle row is recorded against, or `None`
-/// when the row is gone.
-async fn subtitle_owner(datastore: &StoreDatastore, id: &str) -> Option<(String, Option<String>)> {
-    SqlRuntime::fetch_optional(
-        datastore.read_exec(),
-        "SELECT title_id, episode_id FROM subtitle_downloads WHERE id = {}",
-        &[SqlArg::Text(id.to_string())],
-    )
-    .await
-    .expect("the subtitle query should run")
-    .map(|row| {
-        (
-            row.text("title_id").expect("a title id"),
-            row.opt_text("episode_id").expect("an episode id column"),
-        )
-    })
-}
-
 fn retired_record_total(outcome: &MergeOutcome) -> i64 {
     let total: u64 = outcome
         .rows_affected
@@ -1442,76 +1401,6 @@ fn retired_record_total(outcome: &MergeOutcome) -> i64 {
         .map(|(_, rows)| *rows)
         .sum();
     i64::try_from(total).expect("a small count")
-}
-
-#[tokio::test]
-async fn a_carried_files_subtitles_move_with_it_and_the_rest_retire() {
-    let (store, datastore) = test_store().await;
-    seed_two_season_series(&datastore).await;
-    insert_title(&datastore, "title-other", "library-c", &[]).await;
-    insert_media_file(&datastore, "o-f1", "title-other", "/o/S01E01.mkv").await;
-
-    insert_subtitle_download(&datastore, "sub-s1", "s-f1", SOURCE, Some("s-e1")).await;
-    insert_subtitle_download(&datastore, "sub-s2", "s-f2", SOURCE, Some("s-e2")).await;
-    insert_subtitle_download(&datastore, "sub-s1-title", "s-f1", SOURCE, None).await;
-    insert_subtitle_download(&datastore, "sub-d1", "d-f1", DESTINATION, Some("d-e1")).await;
-    // Recorded against the source but for a file the merge does not carry.
-    insert_subtitle_download(&datastore, "sub-uncarried", "o-f1", SOURCE, Some("s-e1")).await;
-
-    let plan = plan_for(&store).await;
-    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
-    // One remapped episode per statement, so the chunked path runs.
-    let outcome = {
-        let _binds = crate::media::id_list_statements::lower_max_binds_for_tests(4);
-        store
-            .execute_title_merge(&plan)
-            .await
-            .expect("the merge should commit")
-    };
-
-    assert_eq!(
-        outcome.rows_affected.get("files:subtitle_downloads"),
-        Some(&3)
-    );
-    assert_eq!(
-        outcome
-            .rows_affected
-            .get("files:subtitle_downloads_episode"),
-        Some(&2)
-    );
-    assert_eq!(
-        outcome.rows_affected.get("retire:subtitle_downloads"),
-        Some(&1)
-    );
-    assert_eq!(
-        plan.summary.source_records_dropped,
-        retired_record_total(&outcome),
-        "the preview drops only the subtitle row whose file stays behind"
-    );
-
-    let destination = DESTINATION.to_string();
-    assert_eq!(
-        subtitle_owner(&datastore, "sub-s1").await,
-        Some((destination.clone(), Some("d-e1".to_string())))
-    );
-    assert_eq!(
-        subtitle_owner(&datastore, "sub-s2").await,
-        Some((destination.clone(), Some("d-e2".to_string())))
-    );
-    assert_eq!(
-        subtitle_owner(&datastore, "sub-s1-title").await,
-        Some((destination.clone(), None))
-    );
-    assert_eq!(
-        subtitle_owner(&datastore, "sub-d1").await,
-        Some((destination, Some("d-e1".to_string()))),
-        "the destination's own subtitle row is untouched"
-    );
-    assert_eq!(
-        subtitle_owner(&datastore, "sub-uncarried").await,
-        None,
-        "a subtitle row whose file is not carried retires with the source"
-    );
 }
 
 async fn insert_consumed_manual_import_selection(
