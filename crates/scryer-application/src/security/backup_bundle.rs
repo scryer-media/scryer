@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -1780,7 +1781,38 @@ impl BackupBundleStaging {
         Ok(())
     }
 
-    pub fn finish(mut self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
+    pub fn finish(self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
+        self.finish_unless_abandoned(request, &FinishGate::default())
+    }
+
+    /// [`Self::finish`] on the blocking pool, so compressing and encrypting
+    /// the bundle never holds an async worker. When the caller stops waiting
+    /// (a timeout drops this future), the bundle is not committed to its
+    /// output path; a commit already under way completes before the drop
+    /// returns, so the caller's failure handling always sees the final state.
+    pub async fn finish_off_runtime(
+        self,
+        request: BackupBundleExportRequest,
+    ) -> AppResult<BackupExportOutcome> {
+        let gate = Arc::new(FinishGate::default());
+        let abandon_on_drop = AbandonFinishOnDrop(Some(Arc::clone(&gate)));
+        let joined =
+            tokio::task::spawn_blocking(move || self.finish_unless_abandoned(request, &gate)).await;
+        abandon_on_drop.disarm();
+        match joined {
+            Ok(result) => result,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => Err(AppError::Repository(format!(
+                "backup bundle export task failed: {error}"
+            ))),
+        }
+    }
+
+    fn finish_unless_abandoned(
+        mut self,
+        request: BackupBundleExportRequest,
+        gate: &FinishGate,
+    ) -> AppResult<BackupExportOutcome> {
         if request.passphrase.trim().is_empty() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_NON_EMPTY_PASSWORD,
@@ -1812,11 +1844,48 @@ impl BackupBundleStaging {
         let writer = AtomicOutputWriter::new(&request.output_path)?;
         let writer = AeadChunkWriter::new(writer, &request.passphrase)?;
         let writer = write_bundle_payload(self.staging.path(), writer)?.finish()?;
+        let abandoned = gate
+            .abandoned
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *abandoned {
+            return Err(AppError::Repository(
+                "backup bundle export was abandoned before it was committed".into(),
+            ));
+        }
         writer.finish()?;
+        drop(abandoned);
 
         Ok(BackupExportOutcome {
             summary: manifest.summary(),
         })
+    }
+}
+
+/// Whether the caller of [`BackupBundleStaging::finish_off_runtime`] stopped
+/// waiting. The commit holds the lock, so abandoning waits for a commit that
+/// has already started instead of racing it.
+#[derive(Default)]
+struct FinishGate {
+    abandoned: std::sync::Mutex<bool>,
+}
+
+struct AbandonFinishOnDrop(Option<Arc<FinishGate>>);
+
+impl AbandonFinishOnDrop {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for AbandonFinishOnDrop {
+    fn drop(&mut self) {
+        if let Some(gate) = self.0.take() {
+            *gate
+                .abandoned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        }
     }
 }
 
@@ -2799,6 +2868,56 @@ mod tests {
         assert!(
             matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("tables/titles.ndjson"))
         );
+    }
+
+    /// Finishing on the blocking pool writes a bundle that restores exactly as
+    /// the inline finish does.
+    #[cfg(feature = "runtime-backups")]
+    #[tokio::test]
+    async fn finishing_off_the_runtime_writes_the_same_restorable_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inline_path = temp.path().join("inline.scryer-backup.enc");
+        let blocking_path = temp.path().join("blocking.scryer-backup.enc");
+        test_bundle_staging(4096)
+            .expect("staging")
+            .finish(test_export_request(&inline_path, "backup-passphrase"))
+            .expect("inline finish");
+        test_bundle_staging(4096)
+            .expect("staging")
+            .finish_off_runtime(test_export_request(&blocking_path, "backup-passphrase"))
+            .await
+            .expect("blocking finish");
+
+        let inline = prepare_backup_restore_payload(&inline_path, Some("backup-passphrase"))
+            .expect("inline bundle restores");
+        let blocking = prepare_backup_restore_payload(&blocking_path, Some("backup-passphrase"))
+            .expect("blocking bundle restores");
+        assert_eq!(blocking.manifest().row_counts, inline.manifest().row_counts);
+        assert_eq!(
+            blocking.manifest().part_checksums,
+            inline.manifest().part_checksums
+        );
+    }
+
+    /// A finish whose caller has stopped waiting never commits the bundle.
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn an_abandoned_finish_does_not_commit_the_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bundle_path = temp.path().join("abandoned.scryer-backup.enc");
+        let gate = FinishGate::default();
+        *gate.abandoned.lock().unwrap() = true;
+
+        test_bundle_staging(64)
+            .expect("staging")
+            .finish_unless_abandoned(
+                test_export_request(&bundle_path, "backup-passphrase"),
+                &gate,
+            )
+            .expect_err("an abandoned finish must fail");
+
+        assert!(!bundle_path.exists());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 
     #[cfg(feature = "runtime-backups")]

@@ -1,6 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -18,10 +16,11 @@ use scryer_application::{
 
 use crate::backup_import_normalization::{
     ImportColumnKind, ImportColumnRule, InsertStatements, RestoreRowReader,
-    strip_nonportable_backup_fields, validate_restore_manifest_table_set,
+    validate_restore_manifest_table_set,
 };
 use crate::postgres::PostgresServices;
 use crate::queries::title_search::rebuild_title_search_projection_pg_on_connection;
+use crate::sqlite_backup::TablePartWriter;
 
 const EXPORT_BATCH_SIZE: i64 = 500;
 
@@ -79,7 +78,7 @@ pub async fn export_backup_bundle_from_postgres_pool(
 ) -> AppResult<BackupExportOutcome> {
     let mut staging = BackupBundleStaging::new()?;
     export_backup_tables_from_pool(pool, &mut staging).await?;
-    staging.finish(request)
+    staging.finish_off_runtime(request).await
 }
 
 async fn export_backup_tables_from_pool(
@@ -423,72 +422,123 @@ async fn export_table_part(
     table: &str,
     tables_dir: &Path,
 ) -> AppResult<(u64, String)> {
-    let order_by = table_row_order_clause(tx, table).await?;
-    let sql = format!(
-        "SELECT * FROM {} ORDER BY {} LIMIT $1 OFFSET $2",
-        quote_identifier(table),
-        order_by
-    );
-
-    let output_path = tables_dir.join(backup_table_part_filename(table));
-    let file = File::create(&output_path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create PostgreSQL table export {}: {error}",
-            output_path.display()
-        ))
-    })?;
-    let mut writer = BufWriter::new(file);
-    let mut hasher = blake3::Hasher::new();
-    let mut line_buffer = Vec::with_capacity(16 * 1024);
-
-    let mut count = 0_u64;
-    let mut offset = 0_i64;
-    loop {
-        let rows = sqlx::query(sqlx::AssertSqlSafe(&*sql))
-            .bind(EXPORT_BATCH_SIZE)
-            .bind(offset)
-            .fetch_all(&mut **tx)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to export PostgreSQL table {table}: {error}"
-                ))
-            })?;
-
-        if rows.is_empty() {
-            break;
-        }
-
-        let row_count = rows.len() as i64;
-        for row in rows {
-            let mut value = encode_row(&row)?;
-            if let JsonValue::Object(object) = &mut value {
-                strip_nonportable_backup_fields(table, object);
+    let order = table_export_order(tx, table).await?;
+    let mut part = TablePartWriter::create(table, tables_dir, "PostgreSQL table export").await?;
+    match order.keyset {
+        None => {
+            let sql = format!(
+                "SELECT * FROM {} ORDER BY {} LIMIT $1 OFFSET $2",
+                quote_identifier(table),
+                order.order_by
+            );
+            let mut offset = 0_i64;
+            loop {
+                let rows = sqlx::query(sqlx::AssertSqlSafe(&*sql))
+                    .bind(EXPORT_BATCH_SIZE)
+                    .bind(offset)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(|error| export_query_error(table, error))?;
+                if rows.is_empty() {
+                    break;
+                }
+                offset += rows.len() as i64;
+                let columns = rows[0].columns().len();
+                part = part.write_page(rows, encode_row_columns, columns).await?;
             }
-            line_buffer.clear();
-            serde_json::to_writer(&mut line_buffer, &value).map_err(|error| {
-                AppError::Repository(format!("failed to encode backup row for {table}: {error}"))
-            })?;
-            line_buffer.push(b'\n');
-            writer.write_all(&line_buffer).map_err(|error| {
-                AppError::Repository(format!("failed to write backup row for {table}: {error}"))
-            })?;
-            hasher.update(&line_buffer);
-            count += 1;
         }
-        offset += row_count;
+        Some(key) => {
+            // The key travels as text and is cast back to its column's type,
+            // which round-trips exactly for the key types allowed here. The
+            // text copies are trailing columns that are never encoded.
+            let key_text = key
+                .iter()
+                .map(|(column, _)| format!("{}::text", quote_identifier(column)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let key_list = key
+                .iter()
+                .map(|(column, _)| quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let key_params = key
+                .iter()
+                .enumerate()
+                .map(|(index, (_, cast))| format!("${}::{cast}", index + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let first_sql = format!(
+                "SELECT *, {key_text} FROM {} ORDER BY {} LIMIT $1",
+                quote_identifier(table),
+                order.order_by
+            );
+            let next_sql = format!(
+                "SELECT *, {key_text} FROM {} WHERE ({key_list}) > ({key_params}) ORDER BY {} LIMIT ${}",
+                quote_identifier(table),
+                order.order_by,
+                key.len() + 1
+            );
+            let mut last_key: Option<Vec<String>> = None;
+            loop {
+                let rows = match &last_key {
+                    None => {
+                        sqlx::query(sqlx::AssertSqlSafe(&*first_sql))
+                            .bind(EXPORT_BATCH_SIZE)
+                            .fetch_all(&mut **tx)
+                            .await
+                    }
+                    Some(values) => {
+                        let mut query = sqlx::query(sqlx::AssertSqlSafe(&*next_sql));
+                        for value in values {
+                            query = query.bind(value.clone());
+                        }
+                        query.bind(EXPORT_BATCH_SIZE).fetch_all(&mut **tx).await
+                    }
+                }
+                .map_err(|error| export_query_error(table, error))?;
+                let Some(last) = rows.last() else {
+                    break;
+                };
+                let columns = last.columns().len() - key.len();
+                last_key = Some(
+                    (columns..last.columns().len())
+                        .zip(&key)
+                        .map(|(index, (column, _))| {
+                            last.try_get::<String, _>(index).map_err(|error| {
+                                AppError::Repository(format!(
+                                    "failed to read backup key column {column} of {table}: {error}"
+                                ))
+                            })
+                        })
+                        .collect::<AppResult<Vec<_>>>()?,
+                );
+                part = part.write_page(rows, encode_row_columns, columns).await?;
+            }
+        }
     }
-
-    writer.flush().map_err(|error| {
-        AppError::Repository(format!("failed to flush table export for {table}: {error}"))
-    })?;
-    Ok((count, hasher.finalize().to_hex().to_string()))
+    part.finish().await
 }
 
-async fn table_row_order_clause(
+fn export_query_error(table: &str, error: sqlx::Error) -> AppError {
+    AppError::Repository(format!(
+        "failed to export PostgreSQL table {table}: {error}"
+    ))
+}
+
+/// How a table's rows are paged for export, always in `order_by` order.
+/// `keyset` holds the primary key's columns and the type each is cast back
+/// to, when every one of them is a type whose text form round-trips exactly;
+/// otherwise (a non-key `id`, `ctid`, or another key type) pages are read
+/// with `LIMIT … OFFSET …` as before.
+struct TableExportOrder {
+    order_by: String,
+    keyset: Option<Vec<(String, &'static str)>>,
+}
+
+async fn table_export_order(
     executor: &mut sqlx::PgConnection,
     table: &str,
-) -> AppResult<String> {
+) -> AppResult<TableExportOrder> {
     let pk_rows = sqlx::query(
         "SELECT kcu.column_name
            FROM information_schema.table_constraints tc
@@ -514,11 +564,49 @@ async fn table_row_order_clause(
         .filter_map(|row| row.try_get::<String, _>("column_name").ok())
         .collect::<Vec<_>>();
     if !pk_columns.is_empty() {
-        return Ok(pk_columns
+        let order_by = pk_columns
             .iter()
             .map(|column| quote_identifier(column))
             .collect::<Vec<_>>()
-            .join(", "));
+            .join(", ");
+        let type_rows = sqlx::query(
+            "SELECT column_name, data_type
+               FROM information_schema.columns
+              WHERE table_schema = current_schema()
+                AND table_name = $1",
+        )
+        .bind(table)
+        .fetch_all(&mut *executor)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to inspect primary key types for {table}: {error}"
+            ))
+        })?;
+        let types = type_rows
+            .into_iter()
+            .filter_map(|row| {
+                Some((
+                    row.try_get::<String, _>("column_name").ok()?,
+                    row.try_get::<String, _>("data_type").ok()?,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        // A primary key is unique and NOT NULL in PostgreSQL, so it can page
+        // by key whenever its values survive a text round trip.
+        let keyset = pk_columns
+            .iter()
+            .map(|column| {
+                let cast = match types.get(column)?.as_str() {
+                    "text" | "character varying" => "text",
+                    "uuid" => "uuid",
+                    "smallint" | "integer" | "bigint" => "bigint",
+                    _ => return None,
+                };
+                Some((column.clone(), cast))
+            })
+            .collect::<Option<Vec<_>>>();
+        return Ok(TableExportOrder { order_by, keyset });
     }
 
     let has_id: bool = sqlx::query_scalar(
@@ -536,16 +624,19 @@ async fn table_row_order_clause(
     .map_err(|error| {
         AppError::Repository(format!("failed to inspect id column for {table}: {error}"))
     })?;
-    if has_id {
-        return Ok(quote_identifier("id"));
-    }
-
-    Ok("ctid".to_string())
+    Ok(TableExportOrder {
+        order_by: if has_id {
+            quote_identifier("id")
+        } else {
+            "ctid".to_string()
+        },
+        keyset: None,
+    })
 }
 
-fn encode_row(row: &PgRow) -> AppResult<JsonValue> {
+fn encode_row_columns(row: &PgRow, encoded_columns: usize) -> AppResult<JsonValue> {
     let mut object = JsonMap::new();
-    for (index, column) in row.columns().iter().enumerate() {
+    for (index, column) in row.columns().iter().enumerate().take(encoded_columns) {
         let raw = row.try_get_raw(index).map_err(|error| {
             AppError::Repository(format!(
                 "failed to read backup column {} from PostgreSQL row: {error}",
