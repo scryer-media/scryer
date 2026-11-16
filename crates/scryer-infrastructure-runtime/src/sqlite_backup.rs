@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use scryer_application::{
     AppError, AppResult, BACKUP_TABLE_CATALOG, BLOB_MARKER_BASE64, BLOB_MARKER_TYPE,
     BackupBundleExportRequest, BackupBundleStaging, BackupRestorePreparedBundle,
-    BackupTableClassification, EXPORT_BATCH_SIZE, LogicalBackupExporter,
+    BackupStagingTablesDir, BackupTableClassification, EXPORT_BATCH_SIZE, LogicalBackupExporter,
     backup_table_part_filename, prepare_backup_restore_payload,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -82,7 +82,7 @@ async fn export_backup_tables_from_pool(
 ) -> AppResult<()> {
     validate_backup_catalog(pool).await?;
     let export_tables = ordered_export_tables(pool).await?;
-    let tables_dir = staging.tables_dir();
+    let tables_dir = staging.shared_tables_dir();
 
     let mut conn = pool.acquire().await.map_err(|error| {
         AppError::Repository(format!(
@@ -434,22 +434,29 @@ async fn ordered_catalog_tables(
 /// One table part being written: the JSON-lines file, its running checksum
 /// and row count. Encoding and file writes run on the blocking pool, one page
 /// at a time, so a large table never holds an async worker.
+///
+/// Every blocking step owns the writer, and the writer holds the staging
+/// directory, so an export dropped mid-step removes the directory only after
+/// that step has finished and closed its file.
 pub(crate) struct TablePartWriter {
     table: String,
     writer: BufWriter<File>,
     hasher: blake3::Hasher,
     line_buffer: Vec<u8>,
     count: u64,
+    // Declared last so the file is closed before the directory can go.
+    staging: BackupStagingTablesDir,
 }
 
 impl TablePartWriter {
     pub(crate) async fn create(
         table: &str,
-        tables_dir: &Path,
+        tables_dir: &BackupStagingTablesDir,
         create_label: &'static str,
     ) -> AppResult<Self> {
         let table = table.to_string();
-        let output_path = tables_dir.join(backup_table_part_filename(&table));
+        let staging = tables_dir.clone();
+        let output_path = staging.path().join(backup_table_part_filename(&table));
         run_export_blocking(move || {
             let file = File::create(&output_path).map_err(|error| {
                 AppError::Repository(format!(
@@ -463,6 +470,7 @@ impl TablePartWriter {
                 hasher: blake3::Hasher::new(),
                 line_buffer: Vec::with_capacity(16 * 1024),
                 count: 0,
+                staging,
             })
         })
         .await
@@ -510,11 +518,15 @@ impl TablePartWriter {
                 mut writer,
                 hasher,
                 count,
+                staging,
                 ..
             } = self;
-            writer.flush().map_err(|error| {
+            let flushed = writer.flush().map_err(|error| {
                 AppError::Repository(format!("failed to flush table export for {table}: {error}"))
-            })?;
+            });
+            drop(writer);
+            drop(staging);
+            flushed?;
             Ok((count, hasher.finalize().to_hex().to_string()))
         })
         .await
@@ -553,7 +565,7 @@ enum ExportPaging {
 async fn export_table_part(
     conn: &mut sqlx::SqliteConnection,
     table: &str,
-    tables_dir: &Path,
+    tables_dir: &BackupStagingTablesDir,
 ) -> AppResult<(u64, String)> {
     let order = table_export_order(conn, table).await?;
     let mut part = TablePartWriter::create(table, tables_dir, "table export").await?;
@@ -1127,6 +1139,78 @@ mod tests {
         ImportColumnKind, ImportColumnRule, normalize_import_object_for_target,
     };
 
+    /// A row whose encoding signals that it started and then waits to be
+    /// released, so the test decides exactly when the blocking write ends.
+    struct GatedRow {
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    fn encode_gated_row(
+        row: &GatedRow,
+        _columns: usize,
+    ) -> scryer_application::AppResult<JsonValue> {
+        row.entered
+            .send(())
+            .expect("test waits for the write to start");
+        row.release.recv().expect("test releases the write");
+        Ok(serde_json::json!({ "id": 1 }))
+    }
+
+    #[test]
+    fn dropped_export_removes_staging_only_after_its_blocking_write_ends() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let staging = scryer_application::BackupBundleStaging::new().expect("staging dir");
+        let staging_root = staging
+            .tables_dir()
+            .parent()
+            .expect("tables dir has a parent")
+            .to_path_buf();
+        let part_path = staging
+            .tables_dir()
+            .join(scryer_application::backup_table_part_filename(
+                "synthetic_table",
+            ));
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let export = runtime.spawn(async move {
+            let staging = staging;
+            let tables_dir = staging.shared_tables_dir();
+            let part =
+                super::TablePartWriter::create("synthetic_table", &tables_dir, "table export")
+                    .await?;
+            let row = GatedRow {
+                entered: entered_tx,
+                release: release_rx,
+            };
+            let part = part.write_page(vec![row], encode_gated_row, 1).await?;
+            part.finish().await
+        });
+
+        entered_rx.recv().expect("the blocking write starts");
+        export.abort();
+        let joined = runtime.block_on(export);
+        assert!(joined.expect_err("the export was dropped").is_cancelled());
+        assert!(
+            part_path.exists(),
+            "the in-flight write keeps the staging directory"
+        );
+
+        release_tx.send(()).expect("release the blocking write");
+        // Shutting the runtime down waits for its blocking tasks to return,
+        // and a detached task's result is dropped as it completes.
+        drop(runtime);
+        assert!(
+            !staging_root.exists(),
+            "no staging file outlives the dropped export"
+        );
+    }
+
     #[tokio::test]
     async fn background_restore_import_percentage_counts_inserted_rows() {
         let directory = tempfile::tempdir().unwrap();
@@ -1223,15 +1307,13 @@ mod tests {
             }
             query.execute(&source).await.unwrap();
         }
-        let directory = tempfile::tempdir().unwrap();
+        let staging = scryer_application::BackupBundleStaging::new().unwrap();
+        let directory = staging.shared_tables_dir();
         let mut source_connection = source.acquire().await.unwrap();
-        let (exported, _) = super::export_table_part(
-            &mut source_connection,
-            "restore_round_trip",
-            directory.path(),
-        )
-        .await
-        .unwrap();
+        let (exported, _) =
+            super::export_table_part(&mut source_connection, "restore_round_trip", &directory)
+                .await
+                .unwrap();
         assert_eq!(exported, 600);
         let expected = round_trip_rows(&mut source_connection).await;
 
@@ -1728,7 +1810,8 @@ mod tests {
 
         let mut connection = pool.acquire().await.unwrap();
         let reference_dir = tempfile::tempdir().unwrap();
-        let keyset_dir = tempfile::tempdir().unwrap();
+        let keyset_staging = scryer_application::BackupBundleStaging::new().unwrap();
+        let keyset_dir = keyset_staging.shared_tables_dir();
         for (table, rows, keyset) in [
             ("paging_composite", 2_600, true),
             ("paging_without_rowid", 1_300, true),
@@ -1754,7 +1837,7 @@ mod tests {
                 reference_export::export_table_part(&mut connection, table, reference_dir.path())
                     .await
                     .unwrap();
-            let actual = super::export_table_part(&mut connection, table, keyset_dir.path())
+            let actual = super::export_table_part(&mut connection, table, &keyset_dir)
                 .await
                 .unwrap();
             assert_eq!(expected.0, rows, "{table} reference row count");

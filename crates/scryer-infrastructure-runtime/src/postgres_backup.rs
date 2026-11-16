@@ -9,9 +9,9 @@ use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 use scryer_application::{
     AppError, AppResult, BACKUP_TABLE_CATALOG, BackupBundleExportRequest, BackupBundleStaging,
-    BackupExportOutcome, BackupRestorePreparedBundle, BackupTableClassification,
-    LogicalBackupExporter, PreparedBackupBundleDirectory, backup_table_part_filename,
-    prepare_backup_restore_payload,
+    BackupExportOutcome, BackupRestorePreparedBundle, BackupStagingTablesDir,
+    BackupTableClassification, LogicalBackupExporter, PreparedBackupBundleDirectory,
+    backup_table_part_filename, prepare_backup_restore_payload,
 };
 
 use crate::backup_import_normalization::{
@@ -87,7 +87,7 @@ async fn export_backup_tables_from_pool(
 ) -> AppResult<()> {
     validate_backup_catalog(pool).await?;
     let export_tables = ordered_export_tables(pool).await?;
-    let tables_dir = staging.tables_dir();
+    let tables_dir = staging.shared_tables_dir();
 
     let mut tx = pool.begin().await.map_err(|error| {
         AppError::Repository(format!(
@@ -420,7 +420,7 @@ async fn ordered_catalog_tables(
 async fn export_table_part(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     table: &str,
-    tables_dir: &Path,
+    tables_dir: &BackupStagingTablesDir,
 ) -> AppResult<(u64, String)> {
     let order = table_export_order(tx, table).await?;
     let mut part = TablePartWriter::create(table, tables_dir, "PostgreSQL table export").await?;
@@ -1098,11 +1098,12 @@ mod restore_tests {
             .map_err(repo_err)?;
             validate_backup_catalog(pool).await?;
             let tables = ordered_export_tables(pool).await?;
-            let directory = tempfile::tempdir().unwrap();
+            let staging = BackupBundleStaging::new().unwrap();
+            let directory = staging.shared_tables_dir();
             let mut counts = BTreeMap::new();
             let mut tx = pool.begin().await.map_err(repo_err)?;
             for table in &tables {
-                let (rows, _) = export_table_part(&mut tx, table, directory.path()).await?;
+                let (rows, _) = export_table_part(&mut tx, table, &directory).await?;
                 counts.insert(table.clone(), rows);
             }
             tx.rollback().await.map_err(repo_err)?;
@@ -1120,7 +1121,7 @@ mod restore_tests {
                     pool,
                     &counts,
                     None,
-                    directory.path(),
+                    &directory.path(),
                 ))
                 .await?;
             assert_eq!(deadline.import_percent(), Some(100));
@@ -1146,7 +1147,7 @@ mod restore_tests {
                         pool,
                         &counts,
                         None,
-                        directory.path()
+                        &directory.path()
                     ))
                     .await
                     .is_err()

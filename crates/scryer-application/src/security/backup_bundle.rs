@@ -1684,9 +1684,24 @@ pub struct BackupExportOutcome {
 }
 
 pub struct BackupBundleStaging {
-    staging: TempDir,
+    staging: Arc<TempDir>,
     row_counts: BTreeMap<String, u64>,
     part_checksums: BTreeMap<String, String>,
+}
+
+/// The tables directory of a staged export, for blocking work that writes
+/// into it. Every clone keeps the whole staging directory on disk, so it is
+/// removed only once the last holder is gone: an export dropped while a
+/// blocking write is still running never leaves that write's file behind.
+#[derive(Clone)]
+pub struct BackupStagingTablesDir {
+    staging: Arc<TempDir>,
+}
+
+impl BackupStagingTablesDir {
+    pub fn path(&self) -> PathBuf {
+        self.staging.path().join(TABLES_DIRNAME)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1759,7 +1774,7 @@ impl BackupBundleStaging {
         })?;
 
         Ok(Self {
-            staging,
+            staging: Arc::new(staging),
             row_counts: BTreeMap::new(),
             part_checksums: BTreeMap::new(),
         })
@@ -1767,6 +1782,14 @@ impl BackupBundleStaging {
 
     pub fn tables_dir(&self) -> PathBuf {
         self.staging.path().join(TABLES_DIRNAME)
+    }
+
+    /// A handle on the tables directory that keeps the staging directory
+    /// alive for as long as it is held; see [`BackupStagingTablesDir`].
+    pub fn shared_tables_dir(&self) -> BackupStagingTablesDir {
+        BackupStagingTablesDir {
+            staging: Arc::clone(&self.staging),
+        }
     }
 
     pub fn record_table_part(
