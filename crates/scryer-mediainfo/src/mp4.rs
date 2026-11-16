@@ -1393,7 +1393,9 @@ fn parse_stsd(data: &[u8], track: &mut Mp4TrackMetadata) {
                                             )
                                         });
                             }
-                            t if MP4_DOVI_TYPES.contains(&t) => {
+                            t if MP4_DOVI_TYPES.contains(&t)
+                                && crate::codec::parse_dovi_config(child_payload).is_some() =>
+                            {
                                 track.dovi_config = Some(child_payload.to_vec());
                             }
                             _ => {}
@@ -2761,6 +2763,25 @@ mod tests {
                 String::from_utf8_lossy(name)
             );
         }
+    }
+
+    #[test]
+    fn dolby_vision_box_too_short_to_parse_is_not_stored() {
+        let parse = |boxes: &[Vec<u8>]| {
+            let mut entry = vec![0_u8; 78];
+            entry.extend(boxes.concat());
+            let mut stsd = vec![0, 0, 0, 0, 0, 0, 0, 1];
+            stsd.extend(make_box(b"hvc1", &entry));
+            let mut track = Mp4TrackMetadata::default();
+            parse_stsd(&stsd, &mut track);
+            track.dovi_config
+        };
+        let valid = [1, 0, 0x10, 0x35, 0x10];
+        assert_eq!(parse(&[make_box(b"dvvC", &[1, 0, 0x10])]), None);
+        assert_eq!(
+            parse(&[make_box(b"dvvC", &valid), make_box(b"dvwC", &[1, 0, 0x28])]).as_deref(),
+            Some(&valid[..])
+        );
     }
 
     fn make_meta_box(payload: &[u8]) -> Vec<u8> {

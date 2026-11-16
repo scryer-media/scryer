@@ -741,90 +741,48 @@ fn fixture_matrix_expected_metadata() {
 // Dolby Vision (MKV)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn mkv_dv_profile5() {
-    let a = analyze_file(&media("dv_profile5.mkv")).unwrap();
+/// Profile, level, compatibility id and the RPU / enhancement-layer / base-layer flags
+/// reported for the primary video stream.
+fn mkv_dovi_record(name: &str) -> (u8, u8, u8, bool, bool, bool) {
+    let a = analyze_file(&media(name)).unwrap();
     assert_eq!(a.video_codec.as_deref(), Some("hevc"));
     assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(5));
-    assert_eq!(a.dovi_bl_compat_id, Some(0));
     assert!(is_valid_video(&a));
+    let dovi = a.details.streams[0].metadata.hdr.dovi.clone().unwrap();
+    assert_eq!(dovi.profile, a.dovi_profile);
+    assert_eq!(dovi.base_layer_compatibility_id, a.dovi_bl_compat_id);
+    (
+        dovi.profile.unwrap(),
+        dovi.level.unwrap(),
+        dovi.base_layer_compatibility_id.unwrap(),
+        dovi.rpu_present.unwrap(),
+        dovi.enhancement_layer_present.unwrap(),
+        dovi.base_layer_present.unwrap(),
+    )
+}
+
+#[test]
+fn mkv_dv_profile5() {
+    assert_eq!(
+        mkv_dovi_record("dv_profile5.mkv"),
+        (5, 6, 0, true, false, true)
+    );
 }
 
 #[test]
 fn mkv_dv_profile7() {
-    let a = analyze_file(&media("dv_profile7.mkv")).unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(7));
-    assert_eq!(a.dovi_bl_compat_id, Some(6));
-    assert!(is_valid_video(&a));
+    assert_eq!(
+        mkv_dovi_record("dv_profile7.mkv"),
+        (7, 6, 6, true, true, true)
+    );
 }
 
 #[test]
 fn mkv_dv_profile8() {
-    let a = analyze_file(&media("dv_profile8.mkv")).unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(8));
-    assert_eq!(a.dovi_bl_compat_id, Some(1));
-    assert!(is_valid_video(&a));
-}
-
-#[test]
-fn mkv_dolby_vision_mapping_is_read_from_the_header_without_extra_io() {
-    // The same file with the BlockAddIDType replaced by a same-length unregistered value
-    // must cost exactly the same reads and seeks under every profile.
-    for (name, fourcc) in [
-        ("dv_profile5.mkv", b"dvcC"),
-        ("dv_profile7.mkv", b"dvcC"),
-        ("dv_profile8.mkv", b"dvvC"),
-    ] {
-        let dv = std::fs::read(media(name)).unwrap();
-        let needle = [&[0x41, 0xE7, 0x84][..], fourcc].concat();
-        let at = dv
-            .windows(needle.len())
-            .position(|window| window == needle)
-            .unwrap_or_else(|| panic!("{name}: BlockAddIDType {fourcc:?} not stored"));
-        let mut plain = dv.clone();
-        plain[at + 3..at + 7].copy_from_slice(b"xxxx");
-
-        for profile in [
-            AnalysisProfile::ContentProbe,
-            AnalysisProfile::Fast,
-            AnalysisProfile::DefaultRich,
-            AnalysisProfile::FfprobeParity,
-        ] {
-            let analyze = |bytes: &[u8]| {
-                scryer_mediainfo::analyze_source(
-                    &mut std::io::Cursor::new(bytes.to_vec()),
-                    "mkv",
-                    AnalyzeOptions { profile },
-                )
-                .unwrap()
-            };
-            let with_dv = analyze(&dv);
-            let without_dv = analyze(&plain);
-            assert_eq!(
-                with_dv.video_hdr_format.as_deref(),
-                Some("Dolby Vision"),
-                "{name} {profile:?}"
-            );
-            assert_eq!(without_dv.video_hdr_format, None, "{name} {profile:?}");
-            assert_eq!(
-                (
-                    with_dv.details.report.bytes_read,
-                    with_dv.details.report.seeks
-                ),
-                (
-                    without_dv.details.report.bytes_read,
-                    without_dv.details.report.seeks
-                ),
-                "{name} {profile:?}"
-            );
-            assert!(with_dv.details.report.bytes_read > 0, "{name} {profile:?}");
-        }
-    }
+    assert_eq!(
+        mkv_dovi_record("dv_profile8.mkv"),
+        (8, 6, 1, true, false, true)
+    );
 }
 
 // ---------------------------------------------------------------------------

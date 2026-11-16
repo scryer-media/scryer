@@ -22,14 +22,204 @@ fn hex(value: &str) -> Vec<u8> {
 fn element(id: u32, data: &[u8]) -> Vec<u8> {
     let id = id.to_be_bytes();
     let mut bytes = id[id.iter().position(|byte| *byte != 0).unwrap()..].to_vec();
-    assert!(data.len() < 16_383);
     if data.len() < 127 {
         bytes.push(0x80 | data.len() as u8);
-    } else {
+    } else if data.len() < 16_383 {
         bytes.extend((0x4000 | data.len() as u16).to_be_bytes());
+    } else {
+        assert!(data.len() < 0x0fff_ffff);
+        bytes.extend((0x1000_0000 | data.len() as u32).to_be_bytes());
     }
     bytes.extend(data);
     bytes
+}
+
+fn ebml_header() -> Vec<u8> {
+    element(
+        0x1a45dfa3,
+        &[
+            uint(0x4286, 1),
+            uint(0x42f7, 1),
+            uint(0x42f2, 4),
+            uint(0x42f3, 8),
+            element(0x4282, b"matroska"),
+            uint(0x4287, 4),
+            uint(0x4285, 2),
+        ]
+        .concat(),
+    )
+}
+
+fn segment_info() -> Vec<u8> {
+    element(
+        0x1549a966,
+        &[
+            uint(0x2ad7b1, 1_000_000),
+            element(0x4489, &2000_f64.to_be_bytes()),
+            element(0x4d80, b"test"),
+            element(0x5741, b"test"),
+        ]
+        .concat(),
+    )
+}
+
+/// The 24-byte DOVIDecoderConfigurationRecord FFmpeg writes: version 1.0, RPU and base
+/// layer present, the enhancement layer only for dual-layer profile 7.
+fn dovi_record(profile: u8, level: u8, compatibility: u8) -> Vec<u8> {
+    let enhancement_layer = u8::from(profile == 7);
+    let mut record = vec![0; 24];
+    record[..5].copy_from_slice(&[
+        1,
+        0,
+        profile << 1 | level >> 5,
+        (level & 0x1f) << 3 | 1 << 2 | enhancement_layer << 1 | 1,
+        compatibility << 4,
+    ]);
+    record
+}
+
+/// A BlockAdditionMapping laid out as FFmpeg's Matroska muxer writes it: name, type and
+/// record, with no BlockAddIDValue.
+fn dovi_mapping(block_add_id_type: u64, record: &[u8]) -> Vec<u8> {
+    element(
+        0x41e4,
+        &[
+            element(0x41a4, b"Dolby Vision configuration"),
+            uint(0x41e7, block_add_id_type),
+            element(0x41ed, record),
+        ]
+        .concat(),
+    )
+}
+
+/// The BlockAddIDType FourCC muxers use: 'dvcC' up to profile 7, 'dvvC' from profile 8.
+fn dovi_block_add_id_type(profile: u8) -> u64 {
+    u32::from_be_bytes(if profile <= 7 { *b"dvcC" } else { *b"dvvC" }).into()
+}
+
+/// A length-prefixed (4-byte) HEVC TRAIL_R NAL unit of `size` bytes with no SEI.
+fn hevc_frame(size: usize) -> Vec<u8> {
+    let mut frame = vec![0; size];
+    frame[..4].copy_from_slice(&(size as u32 - 4).to_be_bytes());
+    frame[4..6].copy_from_slice(&[0x02, 0x01]);
+    frame
+}
+
+fn simple_block(track: u8, keyframe: bool, payload: &[u8]) -> Vec<u8> {
+    element(
+        0xa3,
+        &[
+            &[0x80 | track, 0, 0, if keyframe { 0x80 } else { 0 }][..],
+            payload,
+        ]
+        .concat(),
+    )
+}
+
+/// A 2160p PQ (BT.2020, SMPTE ST 2084) HEVC track with a profile 8.1 Dolby Vision mapping
+/// stored under `block_add_id_type`, and 24 clusters of 25 fps frames. The first frame is
+/// 256 KiB, so the frame-payload HDR10+ probe reads past the cluster headers.
+pub fn pq_dolby_vision_bytes(block_add_id_type: u64) -> Vec<u8> {
+    let video = [
+        uint(0xd7, 1),
+        uint(0x73c5, 1),
+        uint(0x83, 1),
+        element(0x86, b"V_MPEGH/ISO/HEVC"),
+        element(
+            0x63a2,
+            &hex("0102600000009000000000005df000fcfcfafa00000300"),
+        ),
+        element(
+            0xe0,
+            &[
+                uint(0xb0, 3840),
+                uint(0xba, 2160),
+                element(
+                    0x55b0,
+                    &[uint(0x55b1, 9), uint(0x55ba, 16), uint(0x55bb, 9)].concat(),
+                ),
+            ]
+            .concat(),
+        ),
+        dovi_mapping(block_add_id_type, &dovi_record(8, 6, 1)),
+    ]
+    .concat();
+    let tracks = element(0x1654ae6b, &element(0xae, &video));
+    let clusters = (0..24_u64)
+        .map(|index| {
+            let frame = hevc_frame(if index == 0 { 256 * 1024 } else { 64 });
+            element(
+                0x1f43b675,
+                &[uint(0xe7, index * 40), simple_block(1, index == 0, &frame)].concat(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    [
+        ebml_header(),
+        element(0x18538067, &[segment_info(), tracks, clusters].concat()),
+    ]
+    .concat()
+}
+
+/// A cover-art style MJPEG video track ahead of a 1080p HEVC track that carries a
+/// profile 7 Dolby Vision mapping.
+pub fn cover_art_then_dolby_vision_bytes() -> Vec<u8> {
+    let cover = [
+        uint(0xd7, 1),
+        uint(0x73c5, 1),
+        uint(0x83, 1),
+        element(0x536e, b"cover"),
+        element(0x86, b"V_MJPEG"),
+        element(0xe0, &[uint(0xb0, 600), uint(0xba, 600)].concat()),
+    ]
+    .concat();
+    let video = [
+        uint(0xd7, 2),
+        uint(0x73c5, 2),
+        uint(0x83, 1),
+        element(0x86, b"V_MPEGH/ISO/HEVC"),
+        element(
+            0x63a2,
+            &hex("0102600000009000000000005df000fcfcfafa00000300"),
+        ),
+        element(
+            0xe0,
+            &[
+                uint(0xb0, 1920),
+                uint(0xba, 1080),
+                element(
+                    0x55b0,
+                    &[uint(0x55b1, 9), uint(0x55ba, 16), uint(0x55bb, 9)].concat(),
+                ),
+            ]
+            .concat(),
+        ),
+        dovi_mapping(dovi_block_add_id_type(7), &dovi_record(7, 6, 6)),
+    ]
+    .concat();
+    let tracks = element(
+        0x1654ae6b,
+        &[element(0xae, &cover), element(0xae, &video)].concat(),
+    );
+    let clusters = (0..2_u64)
+        .map(|index| {
+            element(
+                0x1f43b675,
+                &[
+                    uint(0xe7, index * 1000),
+                    simple_block(2, index == 0, &hevc_frame(64)),
+                ]
+                .concat(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    [
+        ebml_header(),
+        element(0x18538067, &[segment_info(), tracks, clusters].concat()),
+    ]
+    .concat()
 }
 
 fn uint(id: u32, value: u64) -> Vec<u8> {
@@ -49,29 +239,8 @@ pub fn authored_bytes(name: &str, explicit: bool) -> Option<Vec<u8>> {
         "hevc_hdr10plus.mkv" => (0, 0),
         _ => return None,
     };
-    let ebml = element(
-        0x1a45dfa3,
-        &[
-            uint(0x4286, 1),
-            uint(0x42f7, 1),
-            uint(0x42f2, 4),
-            uint(0x42f3, 8),
-            element(0x4282, b"matroska"),
-            uint(0x4287, 4),
-            uint(0x4285, 2),
-        ]
-        .concat(),
-    );
-    let info = element(
-        0x1549a966,
-        &[
-            uint(0x2ad7b1, 1_000_000),
-            element(0x4489, &2000_f64.to_be_bytes()),
-            element(0x4d80, b"test"),
-            element(0x5741, b"test"),
-        ]
-        .concat(),
-    );
+    let ebml = ebml_header();
+    let info = segment_info();
     // No parameter-set arrays or timing declarations are present in these hvcC records.
     let config = hex(if profile == 0 {
         "0102600000009000000000005df000fcfcfafa00000300"
@@ -95,20 +264,9 @@ pub fn authored_bytes(name: &str, explicit: bool) -> Option<Vec<u8>> {
     ]
     .concat();
     if profile != 0 {
-        let mut dovi = vec![0; 24];
-        dovi[..5].copy_from_slice(&[1, 0, profile << 1, 0x30, compatibility << 4]);
-        // Muxers store the configuration under the FourCC 'dvcC' for profiles up to 7
-        // and 'dvvC' for profile 8 and later.
-        let fourcc = if profile <= 7 { b"dvcC" } else { b"dvvC" };
-        video.extend(element(
-            0x41e4,
-            &[
-                uint(0x41f0, 1),
-                element(0x41a4, fourcc),
-                uint(0x41e7, u32::from_be_bytes(*fourcc).into()),
-                element(0x41ed, &dovi),
-            ]
-            .concat(),
+        video.extend(dovi_mapping(
+            dovi_block_add_id_type(profile),
+            &dovi_record(profile, 6, compatibility),
         ));
     }
     let mut audio = [
