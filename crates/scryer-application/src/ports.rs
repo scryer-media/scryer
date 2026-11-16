@@ -10845,6 +10845,10 @@ pub trait PendingReleaseRepository: Send + Sync {
         grabbed_at: Option<&str>,
     ) -> AppResult<()>;
     /// Terminal policy rejection is retained as audit history, not deleted.
+    /// Only an active row (waiting, standby, processing or needs review) is
+    /// expired; a row that has already left the active set, such as one
+    /// grabbed or superseded meanwhile, keeps its status, and the call still
+    /// returns `Ok(())`.
     async fn expire_pending_release(&self, id: &str, decision_code: &str) -> AppResult<()>;
     async fn mark_release_age_unknown_pending_release_needs_review(
         &self,

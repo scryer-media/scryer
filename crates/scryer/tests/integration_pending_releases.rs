@@ -815,6 +815,210 @@ async fn delete_standby_for_wanted_item_leaves_waiting_rows_intact() {
     );
 }
 
+fn pending_release_store(
+    ctx: &TestContext,
+) -> scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore {
+    scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
+        ctx.db.datastore(),
+        ctx.db.encryption_key_state(),
+    )
+}
+
+/// A release first seen without a publish time, and the observation of it.
+fn release_age_unknown_sighting(
+    wanted_item_id: &str,
+    title_id: &str,
+) -> (
+    scryer_application::PendingRelease,
+    scryer_application::PendingReleaseObservation,
+) {
+    let now = Utc::now();
+    let release = scryer_application::PendingRelease {
+        http_release: None,
+        id: scryer_domain::Id::new().0,
+        wanted_item_id: wanted_item_id.to_string(),
+        title_id: title_id.to_string(),
+        release_title: "Synthetic.Unknown.Age.1080p.WEB-DL".to_string(),
+        release_url: Some("https://example.com/unknown-age.nzb".to_string()),
+        source_kind: Some(scryer_application::DownloadSourceKind::NzbUrl),
+        release_size_bytes: Some(1024),
+        release_score: 100,
+        scoring_log_json: None,
+        indexer_source: Some("Synthetic Indexer".to_string()),
+        indexer_id: Some("synthetic-indexer".to_string()),
+        release_guid: Some("unknown-age-guid".to_string()),
+        added_at: now.to_rfc3339(),
+        last_observed_at: now.to_rfc3339(),
+        delay_until: (now + Duration::minutes(5)).to_rfc3339(),
+        status: PendingReleaseStatus::Waiting,
+        grabbed_at: None,
+        source_password: None,
+        published_at: None,
+        info_hash: None,
+        seed_minimums: Default::default(),
+        seeders: None,
+        release_identity: String::new(),
+        coverage_identity: String::new(),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: None,
+        release_age_unknown: true,
+        release_listing_json: None,
+    };
+    let observation = scryer_application::PendingReleaseObservation {
+        eligible_at: release.delay_until.clone(),
+        last_observed_at: now.to_rfc3339(),
+        latest_decision_code: None,
+        release_identity: "guid:synthetic-indexer:unknown-age-guid".to_string(),
+        coverage_identity: format!("scope:{wanted_item_id}"),
+        role: scryer_application::PendingReleaseRole::Primary,
+        release_age_unknown: true,
+    };
+    (release, observation)
+}
+
+/// The same release seen again, now with a publish time.
+fn with_publish_time(
+    release: &scryer_application::PendingRelease,
+    observation: &scryer_application::PendingReleaseObservation,
+) -> (
+    scryer_application::PendingRelease,
+    scryer_application::PendingReleaseObservation,
+) {
+    let mut hydrated = release.clone();
+    hydrated.published_at = Some((Utc::now() - Duration::minutes(30)).to_rfc3339());
+    let observation = scryer_application::PendingReleaseObservation {
+        release_age_unknown: false,
+        last_observed_at: (Utc::now() + Duration::minutes(1)).to_rfc3339(),
+        ..observation.clone()
+    };
+    (hydrated, observation)
+}
+
+#[tokio::test]
+async fn publish_time_fill_updates_an_active_row_and_never_revives_a_grabbed_one() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-publish-fill").await;
+    let wanted = seed_wanted_item(&ctx, "title-publish-fill", AcquisitionScopeStatus::Wanted).await;
+    let store = pending_release_store(&ctx);
+
+    // Active: the later sighting fills the row it first made.
+    let (release, observation) = release_age_unknown_sighting(&wanted.id, "title-publish-fill");
+    let first_id = store
+        .insert_pending_release_observation(&release, &observation)
+        .await
+        .expect("first sighting");
+    let (hydrated, hydrated_observation) = with_publish_time(&release, &observation);
+    let filled_id = store
+        .insert_pending_release_observation(&hydrated, &hydrated_observation)
+        .await
+        .expect("sighting with a publish time");
+    assert_eq!(filled_id, first_id);
+    let filled = ctx
+        .library_state
+        .get_pending_release(&first_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(filled.status, PendingReleaseStatus::Waiting);
+    assert!(!filled.release_age_unknown);
+
+    // Grabbed first, then the sighting with a publish time: the grabbed row
+    // keeps its status, and the sighting is stored as its own row.
+    store
+        .update_pending_release_status(
+            &first_id,
+            PendingReleaseStatus::Grabbed,
+            Some(&Utc::now().to_rfc3339()),
+        )
+        .await
+        .expect("grab");
+    let (later, later_observation) = with_publish_time(&release, &observation);
+    let later = scryer_application::PendingRelease {
+        id: scryer_domain::Id::new().0,
+        ..later
+    };
+    let later_id = store
+        .insert_pending_release_observation(&later, &later_observation)
+        .await
+        .expect("sighting after the grab");
+    assert_ne!(later_id, first_id);
+    let grabbed = ctx
+        .library_state
+        .get_pending_release(&first_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(grabbed.status, PendingReleaseStatus::Grabbed);
+}
+
+#[tokio::test]
+async fn expiring_a_row_grabbed_since_it_was_read_leaves_it_grabbed() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-expire-race").await;
+    let wanted = seed_wanted_item(&ctx, "title-expire-race", AcquisitionScopeStatus::Wanted).await;
+    let store = pending_release_store(&ctx);
+    let waiting = seed_pending_release(
+        &ctx,
+        &wanted.id,
+        "title-expire-race",
+        100,
+        5,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+    let other = seed_pending_release(
+        &ctx,
+        &wanted.id,
+        "title-expire-race",
+        90,
+        5,
+        PendingReleaseStatus::Standby,
+    )
+    .await;
+
+    // The caller read both rows as active. One is grabbed before its expiry
+    // lands; the other is still active.
+    store
+        .update_pending_release_status(
+            &waiting.id,
+            PendingReleaseStatus::Grabbed,
+            Some(&Utc::now().to_rfc3339()),
+        )
+        .await
+        .expect("grab");
+    store
+        .expire_pending_release(&waiting.id, "pending_release_rejected")
+        .await
+        .expect("a refused expiry still returns Ok");
+    store
+        .expire_pending_release(&other.id, "pending_release_rejected")
+        .await
+        .expect("expire the active row");
+
+    let grabbed = ctx
+        .library_state
+        .get_pending_release(&waiting.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(grabbed.status, PendingReleaseStatus::Grabbed);
+    assert_ne!(
+        grabbed.last_decision_code.as_deref(),
+        Some("pending_release_rejected")
+    );
+    let expired = ctx
+        .library_state
+        .get_pending_release(&other.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(expired.status, PendingReleaseStatus::Expired);
+    assert_eq!(
+        expired.last_decision_code.as_deref(),
+        Some("pending_release_rejected")
+    );
+}
+
 #[tokio::test]
 async fn compare_and_set_pending_release_status_claims_once() {
     let ctx = TestContext::new().await;
