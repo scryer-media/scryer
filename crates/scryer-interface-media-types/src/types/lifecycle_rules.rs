@@ -222,7 +222,7 @@ pub struct LifecycleRuleRevision {
     pub grace_days: i32,
     /// Hash of the exact stored source, used to attribute a decision to the
     /// revision that produced it.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     /// ID of the user who wrote the revision, or null when unattributed.
     pub created_by: Option<ID>,
     /// UTC creation time.
@@ -444,7 +444,7 @@ pub struct LifecyclePreviewPayload {
     /// compiled under.
     pub rule_set_id: String,
     /// Hash of the exact source that produced these outcomes.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     /// UTC time the preview evaluated the selection.
     pub evaluated_at: DateTime<Utc>,
     /// One entry per evaluated subject, including its owning title.
@@ -755,7 +755,7 @@ pub struct CreateLifecycleRuleSetInput {
 
 /// Replaces the matcher of an existing rule set, appending a revision.
 #[derive(InputObject)]
-pub struct UpdateLifecycleRuleMatcherInput {
+pub struct UpdateLifecycleRuleSourceInput {
     /// Rule-set ID.
     pub id: ID,
     /// Replacement matcher source as written in the editor.

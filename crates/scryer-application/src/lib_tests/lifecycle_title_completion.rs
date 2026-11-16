@@ -14,7 +14,7 @@ use crate::lib_tests::media_server_signals::{
     jellyfin_connection,
 };
 use crate::lifecycle_rules::{
-    LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection, LifecycleRuleDraft,
+    LifecyclePreviewRequest, LifecyclePreviewSelection, LifecyclePreviewSource, LifecycleRuleDraft,
 };
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
@@ -349,7 +349,7 @@ async fn title_file_only_deletion_retains_show_records_and_linked_or_sibling_fil
         .preview_lifecycle_rule(
             &fixture.execution.user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored {
+                source: LifecyclePreviewSource::Stored {
                     rule_set_id: rule.clone(),
                 },
                 selection: LifecyclePreviewSelection::Titles(vec![fixture.title.id.clone()]),
@@ -524,7 +524,7 @@ async fn movie_title_file_only_deletion_retains_title_and_metadata_records() {
         .await
         .expect("insert movie file");
 
-    let movie_matcher = format!(
+    let movie_source = format!(
         "match if {{ input.subject.title_id == {:?}; input.facts.monitored }}",
         fixture.title.id
     );
@@ -532,7 +532,7 @@ async fn movie_title_file_only_deletion_retains_title_and_metadata_records() {
         &fixture.execution,
         LifecycleRuleSubjectKind::Title,
         &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
-        &movie_matcher,
+        &movie_source,
     )
     .await;
     let report = fixture
@@ -620,7 +620,7 @@ async fn episode_retention_preview_grace_and_execution_keep_only_the_newest_down
         .preview_lifecycle_rule(
             &fixture.execution.user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source_at(
                         RETAIN_NEWEST_EPISODE,
@@ -771,7 +771,7 @@ async fn preview_whole_show_completion(
     app.preview_lifecycle_rule(
         user,
         LifecyclePreviewRequest {
-            matcher: LifecyclePreviewMatcher::Inline {
+            source: LifecyclePreviewSource::Inline {
                 library_ids: vec![],
                 rego_source: crate::lib_tests::heads_source(
                     COMPLETE_SHOW_WATCH,

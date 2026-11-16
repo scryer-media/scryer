@@ -1422,7 +1422,7 @@ mod tests {
     /// it has to work — this is what the regorus `time` feature buys.
     #[test]
     fn evaluation_time_supports_date_arithmetic() {
-        const AGE_MATCHER: &str = "day_ns := (24 * 60 * 60) * 1000000000\n\n\
+        const AGE_SOURCE: &str = "day_ns := (24 * 60 * 60) * 1000000000\n\n\
              unmonitor if {\n  \
                age := time.parse_rfc3339_ns(input.evaluation_time) - \
              time.parse_rfc3339_ns(input.facts.added_at)\n  \
@@ -1432,7 +1432,7 @@ mod tests {
         // Synthetic input is evaluated at 2023-11-14.
         let mut old = synthetic_lifecycle_input();
         old.facts.added_at = Observation::known("2020-01-01T00:00:00Z".to_string());
-        let matched = evaluate_against(&[policy("added_long_ago", AGE_MATCHER)], old);
+        let matched = evaluate_against(&[policy("added_long_ago", AGE_SOURCE)], old);
         assert!(matched.errors.is_empty(), "{:?}", matched.errors);
         assert_eq!(
             matched.records[0].decision.outcome,
@@ -1442,7 +1442,7 @@ mod tests {
 
         let mut recent = synthetic_lifecycle_input();
         recent.facts.added_at = Observation::known("2023-11-01T00:00:00Z".to_string());
-        let unmatched = evaluate_against(&[policy("added_recently", AGE_MATCHER)], recent);
+        let unmatched = evaluate_against(&[policy("added_recently", AGE_SOURCE)], recent);
         assert!(unmatched.errors.is_empty(), "{:?}", unmatched.errors);
         assert_eq!(
             unmatched.records[0].decision.outcome,

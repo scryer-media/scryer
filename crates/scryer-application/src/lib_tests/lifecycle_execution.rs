@@ -11,7 +11,7 @@ use super::*;
 
 use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
 use crate::lib_tests::lifecycle_rules::{InMemoryLifecycleRuleRepo, LifecycleRuleReadFault};
-use crate::lifecycle_rules::{LifecycleMatcherDraft, LifecycleRuleDraft, execution_reason};
+use crate::lifecycle_rules::{LifecycleRuleDraft, LifecycleSourceDraft, execution_reason};
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::test_support::InMemoryLocationOperationStore;
 use crate::ports::{
@@ -81,11 +81,11 @@ pub(super) fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionF
     }
 }
 
-const MONITORED_MATCHER: &str = "match if {\n\
+const MONITORED_SOURCE: &str = "match if {\n\
      \tinput.facts.monitored\n\
      }\n";
 
-const ALWAYS_MATCHER: &str = "match := true\n";
+const ALWAYS_SOURCE: &str = "match := true\n";
 
 pub(super) fn unmonitor_draft(rego_source: &str) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
@@ -107,7 +107,7 @@ fn delete_draft() -> LifecycleRuleDraft {
         name: "Retire".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::heads_source(
-            ALWAYS_MATCHER,
+            ALWAYS_SOURCE,
             &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
         ),
         grace_days: 0,
@@ -199,7 +199,7 @@ impl ExecutionFixture {
 // ── Arming survives nothing it did not authorize (Fix 1) ────────────────────
 
 #[tokio::test]
-async fn replacing_the_matcher_disarms_the_rule() {
+async fn replacing_the_source_disarms_the_rule() {
     let fixture = execution_app(None);
     let rule_id = fixture.observed_rule(delete_draft()).await;
     fixture.open_gates(true, true).await;
@@ -215,12 +215,12 @@ async fn replacing_the_matcher_disarms_the_rule() {
     // an acknowledgement nobody gave for it.
     let replaced = fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &fixture.user,
             &rule_id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    ALWAYS_MATCHER,
+                    ALWAYS_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 0,
@@ -319,7 +319,7 @@ async fn renaming_a_rule_leaves_its_arming_alone() {
 async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -373,7 +373,7 @@ async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt
 async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -411,7 +411,7 @@ async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
 async fn the_evaluator_leaves_a_candidate_under_an_execution_lease_alone() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -459,7 +459,7 @@ async fn the_evaluator_leaves_a_candidate_under_an_execution_lease_alone() {
 async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -519,7 +519,7 @@ async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
 async fn a_rule_that_is_actually_gone_cancels_its_candidate() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -545,7 +545,7 @@ async fn a_rule_that_is_actually_gone_cancels_its_candidate() {
 async fn an_unreadable_rule_store_holds_the_candidate_instead_of_cancelling_it() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -576,7 +576,7 @@ async fn an_unreadable_rule_store_holds_the_candidate_instead_of_cancelling_it()
 async fn both_effect_gates_off_executes_nothing() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(false, false).await;
     fixture
@@ -595,7 +595,7 @@ async fn both_effect_gates_off_executes_nothing() {
 async fn reversible_unmonitor_executes_and_records_the_evidence() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -641,7 +641,7 @@ async fn action_result_write_failures_still_consume_the_rule_execution_budget() 
     let rule_id = fixture
         .observed_rule(LifecycleRuleDraft {
             max_titles_per_run: Some(10),
-            ..unmonitor_draft(MONITORED_MATCHER)
+            ..unmonitor_draft(MONITORED_SOURCE)
         })
         .await;
     fixture.open_gates(true, false).await;
@@ -693,7 +693,7 @@ async fn action_result_write_failures_still_consume_the_rule_execution_budget() 
 #[tokio::test]
 async fn an_already_met_postcondition_reports_already_satisfied() {
     let fixture = execution_app(None);
-    let rule_id = fixture.observed_rule(unmonitor_draft(ALWAYS_MATCHER)).await;
+    let rule_id = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
     fixture.open_gates(true, false).await;
     fixture
         .arm(&rule_id, LifecycleEffectArming::Reversible, None)
@@ -791,7 +791,7 @@ async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
             &fixture.user,
             LifecycleRuleDraft {
                 max_titles_per_run: Some(0),
-                ..unmonitor_draft(ALWAYS_MATCHER)
+                ..unmonitor_draft(ALWAYS_SOURCE)
             },
         )
         .await
@@ -816,7 +816,7 @@ async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
             &fixture.user,
             LifecycleRuleDraft {
                 max_titles_per_run: None,
-                ..unmonitor_draft(ALWAYS_MATCHER)
+                ..unmonitor_draft(ALWAYS_SOURCE)
             },
         )
         .await
@@ -824,7 +824,7 @@ async fn a_destructive_rule_without_a_maximum_is_refused_on_save() {
 }
 
 #[tokio::test]
-async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
+async fn a_source_save_adds_a_delete_head_and_its_maximum_together() {
     let fixture = execution_app(None);
     let created = fixture
         .app
@@ -832,17 +832,17 @@ async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
             &fixture.user,
             LifecycleRuleDraft {
                 max_titles_per_run: None,
-                ..unmonitor_draft(ALWAYS_MATCHER)
+                ..unmonitor_draft(ALWAYS_SOURCE)
             },
         )
         .await
         .expect("a reversible rule saves without a maximum");
     let rule_id = created.rule_set.id.clone();
     let deleting_source = crate::lib_tests::heads_source(
-        ALWAYS_MATCHER,
+        ALWAYS_SOURCE,
         &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
     );
-    let save = |max_titles_per_run| crate::lifecycle_rules::LifecycleMatcherDraft {
+    let save = |max_titles_per_run| crate::lifecycle_rules::LifecycleSourceDraft {
         rego_source: deleting_source.clone(),
         grace_days: 0,
         max_titles_per_run,
@@ -850,7 +850,7 @@ async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
 
     let refused = fixture
         .app
-        .update_lifecycle_rule_matcher(&fixture.user, &rule_id, save(None))
+        .update_lifecycle_rule_source(&fixture.user, &rule_id, save(None))
         .await
         .expect_err("a delete head without a maximum is refused");
     assert_eq!(
@@ -868,7 +868,7 @@ async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
 
     let saved = fixture
         .app
-        .update_lifecycle_rule_matcher(&fixture.user, &rule_id, save(Some(Some(7))))
+        .update_lifecycle_rule_source(&fixture.user, &rule_id, save(Some(Some(7))))
         .await
         .expect("a delete head saved with its maximum");
     assert_eq!(saved.rule_set.max_titles_per_run, Some(7));
@@ -954,7 +954,7 @@ async fn a_destructive_rule_cannot_lose_its_maximum_or_arm_without_one() {
 async fn a_subject_that_stopped_matching_cancels_instead_of_acting() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -993,7 +993,7 @@ async fn a_subject_that_stopped_matching_cancels_instead_of_acting() {
 async fn a_candidate_outside_the_fresh_rule_scope_cancels_instead_of_acting() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -1028,7 +1028,7 @@ async fn a_candidate_outside_the_fresh_rule_scope_cancels_instead_of_acting() {
 async fn an_empty_rule_scope_still_reaches_every_library() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -1082,7 +1082,7 @@ async fn a_destructive_rule_needs_both_the_gate_and_destructive_arming() {
 #[tokio::test]
 async fn enabling_derives_arming_and_destructive_demands_the_current_count() {
     let fixture = execution_app(None);
-    let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_MATCHER)).await;
+    let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
 
     // A medium-risk rule arms library updates only, with no confirmation.
     let enabled = fixture
@@ -1166,10 +1166,10 @@ async fn destructive_arming_rejects_missing_or_stale_revision_even_with_the_same
     let draft = delete_draft();
     fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &fixture.user,
             &rule_id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: draft.rego_source,
                 grace_days: 0,
                 max_titles_per_run: None,
@@ -1243,7 +1243,7 @@ async fn destructive_arming_rejects_a_stale_scope_even_with_the_same_revision_an
 #[tokio::test]
 async fn destructive_arming_requires_system_settings_authority() {
     let fixture = execution_app(None);
-    let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_MATCHER)).await;
+    let unmonitor_rule = fixture.observed_rule(unmonitor_draft(ALWAYS_SOURCE)).await;
     let delete_rule = fixture.observed_rule(delete_draft()).await;
     let mut outsider = User::new_admin("outsider");
     outsider.authorization = scryer_domain::UserAuthorization {
@@ -1290,7 +1290,7 @@ async fn destructive_arming_requires_system_settings_authority() {
 async fn active_playback_blocks_every_due_action() {
     let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(2)));
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -1333,7 +1333,7 @@ async fn an_unreachable_media_server_fails_closed() {
         "status 401".to_string(),
     )));
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -1356,7 +1356,7 @@ async fn an_unreachable_media_server_fails_closed() {
 async fn a_dry_run_rule_never_acts() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, true).await;
     seed_title(&fixture.app, &fixture.user, "Dry Run", true).await;
@@ -1372,7 +1372,7 @@ async fn a_dry_run_rule_never_acts() {
 #[tokio::test]
 async fn a_candidate_inside_its_grace_window_is_not_touched() {
     let fixture = execution_app(None);
-    let mut draft = unmonitor_draft(MONITORED_MATCHER);
+    let mut draft = unmonitor_draft(MONITORED_SOURCE);
     draft.grace_days = 30;
     let rule_id = fixture.observed_rule(draft).await;
     fixture.open_gates(true, false).await;
@@ -1391,7 +1391,7 @@ async fn a_candidate_inside_its_grace_window_is_not_touched() {
 #[tokio::test]
 async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
     let fixture = execution_app(None);
-    let mut draft = unmonitor_draft(MONITORED_MATCHER);
+    let mut draft = unmonitor_draft(MONITORED_SOURCE);
     draft.rego_source = "add_tags := [\"graced\"] if {\n\tinput.facts.monitored\n}\n\n\
                          unmonitor if {\n\tinput.facts.monitored\n}\n"
         .to_string();
@@ -1429,7 +1429,7 @@ async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
         .preview_lifecycle_rule(
             &fixture.user,
             crate::lifecycle_rules::LifecyclePreviewRequest {
-                matcher: crate::lifecycle_rules::LifecyclePreviewMatcher::Stored {
+                source: crate::lifecycle_rules::LifecyclePreviewSource::Stored {
                     rule_set_id: rule_id.clone(),
                 },
                 selection: crate::lifecycle_rules::LifecyclePreviewSelection::Titles(vec![
@@ -1476,7 +1476,7 @@ async fn a_subject_with_actions_reaches_them_only_through_its_grace() {
 async fn an_undecidable_subject_blocks_at_execution() {
     let fixture = execution_app(None);
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -1515,7 +1515,7 @@ async fn an_undecidable_subject_blocks_at_execution() {
 async fn a_held_candidate_waits_for_the_next_evaluation_then_is_examined_again() {
     let fixture = execution_app(Some(PlaybackProbeStatus::ActiveSessions(1)));
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     fixture
@@ -1646,7 +1646,7 @@ async fn a_reversible_action_also_holds_while_a_location_operation_owns_the_titl
     let operations = Arc::new(InMemoryLocationOperationStore::new());
     let fixture = execution_app_with_operations(operations.clone());
     let rule_id = fixture
-        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .observed_rule(unmonitor_draft(MONITORED_SOURCE))
         .await;
     fixture.open_gates(true, false).await;
     let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;

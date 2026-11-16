@@ -151,7 +151,7 @@ fn detail_fields() -> String {
              ruleSetId
              revisionNumber
              regoSource
-             matcherContentHash
+             sourceContentHash
              createdBy
              createdAt
          }}"
@@ -193,7 +193,7 @@ fn preview_mutation() -> String {
         "mutation($input: PreviewRequestRuleInput!) {{
             previewRequestRule(input: $input) {{
                 ruleSetId
-                matcherContentHash
+                sourceContentHash
                 metadataPartial
                 inputDocument
                 decision {{{DECISION_FIELDS}}}
@@ -539,7 +539,7 @@ async fn request_rule_create_list_get_and_revisions_round_trip() {
     assert_eq!(revision["revisionNumber"], 1);
     assert_eq!(revision["ruleSetId"], json!(id));
     assert!(
-        revision["matcherContentHash"]
+        revision["sourceContentHash"]
             .as_str()
             .is_some_and(|hash| !hash.is_empty())
     );
@@ -557,8 +557,8 @@ async fn request_rule_create_list_get_and_revisions_round_trip() {
     let updated = gql(
         &ctx,
         &format!(
-            "mutation($input: UpdateRequestRuleMatcherInput!) {{
-                updateRequestRuleMatcher(input: $input) {{{}}}
+            "mutation($input: UpdateRequestRuleSourceInput!) {{
+                updateRequestRuleSource(input: $input) {{{}}}
             }}",
             detail_fields()
         ),
@@ -567,7 +567,7 @@ async fn request_rule_create_list_get_and_revisions_round_trip() {
     .await;
     assert_no_errors(&updated);
     assert_eq!(
-        updated["data"]["updateRequestRuleMatcher"]["revision"]["revisionNumber"],
+        updated["data"]["updateRequestRuleSource"]["revision"]["revisionNumber"],
         2
     );
 
@@ -724,7 +724,7 @@ async fn validating_an_unknown_fact_path_names_the_rules_context_reference() {
 // ===========================================================================
 
 #[tokio::test]
-async fn a_person_targeting_matcher_needs_permission_management_authority() {
+async fn a_person_targeting_source_needs_permission_management_authority() {
     let ctx = TestContext::new().await;
 
     let catalog_only = user_with(

@@ -42,7 +42,7 @@ import {
   ruleStateOptionsFor,
   runStatusLabelKey,
   setLifecycleRuleStateVariables,
-  updateLifecycleRuleMatcherInput,
+  updateLifecycleRuleSourceInput,
   lifecycleRuleBuilder,
   updateLifecycleRuleMetadataInput,
 } from "./lifecycle-rule-sets.ts";
@@ -112,7 +112,7 @@ const detail: LifecycleRuleSetDetail = {
     regoSource:
       'set_quality_profile := "Compact 1080p" if input.facts.has_file\n\nsearch if input.facts.has_file\n',
     graceDays: 14,
-    matcherContentHash: "blake3:abcdef",
+    sourceContentHash: "blake3:abcdef",
     createdBy: "operator",
     createdAt: "2026-01-02T00:00:00Z",
   },
@@ -181,14 +181,14 @@ test("create input sends the source as the whole rule and no separate action", (
 
 test("matcher and metadata updates split along the API's versioned and unversioned halves", () => {
   const draft = lifecycleRuleDraftFromDetail(detail, lifecycle);
-  const matcher = updateLifecycleRuleMatcherInput(
+  const source = updateLifecycleRuleSourceInput(
     "rule-1",
     draft,
     lifecycle,
   );
   const metadata = updateLifecycleRuleMetadataInput("rule-1", draft);
 
-  assert.deepEqual(Object.keys(matcher).sort(), [
+  assert.deepEqual(Object.keys(source).sort(), [
     "builderModel",
     "graceDays",
     "id",
@@ -213,7 +213,7 @@ test("a per-run maximum change alone goes on the metadata half; a source change 
     { ...baseline, maxTitlesPerRun: 5 },
     lifecycle,
   );
-  assert.equal(limitOnly.matcher, null);
+  assert.equal(limitOnly.source, null);
   assert.equal(limitOnly.metadata?.maxTitlesPerRun, 5);
 
   const withSource = lifecycleRuleUpdatePlan(
@@ -226,7 +226,7 @@ test("a per-run maximum change alone goes on the metadata half; a source change 
     },
     lifecycle,
   );
-  assert.equal(withSource.matcher?.maxTitlesPerRun, 5);
+  assert.equal(withSource.source?.maxTitlesPerRun, 5);
 
   const cleared = lifecycleRuleUpdatePlan(
     "rule-1",
@@ -284,7 +284,7 @@ test("a saved rule's schedule is read into the draft and sent back on create and
   );
   assert.equal(
     Object.hasOwn(
-      updateLifecycleRuleMatcherInput("rule-1", draft, lifecycle),
+      updateLifecycleRuleSourceInput("rule-1", draft, lifecycle),
       "schedule",
     ),
     false,
@@ -338,7 +338,7 @@ test("a schedule change alone is saved through the metadata update, never the ma
     lifecycle,
   );
 
-  assert.equal(plan.matcher, null);
+  assert.equal(plan.source, null);
   assert.deepEqual(plan.metadata?.schedule, {
     kind: "DAILY",
     everySeconds: null,
@@ -354,7 +354,7 @@ test("an update sends only the halves the editor changed", () => {
   assert.deepEqual(
     lifecycleRuleUpdatePlan("rule-1", baseline, baseline, lifecycle),
     {
-      matcher: null,
+      source: null,
       metadata: null,
     },
   );
@@ -368,7 +368,7 @@ test("an update sends only the halves the editor changed", () => {
     },
     lifecycle,
   );
-  assert.equal(grace.matcher?.graceDays, 21);
+  assert.equal(grace.source?.graceDays, 21);
   assert.equal(grace.metadata, null);
 
   const both = lifecycleRuleUpdatePlan(
@@ -381,7 +381,7 @@ test("an update sends only the halves the editor changed", () => {
     },
     lifecycle,
   );
-  assert.equal(both.matcher?.regoSource, "search if input.facts.has_file\n");
+  assert.equal(both.source?.regoSource, "search if input.facts.has_file\n");
   assert.equal(both.metadata?.name, "Renamed");
 });
 
@@ -389,7 +389,7 @@ test("no input names a scope or a storage root: heads say where an action acts",
   const draft = copyLifecycleRuleDraft(detail, lifecycle);
   const inputs = [
     createLifecycleRuleSetInput(draft, lifecycle),
-    updateLifecycleRuleMatcherInput("rule-1", draft, lifecycle),
+    updateLifecycleRuleSourceInput("rule-1", draft, lifecycle),
     lifecyclePreviewInput({ draft, libraryId: "series" }),
   ];
   for (const input of inputs) {

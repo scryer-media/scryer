@@ -11,8 +11,8 @@ use super::*;
 use crate::lib_tests::lifecycle_rules::InMemoryLifecycleRuleRepo;
 use crate::lifecycle_rules::{
     LifecycleActionSequence, LifecycleActionStep, LifecycleActionStepKind,
-    LifecycleActionStepParameters, LifecycleDeclaredActions, LifecycleMatcherDraft,
-    LifecycleRuleDraft, LifecycleSearchCondition,
+    LifecycleActionStepParameters, LifecycleDeclaredActions, LifecycleRuleDraft,
+    LifecycleSearchCondition, LifecycleSourceDraft,
 };
 use scryer_domain::{LifecycleEffectArming, LifecycleRuleState, User};
 use scryer_rules::lifecycle_actions::LifecycleActionHead;
@@ -64,8 +64,8 @@ fn draft(rego_source: &str, grace_days: i64) -> LifecycleRuleDraft {
     }
 }
 
-fn matcher(rego_source: &str, grace_days: i64) -> LifecycleMatcherDraft {
-    LifecycleMatcherDraft {
+fn source_draft(rego_source: &str, grace_days: i64) -> LifecycleSourceDraft {
+    LifecycleSourceDraft {
         rego_source: rego_source.to_string(),
         grace_days,
         max_titles_per_run: None,
@@ -102,7 +102,7 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
     );
 
     let updated = app
-        .update_lifecycle_rule_matcher(&user, &created.rule_set.id, matcher(SEARCH_ONLY, 41))
+        .update_lifecycle_rule_source(&user, &created.rule_set.id, source_draft(SEARCH_ONLY, 41))
         .await
         .expect("save a new revision");
     assert_eq!(updated.rule_set.current_revision_number, 2);
@@ -146,7 +146,7 @@ async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
     .await;
 
     let kept = app
-        .update_lifecycle_rule_matcher(&user, &created.rule_set.id, matcher(SEARCH_ONLY, 3))
+        .update_lifecycle_rule_source(&user, &created.rule_set.id, source_draft(SEARCH_ONLY, 3))
         .await
         .expect("edit without a delete head");
     assert_eq!(
@@ -161,7 +161,7 @@ async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
     assert!(!kept.rule_set.destructive_rearm_required);
 
     let dropped = app
-        .update_lifecycle_rule_matcher(&user, &created.rule_set.id, matcher(DELETES_FILES, 3))
+        .update_lifecycle_rule_source(&user, &created.rule_set.id, source_draft(DELETES_FILES, 3))
         .await
         .expect("edit to a delete head");
     assert_eq!(
@@ -267,7 +267,7 @@ async fn an_edit_without_delete_heads_drops_destructive_arming() {
     .await;
 
     let edited = app
-        .update_lifecycle_rule_matcher(&user, &created.rule_set.id, matcher(SEARCH_ONLY, 0))
+        .update_lifecycle_rule_source(&user, &created.rule_set.id, source_draft(SEARCH_ONLY, 0))
         .await
         .expect("edit away the delete head");
     assert_eq!(

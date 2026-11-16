@@ -3,8 +3,8 @@ use crate::types::*;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::AppError;
 use scryer_application::lifecycle_rules::{
-    LifecycleMatcherDraft, LifecyclePreviewMatcher, LifecyclePreviewRequest,
-    LifecyclePreviewSelection, LifecycleRuleDraft,
+    LifecyclePreviewRequest, LifecyclePreviewSelection, LifecyclePreviewSource, LifecycleRuleDraft,
+    LifecycleSourceDraft,
 };
 use scryer_domain::AppPermission;
 
@@ -49,15 +49,15 @@ fn diagnostic_payload(
 /// rule set and previewing an unsaved draft answer different questions, and
 /// accepting both at once would make it ambiguous which source produced the
 /// outcomes the caller is about to act on.
-fn preview_matcher(input: &mut PreviewLifecycleRuleInput) -> GqlResult<LifecyclePreviewMatcher> {
+fn preview_source(input: &mut PreviewLifecycleRuleInput) -> GqlResult<LifecyclePreviewSource> {
     let rule_set_id = input.rule_set_id.take();
     let rego_source = input.rego_source.take();
 
     match (rule_set_id, rego_source) {
-        (Some(rule_set_id), None) => Ok(LifecyclePreviewMatcher::Stored {
+        (Some(rule_set_id), None) => Ok(LifecyclePreviewSource::Stored {
             rule_set_id: String::from(rule_set_id),
         }),
-        (None, Some(rego_source)) => Ok(LifecyclePreviewMatcher::Inline {
+        (None, Some(rego_source)) => Ok(LifecyclePreviewSource::Inline {
             library_ids: input.library_ids.take().unwrap_or_default(),
             rego_source,
             grace_days: grace_days(input.grace_days),
@@ -172,20 +172,20 @@ impl LifecycleRuleMutations {
     }
 
     /// Replace a rule set's source and grace period by appending a revision.
-    async fn update_lifecycle_rule_matcher(
+    async fn update_lifecycle_rule_source(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Rule-set identity, replacement source, and optional grace period.")]
-        input: UpdateLifecycleRuleMatcherInput,
+        input: UpdateLifecycleRuleSourceInput,
     ) -> GqlResult<LifecycleRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
         let detail = app
-            .update_lifecycle_rule_matcher_with_builder_model(
+            .update_lifecycle_rule_source_with_builder_model(
                 &actor,
                 input.id.as_ref(),
-                LifecycleMatcherDraft {
+                LifecycleSourceDraft {
                     rego_source: input.rego_source,
                     grace_days: grace_days(input.grace_days),
                     max_titles_per_run: max_titles_per_run_change(input.max_titles_per_run),
@@ -320,11 +320,11 @@ impl LifecycleRuleMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
-        let matcher = preview_matcher(&mut input)?;
+        let source = preview_source(&mut input)?;
         let selection = preview_selection(&mut input)?;
 
         let result = app
-            .preview_lifecycle_rule(&actor, LifecyclePreviewRequest { matcher, selection })
+            .preview_lifecycle_rule(&actor, LifecyclePreviewRequest { source, selection })
             .await
             .map_err(to_gql_error)?;
 

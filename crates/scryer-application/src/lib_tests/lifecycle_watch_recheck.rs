@@ -30,21 +30,21 @@ use scryer_domain::{
 };
 
 /// Matches a movie someone has played: a rule that rests on a watch fact.
-const SOMEONE_WATCHED_MATCHER: &str = "package whatever\n\
+const SOMEONE_WATCHED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tcount(input.facts.watched_by_user_ids) > 0\n\
      }\n";
 
 /// Matches a movie nobody has played: the rule a missed play would delete.
-const NOBODY_WATCHED_MATCHER: &str = "package whatever\n\
+const NOBODY_WATCHED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tcount(input.facts.watched_by_user_ids) == 0\n\
      }\n";
 
 /// Reads no watch fact, so no re-check is due.
-const MONITORED_MATCHER: &str = "package whatever\n\
+const MONITORED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.monitored\n\
@@ -660,7 +660,7 @@ async fn a_play_newer_than_the_stored_facts_holds_the_action() {
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(1)))],
         history: Vec::new(),
     }));
-    let (title_id, _) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    let (title_id, _) = fixture.run(SOMEONE_WATCHED_SOURCE).await;
 
     assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 1);
     fixture
@@ -675,7 +675,7 @@ async fn a_play_no_stored_fact_credits_holds_the_action() {
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
         history: vec![live(STRANGER_EXTERNAL_ID, true, Some(hours_ago(72)))],
     }));
-    let (title_id, _) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    let (title_id, _) = fixture.run(SOMEONE_WATCHED_SOURCE).await;
 
     fixture
         .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNCREDITED_PLAY)
@@ -688,7 +688,7 @@ async fn a_recheck_that_cannot_be_made_holds_the_action() {
         reasons::REQUEST_FAILED,
         "request timed out",
     )));
-    let (title_id, _) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    let (title_id, _) = fixture.run(SOMEONE_WATCHED_SOURCE).await;
 
     fixture
         .assert_held(&title_id, execution_reason::WATCH_RECHECK_UNAVAILABLE)
@@ -702,7 +702,7 @@ async fn a_clean_recheck_lets_the_action_run_and_leaves_the_stored_facts_alone()
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
         history: Vec::new(),
     }));
-    let (title_id, before) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    let (title_id, before) = fixture.run(SOMEONE_WATCHED_SOURCE).await;
 
     // The step re-reads before it claims and again under the title guard.
     assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
@@ -723,7 +723,7 @@ async fn a_rule_that_reads_no_watch_fact_is_not_rechecked() {
         reasons::REQUEST_FAILED,
         "request timed out",
     )));
-    let (title_id, _) = fixture.run(MONITORED_MATCHER).await;
+    let (title_id, _) = fixture.run(MONITORED_SOURCE).await;
 
     assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 0);
     assert!(!fixture.monitored(&title_id).await, "the action ran");
@@ -742,7 +742,7 @@ async fn a_title_with_no_stored_plays_is_rechecked_through_the_library_mapping()
     }));
     let (title_id, before) = fixture
         .run_with(
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
             Seed {
                 stored_play: false,
                 file: true,
@@ -770,7 +770,7 @@ async fn an_unlinked_accounts_play_of_a_title_with_no_stored_plays_holds_the_act
     }));
     let (title_id, _) = fixture
         .run_with(
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
             Seed {
                 stored_play: false,
                 file: true,
@@ -795,7 +795,7 @@ async fn a_title_with_no_mapped_item_is_held() {
     }));
     let (title_id, _) = fixture
         .run_with(
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
             Seed {
                 stored_play: false,
                 file: true,
@@ -819,7 +819,7 @@ async fn a_mapped_title_still_unplayed_lets_the_action_run() {
     }));
     let (title_id, _) = fixture
         .run_with(
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
             Seed {
                 stored_play: false,
                 file: true,
@@ -841,7 +841,7 @@ async fn a_failed_read_of_a_title_with_no_stored_plays_holds_the_action() {
     )));
     let (title_id, _) = fixture
         .run_with(
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
             Seed {
                 stored_play: false,
                 file: true,
@@ -876,7 +876,7 @@ async fn a_second_server_without_the_title_holds_it_as_unmapped() {
     );
     let (title_id, _) = fixture
         .run_with(
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
             Seed {
                 stored_play: false,
                 file: true,
@@ -944,7 +944,7 @@ async fn a_title_mapped_on_every_server_is_read_on_each_and_runs() {
     fixture
         .arm_and_evaluate(
             scryer_domain::LifecycleRuleSubjectKind::Title,
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
         )
         .await;
     fixture
@@ -972,7 +972,7 @@ async fn a_season_subject_is_rechecked_through_its_episodes_items() {
     let episodes = fixture
         .run_scoped(
             scryer_domain::LifecycleRuleSubjectKind::Season,
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
         )
         .await;
 
@@ -1005,7 +1005,7 @@ async fn an_episode_subject_is_rechecked_through_its_own_item() {
     let episodes = fixture
         .run_scoped(
             scryer_domain::LifecycleRuleSubjectKind::Episode,
-            NOBODY_WATCHED_MATCHER,
+            NOBODY_WATCHED_SOURCE,
         )
         .await;
 
@@ -1034,7 +1034,7 @@ async fn an_episode_subject_is_rechecked_through_its_own_item() {
 // ── The per-user gate closed, the audience open ─────────────────────────────
 
 /// Matches a title someone, anyone, has played: an anonymous fact only.
-const ANYONE_WATCHED_MATCHER: &str = "package whatever\n\
+const ANYONE_WATCHED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.watched_by_anyone\n\
@@ -1111,7 +1111,7 @@ async fn an_old_stored_play_is_not_a_newer_play_while_a_link_awaits_its_sweep() 
         crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
 
-    fixture.arm_and_run(&title.id, ANYONE_WATCHED_MATCHER).await;
+    fixture.arm_and_run(&title.id, ANYONE_WATCHED_SOURCE).await;
 
     // The step re-reads before it claims and again under the title guard.
     assert_eq!(fixture.rechecks.load(Ordering::SeqCst), 2);
@@ -1126,7 +1126,7 @@ async fn an_old_stored_play_is_not_a_newer_play_while_a_link_awaits_its_sweep() 
 }
 
 /// Matches a movie someone played and no linked user has as a favourite.
-const WATCHED_NOT_FAVOURITE_MATCHER: &str = "package whatever\n\
+const WATCHED_NOT_FAVOURITE_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tcount(input.facts.watched_by_user_ids) > 0\n\
@@ -1145,7 +1145,7 @@ async fn a_favourite_set_since_the_sweep_holds_a_rule_that_reads_favourites() {
         }],
         history: Vec::new(),
     }));
-    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
+    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_SOURCE).await;
 
     assert_eq!(
         fixture.rechecks.load(Ordering::SeqCst),
@@ -1168,7 +1168,7 @@ async fn a_live_favourite_does_not_hold_a_rule_that_reads_no_favourite_fact() {
         }],
         history: Vec::new(),
     }));
-    let (title_id, _) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    let (title_id, _) = fixture.run(SOMEONE_WATCHED_SOURCE).await;
 
     assert!(!fixture.monitored(&title_id).await, "the action ran");
 }
@@ -1182,7 +1182,7 @@ async fn an_unchanged_favourite_state_lets_a_favourite_rule_run() {
         participants: vec![live(VIEWER_EXTERNAL_ID, true, Some(hours_ago(48)))],
         history: Vec::new(),
     }));
-    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
+    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_SOURCE).await;
 
     assert!(!fixture.monitored(&title_id).await, "the action ran");
 }
@@ -1203,7 +1203,7 @@ async fn a_series_favourite_set_since_the_sweep_holds_a_rule_that_reads_favourit
         PARENT_ITEM.to_string(),
         vec![VIEWER_EXTERNAL_ID.to_string()],
     );
-    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
+    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_SOURCE).await;
 
     assert_eq!(
         *fixture.favourites.asked.lock().expect("asked"),
@@ -1225,7 +1225,7 @@ async fn a_parent_read_is_made_only_for_a_rule_that_reads_favourites() {
         history: Vec::new(),
     };
     let fixture = recheck_app(Ok(answer.clone()));
-    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_MATCHER).await;
+    let (title_id, _) = fixture.run(WATCHED_NOT_FAVOURITE_SOURCE).await;
     // One parent read follows each item re-check the action makes.
     let parent_reads = fixture.favourites.asked.lock().expect("asked").clone();
     assert_eq!(parent_reads.len(), fixture.rechecks.load(Ordering::SeqCst));
@@ -1241,7 +1241,7 @@ async fn a_parent_read_is_made_only_for_a_rule_that_reads_favourites() {
         PARENT_ITEM.to_string(),
         vec![VIEWER_EXTERNAL_ID.to_string()],
     );
-    let (title_id, _) = fixture.run(SOMEONE_WATCHED_MATCHER).await;
+    let (title_id, _) = fixture.run(SOMEONE_WATCHED_SOURCE).await;
     assert!(
         fixture.favourites.asked.lock().expect("asked").is_empty(),
         "no favourite fact, no parent read"

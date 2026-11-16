@@ -145,7 +145,7 @@ pub fn from_request_rule_revision(
         rule_set_id: ID::from(revision.rule_set_id),
         revision_number: to_graphql_int(revision.revision_number),
         rego_source: scryer_rules::strip_editor_source(&revision.rego_source),
-        matcher_content_hash: revision.matcher_content_hash,
+        source_content_hash: revision.source_content_hash,
         created_by: revision.created_by.map(ID::from),
         created_at: revision.created_at,
     }
@@ -466,7 +466,7 @@ pub fn from_request_rule_preview_result(
 
     RequestRulePreviewPayload {
         rule_set_id: result.rule_set_id,
-        matcher_content_hash: result.matcher_content_hash,
+        source_content_hash: result.source_content_hash,
         decision: RequestRuleDecision {
             id: None,
             request_id: None,

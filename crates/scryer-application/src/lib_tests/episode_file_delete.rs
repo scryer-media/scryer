@@ -1580,7 +1580,7 @@ impl ScopedLifecycleFixture {
 #[tokio::test]
 async fn lifecycle_scope_episode_deletion_preserves_siblings_and_records() {
     use crate::lifecycle_rules::{
-        LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
+        LifecyclePreviewRequest, LifecyclePreviewSelection, LifecyclePreviewSource,
     };
     let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
@@ -1595,7 +1595,7 @@ async fn lifecycle_scope_episode_deletion_preserves_siblings_and_records() {
         .preview_lifecycle_rule(
             &f.admin,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored { rule_set_id: rule },
+                source: LifecyclePreviewSource::Stored { rule_set_id: rule },
                 selection: LifecyclePreviewSelection::Titles(vec![f.title_id.clone()]),
             },
         )
@@ -1982,7 +1982,7 @@ async fn lifecycle_scope_crash_after_unmonitor_and_disk_removal_resumes_catalog_
 #[tokio::test]
 async fn lifecycle_scope_preview_targets_are_exact_and_sibling_grace_is_independent() {
     use crate::lifecycle_rules::{
-        LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
+        LifecyclePreviewRequest, LifecyclePreviewSelection, LifecyclePreviewSource,
     };
     let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
@@ -2018,7 +2018,7 @@ async fn lifecycle_scope_preview_targets_are_exact_and_sibling_grace_is_independ
         .preview_lifecycle_rule(
             &f.admin,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored {
+                source: LifecyclePreviewSource::Stored {
                     rule_set_id: rule.clone(),
                 },
                 selection: LifecyclePreviewSelection::Subjects {
@@ -2049,7 +2049,7 @@ async fn lifecycle_scope_preview_targets_are_exact_and_sibling_grace_is_independ
         .preview_lifecycle_rule(
             &f.admin,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored {
+                source: LifecyclePreviewSource::Stored {
                     rule_set_id: rule.clone(),
                 },
                 selection: LifecyclePreviewSelection::Subjects {
@@ -2067,7 +2067,7 @@ async fn lifecycle_scope_preview_targets_are_exact_and_sibling_grace_is_independ
         .preview_lifecycle_rule(
             &f.admin,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored { rule_set_id: rule },
+                source: LifecyclePreviewSource::Stored { rule_set_id: rule },
                 selection: LifecyclePreviewSelection::Subjects {
                     title_ids: vec![f.title_id.clone()],
                     subject_ids: vec!["missing".into()],

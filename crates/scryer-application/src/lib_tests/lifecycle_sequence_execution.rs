@@ -30,12 +30,12 @@ use scryer_domain::{
 };
 use std::collections::HashMap;
 
-pub(super) const ALWAYS_MATCHER: &str = "match := true\n";
+pub(super) const ALWAYS_SOURCE: &str = "match := true\n";
 
 /// Swap a sequence draft's always-true matcher for another, keeping the
 /// action heads its steps added.
-pub(super) fn with_matcher(draft: &mut LifecycleRuleDraft, matcher: &str) {
-    draft.rego_source = draft.rego_source.replacen(ALWAYS_MATCHER, matcher, 1);
+pub(super) fn with_source(draft: &mut LifecycleRuleDraft, matcher: &str) {
+    draft.rego_source = draft.rego_source.replacen(ALWAYS_SOURCE, matcher, 1);
 }
 
 pub(super) fn sequence_draft(steps: Vec<LifecycleActionStep>) -> LifecycleRuleDraft {
@@ -43,7 +43,7 @@ pub(super) fn sequence_draft(steps: Vec<LifecycleActionStep>) -> LifecycleRuleDr
         max_titles_per_run: Some(100),
         name: "Sequence executor regression".to_string(),
         description: String::new(),
-        rego_source: crate::lib_tests::steps_source(ALWAYS_MATCHER, &steps),
+        rego_source: crate::lib_tests::steps_source(ALWAYS_SOURCE, &steps),
         grace_days: 0,
         library_ids: Vec::new(),
     }
@@ -1211,7 +1211,7 @@ async fn unmonitor_after_a_waiting_search_reads_monitoring_when_it_runs() {
         },
     ];
     let mut draft = sequence_draft(steps);
-    with_matcher(&mut draft, "match if { input.facts.monitored }\n");
+    with_source(&mut draft, "match if { input.facts.monitored }\n");
     let (_rule_set_id, candidate) = arm_and_evaluate(&fixture, draft).await;
     // Declared heads always search before they unmonitor, so the unmonitor
     // waits behind the accepted search and acts on monitoring as it is when
@@ -1301,7 +1301,7 @@ async fn tag_delta_baseline_preserves_external_tags_across_a_waiting_step() {
             },
         },
     ]);
-    with_matcher(
+    with_source(
         &mut draft,
         "match if { input.facts.tags[_] == \"owned-remove\" }\n",
     );
@@ -2334,7 +2334,7 @@ fn self_retiring_draft(action_head: &str, message: &str) -> LifecycleRuleDraft {
         name: "Sequence executor regression".to_string(),
         description: String::new(),
         rego_source: format!(
-            "{ALWAYS_MATCHER}\n{action_head}\n\nnotify := {} if {{\n\tmatch\n}}\n",
+            "{ALWAYS_SOURCE}\n{action_head}\n\nnotify := {} if {{\n\tmatch\n}}\n",
             serde_json::to_string(message).expect("a string always serializes")
         ),
         grace_days: 0,
@@ -2472,7 +2472,7 @@ async fn a_rule_that_would_undo_another_rules_monitoring_holds_instead_of_flippi
     let draft = |name: &str, head: &str| LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: name.to_string(),
-        rego_source: format!("{ALWAYS_MATCHER}\n{head}\n"),
+        rego_source: format!("{ALWAYS_SOURCE}\n{head}\n"),
         ..sequence_draft(Vec::new())
     };
     let (monitor_rule, _) = arm_and_evaluate_all(

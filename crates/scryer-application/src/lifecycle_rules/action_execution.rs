@@ -645,7 +645,7 @@ impl AppUseCase {
     /// operator acknowledged is one matcher's blast radius under one action, so
     /// appending a revision drops an Enabled rule back to Dry run and this call
     /// has to be repeated against the new matcher (see
-    /// [`AppUseCase::update_lifecycle_rule_matcher`]).
+    /// [`AppUseCase::update_lifecycle_rule_source`]).
     pub async fn set_lifecycle_rule_state(
         &self,
         actor: &User,
@@ -3056,7 +3056,7 @@ mod monitoring_conflict_lookup_tests {
             id: format!("{rule_set_id}-{title_id}"),
             rule_set_id: rule_set_id.to_string(),
             revision_number: 1,
-            matcher_content_hash: "hash".to_string(),
+            source_content_hash: "hash".to_string(),
             title_id: title_id.to_string(),
             library_id: "library-a".to_string(),
             facet: "movie".to_string(),

@@ -2,8 +2,8 @@ use super::*;
 
 use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
 use crate::lifecycle_rules::{
-    LIFECYCLE_MAX_GRACE_DAYS, LifecycleMatcherDraft, LifecyclePreviewMatcher,
-    LifecyclePreviewRequest, LifecyclePreviewSelection, LifecycleRuleDraft,
+    LIFECYCLE_MAX_GRACE_DAYS, LifecyclePreviewRequest, LifecyclePreviewSelection,
+    LifecyclePreviewSource, LifecycleRuleDraft, LifecycleSourceDraft,
 };
 use scryer_domain::{
     LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate, LifecycleCandidateState,
@@ -14,14 +14,14 @@ use scryer_rules::lifecycle::LifecycleOutcome;
 
 /// Matches every monitored title. The package line is deliberately wrong so
 /// every test also proves the service rewrites it to the assigned rule ID.
-const MONITORED_MATCHER: &str = "package whatever\n\
+const MONITORED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.monitored\n\
      }\n";
 
 /// Matches nothing: the facet never equals this sentinel.
-const NEVER_MATCHER: &str = "package whatever\n\
+const NEVER_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
@@ -32,7 +32,7 @@ const NEVER_MATCHER: &str = "package whatever\n\
 /// No `unknown` rule of its own: reading `input.facts.last_upgraded_at` is
 /// enough, because the engine will not consult a rule whose facts it could not
 /// observe for the subject.
-const NEEDS_UPGRADE_HISTORY_MATCHER: &str = "package whatever\n\
+const NEEDS_UPGRADE_HISTORY_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.last_upgraded_at != \"\"\n\
@@ -391,7 +391,7 @@ fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
         id: Id::new().0,
         rule_set_id: rule_set_id.to_string(),
         revision_number: 1,
-        matcher_content_hash: "hash".to_string(),
+        source_content_hash: "hash".to_string(),
         title_id: title_id.to_string(),
         subject_id: title_id.to_string(),
         library_id: "library-a".to_string(),
@@ -568,7 +568,7 @@ async fn create_persists_a_dormant_rule_set_and_its_first_revision() {
     } = lifecycle_app();
 
     let detail = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
 
@@ -596,7 +596,7 @@ async fn create_persists_a_dormant_rule_set_and_its_first_revision() {
         detail.revision.rego_source
     );
     assert_eq!(
-        detail.revision.matcher_content_hash,
+        detail.revision.source_content_hash,
         scryer_rules::runtime::content_hash(&detail.revision.rego_source),
         "the stored hash must be the hash of the stored source"
     );
@@ -629,7 +629,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
     let created = app
         .create_lifecycle_rule_set_with_builder_model(
             &user,
-            draft(MONITORED_MATCHER),
+            draft(MONITORED_SOURCE),
             BuilderModelChange::Set(model.clone()),
         )
         .await
@@ -644,9 +644,9 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
         Some(model.clone())
     );
 
-    let matcher = |grace_days| LifecycleMatcherDraft {
+    let matcher = |grace_days| LifecycleSourceDraft {
         rego_source: crate::lib_tests::heads_source(
-            MONITORED_MATCHER,
+            MONITORED_SOURCE,
             &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days,
@@ -655,7 +655,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
 
     // Omitted: the new revision carries the current document forward.
     let kept = app
-        .update_lifecycle_rule_matcher(&user, &created.rule_set.id, matcher(8))
+        .update_lifecycle_rule_source(&user, &created.rule_set.id, matcher(8))
         .await
         .expect("update keeping model");
     assert_eq!(
@@ -665,12 +665,12 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
 
     // A hand edit with the field omitted leaves the new revision without one.
     let edited = app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &user,
             &created.rule_set.id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    NEVER_MATCHER,
+                    NEVER_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 8,
@@ -681,7 +681,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
         .expect("hand edit");
     assert_eq!(edited.revision.builder_model_json, None);
     let restored = app
-        .update_lifecycle_rule_matcher_with_builder_model(
+        .update_lifecycle_rule_source_with_builder_model(
             &user,
             &created.rule_set.id,
             matcher(8),
@@ -696,7 +696,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
 
     // A scoring document is refused and no revision is appended.
     let refused = app
-        .update_lifecycle_rule_matcher_with_builder_model(
+        .update_lifecycle_rule_source_with_builder_model(
             &user,
             &created.rule_set.id,
             matcher(9),
@@ -719,7 +719,7 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
 
     // Cleared: the next revision is hand-written; earlier revisions keep theirs.
     let cleared = app
-        .update_lifecycle_rule_matcher_with_builder_model(
+        .update_lifecycle_rule_source_with_builder_model(
             &user,
             &created.rule_set.id,
             matcher(10),
@@ -737,12 +737,12 @@ async fn builder_model_rides_each_revision_and_carries_forward_when_kept() {
 }
 
 #[tokio::test]
-async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched() {
+async fn update_source_appends_a_revision_and_leaves_the_previous_one_untouched() {
     let LifecycleFixture {
         app, user, rules, ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
     let first = rules
@@ -752,12 +752,12 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
         .expect("revision 1");
 
     let updated = app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &user,
             &created.rule_set.id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    NEVER_MATCHER,
+                    NEVER_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 30,
@@ -771,8 +771,8 @@ async fn update_matcher_appends_a_revision_and_leaves_the_previous_one_untouched
     assert_eq!(updated.revision.revision_number, 2);
     assert_eq!(updated.revision.grace_days, 30);
     assert_ne!(
-        updated.revision.matcher_content_hash,
-        first.matcher_content_hash
+        updated.revision.source_content_hash,
+        first.source_content_hash
     );
 
     let stored_first = rules
@@ -797,7 +797,7 @@ async fn metadata_edits_do_not_create_a_revision() {
         app, user, rules, ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
 
@@ -833,7 +833,7 @@ async fn changing_the_library_scope_disarms_the_rule() {
         app, user, rules, ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
     super::lifecycle_rules::arm_rule(
@@ -885,7 +885,7 @@ async fn renaming_or_reordering_the_same_scope_leaves_arming_alone() {
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
                 library_ids: vec!["library-a".to_string(), "library-b".to_string()],
-                ..draft(MONITORED_MATCHER)
+                ..draft(MONITORED_SOURCE)
             },
         )
         .await
@@ -936,7 +936,7 @@ async fn deleting_a_rule_that_has_executed_is_refused() {
         ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
     evaluation
@@ -980,7 +980,7 @@ async fn a_disabled_rule_with_a_history_is_still_refused() {
         ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
     evaluation
@@ -1023,7 +1023,7 @@ async fn deleting_a_rule_with_live_candidates_is_refused() {
         ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
     evaluation
@@ -1055,7 +1055,7 @@ async fn delete_removes_the_rule_set_and_its_revisions() {
         app, user, rules, ..
     } = lifecycle_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
 
@@ -1076,7 +1076,7 @@ async fn delete_removes_the_rule_set_and_its_revisions() {
 // ── Rejections ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn a_matcher_that_does_not_compile_is_rejected() {
+async fn a_source_that_does_not_compile_is_rejected() {
     let LifecycleFixture {
         app, user, rules, ..
     } = lifecycle_app();
@@ -1099,7 +1099,7 @@ async fn a_matcher_that_does_not_compile_is_rejected() {
 }
 
 #[tokio::test]
-async fn a_matcher_reading_an_undocumented_fact_is_rejected() {
+async fn a_source_reading_an_undocumented_fact_is_rejected() {
     let LifecycleFixture {
         app, user, rules, ..
     } = lifecycle_app();
@@ -1135,8 +1135,8 @@ async fn a_source_without_an_action_head_is_refused() {
             &user,
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
-                rego_source: MONITORED_MATCHER.to_string(),
-                ..draft(MONITORED_MATCHER)
+                rego_source: MONITORED_SOURCE.to_string(),
+                ..draft(MONITORED_SOURCE)
             },
         )
         .await
@@ -1166,7 +1166,7 @@ async fn a_negative_grace_period_is_rejected() {
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
                 grace_days: -1,
-                ..draft(MONITORED_MATCHER)
+                ..draft(MONITORED_SOURCE)
             },
         )
         .await
@@ -1196,7 +1196,7 @@ async fn the_grace_period_is_bounded_at_ten_years() {
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
                 grace_days: LIFECYCLE_MAX_GRACE_DAYS,
-                ..draft(MONITORED_MATCHER)
+                ..draft(MONITORED_SOURCE)
             },
         )
         .await
@@ -1209,7 +1209,7 @@ async fn the_grace_period_is_bounded_at_ten_years() {
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
                 grace_days: LIFECYCLE_MAX_GRACE_DAYS + 1,
-                ..draft(MONITORED_MATCHER)
+                ..draft(MONITORED_SOURCE)
             },
         )
         .await
@@ -1230,12 +1230,12 @@ async fn the_grace_period_is_bounded_at_ten_years() {
 
     // A revision cannot smuggle one past the bound either.
     let refused = app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &user,
             &accepted.rule_set.id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    MONITORED_MATCHER,
+                    MONITORED_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: LIFECYCLE_MAX_GRACE_DAYS + 1,
@@ -1266,7 +1266,7 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
     };
 
     let create_error = app
-        .create_lifecycle_rule_set(&outsider, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&outsider, draft(MONITORED_SOURCE))
         .await
         .expect_err("create must require ManageCatalogSettings");
     assert!(
@@ -1293,10 +1293,10 @@ async fn a_non_privileged_actor_cannot_author_or_preview() {
         .preview_lifecycle_rule(
             &outsider,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source(
-                        MONITORED_MATCHER,
+                        MONITORED_SOURCE,
                         &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
@@ -1323,7 +1323,7 @@ async fn preview_separates_match_from_no_match() {
     let monitored = seed_title(&app, &user, "Monitored Movie", true).await;
     let unmonitored = seed_title(&app, &user, "Unmonitored Movie", false).await;
     let created = app
-        .create_lifecycle_rule_set(&user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&user, draft(MONITORED_SOURCE))
         .await
         .expect("create rule set");
 
@@ -1331,7 +1331,7 @@ async fn preview_separates_match_from_no_match() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored {
+                source: LifecyclePreviewSource::Stored {
                     rule_set_id: created.rule_set.id.clone(),
                 },
                 selection: LifecyclePreviewSelection::Titles(vec![
@@ -1345,8 +1345,8 @@ async fn preview_separates_match_from_no_match() {
 
     assert_eq!(preview.rule_set_id, created.rule_set.id);
     assert_eq!(
-        preview.matcher_content_hash,
-        created.revision.matcher_content_hash
+        preview.source_content_hash,
+        created.revision.source_content_hash
     );
     assert_eq!(preview.titles.len(), 2);
 
@@ -1387,7 +1387,7 @@ async fn preview_reports_a_failed_subject_by_code() {
                 max_titles_per_run: Some(100),
                 rego_source: "package rules\nimport rego.v1\n\nunmonitor := \"yes\" if {\n\tnot input.facts.monitored\n}\n"
                     .to_string(),
-                ..draft(MONITORED_MATCHER)
+                ..draft(MONITORED_SOURCE)
             },
         )
         .await
@@ -1397,7 +1397,7 @@ async fn preview_reports_a_failed_subject_by_code() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored {
+                source: LifecyclePreviewSource::Stored {
                     rule_set_id: created.rule_set.id.clone(),
                 },
                 selection: LifecyclePreviewSelection::Titles(vec![unmonitored.id.clone()]),
@@ -1429,10 +1429,10 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source(
-                        NEEDS_UPGRADE_HISTORY_MATCHER,
+                        NEEDS_UPGRADE_HISTORY_SOURCE,
                         &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
@@ -1466,10 +1466,10 @@ async fn an_inline_preview_persists_nothing() {
     app.preview_lifecycle_rule(
         &user,
         LifecyclePreviewRequest {
-            matcher: LifecyclePreviewMatcher::Inline {
+            source: LifecyclePreviewSource::Inline {
                 library_ids: vec![],
                 rego_source: crate::lib_tests::heads_source(
-                    MONITORED_MATCHER,
+                    MONITORED_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 0,
@@ -1494,10 +1494,10 @@ async fn preview_refuses_a_selection_above_the_cap() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source(
-                        MONITORED_MATCHER,
+                        MONITORED_SOURCE,
                         &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                     ),
                     grace_days: 0,
@@ -1531,7 +1531,7 @@ async fn validate_reports_errors_without_storing_anything() {
         .validate_lifecycle_rule_source(
             &user,
             &crate::lib_tests::heads_source(
-                MONITORED_MATCHER,
+                MONITORED_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
             ),
         )
@@ -1591,7 +1591,7 @@ async fn file_facts_distinguish_having_files_from_having_none() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source(
                         matcher,
@@ -1629,7 +1629,7 @@ async fn episode_counts_are_absent_for_movies() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: "package whatever\n\
                          import rego.v1\n\n\
@@ -1713,7 +1713,7 @@ async fn series_movie_facts_are_present_for_shows_and_absent_for_movies() {
         .preview_lifecycle_rule(
             &user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source(
                         matcher,
@@ -1773,7 +1773,7 @@ async fn a_move_target_that_does_not_exist_is_refused_with_its_position() {
                     max_titles_per_run: Some(100),
                     rego_source: source,
                     library_ids,
-                    ..draft(MONITORED_MATCHER)
+                    ..draft(MONITORED_SOURCE)
                 },
             )
             .await

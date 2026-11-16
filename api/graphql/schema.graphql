@@ -12430,7 +12430,7 @@ type LifecyclePreviewPayload {
 	"""
 	Hash of the exact source that produced these outcomes.
 	"""
-	matcherContentHash: String!
+	sourceContentHash: String!
 	"""
 	UTC time the preview evaluated the selection.
 	"""
@@ -12574,7 +12574,7 @@ type LifecycleRuleRevision {
 	Hash of the exact stored source, used to attribute a decision to the
 	revision that produced it.
 	"""
-	matcherContentHash: String!
+	sourceContentHash: String!
 	"""
 	ID of the user who wrote the revision, or null when unattributed.
 	"""
@@ -21703,11 +21703,11 @@ type MutationRoot {
 	"""
 	Replace a rule set's source and grace period by appending a revision.
 	"""
-	updateLifecycleRuleMatcher(
+	updateLifecycleRuleSource(
 		"""
 		Rule-set identity, replacement source, and optional grace period.
 		"""
-		input: UpdateLifecycleRuleMatcherInput!
+		input: UpdateLifecycleRuleSourceInput!
 	): LifecycleRuleSetDetail!
 	"""
 	Rename, re-scope or reschedule a rule set without touching its matcher, so no revision is created.
@@ -21846,11 +21846,11 @@ type MutationRoot {
 	Revision N is left exactly as written, so a decision recorded against it
 	stays attributable.
 	"""
-	updateRequestRuleMatcher(
+	updateRequestRuleSource(
 		"""
 		Rule-set identity and the replacement rule source.
 		"""
-		input: UpdateRequestRuleMatcherInput!
+		input: UpdateRequestRuleSourceInput!
 	): RequestRuleSetDetail!
 	"""
 	Rename and re-scope a rule set without touching its source, so no revision is created.
@@ -28665,7 +28665,7 @@ type RequestRulePreviewPayload {
 	"""
 	Hash of the exact source that produced this outcome.
 	"""
-	matcherContentHash: String!
+	sourceContentHash: String!
 	"""
 	The single rule's verdict, shaped as a decision so the authoring UI and
 	the decision browser render the same component. `effectiveOutcome`
@@ -28715,7 +28715,7 @@ type RequestRuleRevision {
 	Hash of the exact stored source, used to attribute a decision to the
 	revision that produced it.
 	"""
-	matcherContentHash: String!
+	sourceContentHash: String!
 	"""
 	ID of the user who wrote the revision, or null when unattributed.
 	"""
@@ -35434,37 +35434,6 @@ input UpdateLibraryRootInput {
 }
 
 """
-Replaces the matcher of an existing rule set, appending a revision.
-"""
-input UpdateLifecycleRuleMatcherInput {
-	"""
-	Rule-set ID.
-	"""
-	id: ID!
-	"""
-	Replacement matcher source as written in the editor.
-	"""
-	regoSource: String!
-	"""
-	Days a subject must match continuously before the action becomes due;
-	defaults to zero.
-	"""
-	graceDays: Int
-	"""
-	The simple builder's document. Omit to keep the current revision's
-	document, pass null to clear it, or pass a document to replace it.
-	"""
-	builderModel: JSON
-	"""
-	Replacement most titles the rule may act on in one run, checked with
-	the new source so a delete head and its maximum can be saved
-	together. Omitted keeps the current value, null clears it, and a
-	value of at least one replaces it.
-	"""
-	maxTitlesPerRun: Int
-}
-
-"""
 Renames and re-scopes a rule set without touching its matcher.
 """
 input UpdateLifecycleRuleMetadataInput {
@@ -35494,6 +35463,37 @@ input UpdateLifecycleRuleMetadataInput {
 	the current value, null clears it, and a value of at least one
 	replaces it. A rule that deletes files or titles cannot be cleared.
 	Changing it leaves the rule's state and arming alone.
+	"""
+	maxTitlesPerRun: Int
+}
+
+"""
+Replaces the matcher of an existing rule set, appending a revision.
+"""
+input UpdateLifecycleRuleSourceInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Replacement matcher source as written in the editor.
+	"""
+	regoSource: String!
+	"""
+	Days a subject must match continuously before the action becomes due;
+	defaults to zero.
+	"""
+	graceDays: Int
+	"""
+	The simple builder's document. Omit to keep the current revision's
+	document, pass null to clear it, or pass a document to replace it.
+	"""
+	builderModel: JSON
+	"""
+	Replacement most titles the rule may act on in one run, checked with
+	the new source so a delete head and its maximum can be saved
+	together. Omitted keeps the current value, null clears it, and a
+	value of at least one replaces it.
 	"""
 	maxTitlesPerRun: Int
 }
@@ -36064,25 +36064,6 @@ input UpdateRecycleBinSettingsInput {
 }
 
 """
-Replaces the source of an existing rule set, appending revision N+1.
-"""
-input UpdateRequestRuleMatcherInput {
-	"""
-	Rule-set ID.
-	"""
-	ruleSetId: ID!
-	"""
-	Replacement rule source as written in the editor.
-	"""
-	regoSource: String!
-	"""
-	The visual builder's document: a JSON object of at most 64 KiB.
-	Omitted keeps the stored one; null clears it.
-	"""
-	builderModel: JSON
-}
-
-"""
 Renames and re-scopes a rule set without touching its source, so no
 revision is created.
 """
@@ -36103,6 +36084,25 @@ input UpdateRequestRuleMetadataInput {
 	Replacement library scope. Omitted or empty means every library.
 	"""
 	libraryIds: [String!]
+}
+
+"""
+Replaces the source of an existing rule set, appending revision N+1.
+"""
+input UpdateRequestRuleSourceInput {
+	"""
+	Rule-set ID.
+	"""
+	ruleSetId: ID!
+	"""
+	Replacement rule source as written in the editor.
+	"""
+	regoSource: String!
+	"""
+	The visual builder's document: a JSON object of at most 64 KiB.
+	Omitted keeps the stored one; null clears it.
+	"""
+	builderModel: JSON
 }
 
 """

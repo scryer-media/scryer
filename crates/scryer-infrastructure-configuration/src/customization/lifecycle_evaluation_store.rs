@@ -1640,7 +1640,7 @@ impl LifecycleEvaluationRunRepository for LifecycleEvaluationStore {
                 SqlArg::Text(run.id.clone()),
                 SqlArg::Text(run.rule_set_id.clone()),
                 SqlArg::I64(run.revision_number),
-                SqlArg::Text(run.matcher_content_hash.clone()),
+                SqlArg::Text(run.source_content_hash.clone()),
                 SqlArg::Timestamp(run.started_at),
                 SqlArg::Text(run.status.as_storage_str().to_string()),
             ],
@@ -1770,7 +1770,7 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(candidate.id.clone()),
         SqlArg::Text(candidate.rule_set_id.clone()),
         SqlArg::I64(candidate.revision_number),
-        SqlArg::Text(candidate.matcher_content_hash.clone()),
+        SqlArg::Text(candidate.source_content_hash.clone()),
         SqlArg::Text(candidate.title_id.clone()),
         SqlArg::Text(candidate.library_id.clone()),
         SqlArg::Text(candidate.facet.clone()),
@@ -2222,7 +2222,7 @@ fn same_terminal_membership(
     left.candidate_id == right.candidate_id
         && left.rule_set_id == right.rule_set_id
         && left.revision_number == right.revision_number
-        && left.matcher_content_hash == right.matcher_content_hash
+        && left.source_content_hash == right.source_content_hash
         && left.title_id == right.title_id
         && left.subject_kind == right.subject_kind
         && left.subject_id == right.subject_id
@@ -2315,7 +2315,7 @@ fn terminal_membership_args(
         SqlArg::Text(membership.candidate_id.clone()),
         SqlArg::Text(membership.rule_set_id.clone()),
         SqlArg::I64(membership.revision_number),
-        SqlArg::Text(membership.matcher_content_hash.clone()),
+        SqlArg::Text(membership.source_content_hash.clone()),
         SqlArg::Text(membership.title_id.clone()),
         SqlArg::Text(membership.subject_kind.clone()),
         SqlArg::Text(membership.subject_id.clone()),
@@ -2403,7 +2403,7 @@ fn row_to_sequence_terminal_membership(
         candidate_id: row.text("candidate_id")?,
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
-        matcher_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("matcher_content_hash")?,
         title_id: row.text("title_id")?,
         subject_kind: row.text("subject_kind")?,
         subject_id: row.text("subject_id")?,
@@ -2456,7 +2456,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         id: row.text("id")?,
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
-        matcher_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("matcher_content_hash")?,
         title_id: row.text("title_id")?,
         library_id: row.text("library_id")?,
         facet: row.text("facet")?,
@@ -2515,7 +2515,7 @@ fn row_to_evaluation_run(row: &SqlRow) -> AppResult<LifecycleEvaluationRun> {
         id: row.text("id")?,
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
-        matcher_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("matcher_content_hash")?,
         started_at: row.timestamp("started_at")?,
         finished_at: row.opt_timestamp("finished_at")?,
         status: LifecycleEvaluationRunStatus::parse_storage(&row.text("status")?)

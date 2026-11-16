@@ -21,8 +21,8 @@ use crate::lib_tests::media_server_signals::{
     jellyfin_connection, named_jellyfin_connection,
 };
 use crate::lifecycle_rules::{
-    LifecycleMatcherDraft, LifecyclePreviewMatcher, LifecyclePreviewRequest,
-    LifecyclePreviewResult, LifecyclePreviewSelection, LifecycleRuleDraft,
+    LifecyclePreviewRequest, LifecyclePreviewResult, LifecyclePreviewSelection,
+    LifecyclePreviewSource, LifecycleRuleDraft, LifecycleSourceDraft,
 };
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
@@ -34,7 +34,7 @@ use scryer_rules::lifecycle::LifecycleOutcome;
 
 /// Matches a movie every one of its requesters has played — the shipped
 /// "Remove watched, requested movies" template, in matcher form.
-const WATCHED_BY_ALL_REQUESTERS_MATCHER: &str = "package whatever\n\
+const WATCHED_BY_ALL_REQUESTERS_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.requested\n\
@@ -44,7 +44,7 @@ const WATCHED_BY_ALL_REQUESTERS_MATCHER: &str = "package whatever\n\
 /// Matches a movie nobody has played. Reads only the watcher list, so it is the
 /// cleanest probe of the gate: with the gate open and no rows, the list is a
 /// known-empty one and this decides.
-const NOBODY_WATCHED_MATCHER: &str = "package whatever\n\
+const NOBODY_WATCHED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tcount(input.facts.watched_by_user_ids) == 0\n\
@@ -52,7 +52,7 @@ const NOBODY_WATCHED_MATCHER: &str = "package whatever\n\
 
 /// Matches a movie with no recorded play at all, through the anonymous
 /// timestamp rather than the watcher list.
-const NEVER_WATCHED_MATCHER: &str = "package whatever\n\
+const NEVER_WATCHED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tnot input.facts.last_watched_at\n\
@@ -60,14 +60,14 @@ const NEVER_WATCHED_MATCHER: &str = "package whatever\n\
 
 /// The other requester rollup, so the gate can be probed through all four watch
 /// facts rather than just the two the shipped template reads.
-const WATCHED_BY_ANY_REQUESTER_MATCHER: &str = "package whatever\n\
+const WATCHED_BY_ANY_REQUESTER_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.watched_by_any_requester\n\
      }\n";
 
 /// Reads no person-targeted fact at all, so the authoring bar must not apply.
-const MONITORED_MATCHER: &str = "package whatever\n\
+const MONITORED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.monitored\n\
@@ -281,8 +281,8 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
     }
 }
 
-fn inline_matcher(rego_source: &str) -> LifecyclePreviewMatcher {
-    LifecyclePreviewMatcher::Inline {
+fn inline_source(rego_source: &str) -> LifecyclePreviewSource {
+    LifecyclePreviewSource::Inline {
         library_ids: vec![],
         rego_source: crate::lib_tests::heads_source(
             rego_source,
@@ -297,14 +297,14 @@ impl WatchFixture {
     async fn preview_as(
         &self,
         actor: &User,
-        matcher: LifecyclePreviewMatcher,
+        source: LifecyclePreviewSource,
         title_id: &str,
     ) -> AppResult<LifecyclePreviewResult> {
         self.app
             .preview_lifecycle_rule(
                 actor,
                 LifecyclePreviewRequest {
-                    matcher,
+                    source,
                     selection: LifecyclePreviewSelection::Titles(vec![title_id.to_string()]),
                 },
             )
@@ -318,7 +318,7 @@ impl WatchFixture {
         title_id: &str,
     ) -> (Option<LifecycleOutcome>, Vec<String>) {
         let preview = self
-            .preview_as(&self.user, inline_matcher(rego_source), title_id)
+            .preview_as(&self.user, inline_source(rego_source), title_id)
             .await
             .expect("preview");
         assert_eq!(preview.titles.len(), 1);
@@ -337,7 +337,7 @@ async fn watch_facts_hold_without_a_connected_media_server() {
     let fixture = watch_app(Vec::new(), Vec::new());
     let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     // Nothing could have reported a play, so "nobody watched it" is not
     // something Scryer knows — it is something it never asked.
@@ -352,7 +352,7 @@ async fn watch_facts_hold_until_a_connection_has_swept_cleanly() {
     // A state row exists, but no sweep ever finished cleanly.
     record_sweep(&fixture.signals, CONNECTION_ID, None).await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Unknown));
     assert_eq!(reasons, vec!["signal_sync_never_succeeded".to_string()]);
@@ -363,7 +363,7 @@ async fn a_connection_with_no_state_row_at_all_reads_as_never_swept() {
     let fixture = watch_app(vec![jellyfin_connection(true)], Vec::new());
     let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Unknown));
     assert_eq!(reasons, vec!["signal_sync_never_succeeded".to_string()]);
@@ -380,7 +380,7 @@ async fn watch_facts_hold_when_the_newest_clean_sweep_is_stale() {
     )
     .await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Unknown));
     assert_eq!(reasons, vec!["signals_stale".to_string()]);
@@ -397,7 +397,7 @@ async fn a_fresh_sweep_with_no_plays_is_a_decisive_nobody_watched_it() {
     let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(
         outcome,
@@ -423,7 +423,7 @@ async fn a_recorded_play_stops_the_nobody_watched_rule_matching() {
     )
     .await;
 
-    let (outcome, _) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, _) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::NoMatch));
 }
@@ -443,7 +443,7 @@ async fn a_disabled_connection_never_poisons_the_gate() {
     // Only the enabled connection has ever swept.
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
-    let (outcome, _) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, _) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Match));
 }
@@ -469,7 +469,7 @@ async fn one_stale_connection_holds_every_subject() {
     )
     .await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Unknown));
     assert_eq!(reasons, vec!["signals_stale".to_string()]);
@@ -491,12 +491,12 @@ async fn a_fresh_sweep_with_nobody_linked_holds_every_watch_fact() {
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
     for (fact, matcher) in [
-        ("watched_by_user_ids", NOBODY_WATCHED_MATCHER),
-        ("last_watched_at", NEVER_WATCHED_MATCHER),
-        ("watched_by_any_requester", WATCHED_BY_ANY_REQUESTER_MATCHER),
+        ("watched_by_user_ids", NOBODY_WATCHED_SOURCE),
+        ("last_watched_at", NEVER_WATCHED_SOURCE),
+        ("watched_by_any_requester", WATCHED_BY_ANY_REQUESTER_SOURCE),
         (
             "watched_by_all_requesters",
-            WATCHED_BY_ALL_REQUESTERS_MATCHER,
+            WATCHED_BY_ALL_REQUESTERS_SOURCE,
         ),
     ] {
         let (outcome, reasons) = fixture.decide(matcher, &title.id).await;
@@ -522,8 +522,8 @@ async fn one_linked_participant_opens_the_gate() {
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
     for (fact, matcher) in [
-        ("watched_by_user_ids", NOBODY_WATCHED_MATCHER),
-        ("last_watched_at", NEVER_WATCHED_MATCHER),
+        ("watched_by_user_ids", NOBODY_WATCHED_SOURCE),
+        ("last_watched_at", NEVER_WATCHED_SOURCE),
     ] {
         let (outcome, reasons) = fixture.decide(matcher, &title.id).await;
 
@@ -543,8 +543,8 @@ async fn a_link_no_sweep_has_read_holds_every_watch_fact() {
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
     for (fact, matcher) in [
-        ("watched_by_user_ids", NOBODY_WATCHED_MATCHER),
-        ("last_watched_at", NEVER_WATCHED_MATCHER),
+        ("watched_by_user_ids", NOBODY_WATCHED_SOURCE),
+        ("last_watched_at", NEVER_WATCHED_SOURCE),
     ] {
         let (outcome, reasons) = fixture.decide(matcher, &title.id).await;
 
@@ -571,7 +571,7 @@ async fn an_unread_link_beside_a_read_one_holds_every_watch_fact() {
     let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
-    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_MATCHER, &title.id).await;
+    let (outcome, reasons) = fixture.decide(NOBODY_WATCHED_SOURCE, &title.id).await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Unknown));
     assert_eq!(reasons, vec!["participants_not_yet_swept".to_string()]);
@@ -602,7 +602,7 @@ async fn a_requested_movie_its_requester_watched_matches_the_shipped_template() 
     .await;
 
     let (outcome, _) = fixture
-        .decide(WATCHED_BY_ALL_REQUESTERS_MATCHER, &title.id)
+        .decide(WATCHED_BY_ALL_REQUESTERS_SOURCE, &title.id)
         .await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Match));
@@ -634,7 +634,7 @@ async fn an_unlinked_requester_holds_the_shipped_template() {
     .await;
 
     let (outcome, reasons) = fixture
-        .decide(WATCHED_BY_ALL_REQUESTERS_MATCHER, &title.id)
+        .decide(WATCHED_BY_ALL_REQUESTERS_SOURCE, &title.id)
         .await;
 
     assert_eq!(outcome, Some(LifecycleOutcome::Unknown));
@@ -658,7 +658,7 @@ async fn an_unrequested_movie_never_matches_the_shipped_template() {
     .await;
 
     let (outcome, reasons) = fixture
-        .decide(WATCHED_BY_ALL_REQUESTERS_MATCHER, &title.id)
+        .decide(WATCHED_BY_ALL_REQUESTERS_SOURCE, &title.id)
         .await;
 
     // Absent, not unknown: the rollups simply do not apply, so the rule decides
@@ -684,7 +684,7 @@ async fn authoring_a_watch_rule_needs_permission_management() {
         .app
         .create_lifecycle_rule_set(
             &catalog_only_author(),
-            draft(WATCHED_BY_ALL_REQUESTERS_MATCHER),
+            draft(WATCHED_BY_ALL_REQUESTERS_SOURCE),
         )
         .await
         .expect_err("a rule about people needs permission-management authority");
@@ -740,7 +740,7 @@ async fn a_rule_about_media_rather_than_people_is_unaffected() {
 
     fixture
         .app
-        .create_lifecycle_rule_set(&catalog_only_author(), draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&catalog_only_author(), draft(MONITORED_SOURCE))
         .await
         .expect("catalog-settings management is enough for a rule about media");
 }
@@ -750,7 +750,7 @@ async fn a_rule_about_media_rather_than_people_is_unaffected() {
 #[tokio::test]
 async fn the_anonymous_watch_aggregate_is_not_gated() {
     let fixture = watch_app(Vec::new(), Vec::new());
-    const LAST_WATCHED_MATCHER: &str = "package whatever\n\
+    const LAST_WATCHED_SOURCE: &str = "package whatever\n\
          import rego.v1\n\n\
          match if {\n\
          \tinput.facts.requested\n\
@@ -759,7 +759,7 @@ async fn the_anonymous_watch_aggregate_is_not_gated() {
 
     fixture
         .app
-        .create_lifecycle_rule_set(&catalog_only_author(), draft(LAST_WATCHED_MATCHER))
+        .create_lifecycle_rule_set(&catalog_only_author(), draft(LAST_WATCHED_SOURCE))
         .await
         .expect("requested and last_watched_at name nobody");
 }
@@ -770,28 +770,28 @@ async fn a_privileged_author_may_save_a_person_fact_rule() {
 
     fixture
         .app
-        .create_lifecycle_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_MATCHER))
+        .create_lifecycle_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_SOURCE))
         .await
         .expect("an administrator may author a rule about people");
 }
 
 #[tokio::test]
-async fn the_bar_applies_to_replacing_a_matcher_too() {
+async fn the_bar_applies_to_replacing_a_source_too() {
     let fixture = watch_app(Vec::new(), Vec::new());
     let created = fixture
         .app
-        .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_MATCHER))
+        .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_SOURCE))
         .await
         .expect("create a rule about media");
 
     let error = fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &catalog_only_author(),
             &created.rule_set.id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    WATCHED_BY_ALL_REQUESTERS_MATCHER,
+                    WATCHED_BY_ALL_REQUESTERS_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 0,
@@ -828,7 +828,7 @@ async fn previewing_a_person_fact_draft_needs_permission_management() {
     let error = fixture
         .preview_as(
             &catalog_only_author(),
-            inline_matcher(WATCHED_BY_ALL_REQUESTERS_MATCHER),
+            inline_source(WATCHED_BY_ALL_REQUESTERS_SOURCE),
             &title.id,
         )
         .await
@@ -860,7 +860,7 @@ async fn a_privileged_actor_may_preview_a_person_fact_rule() {
     let preview = fixture
         .preview_as(
             &fixture.user,
-            inline_matcher(WATCHED_BY_ALL_REQUESTERS_MATCHER),
+            inline_source(WATCHED_BY_ALL_REQUESTERS_SOURCE),
             &title.id,
         )
         .await
@@ -877,7 +877,7 @@ async fn previewing_a_rule_about_media_is_unaffected() {
     let preview = fixture
         .preview_as(
             &catalog_only_author(),
-            inline_matcher(MONITORED_MATCHER),
+            inline_source(MONITORED_SOURCE),
             &title.id,
         )
         .await
@@ -894,14 +894,14 @@ async fn previewing_a_stored_person_fact_rule_is_gated_too() {
     let title = seed_title(&fixture.app, &fixture.user, "Requested Movie").await;
     let created = fixture
         .app
-        .create_lifecycle_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_MATCHER))
+        .create_lifecycle_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_SOURCE))
         .await
         .expect("an administrator may author a rule about people");
 
     let error = fixture
         .preview_as(
             &catalog_only_author(),
-            LifecyclePreviewMatcher::Stored {
+            LifecyclePreviewSource::Stored {
                 rule_set_id: created.rule_set.id.clone(),
             },
             &title.id,
@@ -949,7 +949,7 @@ async fn a_stored_person_fact_rule_still_evaluates_under_the_system_principal() 
 
     let created = fixture
         .app
-        .create_lifecycle_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_MATCHER))
+        .create_lifecycle_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_SOURCE))
         .await
         .expect("create rule set");
     super::lifecycle_rules::set_rule_state(
@@ -992,7 +992,7 @@ async fn preview_shows_the_fact_document_only_to_a_permissions_manager() {
     let title = seed_title(&fixture.app, &fixture.user, "Example Feature").await;
 
     let privileged = fixture
-        .preview_as(&fixture.user, inline_matcher(MONITORED_MATCHER), &title.id)
+        .preview_as(&fixture.user, inline_source(MONITORED_SOURCE), &title.id)
         .await
         .expect("preview");
     let facts = privileged.titles[0]
@@ -1009,7 +1009,7 @@ async fn preview_shows_the_fact_document_only_to_a_permissions_manager() {
     let catalog_only = fixture
         .preview_as(
             &catalog_only_author(),
-            inline_matcher(MONITORED_MATCHER),
+            inline_source(MONITORED_SOURCE),
             &title.id,
         )
         .await

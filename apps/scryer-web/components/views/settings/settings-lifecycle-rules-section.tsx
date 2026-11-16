@@ -683,7 +683,7 @@ function LifecyclePreviewPanel({
                   previewResult.evaluatedAt,
                   dateTimeFormat,
                 ),
-                hash: previewResult.matcherContentHash.slice(0, 12),
+                hash: previewResult.sourceContentHash.slice(0, 12),
               })}
             </p>
             <div className="overflow-x-auto">

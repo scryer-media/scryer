@@ -2,7 +2,7 @@ use crate::context::{app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::types::*;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::AppError;
-use scryer_application::request_rules::{RequestRuleDraft, RequestRulePreviewMatcher};
+use scryer_application::request_rules::{RequestRuleDraft, RequestRulePreviewSource};
 use scryer_domain::AppPermission;
 
 /// Resolve the rule source a preview should run.
@@ -11,12 +11,12 @@ use scryer_domain::AppPermission;
 /// rule set and previewing an unsaved draft answer different questions, and
 /// accepting both at once would make it ambiguous which source produced the
 /// verdict the author is about to act on.
-fn preview_matcher(input: &mut PreviewRequestRuleInput) -> GqlResult<RequestRulePreviewMatcher> {
+fn preview_source(input: &mut PreviewRequestRuleInput) -> GqlResult<RequestRulePreviewSource> {
     match (input.rule_set_id.take(), input.rego_source.take()) {
-        (Some(rule_set_id), None) => Ok(RequestRulePreviewMatcher::Stored {
+        (Some(rule_set_id), None) => Ok(RequestRulePreviewSource::Stored {
             rule_set_id: String::from(rule_set_id),
         }),
-        (None, Some(rego_source)) => Ok(RequestRulePreviewMatcher::Inline { rego_source }),
+        (None, Some(rego_source)) => Ok(RequestRulePreviewSource::Inline { rego_source }),
         (Some(_), Some(_)) => Err(to_gql_error(AppError::validation_refused(
             scryer_interface_core::refusal::INTERFACE_RULE_PREVIEW_TARGET_CONFLICT,
             "preview accepts either 'ruleSetId' or 'regoSource', not both",
@@ -105,11 +105,11 @@ impl RequestRuleMutations {
     ///
     /// Revision N is left exactly as written, so a decision recorded against it
     /// stays attributable.
-    async fn update_request_rule_matcher(
+    async fn update_request_rule_source(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Rule-set identity and the replacement rule source.")]
-        input: UpdateRequestRuleMatcherInput,
+        input: UpdateRequestRuleSourceInput,
     ) -> GqlResult<RequestRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
         let actor =
@@ -123,7 +123,7 @@ impl RequestRuleMutations {
             async_graphql::MaybeUndefined::Value(model) => Some(Some(model.0)),
         };
         let detail = app
-            .update_request_rule_matcher(&actor, &rule_set_id, &input.rego_source, builder_model)
+            .update_request_rule_source(&actor, &rule_set_id, &input.rego_source, builder_model)
             .await
             .map_err(to_gql_error)?;
         let count = decision_count(&app, &actor, &rule_set_id).await?;
@@ -270,10 +270,10 @@ impl RequestRuleMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
 
-        let matcher = preview_matcher(&mut input)?;
-        let stored_rule_set_id = match &matcher {
-            RequestRulePreviewMatcher::Stored { rule_set_id } => Some(rule_set_id.clone()),
-            RequestRulePreviewMatcher::Inline { .. } => None,
+        let source = preview_source(&mut input)?;
+        let stored_rule_set_id = match &source {
+            RequestRulePreviewSource::Stored { rule_set_id } => Some(rule_set_id.clone()),
+            RequestRulePreviewSource::Inline { .. } => None,
         };
         let sample = crate::mappers::request_rule_sample_into_application(input.sample)
             .map_err(to_gql_error)?;
@@ -281,7 +281,7 @@ impl RequestRuleMutations {
         let result = app
             .preview_request_rule(
                 &actor,
-                scryer_application::RequestRulePreviewRequest { matcher, sample },
+                scryer_application::RequestRulePreviewRequest { source, sample },
             )
             .await
             .map_err(to_gql_error)?;

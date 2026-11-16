@@ -95,7 +95,7 @@ import {
   runLifecycleActionHandlerNowMutation,
   runLifecycleEvaluationNowMutation,
   setLifecycleInstanceGatesMutation,
-  updateLifecycleRuleMatcherMutation,
+  updateLifecycleRuleSourceMutation,
   updateLifecycleRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
 
@@ -753,13 +753,13 @@ export function SettingsLifecycleRulesContainer({
           ruleSetDraft,
           builderBinding,
         );
-        if (plan.matcher) {
-          const matcher = await client
-            .mutation(updateLifecycleRuleMatcherMutation, {
-              input: plan.matcher,
+        if (plan.source) {
+          const source = await client
+            .mutation(updateLifecycleRuleSourceMutation, {
+              input: plan.source,
             })
             .toPromise();
-          if (matcher.error) throw matcher.error;
+          if (source.error) throw source.error;
         }
         if (plan.metadata) {
           const metadata = await client

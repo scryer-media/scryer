@@ -18,7 +18,7 @@ import {
   lifecycleRuleSetsQuery,
 } from "@/lib/graphql/queries";
 import {
-  updateLifecycleRuleMatcherMutation,
+  updateLifecycleRuleSourceMutation,
   updateLifecycleRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
 import type {
@@ -110,10 +110,10 @@ export function ExpiredRequestLeasesControl() {
         { ...draft, graceDays, schedule },
         binding,
       );
-      if (plan.matcher) {
+      if (plan.source) {
         const { error } = await client
-          .mutation(updateLifecycleRuleMatcherMutation, {
-            input: plan.matcher,
+          .mutation(updateLifecycleRuleSourceMutation, {
+            input: plan.source,
           })
           .toPromise();
         if (error) throw error;

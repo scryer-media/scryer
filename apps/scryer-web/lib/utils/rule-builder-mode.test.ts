@@ -20,7 +20,7 @@ import {
   initialLifecycleRuleDraft,
   lifecycleRuleDraftFromDetail,
   newLifecycleRuleBuilderDraft,
-  updateLifecycleRuleMatcherInput,
+  updateLifecycleRuleSourceInput,
 } from "./lifecycle-rule-sets.ts";
 import {
   REQUEST_STARTER_SOURCE,
@@ -30,7 +30,7 @@ import {
   initialRequestRuleDraft,
   newRequestRuleBuilderDraft,
   requestRuleDraftFromDetail,
-  updateRequestRuleMatcherInput,
+  updateRequestRuleSourceInput,
 } from "./request-rule-sets.ts";
 import {
   emptyRuleBuilderModel,
@@ -132,7 +132,7 @@ function lifecycleDetail(
       regoSource,
       graceDays: 0,
       storageRootId: null,
-      matcherContentHash: "blake3:sample",
+      sourceContentHash: "blake3:sample",
       createdBy: "operator",
       createdAt: "2026-01-01T00:00:00Z",
     },
@@ -202,7 +202,7 @@ const lifecycle: Family<ReturnType<typeof initialLifecycleRuleDraft>> = {
   createModel: (draft) =>
     createLifecycleRuleSetInput(draft, LIFECYCLE_BUILDER).builderModel,
   updateModel: (draft) =>
-    updateLifecycleRuleMatcherInput("rule-sample", draft, LIFECYCLE_BUILDER)
+    updateLifecycleRuleSourceInput("rule-sample", draft, LIFECYCLE_BUILDER)
       .builderModel,
 };
 
@@ -237,7 +237,7 @@ const request: Family<ReturnType<typeof initialRequestRuleDraft>> = {
   createModel: (draft) =>
     createRequestRuleSetInput(draft, REQUEST_BUILDER).builderModel,
   updateModel: (draft) =>
-    updateRequestRuleMatcherInput("rule-sample", draft, REQUEST_BUILDER)
+    updateRequestRuleSourceInput("rule-sample", draft, REQUEST_BUILDER)
       .builderModel,
 };
 
@@ -465,7 +465,7 @@ test("without the served schema a stored builder rule opens as Rego and an updat
   assert.equal(initialRuleEditorMode(draft), "edit");
   assert.equal(isIncompleteRuleBuilderDraft(unserved, draft), false);
   // The update leaves `builderModel` out, so the server keeps the stored one.
-  const input = updateRequestRuleMatcherInput("rule-sample", draft, unserved);
+  const input = updateRequestRuleSourceInput("rule-sample", draft, unserved);
   assert.equal(Object.hasOwn(input, "builderModel"), false);
   assert.equal(newRequestRuleBuilderDraft(unserved).builderModel, null);
 });

@@ -518,7 +518,7 @@ pub use request_rules::{
     FALLBACK_SHAPING_CONFLICT, FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER,
     PREFLIGHT_REQUEST_ID_PREFIX, REQUEST_MAX_LEASE_DAYS, RecordedVote, RequestDecisionReason,
     RequestDraft, RequestEvaluation, RequestEvaluationPurpose, RequestPreflight, RequestRuleDraft,
-    RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRulePreviewResult,
+    RequestRulePreviewRequest, RequestRulePreviewResult, RequestRulePreviewSource,
     RequestRuleSample, RequestRuleScope, RequestRuleSetDetail, RequestRuleValidation,
     RequestRulesEngineCache, RequestRulesEngineHandle, ResolvedShaping, ScopedError, ScopedVote,
     ShapedValue, ShapingRefusal, arbitrate, validate_lease_days, validate_tag_list,

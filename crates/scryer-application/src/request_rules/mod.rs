@@ -66,7 +66,7 @@ pub use read_model::{
     MediaRequestPolicyFacts, MediaRequestPolicySelection, RequestRuleDecisionView,
 };
 pub use service::{
-    REQUEST_MAX_LEASE_DAYS, RequestRuleDraft, RequestRulePreviewMatcher, RequestRulePreviewRequest,
-    RequestRulePreviewResult, RequestRuleSample, RequestRuleSetDetail, RequestRuleValidation,
+    REQUEST_MAX_LEASE_DAYS, RequestRuleDraft, RequestRulePreviewRequest, RequestRulePreviewResult,
+    RequestRulePreviewSource, RequestRuleSample, RequestRuleSetDetail, RequestRuleValidation,
     validate_lease_days, validate_tag_list,
 };

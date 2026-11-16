@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicBool;
 use crate::lib_tests::lifecycle_rules::InMemoryLifecycleRuleRepo;
 use crate::lifecycle_rules::{
     ACTION_SEQUENCE_KIND, LifecycleCandidateFilter, LifecycleGates, LifecycleGatesUpdate,
-    LifecycleMatcherDraft, LifecycleRuleDraft, candidate_reason,
+    LifecycleRuleDraft, LifecycleSourceDraft, candidate_reason,
 };
 use crate::ports::{LifecycleActionStepCandidateKey, LifecycleCandidateQuery};
 use scryer_domain::{
@@ -25,14 +25,14 @@ use scryer_domain::{
 };
 
 /// Matches every monitored title.
-const MONITORED_MATCHER: &str = "package whatever\n\
+const MONITORED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.monitored\n\
      }\n";
 
 /// Matches nothing: the facet never equals this sentinel.
-const NEVER_MATCHER: &str = "package whatever\n\
+const NEVER_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
@@ -44,7 +44,7 @@ const NEVER_MATCHER: &str = "package whatever\n\
 /// `input.facts`: this is the manual, opted-out path, so the hold here is the
 /// rule's own `unknown` rather than the engine's, and the reason code is one
 /// the author chose. The candidate must be held either way.
-const UNKNOWN_MATCHER: &str = "package whatever\n\
+const UNKNOWN_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match := true\n\n\
      unknown if {\n\
@@ -1341,7 +1341,7 @@ fn same_terminal_membership(
     left.candidate_id == right.candidate_id
         && left.rule_set_id == right.rule_set_id
         && left.revision_number == right.revision_number
-        && left.matcher_content_hash == right.matcher_content_hash
+        && left.source_content_hash == right.source_content_hash
         && left.title_id == right.title_id
         && left.subject_kind == right.subject_kind
         && left.subject_id == right.subject_id
@@ -1690,7 +1690,7 @@ async fn gates_require_system_settings_management() {
 async fn the_evaluation_gate_makes_a_run_a_no_op() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.armed_rule(MONITORED_SOURCE, 7).await;
 
     let report = fixture.evaluate().await;
 
@@ -1713,7 +1713,7 @@ async fn each_state_writes_its_mode_and_arming_and_creation_still_ships_dark() {
     let fixture = evaluation_app();
     let created = fixture
         .app
-        .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_MATCHER, 7))
+        .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_SOURCE, 7))
         .await
         .expect("create rule set");
     assert!(!created.rule_set.enabled, "rules are created disabled");
@@ -1786,7 +1786,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
     let fixture = evaluation_app();
     let created = fixture
         .app
-        .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_MATCHER, 7))
+        .create_lifecycle_rule_set(&fixture.user, draft(MONITORED_SOURCE, 7))
         .await
         .expect("create rule set");
     let id = created.rule_set.id;
@@ -1801,12 +1801,12 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
 
     let edited = fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &fixture.user,
             &id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    MONITORED_MATCHER,
+                    MONITORED_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 3,
@@ -1838,12 +1838,12 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
     // A second edit keeps the flag; it only reflects that the rule was enabled.
     let again = fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &fixture.user,
             &id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    MONITORED_MATCHER,
+                    MONITORED_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 4,
@@ -1880,12 +1880,12 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
     assert!(!dry.rule_set.destructive_rearm_required);
     let edited_dry = fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &fixture.user,
             &id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    MONITORED_MATCHER,
+                    MONITORED_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 5,
@@ -1903,7 +1903,7 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
 async fn a_first_match_opens_a_candidate_and_starts_the_clock() {
     let fixture = evaluation_app();
     let title = seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
 
     let report = fixture.evaluate().await;
@@ -1936,7 +1936,7 @@ async fn a_first_match_opens_a_candidate_and_starts_the_clock() {
 async fn a_zero_day_grace_is_due_the_moment_it_matches() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    fixture.armed_rule(MONITORED_MATCHER, 0).await;
+    fixture.armed_rule(MONITORED_SOURCE, 0).await;
     fixture.open_evaluation_gate().await;
 
     fixture.evaluate().await;
@@ -1949,7 +1949,7 @@ async fn a_zero_day_grace_is_due_the_moment_it_matches() {
 async fn a_repeat_match_advances_only_the_last_match_and_never_the_clock() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
 
     fixture.evaluate().await;
@@ -1978,14 +1978,14 @@ async fn a_repeat_match_advances_only_the_last_match_and_never_the_clock() {
 async fn an_unknown_decision_holds_the_candidate_instead_of_cancelling_it() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let before = fixture.only_candidate().await;
 
     // The matcher is swapped in place rather than through a revision bump, so
     // what this test observes is the unknown branch and not the supersede one.
-    swap_matcher_in_place(&fixture, &rule_set_id, UNKNOWN_MATCHER, &before).await;
+    swap_source_in_place(&fixture, &rule_set_id, UNKNOWN_SOURCE, &before).await;
 
     let report = fixture.evaluate().await;
     assert_eq!(report.candidates_held, 1);
@@ -2012,7 +2012,7 @@ async fn an_unknown_decision_holds_the_candidate_instead_of_cancelling_it() {
 async fn an_unknown_decision_never_opens_a_candidate() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    fixture.armed_rule(UNKNOWN_MATCHER, 7).await;
+    fixture.armed_rule(UNKNOWN_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
 
     let report = fixture.evaluate().await;
@@ -2028,14 +2028,14 @@ async fn an_unknown_decision_never_opens_a_candidate() {
 async fn a_no_match_cancels_the_candidate() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let opened = fixture.only_candidate().await;
 
     // Replace revision 1 in place so the cancel is attributable to the decision
     // and not to a supersede.
-    swap_matcher_in_place(&fixture, &rule_set_id, NEVER_MATCHER, &opened).await;
+    swap_source_in_place(&fixture, &rule_set_id, NEVER_SOURCE, &opened).await;
 
     let report = fixture.evaluate().await;
     assert_eq!(report.candidates_canceled, 1);
@@ -2051,14 +2051,14 @@ async fn a_no_match_cancels_the_candidate() {
 async fn a_rematch_after_a_cancel_opens_a_new_generation_with_a_fresh_clock() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let first = fixture.only_candidate().await;
 
-    swap_matcher_in_place(&fixture, &rule_set_id, NEVER_MATCHER, &first).await;
+    swap_source_in_place(&fixture, &rule_set_id, NEVER_SOURCE, &first).await;
     fixture.evaluate().await;
-    swap_matcher_in_place(&fixture, &rule_set_id, MONITORED_MATCHER, &first).await;
+    swap_source_in_place(&fixture, &rule_set_id, MONITORED_SOURCE, &first).await;
     let report = fixture.evaluate().await;
 
     assert_eq!(report.candidates_created, 1);
@@ -2077,22 +2077,22 @@ async fn a_rematch_after_a_cancel_opens_a_new_generation_with_a_fresh_clock() {
 }
 
 #[tokio::test]
-async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
+async fn a_source_edit_supersedes_the_candidate_and_restarts_the_clock() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let original = fixture.only_candidate().await;
 
     fixture
         .app
-        .update_lifecycle_rule_matcher(
+        .update_lifecycle_rule_source(
             &fixture.user,
             &rule_set_id,
-            LifecycleMatcherDraft {
+            LifecycleSourceDraft {
                 rego_source: crate::lib_tests::heads_source(
-                    MONITORED_MATCHER,
+                    MONITORED_SOURCE,
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 30,
@@ -2145,7 +2145,7 @@ async fn an_exclusion_blocks_creation_and_closes_an_existing_candidate() {
     let fixture = evaluation_app();
     let excluded = seed_title(&fixture.app, &fixture.user, "Hands Off", true).await;
     let kept = seed_title(&fixture.app, &fixture.user, "Fair Game", true).await;
-    fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
 
     fixture.evaluate().await;
@@ -2205,7 +2205,7 @@ async fn an_exclusion_blocks_creation_and_closes_an_existing_candidate() {
 async fn a_candidate_the_scope_no_longer_covers_is_canceled_by_the_next_pass() {
     let fixture = evaluation_app();
     let title = seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let opened = fixture.only_candidate().await;
@@ -2247,7 +2247,7 @@ async fn a_candidate_the_scope_no_longer_covers_is_canceled_by_the_next_pass() {
 async fn an_out_of_scope_candidate_under_an_execution_lease_is_left_alone() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let opened = fixture.only_candidate().await;
@@ -2286,7 +2286,7 @@ async fn an_out_of_scope_candidate_under_an_execution_lease_is_left_alone() {
 async fn a_disabled_rule_is_skipped_and_its_candidates_are_left_alone() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
     let before = fixture.only_candidate().await;
@@ -2316,7 +2316,7 @@ async fn a_pass_records_a_run_with_the_counts_it_produced() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
     seed_title(&fixture.app, &fixture.user, "Unmonitored", false).await;
-    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
 
     fixture.evaluate().await;
@@ -2341,7 +2341,7 @@ async fn a_pass_records_a_run_with_the_counts_it_produced() {
 async fn candidates_are_only_visible_while_lifecycle_is_enabled() {
     let fixture = evaluation_app();
     seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
-    fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.armed_rule(MONITORED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     fixture.evaluate().await;
 
@@ -2382,7 +2382,7 @@ async fn candidates_are_only_visible_while_lifecycle_is_enabled() {
 /// operator named `admin` added. Reads every provenance fact at once so the
 /// batched request lookup, the username resolution, and the contract entries
 /// that let those paths validate at all are all proven by one evaluation.
-const REQUESTED_MATCHER: &str = "package whatever\n\
+const REQUESTED_SOURCE: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
      \tinput.facts.requested\n\
@@ -2494,7 +2494,7 @@ async fn a_rule_can_match_on_who_requested_a_title() {
         "user-casey",
     ));
 
-    fixture.armed_rule(REQUESTED_MATCHER, 7).await;
+    fixture.armed_rule(REQUESTED_SOURCE, 7).await;
     fixture.open_evaluation_gate().await;
     let report = fixture.evaluate().await;
 
@@ -2511,7 +2511,7 @@ async fn a_rule_can_match_on_who_requested_a_title() {
 /// Replace the revision currently in force without bumping the revision number,
 /// so a test can change what a rule decides without also triggering the
 /// supersede path.
-async fn swap_matcher_in_place(
+async fn swap_source_in_place(
     fixture: &EvaluationFixture,
     rule_set_id: &str,
     rego_source: &str,
@@ -2533,7 +2533,7 @@ async fn swap_matcher_in_place(
             action_spec_json: r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
                 .to_string(),
             grace_days: reference.grace_days,
-            matcher_content_hash: reference.matcher_content_hash.clone(),
+            source_content_hash: reference.source_content_hash.clone(),
             created_by: None,
             created_at: Utc::now(),
             builder_model_json: None,
@@ -2602,7 +2602,7 @@ async fn armed_source(fixture: &EvaluationFixture, rego_source: &str) -> String 
             &fixture.user,
             LifecycleRuleDraft {
                 rego_source: rego_source.to_string(),
-                ..draft(MONITORED_MATCHER, 0)
+                ..draft(MONITORED_SOURCE, 0)
             },
         )
         .await

@@ -206,7 +206,7 @@ impl AppUseCase {
                     name: rule_set.name,
                     library_ids: rule_set.library_ids,
                     revision_number: revision.revision_number,
-                    content_hash: revision.matcher_content_hash,
+                    content_hash: revision.source_content_hash,
                 },
             );
             policies.push(policy);

@@ -63,7 +63,7 @@ pub struct RequestRuleDraft {
 
 /// Which rule source a preview should run.
 #[derive(Clone, Debug)]
-pub enum RequestRulePreviewMatcher {
+pub enum RequestRulePreviewSource {
     /// The current revision of a stored rule set.
     Stored { rule_set_id: String },
     /// An unsaved draft from the editor. Validated and compiled, never stored.
@@ -94,7 +94,7 @@ pub struct RequestRuleSample {
 
 #[derive(Clone, Debug)]
 pub struct RequestRulePreviewRequest {
-    pub matcher: RequestRulePreviewMatcher,
+    pub source: RequestRulePreviewSource,
     pub sample: RequestRuleSample,
 }
 
@@ -134,7 +134,7 @@ pub struct RequestRulePreviewResult {
     /// The stored rule set's id, or the throwaway id an inline draft compiled
     /// under.
     pub rule_set_id: String,
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub evaluated_at: chrono::DateTime<Utc>,
     /// `None` exactly when `error` is set: a rule that failed produced no vote.
     pub vote: Option<RequestVote>,
@@ -297,7 +297,7 @@ impl AppUseCase {
             .map(validated_builder_model_json)
             .transpose()?;
         let id = Id::new_rego_safe().0;
-        let prepared = prepare_matcher(&id, &draft.rego_source)?;
+        let prepared = prepare_source(&id, &draft.rego_source)?;
         self.require_request_person_fact_authority(actor, &prepared.rego_source, &id)
             .await?;
         self.require_request_shaping_values(&prepared.scan, &draft.library_ids)
@@ -339,7 +339,7 @@ impl AppUseCase {
     /// only when the source is unchanged; a changed source with no document
     /// clears it, so a later builder save cannot bring back a source that was
     /// edited by hand.
-    pub async fn update_request_rule_matcher(
+    pub async fn update_request_rule_source(
         &self,
         actor: &User,
         rule_set_id: &str,
@@ -355,7 +355,7 @@ impl AppUseCase {
             Some(Some(model)) => Some(Some(validated_builder_model_json(model)?)),
         };
         let mut rule_set = self.require_request_rule_set(rule_set_id).await?;
-        let prepared = prepare_matcher(&rule_set.id, rego_source)?;
+        let prepared = prepare_source(&rule_set.id, rego_source)?;
         self.require_request_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
             .await?;
         self.require_request_shaping_values(&prepared.scan, &rule_set.library_ids)
@@ -368,7 +368,7 @@ impl AppUseCase {
                 .get_revision(&rule_set.id, rule_set.current_revision_number)
                 .await?;
             let source_unchanged = current
-                .is_some_and(|revision| revision.matcher_content_hash == prepared.content_hash);
+                .is_some_and(|revision| revision.source_content_hash == prepared.content_hash);
             if !source_unchanged {
                 builder_model_json = Some(None);
             }
@@ -545,7 +545,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let policy = self.resolve_request_preview_policy(request.matcher).await?;
+        let policy = self.resolve_request_preview_policy(request.source).await?;
         // Preview evaluates against a real requester and reports the verdict,
         // so an ungated one is a person-fact oracle: ask "would this approve
         // for user x" and read the answer. The same bar authoring meets applies
@@ -652,7 +652,7 @@ impl AppUseCase {
         let input = build_request_input(context);
         let input_json = serde_json::to_string_pretty(&input).unwrap_or_else(|_| "{}".to_string());
 
-        let matcher_content_hash = content_hash(&policy.rego_source);
+        let source_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
         let engine = RequestRulesEngine::build(std::slice::from_ref(&policy)).map_err(|error| {
             AppError::validation_refused(
@@ -713,7 +713,7 @@ impl AppUseCase {
 
         Ok(RequestRulePreviewResult {
             rule_set_id,
-            matcher_content_hash,
+            source_content_hash,
             evaluated_at,
             vote,
             held,
@@ -931,10 +931,10 @@ impl AppUseCase {
 
     async fn resolve_request_preview_policy(
         &self,
-        matcher: RequestRulePreviewMatcher,
+        source: RequestRulePreviewSource,
     ) -> AppResult<RequestPolicy> {
-        match matcher {
-            RequestRulePreviewMatcher::Stored { rule_set_id } => {
+        match source {
+            RequestRulePreviewSource::Stored { rule_set_id } => {
                 let rule_set = self.require_request_rule_set(&rule_set_id).await?;
                 let detail = self.load_request_rule_detail(rule_set).await?;
                 Ok(RequestPolicy {
@@ -943,9 +943,9 @@ impl AppUseCase {
                     rego_source: detail.revision.rego_source,
                 })
             }
-            RequestRulePreviewMatcher::Inline { rego_source } => {
+            RequestRulePreviewSource::Inline { rego_source } => {
                 let scratch_id = Id::new_rego_safe().0;
-                let prepared = prepare_matcher(&scratch_id, &rego_source)?;
+                let prepared = prepare_source(&scratch_id, &rego_source)?;
                 Ok(RequestPolicy {
                     id: scratch_id,
                     name: "preview".to_string(),
@@ -959,7 +959,7 @@ impl AppUseCase {
 // ── Validation helpers ──────────────────────────────────────────────────────
 
 /// A rule source that passed every authoring-time check, ready to persist.
-pub(crate) struct PreparedMatcher {
+pub(crate) struct PreparedSource {
     pub(crate) rego_source: String,
     pub(crate) content_hash: String,
     /// What the source can do, for the checks that need this instance's
@@ -1024,7 +1024,7 @@ pub(crate) fn validated_builder_model_json(model: &serde_json::Value) -> AppResu
 
 /// Rewrite the package to the system-assigned id, then run every check that has
 /// to hold before a revision is written.
-fn prepare_matcher(rule_id: &str, rego_source: &str) -> AppResult<PreparedMatcher> {
+fn prepare_source(rule_id: &str, rego_source: &str) -> AppResult<PreparedSource> {
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
     let validation = validate_request_rule(&rewritten, rule_id).map_err(|error| {
         AppError::validation_refused(
@@ -1056,7 +1056,7 @@ fn prepare_matcher(rule_id: &str, rego_source: &str) -> AppResult<PreparedMatche
             format!("rule validation failed: {error}"),
         )
     })?;
-    Ok(PreparedMatcher {
+    Ok(PreparedSource {
         content_hash: content_hash(&rewritten),
         rego_source: rewritten,
         scan,
@@ -1066,7 +1066,7 @@ fn prepare_matcher(rule_id: &str, rego_source: &str) -> AppResult<PreparedMatche
 fn build_revision(
     rule_set_id: &str,
     revision_number: i64,
-    prepared: &PreparedMatcher,
+    prepared: &PreparedSource,
     actor: &User,
     created_at: chrono::DateTime<Utc>,
 ) -> RequestRuleRevision {
@@ -1075,7 +1075,7 @@ fn build_revision(
         rule_set_id: rule_set_id.to_string(),
         revision_number,
         rego_source: prepared.rego_source.clone(),
-        matcher_content_hash: prepared.content_hash.clone(),
+        source_content_hash: prepared.content_hash.clone(),
         created_by: Some(actor.id.clone()),
         created_at,
     }

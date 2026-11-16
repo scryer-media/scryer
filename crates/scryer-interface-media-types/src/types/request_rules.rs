@@ -232,7 +232,7 @@ pub struct RequestRuleRevision {
     pub rego_source: String,
     /// Hash of the exact stored source, used to attribute a decision to the
     /// revision that produced it.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     /// ID of the user who wrote the revision, or null when unattributed.
     pub created_by: Option<ID>,
     /// UTC creation time.
@@ -367,7 +367,7 @@ pub struct RequestRulePreviewPayload {
     /// compiled under.
     pub rule_set_id: String,
     /// Hash of the exact source that produced this outcome.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     /// The single rule's verdict, shaped as a decision so the authoring UI and
     /// the decision browser render the same component. `effectiveOutcome`
     /// equals `policyOutcome` here.
@@ -524,7 +524,7 @@ pub struct CreateRequestRuleSetInput {
 
 /// Replaces the source of an existing rule set, appending revision N+1.
 #[derive(InputObject)]
-pub struct UpdateRequestRuleMatcherInput {
+pub struct UpdateRequestRuleSourceInput {
     /// Rule-set ID.
     pub rule_set_id: ID,
     /// Replacement rule source as written in the editor.

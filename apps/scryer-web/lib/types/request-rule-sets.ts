@@ -89,7 +89,7 @@ export type RequestRuleRevision = {
   /// Editor-stripped source: the API removes the package and import lines it
   /// generates, so what round-trips through the editor is what the author wrote.
   regoSource: string;
-  matcherContentHash: string;
+  sourceContentHash: string;
   createdBy: string | null;
   createdAt: string;
 };
@@ -158,7 +158,7 @@ export type RequestRuleDecisionRecord = {
 
 export type RequestRulePreviewResult = {
   ruleSetId: string;
-  matcherContentHash: string;
+  sourceContentHash: string;
   decision: RequestRuleDecisionRecord;
   metadataPartial: boolean;
   /// Of the tags the rule emitted, the ones the tag registry does not define.

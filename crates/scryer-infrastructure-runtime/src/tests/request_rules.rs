@@ -196,7 +196,7 @@ fn revision(rule_set_id: &str, number: i64) -> RequestRuleRevision {
         rego_source: format!(
             "package scryer.request.user.{rule_set_id}\napprove if {{ true }}\n# rev {number}\n"
         ),
-        matcher_content_hash: format!("hash-{number}"),
+        source_content_hash: format!("hash-{number}"),
         created_by: Some("user-1".to_string()),
         created_at: Utc::now(),
     }
@@ -252,7 +252,7 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
         stored_revision.rego_source,
         revision("rule-a", 1).rego_source
     );
-    assert_eq!(stored_revision.matcher_content_hash, "hash-1");
+    assert_eq!(stored_revision.source_content_hash, "hash-1");
     assert_eq!(stored_revision.created_by.as_deref(), Some("user-1"));
 
     // Appending a revision repoints the rule set and rewrites nothing.
@@ -275,7 +275,7 @@ async fn assert_rule_set_round_trip(store: &dyn RequestRuleSetRepository) -> App
             .get_revision("rule-a", 1)
             .await?
             .expect("revision 1 survives")
-            .matcher_content_hash,
+            .source_content_hash,
         "hash-1",
         "an appended revision must not rewrite its predecessor"
     );

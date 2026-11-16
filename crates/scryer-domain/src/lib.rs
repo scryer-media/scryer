@@ -6097,7 +6097,7 @@ pub struct LifecycleRuleRevision {
     /// passing the raw text around.
     pub action_spec_json: String,
     pub grace_days: i64,
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
     /// The simple builder's document for this revision's source, as canonical
@@ -6195,7 +6195,7 @@ pub struct LifecycleCandidate {
     /// Revision in force when the candidate was created. A candidate whose
     /// revision no longer matches the rule set's current revision is superseded.
     pub revision_number: i64,
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub title_id: String,
     pub library_id: String,
     pub facet: String,
@@ -6309,7 +6309,7 @@ pub struct LifecycleEvaluationRun {
     pub id: String,
     pub rule_set_id: String,
     pub revision_number: i64,
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
     pub status: LifecycleEvaluationRunStatus,
@@ -6721,7 +6721,7 @@ pub struct LifecycleSequenceTerminalMembership {
     pub candidate_id: String,
     pub rule_set_id: String,
     pub revision_number: i64,
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub title_id: String,
     pub subject_kind: String,
     pub subject_id: String,
@@ -6772,7 +6772,7 @@ pub struct RequestRuleRevision {
     /// Rego source with the package declaration already rewritten to the
     /// system-assigned rule ID.
     pub rego_source: String,
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
 }

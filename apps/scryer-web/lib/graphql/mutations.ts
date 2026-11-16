@@ -2894,8 +2894,8 @@ export const createLifecycleRuleSetMutation = `mutation CreateLifecycleRuleSet($
   }
 }`;
 
-export const updateLifecycleRuleMatcherMutation = `mutation UpdateLifecycleRuleMatcher($input: UpdateLifecycleRuleMatcherInput!) {
-  updateLifecycleRuleMatcher(input: $input) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
+export const updateLifecycleRuleSourceMutation = `mutation UpdateLifecycleRuleSource($input: UpdateLifecycleRuleSourceInput!) {
+  updateLifecycleRuleSource(input: $input) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
@@ -2924,7 +2924,7 @@ export const validateLifecycleRuleMutation = `mutation ValidateLifecycleRule($in
 export const previewLifecycleRuleMutation = `mutation PreviewLifecycleRule($input: PreviewLifecycleRuleInput!) {
   previewLifecycleRule(input: $input) {
     ruleSetId
-    matcherContentHash
+    sourceContentHash
     evaluatedAt
     titles {
       excluded
@@ -3003,8 +3003,8 @@ export const createRequestRuleSetMutation = `mutation CreateRequestRuleSet($inpu
   }
 }`;
 
-export const updateRequestRuleMatcherMutation = `mutation UpdateRequestRuleMatcher($input: UpdateRequestRuleMatcherInput!) {
-  updateRequestRuleMatcher(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+export const updateRequestRuleSourceMutation = `mutation UpdateRequestRuleSource($input: UpdateRequestRuleSourceInput!) {
+  updateRequestRuleSource(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
@@ -3042,7 +3042,7 @@ export const validateRequestRuleMutation = `mutation ValidateRequestRule($input:
 export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: PreviewRequestRuleInput!) {
   previewRequestRule(input: $input) {
     ruleSetId
-    matcherContentHash
+    sourceContentHash
     metadataPartial
     undefinedTags
     inputDocument

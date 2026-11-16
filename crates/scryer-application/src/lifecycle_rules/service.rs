@@ -90,7 +90,7 @@ pub struct LifecycleRuleDraft {
 /// A replacement matcher for an existing rule set. Applying one always appends
 /// a revision; it never edits the revision in force.
 #[derive(Clone, Debug)]
-pub struct LifecycleMatcherDraft {
+pub struct LifecycleSourceDraft {
     pub rego_source: String,
     pub grace_days: i64,
     /// The most titles the rule may act on in one fire, saved with the new
@@ -102,7 +102,7 @@ pub struct LifecycleMatcherDraft {
 
 /// Which matcher a preview should run.
 #[derive(Clone, Debug)]
-pub enum LifecyclePreviewMatcher {
+pub enum LifecyclePreviewSource {
     /// The current revision of a stored rule set.
     Stored { rule_set_id: String },
     /// An unsaved draft from the editor. Validated and compiled, never stored.
@@ -132,7 +132,7 @@ pub enum LifecyclePreviewSelection {
 
 #[derive(Clone, Debug)]
 pub struct LifecyclePreviewRequest {
-    pub matcher: LifecyclePreviewMatcher,
+    pub source: LifecyclePreviewSource,
     pub selection: LifecyclePreviewSelection,
 }
 
@@ -197,7 +197,7 @@ pub struct LifecyclePreviewResult {
     /// under.
     pub rule_set_id: String,
     /// Hash of the exact source that produced these outcomes.
-    pub matcher_content_hash: String,
+    pub source_content_hash: String,
     pub evaluated_at: chrono::DateTime<Utc>,
     pub titles: Vec<LifecyclePreviewTitleResult>,
 }
@@ -347,7 +347,7 @@ impl AppUseCase {
         let name = require_non_empty(&draft.name, "name")?;
 
         let id = Id::new_rego_safe().0;
-        let prepared = prepare_matcher(&id, &draft.rego_source, draft.grace_days)?;
+        let prepared = prepare_source(&id, &draft.rego_source, draft.grace_days)?;
         require_max_titles_per_run(&prepared.declared, draft.max_titles_per_run)?;
         self.require_declared_action_targets(
             &prepared.declared,
@@ -425,13 +425,13 @@ impl AppUseCase {
     /// does, so the acknowledgement still describes the same blast radius.
     ///
     /// [`LifecycleEffectArming::None`]: scryer_domain::LifecycleEffectArming::None
-    pub async fn update_lifecycle_rule_matcher(
+    pub async fn update_lifecycle_rule_source(
         &self,
         actor: &User,
         rule_set_id: &str,
-        draft: LifecycleMatcherDraft,
+        draft: LifecycleSourceDraft,
     ) -> AppResult<LifecycleRuleSetDetail> {
-        self.update_lifecycle_rule_matcher_with_builder_model(
+        self.update_lifecycle_rule_source_with_builder_model(
             actor,
             rule_set_id,
             draft,
@@ -440,15 +440,15 @@ impl AppUseCase {
         .await
     }
 
-    /// Append a revision as [`Self::update_lifecycle_rule_matcher`] does.
+    /// Append a revision as [`Self::update_lifecycle_rule_source`] does.
     /// [`BuilderModelChange::Keep`] carries the current revision's builder
     /// document onto the new one only when the source is unchanged; a changed
     /// source leaves the new revision without one.
-    pub async fn update_lifecycle_rule_matcher_with_builder_model(
+    pub async fn update_lifecycle_rule_source_with_builder_model(
         &self,
         actor: &User,
         rule_set_id: &str,
-        draft: LifecycleMatcherDraft,
+        draft: LifecycleSourceDraft,
         builder_model: BuilderModelChange,
     ) -> AppResult<LifecycleRuleSetDetail> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
@@ -467,7 +467,7 @@ impl AppUseCase {
                     rule_set.id, rule_set.current_revision_number
                 ))
             })?;
-        let prepared = prepare_matcher(&rule_set.id, &draft.rego_source, draft.grace_days)?;
+        let prepared = prepare_source(&rule_set.id, &draft.rego_source, draft.grace_days)?;
         let builder_model_json = resolved_builder_model(
             &builder_model.after_source_edit(&current_revision.rego_source, &prepared.rego_source),
             current_revision.builder_model_json.clone(),
@@ -786,7 +786,7 @@ impl AppUseCase {
         }
         let id = Id::new_rego_safe().0;
         let grace_days = 7;
-        let prepared = prepare_matcher(&id, EXPIRED_REQUEST_LEASES_REGO, grace_days)?;
+        let prepared = prepare_source(&id, EXPIRED_REQUEST_LEASES_REGO, grace_days)?;
         let now = Utc::now();
         let revision = build_revision(&id, 1, &prepared, grace_days, None, now, None);
         let rule_set = LifecycleRuleSet {
@@ -844,7 +844,7 @@ impl AppUseCase {
         }
         let keeps_arming = is_stored(MATCH_FORM_EXPIRED_REQUEST_LEASES_REGO);
 
-        let prepared = prepare_matcher(
+        let prepared = prepare_source(
             &rule_set.id,
             EXPIRED_REQUEST_LEASES_REGO,
             current.grace_days,
@@ -931,7 +931,7 @@ impl AppUseCase {
             .await?;
 
         let (policy, declared, library_ids, grace_days) =
-            self.resolve_preview_policy(request.matcher).await?;
+            self.resolve_preview_policy(request.source).await?;
         // Preview evaluates against real subjects and reports per-title
         // outcomes, so an ungated one is a person-fact oracle: ask "did user x
         // watch this" title by title and read the answers off the results. The
@@ -1046,7 +1046,7 @@ impl AppUseCase {
             )
             .await;
 
-        let matcher_content_hash = content_hash(&policy.rego_source);
+        let source_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
         let engine = LifecycleRulesEngine::build(std::slice::from_ref(&policy)).map_err(|e| {
             AppError::validation_refused(
@@ -1299,7 +1299,7 @@ impl AppUseCase {
                 .list_active_subject_candidates(&rule_set_id, kind.as_storage_str(), matched_ids)
                 .await?
                 .into_iter()
-                .filter(|candidate| candidate.matcher_content_hash == matcher_content_hash)
+                .filter(|candidate| candidate.source_content_hash == source_content_hash)
             {
                 open.insert(
                     (kind.as_storage_str(), candidate.subject_id),
@@ -1332,7 +1332,7 @@ impl AppUseCase {
         }
         Ok(LifecyclePreviewResult {
             rule_set_id,
-            matcher_content_hash,
+            source_content_hash,
             evaluated_at,
             titles: results,
         })
@@ -1420,10 +1420,10 @@ impl AppUseCase {
 
     async fn resolve_preview_policy(
         &self,
-        matcher: LifecyclePreviewMatcher,
+        source: LifecyclePreviewSource,
     ) -> AppResult<(LifecyclePolicy, LifecycleDeclaredActions, Vec<String>, i64)> {
-        match matcher {
-            LifecyclePreviewMatcher::Stored { rule_set_id } => {
+        match source {
+            LifecyclePreviewSource::Stored { rule_set_id } => {
                 let rule_set = self.require_lifecycle_rule_set(&rule_set_id).await?;
                 let detail = self.load_lifecycle_rule_detail(rule_set).await?;
                 if let Some(reason) = detail.load_refusal {
@@ -1440,13 +1440,13 @@ impl AppUseCase {
                     detail.revision.grace_days,
                 ))
             }
-            LifecyclePreviewMatcher::Inline {
+            LifecyclePreviewSource::Inline {
                 library_ids,
                 rego_source,
                 grace_days,
             } => {
                 let scratch_id = Id::new_rego_safe().0;
-                let prepared = prepare_matcher(&scratch_id, &rego_source, grace_days)?;
+                let prepared = prepare_source(&scratch_id, &rego_source, grace_days)?;
                 Ok((
                     LifecyclePolicy {
                         id: scratch_id,
@@ -1711,7 +1711,7 @@ impl AppUseCase {
 // ── Validation helpers ──────────────────────────────────────────────────────
 
 /// A matcher that passed every authoring-time check, ready to persist.
-struct PreparedMatcher {
+struct PreparedSource {
     rego_source: String,
     content_hash: String,
     action_spec_json: String,
@@ -1723,11 +1723,7 @@ struct PreparedMatcher {
 /// must hold before a revision is written: the matcher compiles, reads only
 /// documented facts and defines at least one action head, and the grace
 /// period is a real duration. Where each head acts is its name.
-fn prepare_matcher(
-    rule_id: &str,
-    rego_source: &str,
-    grace_days: i64,
-) -> AppResult<PreparedMatcher> {
+fn prepare_source(rule_id: &str, rego_source: &str, grace_days: i64) -> AppResult<PreparedSource> {
     if grace_days < 0 {
         return Err(AppError::validation_refused(
             crate::error_reasons::lifecycle::GRACE_PERIOD_INVALID,
@@ -1772,7 +1768,7 @@ fn prepare_matcher(
     let declared = LifecycleDeclaredActions::from_scan(&scan);
     let action_spec_json = declared.to_persisted_json();
 
-    Ok(PreparedMatcher {
+    Ok(PreparedSource {
         content_hash: content_hash(&rewritten),
         rego_source: rewritten,
         action_spec_json,
@@ -1852,7 +1848,7 @@ fn require_non_empty(value: &str, field: &str) -> AppResult<String> {
 fn build_revision(
     rule_set_id: &str,
     revision_number: i64,
-    prepared: &PreparedMatcher,
+    prepared: &PreparedSource,
     grace_days: i64,
     created_by: Option<String>,
     created_at: chrono::DateTime<Utc>,
@@ -1865,7 +1861,7 @@ fn build_revision(
         rego_source: prepared.rego_source.clone(),
         action_spec_json: prepared.action_spec_json.clone(),
         grace_days,
-        matcher_content_hash: prepared.content_hash.clone(),
+        source_content_hash: prepared.content_hash.clone(),
         created_by,
         created_at,
         builder_model_json,

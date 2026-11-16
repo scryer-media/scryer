@@ -4,7 +4,7 @@ use super::*;
 
 use crate::lib_tests::lifecycle_execution::{ExecutionFixture, execution_app, seed_title};
 use crate::lib_tests::lifecycle_sequence_execution::{
-    arm_and_evaluate, arm_and_evaluate_all, sequence_draft, with_matcher,
+    arm_and_evaluate, arm_and_evaluate_all, sequence_draft, with_source,
 };
 use crate::lib_tests::lifecycle_title_completion::{
     TitleFixture, add_episode_file, season_and_episode, title_fixture,
@@ -99,12 +99,12 @@ pub(super) async fn add_catalog_movie_file_without_physical_path(
 /// A matcher that reads the subject's storage facts and holds every title
 /// whose files sit on a configured root, so deletion rechecks capacity per
 /// file.
-pub(super) const STORAGE_MATCHER: &str =
+pub(super) const STORAGE_SOURCE: &str =
     "match if {\n\tsome root in input.facts.storage_roots\n\troot.available_percent >= 0\n}\n";
 
 pub(super) fn storage_sequence_deletion_draft() -> crate::lifecycle_rules::LifecycleRuleDraft {
     let mut draft = sequence_draft(deletion_steps());
-    with_matcher(&mut draft, STORAGE_MATCHER);
+    with_source(&mut draft, STORAGE_SOURCE);
     draft
 }
 
@@ -270,7 +270,7 @@ fn terminal_membership(
         candidate_id: candidate.id.clone(),
         rule_set_id: candidate.rule_set_id.clone(),
         revision_number: candidate.revision_number,
-        matcher_content_hash: candidate.matcher_content_hash.clone(),
+        source_content_hash: candidate.source_content_hash.clone(),
         title_id: candidate.title_id.clone(),
         subject_kind: candidate.subject_kind.clone(),
         subject_id: candidate.subject_id.clone(),
@@ -397,7 +397,7 @@ async fn episode_sequence_unmonitor_then_delete_files_preserves_other_season_rec
     let other_file_id =
         add_episode_file(&fixture, &other_season, "Sequence/Season 02/S02E02.mkv").await;
     let mut draft = sequence_draft(deletion_steps());
-    super::lifecycle_sequence_execution::with_matcher(
+    super::lifecycle_sequence_execution::with_source(
         &mut draft,
         &format!(
             "package selected_episode\nimport rego.v1\n\nmatch if {{\n  input.episode.id == {:?}\n}}\n",
@@ -726,7 +726,7 @@ async fn unmonitor_only_storage_sequence_releases_after_its_catalog_membership_d
         steps: steps.clone(),
     };
     let mut draft = sequence_draft(steps);
-    with_matcher(&mut draft, STORAGE_MATCHER);
+    with_source(&mut draft, STORAGE_SOURCE);
     let (_rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     fixture
         .execution
@@ -786,7 +786,7 @@ async fn failed_storage_sequence_releases_after_its_exact_subject_is_omitted() {
         steps: steps.clone(),
     };
     let mut draft = sequence_draft(steps);
-    with_matcher(&mut draft, STORAGE_MATCHER);
+    with_source(&mut draft, STORAGE_SOURCE);
     let (_rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     fixture
         .execution
@@ -847,7 +847,7 @@ async fn storage_omission_sweep_reaches_a_terminal_marker_after_one_hundred_reta
         steps: steps.clone(),
     };
     let mut draft = sequence_draft(steps);
-    with_matcher(&mut draft, STORAGE_MATCHER);
+    with_source(&mut draft, STORAGE_SOURCE);
     let (_rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
 
     for index in 0..100 {
@@ -1148,7 +1148,7 @@ async fn a_very_large_maximum_acts_on_every_due_title() {
 async fn an_armed_deleting_rule_without_a_maximum_shows_its_refusal_and_acts_on_nothing() {
     use crate::error_reasons::lifecycle::RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN;
     use crate::lifecycle_rules::{
-        LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
+        LifecyclePreviewRequest, LifecyclePreviewSelection, LifecyclePreviewSource,
     };
     use crate::ports::LifecycleRuleSetRepository;
 
@@ -1204,7 +1204,7 @@ async fn an_armed_deleting_rule_without_a_maximum_shows_its_refusal_and_acts_on_
         .preview_lifecycle_rule(
             user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Stored {
+                source: LifecyclePreviewSource::Stored {
                     rule_set_id: rule_set_id.clone(),
                 },
                 selection: LifecyclePreviewSelection::Titles(vec![fixture.title.id.clone()]),
@@ -2000,7 +2000,7 @@ async fn an_opposite_monitoring_change_on_an_unrelated_title_does_not_hold() {
 
 /// A storage matcher with one more condition, so deletion rechecks capacity
 /// per file and the probe can hold the sequence between its files.
-fn storage_matcher_with(condition: &str) -> String {
+fn storage_source_with(condition: &str) -> String {
     format!(
         "match if {{\n\tsome root in input.facts.storage_roots\n\troot.available_percent >= 0\n\t{condition}\n}}\n"
     )
@@ -2058,7 +2058,7 @@ async fn hold_movie_delete_after_one_file(name: &str, condition: &str) -> HeldDe
     let (probe, capacity_recovered) = capacity_holds_after_file_removal(deleted_path.clone());
     let probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
     let mut draft = sequence_draft(deletion_steps());
-    with_matcher(&mut draft, &storage_matcher_with(condition));
+    with_source(&mut draft, &storage_source_with(condition));
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     super::lifecycle_rules::arm_rule(
         &fixture.execution.app,
@@ -2268,7 +2268,7 @@ async fn a_candidate_without_a_started_delete_is_judged_on_live_facts() {
         install_lifecycle_storage_capacity_probe_for_test(stable_capacity_probe(capacity(100)))
             .await;
     let mut draft = sequence_draft(deletion_steps());
-    with_matcher(&mut draft, &storage_matcher_with("input.facts.monitored"));
+    with_source(&mut draft, &storage_source_with("input.facts.monitored"));
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     assert_no_steps(&fixture, &candidate).await;
     fixture
@@ -2416,9 +2416,9 @@ async fn an_outside_re_monitor_between_unmonitor_and_delete_is_not_hidden() {
         install_lifecycle_storage_capacity_probe_for_test(stable_capacity_probe(capacity(100)))
             .await;
     let mut draft = sequence_draft(deletion_steps());
-    with_matcher(
+    with_source(
         &mut draft,
-        &storage_matcher_with("input.facts.monitored_episode_count >= 2"),
+        &storage_source_with("input.facts.monitored_episode_count >= 2"),
     );
     let (rule_set_id, candidate) = arm_and_evaluate(&fixture.execution, draft).await;
     assert_eq!(candidate.subject_id, fixture.title.id);

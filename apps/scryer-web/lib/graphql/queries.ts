@@ -4190,7 +4190,7 @@ const lifecycleRuleRevisionFieldSelection = `
     revisionNumber
     regoSource
     graceDays
-    matcherContentHash
+    sourceContentHash
     createdBy
     createdAt`;
 
@@ -4429,7 +4429,7 @@ const requestRuleRevisionFieldSelection = `
     ruleSetId
     revisionNumber
     regoSource
-    matcherContentHash
+    sourceContentHash
     createdBy
     createdAt`;
 

@@ -61,8 +61,8 @@ pub use evaluation::{
 pub use safety::{LifecycleActivityCheck, LifecyclePlaybackHold, fold_playback_hold};
 pub use service::{
     EXPIRED_REQUEST_LEASES_REGO, LIFECYCLE_MAX_GRACE_DAYS, LIFECYCLE_PREVIEW_DEFAULT_TITLES,
-    LIFECYCLE_PREVIEW_MAX_TITLES, LifecycleMatcherDraft, LifecyclePreviewMatcher,
-    LifecyclePreviewRequest, LifecyclePreviewResult, LifecyclePreviewSelection,
-    LifecyclePreviewTitleResult, LifecycleRuleDraft, LifecycleRuleSetDetail,
-    LifecycleRuleSourceValidation,
+    LIFECYCLE_PREVIEW_MAX_TITLES, LifecyclePreviewRequest, LifecyclePreviewResult,
+    LifecyclePreviewSelection, LifecyclePreviewSource, LifecyclePreviewTitleResult,
+    LifecycleRuleDraft, LifecycleRuleSetDetail, LifecycleRuleSourceValidation,
+    LifecycleSourceDraft,
 };

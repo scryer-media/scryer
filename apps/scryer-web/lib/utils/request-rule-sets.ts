@@ -328,7 +328,7 @@ export function createRequestRuleSetInput(
 
 /// Without a schema nothing could be checked, so `builderModel` is left out
 /// and the stored model stays as it is.
-export function updateRequestRuleMatcherInput(
+export function updateRequestRuleSourceInput(
   ruleSetId: string,
   draft: RequestRuleSetDraft,
   binding: RequestRuleBuilderBinding,

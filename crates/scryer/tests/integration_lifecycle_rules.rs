@@ -74,7 +74,7 @@ fn assert_error_contains(body: &Value, expected: &str) {
 /// Deletes every monitored title. The package line is deliberately absent: the
 /// server owns it, and the editor never sees it. The source declares both when
 /// it acts and what it does.
-const MONITORED_MATCHER: &str = "delete_title if {\n\
+const MONITORED_SOURCE: &str = "delete_title if {\n\
      \tinput.facts.monitored\n\
      }\n";
 
@@ -84,7 +84,7 @@ const MONITORED_UNMONITOR: &str = "unmonitor if {\n\
      }\n";
 
 /// Acts on nothing: the facet never equals this sentinel.
-const NEVER_MATCHER: &str = "unmonitor if {\n\
+const NEVER_SOURCE: &str = "unmonitor if {\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
      }\n";
 
@@ -92,16 +92,16 @@ const NEVER_MATCHER: &str = "unmonitor if {\n\
 /// than reported as a no-match. Nothing in the source says so: the server
 /// derives the hold from the fact the matcher references, which is exactly the
 /// mistake an author can no longer make.
-const ACTIVE_DOWNLOADS_MATCHER: &str = "delete_title if {\n\
+const ACTIVE_DOWNLOADS_SOURCE: &str = "delete_title if {\n\
      \tnot input.facts.active_downloads\n\
      }\n";
 
 /// Compiles, but defines no action, so it could never do anything.
-const NO_ACTION_MATCHER: &str = "match if {\n\
+const NO_ACTION_SOURCE: &str = "match if {\n\
      \tinput.facts.monitored\n\
      }\n";
 
-const INVALID_MATCHER: &str = "delete_title if { this is not rego\n";
+const INVALID_SOURCE: &str = "delete_title if { this is not rego\n";
 
 /// Adds `tag` to every monitored title.
 fn add_tag_source(tag: &str) -> String {
@@ -135,7 +135,7 @@ const DETAIL_FIELDS: &str = r#"
         revisionNumber
         regoSource
         graceDays
-        matcherContentHash
+        sourceContentHash
         createdBy
         createdAt
     }
@@ -155,10 +155,10 @@ fn create_mutation() -> String {
     )
 }
 
-fn update_matcher_mutation() -> String {
+fn update_source_mutation() -> String {
     format!(
-        "mutation($input: UpdateLifecycleRuleMatcherInput!) {{
-            updateLifecycleRuleMatcher(input: $input) {{{DETAIL_FIELDS}}}
+        "mutation($input: UpdateLifecycleRuleSourceInput!) {{
+            updateLifecycleRuleSource(input: $input) {{{DETAIL_FIELDS}}}
         }}"
     )
 }
@@ -191,14 +191,14 @@ const REVISIONS_QUERY: &str = r#"query($ruleSetId: ID!) {
         revisionNumber
         regoSource
         graceDays
-        matcherContentHash
+        sourceContentHash
     }
 }"#;
 
 const PREVIEW_MUTATION: &str = r#"mutation($input: PreviewLifecycleRuleInput!) {
     previewLifecycleRule(input: $input) {
         ruleSetId
-        matcherContentHash
+        sourceContentHash
         evaluatedAt
         titles {
             titleId
@@ -334,7 +334,7 @@ async fn lifecycle_rule_create_list_and_get_round_trip() {
             "input": {
                 "name": "Stale movies",
                 "description": "Movies nobody monitors",
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "graceDays": 14,
                 "libraryIds": [movie_library_id()],
                 "maxTitlesPerRun": TEST_MAX_TITLES_PER_RUN,
@@ -361,7 +361,7 @@ async fn lifecycle_rule_create_list_and_get_round_trip() {
     assert_eq!(revision["ruleSetId"], json!(id));
     assert_eq!(revision["graceDays"], 14);
     assert!(
-        revision["matcherContentHash"]
+        revision["sourceContentHash"]
             .as_str()
             .is_some_and(|hash| !hash.is_empty())
     );
@@ -470,23 +470,23 @@ async fn lifecycle_rule_naming_an_unknown_quality_profile_is_rejected() {
 }
 
 #[tokio::test]
-async fn lifecycle_rule_matcher_update_appends_a_revision() {
+async fn lifecycle_rule_source_update_appends_a_revision() {
     let ctx = TestContext::new().await;
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
-    let first_hash = created["revision"]["matcherContentHash"]
+    let first_hash = created["revision"]["sourceContentHash"]
         .as_str()
         .expect("hash")
         .to_string();
 
     let updated = gql(
         &ctx,
-        &update_matcher_mutation(),
+        &update_source_mutation(),
         json!({
             "input": {
                 "id": id,
-                "regoSource": NEVER_MATCHER,
+                "regoSource": NEVER_SOURCE,
                 "graceDays": 30,
             }
         }),
@@ -494,13 +494,13 @@ async fn lifecycle_rule_matcher_update_appends_a_revision() {
     .await;
     assert_no_errors(&updated);
 
-    let detail = &updated["data"]["updateLifecycleRuleMatcher"];
+    let detail = &updated["data"]["updateLifecycleRuleSource"];
     assert_eq!(detail["ruleSet"]["currentRevisionNumber"], 2);
     assert_eq!(detail["revision"]["revisionNumber"], 2);
     assert_eq!(detail["revision"]["graceDays"], 30);
     assert_eq!(detail["declaredActions"]["heads"], json!(["UNMONITOR"]));
     assert_ne!(
-        detail["revision"]["matcherContentHash"],
+        detail["revision"]["sourceContentHash"],
         json!(first_hash),
         "a new matcher must hash differently"
     );
@@ -516,7 +516,7 @@ async fn lifecycle_rule_matcher_update_appends_a_revision() {
     assert_eq!(revisions[1]["revisionNumber"], 1);
     // Revision one is immutable: it still carries the source it was written
     // with, so a decision recorded against it stays attributable.
-    assert_eq!(revisions[1]["matcherContentHash"], json!(first_hash));
+    assert_eq!(revisions[1]["sourceContentHash"], json!(first_hash));
     assert!(
         revisions[1]["regoSource"]
             .as_str()
@@ -563,7 +563,7 @@ async fn builder_models_are_kept_cleared_and_replaced_through_graphql() {
     // Omitted: the new revision keeps the document.
     let kept = gql(
         &ctx,
-        &update_matcher_mutation(),
+        &update_source_mutation(),
         json!({"input": {"id": id, "regoSource": MONITORED_UNMONITOR, "graceDays": 3}}),
     )
     .await;
@@ -578,8 +578,8 @@ async fn builder_models_are_kept_cleared_and_replaced_through_graphql() {
     // Omitted with a changed source: the hand edit drops the document.
     let edited = gql(
         &ctx,
-        &update_matcher_mutation(),
-        json!({"input": {"id": id, "regoSource": NEVER_MATCHER}}),
+        &update_source_mutation(),
+        json!({"input": {"id": id, "regoSource": NEVER_SOURCE}}),
     )
     .await;
     assert_no_errors(&edited);
@@ -590,7 +590,7 @@ async fn builder_models_are_kept_cleared_and_replaced_through_graphql() {
     );
     let rebuilt = gql(
         &ctx,
-        &update_matcher_mutation(),
+        &update_source_mutation(),
         json!({"input": {"id": id, "regoSource": MONITORED_UNMONITOR, "builderModel": model}}),
     )
     .await;
@@ -599,7 +599,7 @@ async fn builder_models_are_kept_cleared_and_replaced_through_graphql() {
     // A document for another family is refused with its code.
     let refused = gql(
         &ctx,
-        &update_matcher_mutation(),
+        &update_source_mutation(),
         json!({"input": {
             "id": id,
             "regoSource": MONITORED_UNMONITOR,
@@ -612,7 +612,7 @@ async fn builder_models_are_kept_cleared_and_replaced_through_graphql() {
     // Null: cleared.
     let cleared = gql(
         &ctx,
-        &update_matcher_mutation(),
+        &update_source_mutation(),
         json!({"input": {"id": id, "regoSource": MONITORED_UNMONITOR, "builderModel": null}}),
     )
     .await;
@@ -701,7 +701,7 @@ async fn lifecycle_rule_metadata_update_does_not_create_a_revision() {
         scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
     ];
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
 
     let renamed = gql(
@@ -765,7 +765,7 @@ async fn lifecycle_rule_validation_reports_errors_without_persisting() {
     let invalid = gql(
         &ctx,
         VALIDATE_MUTATION,
-        json!({ "input": { "regoSource": INVALID_MATCHER } }),
+        json!({ "input": { "regoSource": INVALID_SOURCE } }),
     )
     .await;
     assert_no_errors(&invalid);
@@ -782,7 +782,7 @@ async fn lifecycle_rule_validation_reports_errors_without_persisting() {
     let valid = gql(
         &ctx,
         VALIDATE_MUTATION,
-        json!({ "input": { "regoSource": MONITORED_MATCHER } }),
+        json!({ "input": { "regoSource": MONITORED_SOURCE } }),
     )
     .await;
     assert_no_errors(&valid);
@@ -798,7 +798,7 @@ async fn lifecycle_rule_validation_reports_errors_without_persisting() {
     let no_action = gql(
         &ctx,
         VALIDATE_MUTATION,
-        json!({ "input": { "regoSource": NO_ACTION_MATCHER } }),
+        json!({ "input": { "regoSource": NO_ACTION_SOURCE } }),
     )
     .await;
     assert_no_errors(&no_action);
@@ -821,7 +821,7 @@ async fn lifecycle_rule_validation_reports_errors_without_persisting() {
 }
 
 #[tokio::test]
-async fn lifecycle_rule_creation_rejects_a_matcher_that_does_not_compile() {
+async fn lifecycle_rule_creation_rejects_a_source_that_does_not_compile() {
     let ctx = TestContext::new().await;
 
     let body = gql(
@@ -830,7 +830,7 @@ async fn lifecycle_rule_creation_rejects_a_matcher_that_does_not_compile() {
         json!({
             "input": {
                 "name": "Broken",
-                "regoSource": INVALID_MATCHER,
+                "regoSource": INVALID_SOURCE,
             }
         }),
     )
@@ -843,7 +843,7 @@ async fn lifecycle_rule_creation_rejects_a_matcher_that_does_not_compile() {
         json!({
             "input": {
                 "name": "Does nothing",
-                "regoSource": NO_ACTION_MATCHER,
+                "regoSource": NO_ACTION_SOURCE,
             }
         }),
     )
@@ -875,7 +875,7 @@ async fn lifecycle_rule_preview_separates_match_from_no_match() {
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "titleIds": ["title-monitored", "title-unmonitored"],
             }
         }),
@@ -885,7 +885,7 @@ async fn lifecycle_rule_preview_separates_match_from_no_match() {
 
     let preview = &body["data"]["previewLifecycleRule"];
     assert!(
-        preview["matcherContentHash"]
+        preview["sourceContentHash"]
             .as_str()
             .is_some_and(|hash| !hash.is_empty())
     );
@@ -927,7 +927,7 @@ async fn lifecycle_rule_preview_holds_a_title_on_an_unobservable_fact() {
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": ACTIVE_DOWNLOADS_MATCHER,
+                "regoSource": ACTIVE_DOWNLOADS_SOURCE,
                 "titleIds": ["title-monitored"],
             }
         }),
@@ -949,7 +949,7 @@ async fn lifecycle_rule_preview_runs_a_stored_rule_at_its_current_revision() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-monitored", "Monitored Movie", true).await;
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
 
     let body = gql(
@@ -969,7 +969,7 @@ async fn lifecycle_rule_preview_runs_a_stored_rule_at_its_current_revision() {
     let preview = &body["data"]["previewLifecycleRule"];
     assert_eq!(preview["ruleSetId"], json!(id));
     assert_eq!(
-        preview["matcherContentHash"], created["revision"]["matcherContentHash"],
+        preview["sourceContentHash"], created["revision"]["sourceContentHash"],
         "a stored preview must be attributable to the revision in force"
     );
     assert_eq!(outcome_for(preview, "title-monitored")["outcome"], "MATCH");
@@ -985,7 +985,7 @@ async fn lifecycle_rule_preview_rejects_an_oversized_selection() {
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "titleIds": title_ids,
             }
         }),
@@ -995,37 +995,37 @@ async fn lifecycle_rule_preview_rejects_an_oversized_selection() {
 }
 
 #[tokio::test]
-async fn lifecycle_rule_preview_requires_exactly_one_matcher_and_one_selection() {
+async fn lifecycle_rule_preview_requires_exactly_one_source_and_one_selection() {
     let ctx = TestContext::new().await;
 
-    let both_matchers = gql(
+    let both_sources = gql(
         &ctx,
         PREVIEW_MUTATION,
         json!({
             "input": {
                 "ruleSetId": "rule-1",
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "titleIds": ["title-1"],
             }
         }),
     )
     .await;
-    assert_error_contains(&both_matchers, "not both");
+    assert_error_contains(&both_sources, "not both");
 
-    let no_matcher = gql(
+    let no_source = gql(
         &ctx,
         PREVIEW_MUTATION,
         json!({ "input": { "titleIds": ["title-1"] } }),
     )
     .await;
-    assert_error_contains(&no_matcher, "'ruleSetId' or 'regoSource'");
+    assert_error_contains(&no_source, "'ruleSetId' or 'regoSource'");
 
     let draft_without_action = gql(
         &ctx,
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": NO_ACTION_MATCHER,
+                "regoSource": NO_ACTION_SOURCE,
                 "titleIds": ["title-1"],
             }
         }),
@@ -1041,7 +1041,7 @@ async fn lifecycle_rule_preview_requires_exactly_one_matcher_and_one_selection()
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "titleIds": ["title-1"],
                 "libraryId": movie_library_id(),
             }
@@ -1055,7 +1055,7 @@ async fn lifecycle_rule_preview_requires_exactly_one_matcher_and_one_selection()
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
             }
         }),
     )
@@ -1071,7 +1071,7 @@ async fn lifecycle_rule_preview_requires_exactly_one_matcher_and_one_selection()
 async fn lifecycle_rule_delete_removes_the_rule_set() {
     let ctx = TestContext::new().await;
 
-    let created = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let created = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let id = created["ruleSet"]["id"].as_str().expect("id").to_string();
 
     let deleted = gql(
@@ -1128,7 +1128,7 @@ async fn the_action_input_and_catalog_are_no_longer_part_of_the_api() {
         json!({
             "input": {
                 "name": "Old shape",
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "action": { "kind": "DELETE_TITLE_AND_FILES" },
             }
         }),
@@ -1169,7 +1169,7 @@ async fn lifecycle_rule_surface_denies_an_actor_without_catalog_settings() {
         json!({
             "input": {
                 "name": "Not allowed",
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
             }
         }),
         &denied,
@@ -1183,7 +1183,7 @@ async fn lifecycle_rule_surface_denies_an_actor_without_catalog_settings() {
     let validated = gql_as(
         &ctx,
         VALIDATE_MUTATION,
-        json!({ "input": { "regoSource": MONITORED_MATCHER } }),
+        json!({ "input": { "regoSource": MONITORED_SOURCE } }),
         &denied,
     )
     .await;
@@ -1194,7 +1194,7 @@ async fn lifecycle_rule_surface_denies_an_actor_without_catalog_settings() {
         PREVIEW_MUTATION,
         json!({
             "input": {
-                "regoSource": MONITORED_MATCHER,
+                "regoSource": MONITORED_SOURCE,
                 "titleIds": ["title-1"],
             }
         }),
@@ -1408,7 +1408,7 @@ async fn arm_rule_and_gate(ctx: &TestContext, rule_set_id: &str) {
 async fn lifecycle_evaluation_is_dark_until_both_the_rule_and_the_gate_are_armed() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-dark-1", "Monitored Movie", true).await;
-    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1458,7 +1458,7 @@ async fn a_dry_run_rule_records_a_candidate_shown_only_while_lifecycle_is_on() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-shadow-1", "Monitored Movie", true).await;
     seed_title(&ctx, "title-shadow-2", "Unmonitored Movie", false).await;
-    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1582,7 +1582,7 @@ async fn a_dry_run_rule_records_a_candidate_shown_only_while_lifecycle_is_on() {
 async fn an_exclusion_round_trips_and_closes_the_candidate_it_covers() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-excl-1", "Hands Off", true).await;
-    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_SOURCE).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -1806,7 +1806,7 @@ async fn wait_for_candidate_state(ctx: &TestContext, rule_set_id: &str, state: &
 #[tokio::test]
 async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_library_scope() {
     let ctx = TestContext::new().await;
-    let detail = create_rule(&ctx, "Review deletion", MONITORED_MATCHER).await;
+    let detail = create_rule(&ctx, "Review deletion", MONITORED_SOURCE).await;
     let id = detail["ruleSet"]["id"].as_str().unwrap();
     for confirmation in [
         Value::Null,
@@ -1847,16 +1847,16 @@ async fn enabling_a_delete_rule_requires_the_reviewed_revision_and_explicit_libr
     .await;
     let edited = gql(
         &ctx,
-        &update_matcher_mutation(),
+        &update_source_mutation(),
         json!({ "input": {
             "id": id,
-            "regoSource": MONITORED_MATCHER,
+            "regoSource": MONITORED_SOURCE,
             "graceDays": 3,
         }}),
     )
     .await;
     assert_no_errors(&edited);
-    let rule = &edited["data"]["updateLifecycleRuleMatcher"]["ruleSet"];
+    let rule = &edited["data"]["updateLifecycleRuleSource"]["ruleSet"];
     assert_eq!(rule["state"], "DRY_RUN");
     assert_eq!(rule["editedSinceEnabled"], true);
 }
@@ -1905,7 +1905,7 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
     .expect("record owned media");
     let unrelated = root.path().join("unrelated.txt");
     std::fs::write(&unrelated, b"preserved").expect("write unrelated file");
-    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER).await;
+    let detail = create_rule(&ctx, "Retire watched", MONITORED_SOURCE).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")
@@ -2019,7 +2019,7 @@ async fn a_reversible_unmonitor_journey_needs_no_confirmation() {
 async fn a_subject_that_stopped_matching_is_canceled_before_it_is_acted_on() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-kept", "Rewatched Movie", true).await;
-    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER).await;
+    let detail = create_rule(&ctx, "Retire watched", MONITORED_SOURCE).await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")

@@ -197,7 +197,7 @@ pub fn from_lifecycle_rule_revision(
         revision_number: to_graphql_int(revision.revision_number),
         rego_source: scryer_rules::strip_editor_source(&revision.rego_source),
         grace_days: to_graphql_int(revision.grace_days),
-        matcher_content_hash: revision.matcher_content_hash,
+        source_content_hash: revision.source_content_hash,
         created_by: revision.created_by.map(ID::from),
         created_at: revision.created_at,
     }
@@ -357,7 +357,7 @@ pub fn from_lifecycle_rule_set_detail(
 pub fn from_lifecycle_preview_result(result: AppPreviewResult) -> LifecyclePreviewPayload {
     LifecyclePreviewPayload {
         rule_set_id: result.rule_set_id,
-        matcher_content_hash: result.matcher_content_hash,
+        source_content_hash: result.source_content_hash,
         evaluated_at: result.evaluated_at,
         titles: result
             .titles
@@ -713,7 +713,7 @@ mod tests {
             id: "candidate-1".into(),
             rule_set_id: "rule-1".into(),
             revision_number: 2,
-            matcher_content_hash: "hash".into(),
+            source_content_hash: "hash".into(),
             title_id: "title-1".into(),
             library_id: "library-1".into(),
             facet: "movie".into(),

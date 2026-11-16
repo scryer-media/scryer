@@ -235,7 +235,7 @@ export function createLifecycleRuleSetInput(
 
 /// The matcher half without the per-run maximum: what decides whether a
 /// save writes a new revision.
-function lifecycleRuleMatcherRevision(
+function lifecycleRuleSourceRevision(
   id: string,
   draft: LifecycleRuleSetDraft,
   binding: LifecycleRuleBuilderBinding,
@@ -256,13 +256,13 @@ function lifecycleRuleMatcherRevision(
 
 /// The per-run maximum travels with the source, so a source that starts to
 /// delete is saved together with the limit it needs. Null clears it.
-export function updateLifecycleRuleMatcherInput(
+export function updateLifecycleRuleSourceInput(
   id: string,
   draft: LifecycleRuleSetDraft,
   binding: LifecycleRuleBuilderBinding,
 ) {
   return {
-    ...lifecycleRuleMatcherRevision(id, draft, binding),
+    ...lifecycleRuleSourceRevision(id, draft, binding),
     maxTitlesPerRun: draft.maxTitlesPerRun,
   };
 }
@@ -296,12 +296,12 @@ export function lifecycleRuleUpdatePlan(
   const same = (left: unknown, right: unknown) =>
     JSON.stringify(left) === JSON.stringify(right);
   return {
-    matcher: same(
-      lifecycleRuleMatcherRevision(id, draft, binding),
-      lifecycleRuleMatcherRevision(id, baseline, binding),
+    source: same(
+      lifecycleRuleSourceRevision(id, draft, binding),
+      lifecycleRuleSourceRevision(id, baseline, binding),
     )
       ? null
-      : updateLifecycleRuleMatcherInput(id, draft, binding),
+      : updateLifecycleRuleSourceInput(id, draft, binding),
     metadata: same(metadata, updateLifecycleRuleMetadataInput(id, baseline))
       ? null
       : metadata,
@@ -339,7 +339,7 @@ export function lifecyclePreviewInput({
   titleIds,
   subjectIds,
 }: LifecyclePreviewInputOptions) {
-  const matcher = ruleSetId
+  const source = ruleSetId
     ? { ruleSetId }
     : draft
       ? {
@@ -360,7 +360,7 @@ export function lifecyclePreviewInput({
             limit ?? LIFECYCLE_PREVIEW_LIMIT_DEFAULT,
           ),
         };
-  return { ...matcher, ...subjects };
+  return { ...source, ...subjects };
 }
 
 export function previewOutcomeBadgeTone(

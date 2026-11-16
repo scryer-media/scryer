@@ -47,7 +47,7 @@ import {
   newRequestRuleBuilderDraft,
   requestFilterArgument,
   requestRuleDraftFromDetail,
-  updateRequestRuleMatcherInput,
+  updateRequestRuleSourceInput,
   updateRequestRuleMetadataInput,
 } from "@/lib/utils/request-rule-sets";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
@@ -79,7 +79,7 @@ import {
   deleteRequestRuleSetMutation,
   previewRequestRuleMutation,
   setRequestRuleEnabledMutation,
-  updateRequestRuleMatcherMutation,
+  updateRequestRuleSourceMutation,
   updateRequestRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
 
@@ -591,16 +591,16 @@ export function SettingsRequestRulesContainer() {
     setMutatingRuleSetId(editingRuleSetId || "new");
     try {
       if (editingRuleSetId) {
-        const matcher = await client
-          .mutation(updateRequestRuleMatcherMutation, {
-            input: updateRequestRuleMatcherInput(
+        const source = await client
+          .mutation(updateRequestRuleSourceMutation, {
+            input: updateRequestRuleSourceInput(
               editingRuleSetId,
               ruleSetDraft,
               builderBinding,
             ),
           })
           .toPromise();
-        if (matcher.error) throw matcher.error;
+        if (source.error) throw source.error;
         const metadata = await client
           .mutation(updateRequestRuleMetadataMutation, {
             input: updateRequestRuleMetadataInput(

@@ -4,7 +4,7 @@
 use scryer_rules::lifecycle::rewrite_package_declaration;
 use scryer_rules::validation::validate_lifecycle_rule;
 
-use super::prepare_matcher;
+use super::prepare_source;
 
 const WEB_TEMPLATES: &[(&str, &str)] = &[
     (
@@ -95,7 +95,7 @@ fn every_web_template_saves_without_errors_or_warnings() {
             "{template}: {:?}",
             validation.warnings
         );
-        let prepared = prepare_matcher(&rule_id, source, 7)
+        let prepared = prepare_source(&rule_id, source, 7)
             .unwrap_or_else(|error| panic!("{template}: {error:?}"));
         assert!(!prepared.declared.heads.is_empty(), "{template}");
     }

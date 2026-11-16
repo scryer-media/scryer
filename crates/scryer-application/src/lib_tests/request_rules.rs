@@ -23,7 +23,7 @@ use crate::request_rules::arbitration::{
     FALLBACK_SHAPING_INVALID, LIBRARY_PERMISSION_DECIDER, ScopedError, ScopedVote, arbitrate,
 };
 use crate::request_rules::{
-    RequestRuleDraft, RequestRulePreviewMatcher, RequestRulePreviewRequest, RequestRuleSample,
+    RequestRuleDraft, RequestRulePreviewRequest, RequestRulePreviewSource, RequestRuleSample,
 };
 
 // ── Matchers used throughout ────────────────────────────────────────────────
@@ -503,7 +503,7 @@ async fn a_new_rule_set_is_stored_disabled_and_loads_nothing() {
 
     assert!(!detail.rule_set.enabled);
     assert_eq!(detail.revision.revision_number, 1);
-    assert!(!detail.revision.matcher_content_hash.is_empty());
+    assert!(!detail.revision.source_content_hash.is_empty());
     // A disabled rule is not compiled at all, so the engine is still empty.
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
 }
@@ -563,7 +563,7 @@ async fn enabling_a_rule_set_needs_catalog_settings_authority() {
 }
 
 #[tokio::test]
-async fn a_person_targeting_matcher_needs_permission_authority() {
+async fn a_person_targeting_source_needs_permission_authority() {
     let harness = bootstrap_media_request_app();
 
     // The requester holds `manage_catalog_settings` but not `manage_permissions`.
@@ -621,7 +621,7 @@ async fn a_person_targeting_matcher_needs_permission_authority() {
 }
 
 #[tokio::test]
-async fn an_invalid_matcher_is_refused_with_the_reference_wording() {
+async fn an_invalid_source_is_refused_with_the_reference_wording() {
     let harness = bootstrap_media_request_app();
     let error = harness
         .app
@@ -647,13 +647,13 @@ async fn an_invalid_matcher_is_refused_with_the_reference_wording() {
 }
 
 #[tokio::test]
-async fn editing_a_matcher_appends_a_revision_and_leaves_its_predecessor_alone() {
+async fn editing_a_source_appends_a_revision_and_leaves_its_predecessor_alone() {
     let harness = bootstrap_media_request_app();
     let detail = create_rule(&harness, "Approve everything", APPROVE_EVERYTHING).await;
 
     let updated = harness
         .app
-        .update_request_rule_matcher(&harness.manager, &detail.rule_set.id, DENY_EVERYTHING, None)
+        .update_request_rule_source(&harness.manager, &detail.rule_set.id, DENY_EVERYTHING, None)
         .await
         .expect("matcher edit should succeed");
     assert_eq!(updated.revision.revision_number, 2);
@@ -670,8 +670,8 @@ async fn editing_a_matcher_appends_a_revision_and_leaves_its_predecessor_alone()
         .find(|revision| revision.revision_number == 1)
         .expect("revision 1 survives");
     assert_eq!(
-        first.matcher_content_hash,
-        detail.revision.matcher_content_hash
+        first.source_content_hash,
+        detail.revision.source_content_hash
     );
 }
 
@@ -708,7 +708,7 @@ async fn previewing_reports_the_vote_the_tags_and_the_rendered_input() {
         .preview_request_rule(
             &harness.manager,
             RequestRulePreviewRequest {
-                matcher: RequestRulePreviewMatcher::Stored {
+                source: RequestRulePreviewSource::Stored {
                     rule_set_id: detail.rule_set.id.clone(),
                 },
                 sample: sample(&harness, &library_id, 9041),
@@ -729,7 +729,7 @@ async fn previewing_reports_the_vote_the_tags_and_the_rendered_input() {
         .preview_request_rule(
             &harness.manager,
             RequestRulePreviewRequest {
-                matcher: RequestRulePreviewMatcher::Inline {
+                source: RequestRulePreviewSource::Inline {
                     rego_source: DENY_EVERYTHING.to_string(),
                 },
                 sample: sample(&harness, &library_id, 9041),
@@ -2578,7 +2578,7 @@ async fn the_builder_model_round_trips_and_is_bounded() {
     // Omitted keeps it while the source is unchanged.
     harness
         .app
-        .update_request_rule_matcher(&harness.manager, &id, APPROVE_EVERYTHING, None)
+        .update_request_rule_source(&harness.manager, &id, APPROVE_EVERYTHING, None)
         .await
         .expect("edit");
     assert_eq!(read(true).await, Some(model.clone()));
@@ -2587,13 +2587,13 @@ async fn the_builder_model_round_trips_and_is_bounded() {
     // revert an edit made by hand.
     harness
         .app
-        .update_request_rule_matcher(&harness.manager, &id, DENY_EVERYTHING, None)
+        .update_request_rule_source(&harness.manager, &id, DENY_EVERYTHING, None)
         .await
         .expect("edit");
     assert_eq!(read(true).await, None);
     harness
         .app
-        .update_request_rule_matcher(
+        .update_request_rule_source(
             &harness.manager,
             &id,
             DENY_EVERYTHING,
@@ -2625,7 +2625,7 @@ async fn the_builder_model_round_trips_and_is_bounded() {
     ] {
         let refusal = harness
             .app
-            .update_request_rule_matcher(&harness.manager, &id, DENY_EVERYTHING, Some(Some(bad)))
+            .update_request_rule_source(&harness.manager, &id, DENY_EVERYTHING, Some(Some(bad)))
             .await
             .expect_err("refused");
         assert_eq!(refusal.validation_reason(), Some(code));
@@ -2634,7 +2634,7 @@ async fn the_builder_model_round_trips_and_is_bounded() {
     // Null clears it.
     harness
         .app
-        .update_request_rule_matcher(&harness.manager, &id, DENY_EVERYTHING, Some(None))
+        .update_request_rule_source(&harness.manager, &id, DENY_EVERYTHING, Some(None))
         .await
         .expect("clear");
     assert_eq!(read(true).await, None);

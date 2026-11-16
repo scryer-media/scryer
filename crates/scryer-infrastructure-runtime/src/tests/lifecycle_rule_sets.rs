@@ -703,7 +703,7 @@ fn revision(rule_set_id: &str, number: i64) -> LifecycleRuleRevision {
         rego_source: format!("package scryer.maintenance.user.{rule_set_id}\nmatch := true\n"),
         action_spec_json: r#"{"kind":"unmonitor_scope_keep_files","schema_version":1}"#.to_string(),
         grace_days: 7 * number,
-        matcher_content_hash: format!("hash-{number}"),
+        source_content_hash: format!("hash-{number}"),
         created_by: Some("user-1".to_string()),
         created_at: Utc::now(),
         builder_model_json: None,
@@ -777,7 +777,7 @@ async fn rule_sets_and_revisions_round_trip() {
     let stored_levels = declared(&stored_revision.action_spec_json).levels();
     assert_eq!(stored_levels.len(), 2, "title and season levels survive");
     assert_eq!(stored_levels, declared(&expected.action_spec_json).levels());
-    assert_eq!(stored_revision.matcher_content_hash, "hash-1");
+    assert_eq!(stored_revision.source_content_hash, "hash-1");
     assert_eq!(stored_revision.grace_days, 7);
     assert_eq!(stored_revision.created_by.as_deref(), Some("user-1"));
     assert_eq!(stored_revision.builder_model_json, None);

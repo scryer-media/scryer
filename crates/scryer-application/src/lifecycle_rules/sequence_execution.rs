@@ -2852,7 +2852,7 @@ fn sequence_terminal_membership(
         candidate_id: candidate.id.clone(),
         rule_set_id: candidate.rule_set_id.clone(),
         revision_number: candidate.revision_number,
-        matcher_content_hash: candidate.matcher_content_hash.clone(),
+        source_content_hash: candidate.source_content_hash.clone(),
         title_id: candidate.title_id.clone(),
         subject_kind: candidate.subject_kind.clone(),
         subject_id: candidate.subject_id.clone(),

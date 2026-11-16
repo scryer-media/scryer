@@ -319,7 +319,7 @@ fn revision_args(revision: &RequestRuleRevision) -> Vec<SqlArg> {
         SqlArg::Text(revision.rule_set_id.clone()),
         SqlArg::I64(revision.revision_number),
         SqlArg::Text(revision.rego_source.clone()),
-        SqlArg::Text(revision.matcher_content_hash.clone()),
+        SqlArg::Text(revision.source_content_hash.clone()),
         SqlArg::OptText(revision.created_by.clone()),
         SqlArg::Timestamp(revision.created_at),
     ]
@@ -344,7 +344,7 @@ fn row_to_revision(row: &SqlRow) -> AppResult<RequestRuleRevision> {
         rule_set_id: row.text("rule_set_id")?,
         revision_number: row.i64("revision_number")?,
         rego_source: row.text("rego_source")?,
-        matcher_content_hash: row.text("matcher_content_hash")?,
+        source_content_hash: row.text("matcher_content_hash")?,
         created_by: row.opt_text("created_by")?,
         created_at: row.timestamp_or_now("created_at")?,
     })

@@ -219,7 +219,7 @@ async fn add_title_file_at(fixture: &TitleFixture, title_id: &str, path: &Path) 
 
 /// A matcher for the fixture title that holds while any root its files are
 /// on has under 200 bytes free.
-fn low_space_matcher(fixture: &TitleFixture, extra: &str) -> String {
+fn low_space_source(fixture: &TitleFixture, extra: &str) -> String {
     format!(
         "match if {{ input.subject.title_id == {:?};{extra} some root in input.facts.storage_roots; root.available_bytes < 200 }}",
         fixture.title.id
@@ -227,13 +227,10 @@ fn low_space_matcher(fixture: &TitleFixture, extra: &str) -> String {
 }
 
 async fn arm_storage_title_deletion(fixture: &TitleFixture) -> String {
-    arm_storage_title_deletion_with_matcher(fixture, low_space_matcher(fixture, "")).await
+    arm_storage_title_deletion_with_source(fixture, low_space_source(fixture, "")).await
 }
 
-async fn arm_storage_title_deletion_with_matcher(
-    fixture: &TitleFixture,
-    matcher: String,
-) -> String {
+async fn arm_storage_title_deletion_with_source(fixture: &TitleFixture, matcher: String) -> String {
     let created = fixture
         .execution
         .app
@@ -1166,7 +1163,7 @@ async fn an_unavailable_root_makes_the_storage_facts_unknown_and_holds() {
     add_movie_file_at(&fixture, &root_b.join("Unknown/second.mkv")).await;
 
     assert_eq!(
-        evaluate_dry_run(&fixture, low_space_matcher(&fixture, "")).await,
+        evaluate_dry_run(&fixture, low_space_source(&fixture, "")).await,
         0,
         "an unknown root never matches"
     );
@@ -1362,7 +1359,7 @@ async fn a_rule_without_storage_facts_still_deletes_the_files_it_can_plan() {
     let (root_a_path, root_a_file_id) = add_movie_file(&fixture, "Plain/root-a.mkv").await;
     let root_b_path = root_b.join("Plain/root-b.mkv");
     let root_b_file_id = add_movie_file_at(&fixture, &root_b_path).await;
-    arm_storage_title_deletion_with_matcher(
+    arm_storage_title_deletion_with_source(
         &fixture,
         format!(
             "match if {{ input.subject.title_id == {:?} }}",
@@ -1590,8 +1587,8 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
     .await;
     let fixture = title_fixture("Guarded Retry", MediaFacet::Movie).await;
     let (media_path, media_file_id) = add_movie_file(&fixture, "Guarded/movie.mkv").await;
-    let matcher = low_space_matcher(&fixture, " input.facts.monitored;");
-    arm_storage_title_deletion_with_matcher(&fixture, matcher).await;
+    let matcher = low_space_source(&fixture, " input.facts.monitored;");
+    arm_storage_title_deletion_with_source(&fixture, matcher).await;
     let guard = fixture
         .execution
         .app
@@ -1765,7 +1762,7 @@ async fn scheduled_storage_pass_from_sampler(
                 name: "Storage pressure".into(),
                 description: String::new(),
                 rego_source: crate::lib_tests::heads_source(
-                    low_space_matcher(fixture, ""),
+                    low_space_source(fixture, ""),
                     &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
                 ),
                 grace_days: 0,

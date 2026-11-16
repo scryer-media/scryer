@@ -10,8 +10,8 @@ use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
 use crate::lib_tests::lifecycle_rules::InMemoryLifecycleRuleRepo;
 use crate::lib_tests::request_rules_support::InMemoryLifecycleClaimRepo;
 use crate::lifecycle_rules::{
-    LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
-    LifecycleRuleDraft, execution_reason,
+    LifecyclePreviewRequest, LifecyclePreviewSelection, LifecyclePreviewSource, LifecycleRuleDraft,
+    execution_reason,
 };
 use scryer_domain::{
     LifecycleCandidateState, LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer,
@@ -21,12 +21,12 @@ use scryer_rules::lifecycle::LifecycleOutcome;
 
 /// The shipped `expired-request-leases` template, byte-for-byte minus the
 /// package line the authoring path rewrites.
-const EXPIRED_LEASE_MATCHER: &str = "match if {\n\
+const EXPIRED_LEASE_SOURCE: &str = "match if {\n\
      \tinput.facts.request_lease_state == \"expired\"\n\
      }\n";
 
 /// Matches every title, so the executor's rechecks are what decide.
-const ALWAYS_MATCHER: &str = "match := true\n";
+const ALWAYS_SOURCE: &str = "match := true\n";
 
 struct ClaimFixture {
     app: AppUseCase,
@@ -191,7 +191,7 @@ async fn assert_lease_does_not_hold(state: LifecycleClaimState) {
     let rule_id = fixture
         .rule(
             draft(
-                ALWAYS_MATCHER,
+                ALWAYS_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -262,7 +262,7 @@ async fn destructive_execution_reads_claims_under_the_approval_guard() {
     let rule_id = fixture
         .rule(
             draft(
-                ALWAYS_MATCHER,
+                ALWAYS_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -318,7 +318,7 @@ async fn an_unreadable_claim_store_holds_a_destructive_action() {
     let rule_id = fixture
         .rule(
             draft(
-                ALWAYS_MATCHER,
+                ALWAYS_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -357,7 +357,7 @@ async fn a_live_lease_does_not_hold_a_reversible_action() {
     let rule_id = fixture
         .rule(
             draft(
-                ALWAYS_MATCHER,
+                ALWAYS_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
             ),
             LifecycleRuleState::DryRun,
@@ -396,7 +396,7 @@ async fn the_shipped_template_matches_an_expired_lease() {
     fixture
         .rule(
             draft(
-                EXPIRED_LEASE_MATCHER,
+                EXPIRED_LEASE_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -421,7 +421,7 @@ async fn the_shipped_template_spares_a_title_kept_permanently() {
     fixture
         .rule(
             draft(
-                EXPIRED_LEASE_MATCHER,
+                EXPIRED_LEASE_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -444,7 +444,7 @@ async fn the_shipped_template_spares_a_title_whose_lease_is_still_running() {
     fixture
         .rule(
             draft(
-                EXPIRED_LEASE_MATCHER,
+                EXPIRED_LEASE_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -469,7 +469,7 @@ async fn an_unreadable_claim_store_holds_a_rule_that_reads_a_lease_fact() {
     fixture
         .rule(
             draft(
-                EXPIRED_LEASE_MATCHER,
+                EXPIRED_LEASE_SOURCE,
                 &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
             ),
             LifecycleRuleState::DryRun,
@@ -518,10 +518,10 @@ async fn preview_reads_the_same_claim_facts_as_the_pass() {
         .preview_lifecycle_rule(
             &fixture.user,
             LifecyclePreviewRequest {
-                matcher: LifecyclePreviewMatcher::Inline {
+                source: LifecyclePreviewSource::Inline {
                     library_ids: vec![],
                     rego_source: crate::lib_tests::heads_source(
-                        EXPIRED_LEASE_MATCHER,
+                        EXPIRED_LEASE_SOURCE,
                         &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                     ),
                     grace_days: 0,
@@ -674,8 +674,7 @@ async fn activation_without_a_duration_keeps_a_past_stored_expiry_and_the_next_p
 }
 
 #[tokio::test]
-async fn activation_with_a_zero_duration_keeps_a_past_stored_expiry_and_the_next_pass_expires_it()
-{
+async fn activation_with_a_zero_duration_keeps_a_past_stored_expiry_and_the_next_pass_expires_it() {
     assert_a_past_stored_expiry_is_kept_and_expires(Some(0)).await;
 }
 
@@ -937,7 +936,7 @@ fn the_shipped_rule_matches_the_web_template() {
 }
 
 #[tokio::test]
-async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope() {
+async fn the_shipped_rule_keeps_its_source_and_name_but_not_its_grace_or_scope() {
     let fixture = claims_app();
     fixture
         .app
@@ -961,7 +960,7 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
         LifecycleEffectArming::Destructive
     );
     let stored_source = scryer_rules::strip_editor_source(&detail.revision.rego_source);
-    let matcher = |rego_source: &str, grace_days| crate::lifecycle_rules::LifecycleMatcherDraft {
+    let matcher = |rego_source: &str, grace_days| crate::lifecycle_rules::LifecycleSourceDraft {
         rego_source: rego_source.to_string(),
         grace_days,
         max_titles_per_run: None,
@@ -997,14 +996,14 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
     assert!(refused(
         fixture
             .app
-            .update_lifecycle_rule_matcher(&fixture.user, &id, matcher(ALWAYS_MATCHER, 7),)
+            .update_lifecycle_rule_source(&fixture.user, &id, matcher(ALWAYS_SOURCE, 7),)
             .await
             .map(|_| ())
     ));
     assert!(refused(
         fixture
             .app
-            .update_lifecycle_rule_matcher(
+            .update_lifecycle_rule_source(
                 &fixture.user,
                 &id,
                 // The shipped source with another action declared beside it.
@@ -1027,7 +1026,7 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
     // drop to Dry run that every matcher or scope edit of an enabled rule has.
     let regraced = fixture
         .app
-        .update_lifecycle_rule_matcher(&fixture.user, &id, matcher(&stored_source, 14))
+        .update_lifecycle_rule_source(&fixture.user, &id, matcher(&stored_source, 14))
         .await
         .expect("grace period is editable");
     assert_eq!(regraced.revision.grace_days, 14);
@@ -1097,7 +1096,7 @@ async fn the_shipped_rule_matches_only_titles_whose_lease_expired() {
 /// the current matcher on the next boot, as a new revision that keeps the
 /// operator's grace period and has to be armed again.
 #[tokio::test]
-async fn startup_replaces_the_previously_shipped_matcher() {
+async fn startup_replaces_the_previously_shipped_source() {
     let fixture = claims_app();
     fixture
         .app
@@ -1117,7 +1116,7 @@ async fn startup_replaces_the_previously_shipped_matcher() {
         revision_number: 2,
         rego_source: previous_source.clone(),
         grace_days: 10,
-        matcher_content_hash: scryer_rules::runtime::content_hash(&previous_source),
+        source_content_hash: scryer_rules::runtime::content_hash(&previous_source),
         created_at: now,
         ..seeded.revision.clone()
     };
@@ -1201,7 +1200,7 @@ async fn startup_moves_the_match_form_rule_to_the_current_source_keeping_its_sta
         revision_number: 2,
         rego_source: match_source.clone(),
         grace_days: 12,
-        matcher_content_hash: scryer_rules::runtime::content_hash(&match_source),
+        source_content_hash: scryer_rules::runtime::content_hash(&match_source),
         created_at: now,
         ..armed.revision.clone()
     };

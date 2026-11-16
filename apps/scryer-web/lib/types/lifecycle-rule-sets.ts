@@ -138,7 +138,7 @@ export type LifecycleRuleRevision = {
   regoSource: string;
   revisionNumber: number;
   graceDays: number;
-  matcherContentHash: string;
+  sourceContentHash: string;
   createdBy: string | null;
   createdAt: string;
 };
@@ -212,7 +212,7 @@ export type LifecyclePreviewTitle = {
 
 export type LifecyclePreviewResult = {
   ruleSetId: string | null;
-  matcherContentHash: string;
+  sourceContentHash: string;
   evaluatedAt: string;
   titles: LifecyclePreviewTitle[];
 };
