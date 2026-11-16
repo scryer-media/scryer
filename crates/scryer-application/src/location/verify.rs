@@ -1168,6 +1168,8 @@ pub fn open_cache_bypassed(path: &Path) -> ReadBackHandle {
 }
 
 #[cfg(target_os = "macos")]
+// disk-guard: a cache hint on a handle the owner opened.
+#[allow(clippy::disallowed_methods)]
 fn engage_cache_bypass(file: File) -> ReadBackHandle {
     use std::os::unix::io::AsRawFd;
 
@@ -1189,6 +1191,8 @@ fn engage_cache_bypass(file: File) -> ReadBackHandle {
 }
 
 #[cfg(target_os = "linux")]
+// disk-guard: a cache hint on a handle the owner opened.
+#[allow(clippy::disallowed_methods)]
 fn engage_cache_bypass(file: File) -> ReadBackHandle {
     use std::os::unix::io::AsRawFd;
 

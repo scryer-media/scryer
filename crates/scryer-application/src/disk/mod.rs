@@ -644,12 +644,21 @@ impl Disk {
     }
 
     pub async fn follow(&self, path: impl Into<PathBuf>) -> PathReading {
-        let path = path.into();
+        self.probe_now(path.into(), Self::follow_blocking).await
+    }
+
+    /// [`Self::uncached_blocking`] off the runtime, bounded as
+    /// [`Self::follow`] is: for a check that must see the disk as it is now.
+    pub async fn uncached(&self, path: impl Into<PathBuf>) -> PathReading {
+        self.probe_now(path.into(), Self::uncached_blocking).await
+    }
+
+    async fn probe_now(&self, path: PathBuf, read: fn(&Self, &Path) -> PathReading) -> PathReading {
         let timeout = self.traits(&path).probe_timeout;
         let owner = self.clone();
-        let followed = path.clone();
+        let probed = path.clone();
         match self
-            .bounded(&path, timeout, move || owner.follow_blocking(&followed))
+            .bounded(&path, timeout, move || read(&owner, &probed))
             .await
         {
             Bounded::Done(reading) => reading,

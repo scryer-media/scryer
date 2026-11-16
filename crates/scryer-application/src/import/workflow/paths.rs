@@ -1156,8 +1156,8 @@ async fn posted_names_from_grab(
     }
     let mut on_disk = Vec::with_capacity(cut_files.len());
     for (path, name) in cut_files {
-        if let Ok(metadata) = tokio::fs::metadata(path).await {
-            on_disk.push((name.clone(), metadata.len()));
+        if let Some(len) = Disk::process().follow(*path).await.size() {
+            on_disk.push((name.clone(), len));
         }
     }
     match_cut_file_names(&grabbed, &on_disk)
@@ -1388,11 +1388,7 @@ impl SrrdbFilenameRecovery {
 fn pick_largest_import_video_file(files: &[ImportVideoFile]) -> AppResult<ImportVideoFile> {
     files
         .iter()
-        .max_by_key(|file| {
-            std::fs::metadata(file.path())
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
-        })
+        .max_by_key(|file| Disk::process().follow_blocking(file.path()).size().unwrap_or(0))
         .cloned()
         .ok_or_else(|| AppError::Repository("no files to pick from".to_string()))
 }

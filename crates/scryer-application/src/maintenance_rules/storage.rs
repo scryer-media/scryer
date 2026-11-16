@@ -6,7 +6,6 @@
 //! with the same boundary-aware root predicate used by library workflows.
 
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::path::Path;
 #[cfg(test)]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -16,6 +15,7 @@ use scryer_domain::LibraryRoot;
 use scryer_rules::maintenance::{MaintenanceInput, Observation};
 
 use crate::catalog_workflow::library_path_is_under_root;
+use crate::disk::Disk;
 use crate::library::user_delete::PolicyMediaFileDeletePlan;
 use crate::{AppResult, AppUseCase};
 
@@ -485,7 +485,8 @@ fn physical_root_membership(root: &str, paths: &[String]) -> Option<Vec<bool>> {
     // A configured root and a catalog file can each be symlinks. The manifest
     // is authorized for the physical location, not merely a lexical prefix:
     // `/media/root/escape -> /other` must never become root-local deletion.
-    let root_path = std::fs::canonicalize(root).ok()?;
+    let disk = Disk::process();
+    let root_path = disk.canonicalize_blocking(Path::new(root)).ok()?;
     let root_path = root_path.to_str()?;
     paths
         .iter()
@@ -493,7 +494,7 @@ fn physical_root_membership(root: &str, paths: &[String]) -> Option<Vec<bool>> {
             if path.trim().is_empty() || !Path::new(path).is_absolute() {
                 return None;
             }
-            let file_path = std::fs::canonicalize(path).ok()?;
+            let file_path = disk.canonicalize_blocking(Path::new(path)).ok()?;
             let file_path = file_path.to_str()?;
             if !library_path_is_under_root(file_path, root_path) {
                 return Some(false);
@@ -508,7 +509,8 @@ fn physical_root_membership(root: &str, paths: &[String]) -> Option<Vec<bool>> {
 /// checkpoint's immutable, exact policy paths can use an absent path as proof
 /// of completed on-disk work after the root identity has been checked.
 fn physical_root_membership_or_absent(root: &str, paths: &[String]) -> Option<Vec<bool>> {
-    let root_path = std::fs::canonicalize(root).ok()?;
+    let disk = Disk::process();
+    let root_path = disk.canonicalize_blocking(Path::new(root)).ok()?;
     let root_path = root_path.to_str()?;
     paths
         .iter()
@@ -516,11 +518,10 @@ fn physical_root_membership_or_absent(root: &str, paths: &[String]) -> Option<Ve
             if path.trim().is_empty() || !Path::new(path).is_absolute() {
                 return None;
             }
-            match std::fs::symlink_metadata(path) {
-                Err(error) if error.kind() == ErrorKind::NotFound => Some(true),
-                Err(_) => None,
-                Ok(_) => {
-                    let file_path = std::fs::canonicalize(path).ok()?;
+            match disk.uncached_blocking(Path::new(path)).exists()? {
+                false => Some(true),
+                true => {
+                    let file_path = disk.canonicalize_blocking(Path::new(path)).ok()?;
                     let file_path = file_path.to_str()?;
                     if !library_path_is_under_root(file_path, root_path) {
                         return Some(false);
@@ -532,8 +533,14 @@ fn physical_root_membership_or_absent(root: &str, paths: &[String]) -> Option<Ve
         .collect()
 }
 
+// disk-guard: the root identity and the same-filesystem check use the raw
+// device number or volume path, which the owner's readings keep opaque and
+// drop on filesystems that report a zero inode.
+#[allow(clippy::disallowed_methods)]
 fn physical_root_identity(root: &str) -> Option<String> {
-    let canonical = std::fs::canonicalize(root).ok()?;
+    let canonical = Disk::process()
+        .canonicalize_blocking(Path::new(root))
+        .ok()?;
     let canonical = canonical.to_str()?;
     #[cfg(unix)]
     {
@@ -552,6 +559,10 @@ fn physical_root_identity(root: &str) -> Option<String> {
 }
 
 #[cfg(unix)]
+// disk-guard: the root identity and the same-filesystem check use the raw
+// device number or volume path, which the owner's readings keep opaque and
+// drop on filesystems that report a zero inode.
+#[allow(clippy::disallowed_methods)]
 fn paths_share_filesystem(root: &str, file: &str) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
     match (std::fs::metadata(root), std::fs::metadata(file)) {
@@ -570,6 +581,10 @@ fn paths_share_filesystem(root: &str, file: &str) -> Option<bool> {
 }
 
 #[cfg(windows)]
+// disk-guard: the root identity and the same-filesystem check use the raw
+// device number or volume path, which the owner's readings keep opaque and
+// drop on filesystems that report a zero inode.
+#[allow(clippy::disallowed_methods)]
 fn volume_path(path: &str) -> Option<String> {
     use std::iter;
     use std::os::windows::ffi::OsStrExt;

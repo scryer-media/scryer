@@ -153,6 +153,9 @@ impl StorageWatch {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+// disk-guard: the identity is the mount's filesystem id and source, which the
+// owner does not report.
+#[allow(clippy::disallowed_methods)]
 fn volume_identity(path: &Path) -> io::Result<String> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;

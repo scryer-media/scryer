@@ -337,6 +337,9 @@ fn device_id(_metadata: &std::fs::Metadata) -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
+// disk-guard: the report names the filesystem type, which the owner does not
+// report.
+#[allow(clippy::disallowed_methods)]
 fn filesystem_type(path: &std::path::Path) -> Option<String> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
@@ -353,6 +356,9 @@ fn filesystem_type(path: &std::path::Path) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
+// disk-guard: the report names the filesystem type, which the owner does not
+// report.
+#[allow(clippy::disallowed_methods)]
 fn filesystem_type(path: &std::path::Path) -> Option<String> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;

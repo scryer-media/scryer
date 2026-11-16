@@ -614,6 +614,9 @@ fn open_owned_subtitle(source: &Path, workspace: &Path) -> AppResult<std::fs::Fi
 }
 
 #[cfg(windows)]
+// disk-guard: the containment check reads the path of a handle the owner
+// opened, which the owner does not report.
+#[allow(clippy::disallowed_methods)]
 fn final_windows_handle_path(file: &std::fs::File) -> AppResult<String> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;

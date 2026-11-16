@@ -882,6 +882,8 @@ fn open_full_hash_backfill_file(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 /// Applied only to this short-lived reader thread, never to a runtime pool.
+// disk-guard: an I/O scheduling hint for this thread, not a filesystem call.
+#[allow(clippy::disallowed_methods)]
 fn hash_reader_priority() -> std::io::Result<()> {
     crate::background_worker_priority()?;
     #[cfg(target_os = "linux")]

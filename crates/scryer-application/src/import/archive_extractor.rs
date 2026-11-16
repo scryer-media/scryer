@@ -226,6 +226,9 @@ fn archive_workspace_identity(root: &Path) -> Option<Vec<u8>> {
     archive_workspace_identity_from_file(&options.open(root).ok()?)
 }
 
+// disk-guard: as for `archive_workspace_identity`; on Windows the identity is
+// read from the directory handle.
+#[allow(clippy::disallowed_methods)]
 fn archive_workspace_identity_from_file(directory: &std::fs::File) -> Option<Vec<u8>> {
     let metadata = directory.metadata().ok()?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
