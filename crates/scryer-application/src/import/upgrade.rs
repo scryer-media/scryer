@@ -187,7 +187,7 @@ pub(crate) async fn execute_upgrade(
 
     let same_final_path = old_path == dest_path;
     let import_path = if same_final_path {
-        sibling_guard_path(dest_path, "replacement")
+        sibling_guard_path(dest_path, UPGRADE_REPLACEMENT_PREFIX)
     } else {
         dest_path.to_path_buf()
     };
@@ -329,6 +329,29 @@ const UPGRADE_GUARD_PHASE_DB_SWAPPED: &str = "db_swapped";
 const UPGRADE_GUARD_PHASE_DISPOSED: &str = "disposed";
 const SAME_PATH_UPGRADE_GUARD_DIR: &str = ".scryer-upgrade-guards";
 const SAME_PATH_UPGRADE_GUARD_STALE_AFTER_SECONDS: i64 = 15 * 60;
+const SAME_PATH_UPGRADE_GUARD_SUFFIX: &str = ".guard.json";
+
+/// Sibling name prefix of the file a same-path upgrade moves aside.
+pub const UPGRADE_OLD_PREFIX: &str = ".scry-uo-";
+/// What releases before [`UPGRADE_OLD_PREFIX`] wrote; still recognised.
+pub const LEGACY_UPGRADE_OLD_PREFIX: &str = ".scryer-upgrade-old-";
+/// Sibling name prefix of the verified replacement a same-path upgrade stages.
+pub const UPGRADE_REPLACEMENT_PREFIX: &str = ".scry-ur-";
+/// What releases before [`UPGRADE_REPLACEMENT_PREFIX`] wrote; still recognised.
+pub const LEGACY_UPGRADE_REPLACEMENT_PREFIX: &str = ".scryer-upgrade-replacement-";
+/// Sibling name prefix of an occupant a rollback moves off the final path.
+const UPGRADE_ROLLBACK_OCCUPANT_PREFIX: &str = ".scry-ub-";
+
+fn is_upgrade_old_name(name: &str) -> bool {
+    name.starts_with(UPGRADE_OLD_PREFIX) || name.starts_with(LEGACY_UPGRADE_OLD_PREFIX)
+}
+
+/// Whether `name` is a staged same-path upgrade replacement, under the current
+/// or the legacy prefix.
+pub fn is_upgrade_replacement_name(name: &str) -> bool {
+    name.starts_with(UPGRADE_REPLACEMENT_PREFIX)
+        || name.starts_with(LEGACY_UPGRADE_REPLACEMENT_PREFIX)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SamePathUpgradeGuardManifest {
@@ -382,9 +405,12 @@ fn same_path_upgrade_guard_dir(media_root: &Path) -> PathBuf {
 fn same_path_upgrade_guard_path(media_root: &Path, backup_path: &Path) -> PathBuf {
     let file_name = backup_path
         .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new(".scryer-upgrade-old"));
-    same_path_upgrade_guard_dir(media_root)
-        .join(format!("{}.guard.json", file_name.to_string_lossy()))
+        // Without its trailing dash, so a nameless path never reads as a guard.
+        .unwrap_or_else(|| std::ffi::OsStr::new(UPGRADE_OLD_PREFIX.trim_end_matches('-')));
+    same_path_upgrade_guard_dir(media_root).join(format!(
+        "{}{SAME_PATH_UPGRADE_GUARD_SUFFIX}",
+        file_name.to_string_lossy()
+    ))
 }
 
 async fn write_same_path_upgrade_guard(
@@ -594,7 +620,7 @@ async fn reconcile_same_path_upgrade_guards_under_root(
 fn is_same_path_upgrade_guard_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".scryer-upgrade-old-") && name.ends_with(".guard.json"))
+        .map(|name| is_upgrade_old_name(name) && name.ends_with(SAME_PATH_UPGRADE_GUARD_SUFFIX))
         .unwrap_or(false)
 }
 
@@ -656,16 +682,14 @@ fn validate_same_path_upgrade_guard(
     if !backup_path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".scryer-upgrade-old-"))
-        .unwrap_or(false)
+        .is_some_and(is_upgrade_old_name)
     {
         return Err("backup filename is not an upgrade-old guard filename".to_string());
     }
     if !staged_replacement_path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with(".scryer-upgrade-replacement-"))
-        .unwrap_or(false)
+        .is_some_and(is_upgrade_replacement_name)
     {
         return Err(
             "staged replacement filename is not an upgrade-replacement guard filename".to_string(),
@@ -1390,7 +1414,7 @@ async fn prepare_old_file_disposition_for_upgrade(
         ));
     }
 
-    let backup_path = sibling_guard_path(old_file_source_path, "old");
+    let backup_path = sibling_guard_path(old_file_source_path, UPGRADE_OLD_PREFIX);
     tokio::fs::rename(old_file_source_path, &backup_path)
         .await
         .map_err(|error| {
@@ -1506,7 +1530,7 @@ async fn finalize_same_path_upgrade(
         .await;
     let guard_root =
         resolve_same_path_upgrade_guard_root(recycle_config, old_file_media_root, old_path)?;
-    let backup_path = sibling_guard_path(old_path, "old");
+    let backup_path = sibling_guard_path(old_path, UPGRADE_OLD_PREFIX);
     let guard_path = same_path_upgrade_guard_path(&guard_root, &backup_path);
     let guard = SamePathUpgradeGuardManifest::new(
         title,
@@ -1833,17 +1857,19 @@ async fn rollback_new_replacement(
     }
 }
 
-fn sibling_guard_path(path: &Path, label: &str) -> PathBuf {
+fn sibling_guard_path(path: &Path, kind: &str) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("media"));
-    let prefix = format!(".scryer-upgrade-{}-{}-", label, scryer_domain::Id::new().0);
+    let prefix = format!("{kind}{}-", scryer_domain::Id::new().0);
     // The id keeps the name unique; the file name only says what it guards,
-    // so it is shortened to keep the whole name within the filesystem limit.
+    // so it is shortened to keep the whole name, and the guard file named
+    // after it, within the filesystem limit.
     let file_name = crate::library::rename::truncate_utf8_bytes(
         &file_name.to_string_lossy(),
-        crate::location::verify::FILE_NAME_MAX_BYTES.saturating_sub(prefix.len()),
+        crate::location::verify::FILE_NAME_MAX_BYTES
+            .saturating_sub(prefix.len() + SAME_PATH_UPGRADE_GUARD_SUFFIX.len()),
     );
     parent.join(format!("{prefix}{file_name}"))
 }
@@ -1859,7 +1885,7 @@ async fn restore_same_path_backup(final_path: &Path, backup_path: &Path) -> AppR
     let moved_occupant = if same_path_guard_regular_file_exists(final_path, "final occupant")
         .await?
     {
-        let moved_aside = sibling_guard_path(final_path, "rollback-occupant");
+        let moved_aside = sibling_guard_path(final_path, UPGRADE_ROLLBACK_OCCUPANT_PREFIX);
         tokio::fs::rename(final_path, &moved_aside)
             .await
             .map_err(|error| {
@@ -2081,11 +2107,90 @@ mod long_name_tests {
     fn same_path_upgrade_staging_name_fits_a_generated_name() {
         let generated = format!("{}.mkv", "a".repeat(212));
         assert_eq!(generated.len(), 216);
-        let staged = sibling_guard_path(&Path::new("/library/Show").join(generated), "replacement");
+        let staged = sibling_guard_path(
+            &Path::new("/library/Show").join(generated),
+            UPGRADE_REPLACEMENT_PREFIX,
+        );
         let staged_len = staged.file_name().unwrap().len();
         assert!(
             staged_len <= 255,
             "staging name is {staged_len} bytes; filesystems allow 255"
         );
+    }
+
+    /// The guard file is named after the backup plus a suffix, so a backup of a
+    /// name at the limit must still leave room for it.
+    #[test]
+    fn the_guard_file_of_a_backup_at_the_name_limit_fits() {
+        let root = Path::new("/library");
+        let longest = format!("{}.mkv", "a".repeat(251));
+        let backup = sibling_guard_path(&root.join("Show").join(longest), UPGRADE_OLD_PREFIX);
+        let guard = same_path_upgrade_guard_path(root, &backup);
+        let guard_len = guard.file_name().unwrap().len();
+        assert!(guard_len <= 255, "guard name is {guard_len} bytes");
+        assert!(is_same_path_upgrade_guard_file(&guard));
+    }
+
+    #[test]
+    fn upgrades_write_the_short_names() {
+        let final_path = Path::new("/library/Show/Episode.mkv");
+        for (prefix, expected) in [
+            (UPGRADE_OLD_PREFIX, ".scry-uo-"),
+            (UPGRADE_REPLACEMENT_PREFIX, ".scry-ur-"),
+            (UPGRADE_ROLLBACK_OCCUPANT_PREFIX, ".scry-ub-"),
+        ] {
+            let name = sibling_guard_path(final_path, prefix);
+            let name = name.file_name().unwrap().to_str().unwrap();
+            assert!(name.starts_with(expected), "{name}");
+            assert!(name.ends_with("-Episode.mkv"), "{name}");
+        }
+    }
+
+    #[test]
+    fn current_and_legacy_upgrade_names_are_both_recognised() {
+        assert!(is_upgrade_old_name(".scry-uo-1-Episode.mkv"));
+        assert!(is_upgrade_old_name(".scryer-upgrade-old-1-Episode.mkv"));
+        assert!(is_upgrade_replacement_name(".scry-ur-1-Episode.mkv"));
+        assert!(is_upgrade_replacement_name(
+            ".scryer-upgrade-replacement-1-Episode.mkv"
+        ));
+        for unrelated in [
+            ".scry-ub-1-Episode.mkv",
+            ".scry-u-1-Episode.mkv",
+            ".scryer-upgrade-1-Episode.mkv",
+            ".scryer-upgrade-rollback-occupant-1-Episode.mkv",
+            "scry-uo-1-Episode.mkv",
+            ".scryer-ax-0123456789abcdef",
+        ] {
+            assert!(!is_upgrade_old_name(unrelated), "{unrelated}");
+            assert!(!is_upgrade_replacement_name(unrelated), "{unrelated}");
+        }
+        assert!(!is_upgrade_old_name(".scry-ur-1-Episode.mkv"));
+        assert!(!is_upgrade_replacement_name(".scry-uo-1-Episode.mkv"));
+    }
+
+    #[test]
+    fn guard_files_are_recognised_under_either_backup_prefix_only() {
+        let guards = Path::new("/library").join(SAME_PATH_UPGRADE_GUARD_DIR);
+        for name in [
+            ".scry-uo-1-Episode.mkv.guard.json",
+            ".scryer-upgrade-old-1-Episode.mkv.guard.json",
+        ] {
+            assert!(
+                is_same_path_upgrade_guard_file(&guards.join(name)),
+                "{name}"
+            );
+        }
+        for name in [
+            ".scry-uo-1-Episode.mkv",
+            ".scry-ur-1-Episode.mkv.guard.json",
+            ".scryer-upgrade-replacement-1-Episode.mkv.guard.json",
+            ".scry-uo.guard.json",
+        ] {
+            assert!(
+                !is_same_path_upgrade_guard_file(&guards.join(name)),
+                "{name}"
+            );
+        }
     }
 }

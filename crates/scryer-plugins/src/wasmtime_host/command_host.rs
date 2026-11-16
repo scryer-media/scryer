@@ -766,14 +766,12 @@ fn extract_archive(
     // The workspace removes itself when it drops, which happens on every
     // path out of this function including the `?` returns below.
     let disk = Disk::process();
-    let workspace = disk
-        .scratch_dir_blocking("scry-ex-")
-        .map_err(|error| {
-            ArchiveExtractFailure::temporary(format!(
-                "failed to create archive extraction workspace: {}",
-                std::io::Error::from(error)
-            ))
-        })?;
+    let workspace = disk.scratch_dir_blocking("scry-ex-").map_err(|error| {
+        ArchiveExtractFailure::temporary(format!(
+            "failed to create archive extraction workspace: {}",
+            std::io::Error::from(error)
+        ))
+    })?;
     let archive_path = workspace
         .path()
         .join(staged_archive_name(request.filename.as_deref(), format));

@@ -22,7 +22,10 @@ use tracing::info;
 const EXTRACTED_DIR_NAME: &str = "_scryer_extracted";
 const ARCHIVE_STAGING_PREFIX: &str = ".scryer-ax-";
 #[cfg(test)]
-const ARCHIVE_WRITE_PROBE_PREFIX: &str = ".scryer-write-probe-";
+const ARCHIVE_WRITE_PROBE_PREFIX: &str =
+    crate::application_upgrade::SCRYER_PRODUCT.write_probe_prefix;
+#[cfg(test)]
+const LEGACY_ARCHIVE_WRITE_PROBE_PREFIX: &str = ".scryer-write-probe-";
 const LEGACY_ARCHIVE_STAGING_PREFIX: &str = ".scryer-archive-extract-";
 const ARCHIVE_STAGING_OUTPUT_DIR: &str = "out";
 const ARCHIVE_WORKSPACE_OWNER_FILE: &str = ".workspace-owner.json";
@@ -3850,12 +3853,16 @@ mod tests {
         let probe_file = dir
             .path()
             .join(format!("{ARCHIVE_WRITE_PROBE_PREFIX}leaked"));
+        let legacy_probe_file = dir
+            .path()
+            .join(format!("{LEGACY_ARCHIVE_WRITE_PROBE_PREFIX}leaked"));
         let keep_dir = dir.path().join("Movie (2026)");
         let keep_file = dir.path().join("release.nfo");
         fs::create_dir(&archive_dir).unwrap();
         fs::create_dir(&legacy_dir).unwrap();
         fs::create_dir(&keep_dir).unwrap();
         fs::write(&probe_file, b"probe").unwrap();
+        fs::write(&legacy_probe_file, b"probe").unwrap();
         fs::write(&keep_file, b"nfo").unwrap();
 
         cleanup_archive_artifacts_older_than(dir.path(), Duration::ZERO).await;
@@ -3863,6 +3870,7 @@ mod tests {
         assert!(archive_dir.exists());
         assert!(legacy_dir.exists());
         assert!(probe_file.exists());
+        assert!(legacy_probe_file.exists());
         assert!(keep_dir.exists());
         assert!(keep_file.exists());
     }

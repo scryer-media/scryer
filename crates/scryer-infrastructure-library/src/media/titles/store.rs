@@ -136,10 +136,10 @@ ON CONFLICT (id) DO UPDATE SET
         ELSE titles.smg_identity_backfill_attempt_count
     END";
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
-/// See `media::search::media_file_store::STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT`:
-/// a same-path upgrade's staged replacement row is not a library file until the
-/// rename and the DB swap commit, so the title catalog must not count it either.
-const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
+// See `media::search::media_file_store::live_media_file_predicate`: a
+// same-path upgrade's staged replacement row is not a library file until the
+// rename and the DB swap commit, so the title catalog must not count it either.
+use scryer_application::{LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX};
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
 /// Advances once after every transaction that wrote a title's folder, gave a
@@ -6288,13 +6288,15 @@ fn title_catalog_live_media_file_predicate(dialect: TitleCatalogSqlDialect, alia
         TitleCatalogSqlDialect::Sqlite => {
             format!(
                 "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
-                  AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0)"
+                  AND instr({alias}.file_path, '/{UPGRADE_REPLACEMENT_PREFIX}') = 0
+                  AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0)"
             )
         }
         TitleCatalogSqlDialect::Postgres => {
             format!(
                 "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
-                  AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0)"
+                  AND POSITION('/{UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
+                  AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0)"
             )
         }
     }

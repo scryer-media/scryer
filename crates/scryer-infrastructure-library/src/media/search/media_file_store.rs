@@ -26,12 +26,13 @@ use crate::queries::sql_runtime::{
 use crate::storage::sql::json::canonical_json_text;
 
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
-/// Same-path upgrades stage the verified replacement beside the final file
-/// under this prefix (`import::upgrade::sibling_guard_path`) and only rename it
-/// onto the final path once the old file is safely aside. The staged row exists
-/// in `media_files` for the whole copy, so every live query has to treat it the
-/// same way it treats a recycled file: not part of the library yet.
-const STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT: &str = "/.scryer-upgrade-replacement-";
+// Same-path upgrades stage the verified replacement beside the final file
+// under `UPGRADE_REPLACEMENT_PREFIX` (or, from older releases, the legacy
+// prefix) and only rename it onto the final path once the old file is safely
+// aside. The staged row exists in `media_files` for the whole copy, so every
+// live query has to treat it the same way it treats a recycled file: not part
+// of the library yet.
+use scryer_application::{LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX};
 
 #[derive(Clone)]
 pub struct MediaFileStore {
@@ -3198,11 +3199,13 @@ fn live_media_file_predicate(dialect: SqlDialect, alias: &str) -> String {
     match dialect {
         SqlDialect::Sqlite => format!(
             "(instr({alias}.file_path, '{RECYCLE_BIN_PATH_SEGMENT}') = 0
-              AND instr({alias}.file_path, '{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}') = 0)"
+              AND instr({alias}.file_path, '/{UPGRADE_REPLACEMENT_PREFIX}') = 0
+              AND instr({alias}.file_path, '/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}') = 0)"
         ),
         SqlDialect::Postgres => format!(
             "(POSITION('{RECYCLE_BIN_PATH_SEGMENT}' IN {alias}.file_path) = 0
-              AND POSITION('{STAGED_UPGRADE_REPLACEMENT_PATH_SEGMENT}' IN {alias}.file_path) = 0)"
+              AND POSITION('/{UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0
+              AND POSITION('/{LEGACY_UPGRADE_REPLACEMENT_PREFIX}' IN {alias}.file_path) = 0)"
         ),
     }
 }
@@ -4237,6 +4240,11 @@ mod tests {
             (
                 &title.id,
                 "/synthetic/.scryer-upgrade-replacement-staged.mkv",
+                MediaFileRole::Primary,
+            ),
+            (
+                &title.id,
+                "/synthetic/.scry-ur-staged.mkv",
                 MediaFileRole::Primary,
             ),
             (

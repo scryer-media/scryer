@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+pub use logs::{LEGACY_LOG_ROTATION_MARKER, LOG_ROTATION_MARKER};
 pub use sanitize::{KnownValues, PATH_POLICY, PathPolicy, Sanitizer};
 
 /// The largest compressed bundle produced. The oldest log content is dropped

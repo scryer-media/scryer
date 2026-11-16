@@ -1862,7 +1862,7 @@ pub(super) fn probe_config_io_performance(
     }
 
     let probe_name = format!(
-        ".scryer-runtime-probe-{}-{}.tmp",
+        ".scry-rp-{}-{}.tmp",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

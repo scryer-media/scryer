@@ -213,6 +213,9 @@ pub(crate) use import::parameters as import_parameters;
 pub(crate) use import::post_download_gate;
 pub(crate) use import::seeding_gate;
 pub(crate) use import::title_resolution as import_title_resolution;
+pub use import::upgrade::{
+    LEGACY_UPGRADE_REPLACEMENT_PREFIX, UPGRADE_REPLACEMENT_PREFIX, is_upgrade_replacement_name,
+};
 pub(crate) use integration::integration as app_usecase_integration;
 pub(crate) use library::discovery as library_discovery;
 pub(crate) use library::filename_parser as library_filename_parser;

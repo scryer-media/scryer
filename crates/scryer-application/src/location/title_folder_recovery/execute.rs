@@ -503,7 +503,11 @@ impl TitleFileMover for RecoveryExecution<'_> {
             create_recovery_destination_directories(parent, &self.permissions).await?;
             // Each attempt gets its own durably recorded staging name. An
             // interrupted attempt is never mistaken for permission to delete it.
-            let staging = parent.join(format!(".scryer-recovery-{}", scryer_domain::Id::new().0));
+            let staging = parent.join(format!(
+                "{}{}",
+                super::RECOVERY_STAGING_PREFIX,
+                scryer_domain::Id::new().0
+            ));
             self.app
                 .services
                 .library

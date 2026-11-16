@@ -178,7 +178,7 @@ fn reclaim_expired_cleanup_marker(
 
 fn probe_cache_directory(cache_dir: &Path) -> Result<(), String> {
     let probe = cache_dir.join(format!(
-        ".scryer-wasmtime-probe-{}-{}",
+        ".scry-wt-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

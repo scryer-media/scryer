@@ -249,7 +249,7 @@ fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
 
     let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
     let probe_path = path.join(format!(
-        ".scryer-backup-write-test-{}-{timestamp}.tmp",
+        ".scry-bw-{}-{timestamp}.tmp",
         std::process::id()
     ));
     std::fs::write(&probe_path, b"scryer backup path probe")

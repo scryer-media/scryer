@@ -133,7 +133,7 @@ impl AtomicOutputWriter {
             AppError::Repository(format!("failed to create {}: {error}", parent.display()))
         })?;
         let temp_file = tempfile::Builder::new()
-            .prefix(".scryer-backup-")
+            .prefix(".scry-bk-")
             .tempfile_in(parent)
             .map_err(|error| {
                 AppError::Repository(format!(
@@ -3012,6 +3012,13 @@ mod tests {
         std::fs::write(&output_path, b"known-good").expect("seed output");
 
         let mut writer = AtomicOutputWriter::new(&output_path).expect("create atomic writer");
+        let staged = writer
+            .temp_file
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        assert!(staged.starts_with(".scry-bk-"), "{staged}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

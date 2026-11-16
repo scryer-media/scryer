@@ -124,7 +124,10 @@ fn all(path: &Path) -> Vec<String> {
     contents
 }
 fn segment(path: &Path, sequence: u64) -> PathBuf {
-    let mut name = prefix(path);
+    segment_under(path, LOG_ROTATION_MARKER, sequence)
+}
+fn segment_under(path: &Path, marker: &str, sequence: u64) -> PathBuf {
+    let mut name = prefix(path, marker);
     name.push(format!(
         "{}-{sequence:020}.sealed",
         time().format("%Y%m%dT%H%M%SZ")
@@ -284,6 +287,8 @@ fn retention_only_expires_new_archives_and_counts_archives_not_days() {
         "scryer.log.1.gz.tmp",
         "unrelated.gz",
         "scryer.log.scryer-rotate-invalid.gz",
+        "scryer.log.scry-ro-invalid.gz",
+        "scryer.log.scry-r-20260101T235959Z-00000000000000000000.gz",
     ];
     for name in preserved {
         fs::write(dir.path().join(name), b"preserve").unwrap();
@@ -504,6 +509,57 @@ fn occupied_rotation_name_is_not_overwritten() {
     assert_eq!(all(&path), ["a\n", "b\n"]);
 }
 
+#[test]
+fn rotations_under_the_legacy_marker_are_kept_and_new_ones_use_the_short_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scryer.log");
+    // A segment a release before the short marker sealed but did not publish.
+    fs::write(
+        segment_under(&path, LEGACY_LOG_ROTATION_MARKER, 0),
+        "legacy\n",
+    )
+    .unwrap();
+    let (_, clock) = clock();
+    let (writer, guard) = open_with_clock(&path, policy(1, 5), clock).unwrap();
+    for id in ["a\n", "b\n"] {
+        event(&writer, id);
+        idle(&writer);
+    }
+    drop(guard);
+    assert_eq!(all(&path), ["legacy\n", "a\n", "b\n"]);
+    let names: Vec<_> = managed_files(&path, "gz")
+        .unwrap()
+        .iter()
+        .map(|archive| archive.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(
+        names[0].starts_with("scryer.log.scryer-rotate-"),
+        "{names:?}"
+    );
+    assert!(names[1].starts_with("scryer.log.scry-ro-"), "{names:?}");
+    assert!(managed_files(&path, "sealed").unwrap().is_empty());
+}
+
+#[test]
+fn retention_expires_legacy_archives_by_age_with_the_new_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scryer.log");
+    fs::write(
+        segment_under(&path, LEGACY_LOG_ROTATION_MARKER, 0),
+        "legacy\n",
+    )
+    .unwrap();
+    let (_, clock) = clock();
+    let (writer, guard) = open_with_clock(&path, policy(1, 1), clock).unwrap();
+    for id in ["a\n", "b\n"] {
+        event(&writer, id);
+        idle(&writer);
+    }
+    drop(guard);
+    assert_eq!(all(&path), ["a\n", "b\n"]);
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_active_names_cannot_share_an_archive_namespace() {
@@ -516,6 +572,10 @@ fn non_utf8_active_names_cannot_share_an_archive_namespace() {
         .path()
         .join("log-�.scryer-rotate-20260101T235959Z-00000000000000000000.gz");
     fs::write(&unrelated, "preserve").unwrap();
+    let unrelated_short = dir
+        .path()
+        .join("log-�.scry-ro-20260101T235959Z-00000000000000000000.gz");
+    fs::write(&unrelated_short, "preserve").unwrap();
     assert!(managed_files(&path, "gz").unwrap().is_empty());
     // Linux permits these names; macOS filesystems reject their creation.
     #[cfg(target_os = "linux")]
@@ -528,6 +588,7 @@ fn non_utf8_active_names_cannot_share_an_archive_namespace() {
         assert_eq!(all(&path), ["a\n", "b\n"]);
     }
     assert_eq!(fs::read_to_string(unrelated).unwrap(), "preserve");
+    assert_eq!(fs::read_to_string(unrelated_short).unwrap(), "preserve");
 }
 
 #[test]
@@ -623,6 +684,7 @@ fn unrelated_files(dir: &Path) -> Vec<PathBuf> {
         "unrelated.gz",
         "scryer.log.1.gz",
         "scryer.log.scryer-rotate-invalid.sealed",
+        "scryer.log.scry-ro-invalid.sealed",
         "notes.txt",
     ]
     .iter()

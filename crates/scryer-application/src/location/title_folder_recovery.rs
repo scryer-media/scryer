@@ -18,6 +18,23 @@ use std::path::{Path, PathBuf};
 pub const RECOVERY_VERSION: &str = "title-folder-recovery-v1";
 const MAX_DISCOVERY_ENTRIES: usize = 100_000;
 pub const MAX_CATALOG_ROWS: usize = 250_000;
+/// Name prefix of the staging copy a recovery attempt writes beside its
+/// destination.
+const RECOVERY_STAGING_PREFIX: &str = ".scry-rc-";
+/// What releases before [`RECOVERY_STAGING_PREFIX`] wrote; still recognised.
+const LEGACY_RECOVERY_STAGING_PREFIX: &str = ".scryer-recovery-";
+
+fn is_recovery_staging_name(name: &str) -> bool {
+    name.starts_with(RECOVERY_STAGING_PREFIX) || name.starts_with(LEGACY_RECOVERY_STAGING_PREFIX)
+}
+
+/// Whether a stored path passes through a same-path upgrade's staged
+/// replacement or a recovery attempt's staging copy, under either spelling.
+fn path_is_in_staging(path: &str) -> bool {
+    path.split('/').skip(1).any(|component| {
+        crate::is_upgrade_replacement_name(component) || is_recovery_staging_name(component)
+    })
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecoveryOwner {
@@ -485,8 +502,8 @@ async fn locate_hashed_destination(
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name == ".scryer-recycle"
-                || name.starts_with(".scryer-upgrade-replacement-")
-                || name.starts_with(".scryer-recovery-")
+                || crate::is_upgrade_replacement_name(&name)
+                || is_recovery_staging_name(&name)
             {
                 continue;
             }
@@ -623,8 +640,7 @@ impl AppUseCase {
             .filter(|m| {
                 let path = m.file_path.replace('\\', "/");
                 !path.contains("/.scryer-recycle/")
-                    && !path.contains("/.scryer-upgrade-replacement-")
-                    && !path.contains("/.scryer-recovery-")
+                    && !path_is_in_staging(&path)
                     && !custom_recycle
                         .as_ref()
                         .is_some_and(|r| stored_path_is_inside_folder(r, &m.file_path))
@@ -671,7 +687,9 @@ impl AppUseCase {
                 let folder = entry.path();
                 let stored = path_to_stored_string(&folder);
                 let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                // Scryer's own working folders, under the long or short spelling.
                 if name.starts_with(".scryer-")
+                    || name.starts_with(".scry-")
                     || custom_recycle.as_ref().is_some_and(|recycle| {
                         folder_paths_match(recycle, &stored)
                             || stored_path_is_inside_folder(recycle, &stored)

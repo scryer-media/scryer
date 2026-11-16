@@ -356,9 +356,16 @@ async fn recovery_hash_search_requires_one_match_and_excludes_recycle_and_stagin
     tokio::fs::write(recycle.join("Old.mkv"), b"media")
         .await
         .unwrap();
-    tokio::fs::write(folder.join(".scryer-recovery-abandoned"), b"media")
-        .await
-        .unwrap();
+    for staged in [
+        ".scryer-recovery-abandoned",
+        ".scry-rc-abandoned",
+        ".scryer-upgrade-replacement-abandoned",
+        ".scry-ur-abandoned",
+    ] {
+        tokio::fs::write(folder.join(staged), b"media")
+            .await
+            .unwrap();
+    }
     let hash = blake3::hash(b"media").to_hex().to_string();
     let recycle = path_to_stored_string(&recycle);
     assert_eq!(
@@ -383,6 +390,51 @@ async fn recovery_hash_search_requires_one_match_and_excludes_recycle_and_stagin
         .is_err()
     );
     assert_eq!(tokio::fs::read(&candidate).await.unwrap(), b"media");
+}
+
+#[tokio::test]
+async fn recovery_hash_search_still_counts_a_name_that_only_looks_like_staging() {
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().canonicalize().unwrap();
+    tokio::fs::write(folder.join("Episode.mkv"), b"media")
+        .await
+        .unwrap();
+    tokio::fs::write(folder.join(".scry-r-lookalike"), b"media")
+        .await
+        .unwrap();
+    let hash = blake3::hash(b"media").to_hex().to_string();
+    assert!(
+        locate_hashed_destination(&folder, 5, &hash, None)
+            .await
+            .is_err(),
+        "a lookalike name is a second match, not staging"
+    );
+}
+
+#[test]
+fn recovery_writes_the_short_staging_name_and_recognises_both() {
+    assert_eq!(RECOVERY_STAGING_PREFIX, ".scry-rc-");
+    assert!(is_recovery_staging_name(".scry-rc-1"));
+    assert!(is_recovery_staging_name(".scryer-recovery-1"));
+    for unrelated in [".scry-r-1", ".scry-ur-1", "scry-rc-1", ".scryer-ax-1"] {
+        assert!(!is_recovery_staging_name(unrelated), "{unrelated}");
+    }
+    for staged in [
+        "/library/Show/.scry-rc-1",
+        "/library/Show/.scryer-recovery-1/Episode.mkv",
+        "/library/Show/.scry-ur-1-Episode.mkv",
+        "/library/Show/.scryer-upgrade-replacement-1-Episode.mkv",
+    ] {
+        assert!(path_is_in_staging(staged), "{staged}");
+    }
+    for live in [
+        "/library/Show/Episode.mkv",
+        "/library/Show/.scry-uo-1-Episode.mkv",
+        "/library/Show/x.scry-rc-1",
+        ".scry-rc-1/Episode.mkv",
+    ] {
+        assert!(!path_is_in_staging(live), "{live}");
+    }
 }
 
 #[tokio::test]

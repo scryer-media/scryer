@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use scryer_application::diagnostics::{LEGACY_LOG_ROTATION_MARKER, LOG_ROTATION_MARKER};
 use scryer_application::disk::{
     Access, Disk, DiskError, EntryKind, Link, LinkOutcome, Open, Parents, PathReading, Removal,
     Remove, reason,
@@ -316,23 +317,27 @@ fn open_active(path: &Path, access: Access) -> io::Result<File> {
     .map_err(|error| refused(error, || io::Error::other("not a regular active log")))
 }
 
-fn prefix(path: &Path) -> std::ffi::OsString {
+fn prefix(path: &Path, marker: &str) -> std::ffi::OsString {
     let mut name = path.file_name().unwrap().to_os_string();
-    name.push(".scryer-rotate-");
+    name.push(marker);
     name
 }
 
+/// Rotations under the current marker or the one earlier releases wrote.
 fn managed_files(path: &Path, extension: &str) -> io::Result<Vec<PathBuf>> {
-    let prefix = prefix(path);
+    let prefixes = [LOG_ROTATION_MARKER, LEGACY_LOG_ROTATION_MARKER].map(|m| prefix(path, m));
     let suffix = format!(".{extension}");
     let mut paths = Vec::new();
     for entry in Disk::process().list_blocking(path.parent().unwrap())? {
         let Some(name) = entry.path.file_name() else {
             continue;
         };
-        let Some(id) = name
-            .as_encoded_bytes()
-            .strip_prefix(prefix.as_encoded_bytes())
+        let Some(id) = prefixes
+            .iter()
+            .find_map(|prefix| {
+                name.as_encoded_bytes()
+                    .strip_prefix(prefix.as_encoded_bytes())
+            })
             .and_then(|s| s.strip_suffix(suffix.as_bytes()))
             .and_then(|s| std::str::from_utf8(s).ok())
         else {
@@ -388,7 +393,7 @@ impl Active {
             self.next_sequence = sequence
                 .checked_add(1)
                 .ok_or_else(|| io::Error::other("log sequence exhausted"))?;
-            let mut name = prefix(&self.path);
+            let mut name = prefix(&self.path, LOG_ROTATION_MARKER);
             name.push(format!(
                 "{}-{sequence:020}.sealed",
                 now.format("%Y%m%dT%H%M%SZ")

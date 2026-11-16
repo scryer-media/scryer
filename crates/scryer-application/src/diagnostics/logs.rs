@@ -11,7 +11,10 @@ const LOG_FILE_READ_CAP_BYTES: u64 = 24 * 1024 * 1024;
 const ROTATED_ARCHIVES_READ: usize = 2;
 /// Marker the log writer puts between the active file name and a rotation's
 /// timestamp.
-const ROTATION_MARKER: &str = ".scryer-rotate-";
+pub const LOG_ROTATION_MARKER: &str = ".scry-ro-";
+/// What releases before [`LOG_ROTATION_MARKER`] wrote; still read, published
+/// and retained.
+pub const LEGACY_LOG_ROTATION_MARKER: &str = ".scryer-rotate-";
 
 /// What reading the log files produced.
 #[derive(Debug, Default)]
@@ -163,21 +166,29 @@ fn rotated_archives(active: &Path) -> Vec<std::path::PathBuf> {
     let (Some(directory), Some(file_name)) = (active.parent(), active.file_name()) else {
         return Vec::new();
     };
-    let prefix = format!("{}{ROTATION_MARKER}", file_name.to_string_lossy());
+    let file_name = file_name.to_string_lossy();
+    let prefixes = [LOG_ROTATION_MARKER, LEGACY_LOG_ROTATION_MARKER]
+        .map(|marker| format!("{file_name}{marker}"));
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
+    // Ordered by the timestamp and sequence after the marker, so archives
+    // under either spelling interleave by age.
     let mut archives = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
-            (name.starts_with(&prefix) && name.ends_with(".gz")).then(|| entry.path())
+            let rotation = prefixes
+                .iter()
+                .find_map(|prefix| name.strip_prefix(prefix.as_str()))?
+                .to_owned();
+            name.ends_with(".gz").then(|| (rotation, entry.path()))
         })
         .collect::<Vec<_>>();
     archives.sort();
     archives.reverse();
     archives.truncate(ROTATED_ARCHIVES_READ);
-    archives
+    archives.into_iter().map(|(_, path)| path).collect()
 }
 
 #[cfg(test)]
@@ -190,14 +201,33 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let active = dir.path().join("scryer.log");
         std::fs::write(&active, "active-1\nactive-2\n").expect("write active");
-        for (stamp, line) in [
-            ("20260101T000000Z-00000000000000000001", "oldest"),
-            ("20260102T000000Z-00000000000000000002", "middle"),
-            ("20260103T000000Z-00000000000000000003", "newest"),
+        // Written before and after the marker was shortened, plus a name that
+        // only resembles one and must be ignored.
+        for (marker, stamp, line) in [
+            (
+                LEGACY_LOG_ROTATION_MARKER,
+                "20260101T000000Z-00000000000000000001",
+                "oldest",
+            ),
+            (
+                LEGACY_LOG_ROTATION_MARKER,
+                "20260102T000000Z-00000000000000000002",
+                "middle",
+            ),
+            (
+                LOG_ROTATION_MARKER,
+                "20260103T000000Z-00000000000000000003",
+                "newest",
+            ),
+            (
+                ".scry-r-",
+                "20260104T000000Z-00000000000000000004",
+                "lookalike",
+            ),
         ] {
             let path = dir
                 .path()
-                .join(format!("scryer.log{ROTATION_MARKER}{stamp}.sealed.gz"));
+                .join(format!("scryer.log{marker}{stamp}.sealed.gz"));
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
             writeln!(encoder, "{line}").expect("encode");
