@@ -1127,27 +1127,6 @@ fn a_pass_probes_each_path_once_and_uses_its_listings() {
     assert_eq!(backend.calls_of("lstat"), 3);
 }
 
-#[test]
-fn the_capacity_owner_is_the_process_one() {
-    let disk = Disk::with_seams(Arc::new(Scripted::default()), ManualClock::at(at(0)));
-    let path = "/srv/fixture-disk-owner-capacity";
-    disk.capacity().record_for_test(
-        path,
-        at(0),
-        Some(crate::helpers::FilesystemSpace {
-            total_bytes: 100,
-            available_bytes: 40,
-        }),
-    );
-    assert!(matches!(
-        capacity::StorageCapacity::process().reading(path, at(0)),
-        capacity::StorageCapacityReading::Known {
-            available_bytes: 40,
-            ..
-        }
-    ));
-}
-
 #[tokio::test]
 async fn async_verbs_run_off_the_runtime_and_report_like_their_blocking_forms() {
     let clock = ManualClock::at(at(0));

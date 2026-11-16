@@ -288,7 +288,8 @@ pub struct DiskError {
 }
 
 impl DiskError {
-    pub(crate) fn new(verb: DiskVerb, path: &Path, source: io::Error) -> Self {
+    #[doc(hidden)]
+    pub fn new(verb: DiskVerb, path: &Path, source: io::Error) -> Self {
         Self {
             verb,
             reason: classify(&source),

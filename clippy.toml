@@ -12,14 +12,15 @@
 
 # Disk operations guard.
 #
-# Code reaches the filesystem only through `scryer_application::disk`
-# (crates/scryer-application/src/disk/). The disallowed-methods entries whose
-# reason reads "disk operations go through scryer_application::disk" ban the
-# std, tokio, platform and third-party calls that touch the disk, so a direct
-# call fails `cargo clippy -D warnings` outside an allowed scope.
+# Code reaches the filesystem only through `scryer_application::disk`, which
+# re-exports the disk service crate (crates/scryer-disk/). The
+# disallowed-methods entries whose reason reads "disk operations go through
+# scryer_application::disk" ban the std, tokio, platform and third-party calls
+# that touch the disk, so a direct call fails `cargo clippy -D warnings`
+# outside an allowed scope.
 #
-# The only standing exemptions are: the disk module itself; test, example,
-# bench and build-script code; the crates that do not depend on
+# The only standing exemptions are: the disk service crate itself; test,
+# example, bench and build-script code; the crates that do not depend on
 # scryer-application (scryer-mediainfo, scryer-logging, scryer-launcher); and
 # the plugin WASI sandbox, which manages its own preopened directories. Each
 # carries `allow(clippy::disallowed_methods)` with a `// disk-guard:` comment

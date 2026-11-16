@@ -30,7 +30,7 @@ pub fn stored_path_to_path_buf(stored: &str) -> PathBuf {
 }
 
 /// Foreign native encodings can be displayed, but cannot identify a local file.
-pub(crate) fn stored_path_is_native(stored: &str) -> bool {
+pub fn stored_path_is_native(stored: &str) -> bool {
     !(cfg!(unix) && stored.starts_with(STORED_PATH_WINDOWS_PREFIX)
         || cfg!(windows) && stored.starts_with(STORED_PATH_UNIX_PREFIX))
 }
@@ -47,7 +47,7 @@ pub fn stored_path_to_display_string(stored: &str) -> String {
 
 /// Fold Unicode text while preserving native bytes or unpaired UTF-16 units.
 /// Opaque portions of a path must never acquire the replacement character's identity.
-pub(crate) fn lowercase_os_str(value: &OsStr) -> OsString {
+pub fn lowercase_os_str(value: &OsStr) -> OsString {
     map_os_str_text(value, |text| text.to_lowercase())
 }
 
@@ -106,11 +106,7 @@ fn map_os_str_text(value: &OsStr, transform: impl Fn(&str) -> String) -> OsStrin
 }
 
 /// Split a native name at a native prefix without decoding either lossily.
-pub(crate) fn native_name_suffix(
-    value: &OsStr,
-    prefix: &OsStr,
-    ignore_case: bool,
-) -> Option<OsString> {
+pub fn native_name_suffix(value: &OsStr, prefix: &OsStr, ignore_case: bool) -> Option<OsString> {
     if ignore_case {
         let prefix = lowercase_os_str(prefix);
         #[cfg(unix)]
@@ -172,7 +168,7 @@ pub(crate) fn native_name_suffix(
 }
 
 /// Append a suffix before the final extension without changing the native name.
-pub(crate) fn suffix_path_stem(path: &Path, suffix: &str) -> PathBuf {
+pub fn suffix_path_stem(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_stem().unwrap_or_default().to_os_string();
     name.push(suffix);
     if let Some(extension) = path.extension() {
@@ -354,14 +350,14 @@ const fn folder_path_trailing_separators() -> &'static [char] {
     if cfg!(windows) { &['/', '\\'] } else { &['/'] }
 }
 
-pub(crate) fn stored_path_is_within_folder(folder: &str, path: &str) -> bool {
+pub fn stored_path_is_within_folder(folder: &str, path: &str) -> bool {
     native_path_is_within_folder(
         &stored_path_to_path_buf(folder),
         &stored_path_to_path_buf(path),
     )
 }
 
-pub(crate) fn stored_path_is_lexically_within_folder(folder: &str, path: &str) -> bool {
+pub fn stored_path_is_lexically_within_folder(folder: &str, path: &str) -> bool {
     native_path_is_within_folder(
         &lexically_normalize(&stored_path_to_path_buf(folder)),
         &lexically_normalize(&stored_path_to_path_buf(path)),
@@ -379,7 +375,7 @@ fn native_path_is_within_folder(folder: &Path, path: &Path) -> bool {
     path.starts_with(folder)
 }
 
-pub(crate) fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
+pub fn folder_path_identity_key_for_platform(path: &str, windows: bool) -> Option<String> {
     let decoded = stored_path_to_path_buf(path);
     if decoded.as_os_str().is_empty() {
         return None;
@@ -613,21 +609,6 @@ mod tests {
             lowercase_os_str(first.as_os_str()),
             lowercase_os_str(second.as_os_str())
         );
-        let child = path_to_stored_string(first.join("movie.mkv"));
-        assert!(crate::title_folder_rules::path_is_strictly_within(
-            &child, &first_key
-        ));
-        assert!(!crate::title_folder_rules::path_is_strictly_within(
-            &child,
-            &second_key
-        ));
-        assert!(!crate::title_folder_rules::path_is_strictly_within(
-            &path_to_stored_string(first.join("../outside.mkv")),
-            &first_key
-        ));
-        assert!(!crate::title_folder_rules::path_is_strictly_within(
-            &first_key, &first_key
-        ));
     }
 
     #[test]

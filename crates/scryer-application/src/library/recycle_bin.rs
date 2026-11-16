@@ -1248,28 +1248,7 @@ async fn quick_verified_copy(
     )))
 }
 
-#[cfg(not(windows))]
-fn contains_non_windows_separator_ambiguity(path: &Path) -> bool {
-    path.components().any(|component| match component {
-        std::path::Component::Normal(segment) => segment.to_string_lossy().contains('\\'),
-        std::path::Component::Prefix(prefix) => prefix.as_os_str().to_string_lossy().contains('\\'),
-        _ => false,
-    })
-}
-
-pub(crate) fn path_is_under_configured_root(path: &Path, root: &Path) -> bool {
-    #[cfg(not(windows))]
-    if contains_non_windows_separator_ambiguity(path)
-        || contains_non_windows_separator_ambiguity(root)
-    {
-        return false;
-    }
-
-    crate::stored_paths::stored_path_is_lexically_within_folder(
-        &crate::stored_paths::path_to_stored_string(root),
-        &crate::stored_paths::path_to_stored_string(path),
-    )
-}
+pub(crate) use scryer_disk::path_is_under_configured_root;
 
 pub(crate) fn restore_destination_is_under_configured_root(path: &Path, root: &Path) -> bool {
     if path.file_name().is_none() {

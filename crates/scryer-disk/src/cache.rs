@@ -269,7 +269,7 @@ fn trim(entries: &mut BTreeMap<PathBuf, Entry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::disk::reading::EntryKind;
+    use crate::reading::EntryKind;
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::<Utc>::from_timestamp(1_700_000_000 + seconds, 0).expect("instant")
@@ -316,7 +316,7 @@ mod tests {
         cache.store(&key("/srv/m/a"), known(0), 0);
         let failed = PathReading::Unreachable {
             observed_at: at(0),
-            cause: crate::disk::reason::DISK_TIMED_OUT,
+            cause: crate::reason::DISK_TIMED_OUT,
         };
         cache.store(&key("/srv/m/a"), failed, 0);
         assert!(cache.current(&key("/srv/m/a"), at(0)).is_none());

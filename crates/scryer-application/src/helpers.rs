@@ -487,17 +487,7 @@ pub(crate) fn to_hex(value: &[u8]) -> String {
     output
 }
 
-/// Total and available bytes of the filesystem backing a path.
-///
-/// `available_bytes` is the space an unprivileged writer can use (the
-/// `f_bavail` figure on unix, the caller-available figure on Windows), so
-/// `total - available` counts reserved blocks as used, matching what an
-/// operator expects a usage percentage to mean.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FilesystemSpace {
-    pub total_bytes: u64,
-    pub available_bytes: u64,
-}
+pub(crate) use scryer_disk::capacity::FilesystemSpace;
 
 fn normalize_tag(raw: String) -> String {
     let raw = raw.trim();

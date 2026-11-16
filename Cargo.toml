@@ -5,6 +5,7 @@ members = [
     "xtask-migrations",
     "xtask-support",
     "crates/scryer-domain",
+    "crates/scryer-disk",
     "crates/scryer-application",
     "crates/scryer-webauthn",
     "crates/scryer-outbound-http",

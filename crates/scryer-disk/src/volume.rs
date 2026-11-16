@@ -207,7 +207,7 @@ impl Volumes {
     pub(crate) fn resolve(&self, path: &Path) -> Option<&Volume> {
         self.roots
             .iter()
-            .filter(|volume| crate::recycle_bin::path_is_under_configured_root(path, &volume.root))
+            .filter(|volume| path_is_under_configured_root(path, &volume.root))
             .max_by_key(|volume| volume.root.components().count())
     }
 
@@ -236,28 +236,32 @@ impl Volumes {
     }
 }
 
-impl crate::AppUseCase {
-    /// Install the configured roots on the process's owner: every library
-    /// root, and a custom recycle bin. Run once at startup and after every
-    /// write that adds, changes or removes one.
-    ///
-    /// A root's class is its role, so this reads the library list and one
-    /// setting and touches no filesystem. When the roots cannot be read, the
-    /// roots already installed stay.
-    pub async fn install_disk_volumes(&self) {
-        let library_roots = match self.storage_capacity_roots().await {
-            Ok(roots) => roots,
-            Err(error) => {
-                tracing::warn!(error = %error, "could not read the library roots; the disk owner keeps the roots it has");
-                return;
-            }
-        };
-        let (_, recycle_bin, _) = self.recycle_bin_config_values().await;
-        super::Disk::process().set_volumes(configured_volumes(library_roots, recycle_bin));
-    }
+#[cfg(not(windows))]
+fn contains_non_windows_separator_ambiguity(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        std::path::Component::Normal(segment) => segment.to_string_lossy().contains('\\'),
+        std::path::Component::Prefix(prefix) => prefix.as_os_str().to_string_lossy().contains('\\'),
+        _ => false,
+    })
 }
 
-pub(super) fn configured_volumes(
+pub fn path_is_under_configured_root(path: &Path, root: &Path) -> bool {
+    #[cfg(not(windows))]
+    if contains_non_windows_separator_ambiguity(path)
+        || contains_non_windows_separator_ambiguity(root)
+    {
+        return false;
+    }
+
+    crate::stored_paths::stored_path_is_lexically_within_folder(
+        &crate::stored_paths::path_to_stored_string(root),
+        &crate::stored_paths::path_to_stored_string(path),
+    )
+}
+
+/// The roots to install for these library roots and this custom recycle bin,
+/// each by its role.
+pub fn configured_volumes(
     library_roots: Vec<String>,
     recycle_bin: Option<String>,
 ) -> Vec<(PathBuf, VolumeClass)> {

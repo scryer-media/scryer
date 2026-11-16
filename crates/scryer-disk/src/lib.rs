@@ -5,7 +5,7 @@
 //! path, timeouts, and what each configured root's filesystem has shown it can
 //! and cannot do. Callers pass a path and a verb and get a generic, typed
 //! outcome; they never say or learn what kind of filesystem a path is on.
-//! Free space lives here too, in [`capacity`].
+//! The free-space call lives here too, in [`capacity`].
 //!
 //! Library roots live on network shares, where every call is a round trip and
 //! a dead mount blocks it outright. So reads come in two modes, as capacity
@@ -50,11 +50,16 @@
 //! the handle and evicts them again once the writing is done, so no reading
 //! taken while it was written outlives it.
 
+// disk-guard: this crate is the disk service itself, the one place that calls
+// the filesystem.
+#![allow(clippy::disallowed_methods)]
+
 pub(crate) mod backend;
 pub(crate) mod cache;
-pub(crate) mod capacity;
+pub mod capacity;
 mod pass;
 mod reading;
+pub mod stored_paths;
 mod volume;
 
 use std::io;
@@ -76,14 +81,18 @@ pub use reading::{
     DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, is_cross_device_error, reason,
 };
 pub use volume::VolumeClass;
+#[doc(hidden)]
+pub use volume::{configured_volumes, path_is_under_configured_root};
 
 /// The clock readings are stamped and aged by. Tests replace it.
-pub(crate) trait DiskClock: Send + Sync + 'static {
+#[doc(hidden)]
+pub trait DiskClock: Send + Sync + 'static {
     fn now(&self) -> DateTime<Utc>;
 }
 
+#[doc(hidden)]
 #[derive(Debug, Default)]
-pub(crate) struct SystemClock;
+pub struct SystemClock;
 
 impl DiskClock for SystemClock {
     fn now(&self) -> DateTime<Utc> {
@@ -91,11 +100,13 @@ impl DiskClock for SystemClock {
     }
 }
 
-pub(crate) fn read<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+#[doc(hidden)]
+pub fn read<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
     lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-pub(crate) fn write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+#[doc(hidden)]
+pub fn write<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
     lock.write()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -108,7 +119,8 @@ fn hold(flight: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
 
 /// Whether a reading taken at `observed_at` answers a caller who asked at
 /// `asked_at`: it was taken after the caller asked, or under `reuse` before.
-pub(crate) fn reusable(
+#[doc(hidden)]
+pub fn reusable(
     observed_at: DateTime<Utc>,
     asked_at: DateTime<Utc>,
     reuse: std::time::Duration,
@@ -118,7 +130,8 @@ pub(crate) fn reusable(
 }
 
 /// How a job sent off the async runtime ended.
-pub(crate) enum Offloaded<T> {
+#[doc(hidden)]
+pub enum Offloaded<T> {
     Done(T),
     TimedOut,
     /// The blocking task panicked or was cancelled; the join error's words.
@@ -128,7 +141,8 @@ pub(crate) enum Offloaded<T> {
 /// Run `job` on a blocking thread, waiting at most `timeout` when one is
 /// given. A job that times out keeps running; whatever it records when it
 /// finishes is its own business.
-pub(crate) async fn offload<T: Send + 'static>(
+#[doc(hidden)]
+pub async fn offload<T: Send + 'static>(
     timeout: Option<std::time::Duration>,
     job: impl FnOnce() -> T + Send + 'static,
 ) -> Offloaded<T> {
@@ -540,13 +554,6 @@ impl Disk {
                 probe_timeout: Mutex::default(),
             }),
         }
-    }
-
-    /// The free-space owner. Callers still reach it through
-    /// `StorageCapacity::process` until they move onto this owner.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn capacity(&self) -> capacity::StorageCapacity {
-        capacity::StorageCapacity::process()
     }
 
     /// Install the configured roots. Readings already held stay until they
@@ -1745,8 +1752,8 @@ impl Disk {
     }
 
     /// The class of the root `path` is under, for tests.
-    #[cfg(test)]
-    pub(crate) fn class_of(&self, path: &Path) -> VolumeClass {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn class_of(&self, path: &Path) -> VolumeClass {
         read(&self.inner.volumes).class_of(path)
     }
 }
@@ -1937,13 +1944,14 @@ const SCRATCH_NAME_TRIES: usize = 8;
 fn unique_suffix(near: &Path) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(near.as_os_str().as_encoded_bytes());
-    hasher.update(crate::Id::new().0.as_bytes());
+    hasher.update(uuid::Uuid::new_v4().to_string().as_bytes());
     hasher.finalize().to_hex()[..9].to_string()
 }
 
 /// A hidden sibling of `dest` that no scanner takes for media. A short digest
 /// keeps the name 25 bytes however long the destination's name is.
-pub(crate) fn staging_path_for(dest: &Path) -> PathBuf {
+#[doc(hidden)]
+pub fn staging_path_for(dest: &Path) -> PathBuf {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     parent.join(format!(".scryer-{}.partial", unique_suffix(dest)))
 }
@@ -1955,19 +1963,19 @@ fn fixed_staging_path_for(dest: &Path) -> PathBuf {
     parent.join(format!(".scry-sf-{}.partial", &digest[..9]))
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
     use super::*;
 
     /// A clock tests move by hand.
     #[derive(Default)]
-    pub(crate) struct ManualClock(Mutex<Option<DateTime<Utc>>>);
+    pub struct ManualClock(Mutex<Option<DateTime<Utc>>>);
 
     impl ManualClock {
-        pub(crate) fn at(instant: DateTime<Utc>) -> Arc<Self> {
+        pub fn at(instant: DateTime<Utc>) -> Arc<Self> {
             Arc::new(Self(Mutex::new(Some(instant))))
         }
-        pub(crate) fn set(&self, instant: DateTime<Utc>) {
+        pub fn set(&self, instant: DateTime<Utc>) {
             *self.0.lock().unwrap() = Some(instant);
         }
     }

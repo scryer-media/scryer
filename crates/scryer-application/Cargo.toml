@@ -35,6 +35,7 @@ application-updater = { git = "https://github.com/scryer-media/application-updat
 artifact-trust = { git = "https://github.com/scryer-media/artifact-trust.git", tag = "v0.1.2", default-features = false }
 scryer-media-types = { path = "../scryer-media-types" }
 scryer-domain = { path = "../scryer-domain" }
+scryer-disk = { path = "../scryer-disk" }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 scryer-release-parser = { path = "../scryer-release-parser" }
 scryer-rules = { path = "../scryer-rules" }
@@ -87,6 +88,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win
 [dev-dependencies]
 application-updater = { git = "https://github.com/scryer-media/application-updater.git", rev = "e55801ce7f66c744667d4fe27dd12432a4697f33", features = ["test-seams"] }
 tokio = { workspace = true, features = ["test-util"] }
+# The disk service's test seams: a clock moved by hand and the class a path
+# resolves to.
+scryer-disk = { path = "../scryer-disk", features = ["test-support"] }
 tempfile = "3"
 wiremock = { workspace = true }
 # Fixed IANA zones so schedule tests can exercise daylight-saving transitions
