@@ -39,37 +39,22 @@ async fn write_retry_state(
     reason: Option<String>,
     detail: Option<String>,
 ) -> AppResult<()> {
-    let now = Utc::now();
-    SqlRuntime::execute(
-        SqlExec::Tx(tx),
-        "INSERT INTO download_identity_states
-         (id, identity_key, canonical_download_id, client_id, client_type, download_client_item_id,
-          tracked_state, reason, detail, created_at, updated_at)
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-         ON CONFLICT(identity_key) DO UPDATE SET tracked_state = excluded.tracked_state,
-         reason = excluded.reason, detail = excluded.detail, updated_at = excluded.updated_at",
-        &[
-            SqlArg::Text(scryer_domain::Id::new().0),
-            SqlArg::Text(format!("download:{}", claim.download_id)),
-            SqlArg::Text(claim.download_id.to_string()),
-            SqlArg::OptText(claim.source.client_id.clone()),
-            SqlArg::Text(claim.source.client_type.clone()),
-            SqlArg::Text(claim.source.item_id.clone()),
-            SqlArg::Text(state.into()),
-            SqlArg::OptText(reason),
-            SqlArg::OptText(detail),
-            SqlArg::Timestamp(now),
-            SqlArg::Timestamp(now),
-        ],
-    )
-    .await?;
-    SqlRuntime::execute(
-        SqlExec::Tx(tx),
-        "UPDATE download_submissions SET tracked_state = {} WHERE id = {}",
-        &[
-            SqlArg::Text(state.into()),
-            SqlArg::Text(claim.download_id.to_string()),
-        ],
+    use super::download_submission_store::{
+        IdentityStateConflict, IdentityStateWrite, upsert_identity_state_tx,
+    };
+    upsert_identity_state_tx(
+        tx,
+        IdentityStateWrite {
+            canonical_download_id: claim.download_id,
+            download_id: None,
+            source: Some(&claim.source),
+            tracked_state: state,
+            reason,
+            detail,
+            conflict: IdentityStateConflict::KeepIdentity,
+            now: Utc::now(),
+            mirror_submission: true,
+        },
     )
     .await?;
     Ok(())

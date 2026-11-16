@@ -7287,10 +7287,7 @@ async fn resolve_pending_import_for_created_title_tx(
     }
 
     let now = Utc::now();
-    let updated_at = match &*tx {
-        SqlTx::Sqlite(_) => SqlArg::Text(now.to_rfc3339()),
-        SqlTx::Postgres(_) => SqlArg::Timestamp(now),
-    };
+    let updated_at = SqlArg::Timestamp(now);
     let rows = SqlRuntime::execute(
         SqlExec::Tx(tx),
         "UPDATE library_scan_unmatched_items
@@ -7952,6 +7949,8 @@ mod catalog_sort_scope_tests;
 mod release_day_tests;
 #[cfg(test)]
 mod search_lane_tests;
+#[cfg(test)]
+mod wanted_list_tests;
 
 #[cfg(test)]
 mod affinity_revision_tests;

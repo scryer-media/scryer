@@ -9489,8 +9489,6 @@ pub trait DownloadQueueCommandRepository: Send + Sync {
         sources: &[(Option<String>, String, String, bool)],
         completed_only: bool,
     ) -> AppResult<Vec<crate::DownloadQueueCommandRecord>>;
-
-    async fn prune_terminal_delete_commands_older_than(&self, days: i64) -> AppResult<u32>;
 }
 
 #[derive(Debug, Clone)]
@@ -10640,6 +10638,23 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
                 })
                 .await?,
             );
+        }
+        Ok(states)
+    }
+
+    /// The same rows, in the same order, as
+    /// [`Self::list_acquisition_scope_states_for_title_ids`], with
+    /// `latest_release_decision` left empty. For callers that never read the
+    /// decision; SQL stores skip its join and blob.
+    async fn list_acquisition_scope_states_for_title_ids_without_decisions(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states_for_title_ids(title_ids)
+            .await?;
+        for state in &mut states {
+            state.latest_release_decision = None;
         }
         Ok(states)
     }

@@ -905,10 +905,6 @@ impl DownloadQueueCommandRepository for NullDownloadQueueCommandRepository {
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
         Ok(vec![])
     }
-
-    async fn prune_terminal_delete_commands_older_than(&self, _: i64) -> AppResult<u32> {
-        Ok(0)
-    }
 }
 
 #[derive(Default)]

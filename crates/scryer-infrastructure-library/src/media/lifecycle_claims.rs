@@ -12,11 +12,10 @@ use scryer_domain::{
     LIFECYCLE_CLAIM_LIVE_STATES, LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer,
     LifecycleClaimState,
 };
-use sqlx::Row;
 use std::collections::HashMap;
 
+use crate::queries::sql_runtime::SqlRow;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, StoreDatastore};
-use crate::queries::sql_runtime::{SqlRow, repo_err};
 
 #[derive(Clone)]
 pub struct LifecycleClaimStore {
@@ -597,20 +596,8 @@ fn row_to_claim(row: &SqlRow) -> AppResult<LifecycleClaim> {
         starts_at: row.opt_timestamp("starts_at")?,
         expires_at: row.opt_timestamp("expires_at")?,
         created_by: row.opt_text("created_by")?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
         released_reason: row.opt_text("released_reason")?,
     })
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }

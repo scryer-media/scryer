@@ -4,7 +4,6 @@ use scryer_application::{AppError, AppResult, LifecycleRuleSetRepository};
 use scryer_domain::{
     LifecycleEffectArming, LifecycleEvaluationMode, LifecycleRuleRevision, LifecycleRuleSet,
 };
-use sqlx::Row;
 
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
@@ -638,8 +637,8 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<LifecycleRuleSet> {
         max_titles_per_run: row
             .opt_i64("max_titles_per_run")?
             .map(|max| u32::try_from(max.max(0)).unwrap_or(u32::MAX)),
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
     })
 }
 
@@ -653,7 +652,7 @@ fn row_to_revision(row: &SqlRow) -> AppResult<LifecycleRuleRevision> {
         grace_days: row.i64("grace_days")?,
         matcher_content_hash: row.text("matcher_content_hash")?,
         created_by: row.opt_text("created_by")?,
-        created_at: timestamp_or_now(row, "created_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
         builder_model_json: row.opt_text("builder_model_json")?,
     })
 }
@@ -698,16 +697,4 @@ async fn replace_library_scope(
         .await?;
     }
     Ok(())
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }

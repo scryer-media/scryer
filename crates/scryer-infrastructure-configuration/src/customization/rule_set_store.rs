@@ -1,15 +1,12 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use scryer_application::{AppError, AppResult, RuleSetHistoryChange, RuleSetRepository};
 use scryer_domain::{
     Id, MediaFacet, RuleEvaluationPhase, RulePackInstallation, RulePackMember, RuleSet,
 };
-use sqlx::Row;
 use std::sync::Arc;
 
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
-};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use crate::storage::sql::json::{
     canonical_json_arg, canonical_json_text, json_text_or, opt_json_text,
 };
@@ -594,8 +591,8 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RuleSet> {
         disabled_reason: row.opt_text("disabled_reason")?,
         disabled_reason_code: row.opt_text("disabled_reason_code")?,
         applied_facets: applied_facets(row)?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
         is_managed: row.bool("is_managed")?,
         managed_key: row.opt_text("managed_key")?,
         managed_tag_filter: managed_tag_filter(row)?,
@@ -620,18 +617,6 @@ fn managed_tag_filter(row: &SqlRow) -> AppResult<Option<Vec<String>>> {
 fn applied_facets(row: &SqlRow) -> AppResult<Vec<MediaFacet>> {
     let raw = json_text_or(row, "applied_facets", "[]")?;
     Ok(serde_json::from_str(&raw).unwrap_or_default())
-}
-
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }
 
 fn rule_pack_installation_args(installation: &RulePackInstallation) -> Vec<SqlArg> {
@@ -687,7 +672,7 @@ async fn row_to_rule_pack_installation(
         customizable: row.bool("customizable")?,
         auto_update: row.bool("auto_update")?,
         revision: row.i64("revision")?,
-        last_updated: timestamp_or_now(row, "last_updated")?,
+        last_updated: row.timestamp_or_now("last_updated")?,
         last_error: row.opt_text("last_error")?,
         members,
     })
