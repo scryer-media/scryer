@@ -10355,7 +10355,10 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         &self,
         item: &AcquisitionScopeState,
     ) -> AppResult<String> {
-        if let Some(existing) = find_existing_acquisition_scope_state(self, item).await? {
+        if let Some(existing) = self
+            .get_acquisition_scope_state_for_scope(&item.title_id, AcquisitionScopeKey::of(item))
+            .await?
+        {
             return Ok(existing.id);
         }
         self.upsert_acquisition_scope_state(item).await?;
@@ -10710,68 +10713,6 @@ pub async fn ensure_acquisition_scopes_grabbed_per_row<
         .await?;
     }
     Ok(())
-}
-
-/// Locate the acquisition-state row matching `item`'s scope (episode /
-/// series-movie link / collection / bare title), if one exists.
-pub(crate) async fn find_existing_acquisition_scope_state<
-    R: AcquisitionScopeStateRepository + ?Sized,
->(
-    repo: &R,
-    item: &AcquisitionScopeState,
-) -> AppResult<Option<AcquisitionScopeState>> {
-    if let Some(series_movie_link_id) = item.series_movie_link_id.as_deref() {
-        return Ok(repo
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                title_id: Some(item.title_id.clone()),
-                limit: 500,
-                ..AcquisitionScopeStatesQuery::default()
-            })
-            .await?
-            .into_iter()
-            .find(|existing| {
-                existing.series_movie_link_id.as_deref() == Some(series_movie_link_id)
-            }));
-    }
-
-    // Episode scope before collection scope: an episode state row carries both
-    // its `episode_id` and its owning `collection_id`, so it must be matched on
-    // the more specific episode identity first — otherwise every episode of a
-    // season would resolve to the same collection-matched sibling row.
-    if let Some(episode_id) = item.episode_id.as_deref() {
-        return repo
-            .get_acquisition_scope_state_for_title(&item.title_id, Some(episode_id))
-            .await;
-    }
-
-    if let Some(collection_id) = item.collection_id.as_deref() {
-        return Ok(repo
-            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                title_id: Some(item.title_id.clone()),
-                limit: 500,
-                ..AcquisitionScopeStatesQuery::default()
-            })
-            .await?
-            .into_iter()
-            .find(|existing| {
-                existing.episode_id.is_none()
-                    && existing.collection_id.as_deref() == Some(collection_id)
-            }));
-    }
-
-    Ok(repo
-        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-            title_id: Some(item.title_id.clone()),
-            limit: 500,
-            ..AcquisitionScopeStatesQuery::default()
-        })
-        .await?
-        .into_iter()
-        .find(|existing| {
-            existing.episode_id.is_none()
-                && existing.collection_id.is_none()
-                && existing.series_movie_link_id.is_none()
-        }))
 }
 
 #[async_trait]
