@@ -10,17 +10,15 @@ use crate::{LibraryScanSession, LibraryScanStatus};
 
 const JOB_RUN_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Default cadence of the lifecycle rule evaluator (RFC 137 section 10).
-/// The RFC adopts Maintainerr's familiar eight-hour rhythm as the native
-/// default; there is no clock-parity requirement, so this is a default rather
-/// than a contract.
+/// Default cadence of the lifecycle rule evaluator: Maintainerr's familiar
+/// eight-hour rhythm. There is no clock-parity requirement, so this is a
+/// default rather than a contract.
 pub const LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
 
-/// RFC 137 section 10: collection/action handling defaults to every twelve
-/// hours.
+/// Collection/action handling defaults to every twelve hours.
 pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
 
-/// Cadence of the media-server watch-signal sweep (RFC 137 section 7.3).
+/// Cadence of the media-server watch-signal sweep.
 ///
 /// Six hours is chosen against what the data is for, not against how fast it
 /// changes: signals feed grace-period lifecycle decisions measured in days,
@@ -1163,11 +1161,11 @@ mod tests {
         assert_eq!(
             LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS,
             8 * 3600,
-            "RFC 137 section 10 pins the default cadence at eight hours"
+            "the default evaluation cadence is eight hours"
         );
         assert!(
             definition.manual_trigger_allowed,
-            "an operator must be able to run a dark evaluation on demand"
+            "an operator must be able to run an evaluation on demand"
         );
     }
 

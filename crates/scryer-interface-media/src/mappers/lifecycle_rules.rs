@@ -7,8 +7,7 @@
 use super::*;
 
 use scryer_application::lifecycle_rules::{
-    LifecycleActionKind as AppActionKind, LifecycleActionSequence as AppActionSequence,
-    LifecycleActionStepKind as AppActionStepKind,
+    LifecycleActionSequence as AppActionSequence, LifecycleActionStepKind as AppActionStepKind,
     LifecycleActionStepParameters as AppActionStepParameters,
     LifecycleDeclaredActions as AppDeclaredActions, LifecycleSearchCondition as AppSearchCondition,
     decided_actions_from_json, decided_heads_in_execution_order, derived_effect_arming,
@@ -55,16 +54,6 @@ pub fn lifecycle_rule_subject_kind_into_application(
     }
 }
 
-pub fn lifecycle_rule_subject_kind_value(
-    kind: scryer_domain::LifecycleRuleSubjectKind,
-) -> LifecycleRuleSubjectKind {
-    match kind {
-        scryer_domain::LifecycleRuleSubjectKind::Title => LifecycleRuleSubjectKind::Title,
-        scryer_domain::LifecycleRuleSubjectKind::Season => LifecycleRuleSubjectKind::Season,
-        scryer_domain::LifecycleRuleSubjectKind::Episode => LifecycleRuleSubjectKind::Episode,
-    }
-}
-
 pub fn lifecycle_effect_arming_value(
     arming: scryer_domain::LifecycleEffectArming,
 ) -> LifecycleEffectArming {
@@ -75,9 +64,8 @@ pub fn lifecycle_effect_arming_value(
     }
 }
 
-/// One action-handler attempt. An action kind this build cannot parse renders
-/// nothing rather than a wrong kind, but by construction the executor only
-/// stores catalog wire names, so the fallback is unreachable in practice.
+/// One action-handler attempt. A run that did not record a step sequence
+/// renders nothing rather than a wrong kind.
 pub fn from_lifecycle_action_run(
     view: scryer_application::lifecycle_rules::LifecycleActionRunView,
 ) -> Option<LifecycleActionRun> {
@@ -88,12 +76,10 @@ pub fn from_lifecycle_action_run(
         action_sequence,
         sequence_steps,
     } = view;
-    let action_kind =
-        if run.action_kind == scryer_application::lifecycle_rules::ACTION_SEQUENCE_KIND {
-            LifecycleActionKind::ActionSequence
-        } else {
-            lifecycle_action_kind_value(AppActionKind::parse_wire_str(&run.action_kind)?)
-        };
+    if run.action_kind != scryer_application::lifecycle_rules::ACTION_SEQUENCE_KIND {
+        return None;
+    }
+    let action_kind = LifecycleActionKind::ActionSequence;
     let action_sequence = action_sequence.as_ref().map(from_lifecycle_action_sequence);
     Some(LifecycleActionRun {
         subject_label,
@@ -153,32 +139,6 @@ fn from_lifecycle_action_step_progress(
                 updated_at: receipt.updated_at.to_owned(),
             })
             .collect(),
-    }
-}
-
-pub fn lifecycle_action_kind_value(kind: AppActionKind) -> LifecycleActionKind {
-    match kind {
-        AppActionKind::DoNothing => LifecycleActionKind::DoNothing,
-        AppActionKind::UnmonitorScopeKeepFiles => LifecycleActionKind::UnmonitorScopeKeepFiles,
-        AppActionKind::DeleteTitleAndFiles => LifecycleActionKind::DeleteTitleAndFiles,
-        AppActionKind::UnmonitorTitleDeleteAllFiles => {
-            LifecycleActionKind::UnmonitorTitleDeleteAllFiles
-        }
-        AppActionKind::UnmonitorShowDeleteExistingFiles => {
-            LifecycleActionKind::UnmonitorShowDeleteExistingFiles
-        }
-        AppActionKind::UnmonitorScopeDeleteFiles => LifecycleActionKind::UnmonitorScopeDeleteFiles,
-        AppActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty => {
-            LifecycleActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
-        }
-        AppActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
-            LifecycleActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty
-        }
-        AppActionKind::ChangeQualityProfileAndSearchIfChanged => {
-            LifecycleActionKind::ChangeQualityProfileAndSearchIfChanged
-        }
-        AppActionKind::AddTags => LifecycleActionKind::AddTags,
-        AppActionKind::RemoveTags => LifecycleActionKind::RemoveTags,
     }
 }
 
@@ -464,10 +424,7 @@ pub fn lifecycle_candidate_state_into_application(
     }
 }
 
-/// A candidate stores its action by the catalog's wire name. A name this build
-/// does not know was written by a newer one; it projects as `DO_NOTHING`, the
-/// only kind that authorizes nothing, rather than guessing at a destructive
-/// action whose semantics this build does not have.
+/// Every candidate records its actions as a step sequence.
 pub fn from_lifecycle_candidate(
     view: scryer_application::lifecycle_rules::LifecycleCandidateView,
 ) -> LifecycleCandidate {
@@ -502,16 +459,7 @@ pub fn from_lifecycle_candidate(
         state: lifecycle_candidate_state_value(candidate.state),
         state_reason: candidate.state_reason,
         reason_codes: candidate.reason_codes,
-        action_kind: if candidate.action_kind
-            == scryer_application::lifecycle_rules::ACTION_SEQUENCE_KIND
-        {
-            LifecycleActionKind::ActionSequence
-        } else {
-            lifecycle_action_kind_value(
-                AppActionKind::parse_wire_str(&candidate.action_kind)
-                    .unwrap_or(AppActionKind::DoNothing),
-            )
-        },
+        action_kind: LifecycleActionKind::ActionSequence,
         actions,
         actions_conflict: candidate
             .actions_conflict
@@ -806,11 +754,8 @@ mod tests {
         assert!(projected.action_sequence.is_some());
         assert!(projected.sequence_steps.is_empty());
 
-        let legacy_view = LifecycleCandidateView {
-            candidate: LifecycleCandidate {
-                action_kind: AppActionKind::DoNothing.as_wire_str().into(),
-                ..candidate
-            },
+        let unsequenced_view = LifecycleCandidateView {
+            candidate,
             subject_label: "Example".into(),
             file_count: None,
             total_size_bytes: None,
@@ -819,10 +764,10 @@ mod tests {
             action_sequence: None,
             sequence_steps: Vec::new(),
         };
-        let legacy = from_lifecycle_candidate(legacy_view);
-        assert_eq!(legacy.action_kind, LifecycleActionKind::DoNothing);
-        assert!(legacy.action_sequence.is_none());
-        assert!(legacy.sequence_steps.is_empty());
+        let unsequenced = from_lifecycle_candidate(unsequenced_view);
+        assert_eq!(unsequenced.action_kind, LifecycleActionKind::ActionSequence);
+        assert!(unsequenced.action_sequence.is_none());
+        assert!(unsequenced.sequence_steps.is_empty());
     }
 
     #[test]

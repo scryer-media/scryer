@@ -1,4 +1,4 @@
-//! Watch-signal lifecycle facts (RFC 137 §7.3, WP-N).
+//! Watch-signal lifecycle facts.
 //!
 //! Two things are specified here, and they are deliberately separate concerns:
 //!
@@ -205,9 +205,9 @@ fn draft(rego_source: &str) -> LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: "Watched movies".to_string(),
         description: String::new(),
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             rego_source,
-            crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days: 0,
         library_ids: Vec::new(),
@@ -284,9 +284,9 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
 fn inline_matcher(rego_source: &str) -> LifecyclePreviewMatcher {
     LifecyclePreviewMatcher::Inline {
         library_ids: vec![],
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             rego_source,
-            crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days: 0,
     }
@@ -790,9 +790,9 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
             &catalog_only_author(),
             &created.rule_set.id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     WATCHED_BY_ALL_REQUESTERS_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                 ),
                 grace_days: 0,
                 max_titles_per_run: None,

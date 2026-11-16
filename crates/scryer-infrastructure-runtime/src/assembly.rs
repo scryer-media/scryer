@@ -1747,7 +1747,7 @@ impl DatastoreAssembly {
                 .with_delay_profiles(self.delay_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
-                // Lifecycle safety: live playback observation (RFC 137 §9.10, WP-G).
+                // Lifecycle safety: live playback observation.
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
@@ -1881,7 +1881,7 @@ impl DatastoreAssembly {
                 .with_delay_profiles(self.delay_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
-                // Lifecycle safety: live playback observation (RFC 137 §9.10, WP-G).
+                // Lifecycle safety: live playback observation.
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))

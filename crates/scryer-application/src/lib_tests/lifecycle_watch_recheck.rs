@@ -586,9 +586,9 @@ impl RecheckFixture {
                     max_titles_per_run: Some(100),
                     name: "Watched subjects".to_string(),
                     description: String::new(),
-                    rego_source: crate::lib_tests::legacy_source_at(
+                    rego_source: crate::lib_tests::heads_source_at(
                         matcher,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
                         scope,
                     ),
                     grace_days: 0,

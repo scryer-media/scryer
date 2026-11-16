@@ -311,39 +311,25 @@ impl ScopeIndexerCoverageRepository for RecordingScopeIndexerCoverageRepo {
     }
 }
 
-/// A `match`-form fixture source with the action heads an old action kind
-/// meant, each firing when `match` holds.
-pub(crate) fn legacy_source(
+/// A `match`-form fixture source with `heads`, each firing when `match` holds.
+pub(crate) fn heads_source(
     source: impl AsRef<str>,
-    kind: crate::lifecycle_rules::LifecycleActionKind,
+    heads: &[scryer_rules::lifecycle_actions::LifecycleActionHead],
 ) -> String {
-    use crate::lifecycle_rules::LifecycleActionKind as Kind;
-    use scryer_rules::lifecycle_actions::LifecycleActionHead as Head;
-    let heads: &[Head] = match kind {
-        Kind::UnmonitorScopeKeepFiles | Kind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
-            &[Head::Unmonitor]
-        }
-        Kind::DeleteTitleAndFiles => &[Head::DeleteTitle],
-        Kind::UnmonitorTitleDeleteAllFiles
-        | Kind::UnmonitorShowDeleteExistingFiles
-        | Kind::UnmonitorScopeDeleteFiles
-        | Kind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty => &[Head::DeleteFiles],
-        other => panic!("fixture kind {other:?} has no head-only form"),
-    };
     append_heads_to_match_source(source.as_ref(), heads)
 }
 
-/// [`legacy_source`] for a fixture written when a rule was scoped to seasons
-/// or episodes: its heads act at that level and the facts it read as the
-/// subject's are read from that level's document.
-pub(crate) fn legacy_source_at(
+/// [`heads_source`] for a fixture that reads a season or an episode: its heads
+/// act at that level and the facts it reads as the subject's are read from that
+/// level's document.
+pub(crate) fn heads_source_at(
     source: impl AsRef<str>,
-    kind: crate::lifecycle_rules::LifecycleActionKind,
+    heads: &[scryer_rules::lifecycle_actions::LifecycleActionHead],
     scope: scryer_domain::LifecycleRuleSubjectKind,
 ) -> String {
     use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
     let (level, path) = match scope {
-        scryer_domain::LifecycleRuleSubjectKind::Title => return legacy_source(source, kind),
+        scryer_domain::LifecycleRuleSubjectKind::Title => return heads_source(source, heads),
         scryer_domain::LifecycleRuleSubjectKind::Season => (Level::Season, "season"),
         scryer_domain::LifecycleRuleSubjectKind::Episode => (Level::Episode, "episode"),
     };
@@ -354,7 +340,7 @@ pub(crate) fn legacy_source_at(
             "input.observations.",
             &format!("input.{path}.observations."),
         );
-    narrow_heads(&legacy_source(&source, kind), level)
+    narrow_heads(&heads_source(&source, heads), level)
 }
 
 /// Rename a title-level source's bare heads to their heads at `level`.

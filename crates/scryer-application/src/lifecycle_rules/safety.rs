@@ -1,30 +1,27 @@
-//! Safety preconditions for lifecycle actions (RFC 137 §9.10, §17 D3).
+//! Safety preconditions for lifecycle actions.
 //!
 //! Two read-only observations the action executor must consult before a due
 //! lifecycle action touches media:
 //!
-//! 1. **Live playback.** RFC 9.10: "Any current playback session for the
-//!    subject on a supported Plex/Jellyfin/Emby source holds every due
-//!    action... An unavailable required session source is unknown and fails
-//!    closed for destructive work."
+//! 1. **Live playback.** A current playback session on a supported
+//!    Plex/Jellyfin/Emby source holds every due action. A session source that
+//!    cannot be read is unknown and fails closed for destructive work.
 //! 2. **Active acquisition.** A title with a grab or import in flight must not
 //!    be deleted, unmonitored, or otherwise disturbed underneath the pipeline
 //!    that is currently writing to it.
 //!
-//! # The playback hold is global in this MVP
+//! # The playback hold is global
 //!
-//! The RFC scopes the hold to *the subject*: only a session playing the title
-//! under evaluation holds that title's action. Mapping a live session back to a
-//! Scryer title needs per-provider session→item→title resolution, which this
-//! wave does not build. Until it exists the hold is **global**: if any playback
-//! session is active on any enabled media-server connection, every due
-//! lifecycle action holds.
+//! Ideally only a session playing the title under evaluation would hold that
+//! title's action. Mapping a live session back to a Scryer title needs
+//! per-provider session→item→title resolution, which does not exist yet. Until
+//! it does the hold is **global**: if any playback session is active on any
+//! enabled media-server connection, every due lifecycle action holds.
 //!
-//! That is deliberately stricter than the RFC and never less strict — a global
-//! hold is a superset of the per-subject hold, so no action the RFC would hold
-//! can escape it. The cost is over-holding (someone watching anything defers
-//! all lifecycle for that cycle), which is the acceptable direction for
-//! destructive work. Per-subject session mapping replaces this later.
+//! A global hold is a superset of a per-subject hold, so no action a
+//! per-subject hold would stop can escape it. The cost is over-holding
+//! (someone watching anything defers all lifecycle for that cycle), which is
+//! the acceptable direction for destructive work.
 //!
 //! # Fail closed
 //!
@@ -61,8 +58,8 @@ pub enum LifecyclePlaybackHold {
 }
 
 impl LifecyclePlaybackHold {
-    /// Whether a destructive action must be held. `Unknown` holds — that is the
-    /// fail-closed rule from RFC §17 D3.
+    /// Whether a destructive action must be held. `Unknown` holds: an
+    /// unreadable session source fails closed.
     pub fn holds_destructive_work(&self) -> bool {
         !matches!(self, Self::Clear)
     }

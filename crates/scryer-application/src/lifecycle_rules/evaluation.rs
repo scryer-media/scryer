@@ -1,5 +1,4 @@
-//! Scheduled dark evaluation of stored lifecycle rules (RFC 137 tracks
-//! C1/C2, sections 7.5, 8, 10, 11).
+//! Scheduled evaluation of stored lifecycle rules.
 //!
 //! # What this module may do
 //!
@@ -11,17 +10,15 @@
 //! Execute an action of any kind. Nothing here mutates media, monitoring, tags,
 //! files, or any external system: the only states it ever writes are
 //! [`LifecycleCandidateState::Observing`], [`LifecycleCandidateState::Canceled`],
-//! and [`LifecycleCandidateState::Excluded`]. The remaining states belong to
-//! the executor wave and are already pinned in the domain enum so that wave
-//! needs no migration.
+//! and [`LifecycleCandidateState::Excluded`]. Execution writes the rest.
 //!
 //! # Fail-closed shape
 //!
 //! Every failure path holds rather than advances. An `unknown` decision, a
 //! per-title evaluation error, and a matcher that no longer compiles all leave
 //! the existing candidate exactly where it was; only a confirmed `no_match`
-//! cancels one. That is the RFC 9.8 rule ("transient rule-evaluation failure
-//! preserves membership and holds action") expressed as code.
+//! cancels one: a transient evaluation failure preserves membership and holds
+//! the action.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -208,20 +205,11 @@ pub mod candidate_reason {
     /// The rule's library scope no longer covers the subject — either the scope
     /// was re-pointed at other libraries, or the subject left the catalog.
     pub const OUT_OF_SCOPE: &str = "out_of_scope";
-    /// The subject was merged into another title (US7). Its live candidate
-    /// closes and follows the surviving title as history; the survivor is
-    /// re-evaluated on its own facts at the next pass.
-    pub const MERGED_INTO_DESTINATION: &str = "merged_into_destination";
     /// The subject still matches but the rule now decides different actions
     /// for it. The old candidate closes with this reason, and the candidate
     /// that replaces it carries the reason too when it keeps the old grace
     /// clock.
     pub const ACTIONS_CHANGED: &str = "actions_changed";
-    /// The candidate's deletion began when deletion narrowed to one
-    /// configured root. That journal never resumes, since resuming now would
-    /// reach the subject's other roots, so the candidate closes. A fresh
-    /// match opens a new candidate with a new clock.
-    pub const ROOT_DELETION_JOURNAL_DISCARDED: &str = "root_deletion_journal_discarded";
 }
 
 // ── Instance gates ──────────────────────────────────────────────────────────
@@ -677,7 +665,7 @@ impl AppUseCase {
 
     /// Evaluation runs carry counts and timing, never subjects, so they are not
     /// hidden by the result-display gate: they are how an operator sees that
-    /// dark evaluation is working at all.
+    /// evaluation is working at all.
     pub async fn list_lifecycle_evaluation_runs(
         &self,
         actor: &User,
@@ -1683,41 +1671,34 @@ impl AppUseCase {
                 id: title.library_id.clone(),
                 name: String::new(),
             });
-        let deletion_checkpoint = if let Some(candidate) = active.as_ref()
-            && matches!(
-                candidate.action_kind.as_str(),
-                "unmonitor_scope_delete_files" | "unmonitor_title_delete_all_files"
-            ) {
-            match self
-                .read_lifecycle_deletion_journal(candidate, None)
-                .await?
-            {
-                super::scoped_deletion::LifecycleDeletionJournal::Missing => None,
-                super::scoped_deletion::LifecycleDeletionJournal::Found(checkpoint) => {
-                    Some(checkpoint)
+        // A delete this candidate's own sequence already began changed the
+        // subject's monitoring and files itself. The rule is judged on the
+        // subject as it was before that work, so a half-finished delete does
+        // not cancel itself; any outside change still reads live.
+        let started_delete = match active.as_ref() {
+            Some(candidate) => match self.lifecycle_started_sequence_delete(candidate).await {
+                Ok(started) => started,
+                Err(error) => {
+                    warn!(
+                        rule_set_id,
+                        candidate_id = candidate.id.as_str(),
+                        error = %error,
+                        "could not read a started lifecycle delete; holding its candidate"
+                    );
+                    counts.errors += 1;
+                    *incomplete = true;
+                    candidates
+                        .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
+                        .await?;
+                    counts.held += 1;
+                    return Ok(stored_decision(candidate, true));
                 }
-                super::scoped_deletion::LifecycleDeletionJournal::WrittenForOneRoot => {
-                    if !candidates
-                        .transition_candidate_state(
-                            &candidate.id,
-                            LifecycleCandidateState::Canceled,
-                            candidate_reason::ROOT_DELETION_JOURNAL_DISCARDED,
-                            EVALUATOR_WRITABLE_STATES,
-                            evaluation_time,
-                        )
-                        .await?
-                    {
-                        *incomplete = true;
-                    }
-                    // Closed here or moved by another writer: either way it
-                    // is no longer this pass's to continue.
-                    active = None;
-                    None
-                }
-            }
-        } else {
-            None
+            },
+            None => None,
         };
+        let deletion_checkpoint = started_delete
+            .as_ref()
+            .and_then(|started| started.checkpoint.as_ref());
         let completed_retention_episode_ids = deletion_checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.completed_retention_episode_ids());
@@ -1750,8 +1731,30 @@ impl AppUseCase {
         {
             input = nest_subject_input(title_input.clone(), input, subject);
         }
-        if let Some(checkpoint) = deletion_checkpoint.as_ref() {
-            checkpoint.restore_baseline_if_started(&mut input);
+        if let (Some(candidate), Some(started)) = (active.as_ref(), started_delete.as_ref())
+            && let Err(reason) = self
+                .restore_sequence_own_effects(
+                    candidate,
+                    title,
+                    &started.sequence,
+                    &started.steps,
+                    started.checkpoint.as_ref(),
+                    &mut input,
+                    super::action_execution::SequenceOwnEffects::MonitoringAndFiles,
+                )
+                .await
+        {
+            debug!(
+                rule_set_id,
+                candidate_id = candidate.id.as_str(),
+                reason,
+                "could not restore a started lifecycle delete's own effects; holding its candidate"
+            );
+            counts.held += 1;
+            candidates
+                .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
+                .await?;
+            return Ok(stored_decision(candidate, true));
         }
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;

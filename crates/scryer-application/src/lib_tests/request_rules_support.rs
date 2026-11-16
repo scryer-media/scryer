@@ -492,7 +492,12 @@ impl crate::ports::LifecycleClaimRepository for InMemoryLifecycleClaimRepo {
         {
             claim.state = LifecycleClaimState::Active;
             claim.starts_at = Some(starts_at);
-            claim.expires_at = expires_at;
+            // `CASE WHEN expires_at > ? THEN expires_at ELSE ? END`, NULL
+            // comparisons included.
+            claim.expires_at = match (claim.expires_at, expires_at) {
+                (Some(stored), Some(given)) if stored > given => Some(stored),
+                (_, given) => given,
+            };
             // The write time, not the lease's start: a reconcile pass backdates
             // `starts_at` to the import it missed.
             claim.updated_at = now;

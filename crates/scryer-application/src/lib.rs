@@ -657,7 +657,7 @@ pub use null_repositories::{
     NullTitleImageProcessor, NullTitleImageRepository, NullUpstreamScheduler,
     NullWorkflowOperationRepository,
 };
-// ── Lifecycle safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+// ── Lifecycle safety probes ─────────────────────────────────────────────
 pub use null_repositories::NullMediaServerPlaybackProbe;
 // ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────────
 /// The RSS cadence knob lives beside the RSS lane it governs, but the upstream

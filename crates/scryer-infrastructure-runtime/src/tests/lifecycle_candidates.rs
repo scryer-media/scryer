@@ -151,7 +151,7 @@ async fn candidates_round_trip_with_their_reason_codes_and_timestamps() {
         .expect("create candidate");
 
     let loaded = store
-        .get_active_candidate("rule-a", "title-1")
+        .get_active_subject_candidate("rule-a", "title", "title-1")
         .await
         .expect("read candidate")
         .expect("candidate exists");
@@ -308,7 +308,7 @@ async fn a_rule_set_may_hold_only_one_active_candidate_per_title() {
 
     assert_eq!(
         store
-            .max_match_generation("rule-a", "title-1")
+            .max_subject_match_generation("rule-a", "title", "title-1")
             .await
             .expect("max generation"),
         2,
@@ -750,14 +750,18 @@ async fn independent_stores_race_a_step_claim_without_creating_two_attempts() {
             .count(),
         1
     );
-    assert_eq!(
-        setup
-            .list_action_step_attempts(&step.key)
-            .await
-            .expect("read immutable attempts")
-            .len(),
-        1
-    );
+    let attempts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM lifecycle_action_step_attempts
+          WHERE candidate_id = ? AND match_generation = ? AND revision_number = ? AND step_id = ?",
+    )
+    .bind(&step.key.candidate_id)
+    .bind(step.key.match_generation)
+    .bind(step.key.revision_number)
+    .bind(&step.key.step_id)
+    .fetch_one(&services.pool)
+    .await
+    .expect("count immutable attempts");
+    assert_eq!(attempts, 1);
 
     let _ = std::fs::remove_file(db);
 }
@@ -974,7 +978,7 @@ async fn recording_a_match_advances_the_last_match_and_clears_a_hold() {
         .await
         .expect("hold");
     let held = store
-        .get_active_candidate("rule-a", "title-1")
+        .get_active_subject_candidate("rule-a", "title", "title-1")
         .await
         .expect("read")
         .expect("exists");
@@ -996,7 +1000,7 @@ async fn recording_a_match_advances_the_last_match_and_clears_a_hold() {
         .await
         .expect("hold again");
     let still_held = store
-        .get_active_candidate("rule-a", "title-1")
+        .get_active_subject_candidate("rule-a", "title", "title-1")
         .await
         .expect("read")
         .expect("exists");
@@ -1016,7 +1020,7 @@ async fn recording_a_match_advances_the_last_match_and_clears_a_hold() {
         .await
         .expect("record match");
     let matched = store
-        .get_active_candidate("rule-a", "title-1")
+        .get_active_subject_candidate("rule-a", "title", "title-1")
         .await
         .expect("read")
         .expect("exists");
@@ -1111,19 +1115,6 @@ async fn listing_filters_by_rule_state_and_library_and_counts_by_state() {
         .await
         .expect("counts");
     assert_eq!(counts, vec![(LifecycleCandidateState::Observing, 2)]);
-
-    let canceled = store
-        .cancel_active_candidates_for_rule("rule-a", "revision_superseded", Utc::now())
-        .await
-        .expect("bulk cancel");
-    assert_eq!(canceled, 2);
-    assert!(
-        store
-            .get_active_candidate("rule-a", "title-1")
-            .await
-            .expect("read")
-            .is_none()
-    );
 
     let _ = std::fs::remove_file(db);
 }
@@ -1812,7 +1803,7 @@ async fn a_candidate_transition_lands_only_from_a_state_the_caller_expected() {
         "a transition whose expectation does not hold must not write"
     );
     let unchanged = store
-        .get_active_candidate("rule-a", "title-1")
+        .get_active_subject_candidate("rule-a", "title", "title-1")
         .await
         .expect("read")
         .expect("exists");
@@ -1894,7 +1885,7 @@ async fn stale_sequence_worker_cannot_finish_a_newer_execution_lease() {
         "the first worker must not overwrite the newer executing lease"
     );
     let current = store
-        .get_active_candidate("rule-a", "title-lease")
+        .get_active_subject_candidate("rule-a", "title", "title-lease")
         .await
         .expect("reload candidate")
         .expect("candidate remains active");
@@ -1977,178 +1968,6 @@ async fn action_runs_append_finish_and_enforce_attempt_uniqueness() {
         .await
         .expect("list by candidate");
     assert_eq!(by_candidate.len(), 2);
-
-    let _ = std::fs::remove_file(db);
-}
-
-#[tokio::test]
-async fn storage_held_action_refund_rekeys_the_run_and_is_atomic() {
-    let (services, db) = temp_services("scryer_lifecycle_held_action_refund").await;
-    seed_rule_set(&services, "rule-a").await;
-    let store = evaluation_store(&services);
-    let now = Utc::now();
-
-    let mut row = candidate("cand-1", "rule-a", "title-1", 1);
-    row.action_kind = "unmonitor_scope_delete_files".to_string();
-    store.create_candidate(&row).await.expect("create");
-    assert!(
-        store
-            .transition_candidate_state(
-                &row.id,
-                LifecycleCandidateState::Executing,
-                "execution_leased",
-                &[LifecycleCandidateState::Observing],
-                now,
-            )
-            .await
-            .expect("lease")
-    );
-    store
-        .record_candidate_attempts(&row.id, 1, now)
-        .await
-        .expect("reserve attempt");
-
-    let running = scryer_domain::LifecycleActionRun {
-        id: "run-1".to_string(),
-        candidate_id: row.id.clone(),
-        rule_set_id: row.rule_set_id.clone(),
-        revision_number: row.revision_number,
-        title_id: row.title_id.clone(),
-        subject_id: row.subject_id.clone(),
-        subject_kind: row.subject_kind.clone(),
-        action_kind: row.action_kind.clone(),
-        match_generation: row.match_generation,
-        idempotency_key: "cand-1:1:delete".to_string(),
-        attempt: 1,
-        status: scryer_domain::LifecycleActionRunStatus::Running,
-        hold_reason: None,
-        error: None,
-        detail: r#"{"scoped_deletion":1,"files":[]}"#.to_string(),
-        started_at: now,
-        finished_at: None,
-        created_at: now,
-    };
-    store.start_action_run(&running).await.expect("start");
-
-    let mut held = running.clone();
-    held.status = scryer_domain::LifecycleActionRunStatus::Held;
-    held.idempotency_key = format!("hold:{}", held.id);
-    held.hold_reason = Some("storage_capacity_unavailable".to_string());
-    held.finished_at = Some(now + chrono::Duration::seconds(1));
-    assert!(
-        store
-            .finish_held_action_run_and_release_attempt(&held, 1)
-            .await
-            .expect("finish held and refund")
-    );
-
-    let refunded = store
-        .get_active_candidate("rule-a", "title-1")
-        .await
-        .expect("read")
-        .expect("candidate remains active");
-    assert_eq!(refunded.state, LifecycleCandidateState::Blocked);
-    assert_eq!(refunded.action_attempts, 0);
-    assert_eq!(
-        store
-            .latest_scoped_deletion_action_run(&row.id, 1, &row.action_kind)
-            .await
-            .expect("checkpoint")
-            .expect("held checkpoint")
-            .id,
-        held.id,
-        "the rekeyed hold retains durable checkpoint evidence"
-    );
-    assert!(
-        !store
-            .finish_held_action_run_and_release_attempt(&held, 1)
-            .await
-            .expect("second finish is a compare-and-set miss"),
-        "a repeated hold must not refund twice"
-    );
-
-    // Releasing the original execution key makes its same attempt reusable.
-    assert!(
-        store
-            .transition_candidate_state(
-                &row.id,
-                LifecycleCandidateState::Executing,
-                "execution_leased",
-                &[LifecycleCandidateState::Blocked],
-                now + chrono::Duration::seconds(2),
-            )
-            .await
-            .expect("re-lease")
-    );
-    store
-        .record_candidate_attempts(&row.id, 1, now + chrono::Duration::seconds(2))
-        .await
-        .expect("reserve same attempt again");
-    let mut retry = running.clone();
-    retry.id = "run-2".to_string();
-    retry.started_at = now + chrono::Duration::seconds(2);
-    retry.created_at = retry.started_at;
-    store
-        .start_action_run(&retry)
-        .await
-        .expect("same attempt and original execution key are reusable");
-
-    let mut wrong_generation = retry.clone();
-    wrong_generation.status = scryer_domain::LifecycleActionRunStatus::Held;
-    wrong_generation.match_generation = 2;
-    wrong_generation.idempotency_key = format!("hold:{}", wrong_generation.id);
-    wrong_generation.hold_reason = Some("storage_capacity_unavailable".to_string());
-    wrong_generation.finished_at = Some(now + chrono::Duration::seconds(3));
-    assert!(
-        !store
-            .finish_held_action_run_and_release_attempt(&wrong_generation, 1)
-            .await
-            .expect("wrong generation is a conditional miss")
-    );
-    let mut wrong_attempt = retry.clone();
-    wrong_attempt.status = scryer_domain::LifecycleActionRunStatus::Held;
-    wrong_attempt.attempt = 2;
-    wrong_attempt.idempotency_key = format!("hold:{}", wrong_attempt.id);
-    wrong_attempt.hold_reason = Some("storage_capacity_unavailable".to_string());
-    wrong_attempt.finished_at = Some(now + chrono::Duration::seconds(3));
-    assert!(
-        !store
-            .finish_held_action_run_and_release_attempt(&wrong_attempt, 2)
-            .await
-            .expect("wrong attempt is a conditional miss")
-    );
-    let unchanged = store
-        .get_active_candidate("rule-a", "title-1")
-        .await
-        .expect("read")
-        .expect("candidate remains active");
-    assert_eq!(unchanged.state, LifecycleCandidateState::Executing);
-    assert_eq!(unchanged.action_attempts, 1);
-
-    let mut no_longer_running = retry.clone();
-    no_longer_running.status = scryer_domain::LifecycleActionRunStatus::Succeeded;
-    no_longer_running.finished_at = Some(now + chrono::Duration::seconds(4));
-    store
-        .finish_action_run(&no_longer_running)
-        .await
-        .expect("finish retry before synthetic hold");
-    no_longer_running.status = scryer_domain::LifecycleActionRunStatus::Held;
-    no_longer_running.idempotency_key = format!("hold:{}", no_longer_running.id);
-    no_longer_running.hold_reason = Some("storage_capacity_unavailable".to_string());
-    assert!(
-        store
-            .finish_held_action_run_and_release_attempt(&no_longer_running, 1)
-            .await
-            .is_err(),
-        "a non-running action row rolls back the candidate refund"
-    );
-    let rolled_back = store
-        .get_active_candidate("rule-a", "title-1")
-        .await
-        .expect("read")
-        .expect("candidate remains active");
-    assert_eq!(rolled_back.state, LifecycleCandidateState::Executing);
-    assert_eq!(rolled_back.action_attempts, 1);
 
     let _ = std::fs::remove_file(db);
 }
@@ -2523,14 +2342,11 @@ async fn effect_arming_and_attempts_round_trip() {
         "arming never appends a revision"
     );
 
-    let row = candidate("cand-1", "rule-a", "title-1", 1);
+    let mut row = candidate("cand-1", "rule-a", "title-1", 1);
+    row.action_attempts = 2;
     store.create_candidate(&row).await.expect("create");
-    store
-        .record_candidate_attempts("cand-1", 2, now)
-        .await
-        .expect("attempts");
     let stored = store
-        .get_active_candidate("rule-a", "title-1")
+        .get_active_subject_candidate("rule-a", "title", "title-1")
         .await
         .expect("read")
         .expect("exists");
@@ -2699,7 +2515,7 @@ async fn guarded_rule_deletion_cannot_erase_a_concurrently_created_candidate() {
             assert!(rules.get_rule_set(&rule_id).await.unwrap().is_some());
             assert_eq!(
                 evaluation
-                    .get_active_candidate(&rule_id, "title")
+                    .get_active_subject_candidate(&rule_id, "title", "title")
                     .await
                     .unwrap()
                     .unwrap()

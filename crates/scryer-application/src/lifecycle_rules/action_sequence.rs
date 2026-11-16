@@ -9,19 +9,16 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::{LifecycleEffectClass, LifecycleRiskClass, LifecycleSubjectKind};
+use super::{LifecycleRiskClass, LifecycleSubjectKind};
 
 /// The action kind every candidate and sequence run records.
-///
-/// It is intentionally absent from [`super::LifecycleActionKind`], the names
-/// earlier builds recorded, so history never reads it as one of those.
 pub const ACTION_SEQUENCE_KIND: &str = "action_sequence";
 
-/// The only accepted v2 sequence schema.
+/// The schema version every sequence carries.
 pub const LIFECYCLE_ACTION_SEQUENCE_SCHEMA_VERSION: u32 = 2;
 
-/// A sequence is intentionally compact: every supported primitive may appear
-/// once, and the closed catalog currently contains eleven primitives.
+/// Every step kind may appear once, so a sequence holds at most one step per
+/// kind.
 pub const LIFECYCLE_MAX_ACTION_SEQUENCE_STEPS: usize = 11;
 
 /// Whether a durable action job is complete when it is accepted or only when
@@ -33,8 +30,7 @@ pub enum LifecycleActionCompletionPolicy {
     Completed,
 }
 
-/// The closed v2 primitive catalog. These variants are not aliases for v1
-/// presets: v1 retains its serialized shape and execution behavior.
+/// The closed set of steps the executor can run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleActionStepKind {
@@ -51,9 +47,8 @@ pub enum LifecycleActionStepKind {
     MoveToRoot,
 }
 
-/// Search execution condition. A sequence author must make conditional search
-/// explicit so a profile/search preset cannot silently become an unconditional
-/// search after a reorder.
+/// When a Search step runs: always, or only when the quality-profile step
+/// immediately before it changed the profile.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleSearchCondition {
@@ -102,8 +97,8 @@ impl LifecycleActionStepKind {
     }
 }
 
-/// Typed configuration for a v2 primitive. There is no free-form JSON escape
-/// hatch: a mismatched kind/parameter pair is rejected before persistence.
+/// Typed configuration for one step. There is no free-form JSON escape hatch:
+/// a mismatched kind/parameter pair fails validation.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LifecycleActionStepParameters {
@@ -167,7 +162,7 @@ impl LifecycleActionStepParameters {
     }
 }
 
-/// One user-authored, stable-addressable v2 operation.
+/// One step of a sequence, addressed by a stable id.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct LifecycleActionStep {
@@ -186,8 +181,8 @@ impl LifecycleActionStep {
     }
 }
 
-/// The explicit schema-2 persisted envelope. `content_hash` is computed from
-/// this canonical ordered content and is never accepted from a client payload.
+/// An ordered list of steps. `content_hash` is computed from this canonical
+/// ordered content and is never accepted from a client payload.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct LifecycleActionSequence {
@@ -324,8 +319,8 @@ impl LifecycleActionSequence {
         Ok(())
     }
 
-    /// Whether a Search is the preset form that depends on the immediately
-    /// preceding profile mutation. A standalone Search is unconditional.
+    /// The condition a Search step carries. A Search conditioned on the
+    /// profile depends on the immediately preceding profile step.
     pub fn search_condition(&self, step_index: usize) -> Option<LifecycleSearchCondition> {
         match &self.steps.get(step_index)?.parameters {
             LifecycleActionStepParameters::Search { condition } => Some(*condition),
@@ -342,28 +337,14 @@ impl LifecycleActionSequence {
     }
 }
 
-/// A dependency surfaced to authoring and execution. The executor verifies the
-/// persisted evidence afresh; this descriptor only describes the rule shape.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LifecycleActionStepRequirement {
-    PriorCompleteCoveringUnmonitor,
-}
-
-/// Static backend-owned data for one v2 primitive.
+/// Static data the executor reads for one step kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifecycleActionStepDescriptor {
     pub id: &'static str,
     pub kind: LifecycleActionStepKind,
-    pub label: &'static str,
     pub supported_subjects: &'static [LifecycleSubjectKind],
-    /// A stable typed parameter discriminator for authoring clients.
-    pub parameter_schema: &'static str,
-    pub effect_classes: &'static [LifecycleEffectClass],
     pub risk_class: LifecycleRiskClass,
-    pub requires: &'static [LifecycleActionStepRequirement],
     pub terminal: bool,
-    pub completion_policy: LifecycleActionCompletionPolicy,
 }
 
 impl LifecycleActionStepDescriptor {
@@ -375,165 +356,85 @@ impl LifecycleActionStepDescriptor {
 const ALL_SUBJECTS: &[LifecycleSubjectKind] = LifecycleSubjectKind::ALL;
 const TITLE_SUBJECTS: &[LifecycleSubjectKind] =
     &[LifecycleSubjectKind::Movie, LifecycleSubjectKind::Show];
-const CATALOG_INTENT: &[LifecycleEffectClass] = &[LifecycleEffectClass::CatalogIntent];
-const ACQUISITION: &[LifecycleEffectClass] = &[LifecycleEffectClass::Acquisition];
-const FILE_ORGANIZATION: &[LifecycleEffectClass] = &[LifecycleEffectClass::FileOrganization];
-const DESTRUCTIVE_STORAGE: &[LifecycleEffectClass] = &[LifecycleEffectClass::DestructiveStorage];
-const DELETE_FILES_REQUIREMENT: &[LifecycleActionStepRequirement] =
-    &[LifecycleActionStepRequirement::PriorCompleteCoveringUnmonitor];
-const NO_REQUIREMENTS: &[LifecycleActionStepRequirement] = &[];
 
 const UNMONITOR: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "unmonitor",
     kind: LifecycleActionStepKind::Unmonitor,
-    label: "Unmonitor",
     supported_subjects: ALL_SUBJECTS,
-    parameter_schema: "unmonitor",
-    effect_classes: CATALOG_INTENT,
     risk_class: LifecycleRiskClass::Medium,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 const DELETE_FILES: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "delete_files",
     kind: LifecycleActionStepKind::DeleteFiles,
-    label: "Delete files",
     supported_subjects: ALL_SUBJECTS,
-    parameter_schema: "none",
-    effect_classes: DESTRUCTIVE_STORAGE,
     risk_class: LifecycleRiskClass::High,
-    requires: DELETE_FILES_REQUIREMENT,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 const CHANGE_QUALITY_PROFILE: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "change_quality_profile",
     kind: LifecycleActionStepKind::ChangeQualityProfile,
-    label: "Change quality profile",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "change_quality_profile",
-    effect_classes: CATALOG_INTENT,
     risk_class: LifecycleRiskClass::Medium,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 const SEARCH: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "search",
     kind: LifecycleActionStepKind::Search,
-    label: "Search",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "search",
-    effect_classes: ACQUISITION,
     risk_class: LifecycleRiskClass::Medium,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Accepted,
 };
 const ADD_TAGS: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "add_tags",
     kind: LifecycleActionStepKind::AddTags,
-    label: "Add tags",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "tags",
-    effect_classes: CATALOG_INTENT,
     risk_class: LifecycleRiskClass::Low,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 const REMOVE_TAGS: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "remove_tags",
     kind: LifecycleActionStepKind::RemoveTags,
-    label: "Remove tags",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "tags",
-    effect_classes: CATALOG_INTENT,
     risk_class: LifecycleRiskClass::Low,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 const DELETE_TITLE_AND_FILES: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "delete_title_and_files",
     kind: LifecycleActionStepKind::DeleteTitleAndFiles,
-    label: "Delete title and files",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "none",
-    effect_classes: DESTRUCTIVE_STORAGE,
     risk_class: LifecycleRiskClass::High,
-    requires: NO_REQUIREMENTS,
     terminal: true,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 
 const MONITOR: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "monitor",
     kind: LifecycleActionStepKind::Monitor,
-    label: "Monitor",
     supported_subjects: ALL_SUBJECTS,
-    parameter_schema: "none",
-    effect_classes: CATALOG_INTENT,
     risk_class: LifecycleRiskClass::Medium,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Completed,
 };
 const FETCH_SUBTITLES: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "fetch_subtitles",
     kind: LifecycleActionStepKind::FetchSubtitles,
-    label: "Fetch subtitles",
     supported_subjects: ALL_SUBJECTS,
-    parameter_schema: "none",
-    effect_classes: ACQUISITION,
     risk_class: LifecycleRiskClass::Low,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Accepted,
 };
 const MOVE_TO_LIBRARY: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "move_to_library",
     kind: LifecycleActionStepKind::MoveToLibrary,
-    label: "Move to library",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "library",
-    effect_classes: FILE_ORGANIZATION,
     risk_class: LifecycleRiskClass::Medium,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Accepted,
 };
 const MOVE_TO_ROOT: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "move_to_root",
     kind: LifecycleActionStepKind::MoveToRoot,
-    label: "Move to root",
     supported_subjects: TITLE_SUBJECTS,
-    parameter_schema: "root",
-    effect_classes: FILE_ORGANIZATION,
     risk_class: LifecycleRiskClass::Medium,
-    requires: NO_REQUIREMENTS,
     terminal: false,
-    completion_policy: LifecycleActionCompletionPolicy::Accepted,
 };
-
-const ACTION_SEQUENCE_CATALOG: &[LifecycleActionStepDescriptor] = &[
-    UNMONITOR,
-    DELETE_FILES,
-    CHANGE_QUALITY_PROFILE,
-    SEARCH,
-    ADD_TAGS,
-    REMOVE_TAGS,
-    DELETE_TITLE_AND_FILES,
-    MONITOR,
-    FETCH_SUBTITLES,
-    MOVE_TO_LIBRARY,
-    MOVE_TO_ROOT,
-];
-
-pub fn action_sequence_catalog() -> &'static [LifecycleActionStepDescriptor] {
-    ACTION_SEQUENCE_CATALOG
-}
 
 pub const fn action_sequence_descriptor_for(
     kind: LifecycleActionStepKind,

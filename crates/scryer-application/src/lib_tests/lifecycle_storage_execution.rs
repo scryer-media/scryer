@@ -243,9 +243,9 @@ async fn arm_storage_title_deletion_with_matcher(
                 max_titles_per_run: Some(100),
                 name: "Storage pressure".into(),
                 description: String::new(),
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     matcher,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
                 ),
                 grace_days: 0,
                 library_ids: vec![],
@@ -1089,9 +1089,9 @@ async fn evaluate_dry_run(fixture: &TitleFixture, matcher: String) -> usize {
                 max_titles_per_run: Some(100),
                 name: "Two root facts".into(),
                 description: String::new(),
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     matcher,
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
                 ),
                 grace_days: 0,
                 library_ids: vec![],
@@ -1446,9 +1446,9 @@ async fn a_storage_delete_title_rechecks_space_and_keeps_the_title_no_longer_nee
                 max_titles_per_run: Some(100),
                 name: "Storage pressure titles".into(),
                 description: String::new(),
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     "match if { some root in input.facts.storage_roots; root.available_bytes < 200 }",
-                    crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 0,
                 library_ids: vec![],
@@ -1764,9 +1764,9 @@ async fn scheduled_storage_pass_from_sampler(
                 max_titles_per_run: Some(100),
                 name: "Storage pressure".into(),
                 description: String::new(),
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     low_space_matcher(fixture, ""),
-                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
                 ),
                 grace_days: 0,
                 library_ids: vec![],

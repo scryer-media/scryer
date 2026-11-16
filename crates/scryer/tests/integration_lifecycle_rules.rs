@@ -1,7 +1,6 @@
 #![recursion_limit = "256"]
 
-//! End-to-end coverage for the lifecycle-rule authoring surface (RFC 137
-//! track D): the GraphQL queries and mutations over the authoring service.
+//! End-to-end coverage for the lifecycle-rule authoring surface: the GraphQL queries and mutations over the authoring service.
 //!
 //! Everything here is authoring-time. Nothing in this surface schedules
 //! evaluation or executes an action, so a rule always persists as disabled and
@@ -89,7 +88,7 @@ const NEVER_MATCHER: &str = "unmonitor if {\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
      }\n";
 
-/// Reads a fact this wave cannot observe, so every title must be held rather
+/// Reads a fact Scryer cannot observe, so every title must be held rather
 /// than reported as a no-match. Nothing in the source says so: the server
 /// derives the hold from the fact the matcher references, which is exactly the
 /// mistake an author can no longer make.
@@ -1216,7 +1215,7 @@ async fn lifecycle_rule_surface_denies_an_actor_without_catalog_settings() {
 }
 
 // ===========================================================================
-// 6. Scheduled dark evaluation (RFC 137 tracks C1/C2)
+// 6. Scheduled evaluation
 // ===========================================================================
 
 const CANDIDATE_FIELDS: &str = r#"

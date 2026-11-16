@@ -36,19 +36,6 @@ impl ScopeFactSnapshot {
             monitored_episode_count: facts.monitored_episode_count.clone(),
         }
     }
-    /// Only restore facts this action changes. Watch signals, claims, identity,
-    /// exclusions, and the rule's authorization are still rechecked live.
-    pub fn restore(&self, input: &mut LifecycleInput) {
-        let facts = input.subject_facts_mut();
-        facts.monitored = self.monitored.clone();
-        facts.has_file = self.has_file.clone();
-        facts.file_count = self.file_count.clone();
-        facts.total_file_size_bytes = self.total_file_size_bytes.clone();
-        facts.files = self.files.clone();
-        facts.first_imported_at = self.first_imported_at.clone();
-        facts.episode_file_count = self.episode_file_count.clone();
-        facts.monitored_episode_count = self.monitored_episode_count.clone();
-    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct FileCheckpoint {
@@ -100,14 +87,6 @@ pub(super) struct ScopedDeletionCheckpoint {
     /// file journal. Legacy journals intentionally omit this field.
     #[serde(default)]
     sequence_step_id: Option<String>,
-    /// Set only by journals written while a rule could select one configured
-    /// root. Such a journal never resumes; new journals leave it `None`.
-    #[serde(default)]
-    storage_root_id: Option<String>,
-    /// The selected root's physical identity, in journals written while a
-    /// rule could select one. Kept so those journals still read.
-    #[serde(default)]
-    storage_root_identity: Option<String>,
     subject_kind: String,
     subject_id: String,
     subject_label: String,
@@ -121,39 +100,6 @@ pub(super) struct ScopedDeletionCheckpoint {
     /// hold's detail without replacing the journal. Progress clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hold: Option<serde_json::Value>,
-}
-
-/// A deletion journal for `candidate` as one written when deletion narrowed
-/// to a configured root, with no files, serialized as a run's detail.
-#[cfg(test)]
-pub(crate) fn root_deletion_journal_for_test(candidate: &LifecycleCandidate) -> String {
-    serde_json::to_string(&ScopedDeletionCheckpoint {
-        scoped_deletion: 1,
-        match_generation: candidate.match_generation,
-        action_kind: candidate.action_kind.clone(),
-        sequence_step_id: None,
-        storage_root_id: Some("synthetic-selected-root".to_string()),
-        storage_root_identity: Some("synthetic-root-identity".to_string()),
-        subject_kind: candidate.subject_kind.clone(),
-        subject_id: candidate.subject_id.clone(),
-        subject_label: "Synthetic".to_string(),
-        grace_deadline: candidate.due_at.to_rfc3339(),
-        total_size_bytes: 0,
-        baseline: ScopeFactSnapshot {
-            monitored: Observation::unknown("synthetic"),
-            has_file: Observation::unknown("synthetic"),
-            file_count: Observation::unknown("synthetic"),
-            total_file_size_bytes: Observation::unknown("synthetic"),
-            files: Observation::unknown("synthetic"),
-            first_imported_at: Observation::unknown("synthetic"),
-            episode_file_count: Observation::unknown("synthetic"),
-            monitored_episode_count: Observation::unknown("synthetic"),
-        },
-        mutation_started: true,
-        files: Vec::new(),
-        hold: None,
-    })
-    .expect("serialize synthetic journal")
 }
 
 impl ScopedDeletionCheckpoint {
@@ -185,12 +131,6 @@ pub(super) fn record_hold_detail(run: &mut LifecycleActionRun, hold_detail: &ser
 }
 
 impl ScopedDeletionCheckpoint {
-    pub(super) fn restore_baseline_if_started(&self, input: &mut LifecycleInput) {
-        if self.mutation_started {
-            self.baseline.restore(input);
-        }
-    }
-
     pub(super) fn completed_retention_episode_ids(&self) -> BTreeSet<String> {
         if self.mutation_started {
             self.files
@@ -245,12 +185,12 @@ impl ScopedDeletionCheckpoint {
         } else {
             None
         };
-        restore_known_delta(
+        let count_restored = restore_known_delta(
             &self.baseline.file_count,
             &mut input.subject_facts_mut().file_count,
             completed_count,
         );
-        restore_known_delta(
+        let size_restored = restore_known_delta(
             &self.baseline.total_file_size_bytes,
             &mut input.subject_facts_mut().total_file_size_bytes,
             completed_size,
@@ -258,10 +198,29 @@ impl ScopedDeletionCheckpoint {
         if let Some(baseline_has_file) = restore_has_file {
             input.subject_facts_mut().has_file = Observation::known(baseline_has_file);
         }
+        // A season's or episode's files are also its title's, and the rule
+        // reads the title's facts beside the subject's. Once the subject shows
+        // nothing but this delete's own removals, the same removals are added
+        // back to the title's live figures; any other change to the title's
+        // files still reads as it is.
+        let narrow_subject = !std::ptr::eq(input.subject_facts(), &input.facts);
+        if narrow_subject && count_restored && size_restored && completed_count > 0 {
+            add_known_delta(&mut input.facts.file_count, completed_count);
+            add_known_delta(&mut input.facts.total_file_size_bytes, completed_size);
+            if matches!(input.facts.has_file, Observation::Known { .. }) {
+                input.facts.has_file = Observation::known(true);
+            }
+        }
     }
 }
 
-fn restore_known_delta(baseline: &Observation<i64>, current: &mut Observation<i64>, delta: i64) {
+/// Put `delta` back on `current` when it reads exactly `baseline - delta`.
+/// Returns whether it did.
+fn restore_known_delta(
+    baseline: &Observation<i64>,
+    current: &mut Observation<i64>,
+    delta: i64,
+) -> bool {
     if let (
         Observation::Known {
             value: baseline, ..
@@ -274,6 +233,14 @@ fn restore_known_delta(baseline: &Observation<i64>, current: &mut Observation<i6
         && *current_value == *baseline - delta
     {
         *current_value = *baseline;
+        return true;
+    }
+    false
+}
+
+fn add_known_delta(current: &mut Observation<i64>, delta: i64) {
+    if let Observation::Known { value, .. } = current {
+        *value += delta;
     }
 }
 fn catalog_proof(file: &crate::types::TitleMediaFile) -> String {
@@ -288,47 +255,16 @@ fn catalog_proof(file: &crate::types::TitleMediaFile) -> String {
     )
 }
 
-/// What a candidate's saved deletion journal is.
-pub(super) enum LifecycleDeletionJournal {
-    /// No journal: the deletion has not begun.
-    Missing,
-    /// A journal this candidate may resume.
-    Found(ScopedDeletionCheckpoint),
-    /// A journal written when deletion narrowed to one configured root. It
-    /// never resumes: resuming now would reach the subject's other roots.
-    WrittenForOneRoot,
-}
-
 impl AppUseCase {
-    /// The candidate's saved deletion journal. A journal written for one
-    /// configured root is an identity mismatch: deletion no longer narrows
-    /// to a root, and such a journal must never resume over the subject's
-    /// files on other roots.
+    /// The candidate's saved deletion journal for one sequence step, or
+    /// `None` when that deletion has not begun. A journal that does not
+    /// belong to exactly this candidate, generation, step and subject is an
+    /// identity mismatch and never resumes.
     pub(super) async fn lifecycle_deletion_checkpoint_for_step(
         &self,
         candidate: &LifecycleCandidate,
         sequence_step_id: Option<&str>,
     ) -> AppResult<Option<ScopedDeletionCheckpoint>> {
-        match self
-            .read_lifecycle_deletion_journal(candidate, sequence_step_id)
-            .await?
-        {
-            LifecycleDeletionJournal::Missing => Ok(None),
-            LifecycleDeletionJournal::Found(checkpoint) => Ok(Some(checkpoint)),
-            LifecycleDeletionJournal::WrittenForOneRoot => Err(AppError::Repository(
-                "lifecycle deletion checkpoint identity mismatch".into(),
-            )),
-        }
-    }
-
-    /// The candidate's saved deletion journal, telling a journal written for
-    /// one configured root apart so evaluation can close its candidate
-    /// instead of failing on it every pass.
-    pub(super) async fn read_lifecycle_deletion_journal(
-        &self,
-        candidate: &LifecycleCandidate,
-        sequence_step_id: Option<&str>,
-    ) -> AppResult<LifecycleDeletionJournal> {
         let Some(run) = self
             .services
             .customization
@@ -340,19 +276,10 @@ impl AppUseCase {
             )
             .await?
         else {
-            return Ok(LifecycleDeletionJournal::Missing);
+            return Ok(None);
         };
-        let mut checkpoint: ScopedDeletionCheckpoint = serde_json::from_str(&run.detail)
+        let checkpoint: ScopedDeletionCheckpoint = serde_json::from_str(&run.detail)
             .map_err(|error| AppError::Repository(error.to_string()))?;
-        // Version-one journals did not serialize action/generation. The query
-        // already selected those exact columns from the immutable run row, so
-        // it can supply their provenance without turning an interrupted
-        // pre-upgrade deletion into a permanent hold. New journals carry both
-        // values and are checked below.
-        if checkpoint.match_generation == 0 && checkpoint.action_kind.is_empty() {
-            checkpoint.match_generation = run.match_generation;
-            checkpoint.action_kind = run.action_kind.clone();
-        }
         if run.rule_set_id != candidate.rule_set_id
             || run.revision_number != candidate.revision_number
             || run.match_generation != candidate.match_generation
@@ -368,10 +295,7 @@ impl AppUseCase {
                 "lifecycle deletion checkpoint identity mismatch".into(),
             ));
         }
-        if checkpoint.storage_root_id.is_some() || checkpoint.storage_root_identity.is_some() {
-            return Ok(LifecycleDeletionJournal::WrittenForOneRoot);
-        }
-        Ok(LifecycleDeletionJournal::Found(checkpoint))
+        Ok(Some(checkpoint))
     }
 
     /// Reconcile only a catalog row proven absent by its immutable file id.
@@ -790,8 +714,6 @@ impl AppUseCase {
                     match_generation: candidate.match_generation,
                     action_kind: candidate.action_kind.clone(),
                     sequence_step_id: sequence_step_id.map(str::to_string),
-                    storage_root_id: None,
-                    storage_root_identity: None,
                     subject_kind: candidate.subject_kind.clone(),
                     subject_id: candidate.subject_id.clone(),
                     subject_label,
@@ -1032,9 +954,8 @@ mod hold_detail_tests {
     use super::{ScopedDeletionCheckpoint, record_hold_detail};
     use scryer_domain::{LifecycleActionRun, LifecycleActionRunStatus};
 
-    /// A journal as version one wrote it: no provenance, no storage root and
-    /// no hold.
-    fn version_one_journal() -> serde_json::Value {
+    /// A minimal journal: no provenance and no hold.
+    fn minimal_journal() -> serde_json::Value {
         let absent = serde_json::json!({ "status": "absent" });
         serde_json::json!({
             "scoped_deletion": 1,
@@ -1090,10 +1011,10 @@ mod hold_detail_tests {
     }
 
     #[test]
-    fn a_version_one_journal_without_a_hold_still_reads_and_writes_none() {
-        let journal = version_one_journal().to_string();
+    fn a_minimal_journal_without_a_hold_still_reads_and_writes_none() {
+        let journal = minimal_journal().to_string();
         let checkpoint =
-            ScopedDeletionCheckpoint::from_detail(&journal).expect("version-one journal reads");
+            ScopedDeletionCheckpoint::from_detail(&journal).expect("a minimal journal reads");
         assert!(checkpoint.hold.is_none());
         let written = serde_json::to_value(&checkpoint).expect("write journal");
         assert!(written.get("hold").is_none(), "{written}");
@@ -1101,9 +1022,9 @@ mod hold_detail_tests {
 
     #[test]
     fn a_hold_keeps_the_journal_and_records_its_detail_inside_it() {
-        let journal = version_one_journal();
+        let journal = minimal_journal();
         let mut run = run_with_detail(journal.to_string());
-        let hold = serde_json::json!({ "reason": "storage_root_identity_changed" });
+        let hold = serde_json::json!({ "reason": "synthetic_hold" });
 
         record_hold_detail(&mut run, &hold);
 
@@ -1121,8 +1042,8 @@ mod hold_detail_tests {
 
     #[test]
     fn a_hold_that_returns_the_journal_writes_that_journal() {
-        let mut run = run_with_detail(version_one_journal().to_string());
-        let mut progressed = version_one_journal();
+        let mut run = run_with_detail(minimal_journal().to_string());
+        let mut progressed = minimal_journal();
         progressed["files"][0]["completed"] = serde_json::json!(true);
 
         record_hold_detail(&mut run, &progressed);
@@ -1135,7 +1056,7 @@ mod hold_detail_tests {
     #[test]
     fn a_run_without_a_journal_takes_the_hold_detail() {
         let mut run = run_with_detail(r#"{"preview":"synthetic"}"#.to_string());
-        let hold = serde_json::json!({ "reason": "storage_root_identity_unavailable" });
+        let hold = serde_json::json!({ "reason": "synthetic_unavailable" });
 
         record_hold_detail(&mut run, &hold);
 

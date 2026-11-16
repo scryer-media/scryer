@@ -44,39 +44,13 @@ pub enum LifecycleEffectArming {
     Destructive,
 }
 
-/// The closed catalog of actions a lifecycle rule revision can authorize.
+/// How a lifecycle candidate or action run records its actions.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum LifecycleActionKind {
-    /// This revision contains an ordered action sequence. Read
-    /// `actionSequence` for the authoritative steps; it is never a legacy
-    /// action input value.
+    /// The actions run as an ordered step sequence. Read `actionSequence` for
+    /// the steps.
     ActionSequence,
-    /// Track membership only, and mutate no media.
-    DoNothing,
-    /// Unmonitor the matched scope and keep its files.
-    UnmonitorScopeKeepFiles,
-    /// Delete the title and its files.
-    DeleteTitleAndFiles,
-    /// Unmonitor the title and delete its files while preserving the title.
-    UnmonitorTitleDeleteAllFiles,
-    /// Unmonitor the show and its seasons, and delete existing episode files.
-    UnmonitorShowDeleteExistingFiles,
-    /// Unmonitor the season or episode scope and delete its files.
-    UnmonitorScopeDeleteFiles,
-    /// Unmonitor the season and delete its files, then delete the show when a
-    /// fresh parent check proves it is empty.
-    UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty,
-    /// Unmonitor the season, then unmonitor the show when a fresh parent check
-    /// proves it is empty.
-    UnmonitorSeasonThenUnmonitorShowIfEmpty,
-    /// Change the quality profile and search only when the current profile
-    /// differs from the target.
-    ChangeQualityProfileAndSearchIfChanged,
-    /// Add the configured user tags to the matched title.
-    AddTags,
-    /// Remove the configured user tags from the matched title.
-    RemoveTags,
 }
 
 /// Lifecycle state of one lifecycle candidate.
@@ -532,9 +506,7 @@ pub struct LifecycleCandidate {
     pub state_reason: String,
     /// Reason codes the matcher emitted on the most recent match.
     pub reason_codes: Vec<String>,
-    /// Action the rule revision authorizes, and the one the handler will run if
-    /// this candidate becomes due while the rule is in `OBSERVE` mode, armed for
-    /// the action's risk class, and its instance effect gate is on.
+    /// How the candidate records its actions.
     pub action_kind: LifecycleActionKind,
     /// What the rule decided for this subject on its latest match. Null only
     /// for candidates opened before rules declared their own actions.
@@ -721,10 +693,9 @@ pub struct LifecycleActionRun {
     pub title_id: ID,
     /// Display name of the title, or its stored ID when the title is gone.
     pub title_name: String,
-    /// Action the attempt performed or refused.
+    /// How the attempt records its actions.
     pub action_kind: LifecycleActionKind,
-    /// The immutable schema-2 sequence this attempt executed. Legacy attempts
-    /// retain their original `actionKind` and leave this null.
+    /// The immutable sequence this attempt executed.
     pub action_sequence: Option<LifecycleActionSequence>,
     /// Ordered latest evidence for every step in the immutable sequence.
     pub sequence_steps: Vec<LifecycleActionStepProgress>,

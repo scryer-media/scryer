@@ -6077,8 +6077,8 @@ impl LifecycleRuleArmingConfirmation {
     }
 }
 
-/// One immutable revision of a lifecycle rule set's matcher and action
-/// (RFC 137 section 7.1).
+/// One immutable revision of a lifecycle rule set's source and the actions it
+/// declares.
 ///
 /// Revisions are append-only: editing the matcher writes revision N+1 and
 /// repoints the rule set, so a candidate can always be attributed to the exact
@@ -6106,13 +6106,11 @@ pub struct LifecycleRuleRevision {
     pub builder_model_json: Option<String>,
 }
 
-/// Lifecycle state of one lifecycle candidate (RFC 137 section 8).
+/// Lifecycle state of one lifecycle candidate.
 ///
-/// The whole enum is pinned here, storage strings included, even though the
-/// dark evaluator only ever writes [`Self::Observing`], [`Self::Canceled`], and
-/// [`Self::Excluded`]. The executor wave writes the rest; declaring them now is
-/// what keeps that wave from needing a migration to widen a column it already
-/// shipped.
+/// The whole enum is pinned here, storage strings included. Evaluation writes
+/// [`Self::Observing`], [`Self::Canceled`] and [`Self::Excluded`]; execution
+/// writes the rest.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleCandidateState {
@@ -6186,8 +6184,7 @@ impl LifecycleCandidateState {
 pub const LIFECYCLE_TERMINAL_CANDIDATE_STATES: [&str; 4] =
     ["succeeded", "failed", "canceled", "excluded"];
 
-/// Durable membership of one subject in one lifecycle rule set
-/// (RFC 137 section 8).
+/// Durable membership of one subject in one lifecycle rule set.
 ///
 /// `first_matched_at` is the grace clock's origin and is never rewritten while
 /// the candidate is active: a repeat match advances `last_matched_at` only.
@@ -6258,7 +6255,7 @@ pub struct LifecycleActionsConflict {
     pub other_head: String,
 }
 
-/// A subject a lifecycle rule must never act on (RFC 137 section 11).
+/// A subject a lifecycle rule must never act on.
 ///
 /// `rule_set_id` is `None` for a global exclusion, which covers the subject for
 /// every rule. Exclusions are honored from the first shadow evaluation.
@@ -6306,7 +6303,7 @@ impl LifecycleEvaluationRunStatus {
     }
 }
 
-/// One rule set's pass through one evaluation job run (RFC 137 section 11).
+/// One rule set's pass through one evaluation job run.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LifecycleEvaluationRun {
     pub id: String,
@@ -6327,8 +6324,7 @@ pub struct LifecycleEvaluationRun {
     pub error: Option<String>,
 }
 
-/// How far a lifecycle rule set's effects are armed (RFC 137 sections 8 and
-/// 17 D2/D3). Arming is per rule and independent of the instance-wide effect
+/// How far a lifecycle rule set's effects are armed. Arming is per rule and independent of the instance-wide effect
 /// gates: an action executes only when both permit it.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -6403,7 +6399,7 @@ impl LifecycleActionRunStatus {
 }
 
 /// One recorded action-handler attempt, holds included, so the executed (or
-/// refused) history of a candidate is append-only evidence (RFC 137 section 8).
+/// refused) history of a candidate is append-only evidence.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LifecycleActionRun {
     pub id: String,
@@ -7238,7 +7234,7 @@ pub struct MediaServerPlaybackItem {
     pub last_seen_at: DateTime<Utc>,
 }
 
-// ── Media-server watch signals (RFC 137 section 7.3) ────────────────────────
+// ── Media-server watch signals ──────────────────────────────────────────────
 
 /// What a watch signal is about.
 ///
@@ -7288,7 +7284,7 @@ impl MediaServerSignalKind {
 }
 
 /// One normalized per-user, per-subject observation, as the sync job is about
-/// to write it (RFC 137 "Normalized observation model").
+/// to write it.
 ///
 /// The identity fields the row is keyed by — `connection_id` and
 /// `external_user_id` — are not here: they are the arguments of the write, so a

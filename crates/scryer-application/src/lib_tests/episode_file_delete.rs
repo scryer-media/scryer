@@ -1528,9 +1528,9 @@ impl ScopedLifecycleFixture {
                     max_titles_per_run: Some(100),
                     name: "Scoped deletion".into(),
                     description: String::new(),
-                    rego_source: crate::lib_tests::legacy_source_at(
+                    rego_source: crate::lib_tests::heads_source_at(
                         matcher,
-                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeDeleteFiles,
+                        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteFiles],
                         scope,
                     ),
                     grace_days: grace,

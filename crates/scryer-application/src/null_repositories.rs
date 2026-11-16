@@ -1873,14 +1873,6 @@ impl crate::ports::LifecycleCandidateRepository for NullLifecycleEvaluationRepos
             LIFECYCLE_EVALUATION_NOT_CONFIGURED.to_string(),
         ))
     }
-    async fn cancel_active_candidates_for_rule(
-        &self,
-        _rule_set_id: &str,
-        _state_reason: &str,
-        _updated_at: DateTime<Utc>,
-    ) -> AppResult<u64> {
-        Ok(0)
-    }
     async fn count_candidates_by_state(
         &self,
         _rule_set_id: &str,
@@ -1906,16 +1898,6 @@ impl crate::ports::LifecycleCandidateRepository for NullLifecycleEvaluationRepos
     ) -> AppResult<bool> {
         Ok(false)
     }
-    async fn record_candidate_attempts(
-        &self,
-        _id: &str,
-        _action_attempts: i64,
-        _updated_at: DateTime<Utc>,
-    ) -> AppResult<()> {
-        Err(AppError::Repository(
-            LIFECYCLE_EVALUATION_NOT_CONFIGURED.to_string(),
-        ))
-    }
 }
 
 #[async_trait]
@@ -1935,15 +1917,6 @@ impl crate::ports::LifecycleActionRunRepository for NullLifecycleEvaluationRepos
         ))
     }
     async fn finish_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
-        Err(AppError::Repository(
-            LIFECYCLE_EVALUATION_NOT_CONFIGURED.to_string(),
-        ))
-    }
-    async fn finish_held_action_run_and_release_attempt(
-        &self,
-        _run: &scryer_domain::LifecycleActionRun,
-        _expected_attempt: i64,
-    ) -> AppResult<bool> {
         Err(AppError::Repository(
             LIFECYCLE_EVALUATION_NOT_CONFIGURED.to_string(),
         ))
@@ -2031,13 +2004,6 @@ impl crate::ports::LifecycleActionStepRepository for NullLifecycleEvaluationRepo
         Ok(vec![])
     }
 
-    async fn list_action_step_attempts(
-        &self,
-        _key: &scryer_domain::LifecycleActionStepKey,
-    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepAttempt>> {
-        Ok(vec![])
-    }
-
     async fn list_step_acts_since(
         &self,
         _step_kinds: &[&str],
@@ -2045,14 +2011,6 @@ impl crate::ports::LifecycleActionStepRepository for NullLifecycleEvaluationRepo
         _limit: usize,
     ) -> AppResult<Vec<crate::LifecycleStepAct>> {
         Ok(vec![])
-    }
-
-    async fn get_action_job_receipt(
-        &self,
-        _key: &scryer_domain::LifecycleActionStepKey,
-        _dispatch_attempt: i64,
-    ) -> AppResult<Option<scryer_domain::LifecycleActionJobReceipt>> {
-        Ok(None)
     }
 
     async fn list_action_job_receipts(
@@ -2098,16 +2056,6 @@ impl crate::ports::LifecycleSequenceCompletionRepository for NullLifecycleEvalua
         _subject_id: &str,
     ) -> AppResult<Option<scryer_domain::LifecycleSequenceTerminalMembership>> {
         Ok(None)
-    }
-
-    async fn list_active_sequence_completions(
-        &self,
-        _rule_set_id: &str,
-        _revision_number: i64,
-        _after_id: Option<&str>,
-        _limit: usize,
-    ) -> AppResult<Vec<scryer_domain::LifecycleSequenceTerminalMembership>> {
-        Ok(vec![])
     }
 
     async fn finish_sequence_terminal_membership_and_candidate(

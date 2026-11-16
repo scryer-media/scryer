@@ -1,5 +1,5 @@
 //! The action executor's gate matrix, arming contract, safety rechecks, and
-//! postconditions (RFC 137 sections 8, 9.8, 9.10; tracks D2/D3).
+//! postconditions.
 //!
 //! Every test that makes an action execute also asserts the evidence trail:
 //! the action-run row, the candidate's terminal state, and its reason. The
@@ -92,9 +92,9 @@ pub(super) fn unmonitor_draft(rego_source: &str) -> LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: "Unmonitor stale".to_string(),
         description: String::new(),
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             rego_source,
-            crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::Unmonitor],
         ),
         grace_days: 0,
         library_ids: Vec::new(),
@@ -106,9 +106,9 @@ fn delete_draft() -> LifecycleRuleDraft {
         max_titles_per_run: Some(100),
         name: "Retire".to_string(),
         description: String::new(),
-        rego_source: crate::lib_tests::legacy_source(
+        rego_source: crate::lib_tests::heads_source(
             ALWAYS_MATCHER,
-            crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+            &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
         ),
         grace_days: 0,
         library_ids: Vec::new(),
@@ -219,9 +219,9 @@ async fn replacing_the_matcher_disarms_the_rule() {
             &fixture.user,
             &rule_id,
             LifecycleMatcherDraft {
-                rego_source: crate::lib_tests::legacy_source(
+                rego_source: crate::lib_tests::heads_source(
                     ALWAYS_MATCHER,
-                    crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+                    &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
                 ),
                 grace_days: 0,
                 max_titles_per_run: None,
@@ -838,9 +838,9 @@ async fn a_matcher_save_adds_a_delete_head_and_its_maximum_together() {
         .await
         .expect("a reversible rule saves without a maximum");
     let rule_id = created.rule_set.id.clone();
-    let deleting_source = crate::lib_tests::legacy_source(
+    let deleting_source = crate::lib_tests::heads_source(
         ALWAYS_MATCHER,
-        crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+        &[scryer_rules::lifecycle_actions::LifecycleActionHead::DeleteTitle],
     );
     let save = |max_titles_per_run| crate::lifecycle_rules::LifecycleMatcherDraft {
         rego_source: deleting_source.clone(),
