@@ -174,6 +174,87 @@ impl PendingReleaseStore {
         }
     }
 
+    /// Fills the publish time and the latest listing facts into the
+    /// provisional row `existing_id`, only while that row is still active.
+    /// Returns whether the row was filled.
+    async fn fill_provisional_pending_release(
+        &self,
+        existing_id: &str,
+        release: &PendingRelease,
+        observation: &PendingReleaseObservation,
+    ) -> AppResult<bool> {
+        let encryption_key = self.encryption_key()?;
+        let update_sql = format!(
+            "UPDATE pending_releases
+                    SET release_url = {{}},
+                        source_kind = {{}},
+                        release_size_bytes = {{}},
+                        release_score = {{}},
+                        scoring_log_json = {{}},
+                        release_listing_json = COALESCE({{}}, release_listing_json),
+                        source_password = COALESCE({{}}, source_password),
+                        indexer_source = {{}},
+                        indexer_id = {{}},
+                        release_guid = {{}},
+                        info_hash = {{}},
+                        minimum_seed_ratio = {{}},
+                        minimum_seed_time_minutes = {{}},
+                        season_pack_seed_ratio = {{}},
+                        season_pack_seed_time_minutes = {{}},
+                        seeders = {{}},
+                        delay_until = {{}},
+                        status = 'waiting',
+                        role = {{}},
+                        last_decision_code = COALESCE({{}}, last_decision_code),
+                        published_at = {{}},
+                        release_identity = {{}},
+                        release_age_unknown = {{}},
+                        last_observed_at = {{}}
+                  WHERE id = {{}}
+                    AND status IN {PENDING_RELEASE_ACTIVE_STATUSES_SQL}"
+        );
+        let mut update_args = vec![
+            SqlArg::OptText(release.release_url.clone()),
+            SqlArg::OptText(release.source_kind.map(|value| value.as_str().to_string())),
+            SqlArg::OptI64(release.release_size_bytes),
+            SqlArg::I32(release.release_score),
+            opt_json_arg_for_datastore(&self.datastore, release.scoring_log_json.as_deref())?,
+            SqlArg::OptText(release.release_listing_json.clone()),
+            SqlArg::OptText(encrypt_pending_release_source_password(
+                encryption_key.as_ref(),
+                release.source_password.as_ref(),
+            )?),
+            SqlArg::OptText(release.indexer_source.clone()),
+            SqlArg::OptText(release.indexer_id.clone()),
+            SqlArg::OptText(release.release_guid.clone()),
+            SqlArg::OptText(release.info_hash.clone()),
+            SqlArg::OptF64(release.seed_minimums.min_seed_ratio),
+            SqlArg::OptI64(release.seed_minimums.min_seed_time_minutes),
+            SqlArg::OptF64(release.seed_minimums.season_pack_seed_ratio),
+            SqlArg::OptI64(release.seed_minimums.season_pack_seed_time_minutes),
+            SqlArg::OptI64(release.seeders),
+            self.datastore
+                .timestamp_text_arg(&observation.eligible_at)?,
+            SqlArg::Text(observation.role.as_str().to_string()),
+            SqlArg::OptText(observation.latest_decision_code.clone()),
+            self.datastore
+                .opt_timestamp_text_arg(release.published_at.as_deref())?,
+            SqlArg::Text(observation.release_identity.clone()),
+            SqlArg::Bool(false),
+            self.datastore
+                .timestamp_text_arg(&observation.last_observed_at)?,
+        ];
+        update_args.push(SqlArg::Text(existing_id.to_string()));
+        let updated = execute_datastore_write(
+            &self.datastore,
+            "fill_pending_release_published_at",
+            update_sql,
+            update_args,
+        )
+        .await?;
+        Ok(updated > 0)
+    }
+
     pub async fn backfill_source_passwords(&self) -> AppResult<u64> {
         let encryption_key = self.encryption_key()?;
         let rows = SqlRuntime::fetch_all(
@@ -2555,100 +2636,25 @@ impl PendingReleaseRepository for PendingReleaseStore {
                 SqlArg::Text(normalized_title),
                 SqlArg::Text(normalized_indexer),
             ];
-            // The match and the fill are one transaction, and the fill
-            // re-checks that the row is still active: a row grabbed, expired
-            // or superseded after the match is never put back to waiting.
-            // When the row has left the active set, the observation is
-            // stored by the insert below instead.
-            let update_sql = format!(
-                "UPDATE pending_releases
-                        SET release_url = {{}},
-                            source_kind = {{}},
-                            release_size_bytes = {{}},
-                            release_score = {{}},
-                            scoring_log_json = {{}},
-                            release_listing_json = COALESCE({{}}, release_listing_json),
-                            source_password = COALESCE({{}}, source_password),
-                            indexer_source = {{}},
-                            indexer_id = {{}},
-                            release_guid = {{}},
-                            info_hash = {{}},
-                            minimum_seed_ratio = {{}},
-                            minimum_seed_time_minutes = {{}},
-                            season_pack_seed_ratio = {{}},
-                            season_pack_seed_time_minutes = {{}},
-                            seeders = {{}},
-                            delay_until = {{}},
-                            status = 'waiting',
-                            role = {{}},
-                            last_decision_code = COALESCE({{}}, last_decision_code),
-                            published_at = {{}},
-                            release_identity = {{}},
-                            release_age_unknown = {{}},
-                            last_observed_at = {{}}
-                      WHERE id = {{}}
-                        AND status IN {PENDING_RELEASE_ACTIVE_STATUSES_SQL}"
-            );
-            let update_args = vec![
-                SqlArg::OptText(release.release_url.clone()),
-                SqlArg::OptText(release.source_kind.map(|value| value.as_str().to_string())),
-                SqlArg::OptI64(release.release_size_bytes),
-                SqlArg::I32(release.release_score),
-                opt_json_arg_for_datastore(&self.datastore, release.scoring_log_json.as_deref())?,
-                SqlArg::OptText(release.release_listing_json.clone()),
-                SqlArg::OptText(encrypt_pending_release_source_password(
-                    encryption_key.as_ref(),
-                    release.source_password.as_ref(),
-                )?),
-                SqlArg::OptText(release.indexer_source.clone()),
-                SqlArg::OptText(release.indexer_id.clone()),
-                SqlArg::OptText(release.release_guid.clone()),
-                SqlArg::OptText(release.info_hash.clone()),
-                SqlArg::OptF64(release.seed_minimums.min_seed_ratio),
-                SqlArg::OptI64(release.seed_minimums.min_seed_time_minutes),
-                SqlArg::OptF64(release.seed_minimums.season_pack_seed_ratio),
-                SqlArg::OptI64(release.seed_minimums.season_pack_seed_time_minutes),
-                SqlArg::OptI64(release.seeders),
-                self.datastore
-                    .timestamp_text_arg(&observation.eligible_at)?,
-                SqlArg::Text(observation.role.as_str().to_string()),
-                SqlArg::OptText(observation.latest_decision_code.clone()),
-                self.datastore
-                    .opt_timestamp_text_arg(release.published_at.as_deref())?,
-                SqlArg::Text(observation.release_identity.clone()),
-                SqlArg::Bool(false),
-                self.datastore
-                    .timestamp_text_arg(&observation.last_observed_at)?,
-            ];
-            let filled = SqlRuntime::run_in_transaction(
-                &self.datastore,
-                "fill_pending_release_published_at",
-                move |tx| {
-                    let provisional_sql = provisional_sql.clone();
-                    let provisional_args = provisional_args.clone();
-                    let update_sql = update_sql.clone();
-                    let mut update_args = update_args.clone();
-                    Box::pin(async move {
-                        let Some(existing) = SqlRuntime::fetch_optional(
-                            SqlExec::Tx(tx),
-                            &provisional_sql,
-                            &provisional_args,
-                        )
-                        .await?
-                        else {
-                            return Ok(None);
-                        };
-                        let existing_id = existing.text("id")?;
-                        update_args.push(SqlArg::Text(existing_id.clone()));
-                        let updated =
-                            SqlRuntime::execute(SqlExec::Tx(tx), &update_sql, &update_args).await?;
-                        Ok((updated > 0).then_some(existing_id))
-                    })
-                },
+            // The match is a plain read, so a sighting that matches nothing
+            // takes no write. The fill re-checks that the row is still
+            // active: a row grabbed, expired or superseded after the read is
+            // never put back to waiting, and the observation is stored by the
+            // insert below instead.
+            if let Some(existing) = SqlRuntime::fetch_optional(
+                self.datastore.read_exec(),
+                &provisional_sql,
+                &provisional_args,
             )
-            .await?;
-            if let Some(existing_id) = filled {
-                return Ok(existing_id);
+            .await?
+            {
+                let existing_id = existing.text("id")?;
+                if self
+                    .fill_provisional_pending_release(&existing_id, release, observation)
+                    .await?
+                {
+                    return Ok(existing_id);
+                }
             }
         }
 
