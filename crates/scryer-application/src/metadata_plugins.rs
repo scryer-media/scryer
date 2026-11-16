@@ -97,6 +97,9 @@ const UNKNOWN_ID_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 /// Most remembered "no title under this id" answers across all providers.
 const UNKNOWN_ID_CAPACITY: usize = 4096;
 
+/// Longest a provider's `retry_after` is honoured for, whatever it asked for.
+const MAX_RETRY_AFTER_HOLD: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The host's memory of which plugin calls would be wasted.
 ///
 /// It remembers only two definitive facts: a provider answered that it has no
@@ -180,7 +183,9 @@ impl LookupGuard {
         if seconds == 0 {
             return;
         }
-        let until = (self.now)() + Duration::from_secs(seconds);
+        // A plugin names the delay, so it is bounded here: an absurd value must
+        // neither overflow the clock nor silence the provider for good.
+        let until = (self.now)() + Duration::from_secs(seconds).min(MAX_RETRY_AFTER_HOLD);
         let mut state = self.state();
         let entry = state
             .retry_after
@@ -1162,6 +1167,19 @@ mod tests {
         // A refusal is not an answer: the refused id is asked again too.
         assert!(!scan_lookup(&gateway, THROTTLED).await);
         assert_eq!(lookups.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn an_absurd_retry_after_is_bounded() {
+        let clock = Arc::new(Mutex::new(Instant::now()));
+        let guard = LookupGuard::new({
+            let clock = clock.clone();
+            Arc::new(move || *clock.lock().unwrap())
+        });
+        guard.hold_until_retry_after("fixture-metadata", i64::MAX);
+        assert!(!guard.may_ask("fixture-metadata", KNOWN));
+        advance(&clock, MAX_RETRY_AFTER_HOLD);
+        assert!(guard.may_ask("fixture-metadata", KNOWN));
     }
 
     #[test]
