@@ -1,5 +1,4 @@
-//! The request input document and the reads that fill it (spec 0003 FR-015,
-//! plan §3.2, §4.2).
+//! The request input document and the reads that fill it.
 //!
 //! Two halves, deliberately separated:
 //!
@@ -150,7 +149,7 @@ pub struct RequestDraft {
     pub quality_profile_name: Option<String>,
     pub monitor_type: Option<String>,
     pub monitor_selection: Option<MonitorSelection>,
-    /// `None` means forever (spec 0003 FR-040).
+    /// `None` means forever.
     pub requested_lease_days: Option<i64>,
     /// `None` leaves it to the library; `Some(vec![])` asks for no requirement.
     pub requested_required_audio_languages: Option<Vec<String>>,

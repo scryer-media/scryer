@@ -82,8 +82,7 @@ type LeaseChoice = "forever" | "custom" | `${number}`;
 ///
 /// It is a courtesy, not a gate: a "would be denied" answer still leaves submit
 /// enabled, because the server denying it for real is what writes the decision
-/// trace the requester can then read. A rule in shadow says so out loud, since
-/// its verdict is recorded rather than acted on.
+/// trace the requester can then read.
 ///
 /// Renders nothing at all when the pre-flight has not answered or failed, so a
 /// broken evaluation never blocks a request.
@@ -99,10 +98,7 @@ function RequestPreflightBanner({
 
   const reasonCodes = preflight.reasons.map((reason) => reason.code).join(", ");
   // The server's own word for why the verdict fell back to needing approval.
-  // The first reason code is only an approximation of it, kept for a server
-  // that predates `fallbackReason`.
-  const fallbackReason =
-    preflight.fallbackReason ?? preflight.reasons[0]?.code ?? null;
+  const fallbackReason = preflight.fallbackReason;
   const fallbackLabelKey = fallbackReason
     ? requestFallbackReasonLabelKey(fallbackReason)
     : null;
@@ -150,7 +146,6 @@ function RequestPreflightBanner({
     <div
       id={REQUEST_PREFLIGHT_BANNER_ID}
       data-preflight-outcome={preflight.outcome}
-      data-preflight-mode={preflight.evaluationMode}
       className={`flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-sm ${className}`}
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />

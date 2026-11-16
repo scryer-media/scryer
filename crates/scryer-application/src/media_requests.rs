@@ -209,9 +209,9 @@ pub(crate) struct RequestDecisionProvenance {
     pub(crate) decision_id: Option<String>,
     pub(crate) decided_by_rule_set_ids: Vec<String>,
     /// Tags the policy emitted, already narrowed to the labels the tag registry
-    /// defines. Applied to the created title only on an approval; a denial
-    /// keeps them in the trace and the event alone (FR-050). The unfiltered
-    /// list the rules asked for stays in the decision trace.
+    /// defines. Applied to the created title only on an approval, and empty
+    /// on a denial. The unfiltered list the rules asked for stays in the
+    /// decision trace.
     pub(crate) policy_tags: Vec<String>,
     pub(crate) reason_codes: Vec<String>,
     /// What the rules set for the approval, already checked against the

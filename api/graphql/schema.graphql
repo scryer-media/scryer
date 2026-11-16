@@ -2914,7 +2914,7 @@ input CreateProxyConfigInput {
 }
 
 """
-Creates a request rule set together with its first matcher revision. The
+Creates a request rule set together with its first source revision. The
 rule set is always created disabled; enabling it is a second, deliberate call.
 """
 input CreateRequestRuleSetInput {
@@ -2927,7 +2927,7 @@ input CreateRequestRuleSetInput {
 	"""
 	description: String
 	"""
-	Matcher source as written in the editor. The package declaration is
+	Rule source as written in the editor. The package declaration is
 	applied by the server.
 	"""
 	regoSource: String!
@@ -18357,8 +18357,9 @@ type MediaRequestPayload {
 	"""
 	decision: RequestRuleDecision
 	"""
-	Tags the policy emitted for this request. Stamped on the title only when
-	the request is approved.
+	Tags the policy emitted for this request, narrowed to the labels the
+	tag registry defines. Stamped on the title only when the request is
+	approved. The rules add none to a request they deny.
 	"""
 	policyTags: [String!]!
 	"""
@@ -21829,30 +21830,30 @@ type MutationRoot {
 		ruleSetId: ID
 	): LifecycleEvaluationTriggerPayload!
 	"""
-	Create a request rule set together with its first matcher revision.
+	Create a request rule set together with its first source revision.
 	
 	The rule is created disabled. Enabling it is a second, deliberate call.
 	"""
 	createRequestRuleSet(
 		"""
-		Rule name, matcher source, and optional description and library scope.
+		Rule name, rule source, and optional description and library scope.
 		"""
 		input: CreateRequestRuleSetInput!
 	): RequestRuleSetDetail!
 	"""
-	Replace a rule set's matcher by appending revision N+1.
+	Replace a rule set's source by appending revision N+1.
 	
 	Revision N is left exactly as written, so a decision recorded against it
 	stays attributable.
 	"""
 	updateRequestRuleMatcher(
 		"""
-		Rule-set identity and the replacement matcher source.
+		Rule-set identity and the replacement rule source.
 		"""
 		input: UpdateRequestRuleMatcherInput!
 	): RequestRuleSetDetail!
 	"""
-	Rename and re-scope a rule set without touching its matcher, so no revision is created.
+	Rename and re-scope a rule set without touching its source, so no revision is created.
 	"""
 	updateRequestRuleMetadata(
 		"""
@@ -21895,7 +21896,7 @@ type MutationRoot {
 		input: ValidateRequestRuleInput!
 	): RequestRuleValidationPayload!
 	"""
-	Evaluate one matcher against one hypothetical request without saving anything.
+	Evaluate one rule against one hypothetical request without saving anything.
 	
 	This is the author-side preview: it returns the vote, the reasons, the
 	tags, **and** the exact input document the rule saw. The requester-facing
@@ -21904,7 +21905,7 @@ type MutationRoot {
 	"""
 	previewRequestRule(
 		"""
-		Either a stored rule set or an unsaved matcher, plus the sample request to evaluate it against.
+		Either a stored rule set or an unsaved rule source, plus the sample request to evaluate it against.
 		"""
 		input: PreviewRequestRuleInput!
 	): RequestRulePreviewPayload!
@@ -24631,7 +24632,7 @@ input PreviewLifecycleRuleInput {
 }
 
 """
-Runs one matcher against one hypothetical request without saving anything.
+Runs one rule against one hypothetical request without saving anything.
 
 Supply either `ruleSetId` to preview a stored rule set or `regoSource` to
 preview an unsaved draft, never both: they answer different questions, and
@@ -24643,11 +24644,11 @@ input PreviewRequestRuleInput {
 	"""
 	ruleSetId: ID
 	"""
-	Unsaved matcher source to preview, as written in the editor.
+	Unsaved rule source to preview, as written in the editor.
 	"""
 	regoSource: String
 	"""
-	The request to evaluate the matcher against.
+	The request to evaluate the rule against.
 	"""
 	sample: RequestRuleSampleInput!
 }
@@ -26969,7 +26970,7 @@ type QueryRoot {
 		outcome: RequestDecisionOutcomeValue
 	): [RequestRuleDecision!]!
 	"""
-	The request family's Rules Context Reference: every fact a request matcher may read.
+	The request family's Rules Context Reference: every fact a request rule may read.
 	"""
 	requestRuleInputReference: JSON!
 	"""
@@ -28523,7 +28524,7 @@ type RequestDeclaredActions {
 
 """
 Requester-side pre-flight: what would happen if this draft were submitted
-now (FR-020).
+now.
 
 Deliberately has no vote table and no input document. A requester sees the
 outcome, the reasons behind it, and the tags an approval would stamp.
@@ -28538,23 +28539,23 @@ type RequestPreflightPayload {
 	"""
 	reasons: [RequestPreflightReason!]!
 	"""
-	Tags an approval would stamp on the created title.
+	Tags an approval would stamp on the created title. Empty when the
+	draft would be denied.
 	"""
 	tags: [String!]!
 	"""
 	True when the metadata could not be fully established, so the verdict
-	rests on incomplete facts. An unevaluable policy never approves.
+	rests on incomplete facts. A rule that reads a fact that could not be
+	established is held rather than run.
 	"""
 	metadataPartial: Boolean!
 	"""
-	`ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-	"""
-	evaluationMode: RequestRuleEvaluationModeValue!
-	"""
-	Why the verdict fell back to needing approval, when it did. One of the
-	arbitration vocabulary's codes (`rule_manual`, `held`, `error`,
-	`no_rule_matched`), or null when a rule decided outright. It carries no
-	rule internals: it names the shape of the fallback, never a vote.
+	Why the verdict is a fallback rather than a rule's own `approve` or
+	`deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
+	`library_permission` (the Auto-Approve permission approved),
+	`shaping_conflict` or `shaping_invalid`. Null when a rule decided
+	outright. It carries no rule internals: it names the shape of the
+	fallback, never a vote.
 	"""
 	fallbackReason: String
 	"""
@@ -28581,11 +28582,17 @@ type RequestPreflightReason {
 }
 
 """
-The durable trace of one request evaluation (FR-016).
+The durable trace of one request evaluation. It outlives the rules that
+made it.
 
 `policyOutcome` is what the rules concluded and `effectiveOutcome` is what
-the instance acted on. They disagree only when a request was held because
-its tags could not be checked.
+the instance acted on. They disagree only when the rules approved and the
+title tag registry could not be read: the request is held for approval,
+with the fallback `error`. When the input facts could not be assembled or
+the rules could not be evaluated, both are `MANUAL_REVIEW` with the
+fallback `error`. Decisions recorded by 0.22 and earlier may also show
+`policyOutcome` `MANUAL_REVIEW` with the Auto-Approve permission's
+`effectiveOutcome` for that case.
 """
 type RequestRuleDecision {
 	"""
@@ -28601,10 +28608,6 @@ type RequestRuleDecision {
 	"""
 	evaluatedAt: DateTime!
 	"""
-	`ENFORCE` when an enabled rule was consulted, `DISABLED` when none was.
-	"""
-	mode: RequestRuleEvaluationModeValue!
-	"""
 	What actually happened to the request.
 	"""
 	effectiveOutcome: RequestDecisionOutcomeValue!
@@ -28613,9 +28616,10 @@ type RequestRuleDecision {
 	"""
 	policyOutcome: RequestDecisionOutcomeValue!
 	"""
-	Why the decision fell back rather than following a rule vote
-	(`no_rule_matched`, `held`, `error`, `rule_manual`), or null when a rule
-	decided.
+	Why the decision fell back rather than following a rule's own
+	`approve` or `deny`: `rule_manual`, `held`, `error`, `no_rule_matched`,
+	`library_permission` (the Auto-Approve permission approved),
+	`shaping_conflict` or `shaping_invalid`. Null when a rule decided.
 	"""
 	fallbackReason: String
 	"""
@@ -28646,21 +28650,7 @@ type RequestRuleDecision {
 }
 
 """
-Whether an evaluation consulted an enabled request rule.
-"""
-enum RequestRuleEvaluationModeValue {
-	"""
-	No enabled rule took part.
-	"""
-	DISABLED
-	"""
-	An enabled rule was evaluated, recorded, and acted on.
-	"""
-	ENFORCE
-}
-
-"""
-Author-side preview of one matcher against one hypothetical request.
+Author-side preview of one rule against one hypothetical request.
 
 Nothing is persisted but the trace the evaluation writes, and the caller
 already holds catalog-settings authority, so this is the one place the whole
@@ -28701,7 +28691,7 @@ type RequestRulePreviewPayload {
 }
 
 """
-One immutable revision of a request rule set's matcher.
+One immutable revision of a request rule set's source.
 """
 type RequestRuleRevision {
 	"""
@@ -28713,7 +28703,7 @@ type RequestRuleRevision {
 	"""
 	ruleSetId: ID!
 	"""
-	Revision number, starting at one and incremented on every matcher edit.
+	Revision number, starting at one and incremented on every source edit.
 	"""
 	revisionNumber: Int!
 	"""
@@ -28789,7 +28779,7 @@ input RequestRuleSampleInput {
 }
 
 """
-A request rule set: identity, scope, and evaluation state. The matcher lives
+A request rule set: identity, scope, and evaluation state. The source lives
 on the revision, never here.
 """
 type RequestRuleSet {
@@ -28814,7 +28804,7 @@ type RequestRuleSet {
 	"""
 	libraryIds: [String!]!
 	"""
-	Revision number of the matcher currently in force.
+	Revision number of the source currently in force.
 	"""
 	currentRevisionNumber: Int!
 	"""
@@ -28824,7 +28814,7 @@ type RequestRuleSet {
 	"""
 	decisionCount: Int!
 	"""
-	What the matcher in force can do, read from its source. Null when the
+	What the revision in force can do, read from its source. Null when the
 	source cannot be read.
 	"""
 	declaredActions: RequestDeclaredActions
@@ -28850,10 +28840,6 @@ type RequestRuleSetDetail {
 	The revision currently in force.
 	"""
 	revision: RequestRuleRevision!
-	"""
-	What the revision in force can do, read from its source.
-	"""
-	declaredActions: RequestDeclaredActions
 	"""
 	The visual builder's stored document, or null when the rule was not
 	written with the builder. Read only by the single rule set query.
@@ -36078,7 +36064,7 @@ input UpdateRecycleBinSettingsInput {
 }
 
 """
-Replaces the matcher of an existing rule set, appending revision N+1.
+Replaces the source of an existing rule set, appending revision N+1.
 """
 input UpdateRequestRuleMatcherInput {
 	"""
@@ -36086,7 +36072,7 @@ input UpdateRequestRuleMatcherInput {
 	"""
 	ruleSetId: ID!
 	"""
-	Replacement matcher source as written in the editor.
+	Replacement rule source as written in the editor.
 	"""
 	regoSource: String!
 	"""
@@ -36097,7 +36083,7 @@ input UpdateRequestRuleMatcherInput {
 }
 
 """
-Renames and re-scopes a rule set without touching its matcher, so no
+Renames and re-scopes a rule set without touching its source, so no
 revision is created.
 """
 input UpdateRequestRuleMetadataInput {

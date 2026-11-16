@@ -1,6 +1,7 @@
 // Whole builder schemas from the checked-in served-output files, for tests.
-// The files stand in for what the `ruleBuilderSchema` query serves; they are
-// written by hand until the server produces them.
+// The files are copies of what the `ruleBuilderSchema` query serves: the
+// server's tests check its copies against the builder tables, and the Rust
+// tests keep these copies byte-identical to them.
 
 import lifecycleServed from "../contracts/lifecycle-builder-schema.json" with { type: "json" };
 import requestServed from "../contracts/request-builder-schema.json" with { type: "json" };

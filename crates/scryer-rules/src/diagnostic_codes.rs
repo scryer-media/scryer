@@ -53,9 +53,6 @@ pub const RULE_FOREIGN_DATA_REFERENCE: &str = "RULE_FOREIGN_DATA_REFERENCE";
 /// value the host's helpers depend on, so the decision would rest on facts
 /// the host never observed.
 pub const RULE_WITH_TARGET_NOT_ALLOWED: &str = "RULE_WITH_TARGET_NOT_ALLOWED";
-/// The rule defines a name the family no longer reads and refuses, such as
-/// `tags` in a request rule, which tags a title through `add_tags`.
-pub const RULE_HEAD_NAME_RETIRED: &str = "RULE_HEAD_NAME_RETIRED";
 /// `set_quality_profile` names a quality profile that does not exist.
 pub const RULE_QUALITY_PROFILE_UNKNOWN: &str = "RULE_QUALITY_PROFILE_UNKNOWN";
 /// `set_quality_profile` names a quality profile name that more than one
@@ -74,7 +71,6 @@ pub const RULE_ACTION_READS_OTHER_LEVEL: &str = "RULE_ACTION_READS_OTHER_LEVEL";
 pub const ALL: &[&str] = &[
     RULE_ACTION_READS_OTHER_LEVEL,
     RULE_HEAD_DEFINED_AS_FUNCTION,
-    RULE_HEAD_NAME_RETIRED,
     RULE_QUALITY_PROFILE_UNKNOWN,
     RULE_QUALITY_PROFILE_AMBIGUOUS,
     RULE_MONITOR_UNSUPPORTED,

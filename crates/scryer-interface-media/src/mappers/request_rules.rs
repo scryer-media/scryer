@@ -1,10 +1,10 @@
-//! Projections for the request-rule surface (spec 0003 §7).
+//! Projections for the request-rule surface.
 //!
 //! Three of these are load-bearing rather than mechanical:
 //!
 //! - [`from_request_rule_decision`] takes a `redacted` flag and, when it is set,
 //!   returns the trace **without its votes**. That is the same rule the
-//!   pre-flight enforces by having no vote field at all (FR-020), applied to a
+//!   pre-flight enforces by having no vote field at all, applied to a
 //!   stored decision read back by the person it was about. `reasons` survives
 //!   the redaction, because a requester who is told "denied" and nothing else
 //!   has been told nothing.
@@ -26,7 +26,7 @@ use scryer_application::request_rules::{
 use scryer_application::{MediaRequestMetadataSnapshot, RequestPreflight};
 use scryer_domain::{
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode,
+    RequestDecisionOutcome, RequestRuleDecisionRecord,
 };
 use scryer_rules::request::{
     REQUEST_INPUT_SCHEMA_VERSION, RequestVote, certification_rank_for_label,
@@ -40,15 +40,6 @@ fn to_graphql_int(value: i64) -> i32 {
 }
 
 // ── Enum projections ────────────────────────────────────────────────────────
-
-pub fn request_rule_evaluation_mode_value(
-    mode: RequestRuleEvaluationMode,
-) -> RequestRuleEvaluationModeValue {
-    match mode {
-        RequestRuleEvaluationMode::Disabled => RequestRuleEvaluationModeValue::Disabled,
-        RequestRuleEvaluationMode::Enforce => RequestRuleEvaluationModeValue::Enforce,
-    }
-}
 
 pub fn request_decision_outcome_value(
     outcome: RequestDecisionOutcome,
@@ -186,8 +177,7 @@ pub fn from_request_declared_actions(
 }
 
 /// `with_declared_actions` is the caller's look-ahead: the scan parses the
-/// source, so it runs only when a selection asks for it. The one scan feeds
-/// both the detail and its rule set.
+/// source, so it runs only when a selection asks for the rule set's.
 pub fn from_request_rule_set_detail(
     detail: AppRuleSetDetail,
     decision_count: u64,
@@ -198,9 +188,8 @@ pub fn from_request_rule_set_detail(
         .flatten()
         .map(from_request_declared_actions);
     RequestRuleSetDetail {
-        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions.clone()),
+        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions),
         revision: from_request_rule_revision(detail.revision),
-        declared_actions,
         builder_model: detail.builder_model.map(async_graphql::Json),
     }
 }
@@ -394,7 +383,6 @@ pub fn from_request_rule_decision(
         id: Some(ID::from(record.id)),
         request_id: Some(ID::from(record.request_id)),
         evaluated_at: record.evaluated_at,
-        mode: request_rule_evaluation_mode_value(record.mode),
         effective_outcome: request_decision_outcome_value(record.effective_outcome),
         policy_outcome: request_decision_outcome_value(record.policy_outcome),
         fallback_reason: record.fallback_reason,
@@ -443,12 +431,9 @@ fn preview_fallback_reason(result: &AppPreviewResult) -> Option<String> {
     }
 }
 
-/// `mode` is the stored rule set's mode, or `DISABLED` for an unsaved draft —
-/// an unsaved matcher is not enabled, because it is not stored.
 pub fn from_request_rule_preview_result(
     result: AppPreviewResult,
     rule_set_name: String,
-    mode: RequestRuleEvaluationMode,
 ) -> RequestRulePreviewPayload {
     let outcome = request_decision_outcome_value(preview_outcome(result.vote));
     let fallback_reason = preview_fallback_reason(&result);
@@ -486,7 +471,6 @@ pub fn from_request_rule_preview_result(
             id: None,
             request_id: None,
             evaluated_at: result.evaluated_at,
-            mode: request_rule_evaluation_mode_value(mode),
             effective_outcome: outcome,
             policy_outcome: outcome,
             fallback_reason,
@@ -519,7 +503,6 @@ pub fn from_request_preflight(preflight: RequestPreflight) -> RequestPreflightPa
             .collect(),
         tags: preflight.tags,
         metadata_partial: preflight.metadata_partial,
-        evaluation_mode: request_rule_evaluation_mode_value(preflight.evaluation_mode),
         fallback_reason: preflight.fallback_reason,
         // The requester's own surface: values and conflicts, never a
         // notification.
@@ -652,7 +635,7 @@ pub(crate) fn project_media_request_policy(
 /// The one conversion from the submit input to the application's draft.
 ///
 /// The pre-flight query and the submit mutation both go through this, which is
-/// what makes FR-021 — identical drafts yield identical decisions — a property
+/// what makes "identical drafts yield identical decisions" a property
 /// of the code: the two cannot disagree about what a draft *is*.
 pub fn submit_media_request_input_into_application(
     input: SubmitMediaRequestInput,
@@ -766,7 +749,6 @@ mod tests {
             id: "decision-1".to_string(),
             request_id: "request-1".to_string(),
             evaluated_at: Utc::now(),
-            mode: RequestRuleEvaluationMode::Enforce,
             effective_outcome: RequestDecisionOutcome::Deny,
             policy_outcome: RequestDecisionOutcome::Deny,
             fallback_reason: None,
@@ -779,12 +761,14 @@ mod tests {
         }
     }
 
+    // Recorded by an earlier build, when each vote still carried a `mode`;
+    // such rows must keep loading.
     const VOTES: &str = r#"[
         {"rule_set_id":"a","rule_set_name":"Family ratings only","revision_number":3,
          "content_hash":"h","mode":"enforce","vote":"deny","held":false,
          "reason_codes":["policy_denied"],"tags":["kids"]},
         {"rule_set_id":"b","rule_set_name":"Quota","revision_number":1,
-         "content_hash":"h","mode":"shadow","held":false,
+         "content_hash":"h","mode":"enforce","held":false,
          "reason_codes":[],"tags":[],"error":"policy evaluation exceeded its time budget"}
     ]"#;
 

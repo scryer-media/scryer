@@ -572,7 +572,6 @@ function RequestDecisionChip({
           id={mediaRequestDecisionId(request.id)}
           type="button"
           data-request-decision-outcome={decision.effectiveOutcome}
-          data-request-decision-mode={decision.mode}
           className="cursor-pointer"
         >
           <Badge

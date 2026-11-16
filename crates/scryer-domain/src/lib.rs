@@ -405,9 +405,9 @@ pub struct MediaRequest {
     /// Rule sets that voted for the effective outcome.
     pub decided_by_rule_set_ids: Vec<String>,
     /// Tags the rules emitted, and the labels a list request's route applies,
-    /// merged onto the created title at approval (spec 0003 FR-050).
+    /// merged onto the created title at approval.
     pub policy_tags: Vec<String>,
-    /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
+    /// Versioned metadata snapshot captured at submit.
     /// A raw JSON string here: the typed snapshot lives in the application
     /// layer, so the domain carries the bytes and nothing interprets them.
     pub metadata_snapshot_json: String,
@@ -6739,34 +6739,6 @@ pub struct LifecycleSequenceTerminalMembership {
     pub released_at: Option<DateTime<Utc>>,
 }
 
-/// Whether a request rule set takes part in deciding requests. Operators see
-/// these as Disabled and Enabled.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RequestRuleEvaluationMode {
-    #[default]
-    Disabled,
-    /// Evaluate, record, and act on the decision.
-    Enforce,
-}
-
-impl RequestRuleEvaluationMode {
-    pub const fn as_storage_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Enforce => "enforce",
-        }
-    }
-
-    pub fn parse_storage(value: &str) -> Option<Self> {
-        match value {
-            "disabled" => Some(Self::Disabled),
-            "enforce" => Some(Self::Enforce),
-            _ => None,
-        }
-    }
-}
-
 /// A user-authored request rule set: identity, scope, and evaluation state.
 ///
 /// The matcher lives on [`RequestRuleRevision`], never here, so changing what a
@@ -6776,8 +6748,9 @@ pub struct RequestRuleSet {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Whether the rule set takes part in deciding requests. A disabled rule
+    /// set is not loaded and casts no vote.
     pub enabled: bool,
-    pub evaluation_mode: RequestRuleEvaluationMode,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Revision number of the matcher currently in force.
@@ -6804,11 +6777,10 @@ pub struct RequestRuleRevision {
     pub created_at: DateTime<Utc>,
 }
 
-/// What a request evaluation concluded (spec 0003 FR-010, FR-011).
+/// What a request evaluation concluded.
 ///
-/// [`Self::ManualReview`] is the default because every failure path — engine
-/// error, timeout, unknown fact, no matching rule — lands there: a decision this
-/// build cannot interpret must never read back as an approval or a denial.
+/// [`Self::ManualReview`] is the default so that an outcome this build cannot
+/// interpret never reads back as an approval or a denial.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestDecisionOutcome {
@@ -6837,7 +6809,8 @@ impl RequestDecisionOutcome {
     }
 }
 
-/// The durable trace of one request evaluation (spec 0003 FR-016).
+/// The durable trace of one request evaluation. It outlives the rules that
+/// made it.
 ///
 /// `policy_outcome` (what the rules said) and `effective_outcome` (what the
 /// instance acted on) are separate columns because a fallback can make them
@@ -6849,7 +6822,6 @@ pub struct RequestRuleDecisionRecord {
     /// pre-flight decision is recorded before any request row exists.
     pub request_id: String,
     pub evaluated_at: DateTime<Utc>,
-    pub mode: RequestRuleEvaluationMode,
     pub effective_outcome: RequestDecisionOutcome,
     pub policy_outcome: RequestDecisionOutcome,
     /// Why the decision fell back rather than following a rule vote

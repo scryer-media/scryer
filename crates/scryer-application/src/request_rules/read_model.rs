@@ -1,5 +1,4 @@
-//! Read models for the request-rule GraphQL surface (spec 0003 FR-016, FR-020,
-//! FR-044).
+//! Read models for the request-rule GraphQL surface.
 //!
 //! Nothing in this module decides anything. Every method is a read plus the
 //! authorization that read requires, and it exists because the repositories the
@@ -9,7 +8,7 @@
 //! Two properties are enforced here rather than remembered at each call site:
 //!
 //! 1. **A requester never sees the vote table.** The same redaction the
-//!    pre-flight applies (FR-020) applies to a stored decision read back by the
+//!    pre-flight applies also applies to a stored decision read back by the
 //!    person it was about: outcome, fallback reason, reasons, and tags, never
 //!    the per-rule votes. [`RequestRuleDecisionView::redacted`] carries that
 //!    judgement to the projection so the projection cannot forget to ask.
@@ -39,7 +38,7 @@ pub struct RequestRuleDecisionView {
     pub record: RequestRuleDecisionRecord,
     /// True when the caller reached the trace as the *requester* rather than as
     /// a manager of the request's library. The projection then drops the votes,
-    /// mirroring the pre-flight's redaction (FR-020).
+    /// mirroring the pre-flight's redaction.
     pub redacted: bool,
 }
 
@@ -99,8 +98,9 @@ impl AppUseCase {
 
     /// How many decisions each of `rule_set_ids` took part in.
     ///
-    /// One count per rule set rather than a batched query: the authoring list is
-    /// tens of rows, and the port's count is a single indexed scan per rule.
+    /// One count statement per rule set. Each counts the decisions whose
+    /// stored votes mention the rule set's id, a substring match no index
+    /// serves, so every count reads the whole decision table.
     pub async fn request_rule_decision_counts(
         &self,
         actor: &User,

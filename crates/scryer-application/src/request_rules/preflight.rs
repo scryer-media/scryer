@@ -1,5 +1,4 @@
-//! Pre-flight: tell a requester what will happen before they submit
-//! (spec 0003 FR-020, FR-021).
+//! Pre-flight: tell a requester what will happen before they submit.
 //!
 //! The dialog calls this as the requester changes library, profile, monitor, or
 //! lease. It runs the *same* enrichment and the *same* evaluation the submit
@@ -15,9 +14,9 @@
 //!   catalog-settings authority.
 //! - **It never errors for an evaluation failure.** A preview that 500s teaches
 //!   a requester nothing; a preview that says "this will need approval" is both
-//!   true (an unevaluable policy never approves) and useful.
+//!   true (rules that cannot be consulted never approve) and useful.
 
-use scryer_domain::{LibraryPermission, RequestDecisionOutcome, RequestRuleEvaluationMode, User};
+use scryer_domain::{LibraryPermission, RequestDecisionOutcome, User};
 
 use crate::media_requests::SubmitMediaRequestInput;
 use crate::request_rules::evaluation::{RequestDecisionReason, RequestEvaluationPurpose};
@@ -36,14 +35,16 @@ pub struct RequestPreflight {
     /// were unknown. The dialog says "metadata unavailable — will need
     /// approval" rather than pretending to a verdict it does not have.
     pub metadata_partial: bool,
-    /// `Enforce` when an enabled rule was consulted, `Disabled` when none was.
-    pub evaluation_mode: RequestRuleEvaluationMode,
+    /// False when no enabled rule covers the library, so the Auto-Approve
+    /// permission alone decided.
+    pub rules_consulted: bool,
     /// What the policy concluded, which differs from `outcome` only when the
     /// request was held because its tags could not be checked.
     pub policy_outcome: RequestDecisionOutcome,
-    /// Why the verdict fell back to needing approval, when it did: one of the
-    /// arbitration codes (`rule_manual`, `held`, `error`, `no_rule_matched`),
-    /// or `None` when a rule decided outright. It names the *shape* of the
+    /// Why the verdict is a fallback rather than a rule's own decision: one of
+    /// the arbitration codes (`rule_manual`, `held`, `error`, `no_rule_matched`,
+    /// `library_permission`, `shaping_conflict`, `shaping_invalid`), or `None`
+    /// when a rule decided outright. It names the *shape* of the
     /// fallback and never a rule, so it is safe on the requester's surface.
     pub fallback_reason: Option<String>,
     /// What an approval would be changed to. The requester's surface shows
@@ -100,7 +101,7 @@ impl AppUseCase {
             )?;
 
         // The same read-through cache the submit uses, so the two share one SMG
-        // call and therefore one set of facts (FR-021).
+        // call and therefore one set of facts.
         let enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
         let external_ids = enrichment.external_ids.clone();
 
@@ -153,14 +154,15 @@ impl AppUseCase {
         Ok(RequestPreflight {
             outcome: evaluation.effective_outcome,
             reasons: evaluation.reasons,
-            // Tags are shown whatever the outcome — a requester should see what
-            // an approval would stamp — but they are only ever *applied* by the
-            // approval path. `evaluation.tags` is already narrowed to labels the
-            // tag registry defines, so the banner cannot promise one that the
-            // approval would drop.
+            // Tags are shown for an approval and for a request that waits for
+            // a person, whose approval would stamp them; a denial has none.
+            // They are only ever *applied* by the approval path.
+            // `evaluation.tags` is already narrowed to labels the tag registry
+            // defines, so the banner cannot promise one that the approval
+            // would drop.
             tags: evaluation.tags,
             metadata_partial: evaluation.metadata_partial,
-            evaluation_mode: evaluation.evaluation_mode,
+            rules_consulted: evaluation.rules_consulted,
             policy_outcome: evaluation.policy_outcome,
             fallback_reason: evaluation.fallback_reason,
             shaping: evaluation.shaping,

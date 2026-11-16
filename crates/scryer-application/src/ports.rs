@@ -11716,12 +11716,10 @@ pub trait RequestRuleSetRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
-    /// Move a rule set between evaluation modes. `enabled` is derived by the
-    /// caller from the mode so the two columns can never disagree.
-    async fn update_rule_set_evaluation_mode(
+    /// Enable or disable a rule set.
+    async fn update_rule_set_enabled(
         &self,
         id: &str,
-        mode: scryer_domain::RequestRuleEvaluationMode,
         enabled: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;

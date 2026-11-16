@@ -805,25 +805,25 @@ impl AppUseCase {
         }
 
         let quoted = format!("\"{label}\"");
-        let mut request = 0_u64;
-        for rule_set in self
+        let request_keys: Vec<(String, i64)> = self
             .services
             .customization
             .request_rule_sets
             .list_rule_sets()
             .await?
-        {
-            if let Some(revision) = self
-                .services
-                .customization
-                .request_rule_sets
-                .get_revision(&rule_set.id, rule_set.current_revision_number)
-                .await?
-                && revision.rego_source.contains(&quoted)
-            {
-                request += 1;
-            }
-        }
+            .into_iter()
+            .map(|rule_set| (rule_set.id, rule_set.current_revision_number))
+            .collect();
+        let request = self
+            .services
+            .customization
+            .request_rule_sets
+            .get_revisions(&request_keys)
+            .await?
+            .into_iter()
+            .flatten()
+            .filter(|revision| revision.rego_source.contains(&quoted))
+            .count() as u64;
 
         Ok(RuleSetTagReferenceCounts {
             lifecycle,

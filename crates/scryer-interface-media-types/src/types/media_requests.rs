@@ -188,8 +188,9 @@ pub struct MediaRequestPayload {
     /// was never evaluated. A requester reading their own request gets it with
     /// `votes` emptied.
     pub decision: Option<RequestRuleDecision>,
-    /// Tags the policy emitted for this request. Stamped on the title only when
-    /// the request is approved.
+    /// Tags the policy emitted for this request, narrowed to the labels the
+    /// tag registry defines. Stamped on the title only when the request is
+    /// approved. The rules add none to a request they deny.
     pub policy_tags: Vec<String>,
     /// The metadata the request was decided against, as captured at submit
     /// time.

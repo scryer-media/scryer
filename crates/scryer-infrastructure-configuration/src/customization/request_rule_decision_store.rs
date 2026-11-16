@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use scryer_application::{AppResult, RequestRuleDecisionRepository};
-use scryer_domain::{RequestDecisionOutcome, RequestRuleDecisionRecord, RequestRuleEvaluationMode};
+use scryer_domain::{RequestDecisionOutcome, RequestRuleDecisionRecord};
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
@@ -153,22 +153,24 @@ impl RequestRuleDecisionRepository for RequestRuleDecisionStore {
 /// Request ids bound per latest-decision statement.
 const LATEST_DECISION_REQUEST_CHUNK: usize = 10_000;
 
-const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, mode, effective_outcome,
+const DECISION_COLUMNS: &str = "id, request_id, evaluated_at, effective_outcome,
     policy_outcome, fallback_reason, votes_json, tags_json, shaping_json, input_hash,
     input_schema_version, created_at";
 
+/// `mode` is a retired NOT NULL column that nothing reads. Every recorded
+/// decision consulted enabled rules, so it is written as the constant
+/// `'enforce'` until a migration drops the column.
 const INSERT_DECISION_SQL: &str = "INSERT INTO request_rule_decisions
         (id, request_id, evaluated_at, mode, effective_outcome, policy_outcome,
          fallback_reason, votes_json, tags_json, shaping_json, input_hash, input_schema_version,
          created_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, 'enforce', {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 fn decision_args(decision: &RequestRuleDecisionRecord) -> AppResult<Vec<SqlArg>> {
     Ok(vec![
         SqlArg::Text(decision.id.clone()),
         SqlArg::Text(decision.request_id.clone()),
         SqlArg::Timestamp(decision.evaluated_at),
-        SqlArg::Text(decision.mode.as_storage_str().to_string()),
         SqlArg::Text(decision.effective_outcome.as_storage_str().to_string()),
         SqlArg::Text(decision.policy_outcome.as_storage_str().to_string()),
         SqlArg::OptText(decision.fallback_reason.clone()),
@@ -186,10 +188,9 @@ fn row_to_decision(row: &SqlRow) -> AppResult<RequestRuleDecisionRecord> {
         id: row.text("id")?,
         request_id: row.text("request_id")?,
         evaluated_at: row.timestamp_or_now("evaluated_at")?,
-        // An unrecognized mode or outcome was written by a newer build. Both
-        // read back at their safe default — disabled, manual review — so this
-        // build never presents a verdict it cannot interpret as an approval.
-        mode: RequestRuleEvaluationMode::parse_storage(&row.text("mode")?).unwrap_or_default(),
+        // An unrecognized outcome was written by a newer build. It reads back
+        // as manual review, so this build never presents a verdict it cannot
+        // interpret as an approval.
         effective_outcome: RequestDecisionOutcome::parse_storage(&row.text("effective_outcome")?)
             .unwrap_or_default(),
         policy_outcome: RequestDecisionOutcome::parse_storage(&row.text("policy_outcome")?)

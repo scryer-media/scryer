@@ -3,10 +3,6 @@
 /// requester's library permission does. A rule is created disabled, so
 /// enabling one is always a deliberate second step.
 
-/// Whether an evaluation consulted an enabled rule (`ENFORCE`) or fell back
-/// to the requester's permission (`DISABLED`).
-export type RequestEvaluationMode = "DISABLED" | "ENFORCE";
-
 /// What a decision came to. `MANUAL_REVIEW` is the domain default, so an
 /// unreadable verdict never reads back as an approval or a denial.
 export type RequestDecisionOutcome = "AUTO_APPROVE" | "MANUAL_REVIEW" | "DENY";
@@ -101,7 +97,6 @@ export type RequestRuleRevision = {
 export type RequestRuleSetDetail = {
   ruleSet: RequestRuleSetRecord;
   revision: RequestRuleRevision;
-  declaredActions?: RequestDeclaredActions;
   /// The stored builder document, read only by the single-rule query. Opaque
   /// until `parseRuleBuilderModel` reads it.
   builderModel?: unknown;
@@ -146,9 +141,10 @@ export type RequestRuleDecisionRecord = {
   id: string | null;
   requestId: string | null;
   evaluatedAt: string;
-  mode: RequestEvaluationMode;
   /// What actually happened. `policyOutcome` is what the rules alone came to;
-  /// the two differ only when the decision fell back.
+  /// the two differ only when the rules approved, the tag registry could not
+  /// be read, and the request was held. Traces from 0.22 and earlier may also differ when the
+  /// facts could not be assembled and the Auto-Approve permission decided.
   effectiveOutcome: RequestDecisionOutcome;
   policyOutcome: RequestDecisionOutcome;
   fallbackReason: string | null;
@@ -182,11 +178,10 @@ export type RequestPreflightResult = {
   reasons: RequestPreflightReason[];
   tags: string[];
   metadataPartial: boolean;
-  evaluationMode: RequestEvaluationMode;
   /// Why the verdict fell back to needing approval, when it did. It names the
   /// shape of the fallback (`rule_manual`, `held`, `error`, `no_rule_matched`,
-  /// `shaping_conflict`) and never a rule, so it is safe on the requester's
-  /// surface.
+  /// `library_permission`, `shaping_conflict`, `shaping_invalid`) and never a
+  /// rule, so it is safe on the requester's surface.
   fallbackReason: string | null;
   shaping: RequestShaping | null;
 };

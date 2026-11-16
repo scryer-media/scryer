@@ -27,6 +27,8 @@ pub(crate) struct MockTitleRepo {
     /// every bag carrying the old label, and a delete that strips it.
     pub(super) title_tag_definitions: Arc<Mutex<Vec<scryer_domain::TitleTagDefinition>>>,
     pub(super) fail_tag_reads: AtomicBool,
+    /// How many times the tag registry was read.
+    pub(super) tag_reads: std::sync::atomic::AtomicUsize,
     pub(crate) fail_get_by_id: AtomicBool,
     /// `(title_id, id_list_reads_allowed)`: once that many id-list reads
     /// naming the title have succeeded, every read of it fails, whether by
@@ -598,6 +600,7 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn list_title_tag_definitions(&self) -> AppResult<Vec<TitleTagDefinitionSummary>> {
+        self.tag_reads.fetch_add(1, Ordering::SeqCst);
         if self.fail_tag_reads.load(Ordering::SeqCst) {
             return Err(AppError::Repository(
                 "synthetic tag registry read failure".into(),

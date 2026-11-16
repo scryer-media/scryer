@@ -774,7 +774,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<RequestRuleDecision, Stri
 
 // ── Worked examples ─────────────────────────────────────────────────────────
 
-/// The family-rated approval from the plan's worked examples: named requesters,
+/// A family-rated approval: named requesters,
 /// PG-13 or gentler, tagged `family` when it is gentler still.
 pub const EXAMPLE_NAMED_REQUESTERS_FAMILY_RATED: &str = "package rules\nimport rego.v1\n\nrequesters := {\"alice\", \"bob\", \"carol\"}\n\napprove if {\n\tinput.requester.username in requesters\n\tinput.facts.certification_rank <= 2\n}\n\nadd_tags := [\"family\"] if {\n\tinput.facts.certification_rank <= 1\n}\n";
 

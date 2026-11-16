@@ -7967,8 +7967,6 @@ const cs: LocaleDictionary = {
     'Toto pravidlo nemůže pomocí "with" nahradit {{path}}. Jeho rozhodnutí musí vycházet z toho, co Scryer zjistil.',
   "error.ruleHeadDefinedAsFunction":
     "{{path}} má pro Scryer význam a nemůže být funkcí. Zapište ho jako pravidlo.",
-  "error.ruleHeadNameRetired":
-    "Pravidla žádostí už {{path}} nečtou. Titul označte pomocí add_tags.",
   "error.ruleQualityProfileUnknown":
     "Žádný profil kvality nemá tento název, takže ho pravidlo nemůže použít.",
   "error.ruleQualityProfileAmbiguous":

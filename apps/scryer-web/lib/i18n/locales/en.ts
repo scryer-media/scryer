@@ -12480,8 +12480,6 @@ const en: LocaleDictionary = {
     'This rule cannot replace {{path}} with "with". Its decision must rest on what Scryer observed.',
   "error.ruleHeadDefinedAsFunction":
     "{{path}} has a meaning to Scryer and cannot be a function. Write it as a rule instead.",
-  "error.ruleHeadNameRetired":
-    "Request rules no longer read {{path}}. Tag a title with add_tags instead.",
   "error.ruleQualityProfileUnknown":
     "No quality profile has this name, so the rule cannot apply it.",
   "error.ruleQualityProfileAmbiguous":

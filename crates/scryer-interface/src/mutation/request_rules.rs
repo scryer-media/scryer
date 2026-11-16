@@ -3,9 +3,9 @@ use crate::types::*;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::AppError;
 use scryer_application::request_rules::{RequestRuleDraft, RequestRulePreviewMatcher};
-use scryer_domain::{AppPermission, RequestRuleEvaluationMode};
+use scryer_domain::AppPermission;
 
-/// Resolve the matcher a preview should run.
+/// Resolve the rule source a preview should run.
 ///
 /// The two forms are mutually exclusive by construction: previewing a stored
 /// rule set and previewing an unsaved draft answer different questions, and
@@ -28,15 +28,13 @@ fn preview_matcher(input: &mut PreviewRequestRuleInput) -> GqlResult<RequestRule
     }
 }
 
-/// Whether the selection asks for a detail's declared actions, on the detail
-/// or on its rule set. The scan parses the source, so it runs only then.
+/// Whether the selection asks for the declared actions of a detail's rule
+/// set. The scan parses the source, so it runs only then.
 fn detail_wants_declared_actions(ctx: &Context<'_>) -> bool {
-    let look_ahead = ctx.look_ahead();
-    look_ahead.field("declaredActions").exists()
-        || look_ahead
-            .field("ruleSet")
-            .field("declaredActions")
-            .exists()
+    ctx.look_ahead()
+        .field("ruleSet")
+        .field("declaredActions")
+        .exists()
 }
 
 /// A rule set returned without its revision, with declared actions read only
@@ -68,13 +66,13 @@ pub(crate) struct RequestRuleMutations;
 
 #[Object]
 impl RequestRuleMutations {
-    /// Create a request rule set together with its first matcher revision.
+    /// Create a request rule set together with its first source revision.
     ///
     /// The rule is created disabled. Enabling it is a second, deliberate call.
     async fn create_request_rule_set(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Rule name, matcher source, and optional description and library scope.")]
+        #[graphql(desc = "Rule name, rule source, and optional description and library scope.")]
         input: CreateRequestRuleSetInput,
     ) -> GqlResult<RequestRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
@@ -103,14 +101,14 @@ impl RequestRuleMutations {
         ))
     }
 
-    /// Replace a rule set's matcher by appending revision N+1.
+    /// Replace a rule set's source by appending revision N+1.
     ///
     /// Revision N is left exactly as written, so a decision recorded against it
     /// stays attributable.
     async fn update_request_rule_matcher(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Rule-set identity and the replacement matcher source.")]
+        #[graphql(desc = "Rule-set identity and the replacement rule source.")]
         input: UpdateRequestRuleMatcherInput,
     ) -> GqlResult<RequestRuleSetDetail> {
         let app = app_from_ctx(ctx)?;
@@ -137,7 +135,7 @@ impl RequestRuleMutations {
         ))
     }
 
-    /// Rename and re-scope a rule set without touching its matcher, so no revision is created.
+    /// Rename and re-scope a rule set without touching its source, so no revision is created.
     async fn update_request_rule_metadata(
         &self,
         ctx: &Context<'_>,
@@ -254,7 +252,7 @@ impl RequestRuleMutations {
         })
     }
 
-    /// Evaluate one matcher against one hypothetical request without saving anything.
+    /// Evaluate one rule against one hypothetical request without saving anything.
     ///
     /// This is the author-side preview: it returns the vote, the reasons, the
     /// tags, **and** the exact input document the rule saw. The requester-facing
@@ -264,7 +262,7 @@ impl RequestRuleMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Either a stored rule set or an unsaved matcher, plus the sample request to evaluate it against."
+            desc = "Either a stored rule set or an unsaved rule source, plus the sample request to evaluate it against."
         )]
         mut input: PreviewRequestRuleInput,
     ) -> GqlResult<RequestRulePreviewPayload> {
@@ -288,25 +286,20 @@ impl RequestRuleMutations {
             .await
             .map_err(to_gql_error)?;
 
-        // An unsaved draft has no stored name and no stored mode: it is not
-        // enabled, because it is not stored.
-        let (rule_set_name, mode) = match stored_rule_set_id {
+        // An unsaved draft has no stored name.
+        let rule_set_name = match stored_rule_set_id {
             Some(rule_set_id) => app
                 .get_request_rule_set(&actor, &rule_set_id, false)
                 .await
                 .map_err(to_gql_error)?
-                .map(|detail| (detail.rule_set.name, detail.rule_set.evaluation_mode))
-                .unwrap_or_else(|| (String::new(), RequestRuleEvaluationMode::Disabled)),
-            None => (
-                "Unsaved draft".to_string(),
-                RequestRuleEvaluationMode::Disabled,
-            ),
+                .map(|detail| detail.rule_set.name)
+                .unwrap_or_default(),
+            None => "Unsaved draft".to_string(),
         };
 
         Ok(crate::mappers::from_request_rule_preview_result(
             result,
             rule_set_name,
-            mode,
         ))
     }
 
