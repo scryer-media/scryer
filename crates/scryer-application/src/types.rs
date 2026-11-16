@@ -1935,6 +1935,17 @@ impl ReleaseDecisionExplanation {
         }
     }
 
+    /// Text the store decoded from a stored explanation. It is checked to be
+    /// JSON and trusted, not checked, to be in the canonical form every
+    /// writer stores. Only the store's codec calls this.
+    #[doc(hidden)]
+    pub fn stored_canonical(text: String) -> Self {
+        Self {
+            text,
+            canonical: true,
+        }
+    }
+
     /// Text whose form is not known, such as a saved pending release's
     /// explanation.
     pub fn untrusted(text: impl Into<String>) -> Self {

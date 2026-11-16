@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 use serde_json::Value;
 use zstd::dict::DecoderDictionary;
 
+use crate::json_shape::{ValueParseShape, check_value_parse};
+
 pub const DOMAIN_EVENT_PAYLOAD_FORMAT_V1: u8 = 1;
 pub const DOMAIN_EVENT_PAYLOAD_MAX_BYTES: usize = 256 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
@@ -76,7 +78,7 @@ pub fn derive_domain_event_projections(
 pub fn encode_domain_event_payload(
     payload: &Value,
 ) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
-    compress_compact_payload(&compact_payload(payload)?)
+    DomainEventPayloadEncoder::new().encode(payload)
 }
 
 /// Encodes a payload and also returns the JSON its stored bytes decode to, so
@@ -88,8 +90,75 @@ pub fn encode_domain_event_payload_with_stored_json(
     payload: &Value,
 ) -> Result<(Vec<u8>, Value), DomainEventPayloadCodecError> {
     let compact = compact_payload(payload)?;
-    let encoded = compress_compact_payload(&compact)?;
+    let encoded = DomainEventPayloadEncoder::new().compress_compact(&compact)?;
     Ok((encoded, parse_decoded_payload(&compact)?))
+}
+
+/// Encodes a run of payloads through one zstd context, so the raw dictionary
+/// is loaded once for the run instead of once per payload. Each payload
+/// encodes to exactly the bytes [`encode_domain_event_payload`] produces for
+/// it alone: a zstd frame starts from the dictionary, never from the frame
+/// before it.
+#[derive(Default)]
+pub struct DomainEventPayloadEncoder {
+    compressor: Option<zstd::bulk::Compressor<'static>>,
+}
+
+impl DomainEventPayloadEncoder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn encode(&mut self, payload: &Value) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
+        self.compress_compact(&compact_payload(payload)?)
+    }
+
+    /// [`encode_domain_event_payload_with_stored_json`], taking the payload
+    /// by value. The compact bytes are serialized once. When a parse of those
+    /// bytes reads them back as the payload they were written from — every
+    /// object, array, string and number as written — the payload itself is
+    /// the stored JSON and the bytes are only checked, not parsed into a
+    /// second value; otherwise they are parsed as before.
+    pub fn encode_with_stored_json(
+        &mut self,
+        payload: Value,
+    ) -> Result<(Vec<u8>, Value), DomainEventPayloadCodecError> {
+        let compact = compact_payload(&payload)?;
+        let encoded = self.compress_compact(&compact)?;
+        let stored = match check_value_parse(&compact).map_err(invalid_decoded_payload)? {
+            ValueParseShape::Plain => payload,
+            ValueParseShape::ExpandsRawValue => parse_decoded_payload(&compact)?,
+        };
+        Ok((encoded, stored))
+    }
+
+    fn compress_compact(
+        &mut self,
+        compact: &[u8],
+    ) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
+        let compressor = match &mut self.compressor {
+            Some(compressor) => compressor,
+            None => self.compressor.insert(
+                zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
+                    .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?,
+            ),
+        };
+        let compressed = match compressor.compress(compact) {
+            Ok(compressed) => compressed,
+            Err(error) => {
+                // Start the next payload from a fresh context rather than
+                // trust one that just failed.
+                self.compressor = None;
+                return Err(codec_error(format!(
+                    "failed to compress domain event JSON: {error}"
+                )));
+            }
+        };
+        let mut encoded = Vec::with_capacity(compressed.len() + 1);
+        encoded.push(DOMAIN_EVENT_PAYLOAD_FORMAT_V1);
+        encoded.extend_from_slice(&compressed);
+        Ok(encoded)
+    }
 }
 
 fn compact_payload(payload: &Value) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
@@ -105,24 +174,14 @@ fn compact_payload(payload: &Value) -> Result<Vec<u8>, DomainEventPayloadCodecEr
     Ok(compact)
 }
 
-fn compress_compact_payload(compact: &[u8]) -> Result<Vec<u8>, DomainEventPayloadCodecError> {
-    let mut compressor = zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, DICTIONARY_V1)
-        .map_err(|error| codec_error(format!("failed to initialize zstd: {error}")))?;
-    let compressed = compressor
-        .compress(compact)
-        .map_err(|error| codec_error(format!("failed to compress domain event JSON: {error}")))?;
-    let mut encoded = Vec::with_capacity(compressed.len() + 1);
-    encoded.push(DOMAIN_EVENT_PAYLOAD_FORMAT_V1);
-    encoded.extend_from_slice(&compressed);
-    Ok(encoded)
+fn parse_decoded_payload(decoded: &[u8]) -> Result<Value, DomainEventPayloadCodecError> {
+    serde_json::from_slice(decoded).map_err(invalid_decoded_payload)
 }
 
-fn parse_decoded_payload(decoded: &[u8]) -> Result<Value, DomainEventPayloadCodecError> {
-    serde_json::from_slice(decoded).map_err(|error| {
-        codec_error(format!(
-            "decoded domain event payload is invalid JSON: {error}"
-        ))
-    })
+fn invalid_decoded_payload(error: serde_json::Error) -> DomainEventPayloadCodecError {
+    codec_error(format!(
+        "decoded domain event payload is invalid JSON: {error}"
+    ))
 }
 
 pub fn decode_domain_event_payload(encoded: &[u8]) -> Result<Value, DomainEventPayloadCodecError> {
@@ -357,6 +416,64 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    /// Payloads whose numbers, strings and nesting stress what a parse of the
+    /// compact bytes reads back.
+    fn round_trip_edge_payloads() -> Vec<Value> {
+        let deep = (0..120).fold(json!("leaf"), |inner, _| json!({"k": inner}));
+        let too_deep = (0..140).fold(json!("leaf"), |inner, _| json!([inner]));
+        vec![
+            json!({"data": {"f32": f64::from(0.1_f32), "neg_zero": -0.0, "one": 1.0,
+                            "tiny": 5e-324, "max": f64::MAX, "int_like": 1e21,
+                            "u": u64::MAX, "i": i64::MIN, "zero": 0}}),
+            json!({"data": {"text": "quote \" backslash \\ ctl \u{1} \u{7f} é 😀 /"}}),
+            json!({"z": 1, "a": {"y": [], "b": {}}, "m": [null, true, false]}),
+            json!({"$serde_json::private::RawValue": "{\"x\": 1}"}),
+            json!({"data": {"$serde_json::private::RawValue": "[1, 2]"}}),
+            json!({"$serde_json::private::RawValue": 7}),
+            deep,
+            too_deep,
+        ]
+    }
+
+    #[test]
+    fn a_reused_encoder_matches_per_payload_encoding() {
+        let mut payloads = codec_sample_payloads();
+        payloads.extend(round_trip_edge_payloads());
+        payloads.push(Value::String(
+            "x".repeat(DOMAIN_EVENT_PAYLOAD_MAX_BYTES + 1),
+        ));
+        let mut encoder = DomainEventPayloadEncoder::new();
+        // Twice over, so every payload is also encoded after a larger and a
+        // smaller one through the same context.
+        for payload in payloads.iter().chain(payloads.iter().rev()) {
+            let reused = encoder.encode(payload);
+            let single = encode_domain_event_payload(payload);
+            match (&reused, &single) {
+                (Ok(reused), Ok(single)) => {
+                    assert_eq!(reused, single);
+                    assert_eq!(*reused, encode_with_per_call_dictionary(payload));
+                }
+                (Err(reused), Err(single)) => assert_eq!(reused.to_string(), single.to_string()),
+                _ => panic!("reused and single encodes disagree"),
+            }
+
+            let owned = encoder.encode_with_stored_json(payload.clone());
+            let before = encode_domain_event_payload_with_stored_json(payload);
+            match (owned, before) {
+                (Ok((owned_bytes, owned_json)), Ok((bytes, json))) => {
+                    assert_eq!(owned_bytes, bytes);
+                    assert_eq!(owned_json, json);
+                    assert_eq!(
+                        serde_json::to_vec(&owned_json).unwrap(),
+                        serde_json::to_vec(&json).unwrap()
+                    );
+                }
+                (Err(owned), Err(before)) => assert_eq!(owned.to_string(), before.to_string()),
+                (owned, before) => panic!("stored JSON disagrees: {owned:?} / {before:?}"),
+            }
+        }
     }
 
     #[test]

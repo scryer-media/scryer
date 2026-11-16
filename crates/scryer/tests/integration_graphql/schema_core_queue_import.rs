@@ -1561,12 +1561,34 @@ async fn graphql_traverses_core_graph_relationships() {
         explanation_json: None,
         created_at: "2026-03-20T00:05:00Z".to_string(),
     };
-    scryer_infrastructure_library::media::libraries::state_store::WantedStore::new(
-        ctx.db.datastore(),
-    )
-    .insert_release_decision(&decision)
-    .await
-    .expect("seed release decision");
+    // An older decision that recorded its deciding step, so the page has more
+    // than one row and an explanation to read.
+    let explained_decision = ReleaseDecision {
+        id: Id::new().0,
+        wanted_item_id: wanted_item.id.clone(),
+        title_id: title.id.clone(),
+        release_title: "Graph Traversal Show S01E01 720p WEB-DL".to_string(),
+        release_url: None,
+        release_size_bytes: Some(4_096),
+        decision_code: "rejected".to_string(),
+        candidate_score: 90,
+        current_score: Some(120),
+        score_delta: Some(-30),
+        explanation_json: Some(scryer_application::ReleaseDecisionExplanation::from_value(
+            &json!({ "auto_decision": { "decided_by": "quality_tier" } }),
+        )),
+        created_at: "2026-03-20T00:04:00Z".to_string(),
+    };
+    let decision_store =
+        scryer_infrastructure_library::media::libraries::state_store::WantedStore::new(
+            ctx.db.datastore(),
+        );
+    for seeded in [&decision, &explained_decision] {
+        decision_store
+            .insert_release_decision(seeded)
+            .await
+            .expect("seed release decision");
+    }
 
     let pending_release = PendingRelease {
         http_release: None,
@@ -1696,6 +1718,23 @@ async fn graphql_traverses_core_graph_relationships() {
             releaseDecisions(limit: 10) {
               items { id }
             }
+            countedDecisions: releaseDecisions(limit: 10) {
+              totalCount
+              items { id explanationJson decidedBy }
+            }
+            pagedDecisions: releaseDecisions(limit: 1) {
+              ...DecisionPage
+            }
+            directPagedDecisions: releaseDecisions(limit: 1) {
+              hasMore
+              items { id }
+            }
+            explainedDecisions: releaseDecisions(limit: 10) {
+              items { id explanationJson }
+            }
+            decidingDecisions: releaseDecisions(limit: 10) {
+              items { id decidedBy }
+            }
           }
           episode(titleId: $titleId, episodeId: $episodeId) {
             id
@@ -1712,6 +1751,11 @@ async fn graphql_traverses_core_graph_relationships() {
           mismatchedEpisode: episode(titleId: $mismatchTitleId, episodeId: $episodeId) {
             id
           }
+        }
+
+        fragment DecisionPage on ReleaseDecisionsPagePayload {
+          hasMore
+          items { id }
         }
         "#,
         json!({
@@ -1800,6 +1844,38 @@ async fn graphql_traverses_core_graph_relationships() {
         body["data"]["wantedItem"]["releaseDecisions"]["items"][0]["id"],
         decision.id
     );
+    // The total is counted when it, or the continuation flag, is read —
+    // through a fragment too.
+    let counted = &body["data"]["wantedItem"]["countedDecisions"];
+    assert_eq!(counted["totalCount"], 2);
+    assert_eq!(counted["items"][0]["id"], decision.id);
+    assert!(counted["items"][0]["explanationJson"].is_null());
+    assert!(counted["items"][0]["decidedBy"].is_null());
+    // Two decisions and a page of one: `hasMore` alone still counts the
+    // total, read directly and through a fragment.
+    for page in ["pagedDecisions", "directPagedDecisions"] {
+        let paged = &body["data"]["wantedItem"][page];
+        assert_eq!(paged["hasMore"], true, "{page}");
+        assert_eq!(paged["items"].as_array().map(Vec::len), Some(1), "{page}");
+    }
+    // Each explanation-derived field is filled when it is the only one read.
+    let item_with = |page: &str, id: &str| {
+        body["data"]["wantedItem"][page]["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["id"] == id))
+            .cloned()
+            .unwrap_or_else(|| panic!("{page} should list decision {id}"))
+    };
+    assert_eq!(
+        item_with("explainedDecisions", &explained_decision.id)["explanationJson"],
+        json!({ "auto_decision": { "decided_by": "quality_tier" } })
+    );
+    assert!(item_with("explainedDecisions", &decision.id)["explanationJson"].is_null());
+    assert_eq!(
+        item_with("decidingDecisions", &explained_decision.id)["decidedBy"],
+        "QUALITY_TIER"
+    );
+    assert!(item_with("decidingDecisions", &decision.id)["decidedBy"].is_null());
     assert_eq!(body["data"]["episode"]["id"], episode.id);
     assert_eq!(body["data"]["episode"]["parentTitle"]["id"], title.id);
     assert_eq!(

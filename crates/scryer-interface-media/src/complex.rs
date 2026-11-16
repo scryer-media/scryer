@@ -5,15 +5,38 @@ use scryer_interface_core::{
 };
 
 use crate::mappers::{
-    fallback_episode_media_availability, from_collection, from_discovery_item,
-    from_download_queue_item, from_episode, from_episode_media_availability, from_library_settings,
-    from_pending_release, from_release_decision, from_series_movie_link, from_submission_scope,
-    from_title, from_title_credit, from_title_list_membership, from_title_media_file,
-    from_title_rating_summary, from_wanted_item,
+    ExplanationSelection, fallback_episode_media_availability, from_collection,
+    from_discovery_item, from_download_queue_item, from_episode, from_episode_media_availability,
+    from_library_settings, from_pending_release, from_release_decision_selecting,
+    from_series_movie_link, from_submission_scope, from_title, from_title_credit,
+    from_title_list_membership, from_title_media_file, from_title_rating_summary, from_wanted_item,
 };
 use crate::types::*;
 
 const RELATION_PAGE_MAX_LIMIT: i32 = 300;
+
+/// What a release-decisions page query reads: the total is counted only for
+/// `totalCount` or `hasMore`, and explanations are parsed only for the item
+/// fields that read them.
+#[derive(Clone, Copy, Debug)]
+struct ReleaseDecisionsPageSelection {
+    total: bool,
+    explanation: ExplanationSelection,
+}
+
+impl ReleaseDecisionsPageSelection {
+    fn of(ctx: &Context<'_>) -> Self {
+        let look_ahead = ctx.look_ahead();
+        let items = look_ahead.field("items");
+        Self {
+            total: look_ahead.field("totalCount").exists() || look_ahead.field("hasMore").exists(),
+            explanation: ExplanationSelection {
+                explanation_json: items.field("explanationJson").exists(),
+                decided_by: items.field("decidedBy").exists(),
+            },
+        }
+    }
+}
 
 fn from_media_server_playback_link(
     link: scryer_application::MediaServerPlaybackLink,
@@ -1156,6 +1179,7 @@ impl TitlePayload {
                     has_more: false,
                 });
             }
+            let selection = ReleaseDecisionsPageSelection::of(ctx);
             let (decisions, total_count) = app
                 .list_release_decisions_page(
                     &actor,
@@ -1164,13 +1188,14 @@ impl TitlePayload {
                         title_id: Some(self.id.to_string()),
                         limit: i64::from(limit),
                         offset: i64::from(offset),
+                        skip_total: !selection.total,
                     },
                 )
                 .await
                 .map_err(to_gql_error)?;
             let items = decisions
                 .into_iter()
-                .map(from_release_decision)
+                .map(|decision| from_release_decision_selecting(decision, selection.explanation))
                 .collect::<scryer_application::AppResult<Vec<_>>>()
                 .map_err(to_gql_error)?;
             let has_more = i64::from(offset).saturating_add(items.len() as i64) < total_count;
@@ -1751,6 +1776,7 @@ impl WantedItemPayload {
             let actor = actor_from_ctx(ctx)?;
             let limit = relation_page_limit(limit.min(i64::from(i32::MAX)) as i32);
             let offset = relation_page_offset(offset);
+            let selection = ReleaseDecisionsPageSelection::of(ctx);
             let (decisions, total_count) = app
                 .list_release_decisions_page(
                     &actor,
@@ -1759,13 +1785,14 @@ impl WantedItemPayload {
                         title_id: None,
                         limit: i64::from(limit),
                         offset: i64::from(offset),
+                        skip_total: !selection.total,
                     },
                 )
                 .await
                 .map_err(to_gql_error)?;
             let items = decisions
                 .into_iter()
-                .map(from_release_decision)
+                .map(|decision| from_release_decision_selecting(decision, selection.explanation))
                 .collect::<scryer_application::AppResult<Vec<_>>>()
                 .map_err(to_gql_error)?;
             let has_more = i64::from(offset).saturating_add(items.len() as i64) < total_count;

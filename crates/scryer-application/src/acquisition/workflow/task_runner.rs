@@ -4949,7 +4949,11 @@ async fn process_single_target(
     // can return from the loop. Otherwise the pending-review side effect depends
     // on incidental candidate ordering.
     let mut parked_ambiguous_identity = false;
-    if let Some(candidate) = results.iter().find(|candidate| {
+    // When the parked candidate already carries its decision's annotation,
+    // its review text is the explanation its decision row records, so that
+    // explanation is built once and serves both.
+    let mut parked_review_explanation = None;
+    if let Some((candidate_index, candidate)) = results.iter().enumerate().find(|(_, candidate)| {
         candidate
             .quality_profile_decision
             .as_ref()
@@ -4965,15 +4969,30 @@ async fn process_single_target(
             .as_ref()
             .map(|decision| decision.preference_score)
             .unwrap_or_default();
+        let shared = candidate_carries_auto_decision(
+            candidate,
+            ReleaseAutoDecisionCode::AmbiguousIdentity,
+        )
+        .then(|| {
+            release_decision_explanation_for(
+                candidate,
+                ReleaseAutoDecisionCode::AmbiguousIdentity,
+            )
+        });
+        let review_explanation = match &shared {
+            Some(explanation) => Some(explanation.as_str().to_owned()),
+            None => serialize_decision_explanation(candidate),
+        };
         app.park_pending_release_for_review(
             item,
             title,
             candidate,
             candidate_score,
-            serialize_decision_explanation(candidate),
+            review_explanation,
             *now,
         )
         .await;
+        parked_review_explanation = shared.map(|explanation| (candidate_index, explanation));
     }
     let mut eligible: Vec<usize> = Vec::new();
     let mut next_pending_role = PendingReleaseRole::Primary;
@@ -4999,8 +5018,27 @@ async fn process_single_target(
             }
         })
         .collect::<Vec<_>>();
+    let explained_decisions = candidate_decisions
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, &(candidate, decision_code, incumbent_bar))| {
+            let explanation = match parked_review_explanation.take_if(|(parked_index, _)| {
+                *parked_index == candidate_index
+                    && decision_code == ReleaseAutoDecisionCode::AmbiguousIdentity
+            }) {
+                Some((_, explanation)) => explanation,
+                None => release_decision_explanation_for(candidate, decision_code),
+            };
+            ExplainedReleaseDecision {
+                candidate,
+                decision_code,
+                incumbent_bar,
+                explanation,
+            }
+        })
+        .collect();
     let decision_outcomes =
-        record_release_decisions(app, item, title, &candidate_decisions, now).await;
+        record_explained_release_decisions(app, item, title, explained_decisions, now).await;
 
     for (candidate_index, &(candidate, decision_code, _)) in
         candidate_decisions.iter().enumerate()
