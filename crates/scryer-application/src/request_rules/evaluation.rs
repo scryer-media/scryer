@@ -86,7 +86,7 @@ pub struct RequestEvaluation {
     /// title tag registry defines. Filtering happens once, here, so the pending
     /// row, the pre-flight banner, the resolution event and the approval all
     /// read the same list and none of them can promise a label that will be
-    /// dropped later.
+    /// dropped later. Empty on a denial, which no approval can follow.
     pub tags: Vec<String>,
     /// Every tag the rules emitted, defined or not.
     ///
@@ -371,16 +371,30 @@ impl AppUseCase {
         let resolved_shaping = self.resolve_request_shaping(draft, &mut arbitration).await;
         let mut effective_outcome = arbitration.policy_outcome;
         let mut fallback_reason = arbitration.fallback_reason.map(str::to_string);
-        let applicable_tags = match self
-            .applicable_policy_tags(&purpose, &arbitration.tags)
-            .await
-        {
-            Ok(tags) => tags,
-            Err(error) => {
-                tracing::warn!(%error, "request rule tag registry unavailable; holding request");
-                effective_outcome = RequestDecisionOutcome::ManualReview;
-                fallback_reason = Some(FALLBACK_ERROR.to_string());
-                Vec::new()
+        // Tags land only through an approval, automatic or by a person later,
+        // so a denial needs no registry read: its tags stay in the trace.
+        let applicable_tags = if arbitration.policy_outcome == RequestDecisionOutcome::Deny {
+            Vec::new()
+        } else {
+            match self
+                .applicable_policy_tags(&purpose, &arbitration.tags)
+                .await
+            {
+                Ok(tags) => tags,
+                Err(error) => {
+                    // An approval that cannot check its tags is held, so it
+                    // cannot stamp a label the registry does not define. A
+                    // request already waiting for a person keeps its own
+                    // reason and waits without the tags.
+                    if arbitration.policy_outcome == RequestDecisionOutcome::AutoApprove {
+                        tracing::warn!(%error, "request rule tag registry unavailable; holding request");
+                        effective_outcome = RequestDecisionOutcome::ManualReview;
+                        fallback_reason = Some(FALLBACK_ERROR.to_string());
+                    } else {
+                        tracing::warn!(%error, "request rule tag registry unavailable; the request waits without its tags");
+                    }
+                    Vec::new()
+                }
             }
         };
 

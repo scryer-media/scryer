@@ -18408,8 +18408,9 @@ type MediaRequestPayload {
 	"""
 	decision: RequestRuleDecision
 	"""
-	Tags the policy emitted for this request. Stamped on the title only when
-	the request is approved.
+	Tags the policy emitted for this request, narrowed to the labels the
+	tag registry defines. Stamped on the title only when the request is
+	approved. The rules add none to a request they deny.
 	"""
 	policyTags: [String!]!
 	"""
@@ -28561,7 +28562,8 @@ type RequestPreflightPayload {
 	"""
 	reasons: [RequestPreflightReason!]!
 	"""
-	Tags an approval would stamp on the created title.
+	Tags an approval would stamp on the created title. Empty when the
+	draft would be denied.
 	"""
 	tags: [String!]!
 	"""
@@ -28611,8 +28613,8 @@ The durable trace of one request evaluation. It outlives the rules that
 made it.
 
 `policyOutcome` is what the rules concluded and `effectiveOutcome` is what
-the instance acted on. They disagree only when the title tag registry could
-not be read: the request is held for approval whatever the rules concluded,
+the instance acted on. They disagree only when the rules approved and the
+title tag registry could not be read: the request is held for approval,
 with the fallback `error`. When the input facts could not be assembled or
 the rules could not be evaluated, both are `MANUAL_REVIEW` with the
 fallback `error`. Decisions recorded by 0.22 and earlier may also show

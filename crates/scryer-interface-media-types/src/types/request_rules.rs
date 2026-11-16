@@ -325,8 +325,8 @@ pub struct RequestRuleVote {
 /// made it.
 ///
 /// `policyOutcome` is what the rules concluded and `effectiveOutcome` is what
-/// the instance acted on. They disagree only when the title tag registry could
-/// not be read: the request is held for approval whatever the rules concluded,
+/// the instance acted on. They disagree only when the rules approved and the
+/// title tag registry could not be read: the request is held for approval,
 /// with the fallback `error`. When the input facts could not be assembled or
 /// the rules could not be evaluated, both are `MANUAL_REVIEW` with the
 /// fallback `error`. Decisions recorded by 0.22 and earlier may also show
@@ -407,7 +407,8 @@ pub struct RequestPreflightPayload {
     pub outcome: RequestDecisionOutcomeValue,
     /// Why, in codes with the rule names that produced them.
     pub reasons: Vec<RequestPreflightReason>,
-    /// Tags an approval would stamp on the created title.
+    /// Tags an approval would stamp on the created title. Empty when the
+    /// draft would be denied.
     pub tags: Vec<String>,
     /// True when the metadata could not be fully established, so the verdict
     /// rests on incomplete facts. A rule that reads a fact that could not be

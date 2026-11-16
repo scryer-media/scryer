@@ -147,8 +147,8 @@ export type RequestRuleDecisionRecord = {
   evaluatedAt: string;
   mode: RequestEvaluationMode;
   /// What actually happened. `policyOutcome` is what the rules alone came to;
-  /// the two differ only when the tag registry could not be read and the
-  /// request was held. Traces from 0.22 and earlier may also differ when the
+  /// the two differ only when the rules approved, the tag registry could not
+  /// be read, and the request was held. Traces from 0.22 and earlier may also differ when the
   /// facts could not be assembled and the Auto-Approve permission decided.
   effectiveOutcome: RequestDecisionOutcome;
   policyOutcome: RequestDecisionOutcome;

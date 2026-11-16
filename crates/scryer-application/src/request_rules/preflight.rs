@@ -153,11 +153,12 @@ impl AppUseCase {
         Ok(RequestPreflight {
             outcome: evaluation.effective_outcome,
             reasons: evaluation.reasons,
-            // Tags are shown whatever the outcome — a requester should see what
-            // an approval would stamp — but they are only ever *applied* by the
-            // approval path. `evaluation.tags` is already narrowed to labels the
-            // tag registry defines, so the banner cannot promise one that the
-            // approval would drop.
+            // Tags are shown for an approval and for a request that waits for
+            // a person, whose approval would stamp them; a denial has none.
+            // They are only ever *applied* by the approval path.
+            // `evaluation.tags` is already narrowed to labels the tag registry
+            // defines, so the banner cannot promise one that the approval
+            // would drop.
             tags: evaluation.tags,
             metadata_partial: evaluation.metadata_partial,
             evaluation_mode: evaluation.evaluation_mode,

@@ -698,3 +698,79 @@ async fn without_an_enabled_rule_the_permission_still_approves_when_facts_are_un
     );
     assert!(harness.request_rule_decisions.recorded().await.is_empty());
 }
+
+const DENY_WITH_A_TAG: &str = r#"package rules
+import rego.v1
+
+deny if {
+	input.request.origin == "manual"
+}
+
+add_tags := ["auto-approved"] if {
+	input.request.origin == "manual"
+}
+"#;
+
+#[tokio::test]
+async fn a_denial_stands_without_reading_the_tag_registry() {
+    let mut harness = bootstrap_media_request_app();
+    auto_approving_requester(&mut harness);
+    let detail = create_rule(&harness, "Deny with a tag", DENY_WITH_A_TAG).await;
+    enable(&harness, &detail.rule_set.id).await;
+    harness.titles.fail_tag_reads.store(true, Ordering::SeqCst);
+    let reads_before = harness.titles.tag_reads.load(Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let preflight = harness
+        .app
+        .preview_my_request_decision(&harness.user, media_request_input(library_id.clone(), 9047))
+        .await
+        .expect("pre-flight should answer");
+    assert_eq!(preflight.outcome, RequestDecisionOutcome::Deny);
+    assert!(preflight.tags.is_empty());
+
+    let request_id = submit(&harness, &library_id, 9047, None).await;
+    assert_eq!(
+        harness.titles.tag_reads.load(Ordering::SeqCst),
+        reads_before
+    );
+    let rows = harness.media_requests.requests.lock().await;
+    let request = rows.iter().find(|row| row.id == request_id).unwrap();
+    assert_eq!(request.status, MediaRequestStatus::Rejected);
+    assert!(request.policy_tags.is_empty());
+    drop(rows);
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.policy_outcome, RequestDecisionOutcome::Deny);
+    assert_eq!(trace.effective_outcome, RequestDecisionOutcome::Deny);
+    assert_eq!(trace.fallback_reason, None);
+    // The trace still records what the rule asked for.
+    assert_eq!(trace.tags, vec!["auto-approved".to_string()]);
+}
+
+#[tokio::test]
+async fn a_request_waiting_for_a_person_keeps_its_reason_when_tags_are_unreadable() {
+    let harness = bootstrap_media_request_app();
+    let detail = create_rule(&harness, "Manual with tags", MANUAL_WITH_TWO_TAGS).await;
+    enable(&harness, &detail.rule_set.id).await;
+    harness.titles.fail_tag_reads.store(true, Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let request_id = submit(&harness, &library_id, 9047, None).await;
+    let rows = harness.media_requests.requests.lock().await;
+    let request = rows.iter().find(|row| row.id == request_id).unwrap();
+    assert_eq!(request.status, MediaRequestStatus::Pending);
+    assert!(request.policy_tags.is_empty());
+    drop(rows);
+    let traces = harness.request_rule_decisions.recorded().await;
+    let trace = traces.last().unwrap();
+    assert_eq!(trace.policy_outcome, RequestDecisionOutcome::ManualReview);
+    assert_eq!(
+        trace.effective_outcome,
+        RequestDecisionOutcome::ManualReview
+    );
+    assert_eq!(
+        trace.fallback_reason.as_deref(),
+        Some(crate::request_rules::FALLBACK_RULE_MANUAL)
+    );
+}
