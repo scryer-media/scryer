@@ -3243,7 +3243,7 @@ mod tests {
 
     #[cfg(feature = "runtime-backups")]
     fn write_test_payload(path: &Path, payload_size: usize) -> AppResult<()> {
-        let file = File::create(path).map_err(|error| {
+        let file = std::fs::File::create(path).map_err(|error| {
             AppError::Repository(format!("failed to create test payload: {error}"))
         })?;
         let mut writer = BufWriter::new(file);

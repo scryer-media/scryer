@@ -69,7 +69,9 @@ use volume::Volumes;
 pub use backend::SyncOutcome;
 pub use cache::DISK_STAT_REUSE;
 pub use pass::DiskPass;
-pub use reading::{DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, reason};
+pub use reading::{
+    DiskError, DiskVerb, EntryKind, FileIdentity, PathReading, is_cross_device_error, reason,
+};
 pub use volume::VolumeClass;
 
 /// The clock readings are stamped and aged by. Tests replace it.
@@ -178,8 +180,15 @@ pub enum Remove {
     FileEvenReadOnly,
     /// A directory that must already be empty.
     EmptyDir,
+    /// [`Remove::EmptyDir`], clearing a Windows read-only attribute only when
+    /// that refuses the removal, as [`Remove::FileEvenReadOnly`] does.
+    EmptyDirEvenReadOnly,
     /// A directory and everything in it. A link is removed, never followed.
     Tree,
+    /// [`Remove::Tree`], on Windows first clearing the read-only attribute of
+    /// everything in the tree that carries one, links left alone. A failure
+    /// while clearing removes nothing.
+    TreeEvenReadOnly,
 }
 
 /// How a removal ended. A path that was already gone is not a failure.
@@ -797,13 +806,19 @@ impl Disk {
                 backend.remove_file_clearing_readonly(path)
             }),
             Remove::EmptyDir => self.call("remove_dir", || backend.remove_dir(path)),
+            Remove::EmptyDirEvenReadOnly => {
+                self.call("remove_dir", || backend.remove_dir_clearing_readonly(path))
+            }
             Remove::Tree => self.call("remove_tree", || backend.remove_tree(path)),
+            Remove::TreeEvenReadOnly => self.call("remove_tree", || {
+                backend.remove_tree_clearing_readonly(path)
+            }),
         };
         // Evicted whatever the outcome: a failed tree removal can have
         // removed part of the tree.
         match what {
             Remove::File | Remove::FileEvenReadOnly => self.inner.cache.evict(&key_of(path)),
-            Remove::EmptyDir | Remove::Tree => self.inner.cache.evict_subtree(&key_of(path)),
+            _ => self.inner.cache.evict_subtree(&key_of(path)),
         }
         match result {
             Ok(()) => Ok(Removal::Removed),
@@ -878,6 +893,89 @@ impl Disk {
         let dest = dest.into();
         self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
             disk.move_replacing_blocking(source, &dest)
+        })
+        .await
+    }
+
+    /// Move `source` to `dest` with a rename that refuses an existing
+    /// destination in the same call. `Ok(false)`, with nothing changed, where
+    /// the filesystem has no such rename, for a caller with its own way on.
+    pub fn rename_no_replace_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<bool, DiskError> {
+        let result = self.try_rename_no_replace(source, dest);
+        self.inner.cache.evict_subtree(&key_of(source));
+        self.inner.cache.evict_subtree(&key_of(dest));
+        result
+            .transpose()
+            .map(|renamed| renamed.is_some())
+            .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
+    }
+
+    pub async fn rename_no_replace(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+    ) -> Result<bool, DiskError> {
+        let dest = dest.into();
+        self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
+            disk.rename_no_replace_blocking(source, &dest)
+        })
+        .await
+    }
+
+    /// Move `source` to `dest` by reserving `dest` with an exclusive create
+    /// and renaming over the reservation, which is removed again if the
+    /// rename fails. For a caller that reserves the name whatever the
+    /// filesystem offers; anything else uses [`Self::move_exclusive_blocking`].
+    pub fn move_claimed_blocking(
+        &self,
+        source: &Path,
+        dest: &Path,
+    ) -> Result<MoveOutcome, DiskError> {
+        let result = self.call("rename_claimed", || {
+            self.inner.backend.rename_claimed(source, dest)
+        });
+        self.inner.cache.evict_subtree(&key_of(source));
+        self.inner.cache.evict_subtree(&key_of(dest));
+        result
+            .map(|()| MoveOutcome::Renamed)
+            .map_err(|error| DiskError::new(DiskVerb::Move, source, error))
+    }
+
+    pub async fn move_claimed(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+    ) -> Result<MoveOutcome, DiskError> {
+        let dest = dest.into();
+        self.run(DiskVerb::Move, source.into(), None, move |disk, source| {
+            disk.move_claimed_blocking(source, &dest)
+        })
+        .await
+    }
+
+    /// Give `dest` the permissions `source` has, following links, where the
+    /// platform has owner, group and other permissions; elsewhere nothing
+    /// changes.
+    pub fn copy_permissions_blocking(&self, source: &Path, dest: &Path) -> Result<(), DiskError> {
+        let result = self.call("copy_permissions", || {
+            self.inner.backend.copy_permissions(source, dest)
+        });
+        self.inner.cache.evict(&key_of(dest));
+        result.map_err(|error| DiskError::new(DiskVerb::Change, dest, error))
+    }
+
+    pub async fn copy_permissions(
+        &self,
+        source: impl Into<PathBuf>,
+        dest: impl Into<PathBuf>,
+    ) -> Result<(), DiskError> {
+        let source = source.into();
+        self.run(DiskVerb::Change, dest.into(), None, move |disk, dest| {
+            disk.copy_permissions_blocking(&source, dest)
         })
         .await
     }
@@ -1425,21 +1523,30 @@ impl Disk {
     }
 
     /// An exclusive rename where the filesystem offers one, else a claim of
-    /// the destination and a rename over it. A root whose filesystem refused
-    /// the exclusive rename goes straight to the claim from then on.
+    /// the destination and a rename over it.
     fn rename_exclusive(&self, source: &Path, dest: &Path) -> io::Result<()> {
-        let backend = &self.inner.backend;
-        if !read(&self.inner.volumes).lacks_exclusive_rename(dest) {
-            match self.call("rename_no_replace", || {
-                backend.rename_no_replace(source, dest)
-            }) {
-                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                    read(&self.inner.volumes).note_no_exclusive_rename(dest);
-                }
-                other => return other,
-            }
+        self.try_rename_no_replace(source, dest).unwrap_or_else(|| {
+            self.call("rename_claimed", || {
+                self.inner.backend.rename_claimed(source, dest)
+            })
+        })
+    }
+
+    /// The exclusive rename, or `None` where the filesystem has none. A root
+    /// whose filesystem refused it is not asked again.
+    fn try_rename_no_replace(&self, source: &Path, dest: &Path) -> Option<io::Result<()>> {
+        if read(&self.inner.volumes).lacks_exclusive_rename(dest) {
+            return None;
         }
-        self.call("rename_claimed", || backend.rename_claimed(source, dest))
+        match self.call("rename_no_replace", || {
+            self.inner.backend.rename_no_replace(source, dest)
+        }) {
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                read(&self.inner.volumes).note_no_exclusive_rename(dest);
+                None
+            }
+            other => Some(other),
+        }
     }
 
     fn traits(&self, path: &Path) -> volume::VolumeTraits {
@@ -1574,8 +1681,7 @@ impl Disk {
 /// two paths are on different filesystems, or the filesystem has no such
 /// links or no more room for them.
 fn link_not_possible(error: &io::Error) -> bool {
-    if crate::fs_safety::is_cross_device_error(error) || error.kind() == io::ErrorKind::Unsupported
-    {
+    if is_cross_device_error(error) || error.kind() == io::ErrorKind::Unsupported {
         return true;
     }
     #[cfg(unix)]

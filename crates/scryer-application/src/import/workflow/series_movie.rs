@@ -461,11 +461,14 @@ async fn relocate_titleless_archive_workspace_for_title(
         Ok(()) => Ok(TitlelessArchiveRelocation::Ready(target)),
         Err(error) => {
             crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
-            if crate::fs_safety::is_cross_device_error(&error)
-                || error.kind() == std::io::ErrorKind::AlreadyExists
-            {
+            use crate::disk::reason;
+            if matches!(
+                error.reason(),
+                reason::DISK_MOVE_NEEDS_COPY | reason::DISK_DESTINATION_EXISTS
+            ) {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
+            let error = std::io::Error::from(error);
             Err(AppError::validation_refused(crate::error_reasons::import::ARCHIVE_MATCHED_TITLE_BUT_EXTRACTED_WORKSPACE_COULD_NOT_MOVED_WITHOUT_COPYING, format!(
                 "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
                 title_name,
@@ -3759,13 +3762,13 @@ mod archive_relocation_tests {
     #[test]
     fn cross_device_rename_error_is_detected() {
         let error = std::io::Error::from_raw_os_error(18);
-        assert!(crate::fs_safety::is_cross_device_error(&error));
+        assert!(crate::disk::is_cross_device_error(&error));
     }
 
     #[test]
     fn unrelated_rename_error_is_not_cross_device() {
         let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        assert!(!crate::fs_safety::is_cross_device_error(&error));
+        assert!(!crate::disk::is_cross_device_error(&error));
     }
 }
 

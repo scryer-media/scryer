@@ -2586,19 +2586,20 @@ async fn relocate_entry(
         // directory that appeared at the destination.
         match crate::fs_safety::exclusive_rename(entry_dir, dest).await {
             Some(Ok(())) => return Ok(RelocatedEntry::Moved),
-            Some(Err(error))
-                if error.kind() == std::io::ErrorKind::AlreadyExists
-                    || error.kind() == std::io::ErrorKind::DirectoryNotEmpty =>
-            {
-                return Err(relocation_collision(dest));
-            }
-            Some(Err(error)) if crate::fs_safety::is_cross_device_error(&error) => {}
-            Some(Err(error)) => {
-                return Err(format!(
-                    "could not move the entry to {}: {error}",
-                    dest.display()
-                ));
-            }
+            Some(Err(error)) => match error.reason() {
+                crate::disk::reason::DISK_DESTINATION_EXISTS
+                | crate::disk::reason::DISK_DIRECTORY_NOT_EMPTY => {
+                    return Err(relocation_collision(dest));
+                }
+                crate::disk::reason::DISK_MOVE_NEEDS_COPY => {}
+                _ => {
+                    return Err(format!(
+                        "could not move the entry to {}: {}",
+                        dest.display(),
+                        std::io::Error::from(error)
+                    ));
+                }
+            },
             None => {}
         }
     }

@@ -212,7 +212,17 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
         self.remove_file(path)
     }
     fn remove_dir(&self, path: &Path) -> io::Result<()>;
+    /// [`Self::remove_dir`], clearing a Windows read-only attribute that
+    /// refuses it.
+    fn remove_dir_clearing_readonly(&self, path: &Path) -> io::Result<()> {
+        self.remove_dir(path)
+    }
     fn remove_tree(&self, path: &Path) -> io::Result<()>;
+    /// [`Self::remove_tree`] after clearing every Windows read-only
+    /// attribute in the tree.
+    fn remove_tree_clearing_readonly(&self, path: &Path) -> io::Result<()> {
+        self.remove_tree(path)
+    }
     /// Replaces an existing destination.
     fn rename(&self, source: &Path, dest: &Path) -> io::Result<()>;
     /// Fails with `AlreadyExists` when `dest` exists, and with `Unsupported`
@@ -258,6 +268,11 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn restrict_handle_to_owner(&self, file: &std::fs::File, what: OwnerOnly) -> io::Result<()>;
     /// Sets a file's modification time, following links.
     fn set_modified(&self, path: &Path, at: SystemTime) -> io::Result<()>;
+    /// Gives `dest` the permission bits of `source`, following links.
+    fn copy_permissions(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        let _ = (source, dest);
+        Ok(())
+    }
 }
 
 /// The real filesystem.
@@ -363,7 +378,22 @@ impl DiskBackend for SystemBackend {
         std::fs::remove_dir(path)
     }
 
+    fn remove_dir_clearing_readonly(&self, path: &Path) -> io::Result<()> {
+        let remove = |path: &Path| std::fs::remove_dir(path);
+        if !cfg!(windows) {
+            return remove(path);
+        }
+        removing_readonly(path, remove, clear_readonly, set_readonly)
+    }
+
     fn remove_tree(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_dir_all(path)
+    }
+
+    fn remove_tree_clearing_readonly(&self, path: &Path) -> io::Result<()> {
+        if cfg!(windows) {
+            clear_readonly_tree(path)?;
+        }
         std::fs::remove_dir_all(path)
     }
 
@@ -376,7 +406,11 @@ impl DiskBackend for SystemBackend {
     }
 
     fn rename_claimed(&self, source: &Path, dest: &Path) -> io::Result<()> {
-        crate::fs_safety::rename_into_claimed_destination_blocking(source, dest)
+        self.open(dest, Open::create_new())?;
+        std::fs::rename(source, dest).inspect_err(|_| {
+            // Do not leave the empty reservation behind.
+            let _ = std::fs::remove_file(dest);
+        })
     }
 
     fn hard_link(&self, source: &Path, dest: &Path) -> io::Result<()> {
@@ -553,6 +587,20 @@ impl DiskBackend for SystemBackend {
             .open(path)?
             .set_modified(at)
     }
+
+    fn copy_permissions(&self, source: &Path, dest: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(source)?.permissions().mode();
+            std::fs::set_permissions(dest, std::fs::Permissions::from_mode(mode))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (source, dest);
+            Ok(())
+        }
+    }
 }
 
 /// The platform's answer to opening a link it was told not to follow.
@@ -568,11 +616,94 @@ fn is_link_loop(error: &io::Error) -> bool {
     }
 }
 
+/// macOS `sync_all` is `F_FULLFSYNC`, which network filesystems such as smbfs
+/// reject, so plain `fsync` is tried next. A filesystem that rejects both has
+/// no sync at all: unconfirmed, not an error.
 fn settled(file: &std::fs::File) -> io::Result<SyncOutcome> {
-    Ok(match crate::fs_safety::sync_written_file(file)? {
-        crate::fs_safety::FileSync::Synced => SyncOutcome::Durable,
-        crate::fs_safety::FileSync::Unsupported => SyncOutcome::Unconfirmed,
-    })
+    #[cfg(target_os = "macos")]
+    {
+        settle_sync(file.sync_all(), || plain_fsync(file))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        settle_sync(file.sync_all(), || Err(io::ErrorKind::Unsupported.into()))
+    }
+}
+
+fn settle_sync(
+    full_sync: io::Result<()>,
+    fallback: impl FnOnce() -> io::Result<()>,
+) -> io::Result<SyncOutcome> {
+    match full_sync {
+        Ok(()) => Ok(SyncOutcome::Durable),
+        Err(error) if is_unsupported_sync_error(&error) => match fallback() {
+            Ok(()) => Ok(SyncOutcome::Durable),
+            Err(error) if is_unsupported_sync_error(&error) => Ok(SyncOutcome::Unconfirmed),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    }
+}
+
+/// Matched on the errno as well as the kind: std reports macOS `ENOTSUP`
+/// (errno 45) as `Uncategorized`, not `Unsupported`.
+fn is_unsupported_sync_error(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn plain_fsync(file: &std::fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    loop {
+        // SAFETY: the descriptor belongs to `file`, which outlives the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+/// Clear the read-only attribute throughout a tree, links left alone and
+/// not followed. A missing root has nothing to clear.
+fn clear_readonly_tree(root: &Path) -> io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut pending = vec![(root.to_path_buf(), metadata)];
+    while let Some((path, metadata)) = pending.pop() {
+        match clear_readonly_of(&path, &metadata) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                let entry = entry?;
+                // A directory entry's metadata does not follow links.
+                pending.push((entry.path(), entry.metadata()?));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Windows refuses to remove an entry carrying the DOS read-only attribute.
@@ -828,6 +959,101 @@ mod tests {
             SyncOutcome::Unconfirmed.required().unwrap_err().kind(),
             io::ErrorKind::Unsupported
         );
+    }
+
+    #[test]
+    fn full_sync_falls_back_only_when_unsupported() {
+        use io::ErrorKind;
+        assert_eq!(
+            settle_sync(Ok(()), || panic!("successful full sync needs no fallback")).unwrap(),
+            SyncOutcome::Durable
+        );
+        assert_eq!(
+            settle_sync(Err(ErrorKind::Unsupported.into()), || Ok(())).unwrap(),
+            SyncOutcome::Durable
+        );
+        let error = settle_sync(Err(ErrorKind::PermissionDenied.into()), || {
+            panic!("real sync errors must not fall back")
+        })
+        .expect_err("permission failure must propagate");
+        assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        let error = settle_sync(Err(ErrorKind::Unsupported.into()), || {
+            Err(ErrorKind::Other.into())
+        })
+        .expect_err("fallback sync failure must propagate");
+        assert_eq!(error.kind(), ErrorKind::Other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enotsup_from_both_syncs_reports_a_filesystem_without_sync() {
+        // smbfs on macOS can reject both F_FULLFSYNC and fsync with ENOTSUP.
+        let enotsup = || io::Error::from_raw_os_error(libc::ENOTSUP);
+        assert_eq!(
+            settle_sync(Err(enotsup()), || Err(enotsup())).unwrap(),
+            SyncOutcome::Unconfirmed
+        );
+        assert_eq!(
+            settle_sync(Err(enotsup()), || Ok(())).unwrap(),
+            SyncOutcome::Durable
+        );
+    }
+
+    #[test]
+    fn sync_preserves_written_contents() {
+        use std::io::Write;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("copied-video.mkv");
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"verified-copy").unwrap();
+        settled(&file).expect("sync destination");
+        assert_eq!(std::fs::read(path).unwrap(), b"verified-copy");
+    }
+
+    #[test]
+    fn clearing_a_tree_reaches_every_entry_but_never_follows_a_link() {
+        let directory = tempfile::tempdir().unwrap();
+        let tree = directory.path().join("Invented Show");
+        let outside = directory.path().join("outside.nfo");
+        std::fs::create_dir_all(tree.join("Season 01")).unwrap();
+        let inner = tree.join("Season 01").join("episode.mkv");
+        std::fs::write(&inner, b"a").unwrap();
+        std::fs::write(&outside, b"b").unwrap();
+        for path in [&inner, &outside] {
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, tree.join("linked.nfo")).unwrap();
+
+        clear_readonly_tree(&tree).unwrap();
+        clear_readonly_tree(&directory.path().join("gone")).expect("a missing tree is clear");
+
+        assert!(!std::fs::metadata(&inner).unwrap().permissions().readonly());
+        assert!(
+            std::fs::metadata(&outside)
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+    }
+
+    #[test]
+    fn a_claimed_rename_refuses_an_occupied_destination_and_releases_its_claim() {
+        let directory = tempfile::tempdir().unwrap();
+        let staged = directory.path().join("staged.tmp");
+        let dest = directory.path().join("dest.mkv");
+        backend_write(&staged, b"staged");
+        backend_write(&dest, b"dest");
+        let error = SystemBackend.rename_claimed(&staged, &dest).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"dest");
+
+        let free = directory.path().join("free.mkv");
+        SystemBackend.rename_claimed(&staged, &free).unwrap();
+        assert_eq!(std::fs::read(&free).unwrap(), b"staged");
+        assert!(!staged.exists());
     }
 
     #[test]

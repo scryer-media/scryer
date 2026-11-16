@@ -95,7 +95,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use crc_turbo::CrcAlgorithm;
 
-use crate::disk::{Disk, Remove};
+use crate::disk::{Disk, Open, Remove, SyncOutcome};
 use crate::location::model::{
     AppliedVerificationDepth, FileVerificationOutcome, FileVerificationRecord, MoveCrcAlgorithm,
     StreamedContentHashes, VerificationDepth,
@@ -651,13 +651,7 @@ impl VerifiedCopier {
             }
         };
 
-        if let Err(error) = crate::fs_safety::promote_staged_file(
-            &partial,
-            destination,
-            crate::fs_safety::MoveOptions::default(),
-        )
-        .await
-        {
+        if let Err(error) = crate::fs_safety::promote_staged_file(&partial, destination).await {
             remove_partial_best_effort(&partial).await;
             return Err(AppError::Repository(format!(
                 "failed to place the completed copy at {}: {error}",
@@ -893,19 +887,13 @@ fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
     hash_source_with_progress(source, &CopyProgress::none())
 }
 
-#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn hash_source_with_progress(
     source: &Path,
     progress: &CopyProgress,
 ) -> AppResult<StreamedContentHashes> {
     #[cfg(test)]
     whole_file_reads::note(source);
-    let mut input = File::open(source).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open copy source: {}: {error}",
-            source.display()
-        ))
-    })?;
+    let mut input = open_source(source)?;
 
     let mut bytes = 0u64;
     let mut hasher = StreamedContentHasher::new();
@@ -946,7 +934,18 @@ struct CopyFailure {
     claimed: bool,
 }
 
-#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
+fn open_source(source: &Path) -> AppResult<File> {
+    Disk::process()
+        .open_blocking(source, Open::read())
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open copy source: {}: {}",
+                source.display(),
+                std::io::Error::from(error)
+            ))
+        })
+}
+
 fn copy_claiming_destination(
     source: &Path,
     destination: &Path,
@@ -957,14 +956,7 @@ fn copy_claiming_destination(
         error,
         claimed: false,
     };
-    let mut input = File::open(source)
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to open copy source: {}: {error}",
-                source.display()
-            ))
-        })
-        .map_err(unclaimed)?;
+    let mut input = open_source(source).map_err(unclaimed)?;
 
     let output = open_destination(destination, claim).map_err(unclaimed)?;
     write_claimed_destination(source, destination, &mut input, output, progress).map_err(|error| {
@@ -1010,19 +1002,20 @@ fn write_claimed_destination(
             destination.display()
         ))
     })?;
-    let sync = crate::fs_safety::sync_written_file(&output).map_err(|error| {
+    let disk = Disk::process();
+    let sync = disk.finish_blocking(destination, output).map_err(|error| {
         AppError::Repository(format!(
-            "failed to fsync copy destination: {}: {error}",
-            destination.display()
+            "failed to fsync copy destination: {}: {}",
+            destination.display(),
+            std::io::Error::from(error)
         ))
     })?;
-    if sync == crate::fs_safety::FileSync::Unsupported {
+    if sync == SyncOutcome::Unconfirmed {
         tracing::debug!(
             destination = %destination.display(),
             "copy destination filesystem does not support fsync; relying on copy verification"
         );
     }
-    drop(output);
 
     // The file's own fsync does not promise its directory entry survives a
     // crash. Best-effort because filesystems that reject a directory fsync are
@@ -1033,22 +1026,26 @@ fn write_claimed_destination(
     // operation's configured permissions are applied afterwards by the executor
     // (FR-031) and take precedence; this is only the floor, matching what
     // `fs_safety` already does for its own cross-device copies.
-    carry_source_mode_best_effort(source, destination);
+    let _ = disk.copy_permissions_blocking(source, destination);
 
     Ok(hasher.finalize())
 }
 
-#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn open_destination(destination: &Path, claim: DestinationClaim) -> AppResult<File> {
-    let mut options = std::fs::OpenOptions::new();
-    match claim {
+    let disk = Disk::process();
+    let opened = match claim {
         // `create_new` is the claim: it fails rather than replacing anything.
-        DestinationClaim::ClaimHere => options.write(true).create_new(true),
+        DestinationClaim::ClaimHere => disk
+            .open_blocking(destination, Open::create_new())
+            .map_err(std::io::Error::from),
         // The caller holds the name; opening without `create` means the claim,
         // not this call, is what decided the file may be written.
-        DestinationClaim::AlreadyHeld => options.write(true).truncate(true),
+        DestinationClaim::AlreadyHeld => disk
+            .open_blocking(destination, Open::write_existing())
+            .map_err(std::io::Error::from)
+            .and_then(|file| file.set_len(0).map(|()| file)),
     };
-    options.open(destination).map_err(|error| {
+    opened.map_err(|error| {
         AppError::Repository(format!(
             "failed to open copy destination: {}: {error}",
             destination.display()
@@ -1056,8 +1053,6 @@ fn open_destination(destination: &Path, claim: DestinationClaim) -> AppResult<Fi
     })
 }
 
-#[cfg(unix)]
-#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 fn sync_parent_directory_best_effort(destination: &Path) {
     let Some(parent) = destination.parent() else {
         return;
@@ -1065,9 +1060,7 @@ fn sync_parent_directory_best_effort(destination: &Path) {
     if parent.as_os_str().is_empty() {
         return;
     }
-    if let Ok(directory) = File::open(parent)
-        && let Err(error) = directory.sync_all()
-    {
+    if let Err(error) = Disk::process().sync_dir_blocking(parent) {
         tracing::debug!(
             parent = %parent.display(),
             %error,
@@ -1075,24 +1068,6 @@ fn sync_parent_directory_best_effort(destination: &Path) {
         );
     }
 }
-
-#[cfg(not(unix))]
-fn sync_parent_directory_best_effort(_destination: &Path) {}
-
-#[cfg(unix)]
-#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
-fn carry_source_mode_best_effort(source: &Path, destination: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let Ok(metadata) = std::fs::metadata(source) else {
-        return;
-    };
-    let mode = metadata.permissions().mode();
-    let _ = std::fs::set_permissions(destination, std::fs::Permissions::from_mode(mode));
-}
-
-#[cfg(not(unix))]
-fn carry_source_mode_best_effort(_source: &Path, _destination: &Path) {}
 
 // ── Depth: full ──────────────────────────────────────────────────────────────
 
@@ -1177,14 +1152,14 @@ fn bypass_note(bypass: CacheBypass) -> Option<String> {
 ///
 /// Everywhere else: no mechanism is wired, so the read-back runs uncached and
 /// says so — FR-042 asks for bypass "where the platform allows".
-#[allow(clippy::disallowed_methods)] // disk-guard: verified-copy handles
 pub fn open_cache_bypassed(path: &Path) -> ReadBackHandle {
-    let file = match File::open(path) {
+    let file = match Disk::process().open_blocking(path, Open::read()) {
         Ok(file) => file,
         Err(error) => {
             return ReadBackHandle::Unavailable(format!(
-                "could not open the destination for verification: {}: {error}",
-                path.display()
+                "could not open the destination for verification: {}: {}",
+                path.display(),
+                std::io::Error::from(error)
             ));
         }
     };
@@ -1349,7 +1324,7 @@ fn join_details(first: Option<String>, second: Option<String>) -> Option<String>
 /// pass at all (FR-032).
 ///
 /// This is a pre-flight probe, complementary to
-/// [`crate::fs_safety::is_cross_device_error`], which classifies an `EXDEV` a
+/// [`crate::disk::is_cross_device_error`], which classifies an `EXDEV` a
 /// rename already returned. Both directions fail safe: an unknown answer is
 /// `false`, and a `false` only ever costs a copy that is verified.
 ///

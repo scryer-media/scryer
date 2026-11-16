@@ -1645,23 +1645,24 @@ fn copy_regular_source_to_destination_once(
     temp_file
         .flush()
         .map_err(|error| ImportCopyAttemptError::new("flush", error))?;
-    let sync = scryer_application::fs_safety::sync_written_file(&temp_file)
-        .map_err(|error| ImportCopyAttemptError::new("sync", error))?;
-    if sync == scryer_application::fs_safety::FileSync::Unsupported {
+    let disk = scryer_application::disk::Disk::process();
+    let sync = disk
+        .finish_blocking(temp_dest, temp_file)
+        .map_err(|error| ImportCopyAttemptError::new("sync", error.into()))?;
+    if sync == scryer_application::disk::SyncOutcome::Unconfirmed {
         // Verification below, not the sync, guards the source before cleanup.
         tracing::debug!(
             dest = %dest.display(),
             "import destination filesystem does not support fsync; relying on copy verification"
         );
     }
-    drop(temp_file);
 
     ensure_same_source(source, source_fingerprint)
         .map_err(io_other)
         .map_err(|error| ImportCopyAttemptError::new("source verification", error))?;
 
-    scryer_application::fs_safety::rename_into_claimed_destination_blocking(temp_dest, dest)
-        .map_err(|error| ImportCopyAttemptError::new("final rename", error))?;
+    disk.move_claimed_blocking(temp_dest, dest)
+        .map_err(|error| ImportCopyAttemptError::new("final rename", error.into()))?;
 
     Ok(hasher.finalize())
 }
@@ -2127,7 +2128,7 @@ fn try_fast_import_placement_blocking(
                     },
                 }
             }
-            Err(error) if scryer_application::fs_safety::is_cross_device_error(&error) => {
+            Err(error) if scryer_application::disk::is_cross_device_error(&error) => {
                 tracing::debug!(error = %error, "hard link is ineligible; handing import to copy lane");
             }
             Err(error) => {
@@ -2258,7 +2259,7 @@ fn release_archive_rename_reservation(
     }
     tracing::debug!(
         error = %rename_error,
-        cross_device = scryer_application::fs_safety::is_cross_device_error(rename_error),
+        cross_device = scryer_application::disk::is_cross_device_error(rename_error),
         "archive workspace rename is ineligible; trying the link and copy lanes"
     );
     Ok(false)
@@ -2509,7 +2510,7 @@ fn import_hardlink_or_copy_blocking(
                     },
                 }
             }
-            Err(e) if scryer_application::fs_safety::is_cross_device_error(&e) => {
+            Err(e) if scryer_application::disk::is_cross_device_error(&e) => {
                 tracing::info!(
                     "hard link failed (cross-device), falling back to copy: {} -> {}",
                     source.display(),

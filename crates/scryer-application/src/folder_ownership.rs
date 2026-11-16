@@ -1,4 +1,7 @@
+use std::ops::ControlFlow;
 use std::path::Path;
+
+use crate::disk::{Disk, EntryKind, PathReading};
 
 mod scan_cache;
 pub(crate) use scan_cache::{ScanClaimReservation, ScanOwnershipContext, with_scan_ownership};
@@ -77,17 +80,20 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
             "title folder must be an absolute path without parent traversal",
         ));
     }
+    let disk = Disk::process();
     let mut ancestor = path;
     let mut missing = Vec::new();
     loop {
-        match std::fs::symlink_metadata(ancestor) {
-            Ok(_) => {
-                let mut resolved = std::fs::canonicalize(ancestor).map_err(|error| {
+        let reading = disk.fresh_blocking(ancestor);
+        match reading.exists() {
+            Some(true) => {
+                let mut resolved = disk.canonicalize_blocking(ancestor).map_err(|error| {
                     AppError::validation_refused(
                         crate::error_reasons::folder_ownership::CANNOT_RESOLVE_TITLE_FOLDER,
                         format!(
-                            "cannot resolve title folder {}: {error}",
+                            "cannot resolve title folder {}: {}",
                             ancestor.display(),
+                            std::io::Error::from(error)
                         ),
                     )
                 })?;
@@ -96,7 +102,7 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
                 }
                 return Ok(resolved);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Some(false) => {
                 let component = ancestor
                     .file_name()
                     .ok_or_else(|| missing_drive_refusal(path))?;
@@ -105,12 +111,13 @@ pub(crate) fn resolved_folder_identity(path: &Path) -> AppResult<std::path::Path
                     .parent()
                     .ok_or_else(|| missing_drive_refusal(path))?;
             }
-            Err(error) => {
+            None => {
                 return Err(AppError::validation_refused(
                     crate::error_reasons::folder_ownership::CANNOT_INSPECT_TITLE_FOLDER,
                     format!(
-                        "cannot inspect title folder {}: {error}",
-                        ancestor.display()
+                        "cannot inspect title folder {}: {}",
+                        ancestor.display(),
+                        reading.absence()
                     ),
                 ));
             }
@@ -327,10 +334,12 @@ impl UnreadableFolders {
     /// for it in full.
     fn probe(&mut self, folder: &Path, shared: bool) -> Result<std::path::PathBuf, bool> {
         self.probed();
-        let (failure, seen) = match std::fs::symlink_metadata(folder) {
-            Ok(_) => {
+        let disk = Disk::process();
+        let reading = disk.fresh_blocking(folder);
+        let (failure, seen) = match reading.exists() {
+            Some(true) => {
                 self.probed();
-                match std::fs::canonicalize(folder) {
+                match disk.canonicalize_blocking(folder) {
                     Ok(resolved) => {
                         if shared {
                             self.seen.insert(
@@ -340,21 +349,21 @@ impl UnreadableFolders {
                         }
                         return Ok(resolved);
                     }
-                    Err(error) => (error, SeenFolder::Refused),
+                    Err(error) => (error.reason(), SeenFolder::Refused),
                 }
             }
             // A missing folder resolves through its parent. A missing drive
             // or share has none, and nothing on it can be read.
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound && folder.parent().is_some() =>
-            {
+            Some(false) if folder.parent().is_some() => {
                 self.seen.insert(folder.to_path_buf(), SeenFolder::Missing);
                 return Err(true);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                (error, SeenFolder::Refused)
-            }
-            Err(error) => (error, SeenFolder::Dead),
+            _ => match reading.unreachable_cause() {
+                Some(cause @ crate::disk::reason::DISK_PERMISSION_DENIED) => {
+                    (cause, SeenFolder::Refused)
+                }
+                cause => (cause.unwrap_or(reading.absence()), SeenFolder::Dead),
+            },
         };
         tracing::debug!(
             folder = %folder.display(),
@@ -384,52 +393,58 @@ impl UnreadableFolders {
 /// Probe existing directory entries without writing to the library. Unknown
 /// case behavior is treated conservatively when reserving a destination.
 pub(crate) fn folder_case_insensitive(path: &Path) -> bool {
-    let Some(parent) = path.ancestors().find(|ancestor| ancestor.is_dir()) else {
+    let disk = Disk::process();
+    let Some(parent) = path
+        .ancestors()
+        .find(|ancestor| disk.follow_blocking(ancestor).is(EntryKind::Directory))
+    else {
         return true;
     };
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return true;
-    };
-    for entry in entries.take(16).flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let Some((index, character)) = name.char_indices().find(|(_, c)| c.is_ascii_alphabetic())
-        else {
-            continue;
-        };
-        let mut alternative = name.to_string();
-        alternative.replace_range(
-            index..index + 1,
-            &if character.is_ascii_uppercase() {
-                character.to_ascii_lowercase()
-            } else {
-                character.to_ascii_uppercase()
-            }
-            .to_string(),
-        );
-        let alternative = parent.join(alternative);
-        match std::fs::metadata(&alternative) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-            Ok(other) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    if let Ok(original) = std::fs::metadata(entry.path()) {
-                        return original.dev() == other.dev() && original.ino() == other.ino();
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = other;
-                    return true;
-                }
-            }
-            Err(_) => {}
+    let mut verdict = None;
+    let mut seen = 0;
+    let listed = disk.visit_blocking(parent, |entry| {
+        seen += 1;
+        if let Ok(entry) = entry {
+            verdict = case_verdict(&disk, parent, entry.name(), entry.path());
         }
+        if verdict.is_some() || seen == 16 {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    });
+    listed.ok().and(verdict).unwrap_or(true)
+}
+
+/// What one entry of `parent` says about case: `None` when it says nothing.
+fn case_verdict(disk: &Disk, parent: &Path, name: &std::ffi::OsStr, path: &Path) -> Option<bool> {
+    let name = name.to_str()?;
+    let (index, character) = name.char_indices().find(|(_, c)| c.is_ascii_alphabetic())?;
+    let mut alternative = name.to_string();
+    alternative.replace_range(
+        index..index + 1,
+        &if character.is_ascii_uppercase() {
+            character.to_ascii_lowercase()
+        } else {
+            character.to_ascii_uppercase()
+        }
+        .to_string(),
+    );
+    // Identities are absent where the platform gives none, which answers
+    // "the same folder": the conservative side.
+    let identity = |reading| match reading {
+        PathReading::Known { identity, .. } => Some(identity),
+        _ => None,
+    };
+    match disk.follow_blocking(&parent.join(alternative)) {
+        PathReading::Missing { .. } => Some(false),
+        PathReading::Known { .. } if cfg!(not(unix)) => Some(true),
+        other @ PathReading::Known { .. } => {
+            let original = identity(disk.follow_blocking(path))?;
+            Some(identity(other) == Some(original))
+        }
+        _ => None,
     }
-    true
 }
 
 pub(crate) fn title_owns_folder(title: &Title, folder_path: &Path) -> bool {
@@ -453,11 +468,10 @@ pub(crate) fn title_folder_path(title: &Title) -> Option<&str> {
 /// `None` means the answer is unknown (an unreachable mount, a permission
 /// problem). Callers treat that as "not proven" and take no action on it.
 async fn owned_folder_present(owned_path: &str) -> Option<bool> {
-    match tokio::fs::metadata(stored_path_to_path_buf(owned_path)).await {
-        Ok(_) => Some(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
-        Err(_) => None,
-    }
+    Disk::process()
+        .follow(stored_path_to_path_buf(owned_path))
+        .await
+        .exists()
 }
 
 /// A title's recorded folder is stale when it no longer exists while the
@@ -514,23 +528,27 @@ pub(crate) async fn title_folder_is_case_variant_of(title: &Title, folder_path: 
     ) {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let (owned, scanned) = tokio::join!(
-            tokio::fs::symlink_metadata(stored_path_to_path_buf(owned_path)),
-            tokio::fs::symlink_metadata(folder_path),
-        );
-        let (Ok(owned), Ok(scanned)) = (owned, scanned) else {
-            return false;
-        };
-        owned.ino() != 0 && owned.dev() == scanned.dev() && owned.ino() == scanned.ino()
+    // Ownership already compares folders ignoring case on Windows, so a
+    // case-only difference never reaches this check there.
+    if cfg!(not(unix)) {
+        return false;
     }
-    #[cfg(not(unix))]
-    {
-        // Ownership already compares folders ignoring case on Windows, so a
-        // case-only difference never reaches this check there.
-        false
+    let disk = Disk::process();
+    let (owned, scanned) = tokio::join!(
+        disk.fresh(stored_path_to_path_buf(owned_path)),
+        disk.fresh(folder_path),
+    );
+    match (owned, scanned) {
+        (
+            PathReading::Known {
+                identity: Some(owned),
+                ..
+            },
+            PathReading::Known {
+                identity: scanned, ..
+            },
+        ) => scanned == Some(owned),
+        _ => false,
     }
 }
 
@@ -809,6 +827,20 @@ impl LinkProbe {
             Err(_) => Self::Gone,
         }
     }
+
+    /// [`Self::of`] for a reading from the disk owner.
+    fn of_reading(reading: crate::disk::PathReading) -> Self {
+        match reading.kind() {
+            Some(EntryKind::Symlink) => Self::Link,
+            Some(_) => Self::Plain,
+            None if reading.unreachable_cause()
+                == Some(crate::disk::reason::DISK_PERMISSION_DENIED) =>
+            {
+                Self::Plain
+            }
+            None => Self::Gone,
+        }
+    }
 }
 
 /// Keys for comparing one move candidate against every recorded owner while
@@ -959,7 +991,7 @@ impl FolderOverlapKeys {
                 None => {
                     let probe = evidence(ancestor).unwrap_or_else(|| {
                         self.link_probes += 1;
-                        LinkProbe::of(&std::fs::symlink_metadata(ancestor))
+                        LinkProbe::of_reading(Disk::process().fresh_blocking(ancestor))
                     });
                     self.gone |= probe == LinkProbe::Gone;
                     self.links.insert(ancestor.to_path_buf(), probe);
@@ -1531,16 +1563,15 @@ async fn ensure_unowned_folder_claimable(
     let has_contents = if boundary_verified {
         false
     } else {
-        match tokio::fs::symlink_metadata(folder_path).await {
-            Ok(_) => tokio::fs::read_dir(folder_path)
+        let disk = Disk::process();
+        let reading = disk.fresh(folder_path).await;
+        match reading.exists() {
+            Some(true) => disk
+                .has_entries(folder_path)
                 .await
-                .map_err(|error| AppError::Repository(error.to_string()))?
-                .next_entry()
-                .await
-                .map_err(|error| AppError::Repository(error.to_string()))?
-                .is_some(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(AppError::Repository(error.to_string())),
+                .map_err(|error| AppError::Repository(std::io::Error::from(error).to_string()))?,
+            Some(false) => false,
+            None => return Err(AppError::Repository(reading.absence().to_string())),
         }
     };
     let contents_probe_ms = elapsed_ms(stage);

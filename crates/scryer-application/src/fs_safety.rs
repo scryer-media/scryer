@@ -1,5 +1,10 @@
+use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::disk::{
+    Disk, DiskError, EntryKind, Link, LinkOutcome, Open, Parents, Removal, Remove, SyncOutcome,
+    reason,
+};
 use crate::{AppError, AppResult};
 
 pub(crate) fn most_specific_containing_root(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
@@ -31,217 +36,75 @@ pub(crate) fn containing_root_for_path(path: &Path, roots: &[PathBuf]) -> AppRes
 }
 
 pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {
-    let metadata = std::fs::symlink_metadata(root).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNAVAILABLE,
-            format!(
-                "configured media root {} is unavailable: {}",
-                root.display(),
-                error
+    use crate::error_reasons::fs_safety as reasons;
+    let disk = Disk::process();
+    let reading = disk.fresh_blocking(root);
+    let (code, problem) = match reading.kind() {
+        Some(EntryKind::Directory) => match disk.has_entries_blocking(root) {
+            Ok(true) => return Ok(()),
+            Ok(false) => (reasons::CONFIGURED_MEDIA_ROOT_EMPTY, "is empty".to_string()),
+            Err(error) => (
+                reasons::CONFIGURED_MEDIA_ROOT_UNREADABLE,
+                format!("is unreadable: {}", io::Error::from(error)),
             ),
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_SYMLINK,
-            format!("configured media root {} is a symlink", root.display()),
-        ));
-    }
-    if !metadata.is_dir() {
-        return Err(AppError::validation_refused(
-            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY,
-            format!(
-                "configured media root {} is not a directory",
-                root.display()
-            ),
-        ));
-    }
-
-    let mut entries = std::fs::read_dir(root).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNREADABLE,
-            format!(
-                "configured media root {} is unreadable: {}",
-                root.display(),
-                error
-            ),
-        )
-    })?;
-    match entries.next() {
-        Some(Ok(_)) => {}
-        Some(Err(error)) => {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_UNREADABLE,
-                format!(
-                    "configured media root {} is unreadable: {}",
-                    root.display(),
-                    error
-                ),
-            ));
-        }
-        None => {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::fs_safety::CONFIGURED_MEDIA_ROOT_EMPTY,
-                format!("configured media root {} is empty", root.display()),
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-async fn clear_readonly_for_remove(path: &Path) -> AppResult<()> {
-    let metadata = match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to inspect {} before delete: {}",
-                path.display(),
-                error
-            )));
-        }
+        },
+        Some(EntryKind::Symlink) => (
+            reasons::CONFIGURED_MEDIA_ROOT_SYMLINK,
+            "is a symlink".into(),
+        ),
+        Some(_) => (
+            reasons::CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY,
+            "is not a directory".into(),
+        ),
+        None => (
+            reasons::CONFIGURED_MEDIA_ROOT_UNAVAILABLE,
+            format!("is unavailable: {}", reading.absence()),
+        ),
     };
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    let mut permissions = metadata.permissions();
-    if permissions.readonly() {
-        // This Windows-only operation clears the DOS read-only attribute.
-        #[allow(clippy::permissions_set_readonly_false)]
-        permissions.set_readonly(false);
-        tokio::fs::set_permissions(path, permissions)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to clear read-only attribute on {}: {}",
-                    path.display(),
-                    error
-                ))
-            })?;
-    }
-    Ok(())
+    Err(AppError::validation_refused(
+        code,
+        format!("configured media root {} {problem}", root.display()),
+    ))
 }
 
-#[cfg(not(windows))]
-async fn clear_readonly_for_remove(_path: &Path) -> AppResult<()> {
-    Ok(())
-}
+// The removals below clear a Windows read-only attribute that refuses them.
 
 pub(crate) async fn remove_file_safely(path: &Path) -> AppResult<()> {
-    clear_readonly_for_remove(path).await?;
-    tokio::fs::remove_file(path).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to remove file {}: {}",
-            path.display(),
-            error
-        ))
-    })
+    remove_safely(path, Remove::FileEvenReadOnly, false).await
 }
 
 pub(crate) async fn remove_file_safely_if_exists(path: &Path) -> AppResult<()> {
-    clear_readonly_for_remove(path).await?;
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to remove file {}: {}",
-            path.display(),
-            error
-        ))),
-    }
+    remove_safely(path, Remove::FileEvenReadOnly, true).await
 }
 
 pub(crate) async fn remove_dir_safely(path: &Path) -> AppResult<()> {
-    clear_readonly_for_remove(path).await?;
-    tokio::fs::remove_dir(path).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to remove directory {}: {}",
-            path.display(),
-            error
-        ))
-    })
-}
-
-#[cfg(windows)]
-async fn clear_readonly_tree_for_remove(path: &Path) -> AppResult<()> {
-    let metadata = match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to inspect {} before recursive delete: {}",
-                path.display(),
-                error
-            )));
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return clear_readonly_for_remove(path).await;
-    }
-
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        clear_readonly_for_remove(&dir).await?;
-        let mut entries = tokio::fs::read_dir(&dir).await.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read directory {} before recursive delete: {}",
-                dir.display(),
-                error
-            ))
-        })?;
-        while let Some(entry) = entries.next_entry().await.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read directory entry in {} before recursive delete: {}",
-                dir.display(),
-                error
-            ))
-        })? {
-            let child = entry.path();
-            let child_metadata = tokio::fs::symlink_metadata(&child).await.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to inspect {} before recursive delete: {}",
-                    child.display(),
-                    error
-                ))
-            })?;
-            if child_metadata.is_dir() && !child_metadata.file_type().is_symlink() {
-                stack.push(child);
-            } else {
-                clear_readonly_for_remove(&child).await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-async fn clear_readonly_tree_for_remove(_path: &Path) -> AppResult<()> {
-    Ok(())
+    remove_safely(path, Remove::EmptyDirEvenReadOnly, false).await
 }
 
 pub(crate) async fn remove_dir_all_safely(path: &Path) -> AppResult<()> {
-    clear_readonly_tree_for_remove(path).await?;
-    tokio::fs::remove_dir_all(path).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to remove directory tree {}: {}",
-            path.display(),
-            error
-        ))
-    })
+    remove_safely(path, Remove::TreeEvenReadOnly, false).await
 }
 
 pub(crate) async fn remove_dir_all_safely_if_exists(path: &Path) -> AppResult<()> {
-    clear_readonly_tree_for_remove(path).await?;
-    match tokio::fs::remove_dir_all(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(AppError::Repository(format!(
-            "failed to remove directory tree {}: {}",
-            path.display(),
-            error
-        ))),
-    }
+    remove_safely(path, Remove::TreeEvenReadOnly, true).await
+}
+
+async fn remove_safely(path: &Path, what: Remove, if_exists: bool) -> AppResult<()> {
+    let noun = match what {
+        Remove::EmptyDirEvenReadOnly => "directory",
+        Remove::TreeEvenReadOnly => "directory tree",
+        _ => "file",
+    };
+    let error = match Disk::process().remove(path, what).await {
+        Ok(Removal::Removed) => return Ok(()),
+        Ok(Removal::AlreadyAbsent) if if_exists => return Ok(()),
+        Ok(Removal::AlreadyAbsent) => io::Error::from(io::ErrorKind::NotFound),
+        Err(error) => io::Error::from(error),
+    };
+    Err(AppError::Repository(format!(
+        "failed to remove {noun} {}: {error}",
+        path.display()
+    )))
 }
 
 #[cfg(test)]
@@ -306,6 +169,73 @@ mod tests {
             "{error}"
         );
     }
+
+    #[test]
+    fn root_availability_names_why_a_root_is_unusable() {
+        use crate::error_reasons::fs_safety as reasons;
+        let tempdir = tempfile::tempdir().expect("create temp dir");
+        let missing = tempdir.path().join("gone");
+        let file = tempdir.path().join("plain-file");
+        std::fs::write(&file, b"x").expect("write file");
+        assert_eq!(
+            ensure_root_available(&missing)
+                .expect_err("missing root")
+                .validation_reason(),
+            Some(reasons::CONFIGURED_MEDIA_ROOT_UNAVAILABLE)
+        );
+        assert_eq!(
+            ensure_root_available(&file)
+                .expect_err("file root")
+                .validation_reason(),
+            Some(reasons::CONFIGURED_MEDIA_ROOT_NOT_DIRECTORY)
+        );
+        #[cfg(unix)]
+        {
+            let link = tempdir.path().join("linked-root");
+            std::os::unix::fs::symlink(tempdir.path(), &link).expect("symlink");
+            assert_eq!(
+                ensure_root_available(&link)
+                    .expect_err("linked root")
+                    .validation_reason(),
+                Some(reasons::CONFIGURED_MEDIA_ROOT_SYMLINK)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn removals_take_only_their_target_and_tolerate_absence_only_when_asked() {
+        let tempdir = tempfile::tempdir().expect("create temp dir");
+        let tree = tempdir.path().join("Invented Show");
+        let neighbour = tempdir.path().join("Invented Neighbour");
+        std::fs::create_dir_all(tree.join("Season 01")).expect("tree");
+        std::fs::create_dir_all(&neighbour).expect("neighbour");
+        std::fs::write(tree.join("Season 01").join("episode.mkv"), b"a").expect("file");
+        std::fs::write(neighbour.join("keep.mkv"), b"b").expect("neighbour file");
+        let lone = tempdir.path().join("lone.mkv");
+        std::fs::write(&lone, b"c").expect("lone");
+        let empty = tempdir.path().join("empty");
+        std::fs::create_dir(&empty).expect("empty dir");
+
+        remove_dir_all_safely(&tree).await.expect("tree removed");
+        remove_file_safely(&lone).await.expect("file removed");
+        remove_dir_safely(&empty).await.expect("empty dir removed");
+        assert!(!tree.exists() && !lone.exists() && !empty.exists());
+        assert_eq!(
+            std::fs::read(neighbour.join("keep.mkv")).expect("neighbour kept"),
+            b"b"
+        );
+
+        remove_dir_all_safely_if_exists(&tree)
+            .await
+            .expect("absent tree is fine when asked");
+        remove_file_safely_if_exists(&lone)
+            .await
+            .expect("absent file is fine when asked");
+        assert!(remove_dir_all_safely(&tree).await.is_err());
+        assert!(remove_file_safely(&lone).await.is_err());
+        assert!(remove_dir_safely(&neighbour).await.is_err());
+        assert!(neighbour.join("keep.mkv").exists());
+    }
 }
 
 // ── Moving files ─────────────────────────────────────────────────────────────
@@ -339,173 +269,8 @@ impl Default for MoveOptions {
     }
 }
 
-/// Cross-device rename.
-///
-/// The bare numbers differ per platform: 18 is `EXDEV` on Unix, while 17 is
-/// `ERROR_NOT_SAME_DEVICE` on Windows and `EEXIST` on Unix. Matching both
-/// everywhere sent existing-destination failures down copy-and-delete paths.
-pub fn is_cross_device_error(error: &std::io::Error) -> bool {
-    if error.kind() == std::io::ErrorKind::CrossesDevices {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        matches!(error.raw_os_error(), Some(libc::EXDEV))
-    }
-    #[cfg(windows)]
-    {
-        matches!(error.raw_os_error(), Some(17))
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        false
-    }
-}
-
-/// What a sync of a freshly written file achieved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileSync {
-    /// The file reached stable storage.
-    Synced,
-    /// The filesystem has no sync at all, such as some macOS smbfs mounts. The
-    /// bytes were written; only verification can prove them.
-    Unsupported,
-}
-
-/// Syncs a file a copy has just written.
-///
-/// macOS `sync_all` is `F_FULLFSYNC`, which network filesystems such as smbfs
-/// reject, so plain `fsync` is tried next. Some smbfs mounts reject that too;
-/// that is [`FileSync::Unsupported`], not an error, and the caller must verify
-/// the copy before it relies on it. Any other sync failure is an error.
-pub fn sync_written_file(file: &std::fs::File) -> std::io::Result<FileSync> {
-    #[cfg(target_os = "macos")]
-    {
-        settle_file_sync(file.sync_all(), || plain_fsync(file))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        settle_file_sync(file.sync_all(), || {
-            Err(std::io::ErrorKind::Unsupported.into())
-        })
-    }
-}
-
-fn settle_file_sync(
-    full_sync: std::io::Result<()>,
-    fallback: impl FnOnce() -> std::io::Result<()>,
-) -> std::io::Result<FileSync> {
-    match full_sync {
-        Ok(()) => Ok(FileSync::Synced),
-        Err(error) if is_unsupported_sync_error(&error) => match fallback() {
-            Ok(()) => Ok(FileSync::Synced),
-            Err(error) if is_unsupported_sync_error(&error) => Ok(FileSync::Unsupported),
-            Err(error) => Err(error),
-        },
-        Err(error) => Err(error),
-    }
-}
-
-/// Matched on the errno as well as the kind: std reports macOS `ENOTSUP`
-/// (errno 45) as `Uncategorized`, not `Unsupported`.
-fn is_unsupported_sync_error(error: &std::io::Error) -> bool {
-    if error.kind() == std::io::ErrorKind::Unsupported {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        matches!(
-            error.raw_os_error(),
-            Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn plain_fsync(file: &std::fs::File) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-
-    loop {
-        // SAFETY: the descriptor belongs to `file`, which outlives the call.
-        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(error);
-        }
-    }
-}
-
-#[cfg(test)]
-mod file_sync_tests {
-    use super::*;
-    use std::io::ErrorKind;
-
-    #[test]
-    fn full_sync_falls_back_only_when_unsupported() {
-        assert_eq!(
-            settle_file_sync(Ok(()), || panic!("successful full sync needs no fallback"))
-                .expect("full sync succeeds"),
-            FileSync::Synced
-        );
-        assert_eq!(
-            settle_file_sync(Err(ErrorKind::Unsupported.into()), || Ok(()))
-                .expect("ordinary fsync succeeds when full sync is unsupported"),
-            FileSync::Synced
-        );
-        let error = settle_file_sync(Err(ErrorKind::PermissionDenied.into()), || {
-            panic!("real sync errors must not fall back")
-        })
-        .expect_err("permission failure must propagate");
-        assert_eq!(error.kind(), ErrorKind::PermissionDenied);
-        let error = settle_file_sync(Err(ErrorKind::Unsupported.into()), || {
-            Err(ErrorKind::Other.into())
-        })
-        .expect_err("fallback sync failure must propagate");
-        assert_eq!(error.kind(), ErrorKind::Other);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn enotsup_from_both_syncs_reports_a_filesystem_without_sync() {
-        // smbfs on macOS can reject both F_FULLFSYNC and fsync with ENOTSUP.
-        assert_eq!(
-            settle_file_sync(
-                Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)),
-                || { Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)) }
-            )
-            .expect("a filesystem with no sync is not an error"),
-            FileSync::Unsupported
-        );
-        assert_eq!(
-            settle_file_sync(
-                Err(std::io::Error::from_raw_os_error(libc::ENOTSUP)),
-                || Ok(())
-            )
-            .expect("ENOTSUP from full sync falls back to fsync"),
-            FileSync::Synced
-        );
-    }
-
-    #[test]
-    fn sync_preserves_written_contents() {
-        use std::io::Write;
-
-        let directory = tempfile::tempdir().expect("temporary destination");
-        let path = directory.path().join("copied-video.mkv");
-        let mut file = std::fs::File::create(&path).expect("create destination");
-        file.write_all(b"verified-copy").expect("write destination");
-        sync_written_file(&file).expect("sync destination");
-        assert_eq!(
-            std::fs::read(path).expect("read destination"),
-            b"verified-copy"
-        );
-    }
+fn needs_copy(error: &DiskError) -> bool {
+    error.reason() == reason::DISK_MOVE_NEEDS_COPY
 }
 
 /// Moves `source` onto `dest` without ever replacing a file the caller did not
@@ -519,35 +284,36 @@ pub async fn move_file_exclusive(
     source: &Path,
     dest: &Path,
     options: MoveOptions,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
+    let disk = Disk::process();
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()
     {
-        tokio::fs::create_dir_all(parent).await?;
+        disk.create_dir(parent, Parents::Create).await?;
     }
 
     // On a case-insensitive volume the destination name resolves to the source
     // file itself, so this is a rename to perform, not a collision to reject.
     if source != dest && paths_are_same_file(source, dest) {
-        return move_via_intermediate_name(source, dest).await;
+        return move_via_intermediate_name(&disk, source, dest).await;
     }
 
     if options.overwrite {
-        return match tokio::fs::rename(source, dest).await {
-            Ok(()) => Ok(()),
-            Err(error) if is_cross_device_error(&error) => {
-                transfer_across_devices(source, dest, options).await
+        return match disk.move_replacing(source, dest).await {
+            Ok(_) => Ok(()),
+            Err(error) if needs_copy(&error) => {
+                transfer_across_devices(&disk, source, dest, options).await
             }
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         };
     }
 
     match exclusive_rename(source, dest).await {
         Some(Ok(())) => return Ok(()),
-        Some(Err(error)) if is_cross_device_error(&error) => {
-            return transfer_across_devices(source, dest, options).await;
+        Some(Err(error)) if needs_copy(&error) => {
+            return transfer_across_devices(&disk, source, dest, options).await;
         }
-        Some(Err(error)) => return Err(error),
+        Some(Err(error)) => return Err(error.into()),
         // The platform or filesystem has no exclusive rename; claim instead.
         None => {}
     }
@@ -558,20 +324,20 @@ pub async fn move_file_exclusive(
     //
     // The claim is taken beside the destination rather than on it, so a media
     // scanner never sees an empty file under the real name.
-    let staged = staging_path_for(dest);
-    claim_destination(&staged).await?;
-    let outcome = match tokio::fs::rename(source, &staged).await {
-        Ok(()) => promote_staged_file(&staged, dest, options).await,
-        Err(error) if is_cross_device_error(&error) => {
-            match copy_into_destination(source, &staged, options).await {
-                Ok(()) => promote_staged_file(&staged, dest, options).await,
+    let staged = crate::disk::staging_path_for(dest);
+    claim(&disk, &staged).await?;
+    let outcome = match disk.move_replacing(source, &staged).await {
+        Ok(_) => promote_staged_file(&staged, dest).await,
+        Err(error) if needs_copy(&error) => {
+            match copy_into_destination(&disk, source, &staged, options).await {
+                Ok(()) => promote_staged_file(&staged, dest).await,
                 Err(error) => Err(error),
             }
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     };
     if outcome.is_err() {
-        roll_back_staged_file(source, &staged).await;
+        roll_back_staged_file(&disk, source, &staged).await;
     }
     outcome
 }
@@ -583,19 +349,19 @@ pub async fn move_file_exclusive(
 /// line: `RollbackPartialMove` deletes the target only after confirming the
 /// source still exists, and `RollbackMove` moves the file back when it does
 /// not. Leaving a stray file behind is always preferable to losing one.
-async fn roll_back_staged_file(source: &Path, staged: &Path) {
-    if tokio::fs::symlink_metadata(staged).await.is_err() {
+async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path) {
+    if disk.fresh(staged).await.exists() != Some(true) {
         return;
     }
 
-    if tokio::fs::symlink_metadata(source).await.is_ok() {
+    if disk.fresh(source).await.exists() == Some(true) {
         // The source survived, so the staged file is a partial copy.
-        let _ = tokio::fs::remove_file(staged).await;
+        let _ = disk.remove(staged, Remove::File).await;
         return;
     }
 
     // The staged file is the only copy: put it back where it came from.
-    if tokio::fs::rename(staged, source).await.is_err() {
+    if disk.move_replacing(staged, source).await.is_err() {
         tracing::error!(
             staged = %staged.display(),
             source = %source.display(),
@@ -604,50 +370,30 @@ async fn roll_back_staged_file(source: &Path, staged: &Path) {
     }
 }
 
-/// A sibling of `dest` that no scanner will mistake for media.
-fn staging_path_for(dest: &Path) -> PathBuf {
-    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    // A short digest rather than the destination's own name: media filenames
-    // already run long, and a staging name that grew with them could push the
-    // component past what the filesystem accepts. This stays 25 bytes whatever
-    // the file is called.
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(dest.as_os_str().as_encoded_bytes());
-    hasher.update(crate::Id::new().0.as_bytes());
-    let digest = hasher.finalize().to_hex();
-    parent.join(format!(".scryer-{}.partial", &digest[..9]))
-}
-
 /// Moves the finished file from its staging name onto the destination.
 ///
 /// The destination was never claimed, so this is the moment another writer
 /// could have taken it; the exclusive rename is tried first for that reason.
-///
-/// Public because the verified copier stages its own partial the same way: it
-/// writes to a sibling name and promotes it here, so a crash mid-copy can never
-/// leave a half-written file under the destination's real name
-/// ([`crate::location::verify`]).
-pub async fn promote_staged_file(
-    staged: &Path,
-    dest: &Path,
-    options: MoveOptions,
-) -> std::io::Result<()> {
-    if options.overwrite {
-        return tokio::fs::rename(staged, dest).await;
-    }
-
+/// The verified copier stages its own partial the same way and promotes it
+/// here, so a crash mid-copy never leaves a half-written file under the
+/// destination's real name ([`crate::location::verify`]).
+pub(crate) async fn promote_staged_file(staged: &Path, dest: &Path) -> io::Result<()> {
     if let Some(result) = exclusive_rename(staged, dest).await {
-        return result;
+        return result.map_err(Into::into);
     }
 
     // No exclusive rename here, so link the staged file into place instead:
     // `link(2)` fails when the destination exists, which is the same refusal
     // without a window between checking and writing.
-    match tokio::fs::hard_link(staged, dest).await {
-        Ok(()) => {
+    let disk = Disk::process();
+    match disk.link(staged, dest, Link::Hard).await {
+        Ok(LinkOutcome::Linked) => {
             // The destination now holds the file. Failing to unlink the staging
             // name leaves a stray link, not a lost file, so the move is done.
-            if tokio::fs::remove_file(staged).await.is_err() {
+            if !matches!(
+                disk.remove(staged, Remove::File).await,
+                Ok(Removal::Removed)
+            ) {
                 tracing::warn!(
                     staged = %staged.display(),
                     dest = %dest.display(),
@@ -656,68 +402,87 @@ pub async fn promote_staged_file(
             }
             return Ok(());
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(error),
-        Err(_) => {}
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => {
+            return Err(error.into());
+        }
+        Ok(LinkOutcome::NotPossible) | Err(_) => {}
     }
 
     // The volume has neither, so claim the name and rename over the claim. The
     // empty file exists only for the length of a rename, not a copy.
-    claim_destination(dest).await?;
-    match tokio::fs::rename(staged, dest).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = tokio::fs::remove_file(dest).await;
-            Err(error)
-        }
-    }
+    disk.move_claimed(staged, dest).await?;
+    Ok(())
 }
 
 /// Place a journaled recovery copy without the claim-and-replace fallback.
 /// On volumes without exclusive rename, retain the staging link as well.
 /// If neither operation is supported, preserve everything and refuse.
-pub(crate) async fn promote_recovery_staged_file(
-    staged: &Path,
-    dest: &Path,
-) -> std::io::Result<()> {
+pub(crate) async fn promote_recovery_staged_file(staged: &Path, dest: &Path) -> io::Result<()> {
     if let Some(result) = exclusive_rename(staged, dest).await {
-        return result;
+        return result.map_err(Into::into);
     }
-    tokio::fs::hard_link(staged, dest).await
+    match Disk::process().link(staged, dest, Link::Hard).await? {
+        LinkOutcome::Linked => Ok(()),
+        LinkOutcome::NotPossible => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the volume offers neither an exclusive rename nor a hard link",
+        )),
+    }
 }
 
-/// Claims `dest` so no other writer can take it, failing if it is already held.
-async fn claim_destination(dest: &Path) -> std::io::Result<()> {
-    tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dest)
-        .await
-        .map(|_| ())
+/// Claims `path` so no other writer can take it, failing if it is already held.
+async fn claim(disk: &Disk, path: &Path) -> io::Result<()> {
+    disk.open(path, Open::create_new()).await?;
+    Ok(())
+}
+
+/// Remove the file at `path`, a missing one being an error.
+async fn remove_present_file(disk: &Disk, path: &Path) -> io::Result<()> {
+    match disk.remove(path, Remove::File).await? {
+        Removal::Removed => Ok(()),
+        Removal::AlreadyAbsent => Err(io::ErrorKind::NotFound.into()),
+    }
 }
 
 async fn transfer_across_devices(
+    disk: &Disk,
     source: &Path,
     dest: &Path,
     options: MoveOptions,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
+    let reading = disk.fresh(source).await;
+    let Some(kind) = reading.kind() else {
+        let kind = match reading.exists() {
+            Some(false) => io::ErrorKind::NotFound,
+            _ => io::ErrorKind::Other,
+        };
+        return Err(io::Error::new(
+            kind,
+            format!("{} is {}", source.display(), reading.absence()),
+        ));
+    };
     // A symlinked media file is a pointer, not the payload: copying it would
     // silently duplicate the whole file and drop the link.
-    if tokio::fs::symlink_metadata(source).await?.is_symlink() {
-        let link_target = tokio::fs::read_link(source).await?;
+    if kind == EntryKind::Symlink {
+        let link_target = disk.read_link(source).await?;
         if options.overwrite {
-            let _ = tokio::fs::remove_file(dest).await;
+            let _ = disk.remove(dest, Remove::File).await;
         }
-        create_symlink(&link_target, dest).await?;
-        tokio::fs::remove_file(source).await?;
-        return Ok(());
+        if disk.link(&link_target, dest, Link::Symbolic).await? == LinkOutcome::NotPossible {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("{} cannot hold a symbolic link", dest.display()),
+            ));
+        }
+        return remove_present_file(disk, source).await;
     }
 
     if !options.overwrite {
-        claim_destination(dest).await?;
+        claim(disk, dest).await?;
     }
-    let result = copy_into_destination(source, dest, options).await;
+    let result = copy_into_destination(disk, source, dest, options).await;
     if result.is_err() {
-        let _ = tokio::fs::remove_file(dest).await;
+        let _ = disk.remove(dest, Remove::File).await;
     }
     result
 }
@@ -726,32 +491,27 @@ async fn transfer_across_devices(
 /// the source. Never widens the destination: the handle is opened for writing
 /// without creating, so the claim is what decided the file may be written.
 async fn copy_into_destination(
+    disk: &Disk,
     source: &Path,
     dest: &Path,
     options: MoveOptions,
-) -> std::io::Result<()> {
-    let mut source_file = tokio::fs::File::open(source).await?;
-    let mut dest_file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(dest)
-        .await?;
+) -> io::Result<()> {
+    let mut source_file = disk.open(source, Open::read()).await?;
+    let mut dest_file = disk.open(dest, Open::write_existing()).await?;
+    dest_file.set_len(0).await?;
     tokio::io::copy(&mut source_file, &mut dest_file).await?;
-    tokio::io::AsyncWriteExt::flush(&mut dest_file).await?;
-    let dest_file = dest_file.into_std().await;
-    let sync = tokio::task::spawn_blocking(move || sync_written_file(&dest_file))
-        .await
-        .map_err(std::io::Error::other)??;
+    let sync = disk.finish(dest, dest_file).await?;
 
     // Carry the source's mode. Configured permissions are applied afterwards by
     // the caller and take precedence; this only stops a move from silently
     // changing access when nothing is configured.
-    copy_permissions_best_effort(source, dest).await;
+    let _ = disk.copy_permissions(source, dest).await;
 
     // A copy the filesystem could not sync is proven here even when the
     // caller said it verifies for itself: the source goes next.
-    if options.verify_cross_device || sync == FileSync::Unsupported {
-        if sync == FileSync::Unsupported {
+    let unconfirmed = sync == SyncOutcome::Unconfirmed;
+    if options.verify_cross_device || unconfirmed {
+        if unconfirmed {
             tracing::debug!(
                 dest = %dest.display(),
                 "move destination filesystem does not support fsync; verifying the copy"
@@ -760,7 +520,7 @@ async fn copy_into_destination(
         verify_copy_with_retry(source, dest).await?;
     }
 
-    tokio::fs::remove_file(source).await
+    remove_present_file(disk, source).await
 }
 
 /// Verifies a copy, retrying once after a pause.
@@ -769,7 +529,7 @@ async fn copy_into_destination(
 /// failing on the first look turns a good copy into a failed move. Sonarr does
 /// the same thing for the same reason, calling it out as needed for remote NAS
 /// devices.
-async fn verify_copy_with_retry(source: &Path, dest: &Path) -> std::io::Result<()> {
+async fn verify_copy_with_retry(source: &Path, dest: &Path) -> io::Result<()> {
     let first = crate::fs_integrity::verify_same_file_async(source, dest).await;
     if first.is_ok() {
         return Ok(());
@@ -778,100 +538,25 @@ async fn verify_copy_with_retry(source: &Path, dest: &Path) -> std::io::Result<(
     tokio::time::sleep(COPY_VERIFY_RETRY_DELAY).await;
     match crate::fs_integrity::verify_same_file_async(source, dest).await {
         Ok(()) => Ok(()),
-        Err(error) => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        Err(error) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
             error.to_string(),
         )),
     }
 }
 
-#[cfg(unix)]
-async fn copy_permissions_best_effort(source: &Path, dest: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let Ok(metadata) = tokio::fs::metadata(source).await else {
-        return;
-    };
-    let mode = metadata.permissions().mode();
-    let _ = tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(mode)).await;
-}
-
-#[cfg(not(unix))]
-async fn copy_permissions_best_effort(_source: &Path, _dest: &Path) {}
-
-#[cfg(unix)]
-async fn create_symlink(link_target: &Path, at: &Path) -> std::io::Result<()> {
-    tokio::fs::symlink(link_target, at).await
-}
-
-#[cfg(windows)]
-async fn create_symlink(link_target: &Path, at: &Path) -> std::io::Result<()> {
-    tokio::fs::symlink_file(link_target, at).await
-}
-
-#[cfg(target_os = "linux")]
-fn renameat2_no_replace(source: *const libc::c_char, dest: *const libc::c_char) -> libc::c_int {
-    // SAFETY: the caller provides valid, NUL-terminated paths. Calling the syscall directly
-    // avoids depending on a libc `renameat2` wrapper, which musl does not export.
-    unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            source,
-            libc::AT_FDCWD,
-            dest,
-            libc::RENAME_NOREPLACE,
-        ) as libc::c_int
-    }
-}
-
 /// `Some` when the platform answered with an exclusive rename, `None` when the
-/// caller should claim the destination instead.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) async fn exclusive_rename(source: &Path, dest: &Path) -> Option<std::io::Result<()>> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let source_c = CString::new(source.as_os_str().as_bytes()).ok()?;
-    let dest_c = CString::new(dest.as_os_str().as_bytes()).ok()?;
-    let result = tokio::task::spawn_blocking(move || {
-        let code = {
-            #[cfg(target_os = "linux")]
-            {
-                renameat2_no_replace(source_c.as_ptr(), dest_c.as_ptr())
-            }
-            #[cfg(target_os = "macos")]
-            {
-                // SAFETY: both paths are NUL-terminated and outlive the call.
-                unsafe { libc::renamex_np(source_c.as_ptr(), dest_c.as_ptr(), libc::RENAME_EXCL) }
-            }
-        };
-        if code == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
-    })
-    .await
-    .ok()?;
-
-    match result {
-        Err(ref error)
-            if matches!(
-                error.raw_os_error(),
-                Some(libc::ENOSYS) | Some(libc::ENOTSUP) | Some(libc::EINVAL)
-            ) =>
-        {
-            // Old kernel, or a filesystem without exclusive rename.
-            None
-        }
-        other => Some(other),
+/// caller should claim the destination instead. Windows callers keep their
+/// own fallbacks.
+pub(crate) async fn exclusive_rename(source: &Path, dest: &Path) -> Option<Result<(), DiskError>> {
+    if cfg!(not(any(target_os = "linux", target_os = "macos"))) {
+        return None;
     }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) async fn exclusive_rename(_source: &Path, _dest: &Path) -> Option<std::io::Result<()>> {
-    None
+    match Disk::process().rename_no_replace(source, dest).await {
+        Ok(true) => Some(Ok(())),
+        Ok(false) => None,
+        Err(error) => Some(Err(error)),
+    }
 }
 
 /// Whether `dest` is available to receive `source`.
@@ -879,10 +564,7 @@ pub(crate) async fn exclusive_rename(_source: &Path, _dest: &Path) -> Option<std
 /// A destination that *is* the source is a case-only rename on a
 /// case-insensitive volume, not a collision, so it counts as free.
 pub async fn destination_is_free_for(source: &Path, dest: &Path) -> bool {
-    if tokio::fs::symlink_metadata(dest).await.is_err() {
-        return true;
-    }
-    paths_are_same_file(source, dest)
+    Disk::process().fresh(dest).await.exists() != Some(true) || paths_are_same_file(source, dest)
 }
 
 /// True when two paths differ only in case or Unicode form, which is how a
@@ -900,56 +582,36 @@ fn paths_are_same_file(source: &Path, dest: &Path) -> bool {
 
 /// Renames through a uniquely named sibling so a case-only change lands even
 /// where the volume treats both names as the same file.
-async fn move_via_intermediate_name(source: &Path, dest: &Path) -> std::io::Result<()> {
+async fn move_via_intermediate_name(disk: &Disk, source: &Path, dest: &Path) -> io::Result<()> {
     let parent = source.parent().unwrap_or_else(|| Path::new("."));
     let mut last_error = None;
     for _ in 0..10 {
         let id = crate::Id::new().0;
         let intermediate = parent.join(format!(".scryer-move-{}", &id[..8]));
-        if claim_destination(&intermediate).await.is_err() {
+        if claim(disk, &intermediate).await.is_err() {
             continue;
         }
         // The claim only reserved the name; the rename replaces it.
-        match tokio::fs::rename(source, &intermediate).await {
-            Ok(()) => {
-                return match tokio::fs::rename(&intermediate, dest).await {
-                    Ok(()) => Ok(()),
+        match disk.move_replacing(source, &intermediate).await {
+            Ok(_) => {
+                return match disk.move_replacing(&intermediate, dest).await {
+                    Ok(_) => Ok(()),
                     Err(error) => {
                         // Put the file back rather than stranding it.
-                        let _ = tokio::fs::rename(&intermediate, source).await;
-                        Err(error)
+                        let _ = disk.move_replacing(&intermediate, source).await;
+                        Err(error.into())
                     }
                 };
             }
             Err(error) => {
-                let _ = tokio::fs::remove_file(&intermediate).await;
-                last_error = Some(error);
+                let _ = disk.remove(&intermediate, Remove::File).await;
+                last_error = Some(error.into());
             }
         }
     }
     Err(last_error.unwrap_or_else(|| {
-        std::io::Error::other("could not claim an intermediate name for a case-only rename")
+        io::Error::other("could not claim an intermediate name for a case-only rename")
     }))
-}
-
-/// Blocking twin of the claim `move_file_exclusive` makes, for importers that
-/// already run on a blocking thread.
-///
-/// Renames `staged` onto `dest` only after reserving the destination name, so a
-/// file that appeared since the caller last looked is never replaced.
-pub fn rename_into_claimed_destination_blocking(staged: &Path, dest: &Path) -> std::io::Result<()> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dest)?;
-    match std::fs::rename(staged, dest) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            // Do not leave the empty reservation behind.
-            let _ = std::fs::remove_file(dest);
-            Err(error)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -973,7 +635,7 @@ mod move_tests {
         let error = move_file_exclusive(&source, &dest, MoveOptions::default())
             .await
             .expect_err("an occupied destination must not be replaced");
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
 
         assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
         assert_eq!(std::fs::read(&source).expect("source"), b"source-payload");
@@ -1044,25 +706,6 @@ mod move_tests {
         assert!(!source.exists());
     }
 
-    /// 17 is `EEXIST` on Unix and `ERROR_NOT_SAME_DEVICE` on Windows. Reading it
-    /// as cross-device on Unix sent existing-destination failures into
-    /// copy-and-delete, which is how an import could overwrite a file.
-    #[test]
-    fn cross_device_detection_does_not_confuse_eexist() {
-        #[cfg(unix)]
-        {
-            assert!(is_cross_device_error(&std::io::Error::from_raw_os_error(
-                libc::EXDEV
-            )));
-            assert!(!is_cross_device_error(&std::io::Error::from_raw_os_error(
-                libc::EEXIST
-            )));
-        }
-        assert!(!is_cross_device_error(&std::io::Error::from_raw_os_error(
-            5
-        )));
-    }
-
     /// A name written precomposed comes back decomposed from an SMB share, so
     /// the two spellings have to be recognized as one file.
     #[test]
@@ -1122,17 +765,18 @@ mod move_tests {
         let dest = dir.path().join("dest.mkv");
         write(&source, b"irreplaceable");
         write(&dest, b"occupied");
+        let disk = Disk::process();
 
         // Force the staging path the way a filesystem without an exclusive
         // rename would, then fail promotion because the destination is taken.
-        let staged = staging_path_for(&dest);
-        claim_destination(&staged).await.expect("claim staging");
+        let staged = crate::disk::staging_path_for(&dest);
+        claim(&disk, &staged).await.expect("claim staging");
         tokio::fs::rename(&source, &staged)
             .await
             .expect("stage the source");
         assert!(!source.exists(), "the source has moved to the staging name");
 
-        roll_back_staged_file(&source, &staged).await;
+        roll_back_staged_file(&disk, &source, &staged).await;
 
         assert_eq!(
             std::fs::read(&source).expect("the source must come back"),
@@ -1152,7 +796,7 @@ mod move_tests {
         write(&source, b"payload");
         write(&staged, b"half");
 
-        roll_back_staged_file(&source, &staged).await;
+        roll_back_staged_file(&Disk::process(), &source, &staged).await;
 
         assert_eq!(std::fs::read(&source).expect("source"), b"payload");
         assert!(!staged.exists(), "the partial copy is cleaned up");
@@ -1166,9 +810,10 @@ mod move_tests {
         write(&staged, b"staged-payload");
         write(&dest, b"dest-payload");
 
-        let error = rename_into_claimed_destination_blocking(&staged, &dest)
+        let error = Disk::process()
+            .move_claimed_blocking(&staged, &dest)
             .expect_err("the importer must not replace an existing destination");
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(error.reason(), reason::DISK_DESTINATION_EXISTS);
         assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
         assert_eq!(std::fs::read(&staged).expect("staged"), b"staged-payload");
     }

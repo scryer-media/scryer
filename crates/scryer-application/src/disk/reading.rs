@@ -309,7 +309,7 @@ impl From<DiskError> for io::Error {
 /// The one place an I/O failure becomes a reason code. Typed kinds only.
 fn classify(error: &io::Error) -> &'static str {
     use io::ErrorKind as K;
-    if crate::fs_safety::is_cross_device_error(error) {
+    if is_cross_device_error(error) {
         return reason::DISK_MOVE_NEEDS_COPY;
     }
     if let Some(refusal) = super::backend::Refused::of(error) {
@@ -334,6 +334,29 @@ fn classify(error: &io::Error) -> &'static str {
         | K::ConnectionAborted
         | K::NotConnected => reason::DISK_PATH_UNREACHABLE,
         _ => reason::DISK_OPERATION_FAILED,
+    }
+}
+
+/// Cross-device rename.
+///
+/// The bare numbers differ per platform: 18 is `EXDEV` on Unix, while 17 is
+/// `ERROR_NOT_SAME_DEVICE` on Windows and `EEXIST` on Unix. Matching both
+/// everywhere sent existing-destination failures down copy-and-delete paths.
+pub fn is_cross_device_error(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::CrossesDevices {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::EXDEV))
+    }
+    #[cfg(windows)]
+    {
+        matches!(error.raw_os_error(), Some(17))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
     }
 }
 
@@ -434,6 +457,23 @@ mod tests {
             assert_eq!(error.path(), path);
             assert_eq!(io::Error::from(error).kind(), kind);
         }
+    }
+
+    /// 17 is `EEXIST` on Unix and `ERROR_NOT_SAME_DEVICE` on Windows. Reading it
+    /// as cross-device on Unix sent existing-destination failures into
+    /// copy-and-delete, which is how an import could overwrite a file.
+    #[test]
+    fn cross_device_detection_does_not_confuse_eexist() {
+        #[cfg(unix)]
+        {
+            assert!(is_cross_device_error(&io::Error::from_raw_os_error(
+                libc::EXDEV
+            )));
+            assert!(!is_cross_device_error(&io::Error::from_raw_os_error(
+                libc::EEXIST
+            )));
+        }
+        assert!(!is_cross_device_error(&io::Error::from_raw_os_error(5)));
     }
 
     #[test]
