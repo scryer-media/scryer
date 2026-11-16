@@ -544,6 +544,7 @@ impl AppUseCase {
             latest_decision_codes,
             limit,
             offset,
+            skip_total,
         } = query;
         let title_search = title_search.and_then(|value| {
             let trimmed = value.trim();
@@ -565,8 +566,12 @@ impl AppUseCase {
                 latest_decision_codes: latest_decision_codes.clone(),
                 limit,
                 offset,
+                skip_total,
             })
             .await?;
+        if skip_total {
+            return Ok((items, 0));
+        }
         let total = self
             .services
             .workflow

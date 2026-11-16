@@ -517,6 +517,19 @@ async fn sqlite_wanted_list_filters_pages_and_counts_in_sql() {
             "{label}"
         );
         assert_eq!(count, expected_count, "{label}");
+
+        // The count leaves the latest-decision join out unless a decision
+        // code filters on it; it still counts exactly the rows the list,
+        // which always joins the latest decision, returns unpaged.
+        let unpaged = wanted
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                limit: i64::MAX,
+                offset: 0,
+                ..query.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, unpaged.len() as i64, "{label}");
     }
 
     // The row each scope carries, decision and all.

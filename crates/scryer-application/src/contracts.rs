@@ -1071,6 +1071,9 @@ pub struct AcquisitionScopeStatesQuery {
     pub latest_decision_codes: Vec<String>,
     pub limit: i64,
     pub offset: i64,
+    /// The caller reads no total, so it is not counted and comes back as 0.
+    /// Only the use case's paged read looks at it; a store ignores it.
+    pub skip_total: bool,
 }
 
 /// Which scope an acquisition state row is about, without the rest of the row.

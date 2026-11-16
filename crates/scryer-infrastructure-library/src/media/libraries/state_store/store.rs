@@ -1549,10 +1549,18 @@ impl AcquisitionScopeStateRepository for WantedStore {
         &self,
         query: AcquisitionScopeStatesQuery,
     ) -> AppResult<i64> {
+        // The latest-decision join adds at most one row per scope, so it
+        // changes the count only through a filter on its code; without one it
+        // is left out.
+        let latest_decision_join = if query.latest_decision_codes.is_empty() {
+            ""
+        } else {
+            WANTED_LATEST_DECISION_JOIN_SQL
+        };
         let mut sql = format!(
             "SELECT COUNT(*) AS cnt
                FROM wanted_items w
-               LEFT JOIN titles t ON t.id = w.title_id{WANTED_LATEST_DECISION_JOIN_SQL}
+               LEFT JOIN titles t ON t.id = w.title_id{latest_decision_join}
               WHERE 1=1"
         );
         let mut args = Vec::new();

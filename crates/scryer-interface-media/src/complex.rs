@@ -1146,6 +1146,8 @@ impl TitlePayload {
                         latest_decision_codes: Vec::new(),
                         limit: i64::from(limit),
                         offset: i64::from(offset),
+                        // The page carries no total.
+                        skip_total: true,
                     },
                 )
                 .await

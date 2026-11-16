@@ -643,6 +643,7 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             limit,
             offset,
             library_ids: _,
+            skip_total: _,
         } = query;
         let latest_decisions = self.release_decisions.lock().await.clone();
         let normalized_title_search = title_search.as_deref().map(str::to_lowercase);

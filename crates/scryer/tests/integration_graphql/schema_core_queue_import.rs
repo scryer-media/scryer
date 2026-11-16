@@ -2133,6 +2133,38 @@ async fn graphql_wanted_latest_decision_explanation_follows_the_selection() {
         title_data["releaseDecisions"]["items"][0]["wantedItem"]["latestReleaseDecision"]["explanationJson"],
         json!({ "auto_decision": { "decided_by": "quality_tier" } })
     );
+
+    // A caller that reads no total gets the same page, uncounted.
+    let admin = scryer_domain::User::new_admin("admin");
+    let query = scryer_application::AcquisitionScopeStatesQuery {
+        title_id: Some(title.id.clone()),
+        limit: 10,
+        ..Default::default()
+    };
+    let (counted, total) = ctx
+        .app
+        .list_acquisition_scope_states(&admin, query.clone())
+        .await
+        .expect("list wanted items");
+    let (uncounted, skipped_total) = ctx
+        .app
+        .list_acquisition_scope_states(
+            &admin,
+            scryer_application::AcquisitionScopeStatesQuery {
+                skip_total: true,
+                ..query
+            },
+        )
+        .await
+        .expect("list wanted items without a total");
+    assert_eq!(total, 1);
+    assert_eq!(skipped_total, 0);
+    assert_eq!(counted.len(), 1);
+    assert_eq!(
+        format!("{uncounted:?}"),
+        format!("{counted:?}"),
+        "the uncounted page is the same page"
+    );
 }
 
 #[tokio::test]
