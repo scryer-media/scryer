@@ -7,8 +7,8 @@ import {
   RULE_BUILDER_CATALOGS,
   ruleBuilderCatalogMisses,
 } from "./rule-builder-catalog-presentation.ts";
-import { MAINTENANCE_SERVED_PAYLOAD } from "./rule-builder-contract-fixture.ts";
-import { MAINTENANCE_RULE_BUILDER_BASE } from "./maintenance-rule-builder-schema.ts";
+import { LIFECYCLE_SERVED_PAYLOAD } from "./rule-builder-contract-fixture.ts";
+import { LIFECYCLE_RULE_BUILDER_BASE } from "./lifecycle-rule-builder-schema.ts";
 import {
   generateRuleSource,
   isRuleBuilderOutputInVariant,
@@ -38,8 +38,8 @@ import {
 const ARCHIVE: RuleBuilderOutputDescriptor = {
   id: "ARCHIVE",
   head: "archive",
-  labelKey: "ruleOutput.maintenance.archive",
-  helpKey: "ruleOutput.maintenance.archive.help",
+  labelKey: "ruleOutput.lifecycle.archive",
+  helpKey: "ruleOutput.lifecycle.archive.help",
   valueKind: "FLAG",
   template: "{head} if {helper}",
   perItem: false,
@@ -51,7 +51,7 @@ const ARCHIVE: RuleBuilderOutputDescriptor = {
 const SET_LABELS: RuleBuilderOutputDescriptor = {
   id: "SET_LABELS",
   head: "set_labels",
-  labelKey: "ruleOutput.maintenance.set_labels",
+  labelKey: "ruleOutput.lifecycle.set_labels",
   helpKey: null,
   valueKind: "TEXT_LIST",
   options: "shelfLabels",
@@ -68,7 +68,7 @@ const SET_LABELS: RuleBuilderOutputDescriptor = {
 const HOLD_FOR: RuleBuilderOutputDescriptor = {
   id: "HOLD_FOR",
   head: "hold_for",
-  labelKey: "ruleOutput.maintenance.hold_for",
+  labelKey: "ruleOutput.lifecycle.hold_for",
   valueKind: "DURATION",
   template: "{head} := {value} if {helper}",
   perItem: false,
@@ -76,12 +76,19 @@ const HOLD_FOR: RuleBuilderOutputDescriptor = {
   conflictsWith: [],
 };
 
+/// The server lists every output under the subject it acts on, so the unseen
+/// title outputs come listed under the title.
 const PAYLOAD: RuleBuilderSchemaPayload = {
-  ...MAINTENANCE_SERVED_PAYLOAD,
-  outputs: [ARCHIVE, ...MAINTENANCE_SERVED_PAYLOAD.outputs, HOLD_FOR, SET_LABELS],
+  ...LIFECYCLE_SERVED_PAYLOAD,
+  outputs: [ARCHIVE, ...LIFECYCLE_SERVED_PAYLOAD.outputs, HOLD_FOR, SET_LABELS],
+  subjects: (LIFECYCLE_SERVED_PAYLOAD.subjects ?? []).map((subject) =>
+    subject.inputPath === null
+      ? { ...subject, outputs: ["ARCHIVE", ...subject.outputs, "HOLD_FOR", "SET_LABELS"] }
+      : subject,
+  ),
 };
 
-const SCHEMA = ruleBuilderSchemaFromPayload(MAINTENANCE_RULE_BUILDER_BASE, PAYLOAD);
+const SCHEMA = ruleBuilderSchemaFromPayload(LIFECYCLE_RULE_BUILDER_BASE, PAYLOAD);
 const DESCRIPTORS = PAYLOAD.outputs;
 
 /// Translates from English, handing a missing key back as the real helper does.
@@ -90,7 +97,7 @@ const t = (key: string) => (en as Record<string, string>)[key] ?? key;
 function model(outputs: RuleBuilderModel["outputs"]): RuleBuilderModel {
   return {
     version: 2,
-    family: "maintenance",
+    family: "lifecycle",
     join: "ALL",
     conditions: [{ field: "input.facts.monitored", operator: "IS_TRUE", value: "" }],
     outputs,
@@ -164,9 +171,21 @@ test("an unseen output keeps to its variants and its conflicts", () => {
   assert.ok(archive);
   assert.equal(isRuleBuilderOutputInVariant(archive, "TITLE"), true);
   assert.equal(isRuleBuilderOutputInVariant(archive, "EPISODE"), false);
+  // Lifecycle actions are placed by subject: one the server lists only
+  // under the title is out of scope on a season row.
   assert.deepEqual(
-    problemCodes(generateRuleSource(SCHEMA, model({ ARCHIVE: true }), "EPISODE")),
-    ["BUILDER_OUTPUT_NOT_IN_SCOPE"],
+    problemCodes(
+      generateRuleSource(
+        SCHEMA,
+        {
+          ...model({ ARCHIVE: true }),
+          actions: [{ subject: "SEASON", output: "ARCHIVE", join: "ALL", conditions: [] }],
+        },
+        null,
+      ),
+    ),
+    // The row's action is set aside, so the rule is left with none.
+    ["BUILDER_OUTPUT_NOT_IN_SCOPE", "BUILDER_NO_OUTPUTS"],
   );
 
   // Read in both directions.
@@ -205,7 +224,7 @@ test("an untranslated output is labelled by its head and has no help", () => {
 test("a summary labels heads from the descriptors, then by head, then by id", () => {
   assert.equal(
     ruleOutputHeadLabel(t, DESCRIPTORS, "DELETE_FILES"),
-    en["ruleOutput.maintenance.delete_files"],
+    en["ruleOutput.lifecycle.delete_files"],
   );
   assert.equal(ruleOutputHeadLabel(t, DESCRIPTORS, "ARCHIVE"), "archive");
   assert.equal(ruleOutputHeadLabel(t, DESCRIPTORS, "SOME_LATER_HEAD"), "SOME_LATER_HEAD");
@@ -248,8 +267,10 @@ test("the editor completes every head its variant offers, with a snippet from it
   const title = regoHeadAssists(DESCRIPTORS, t, "TITLE");
   const episode = regoHeadAssists(DESCRIPTORS, t, "EPISODE");
   assert.equal(title.length, DESCRIPTORS.length);
+  // Lifecycle heads name their own level, so only an unseen head that lists
+  // variants is left out of one.
   assert.equal(episode.some((head) => head.head === "archive"), false);
-  assert.equal(episode.some((head) => head.head === "delete_title"), false);
+  assert.ok(episode.some((head) => head.head === "delete_episode_files"));
   assert.ok(episode.some((head) => head.head === "delete_files"));
 
   assert.deepEqual(
@@ -271,7 +292,7 @@ test("the editor completes every head its variant offers, with a snippet from it
     },
   );
   const notify = title.find((head) => head.head === "notify");
-  assert.equal(notify?.detail, en["ruleOutput.maintenance.notify"]);
+  assert.equal(notify?.detail, en["ruleOutput.lifecycle.notify"]);
 });
 
 test("a translated head carries its help into completion and hover", () => {

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -572,6 +573,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "title_content_ratings",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "discovery_title_metadata_tags",
         classification: BackupTableClassification::ResetOnRestore,
     },
@@ -948,27 +953,27 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "login_verification_challenges",
         classification: BackupTableClassification::Ignore,
     },
-    // Maintenance rules and exclusions are user intent. Evaluation,
+    // Lifecycle rules and exclusions are user intent. Evaluation,
     // candidate, and action rows preserve grace periods and the audit trail,
     // so they cannot be regenerated without changing lifecycle semantics.
     BackupTableCatalogEntry {
-        table: "maintenance_rule_sets",
+        table: "lifecycle_rule_sets",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_set_libraries",
+        table: "lifecycle_rule_set_libraries",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_revisions",
+        table: "lifecycle_rule_revisions",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_exclusions",
+        table: "lifecycle_rule_exclusions",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_evaluation_runs",
+        table: "lifecycle_evaluation_runs",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -984,22 +989,22 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     // terminal membership is the once-per-match latch, so every part of this
     // sequence safety state must remain with its candidate history.
     BackupTableCatalogEntry {
-        table: "maintenance_action_steps",
+        table: "lifecycle_action_steps",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_action_step_attempts",
+        table: "lifecycle_action_step_attempts",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_action_job_receipts",
+        table: "lifecycle_action_job_receipts",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_sequence_terminal_memberships",
+        table: "lifecycle_sequence_terminal_memberships",
         classification: BackupTableClassification::Export,
     },
-    // Request rules are user intent in exactly the way maintenance rules are,
+    // Request rules are user intent in exactly the way lifecycle rules are,
     // and their revisions are what a stored decision points at: dropping them
     // would leave every trace naming a rule revision that no longer exists.
     BackupTableCatalogEntry {
@@ -1022,7 +1027,7 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     // A lifecycle claim is what holds media against deletion. Losing one on a
-    // restore would silently expose a leased title to the next maintenance
+    // restore would silently expose a leased title to the next lifecycle
     // pass, so it is exported like the candidates and action runs above.
     BackupTableCatalogEntry {
         table: "lifecycle_claims",
@@ -1643,9 +1648,24 @@ pub struct BackupExportOutcome {
 }
 
 pub struct BackupBundleStaging {
-    staging: ScratchDir,
+    staging: Arc<ScratchDir>,
     row_counts: BTreeMap<String, u64>,
     part_checksums: BTreeMap<String, String>,
+}
+
+/// The tables directory of a staged export, for blocking work that writes
+/// into it. Every clone keeps the whole staging directory on disk, so it is
+/// removed only once the last holder is gone: an export dropped while a
+/// blocking write is still running never leaves that write's file behind.
+#[derive(Clone)]
+pub struct BackupStagingTablesDir {
+    staging: Arc<ScratchDir>,
+}
+
+impl BackupStagingTablesDir {
+    pub fn path(&self) -> PathBuf {
+        self.staging.path().join(TABLES_DIRNAME)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1719,7 +1739,7 @@ impl BackupBundleStaging {
             })?;
 
         Ok(Self {
-            staging,
+            staging: Arc::new(staging),
             row_counts: BTreeMap::new(),
             part_checksums: BTreeMap::new(),
         })
@@ -1727,6 +1747,14 @@ impl BackupBundleStaging {
 
     pub fn tables_dir(&self) -> PathBuf {
         self.staging.path().join(TABLES_DIRNAME)
+    }
+
+    /// A handle on the tables directory that keeps the staging directory
+    /// alive for as long as it is held; see [`BackupStagingTablesDir`].
+    pub fn shared_tables_dir(&self) -> BackupStagingTablesDir {
+        BackupStagingTablesDir {
+            staging: Arc::clone(&self.staging),
+        }
     }
 
     pub fn record_table_part(
@@ -1741,7 +1769,38 @@ impl BackupBundleStaging {
         Ok(())
     }
 
-    pub fn finish(mut self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
+    pub fn finish(self, request: BackupBundleExportRequest) -> AppResult<BackupExportOutcome> {
+        self.finish_unless_abandoned(request, &FinishGate::default())
+    }
+
+    /// [`Self::finish`] on the blocking pool, so compressing and encrypting
+    /// the bundle never holds an async worker. When the caller stops waiting
+    /// (a timeout drops this future), the bundle is not committed to its
+    /// output path; a commit already under way completes before the drop
+    /// returns, so the caller's failure handling always sees the final state.
+    pub async fn finish_off_runtime(
+        self,
+        request: BackupBundleExportRequest,
+    ) -> AppResult<BackupExportOutcome> {
+        let gate = Arc::new(FinishGate::default());
+        let abandon_on_drop = AbandonFinishOnDrop(Some(Arc::clone(&gate)));
+        let joined =
+            tokio::task::spawn_blocking(move || self.finish_unless_abandoned(request, &gate)).await;
+        abandon_on_drop.disarm();
+        match joined {
+            Ok(result) => result,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => Err(AppError::Repository(format!(
+                "backup bundle export task failed: {error}"
+            ))),
+        }
+    }
+
+    fn finish_unless_abandoned(
+        mut self,
+        request: BackupBundleExportRequest,
+        gate: &FinishGate,
+    ) -> AppResult<BackupExportOutcome> {
         if request.passphrase.trim().is_empty() {
             return Err(AppError::validation_refused(
                 crate::error_reasons::security::BACKUP_EXPORT_REQUIRES_NON_EMPTY_PASSWORD,
@@ -1773,11 +1832,48 @@ impl BackupBundleStaging {
         let writer = AtomicOutputWriter::new(&request.output_path)?;
         let writer = AeadChunkWriter::new(writer, &request.passphrase)?;
         let writer = write_bundle_payload(self.staging.path(), writer)?.finish()?;
+        let abandoned = gate
+            .abandoned
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *abandoned {
+            return Err(AppError::Repository(
+                "backup bundle export was abandoned before it was committed".into(),
+            ));
+        }
         writer.finish()?;
+        drop(abandoned);
 
         Ok(BackupExportOutcome {
             summary: manifest.summary(),
         })
+    }
+}
+
+/// Whether the caller of [`BackupBundleStaging::finish_off_runtime`] stopped
+/// waiting. The commit holds the lock, so abandoning waits for a commit that
+/// has already started instead of racing it.
+#[derive(Default)]
+struct FinishGate {
+    abandoned: std::sync::Mutex<bool>,
+}
+
+struct AbandonFinishOnDrop(Option<Arc<FinishGate>>);
+
+impl AbandonFinishOnDrop {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for AbandonFinishOnDrop {
+    fn drop(&mut self) {
+        if let Some(gate) = self.0.take() {
+            *gate
+                .abandoned
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        }
     }
 }
 
@@ -2625,6 +2721,7 @@ mod tests {
             "title_metadata_rating_sources",
             "title_metadata_external_ratings",
             "title_credits",
+            "title_content_ratings",
         ] {
             let classification = BACKUP_TABLE_CATALOG
                 .iter()
@@ -2773,6 +2870,56 @@ mod tests {
         assert!(
             matches!(error, AppError::Validation(message) | AppError::ValidationRefused { message, .. } | AppError::ValidationRefusedWithCount { message, .. } if message.contains("tables/titles.ndjson"))
         );
+    }
+
+    /// Finishing on the blocking pool writes a bundle that restores exactly as
+    /// the inline finish does.
+    #[cfg(feature = "runtime-backups")]
+    #[tokio::test]
+    async fn finishing_off_the_runtime_writes_the_same_restorable_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inline_path = temp.path().join("inline.scryer-backup.enc");
+        let blocking_path = temp.path().join("blocking.scryer-backup.enc");
+        test_bundle_staging(4096)
+            .expect("staging")
+            .finish(test_export_request(&inline_path, "backup-passphrase"))
+            .expect("inline finish");
+        test_bundle_staging(4096)
+            .expect("staging")
+            .finish_off_runtime(test_export_request(&blocking_path, "backup-passphrase"))
+            .await
+            .expect("blocking finish");
+
+        let inline = prepare_backup_restore_payload(&inline_path, Some("backup-passphrase"))
+            .expect("inline bundle restores");
+        let blocking = prepare_backup_restore_payload(&blocking_path, Some("backup-passphrase"))
+            .expect("blocking bundle restores");
+        assert_eq!(blocking.manifest().row_counts, inline.manifest().row_counts);
+        assert_eq!(
+            blocking.manifest().part_checksums,
+            inline.manifest().part_checksums
+        );
+    }
+
+    /// A finish whose caller has stopped waiting never commits the bundle.
+    #[cfg(feature = "runtime-backups")]
+    #[test]
+    fn an_abandoned_finish_does_not_commit_the_bundle() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bundle_path = temp.path().join("abandoned.scryer-backup.enc");
+        let gate = FinishGate::default();
+        *gate.abandoned.lock().unwrap() = true;
+
+        test_bundle_staging(64)
+            .expect("staging")
+            .finish_unless_abandoned(
+                test_export_request(&bundle_path, "backup-passphrase"),
+                &gate,
+            )
+            .expect_err("an abandoned finish must fail");
+
+        assert!(!bundle_path.exists());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 
     #[cfg(feature = "runtime-backups")]

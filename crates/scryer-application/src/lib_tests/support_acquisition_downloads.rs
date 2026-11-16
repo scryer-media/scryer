@@ -516,12 +516,29 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
         title_id: &str,
         episode_id: Option<&str>,
     ) -> AppResult<Option<AcquisitionScopeState>> {
+        // The same arms as the SQL: an episode's row, or the title's own row
+        // with no episode, collection or series-movie link.
+        let scope = episode_id.map_or(AcquisitionScopeKey::Title, AcquisitionScopeKey::Episode);
         Ok(self
             .store
             .lock()
             .await
             .iter()
-            .find(|item| item.title_id == title_id && item.episode_id.as_deref() == episode_id)
+            .find(|item| item.title_id == title_id && scope.matches(item))
+            .cloned())
+    }
+
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
+        Ok(self
+            .store
+            .lock()
+            .await
+            .iter()
+            .find(|item| item.title_id == title_id && scope.matches(item))
             .cloned())
     }
 
@@ -3321,9 +3338,5 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
                     .cloned()
             })
             .collect())
-    }
-
-    async fn prune_terminal_delete_commands_older_than(&self, _days: i64) -> AppResult<u32> {
-        Ok(0)
     }
 }

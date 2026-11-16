@@ -584,12 +584,13 @@ fn stream_validate_and_compress_nzb(
 ) -> AppResult<()> {
     let source = MpscChunkReader::new(receiver);
     let tee = TeeZstdReader::new(source, output_path)?;
-    let buf_reader = StdBufReader::new(tee);
-    let mut reader = Reader::from_reader(buf_reader);
+    // The staged copy keeps the original bytes; only the validator reads the
+    // Latin-1 bytes of an older NZB as text.
+    let text = scryer_application::nzb_text::Utf8OrLatin1::new(StdBufReader::new(tee));
+    let mut reader = Reader::from_reader(StdBufReader::new(text));
     reader.config_mut().trim_text(false);
     let reader = validate_nzb_reader(reader)?;
-    let buf_reader = reader.into_inner();
-    let tee = buf_reader.into_inner();
+    let tee = reader.into_inner().into_inner().into_inner().into_inner();
     tee.finish()
 }
 
@@ -608,7 +609,9 @@ fn validate_nzb_xml(bytes: &[u8]) -> AppResult<()> {
         ));
     }
 
-    let mut reader = Reader::from_reader(Cursor::new(bytes));
+    let mut reader = Reader::from_reader(StdBufReader::new(
+        scryer_application::nzb_text::Utf8OrLatin1::new(Cursor::new(bytes)),
+    ));
     reader.config_mut().trim_text(false);
     validate_nzb_reader(reader).map(|_| ())
 }
@@ -882,6 +885,32 @@ mod tests {
             .expect_err("html payload should fail");
 
         assert!(error.to_string().contains("root element must be <nzb>"));
+    }
+
+    /// Documents SABnzbd, NZBGet and Weaver read: Latin-1 bytes, HTML named
+    /// entities and CDATA inside the root.
+    fn loosely_encoded_nzbs() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            (
+                "latin-1",
+                b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n<nzb><head><meta type=\"poster\">Andr\xe9</meta></head><file poster=\"Andr\xe9\" subject=\"Synthetic.Caf\xe9.mkv yEnc (1/1)\"><groups><group>alt.binaries.test</group></groups><segments><segment number=\"1\">a@example.invalid</segment></segments></file></nzb>".to_vec(),
+            ),
+            (
+                "named entities",
+                b"<nzb><file subject=\"Synthetic&nbsp;Caf&eacute;.mkv&unknownentity; yEnc\"><groups><group>alt.binaries.test</group></groups><segments><segment number=\"1\">a&nbsp;b@example.invalid</segment></segments></file></nzb>".to_vec(),
+            ),
+            (
+                "cdata",
+                b"<nzb><file subject=\"Synthetic.mkv\"><groups><group><![CDATA[alt.binaries.test]]></group></groups><segments><segment number=\"1\"><![CDATA[a<b>@example.invalid]]></segment></segments></file></nzb>".to_vec(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn validate_nzb_xml_accepts_latin1_entities_and_cdata_inside_the_root() {
+        for (label, bytes) in loosely_encoded_nzbs() {
+            validate_nzb_xml(&bytes).unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        }
     }
 
     #[test]

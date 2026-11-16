@@ -710,12 +710,14 @@ pub fn request_builder_schema() -> RuleBuilderSchema {
     };
     RuleBuilderSchema {
         family: REQUEST_RULE_FAMILY,
+        subjects: Vec::new(),
         outputs: REQUEST_HEADS
             .iter()
             .map(|spec| RuleBuilderOutputDescriptor {
                 id: spec.id,
                 head: spec.rule_name,
                 label_key: spec.label_key(),
+                action_label_key: None,
                 help_key: None,
                 value_kind: spec.value_kind,
                 options: spec.options,

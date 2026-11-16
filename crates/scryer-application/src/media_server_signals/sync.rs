@@ -78,10 +78,7 @@ impl MediaServerSignalSyncStatus {
     pub fn at(state: MediaServerSignalSyncState, now: chrono::DateTime<Utc>) -> Self {
         let clean_sweep_stale = state.last_success_at.is_some_and(|last_success_at| {
             !state.enabled
-                || !crate::maintenance_rules::facts::watch_signal_sweep_is_fresh(
-                    last_success_at,
-                    now,
-                )
+                || !crate::lifecycle_rules::facts::watch_signal_sweep_is_fresh(last_success_at, now)
         });
         Self {
             state,

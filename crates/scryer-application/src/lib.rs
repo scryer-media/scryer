@@ -71,6 +71,7 @@ mod folder_ownership;
 pub mod fs_integrity;
 pub mod fs_safety;
 pub mod grabbed_file_names;
+pub mod nzb_text;
 pub mod source_import;
 pub use grabbed_file_names::GrabbedFileName;
 mod health;
@@ -109,8 +110,8 @@ mod library_scan_unmatched;
 pub mod lifecycle_claims;
 pub mod lists;
 pub use lists::{ListPluginProvider, ListProviderClient, NullListPluginProvider};
+pub mod lifecycle_rules;
 pub mod location;
-pub mod maintenance_rules;
 mod media;
 pub(crate) mod media_references;
 mod media_requests;
@@ -418,21 +419,21 @@ pub use catalog::workflow::{
     DeleteTitlesJobRequest,
 };
 pub use contracts::{
-    AcquisitionScopeCoordinates, AcquisitionScopeStatesQuery, ActivityWindowCounts,
-    AudioStreamDetail, CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator,
-    CollectionUpdate, DashboardActivityStats, DeleteExecutionConfirmation,
-    DownloadClientAddRequest, DownloadClientBindingRecord, DownloadClientConfigUpdate,
-    DownloadClientMarkImportedRequest, DownloadClientRetryOutcome, DownloadClientStatus,
-    DownloadOrigin, DownloadPasswordCandidates, DownloadRecord, DownloadSubmission,
-    DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity, DownloadSubmissionPurpose,
-    EpisodeFileReassignOutcome, EpisodeFileReassignRequest, EpisodeFileReassignment,
-    EpisodeLinkReplacement, EpisodeUpdate, FileEpisodeLinkRecord, ImportArtifact,
-    IndexerArtifactLease, IndexerArtifactResolutionRequest, IndexerConfigSyncResult,
-    IndexerConfigUpdate, IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
-    IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
-    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
-    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
-    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    AcquisitionScopeCoordinates, AcquisitionScopeKey, AcquisitionScopeStatesQuery,
+    ActivityWindowCounts, AudioStreamDetail, CanonicalDownloadIdentityDisposition,
+    ClaimedMediaFile, ClientJobLocator, CollectionUpdate, DashboardActivityStats,
+    DeleteExecutionConfirmation, DownloadClientAddRequest, DownloadClientBindingRecord,
+    DownloadClientConfigUpdate, DownloadClientMarkImportedRequest, DownloadClientRetryOutcome,
+    DownloadClientStatus, DownloadOrigin, DownloadPasswordCandidates, DownloadRecord,
+    DownloadSubmission, DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity,
+    DownloadSubmissionPurpose, EpisodeFileReassignOutcome, EpisodeFileReassignRequest,
+    EpisodeFileReassignment, EpisodeLinkReplacement, EpisodeUpdate, FileEpisodeLinkRecord,
+    ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
+    IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
+    IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
+    IndexerDownloadClientProviderCompatibility, IndexerRoutingEntry, IndexerRoutingPlan,
+    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
     MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
     NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
@@ -535,7 +536,7 @@ pub use security::backup_bundle::{
     BLOB_MARKER_TYPE, BackupBundleExportRequest, BackupBundleInspectSummary,
     BackupBundleRestorePayload, BackupBundleStaging, BackupExportOutcome, BackupExportSecrets,
     BackupHydrationDerivedTable, BackupInstanceSecrets, BackupRestorePreparedBundle,
-    BackupTableCatalogEntry, BackupTableClassification, EXPORT_BATCH_SIZE,
+    BackupStagingTablesDir, BackupTableCatalogEntry, BackupTableClassification, EXPORT_BATCH_SIZE,
     PreparedBackupBundleDirectory, RESTORE_VERSION_CONTRACT_HINT, backup_export_table_names,
     backup_table_part_filename, inspect_backup_bundle, prepare_backup_restore_payload,
     restore_resets_hydration_derived_state, validate_inspected_bundle_is_restorable,
@@ -606,8 +607,8 @@ pub use indexer_requests::{
 };
 pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
-    JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
-    MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
+    JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource,
+    LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS, LibraryProbeSignature,
 };
 pub use library::user_delete::{
     DeleteEpisodeFilePreviewResult, DeleteEpisodeFilesPreview, DeletePreview, DeleteTitlesPreview,
@@ -650,8 +651,8 @@ pub use null_repositories::{
     NullImportArtifactRepository, NullImportRepository, NullIndexerSearchLearningRepository,
     NullIndexerStatsTracker, NullJobRunRepository, NullLibraryProbeRepository,
     NullLibraryRepository, NullLibraryScanUnmatchedItemRepository, NullLifecycleClaimRepository,
-    NullLocationOperationRepository, NullLogicalBackupExporter,
-    NullMaintenanceEvaluationRepository, NullMaintenanceRuleSetRepository, NullMediaFileRepository,
+    NullLifecycleEvaluationRepository, NullLifecycleRuleSetRepository,
+    NullLocationOperationRepository, NullLogicalBackupExporter, NullMediaFileRepository,
     NullMediaRequestRepository, NullMediaServerConnectionRepository,
     NullNotificationChannelRepository, NullNotificationSubscriptionRepository, NullOAuthRepository,
     NullPendingReleaseRepository, NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime,
@@ -662,7 +663,7 @@ pub use null_repositories::{
     NullTitleImageProcessor, NullTitleImageRepository, NullUpstreamScheduler,
     NullWorkflowOperationRepository,
 };
-// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+// ── Lifecycle safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
 pub use null_repositories::NullMediaServerPlaybackProbe;
 // ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────────
 /// The RSS cadence knob lives beside the RSS lane it governs, but the upstream
@@ -716,15 +717,15 @@ pub use ports::{
     IndexerSearchListingScope, IndexerSearchListingStrategy, IndexerSearchRunWrite,
     IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser, JobRunRepository,
     LibraryProbeRepository, LibraryRepository, LibraryScanUnmatchedItemRepository,
-    LifecycleActionRunRepository, LifecycleClaimRepository, LocationOperationProgress,
+    LifecycleActionJobReceiptClaim, LifecycleActionJobReceiptTransition,
+    LifecycleActionRunRepository, LifecycleActionStepCandidateKey, LifecycleActionStepClaim,
+    LifecycleActionStepRepository, LifecycleCandidateQuery, LifecycleCandidateRepository,
+    LifecycleClaimRepository, LifecycleDueCursor, LifecycleEvaluationRepository,
+    LifecycleEvaluationRunRepository, LifecycleExclusionRepository, LifecycleRuleScheduleAnchor,
+    LifecycleRuleSetRepository, LifecycleSearchJobRunCreation,
+    LifecycleSequenceCompletionRepository, LifecycleStepAct, LocationOperationProgress,
     LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
-    LogicalBackupExporter, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MaintenanceActionJobReceiptClaim,
-    MaintenanceActionJobReceiptTransition, MaintenanceActionStepCandidateKey,
-    MaintenanceActionStepClaim, MaintenanceActionStepRepository, MaintenanceCandidateQuery,
-    MaintenanceCandidateRepository, MaintenanceDueCursor, MaintenanceEvaluationRepository,
-    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
-    MaintenanceRuleScheduleAnchor, MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
-    MaintenanceSequenceCompletionRepository, MaintenanceStepAct, MediaAnalyzer,
+    LogicalBackupExporter, MEDIA_REQUEST_TITLE_IDENTITY_MAX_IDS, MediaAnalyzer,
     MediaFileHashCandidate, MediaFileRepository, MediaRequestFingerprintSummary, MediaRequestOrder,
     MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
     MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
@@ -777,7 +778,8 @@ pub use quality::release_parser::{
 };
 pub use quality::scoring_weights::{ScoringOverrides, ScoringPersona};
 pub use quality_profile::{
-    BLOCK_SCORE, BUILTIN_DEFAULT_QUALITY_PROFILE_ID, DEFAULT_MIN_UPGRADE_SCORE_DELTA,
+    BLOCK_SCORE, BUILTIN_DEFAULT_QUALITY_PROFILE_ID, DEFAULT_MIN_MISSING_EPISODES_FOR_PACK,
+    DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK, DEFAULT_MIN_UPGRADE_SCORE_DELTA,
     QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE,
     QualityProfile, QualityProfileCriteria, QualityProfileDecision,
     REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry, ScoringEntryKind, ScoringSource,
@@ -812,9 +814,9 @@ pub use settings::keys::{
     FORM_LOGIN_ENABLED_KEY, FULL_HASH_BACKFILL_CURSOR_KEY, HISTORY_KEEP_FOREVER_KEY,
     HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_BYTES_ENV, IMAGE_CACHE_MAX_SIZE_MB_KEY,
     IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CATEGORY_SETTING_KEY,
-    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
-    MAINTENANCE_GATE_EVALUATION_KEY, MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
-    MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY, METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY,
+    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+    LIFECYCLE_GATE_EVALUATION_KEY, LIFECYCLE_GATE_RESULT_DISPLAY_KEY,
+    LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY, METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY,
     MFA_REQUIRE_PASSWORD_LOGIN_KEY, MINIMUM_SEEDERS_FLOOR_DEFAULT,
     MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON, MINIMUM_SEEDERS_FLOOR_SETTING_KEY,
     MOVIE_AVAILABILITY_DELAY_DAYS_KEY, MOVIE_DEFAULT_AVAILABILITY_KEY, MOVIE_RELEASE_MARKET_KEY,
@@ -884,10 +886,11 @@ pub use types::{
     PrimaryCollectionSummary, ReassignEpisodeFileResult, RecycleBinBatchJobAccepted,
     RecycleBinSettings, RecycleRestoreConflictPolicy, RecycleRestorePreview,
     RecycleRestorePreviewItem, RecycledItem, RecycledItemHistory, ReleaseDecision,
-    ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature,
-    ResolvePendingImportResult, RuntimePathStyle, ScopedExternalId, SortDirection, SystemHealth,
-    TitleAcquisitionDiagnostics, TitleAward, TitleCatalogAggregates, TitleCatalogContentStatus,
-    TitleCatalogFilter, TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
+    ReleaseDecisionExplanation, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord,
+    ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
+    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics, TitleAward,
+    TitleCatalogAggregates, TitleCatalogContentStatus, TitleCatalogFilter,
+    TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogPresence,
     TitleCatalogProfileNames, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,
     TitleImageBlob, TitleImageKind, TitleImageSourceResult, TitleImageSyncTask,

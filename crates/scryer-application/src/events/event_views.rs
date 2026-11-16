@@ -356,7 +356,7 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
             ActivitySeverity::Info,
             format!("Stopped following the list '{}'.", data.list.list_name),
         ),
-        DomainEventPayload::MaintenanceRuleNotified(data) => (
+        DomainEventPayload::LifecycleRuleNotified(data) => (
             ActivityKind::SystemNotice,
             ActivitySeverity::Info,
             format!(

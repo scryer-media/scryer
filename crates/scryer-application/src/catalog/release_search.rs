@@ -353,6 +353,10 @@ fn evaluate_candidate(
                     &scored_release_metadata,
                     &inputs.catalog_episodes,
                     primary_episode_ids,
+                    inputs
+                        .quality_profile
+                        .criteria
+                        .min_missing_percent_for_series_pack_or_default(),
                 )
             });
 

@@ -22,8 +22,9 @@ import {
 import type { RuleBuilderSchemaStatus } from "@/lib/hooks/use-rule-builder-schema";
 
 /// A rule's source editor, the same for every rule family. A rule still made
-/// by the builder is shown in the builder (Simple) or as its generated Rego,
-/// read-only (Advanced), with a confirmed, one-way step to edit that Rego.
+/// by the builder is shown in the builder (Simple) or as its generated Rego
+/// (Advanced). The first edit of that Rego asks once, since editing it is
+/// one-way; a rule with nothing chosen yet goes straight to the Rego editor.
 /// Any other rule shows only the Rego editor.
 export function RuleEditorSurface({
   idPrefix,
@@ -73,12 +74,28 @@ export function RuleEditorSurface({
       ? generateRuleSource(schema, builderModel, variant)
       : null;
 
-  const editAsRego = () => {
-    if (ruleRegoEditorNeedsConfirmation({ regoSource: "", builderModel })) {
-      setConfirming(true);
-    } else {
-      onEditAsRego();
-    }
+  const needsConfirmation = ruleRegoEditorNeedsConfirmation({
+    regoSource: "",
+    builderModel,
+  });
+
+  /// Stops an edit of the builder's Rego before the editor applies it and
+  /// asks first. Copying, selecting and moving around stay free.
+  const holdEdit = (event: React.SyntheticEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setConfirming(true);
+  };
+  const holdEditKey = (event: React.KeyboardEvent) => {
+    const modified = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    const edits = modified
+      ? key === "v" || key === "x" || key === "z" || key === "y"
+      : event.key.length === 1 ||
+        event.key === "Backspace" ||
+        event.key === "Delete" ||
+        event.key === "Enter";
+    if (edits && !event.altKey) holdEdit(event);
   };
 
   return (
@@ -92,24 +109,15 @@ export function RuleEditorSurface({
         <div className="flex items-center gap-1">
           {builderModel !== null ? (
             <>
-              {mode === "view" ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  id={selectorId(idPrefix, "editor-edit-as-rego")}
-                  onClick={editAsRego}
-                >
-                  {t("settings.ruleBuilderEditAsRego")}
-                </Button>
-              ) : null}
               <ToggleGroupPrimitive.Root
                 type="single"
                 aria-label={t("settings.ruleBuilderModeLabel")}
                 className="inline-flex rounded-md border border-border p-1"
                 value={showBuilder ? "simple" : "view"}
                 onValueChange={(value) => {
-                  if (value === "simple" || value === "view")
+                  // Nothing chosen yet loses nothing: open the Rego editor.
+                  if (value === "view" && !needsConfirmation) onEditAsRego();
+                  else if (value === "simple" || value === "view")
                     onModeChange(value);
                 }}
               >
@@ -176,7 +184,21 @@ export function RuleEditorSurface({
           {t("settings.ruleBuilderGeneratedSourceEmpty")}
         </p>
       ) : (
-        editor(builderModel !== null)
+        // One wrapper for both cases, so confirming keeps the same editor.
+        <div
+          id={selectorId(idPrefix, "editor-source")}
+          {...(builderModel !== null && !confirming
+            ? {
+                onKeyDownCapture: holdEditKey,
+                onBeforeInputCapture: holdEdit,
+                onPasteCapture: holdEdit,
+                onCutCapture: holdEdit,
+                onDropCapture: holdEdit,
+              }
+            : {})}
+        >
+          {editor(false)}
+        </div>
       )}
       <ConfirmDialog
         open={confirming}

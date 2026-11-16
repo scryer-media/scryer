@@ -237,6 +237,8 @@ export type TitleRecord = {
   mediaResolution?: string | null;
   mediaHdr?: string | null;
   mediaAudioCodec?: string | null;
+  /** US certification, such as `PG-13`, the value the request rule fact reads. */
+  certificationLabel?: string | null;
   ratings?: TitleRatingRecord | null;
   canonicalTags?: CanonicalMediaTag[];
   language?: string | null;

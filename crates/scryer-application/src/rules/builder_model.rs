@@ -35,7 +35,7 @@ pub fn rule_builder_schema(family: &str) -> AppResult<RuleBuilderSchema> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuilderFamily {
     Scoring,
-    Maintenance,
+    Lifecycle,
     Request,
 }
 
@@ -43,7 +43,7 @@ impl BuilderFamily {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Scoring => "scoring",
-            Self::Maintenance => "maintenance",
+            Self::Lifecycle => "lifecycle",
             Self::Request => "request",
         }
     }
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn the_builder_schema_is_served_per_family_and_an_unknown_family_is_refused_with_a_code() {
-        for family in ["maintenance", "scoring"] {
+        for family in ["lifecycle", "scoring"] {
             assert!(rule_builder_schema(family).is_ok(), "{family}");
         }
         assert_eq!(
@@ -175,13 +175,13 @@ mod tests {
     #[test]
     fn a_document_for_the_rule_family_is_stored_canonically() {
         let text = checked_builder_model(
-            &json!({ "version": 2, "family": "maintenance", "join": "ALL" }),
-            BuilderFamily::Maintenance,
+            &json!({ "version": 2, "family": "lifecycle", "join": "ALL" }),
+            BuilderFamily::Lifecycle,
         )
         .expect("valid document");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&text).unwrap(),
-            json!({ "family": "maintenance", "join": "ALL", "version": 2 })
+            json!({ "family": "lifecycle", "join": "ALL", "version": 2 })
         );
     }
 
@@ -191,12 +191,12 @@ mod tests {
             json!([]),
             json!({ "version": 2 }),
             json!({ "version": 2, "family": "scoring" }),
-            json!({ "family": "maintenance" }),
-            json!({ "family": "maintenance", "version": 0 }),
-            json!({ "family": "maintenance", "version": "2" }),
+            json!({ "family": "lifecycle" }),
+            json!({ "family": "lifecycle", "version": 0 }),
+            json!({ "family": "lifecycle", "version": "2" }),
         ] {
             let error =
-                checked_builder_model(&value, BuilderFamily::Maintenance).expect_err("refused");
+                checked_builder_model(&value, BuilderFamily::Lifecycle).expect_err("refused");
             assert_eq!(
                 reason(error),
                 crate::error_reasons::rules::BUILDER_MODEL_INVALID,

@@ -1169,7 +1169,7 @@ fn summary_ids(summary: &serde_json::Value, key: &str) -> Vec<String> {
 /// season monitored, so the season stops being monitored with its episodes.
 #[tokio::test]
 async fn delete_episode_files_unmonitors_deleted_episodes_and_their_drained_season() {
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     // Seasons 0..=2, two episodes each. Season 1 owns episodes 2 and 3.
     let season = &setup.seasons[1];
@@ -1240,7 +1240,7 @@ async fn delete_episode_files_unmonitors_deleted_episodes_and_their_drained_seas
 /// episodes, so both are unmonitored and their drained season follows.
 #[tokio::test]
 async fn delete_episode_files_covers_every_episode_of_a_shared_file() {
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     let season = &setup.seasons[1];
     {
@@ -1301,7 +1301,7 @@ async fn delete_episode_files_covers_every_episode_of_a_shared_file() {
 /// episodes whose files actually went away are unmonitored.
 #[tokio::test]
 async fn delete_episode_files_keeps_a_partly_deleted_season_monitored() {
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     let season = &setup.seasons[2];
     let deleted = setup.episodes[4].id.clone();
@@ -1430,29 +1430,29 @@ async fn delete_episode_files_records_per_file_failures_and_keeps_going() {
 
 // Maintainerr af02e66c: explicit scope, fresh reads, confirmed unmonitoring,
 // independent files, and partial failure evidence.
-struct ScopedMaintenanceFixture {
+struct ScopedLifecycleFixture {
     fixture: EpisodeDeleteFixture,
-    evaluation: Arc<crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo>,
+    evaluation: Arc<crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo>,
     shows: Arc<MockShowRepo>,
     seasons: Vec<Collection>,
     episodes: Vec<Episode>,
 }
 
-async fn scoped_maintenance_fixture() -> ScopedMaintenanceFixture {
-    scoped_maintenance_fixture_for(MediaFacet::Series).await
+async fn scoped_lifecycle_fixture() -> ScopedLifecycleFixture {
+    scoped_lifecycle_fixture_for(MediaFacet::Series).await
 }
 
-async fn scoped_maintenance_fixture_for(facet: MediaFacet) -> ScopedMaintenanceFixture {
-    use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
-    use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
+async fn scoped_lifecycle_fixture_for(facet: MediaFacet) -> ScopedLifecycleFixture {
+    use crate::lib_tests::lifecycle_evaluation::InMemoryLifecycleEvaluationRepo;
+    use crate::lib_tests::lifecycle_rules::InMemoryLifecycleRuleRepo;
     let mut fixture = seed_episode_delete_fixture_for(facet).await;
-    let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
+    let evaluation = Arc::new(InMemoryLifecycleEvaluationRepo::default());
     let shows = Arc::new(MockShowRepo::default());
     fixture.app = fixture.app.with_test_overrides(|services| {
         services
             .with_shows(shows.clone())
-            .with_maintenance_rule_set_store(Arc::new(InMemoryMaintenanceRuleRepo::default()))
-            .with_maintenance_evaluation_store(evaluation.clone())
+            .with_lifecycle_rule_set_store(Arc::new(InMemoryLifecycleRuleRepo::default()))
+            .with_lifecycle_evaluation_store(evaluation.clone())
     });
     let mut seasons = Vec::new();
     let mut episodes = Vec::new();
@@ -1502,7 +1502,7 @@ async fn scoped_maintenance_fixture_for(facet: MediaFacet) -> ScopedMaintenanceF
         }
         seasons.push(collection);
     }
-    ScopedMaintenanceFixture {
+    ScopedLifecycleFixture {
         fixture,
         evaluation,
         shows,
@@ -1511,30 +1511,29 @@ async fn scoped_maintenance_fixture_for(facet: MediaFacet) -> ScopedMaintenanceF
     }
 }
 
-impl ScopedMaintenanceFixture {
+impl ScopedLifecycleFixture {
     async fn rule(
         &self,
-        scope: scryer_domain::MaintenanceRuleSubjectKind,
+        scope: scryer_domain::LifecycleRuleSubjectKind,
         matcher: String,
         grace: i64,
     ) -> String {
-        use crate::maintenance_rules::*;
+        use crate::lifecycle_rules::*;
         let app = &self.fixture.app;
         let actor = &self.fixture.admin;
         let rule = app
-            .create_maintenance_rule_set(
+            .create_lifecycle_rule_set(
                 actor,
-                MaintenanceRuleDraft {
+                LifecycleRuleDraft {
                     max_titles_per_run: Some(100),
-                    subject_kind: scope,
                     name: "Scoped deletion".into(),
                     description: String::new(),
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::legacy_source_at(
                         matcher,
-                        crate::maintenance_rules::MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                        crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeDeleteFiles,
+                        scope,
                     ),
                     grace_days: grace,
-                    storage_root_id: None,
                     library_ids: vec![],
                 },
             )
@@ -1543,18 +1542,18 @@ impl ScopedMaintenanceFixture {
         assert!(!rule.rule_set.enabled);
         assert_eq!(
             rule.rule_set.effect_arming,
-            scryer_domain::MaintenanceEffectArming::None
+            scryer_domain::LifecycleEffectArming::None
         );
-        super::maintenance_rules::set_rule_state(
+        super::lifecycle_rules::set_rule_state(
             app,
             actor,
             &rule.rule_set.id,
-            scryer_domain::MaintenanceRuleState::DryRun,
+            scryer_domain::LifecycleRuleState::DryRun,
             None,
         )
         .await;
-        super::maintenance_rules::open_maintenance_gates(app, false, true).await;
-        app.run_maintenance_rule_evaluation_job()
+        super::lifecycle_rules::open_lifecycle_gates(app, false, true).await;
+        app.run_lifecycle_rule_evaluation_job()
             .await
             .expect("evaluate");
         let count = self
@@ -1566,11 +1565,11 @@ impl ScopedMaintenanceFixture {
                 candidate.rule_set_id == rule.rule_set.id && !candidate.state.is_terminal()
             })
             .count();
-        super::maintenance_rules::arm_rule(
+        super::lifecycle_rules::arm_rule(
             app,
             actor,
             &rule.rule_set.id,
-            scryer_domain::MaintenanceEffectArming::Destructive,
+            scryer_domain::LifecycleEffectArming::Destructive,
             Some(count as i64),
         )
         .await;
@@ -1579,25 +1578,25 @@ impl ScopedMaintenanceFixture {
 }
 
 #[tokio::test]
-async fn maintenance_scope_episode_deletion_preserves_siblings_and_records() {
-    use crate::maintenance_rules::{
-        MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
+async fn lifecycle_scope_episode_deletion_preserves_siblings_and_records() {
+    use crate::lifecycle_rules::{
+        LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
     };
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     let target = &setup.episodes[3]; // S01E02, never S02E02.
     let extra = f
         .add_episode_file("Emberfall/Season 01/Emberfall - S01E02.v2.mkv", &target.id)
         .await;
-    let rule = setup.rule(scryer_domain::MaintenanceRuleSubjectKind::Episode,
+    let rule = setup.rule(scryer_domain::LifecycleRuleSubjectKind::Episode,
         format!("match if {{ input.subject.episode_id == {:?}; input.facts.monitored; input.facts.has_file }}", target.id), 0).await;
     let preview = f
         .app
-        .preview_maintenance_rule(
+        .preview_lifecycle_rule(
             &f.admin,
-            MaintenancePreviewRequest {
-                matcher: MaintenancePreviewMatcher::Stored { rule_set_id: rule },
-                selection: MaintenancePreviewSelection::Titles(vec![f.title_id.clone()]),
+            LifecyclePreviewRequest {
+                matcher: LifecyclePreviewMatcher::Stored { rule_set_id: rule },
+                selection: LifecyclePreviewSelection::Titles(vec![f.title_id.clone()]),
             },
         )
         .await
@@ -1665,13 +1664,13 @@ async fn maintenance_scope_episode_deletion_preserves_siblings_and_records() {
 }
 
 #[tokio::test]
-async fn maintenance_scope_season_deletion_preserves_other_seasons_and_unmonitors_future() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_season_deletion_preserves_other_seasons_and_unmonitors_future() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup.shows.episodes.lock().await[3].air_date = Some("2099-01-01".into());
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             "match if { input.subject.season_number == 1; input.facts.monitored }".into(),
             0,
         )
@@ -1702,21 +1701,21 @@ async fn maintenance_scope_season_deletion_preserves_other_seasons_and_unmonitor
 }
 
 #[tokio::test]
-async fn maintenance_scope_specials_zero_and_inherited_exclusions() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_specials_zero_and_inherited_exclusions() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     let rule = setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             "match := true".into(),
             0,
         )
         .await;
     f.app
-        .exclude_maintenance_scoped_subject(
+        .exclude_lifecycle_scoped_subject(
             &f.admin,
             &f.title_id,
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             &setup.seasons[0].id,
             Some(rule),
             None,
@@ -1734,15 +1733,15 @@ async fn maintenance_scope_specials_zero_and_inherited_exclusions() {
 }
 
 #[tokio::test]
-async fn maintenance_scope_shared_episode_file_is_held_before_unmonitoring() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_shared_episode_file_is_held_before_unmonitoring() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     let mut shared = f.media_files.store.lock().await[2].clone();
     shared.episode_id = Some(setup.episodes[4].id.clone());
     f.media_files.store.lock().await.push(shared);
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             format!(
                 "match if {{ input.subject.episode_id == {:?} }}",
                 setup.episodes[2].id
@@ -1762,12 +1761,12 @@ async fn maintenance_scope_shared_episode_file_is_held_before_unmonitoring() {
 }
 
 #[tokio::test]
-async fn maintenance_scope_missing_episode_never_falls_back_to_show() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_missing_episode_never_falls_back_to_show() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             format!(
                 "match if {{ input.subject.episode_id == {:?} }}",
                 setup.episodes[3].id
@@ -1797,12 +1796,12 @@ async fn maintenance_scope_missing_episode_never_falls_back_to_show() {
 }
 
 #[tokio::test]
-async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_them() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_failed_unmonitor_preserves_files_and_retry_rechecks_them() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             format!(
                 "match if {{ input.subject.episode_id == {:?}; input.facts.monitored }}",
                 setup.episodes[3].id
@@ -1831,15 +1830,15 @@ async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_t
 }
 
 #[tokio::test]
-async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
+async fn lifecycle_season_failed_unmonitor_holds_when_its_subject_changed() {
     // The season unmonitor writes the season flag, then fails on its
     // episodes. The subject no longer equals the recorded before-state, so the
     // retry holds rather than replaying, and every file stays.
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             "match if { input.subject.season_number == 1 }".into(),
             0,
         )
@@ -1856,11 +1855,11 @@ async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
     assert_eq!(f.remaining_file_ids().await.len(), 6);
 
     // An episode subject whose failed attempt changed nothing replays.
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             format!(
                 "match if {{ input.subject.episode_id == {:?} }}",
                 setup.episodes[3].id
@@ -1877,7 +1876,7 @@ async fn maintenance_season_failed_unmonitor_holds_when_its_subject_changed() {
     assert_eq!(f.remaining_file_ids().await.len(), 5);
 }
 
-async fn append_maintenance_safety_holds(setup: &ScopedMaintenanceFixture) {
+async fn append_lifecycle_safety_holds(setup: &ScopedLifecycleFixture) {
     use crate::LifecycleActionRunRepository;
     let checkpoint_run = setup.evaluation.all_action_runs().await.remove(0);
     for index in 0..101 {
@@ -1901,9 +1900,8 @@ async fn append_maintenance_safety_holds(setup: &ScopedMaintenanceFixture) {
 }
 
 #[tokio::test]
-async fn maintenance_scope_partial_preview_failure_records_each_file_and_preserves_shared_sidecars()
-{
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_partial_preview_failure_records_each_file_and_preserves_shared_sidecars() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     let outside = tempfile::tempdir().unwrap();
     let outside_path = outside.path().join("outside.mkv");
@@ -1915,7 +1913,7 @@ async fn maintenance_scope_partial_preview_failure_records_each_file_and_preserv
     std::fs::write(&sidecar, b"shared season metadata").unwrap();
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             format!(
                 "match if {{ input.subject.episode_id == {:?} }}",
                 setup.episodes[3].id
@@ -1953,10 +1951,10 @@ async fn maintenance_scope_partial_preview_failure_records_each_file_and_preserv
 }
 
 #[tokio::test]
-async fn maintenance_scope_crash_after_unmonitor_and_disk_removal_resumes_catalog_cleanup() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_crash_after_unmonitor_and_disk_removal_resumes_catalog_cleanup() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
-    setup.rule(scryer_domain::MaintenanceRuleSubjectKind::Episode,
+    setup.rule(scryer_domain::LifecycleRuleSubjectKind::Episode,
         format!("match if {{ input.subject.episode_id == {:?}; input.facts.monitored; input.facts.has_file }}", setup.episodes[3].id), 0).await;
     *setup.shows.fail_monitoring.lock().await = true;
     f.app.run_every_rule_action_pass_for_tests().await.unwrap();
@@ -1969,12 +1967,12 @@ async fn maintenance_scope_crash_after_unmonitor_and_disk_removal_resumes_catalo
     // completion flag were not persisted. The next lease uses the saved plan.
     std::fs::remove_file(f.root.join("Emberfall/Season 01/Emberfall - S01E02.mkv")).unwrap();
     let candidate = setup.evaluation.all_candidates().await.remove(0);
-    append_maintenance_safety_holds(&setup).await;
+    append_lifecycle_safety_holds(&setup).await;
     setup
         .evaluation
         .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(2))
         .await;
-    f.app.run_maintenance_rule_evaluation_job().await.unwrap();
+    f.app.run_lifecycle_rule_evaluation_job().await.unwrap();
     let report = f.app.run_every_rule_action_pass_for_tests().await.unwrap();
     assert_eq!(report.executed, 1, "{report:?}");
     assert_eq!(f.remaining_file_ids().await.len(), 5);
@@ -1982,23 +1980,23 @@ async fn maintenance_scope_crash_after_unmonitor_and_disk_removal_resumes_catalo
 }
 
 #[tokio::test]
-async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_independent() {
-    use crate::maintenance_rules::{
-        MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
+async fn lifecycle_scope_preview_targets_are_exact_and_sibling_grace_is_independent() {
+    use crate::lifecycle_rules::{
+        LifecyclePreviewMatcher, LifecyclePreviewRequest, LifecyclePreviewSelection,
     };
-    let setup = scoped_maintenance_fixture().await;
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup.shows.episodes.lock().await[3].monitored = false;
     let rule = setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             "match if { input.subject.season_number == 1; input.facts.monitored }".into(),
             7,
         )
         .await;
     let first = setup.evaluation.all_candidates().await.remove(0);
     setup.shows.episodes.lock().await[3].monitored = true;
-    f.app.run_maintenance_rule_evaluation_job().await.unwrap();
+    f.app.run_lifecycle_rule_evaluation_job().await.unwrap();
     let rows = setup.evaluation.all_candidates().await;
     assert_eq!(rows.len(), 2);
     assert_eq!(
@@ -2017,13 +2015,13 @@ async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_indepe
     assert!(sibling.first_matched_at > first.first_matched_at);
     let preview = f
         .app
-        .preview_maintenance_rule(
+        .preview_lifecycle_rule(
             &f.admin,
-            MaintenancePreviewRequest {
-                matcher: MaintenancePreviewMatcher::Stored {
+            LifecyclePreviewRequest {
+                matcher: LifecyclePreviewMatcher::Stored {
                     rule_set_id: rule.clone(),
                 },
-                selection: MaintenancePreviewSelection::Subjects {
+                selection: LifecyclePreviewSelection::Subjects {
                     title_ids: vec![f.title_id.clone()],
                     subject_ids: vec![setup.episodes[3].id.clone()],
                 },
@@ -2036,10 +2034,10 @@ async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_indepe
     assert_eq!(preview.titles[0].due_at, Some(sibling.due_at));
     assert!(!preview.titles[0].due_at_is_estimate);
     f.app
-        .exclude_maintenance_scoped_subject(
+        .exclude_lifecycle_scoped_subject(
             &f.admin,
             &f.title_id,
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             &setup.seasons[1].id,
             Some(rule.clone()),
             None,
@@ -2048,13 +2046,13 @@ async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_indepe
         .unwrap();
     let excluded = f
         .app
-        .preview_maintenance_rule(
+        .preview_lifecycle_rule(
             &f.admin,
-            MaintenancePreviewRequest {
-                matcher: MaintenancePreviewMatcher::Stored {
+            LifecyclePreviewRequest {
+                matcher: LifecyclePreviewMatcher::Stored {
                     rule_set_id: rule.clone(),
                 },
-                selection: MaintenancePreviewSelection::Subjects {
+                selection: LifecyclePreviewSelection::Subjects {
                     title_ids: vec![f.title_id.clone()],
                     subject_ids: vec![setup.episodes[3].id.clone()],
                 },
@@ -2066,11 +2064,11 @@ async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_indepe
     assert!(excluded.titles[0].due_at.is_none());
     let missing = f
         .app
-        .preview_maintenance_rule(
+        .preview_lifecycle_rule(
             &f.admin,
-            MaintenancePreviewRequest {
-                matcher: MaintenancePreviewMatcher::Stored { rule_set_id: rule },
-                selection: MaintenancePreviewSelection::Subjects {
+            LifecyclePreviewRequest {
+                matcher: LifecyclePreviewMatcher::Stored { rule_set_id: rule },
+                selection: LifecyclePreviewSelection::Subjects {
                     title_ids: vec![f.title_id.clone()],
                     subject_ids: vec!["missing".into()],
                 },
@@ -2081,14 +2079,14 @@ async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_indepe
 }
 
 #[tokio::test]
-async fn maintenance_scope_anime_specials_and_missing_files_keep_parent_records() {
-    let setup = scoped_maintenance_fixture_for(MediaFacet::Anime).await;
+async fn lifecycle_scope_anime_specials_and_missing_files_keep_parent_records() {
+    let setup = scoped_lifecycle_fixture_for(MediaFacet::Anime).await;
     let f = &setup.fixture;
     setup.shows.episodes.lock().await[0].absolute_number = Some("100".into());
     std::fs::remove_file(f.root.join("Emberfall/Season 00/Emberfall - S00E01.mkv")).unwrap();
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             "match if { input.subject.season_number == 0 }".into(),
             0,
         )
@@ -2116,12 +2114,12 @@ async fn maintenance_scope_anime_specials_and_missing_files_keep_parent_records(
 }
 
 #[tokio::test]
-async fn maintenance_scope_season_failed_propagation_preserves_every_file() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_season_failed_propagation_preserves_every_file() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             "match if { input.subject.season_number == 1 }".into(),
             0,
         )
@@ -2143,12 +2141,12 @@ async fn maintenance_scope_season_failed_propagation_preserves_every_file() {
 }
 
 #[tokio::test]
-async fn maintenance_scope_overlapping_episode_and_season_rules_preserve_other_seasons() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_overlapping_episode_and_season_rules_preserve_other_seasons() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            scryer_domain::LifecycleRuleSubjectKind::Episode,
             format!(
                 "match if {{ input.subject.episode_id == {:?}; input.facts.monitored }}",
                 setup.episodes[3].id
@@ -2158,7 +2156,7 @@ async fn maintenance_scope_overlapping_episode_and_season_rules_preserve_other_s
         .await;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             "match if { input.subject.season_number == 1; input.facts.monitored }".into(),
             0,
         )
@@ -2201,12 +2199,12 @@ async fn maintenance_scope_overlapping_episode_and_season_rules_preserve_other_s
 }
 
 #[tokio::test]
-async fn maintenance_scope_newly_discovered_future_episodes_inherit_unmonitored_season() {
-    let setup = scoped_maintenance_fixture().await;
+async fn lifecycle_scope_newly_discovered_future_episodes_inherit_unmonitored_season() {
+    let setup = scoped_lifecycle_fixture().await;
     let f = &setup.fixture;
     setup
         .rule(
-            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            scryer_domain::LifecycleRuleSubjectKind::Season,
             "match if { input.subject.season_number == 1 }".into(),
             0,
         )

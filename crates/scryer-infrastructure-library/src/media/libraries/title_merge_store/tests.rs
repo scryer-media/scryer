@@ -8,6 +8,7 @@ use super::*;
 use scryer_application::location::merge::engine::plan_merge;
 use scryer_application::location::merge::map::MergeBlockReason;
 use scryer_application::location::merge::roles::RoleChangeReason;
+use scryer_infrastructure_sql::domain_event_payload::encode_domain_event_payload;
 use sqlx::sqlite::SqlitePoolOptions;
 
 mod bridge_cache;
@@ -434,7 +435,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     insert_wanted_item(&datastore, "wanted-1", SOURCE, "s-e1", "wanted").await;
     run(
         &datastore,
-        "INSERT INTO maintenance_rule_sets (id, name) VALUES ('rule-1', 'Rule')",
+        "INSERT INTO lifecycle_rule_sets (id, name) VALUES ('rule-1', 'Rule')",
         vec![],
     )
     .await;
@@ -461,7 +462,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_action_steps (candidate_id, match_generation, revision_number, step_id,
+        "INSERT INTO lifecycle_action_steps (candidate_id, match_generation, revision_number, step_id,
                                                 rule_set_id, title_id, subject_kind, subject_id,
                                                 sequence_content_hash, step_kind, state, created_at, updated_at)
          VALUES ('candidate-1', 1, 1, 'step-1', 'rule-1', {}, 'title', {}, 'sequence-hash', 'delete',
@@ -474,7 +475,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_action_step_attempts (id, candidate_id, match_generation, revision_number,
+        "INSERT INTO lifecycle_action_step_attempts (id, candidate_id, match_generation, revision_number,
                                                         step_id, attempt, state, started_at, created_at, updated_at)
          VALUES ('step-attempt-1', 'candidate-1', 1, 1, 'step-1', 1, 'succeeded',
                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
@@ -483,7 +484,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_action_job_receipts (candidate_id, match_generation, revision_number, step_id,
+        "INSERT INTO lifecycle_action_job_receipts (candidate_id, match_generation, revision_number, step_id,
                                                        dispatch_attempt, schema_version, logical_request_key,
                                                        request_hash, state, created_at, updated_at)
          VALUES ('candidate-1', 1, 1, 'step-1', 1, 1, 'request-1', 'hash-1', 'completed',
@@ -493,7 +494,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_sequence_terminal_memberships
+        "INSERT INTO lifecycle_sequence_terminal_memberships
              (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id, subject_kind,
               subject_id, match_generation, sequence_content_hash, outcome, created_at)
          VALUES ('terminal-membership-1', 'candidate-1', 'rule-1', 1, 'hash', {}, 'title', {}, 1,
@@ -506,7 +507,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_rule_exclusions (id, title_id, reason)
+        "INSERT INTO lifecycle_rule_exclusions (id, title_id, reason)
          VALUES ('exclusion-1', {}, 'merged source')",
         vec![SqlArg::Text(SOURCE.to_string())],
     )
@@ -558,10 +559,10 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     );
     assert_eq!(outcome.rows_affected.get("retire:titles"), Some(&1));
     for table in [
-        "maintenance_action_step_attempts",
-        "maintenance_action_job_receipts",
-        "maintenance_action_steps",
-        "maintenance_sequence_terminal_memberships",
+        "lifecycle_action_step_attempts",
+        "lifecycle_action_job_receipts",
+        "lifecycle_action_steps",
+        "lifecycle_sequence_terminal_memberships",
         "lifecycle_action_runs",
         "lifecycle_candidates",
     ] {
@@ -603,7 +604,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
         ("wanted_items", "title_id"),
         ("lifecycle_candidates", "title_id"),
         ("lifecycle_action_runs", "title_id"),
-        ("maintenance_rule_exclusions", "title_id"),
+        ("lifecycle_rule_exclusions", "title_id"),
         ("media_server_user_media_signals", "scryer_title_id"),
     ] {
         assert_eq!(
@@ -1220,4 +1221,337 @@ async fn a_merge_advances_the_title_folder_write_counter() {
         after > before,
         "retiring the source title changes the title set"
     );
+}
+
+async fn insert_monitor_selection(
+    datastore: &StoreDatastore,
+    owner_kind: &str,
+    owner_id: &str,
+    season: &str,
+) {
+    run(
+        datastore,
+        "INSERT INTO monitor_selections (owner_kind, owner_id, entry_kind, entry_key, label,
+                                         external_ids_json, created_at, updated_at)
+         VALUES ({}, {}, 'season', {}, NULL, '[]', '2026-01-01T00:00:00Z',
+                 '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(owner_kind.to_string()),
+            SqlArg::Text(owner_id.to_string()),
+            SqlArg::Text(season.to_string()),
+        ],
+    )
+    .await;
+}
+
+async fn monitor_selection_seasons(
+    datastore: &StoreDatastore,
+    owner_kind: &str,
+    owner_id: &str,
+) -> Vec<String> {
+    SqlRuntime::fetch_all(
+        datastore.read_exec(),
+        "SELECT entry_key FROM monitor_selections
+          WHERE owner_kind = {} AND owner_id = {}
+          ORDER BY entry_key",
+        &[
+            SqlArg::Text(owner_kind.to_string()),
+            SqlArg::Text(owner_id.to_string()),
+        ],
+    )
+    .await
+    .expect("the selection query should run")
+    .iter()
+    .map(|row| row.text("entry_key").expect("an entry key"))
+    .collect()
+}
+
+async fn insert_media_request_for_title(
+    datastore: &StoreDatastore,
+    id: &str,
+    library_id: &str,
+    created_title_id: &str,
+) {
+    run(
+        datastore,
+        "INSERT INTO media_requests (id, library_id, facet, status, identity_fingerprint, title,
+                                     created_title_id, created_by_user_id, created_at,
+                                     updated_at)
+         VALUES ({}, {}, 'series', 'approved', {}, {}, {}, 'requester-under-test',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(library_id.to_string()),
+            SqlArg::Text(format!("fingerprint-{id}")),
+            SqlArg::Text(format!("Request {id}")),
+            SqlArg::Text(created_title_id.to_string()),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_merge_clears_the_retired_titles_monitor_selections_and_keeps_the_survivors() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    for (library_id, slug) in [("library-a", "a"), ("library-b", "b")] {
+        run(
+            &datastore,
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ({}, 'series', {}, {}, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            vec![
+                SqlArg::Text(library_id.to_string()),
+                SqlArg::Text(slug.to_uppercase()),
+                SqlArg::Text(slug.to_string()),
+            ],
+        )
+        .await;
+    }
+    run(
+        &datastore,
+        "INSERT INTO users (id, username, password_hash, password_change_required, account_kind,
+                            status)
+         VALUES ('requester-under-test', 'requester-under-test', NULL, 0, 'local', 'active')",
+        vec![],
+    )
+    .await;
+    insert_monitor_selection(&datastore, "title", SOURCE, "1").await;
+    insert_monitor_selection(&datastore, "title", SOURCE, "2").await;
+    insert_monitor_selection(&datastore, "title", DESTINATION, "2").await;
+    // The source's request retires with the merge; the destination's stays.
+    insert_media_request_for_title(&datastore, "request-source", "library-a", SOURCE).await;
+    insert_media_request_for_title(&datastore, "request-destination", "library-b", DESTINATION)
+        .await;
+    insert_monitor_selection(&datastore, "media_request", "request-source", "1").await;
+    insert_monitor_selection(&datastore, "media_request", "request-destination", "2").await;
+
+    let selections_before = scalar(
+        &datastore,
+        "SELECT COUNT(*) AS row_count FROM monitor_selections",
+        vec![],
+    )
+    .await;
+    let plan = plan_for(&store).await;
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    // The preview counts the selections the merge removes, and the outcome
+    // records each delete.
+    let selections_removed = selections_before
+        - scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM monitor_selections",
+            vec![],
+        )
+        .await;
+    assert_eq!(selections_removed, 3);
+    assert_eq!(
+        outcome.rows_affected.get("retire:monitor_selections_title"),
+        Some(&2)
+    );
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("retire:monitor_selections_media_request"),
+        Some(&1)
+    );
+    let retired_records: u64 = outcome
+        .rows_affected
+        .iter()
+        .filter(|(key, _)| key.starts_with("retire:") && key.as_str() != "retire:titles")
+        .map(|(_, rows)| *rows)
+        .sum();
+    assert_eq!(
+        plan.summary.source_records_dropped,
+        i64::try_from(retired_records).expect("a small count"),
+        "the preview's dropped count matches the rows the merge removed"
+    );
+
+    assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 0);
+    assert!(
+        monitor_selection_seasons(&datastore, "title", SOURCE)
+            .await
+            .is_empty(),
+        "the retired title keeps no monitor selection"
+    );
+    assert_eq!(
+        monitor_selection_seasons(&datastore, "title", DESTINATION).await,
+        vec!["2".to_string()],
+        "the surviving title's selection is untouched"
+    );
+    assert!(
+        monitor_selection_seasons(&datastore, "media_request", "request-source")
+            .await
+            .is_empty(),
+        "the retired request keeps no monitor selection"
+    );
+    assert_eq!(
+        monitor_selection_seasons(&datastore, "media_request", "request-destination").await,
+        vec!["2".to_string()],
+    );
+}
+
+fn retired_record_total(outcome: &MergeOutcome) -> i64 {
+    let total: u64 = outcome
+        .rows_affected
+        .iter()
+        .filter(|(key, _)| key.starts_with("retire:") && key.as_str() != "retire:titles")
+        .map(|(_, rows)| *rows)
+        .sum();
+    i64::try_from(total).expect("a small count")
+}
+
+async fn insert_consumed_manual_import_selection(
+    datastore: &StoreDatastore,
+    id: &str,
+    title_id: &str,
+    candidate_paths: &[&str],
+) {
+    run(
+        datastore,
+        "INSERT INTO manual_import_selections (id, actor_user_id, title_id, source_system,
+                                               source_ref, consumed_at, created_at, updated_at)
+         VALUES ({}, 'actor-under-test', {}, 'system-under-test', {}, '2026-01-02T00:00:00Z',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(format!("ref-{id}")),
+        ],
+    )
+    .await;
+    for path in candidate_paths {
+        run(
+            datastore,
+            "INSERT INTO manual_import_selection_candidates (id, selection_id, canonical_path,
+                                                             created_at)
+             VALUES ({}, {}, {}, '2026-01-01T00:00:00Z')",
+            vec![
+                SqlArg::Text(format!("{id}-{path}")),
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(path.to_string()),
+            ],
+        )
+        .await;
+    }
+}
+
+async fn selection_candidate_count(datastore: &StoreDatastore, selection_id: &str) -> i64 {
+    scalar(
+        datastore,
+        "SELECT COUNT(*) AS row_count FROM manual_import_selection_candidates
+          WHERE selection_id = {}",
+        vec![SqlArg::Text(selection_id.to_string())],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_merge_deletes_the_candidates_of_the_selections_it_retires() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    insert_consumed_manual_import_selection(
+        &datastore,
+        "selection-source",
+        SOURCE,
+        &["/incoming/a.mkv", "/incoming/b.mkv"],
+    )
+    .await;
+    insert_consumed_manual_import_selection(
+        &datastore,
+        "selection-destination",
+        DESTINATION,
+        &["/incoming/c.mkv"],
+    )
+    .await;
+
+    let plan = plan_for(&store).await;
+    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("retire:manual_import_selection_candidates"),
+        Some(&2)
+    );
+    assert_eq!(
+        outcome.rows_affected.get("retire:manual_import_selections"),
+        Some(&1)
+    );
+    assert_eq!(
+        plan.summary.source_records_dropped,
+        retired_record_total(&outcome),
+        "the preview counts the candidates the merge removes"
+    );
+    assert_eq!(
+        selection_candidate_count(&datastore, "selection-source").await,
+        0
+    );
+    assert_eq!(
+        selection_candidate_count(&datastore, "selection-destination").await,
+        1,
+        "the surviving title's selection keeps its candidates"
+    );
+}
+
+async fn stored_payload(datastore: &StoreDatastore, event_id: &str) -> Vec<u8> {
+    SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT payload_json FROM domain_events WHERE event_id = {}",
+        &[SqlArg::Text(event_id.to_string())],
+    )
+    .await
+    .expect("the event query should run")
+    .expect("the event row")
+    .opt_bytes("payload_json")
+    .expect("a payload column")
+    .expect("a payload")
+}
+
+#[tokio::test]
+async fn rewritten_history_payloads_store_the_bytes_a_lone_encode_produces() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    let events: [(&str, &[&str]); 4] = [
+        ("event-a", &["s-e1"]),
+        ("event-b", &["s-e2", "s-e1"]),
+        ("event-c", &["s-e1", "s-e2"]),
+        ("event-d", &["s-e2"]),
+    ];
+    let mut expected = Vec::new();
+    for (event_id, episode_ids) in events {
+        insert_release_grabbed_event(&datastore, event_id, SOURCE, episode_ids).await;
+        // The old path: remap the stored payload and encode it on its own.
+        let mut payload = decode_domain_event_payload(&stored_payload(&datastore, event_id).await)
+            .expect("the seeded payload decodes");
+        let remapped: Vec<Value> = episode_ids
+            .iter()
+            .map(|id| Value::String(id.replacen("s-", "d-", 1)))
+            .collect();
+        payload["data"]["episode_ids"] = Value::Array(remapped);
+        expected.push((
+            event_id,
+            encode_domain_event_payload(&payload).expect("the payload encodes"),
+        ));
+    }
+
+    let plan = plan_for(&store).await;
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+    assert_eq!(outcome.domain_event_payloads_rewritten, 4);
+    for (event_id, bytes) in expected {
+        assert_eq!(
+            stored_payload(&datastore, event_id).await,
+            bytes,
+            "{event_id} stores exactly what a lone encode of its remapped payload produces"
+        );
+    }
 }

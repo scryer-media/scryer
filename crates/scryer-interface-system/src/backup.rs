@@ -267,7 +267,7 @@ async fn wait_for_restore(app: &AppUseCase, id: &str) -> GqlResult<RestoreJobPay
             }
         } else {
             return Err(to_gql_error(
-                scryer_application::RestoreCoordinator::maintenance_error(),
+                scryer_application::RestoreCoordinator::lifecycle_error(),
             ));
         }
         notified.await;
@@ -472,7 +472,7 @@ impl BackupMutations {
         Ok(RestoreInspectPayload {
             upload_id: job.upload_id,
             summary: job.summary.ok_or_else(|| {
-                to_gql_error(scryer_application::RestoreCoordinator::maintenance_error())
+                to_gql_error(scryer_application::RestoreCoordinator::lifecycle_error())
             })?,
         })
     }
@@ -616,7 +616,7 @@ impl BackupMutations {
         let app = app_from_ctx(ctx)?;
         let _ = wait_for_restore(&app, job.id.as_str()).await?;
         let summary = app.restore_coordinator().summary().ok_or_else(|| {
-            to_gql_error(scryer_application::RestoreCoordinator::maintenance_error())
+            to_gql_error(scryer_application::RestoreCoordinator::lifecycle_error())
         })?;
         Ok(RestoreApplyPayload {
             summary: restore_summary_payload(&summary).map_err(to_gql_error)?,

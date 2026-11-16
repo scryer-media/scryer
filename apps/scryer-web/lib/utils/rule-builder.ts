@@ -31,14 +31,28 @@ export type RuleBuilderOutputValue =
   | string[]
   | { [part: string]: string };
 
+/// One action of a family whose schema declares subjects: the subject it acts
+/// on, the output it declares ("" until one is picked), and the conditions
+/// that apply to it alone, on top of the rule's shared conditions. A row with
+/// no subject acts on the family's default subject.
+export type RuleBuilderActionRow = {
+  subject?: string;
+  output: string;
+  join: RuleBuilderJoin;
+  conditions: RuleBuilderCondition[];
+};
+
 /// What the server stores as an opaque JSON document next to the rule. A key
-/// present in `outputs` is a chosen output.
+/// present in `outputs` is a chosen output. For a family with subjects,
+/// `actions` lists the chosen outputs row by row, and `outputs` holds each
+/// row's value under its output id.
 export type RuleBuilderModel = {
   version: typeof RULE_BUILDER_MODEL_VERSION;
   family: string;
   join: RuleBuilderJoin;
   conditions: RuleBuilderCondition[];
   outputs: Record<string, RuleBuilderOutputValue>;
+  actions?: RuleBuilderActionRow[];
 };
 
 // ── Schema ────────────────────────────────────────────────────────────
@@ -152,6 +166,9 @@ export type RuleBuilderOutput = {
   /// Translated through the normal i18n path. Without a translation the
   /// output is shown by its head.
   labelKey: string;
+  /// The action's own name, shared by the same action on every subject, such
+  /// as "Delete files" for each level's delete head.
+  actionLabelKey?: string;
   /// Help without a translation is left out.
   helpKey?: string | null;
   value: RuleBuilderOutputValueSpec;
@@ -187,6 +204,16 @@ export type RuleBuilderContract = {
   }[];
 };
 
+/// What an action row can act on. `inputPath` is where the subject's own
+/// input sits (`input.season`); null for the subject the rule's input is
+/// about. `outputs` are the outputs a row on this subject can pick.
+export type RuleBuilderSubject = {
+  id: string;
+  labelKey: string;
+  inputPath: string | null;
+  outputs: readonly string[];
+};
+
 export type RuleBuilderSchema = {
   /// Also the family the server's `ruleBuilderSchema` query is asked for.
   family: string;
@@ -203,20 +230,24 @@ export type RuleBuilderSchema = {
   /// In the order they are listed and written.
   outputs: readonly RuleBuilderOutput[];
   outputRules: readonly RuleBuilderOutputRule[];
+  /// Served by families whose actions each pick a subject. A family without
+  /// subjects offers its outputs as one checklist.
+  subjects?: readonly RuleBuilderSubject[];
   labels: {
     outputs: string;
     outputsHelp: string;
     conditionsHelp: string;
     /// Shown on an output the rule's variant cannot declare.
     outputNotInVariant?: string;
-    /// Badge on a destructive output.
-    destructive?: string;
   };
 };
 
 /// Everything about a family that is not its outputs. The outputs come from
 /// the server, so a new action needs no change here.
-export type RuleBuilderBaseSchema = Omit<RuleBuilderSchema, "outputs" | "outputRules">;
+export type RuleBuilderBaseSchema = Omit<
+  RuleBuilderSchema,
+  "outputs" | "outputRules" | "subjects"
+>;
 
 // ── Served outputs ────────────────────────────────────────────────────
 
@@ -235,6 +266,9 @@ export type RuleBuilderOutputDescriptor = {
   head: string;
   /// A translation tag, `ruleOutput.<family>.<head>`.
   labelKey: string;
+  /// The base action's tag, for an output that is that action on a narrower
+  /// subject.
+  actionLabelKey?: string | null;
   /// `ruleOutput.<family>.<head>.help`, when the output has help.
   helpKey?: string | null;
   valueKind: string;
@@ -258,11 +292,19 @@ export type RuleBuilderServedOutputRule = {
   of?: readonly string[] | null;
 };
 
+export type RuleBuilderServedSubject = {
+  id: string;
+  labelKey: string;
+  inputPath?: string | null;
+  outputs: readonly string[];
+};
+
 /// What the `ruleBuilderSchema` query returns for one family.
 export type RuleBuilderSchemaPayload = {
   family: string;
   outputs: readonly RuleBuilderOutputDescriptor[];
   outputRules: readonly RuleBuilderServedOutputRule[];
+  subjects?: readonly RuleBuilderServedSubject[] | null;
 };
 
 function constraints(descriptor: RuleBuilderOutputDescriptor) {
@@ -311,6 +353,7 @@ export function ruleBuilderOutputsFromPayload(
 ): {
   outputs: RuleBuilderOutput[];
   outputRules: RuleBuilderOutputRule[];
+  subjects: RuleBuilderSubject[];
   skipped: string[];
 } {
   const outputs: RuleBuilderOutput[] = [];
@@ -325,6 +368,9 @@ export function ruleBuilderOutputsFromPayload(
       id: descriptor.id,
       head: descriptor.head,
       labelKey: descriptor.labelKey,
+      ...(descriptor.actionLabelKey
+        ? { actionLabelKey: descriptor.actionLabelKey }
+        : {}),
       ...(descriptor.helpKey ? { helpKey: descriptor.helpKey } : {}),
       value,
       template: descriptor.template,
@@ -352,7 +398,16 @@ export function ruleBuilderOutputsFromPayload(
         break;
     }
   }
-  return { outputs, outputRules, skipped };
+  // A subject keeps only the outputs this build can offer.
+  const subjects: RuleBuilderSubject[] = (payload.subjects ?? []).map(
+    (subject) => ({
+      id: subject.id,
+      labelKey: subject.labelKey,
+      inputPath: subject.inputPath ?? null,
+      outputs: subject.outputs.filter((id) => ids.includes(id)),
+    }),
+  );
+  return { outputs, outputRules, subjects, skipped };
 }
 
 /// A family's whole schema: its own base and the outputs the server serves.
@@ -360,8 +415,14 @@ export function ruleBuilderSchemaFromPayload(
   base: RuleBuilderBaseSchema,
   payload: RuleBuilderSchemaPayload,
 ): RuleBuilderSchema {
-  const { outputs, outputRules } = ruleBuilderOutputsFromPayload(payload);
-  return { ...base, outputs, outputRules };
+  const { outputs, outputRules, subjects } =
+    ruleBuilderOutputsFromPayload(payload);
+  return {
+    ...base,
+    outputs,
+    outputRules,
+    ...(subjects.length > 0 ? { subjects } : {}),
+  };
 }
 
 /// A translation, or `fallback` when the locale and the fallback locale have
@@ -376,12 +437,27 @@ export function translatedOr(
 }
 
 /// An output's label in the UI language, or its head when the tag has no
-/// translation yet, so an output the server just added is still usable.
+/// translation yet, so an output the server just added is still usable. An
+/// output that is an action on a narrower subject falls back to the action's
+/// own name.
 export function ruleBuilderOutputLabel(
   t: (key: string) => string,
-  output: Pick<RuleBuilderOutput, "labelKey" | "head">,
+  output: Pick<RuleBuilderOutput, "labelKey" | "head" | "actionLabelKey">,
 ): string {
-  return translatedOr(t, output.labelKey, output.head);
+  const fallback = output.actionLabelKey
+    ? translatedOr(t, output.actionLabelKey, output.head)
+    : output.head;
+  return translatedOr(t, output.labelKey, fallback);
+}
+
+/// The action an output declares, named the same on every subject.
+export function ruleBuilderActionLabel(
+  t: (key: string) => string,
+  output: Pick<RuleBuilderOutput, "labelKey" | "head" | "actionLabelKey">,
+): string {
+  return output.actionLabelKey
+    ? translatedOr(t, output.actionLabelKey, output.head)
+    : ruleBuilderOutputLabel(t, output);
 }
 
 /// An output's help in the UI language; null when it has none translated.
@@ -520,6 +596,215 @@ export function ruleBuilderOperators(
   return schema.kinds[kind]?.operators ?? [];
 }
 
+// ── Subjects ──────────────────────────────────────────────────────────
+
+/// The subject a row with none acts on: the one the rule's input is about.
+export function ruleBuilderDefaultSubject(
+  schema: RuleBuilderSchema,
+): RuleBuilderSubject | null {
+  const subjects = schema.subjects ?? [];
+  return subjects.find((subject) => subject.inputPath === null) ?? subjects[0] ?? null;
+}
+
+/// The subject a row acts on; null when it names one the schema lacks.
+export function ruleBuilderRowSubject(
+  schema: RuleBuilderSchema,
+  row: Pick<RuleBuilderActionRow, "subject">,
+): RuleBuilderSubject | null {
+  if (row.subject === undefined) return ruleBuilderDefaultSubject(schema);
+  return schema.subjects?.find((subject) => subject.id === row.subject) ?? null;
+}
+
+const SUBJECT_FIELD_CACHE = new WeakMap<
+  RuleBuilderSchema,
+  Map<string, RuleBuilderField[]>
+>();
+
+/// The fields a row on `subject` can read: every field the rule's own input
+/// offers, then, for a subject with its own input, the same facts read from
+/// that input, named by their path. A subject's own document carries facts
+/// and their observations, never the rule input's other sections.
+export function ruleBuilderSubjectFields(
+  schema: RuleBuilderSchema,
+  variant: string | null,
+  subject: RuleBuilderSubject | null,
+): RuleBuilderField[] {
+  const base = ruleBuilderFields(schema, variant);
+  const inputPath = subject?.inputPath;
+  if (!inputPath) return base;
+  let bySubject = SUBJECT_FIELD_CACHE.get(schema);
+  if (!bySubject) {
+    bySubject = new Map();
+    SUBJECT_FIELD_CACHE.set(schema, bySubject);
+  }
+  const key = `${variant ?? ""}\u0000${inputPath}`;
+  const cached = bySubject.get(key);
+  if (cached) return cached;
+  const own = base
+    .filter(
+      (field) =>
+        field.path.startsWith("input.facts.") ||
+        field.path.startsWith("input.observations."),
+    )
+    .map((field) => {
+      const path = `${inputPath}${field.path.slice("input".length)}`;
+      return { ...field, path, label: path.replace(/^input\./, "") };
+    });
+  const fields = [...base, ...own];
+  bySubject.set(key, fields);
+  return fields;
+}
+
+function blankCondition(condition: RuleBuilderCondition): boolean {
+  return !condition.field && !condition.operator && !condition.value;
+}
+
+/// The model's action rows. A model stored before rows existed reads as one
+/// row per chosen output, on the subject that offers it, with no conditions
+/// of its own.
+export function ruleBuilderActionRows(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+): RuleBuilderActionRow[] {
+  if (model.actions) return model.actions;
+  return ruleBuilderChosenOutputs(schema, model.outputs).map((output) => {
+    const subject = schema.subjects?.find((entry) =>
+      entry.outputs.includes(output.id),
+    );
+    return {
+      ...(subject ? { subject: subject.id } : {}),
+      output: output.id,
+      join: "ALL",
+      conditions: [],
+    };
+  });
+}
+
+/// The outputs record that matches `rows`: each row's value under its
+/// output id, and nothing else.
+function outputsForRows(
+  rows: readonly RuleBuilderActionRow[],
+  values: RuleBuilderModel["outputs"],
+): RuleBuilderModel["outputs"] {
+  const outputs: RuleBuilderModel["outputs"] = {};
+  for (const row of rows)
+    if (row.output && Object.hasOwn(values, row.output))
+      outputs[row.output] = values[row.output];
+  return outputs;
+}
+
+function withRows(
+  model: RuleBuilderModel,
+  rows: RuleBuilderActionRow[],
+  values: RuleBuilderModel["outputs"] = model.outputs,
+): RuleBuilderModel {
+  return { ...model, actions: rows, outputs: outputsForRows(rows, values) };
+}
+
+/// Add an unfinished row on the default subject.
+export function addRuleBuilderAction(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+): RuleBuilderModel {
+  return withRows(model, [
+    ...ruleBuilderActionRows(schema, model),
+    { output: "", join: "ALL", conditions: [] },
+  ]);
+}
+
+export function removeRuleBuilderAction(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+  index: number,
+): RuleBuilderModel {
+  return withRows(
+    model,
+    ruleBuilderActionRows(schema, model).filter((_, at) => at !== index),
+  );
+}
+
+/// Pick a row's output. The row starts from the output's initial value; the
+/// output it held before is dropped with its value.
+export function setRuleBuilderActionOutput(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+  index: number,
+  outputId: string,
+): RuleBuilderModel {
+  const rows = ruleBuilderActionRows(schema, model);
+  const output = schema.outputs.find((entry) => entry.id === outputId);
+  const values = { ...model.outputs };
+  const previous = rows[index]?.output;
+  if (previous && previous !== outputId) delete values[previous];
+  if (output && previous !== outputId)
+    values[output.id] = initialRuleBuilderOutputValue(output);
+  return withRows(
+    model,
+    rows.map((row, at) =>
+      at === index ? { ...row, output: output ? output.id : "" } : row,
+    ),
+    values,
+  );
+}
+
+/// Change one row's conditions or their join.
+export function setRuleBuilderActionConditions(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+  index: number,
+  change: Partial<Pick<RuleBuilderActionRow, "join" | "conditions">>,
+): RuleBuilderModel {
+  return withRows(
+    model,
+    ruleBuilderActionRows(schema, model).map((row, at) =>
+      at === index ? { ...row, ...change } : row,
+    ),
+  );
+}
+
+/// Move one row to another subject. The row keeps its action when the new
+/// subject has the same action, with the value it holds; otherwise the
+/// action is cleared. Its conditions stay as they are: one the new subject
+/// cannot read is reported against the row, never dropped.
+export function setRuleBuilderActionSubject(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+  index: number,
+  subjectId: string,
+): RuleBuilderModel {
+  const rows = ruleBuilderActionRows(schema, model);
+  const row = rows[index];
+  const subject = schema.subjects?.find((entry) => entry.id === subjectId);
+  if (!row || !subject) return model;
+  const current = schema.outputs.find((entry) => entry.id === row.output);
+  const actionKey = current ? (current.actionLabelKey ?? current.labelKey) : null;
+  const taken = new Set(
+    rows.filter((_, at) => at !== index).map((other) => other.output),
+  );
+  const match = actionKey
+    ? schema.outputs.find(
+        (entry) =>
+          subject.outputs.includes(entry.id) &&
+          (entry.actionLabelKey ?? entry.labelKey) === actionKey &&
+          !taken.has(entry.id),
+      )
+    : undefined;
+  const values = { ...model.outputs };
+  if (current && match && match.id !== current.id) {
+    values[match.id] = values[current.id] ?? initialRuleBuilderOutputValue(match);
+    delete values[current.id];
+  }
+  return withRows(
+    model,
+    rows.map((entry, at) =>
+      at === index
+        ? { ...entry, subject: subject.id, output: match ? match.id : "" }
+        : entry,
+    ),
+    values,
+  );
+}
+
 // ── Outputs ───────────────────────────────────────────────────────────
 
 /// The chosen outputs in the order they are written.
@@ -626,6 +911,8 @@ export function ruleBuilderOptionSources(
 export const RULE_BUILDER_PROBLEM_CODES = [
   /// The rule has no condition.
   "BUILDER_NO_CONDITIONS",
+  /// An action row has no action picked.
+  "BUILDER_ACTION_REQUIRED",
   /// The rule chooses no output.
   "BUILDER_NO_OUTPUTS",
   /// The rule chooses none of the outputs it needs one of.
@@ -675,7 +962,10 @@ export type RuleBuilderProblemCode = (typeof RULE_BUILDER_PROBLEM_CODES)[number]
 
 export type RuleBuilderProblem = {
   code: RuleBuilderProblemCode;
-  /// The condition row the problem belongs to.
+  /// The action row the problem belongs to.
+  actionIndex?: number;
+  /// The condition row the problem belongs to: of the action row, when the
+  /// problem names one.
   conditionIndex?: number;
   /// The output the problem belongs to.
   output?: string;
@@ -688,6 +978,7 @@ export type RuleBuilderProblem = {
 export const RULE_BUILDER_PROBLEM_KEYS: Record<RuleBuilderProblemCode, string> =
   {
     BUILDER_NO_CONDITIONS: "settings.ruleBuilderProblemNoConditions",
+    BUILDER_ACTION_REQUIRED: "settings.ruleBuilderProblemActionRequired",
     BUILDER_NO_OUTPUTS: "settings.ruleBuilderProblemNoOutputs",
     BUILDER_OUTPUT_REQUIRED: "settings.ruleBuilderProblemOutputRequired",
     BUILDER_FACT_REQUIRED: "settings.ruleBuilderProblemFactRequired",
@@ -862,9 +1153,10 @@ type Checked =
 function outputBlocks(
   schema: RuleBuilderSchema,
   output: RuleBuilderOutput,
-  value: RuleBuilderOutputValue,
+  value: RuleBuilderOutputValue | undefined,
+  helper: string = schema.helperRule,
 ): Checked {
-  const base = { head: output.head, helper: schema.helperRule };
+  const base = { head: output.head, helper };
   const spec = output.value;
   switch (spec.kind) {
     case "flag":
@@ -941,6 +1233,8 @@ export function generateRuleSource(
   model: RuleBuilderModel,
   variant: string | null,
 ): RuleBuilderResult {
+  if (schema.subjects && schema.subjects.length > 0)
+    return generateRowSource(schema, model, variant);
   const problems: RuleBuilderProblem[] = [];
   const fields = new Map(
     ruleBuilderFields(schema, variant).map((field) => [field.path, field]),
@@ -1026,6 +1320,163 @@ export function generateRuleSource(
   };
 }
 
+function helperBlock(helper: string, lines: readonly string[]): string {
+  return `${helper} if {\n${lines.map((line) => `\t${line}`).join("\n")}\n}`;
+}
+
+/// The source for a family with subjects. The shared conditions are the
+/// helper rule and read only the rule's own input. A row with conditions of
+/// its own gets a helper of its own, `<helper>_<row>`, that requires the
+/// shared helper (when there are shared conditions) and then its own, read
+/// from its subject; its action is written against that helper. Outputs are
+/// still written in the schema's order.
+function generateRowSource(
+  schema: RuleBuilderSchema,
+  model: RuleBuilderModel,
+  variant: string | null,
+): RuleBuilderResult {
+  const problems: RuleBuilderProblem[] = [];
+  const sharedFields = new Map(
+    ruleBuilderFields(schema, variant).map((field) => [field.path, field]),
+  );
+  const sharedBodies: string[][] = [];
+  model.conditions.forEach((condition, conditionIndex) => {
+    const checked = checkCondition(schema, condition, sharedFields);
+    if ("problem" in checked)
+      problems.push({ code: checked.problem, conditionIndex });
+    else sharedBodies.push(checked.lines);
+  });
+  const shared = model.conditions.length > 0;
+
+  const rows = ruleBuilderActionRows(schema, model);
+  const known = new Set(schema.outputs.map((output) => output.id));
+  const rowOf = new Map<string, number>();
+  const helperOf = new Map<string, string>();
+  const rowBlocks: string[] = [];
+  const unconditioned = rows.filter((row) => row.conditions.length === 0);
+  if (!shared && unconditioned.length === rows.length)
+    problems.push({ code: "BUILDER_NO_CONDITIONS" });
+
+  rows.forEach((row, actionIndex) => {
+    const subject = ruleBuilderRowSubject(schema, row);
+    if (!subject) {
+      problems.push({ code: "BUILDER_OUTPUT_NOT_IN_SCOPE", actionIndex });
+    } else if (!row.output) {
+      problems.push({ code: "BUILDER_ACTION_REQUIRED", actionIndex });
+    } else if (!known.has(row.output)) {
+      problems.push({
+        code: "BUILDER_OUTPUT_UNKNOWN",
+        output: row.output,
+        actionIndex,
+      });
+    } else if (!subject.outputs.includes(row.output)) {
+      problems.push({
+        code: "BUILDER_OUTPUT_NOT_IN_SCOPE",
+        output: row.output,
+        actionIndex,
+      });
+    } else if (rowOf.has(row.output)) {
+      problems.push({
+        code: "BUILDER_OUTPUTS_CONFLICT",
+        output: row.output,
+        outputs: [row.output],
+        actionIndex,
+      });
+    } else {
+      rowOf.set(row.output, actionIndex);
+    }
+
+    if (!shared && row.conditions.length === 0 && unconditioned.length < rows.length)
+      problems.push({ code: "BUILDER_NO_CONDITIONS", actionIndex });
+    const fields = new Map(
+      ruleBuilderSubjectFields(schema, variant, subject).map((field) => [
+        field.path,
+        field,
+      ]),
+    );
+    const bodies: string[][] = [];
+    row.conditions.forEach((condition, conditionIndex) => {
+      const checked = checkCondition(schema, condition, fields);
+      if ("problem" in checked)
+        problems.push({ code: checked.problem, actionIndex, conditionIndex });
+      else bodies.push(checked.lines);
+    });
+    let helper = schema.helperRule;
+    if (row.conditions.length > 0) {
+      helper = `${schema.helperRule}_${actionIndex + 1}`;
+      const requires = shared ? [schema.helperRule] : [];
+      const joined = row.join === "ALL" ? [bodies.flat()] : bodies;
+      for (const lines of joined)
+        rowBlocks.push(helperBlock(helper, [...requires, ...lines]));
+    }
+    if (rowOf.get(row.output) === actionIndex) helperOf.set(row.output, helper);
+  });
+
+  for (const rule of schema.outputRules) {
+    if (rule.rule === "at_most_one") continue;
+    const of = rule.of ?? schema.outputs.map((output) => output.id);
+    if (of.some((id) => rowOf.has(id))) continue;
+    problems.push(
+      rule.of
+        ? { code: "BUILDER_OUTPUT_REQUIRED", outputs: [...rule.of] }
+        : { code: "BUILDER_NO_OUTPUTS" },
+    );
+  }
+
+  const chosen = outputsForRows(rows, model.outputs);
+  const blocks: string[] = [];
+  for (const output of schema.outputs) {
+    const actionIndex = rowOf.get(output.id);
+    if (actionIndex === undefined) continue;
+    const conflicts = ruleBuilderConflicts(schema, output.id, chosen);
+    if (conflicts.length > 0) {
+      problems.push({
+        code: "BUILDER_OUTPUTS_CONFLICT",
+        output: output.id,
+        outputs: conflicts,
+        actionIndex,
+      });
+      continue;
+    }
+    const missing = ruleBuilderMissingRequirements(schema, output.id, chosen);
+    if (missing.length > 0) {
+      problems.push({
+        code: "BUILDER_OUTPUT_NEEDS_OTHER",
+        output: output.id,
+        outputs: missing,
+        actionIndex,
+      });
+      continue;
+    }
+    const checked = outputBlocks(
+      schema,
+      output,
+      chosen[output.id],
+      helperOf.get(output.id),
+    );
+    if ("problem" in checked)
+      problems.push({
+        code: checked.problem,
+        output: output.id,
+        actionIndex,
+        ...(checked.part ? { part: checked.part } : {}),
+      });
+    else blocks.push(...checked.blocks);
+  }
+
+  if (problems.length > 0) return { ok: false, problems };
+
+  const sharedBlocks = shared
+    ? (model.join === "ALL" ? [sharedBodies.flat()] : sharedBodies).map(
+        (lines) => helperBlock(schema.helperRule, lines),
+      )
+    : [];
+  return {
+    ok: true,
+    source: `${schema.preamble}${[...sharedBlocks, ...rowBlocks, ...blocks].join("\n\n")}\n`,
+  };
+}
+
 /// True when `source` is what the builder writes for this model, either as
 /// generated or as the API hands a stored source back to the editor, with the
 /// preamble removed.
@@ -1055,6 +1506,7 @@ export function emptyRuleBuilderModel(
     join: "ALL",
     conditions: [{ field: "", operator: "", value: "" }],
     outputs: {},
+    ...(schema.subjects && schema.subjects.length > 0 ? { actions: [] } : {}),
   };
 }
 
@@ -1062,9 +1514,9 @@ export function emptyRuleBuilderModel(
 export function isBlankRuleBuilderModel(model: RuleBuilderModel): boolean {
   return (
     Object.keys(model.outputs).length === 0 &&
-    model.conditions.every(
-      (condition) =>
-        !condition.field && !condition.operator && !condition.value,
+    model.conditions.every(blankCondition) &&
+    (model.actions ?? []).every(
+      (row) => !row.output && row.conditions.every(blankCondition),
     )
   );
 }
@@ -1124,15 +1576,20 @@ export function parseRuleBuilderModel(
       kind.operators.map((operator) => operator.id),
     ),
   );
-  const conditions: RuleBuilderCondition[] = [];
-  for (const entry of value.conditions) {
-    if (!isRecord(entry)) return null;
-    const { field, operator, value: text } = entry;
-    if (typeof field !== "string" || typeof text !== "string") return null;
-    if (typeof operator !== "string") return null;
-    if (operator !== "" && !operators.has(operator)) return null;
-    conditions.push({ field, operator, value: text });
-  }
+  const parseConditions = (entries: unknown[]): RuleBuilderCondition[] | null => {
+    const parsed: RuleBuilderCondition[] = [];
+    for (const entry of entries) {
+      if (!isRecord(entry)) return null;
+      const { field, operator, value: text } = entry;
+      if (typeof field !== "string" || typeof text !== "string") return null;
+      if (typeof operator !== "string") return null;
+      if (operator !== "" && !operators.has(operator)) return null;
+      parsed.push({ field, operator, value: text });
+    }
+    return parsed;
+  };
+  const conditions = parseConditions(value.conditions);
+  if (!conditions) return null;
 
   if (!isRecord(value.outputs)) return null;
   const outputs: Record<string, RuleBuilderOutputValue> = {};
@@ -1144,11 +1601,45 @@ export function parseRuleBuilderModel(
     outputs[id] = parsed;
   }
 
-  return {
+  const model: RuleBuilderModel = {
     version: RULE_BUILDER_MODEL_VERSION,
     family: schema.family,
     join: value.join,
     conditions,
     outputs,
   };
+  if (!schema.subjects || schema.subjects.length === 0) {
+    return value.actions === undefined ? model : null;
+  }
+  if (value.actions === undefined) {
+    return { ...model, actions: ruleBuilderActionRows(schema, model) };
+  }
+  if (!Array.isArray(value.actions)) return null;
+  const actions: RuleBuilderActionRow[] = [];
+  for (const entry of value.actions) {
+    if (!isRecord(entry)) return null;
+    const { subject, output, join } = entry;
+    if (subject !== undefined) {
+      if (typeof subject !== "string") return null;
+      if (!schema.subjects.some((candidate) => candidate.id === subject))
+        return null;
+    }
+    if (typeof output !== "string") return null;
+    if (output !== "" && !schema.outputs.some((candidate) => candidate.id === output))
+      return null;
+    if (join !== "ALL" && join !== "ANY") return null;
+    if (!Array.isArray(entry.conditions)) return null;
+    const rowConditions = parseConditions(entry.conditions);
+    if (!rowConditions) return null;
+    actions.push({
+      ...(subject !== undefined ? { subject } : {}),
+      output,
+      join,
+      conditions: rowConditions,
+    });
+  }
+  // Every chosen value belongs to a row.
+  if (Object.keys(outputs).some((id) => !actions.some((row) => row.output === id)))
+    return null;
+  return { ...model, actions };
 }

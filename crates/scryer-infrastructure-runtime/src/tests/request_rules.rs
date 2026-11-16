@@ -15,7 +15,7 @@ use scryer_domain::{
 #[tokio::test]
 async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
     let (services, db) = temp_services("scryer_request_scope_integrity").await;
-    super::maintenance_rule_sets::seed_rule_libraries(&services.datastore()).await;
+    super::lifecycle_rule_sets::seed_rule_libraries(&services.datastore()).await;
     let store = crate::RequestRuleSetStore::new(services.datastore());
     let pool = services.pool();
     let scope = vec![
@@ -506,7 +506,7 @@ async fn assert_decisions_outlive_their_rule_set(
 async fn request_rule_sets_and_revisions_round_trip() {
     let (services, db) = temp_services("scryer_request_rules").await;
     let store = crate::RequestRuleSetStore::new(services.datastore());
-    super::maintenance_rule_sets::seed_rule_libraries(&services.datastore()).await;
+    super::lifecycle_rule_sets::seed_rule_libraries(&services.datastore()).await;
     assert_rule_set_round_trip(&store)
         .await
         .expect("rule sets should round-trip");
@@ -622,7 +622,7 @@ async fn request_rule_stores_round_trip_postgres() -> AppResult<()> {
         let rules = crate::RequestRuleSetStore::new(services.datastore());
         let decisions = crate::RequestRuleDecisionStore::new(services.datastore());
         let result = async {
-            super::maintenance_rule_sets::seed_rule_libraries(&services.datastore()).await;
+            super::lifecycle_rule_sets::seed_rule_libraries(&services.datastore()).await;
             assert_rule_set_round_trip(&rules).await?;
             assert_decision_round_trip(&decisions).await?;
             assert_decisions_outlive_their_rule_set(&rules, &decisions).await

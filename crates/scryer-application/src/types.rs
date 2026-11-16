@@ -151,6 +151,10 @@ pub struct TitleMetadataUpdate {
     pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
     /// Ratings returned by SMG/MDBList. `Some(default)` clears stale stored ratings.
     pub ratings: Option<TitleRatingSummary>,
+    /// Content ratings returned by SMG, one entry per country, in the shape the
+    /// request rules read. `Some(vec![])` clears stale stored ratings; `None`
+    /// leaves the stored rows untouched for callers that do not hydrate.
+    pub content_ratings: Option<Vec<ContentRating>>,
     /// Complete credit set returned by SMG. `Some(vec![])` clears the stale cache;
     /// `None` leaves the existing rows untouched for callers that do not hydrate.
     pub credits: Option<Vec<TitleCredit>>,
@@ -1450,7 +1454,7 @@ pub struct TitleTagMembershipCounts {
 /// changing meaning.
 ///
 /// The four reference counts are kept apart rather than summed so the warning
-/// can name what the operator has to go and look at: a maintenance rule, a
+/// can name what the operator has to go and look at: a lifecycle rule, a
 /// release rule, a request rule, or a managed pack's tag filter are four
 /// different places.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1460,7 +1464,7 @@ pub struct TitleTagRewriteCounts {
     /// touched no title can still have touched series movies.
     pub series_movies: u64,
     pub delay_profiles: u64,
-    pub maintenance_rule_sets: u64,
+    pub lifecycle_rule_sets: u64,
     pub release_rule_sets: u64,
     /// Release rule sets whose managed `tag_filter` list carries the label.
     /// A managed pack can appear here and in `release_rule_sets` at once; the
@@ -1905,9 +1909,81 @@ pub struct ReleaseDecision {
     pub candidate_score: i32,
     pub current_score: Option<i32>,
     pub score_delta: Option<i32>,
-    pub explanation_json: Option<String>,
+    pub explanation_json: Option<ReleaseDecisionExplanation>,
     pub created_at: String,
 }
+
+/// A release decision's explanation JSON, and whether its text is already in
+/// the compact form serde_json writes for a parsed value.
+///
+/// Only [`ReleaseDecisionExplanation::from_value`] yields canonical text, so
+/// the store can compress it without parsing it again. Text of any other
+/// origin comes in through [`ReleaseDecisionExplanation::untrusted`] and is
+/// parsed and re-serialized before it is stored.
+#[derive(Clone, Debug)]
+pub struct ReleaseDecisionExplanation {
+    text: String,
+    canonical: bool,
+}
+
+impl ReleaseDecisionExplanation {
+    /// Serializes `value` compactly; the result is canonical.
+    pub fn from_value(value: &serde_json::Value) -> Self {
+        Self {
+            text: value.to_string(),
+            canonical: true,
+        }
+    }
+
+    /// Text the store decoded from a stored explanation. It is checked to be
+    /// JSON and trusted, not checked, to be in the canonical form every
+    /// writer stores. Only the store's codec calls this.
+    #[doc(hidden)]
+    pub fn stored_canonical(text: String) -> Self {
+        Self {
+            text,
+            canonical: true,
+        }
+    }
+
+    /// Text whose form is not known, such as a saved pending release's
+    /// explanation.
+    pub fn untrusted(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            canonical: false,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    pub fn into_string(self) -> String {
+        self.text
+    }
+
+    /// The text, when it is known to be canonical.
+    pub fn canonical_text(&self) -> Option<&str> {
+        self.canonical.then_some(self.text.as_str())
+    }
+}
+
+impl std::ops::Deref for ReleaseDecisionExplanation {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl PartialEq for ReleaseDecisionExplanation {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for ReleaseDecisionExplanation {}
 
 #[derive(Clone, Debug)]
 pub struct DecisionCodeCount {

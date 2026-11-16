@@ -180,16 +180,30 @@ pub fn redact_archive_diagnostic(text: &str) -> String {
 /// Read a password from a release/job label, never a URL or filesystem path.
 /// Password contents are literal, including flag-like values and whitespace.
 pub fn release_name_password(name: &str) -> Option<String> {
-    release_password_parts(name).map(|(_, password)| password.to_string())
+    release_name_password_with_slash(name, true)
+}
+
+pub(crate) fn release_name_password_with_slash(
+    name: &str,
+    allow_slash_password: bool,
+) -> Option<String> {
+    release_password_parts(name, allow_slash_password).map(|(_, password)| password.to_string())
 }
 
 pub fn release_name_without_password(name: &str) -> &str {
-    release_password_parts(name)
+    release_name_without_password_with_slash(name, true)
+}
+
+pub(crate) fn release_name_without_password_with_slash(
+    name: &str,
+    allow_slash_password: bool,
+) -> &str {
+    release_password_parts(name, allow_slash_password)
         .map(|(name, _)| name.trim_end())
         .unwrap_or(name)
 }
 
-fn release_password_parts(name: &str) -> Option<(&str, &str)> {
+fn release_password_parts(name: &str, allow_slash_password: bool) -> Option<(&str, &str)> {
     let name = name.trim_start();
     let name = if name.trim_end().ends_with("}}") && name.contains("{{") {
         name.trim_end()
@@ -214,8 +228,10 @@ fn release_password_parts(name: &str) -> Option<(&str, &str)> {
         (&without_close[..open], inner)
     } else if let Some((prefix, inner)) = name.rsplit_once(" password=") {
         (prefix, inner)
-    } else {
+    } else if allow_slash_password {
         name.split_once(" / ")?
+    } else {
+        return None;
     };
     let drive_prefix = prefix.as_bytes().get(1) == Some(&b':')
         && prefix

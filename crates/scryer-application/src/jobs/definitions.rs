@@ -10,11 +10,11 @@ use crate::{LibraryScanSession, LibraryScanStatus};
 
 const JOB_RUN_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Default cadence of the maintenance rule evaluator (RFC 137 section 10).
+/// Default cadence of the lifecycle rule evaluator (RFC 137 section 10).
 /// The RFC adopts Maintainerr's familiar eight-hour rhythm as the native
 /// default; there is no clock-parity requirement, so this is a default rather
 /// than a contract.
-pub const MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
+pub const LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
 
 /// RFC 137 section 10: collection/action handling defaults to every twelve
 /// hours.
@@ -23,7 +23,7 @@ pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
 /// Cadence of the media-server watch-signal sweep (RFC 137 section 7.3).
 ///
 /// Six hours is chosen against what the data is for, not against how fast it
-/// changes: signals feed grace-period maintenance decisions measured in days,
+/// changes: signals feed grace-period lifecycle decisions measured in days,
 /// so four sweeps a day is ample, and each sweep is a full read of every
 /// participant's played set rather than a delta.
 pub const MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS: i64 = 6 * 3600;
@@ -198,7 +198,9 @@ pub enum JobKey {
     RecycleBinPurge,
     AcquisitionSearch,
     ApplicationUpgrade,
-    MaintenanceRuleEvaluation,
+    // Matches `as_str` and the stored `job_key`.
+    #[serde(rename = "lifecycle_rule_evaluation")]
+    LifecycleRuleEvaluation,
     LifecycleActionHandling,
     MediaServerSignalSync,
     ListSync,
@@ -256,7 +258,7 @@ impl JobKey {
             Self::RecycleBinPurge => "recycle_bin_purge",
             Self::AcquisitionSearch => "acquisition_search",
             Self::ApplicationUpgrade => "application_upgrade",
-            Self::MaintenanceRuleEvaluation => "maintenance_rule_evaluation",
+            Self::LifecycleRuleEvaluation => "lifecycle_rule_evaluation",
             Self::LifecycleActionHandling => "lifecycle_action_handling",
             Self::MediaServerSignalSync => "media_server_signal_sync",
             Self::ListSync => "list_sync",
@@ -296,7 +298,7 @@ impl JobKey {
             "recycle_bin_purge" => Some(Self::RecycleBinPurge),
             "acquisition_search" => Some(Self::AcquisitionSearch),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
-            "maintenance_rule_evaluation" => Some(Self::MaintenanceRuleEvaluation),
+            "lifecycle_rule_evaluation" => Some(Self::LifecycleRuleEvaluation),
             "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
             "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
             "list_sync" => Some(Self::ListSync),
@@ -337,8 +339,8 @@ impl JobKey {
             Self::RecycleBinPurge => "Recycle Bin Purge",
             Self::AcquisitionSearch => "Acquisition Search",
             Self::ApplicationUpgrade => "Application Upgrade",
-            Self::MaintenanceRuleEvaluation => "Maintenance Rule Evaluation",
-            Self::LifecycleActionHandling => "Maintenance Action Handling",
+            Self::LifecycleRuleEvaluation => "Lifecycle Rule Evaluation",
+            Self::LifecycleActionHandling => "Lifecycle Action Handling",
             Self::MediaServerSignalSync => "Media Server Signal Sync",
             Self::ListSync => "List Sync",
             Self::LocationOperation => "Location Operation",
@@ -401,11 +403,11 @@ impl JobKey {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
             Self::ApplicationUpgrade => "Download, verify, and apply a signed application upgrade.",
-            Self::MaintenanceRuleEvaluation => {
-                "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action."
+            Self::LifecycleRuleEvaluation => {
+                "Start and expire request leases on schedule. Each lifecycle rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action."
             }
             Self::LifecycleActionHandling => {
-                "Each maintenance rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule."
+                "Each lifecycle rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule."
             }
             Self::MediaServerSignalSync => {
                 "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."
@@ -454,7 +456,7 @@ impl JobKey {
             | Self::PendingReleaseProcessing
             | Self::StagedNzbPrune
             | Self::FullHashBackfill
-            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleRuleEvaluation
             | Self::LifecycleActionHandling
             | Self::MediaServerSignalSync
             | Self::ListSync => JobCategory::Maintenance,
@@ -483,7 +485,7 @@ impl JobKey {
             | Self::HealthChecks
             | Self::StagedNzbPrune
             | Self::FullHashBackfill
-            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleRuleEvaluation
             | Self::LifecycleActionHandling
             | Self::MediaServerSignalSync
             | Self::ListSync => JobScheduleKind::Interval,
@@ -525,7 +527,7 @@ impl JobKey {
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
             Self::FullHashBackfill => "Every 30 minutes, 02:00–06:00 host local time",
-            Self::MaintenanceRuleEvaluation => "Every 8 hours",
+            Self::LifecycleRuleEvaluation => "Every 8 hours",
             Self::LifecycleActionHandling => "Every 12 hours",
             Self::MediaServerSignalSync => "Every 6 hours",
             Self::ListSync => "Every 15 minutes",
@@ -561,7 +563,7 @@ impl JobKey {
             Self::HealthChecks => Some(6 * 3600),
             Self::StagedNzbPrune => Some(3600),
             Self::FullHashBackfill => Some(30 * 60),
-            Self::MaintenanceRuleEvaluation => Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS),
+            Self::LifecycleRuleEvaluation => Some(LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS),
             Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
             Self::MediaServerSignalSync => Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS),
             Self::ListSync => Some(LIST_SYNC_INTERVAL_SECONDS),
@@ -634,7 +636,7 @@ pub const ALL_JOB_KEYS: [JobKey; 22] = [
     JobKey::DiscoverySync,
     JobKey::ArtworkEncoding,
     JobKey::TitleImageCacheRefresh,
-    JobKey::MaintenanceRuleEvaluation,
+    JobKey::LifecycleRuleEvaluation,
     JobKey::LifecycleActionHandling,
     JobKey::MediaServerSignalSync,
     JobKey::ListSync,
@@ -1135,31 +1137,31 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_evaluation_is_registered_as_a_recurring_maintenance_job() {
-        let definition = JobDefinition::from_key(JobKey::MaintenanceRuleEvaluation, None);
+    fn lifecycle_rule_evaluation_is_registered_as_a_recurring_maintenance_job() {
+        let definition = JobDefinition::from_key(JobKey::LifecycleRuleEvaluation, None);
 
         assert_eq!(
-            JobKey::MaintenanceRuleEvaluation.as_str(),
-            "maintenance_rule_evaluation"
+            JobKey::LifecycleRuleEvaluation.as_str(),
+            "lifecycle_rule_evaluation"
         );
         assert_eq!(
-            JobKey::parse("maintenance_rule_evaluation"),
-            Some(JobKey::MaintenanceRuleEvaluation)
+            JobKey::parse("lifecycle_rule_evaluation"),
+            Some(JobKey::LifecycleRuleEvaluation)
         );
         assert!(
-            ALL_JOB_KEYS.contains(&JobKey::MaintenanceRuleEvaluation),
+            ALL_JOB_KEYS.contains(&JobKey::LifecycleRuleEvaluation),
             "the evaluator has to appear in the system-jobs surface to be observable"
         );
-        assert_eq!(definition.display_name, "Maintenance Rule Evaluation");
+        assert_eq!(definition.display_name, "Lifecycle Rule Evaluation");
         assert_eq!(definition.category, JobCategory::Maintenance);
         assert_eq!(definition.schedule.kind, JobScheduleKind::Interval);
         assert_eq!(definition.schedule.description, "Every 8 hours");
         assert_eq!(
             definition.schedule.interval_seconds,
-            Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS)
+            Some(LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS)
         );
         assert_eq!(
-            MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
+            LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS,
             8 * 3600,
             "RFC 137 section 10 pins the default cadence at eight hours"
         );

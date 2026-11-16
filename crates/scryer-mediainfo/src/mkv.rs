@@ -8,7 +8,8 @@ use crate::codec::{
     audio_profile_probe_spec, detect_audio_profile_from_probe_bytes,
     detect_dts_channels_from_probe_bytes, detect_header_audio_profile, extract_h265_info,
     hevc_nal_length_size, merge_audio_profile, normalize_codec_name, normalize_pcm_codec_name,
-    normalize_vfw_codec_name, scan_hevc_frame_for_hdr10plus, scan_itu_t35_payload_for_hdr10plus,
+    normalize_vfw_codec_name, parse_dovi_config, scan_hevc_frame_for_hdr10plus,
+    scan_itu_t35_payload_for_hdr10plus,
 };
 use crate::scan;
 mod inventory;
@@ -84,7 +85,16 @@ const EBML_ID_BLOCK_ADDITION_MAPPING: u32 = 0x41E4;
 const EBML_ID_BLOCK_ADD_ID_TYPE: u32 = 0x41E7;
 const EBML_ID_BLOCK_ADD_ID_EXTRA_DATA: u32 = 0x41ED;
 const MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35: u64 = 4;
-const DOVI_BLOCK_ADD_ID_TYPE: u64 = 0x6476;
+/// BlockAddIDType FourCCs for the Dolby Vision configuration record: 'dvcC' (profiles 0-7)
+/// and 'dvvC' (profiles 8-10 and 20), per the Matroska Block Additional Mappings registry.
+/// The registry also lists 'dvwC'; it is left out because FFmpeg's Matroska demuxer does
+/// not read it.
+const MATROSKA_BLOCK_ADD_ID_TYPE_DVCC: u64 = u32::from_be_bytes(*b"dvcC") as u64;
+const MATROSKA_BLOCK_ADD_ID_TYPE_DVVC: u64 = u32::from_be_bytes(*b"dvvC") as u64;
+const DOVI_BLOCK_ADD_ID_TYPES: [u64; 2] = [
+    MATROSKA_BLOCK_ADD_ID_TYPE_DVCC,
+    MATROSKA_BLOCK_ADD_ID_TYPE_DVVC,
+];
 const MATROSKA_TRACK_ENCODING_SCOPE_FRAME_CONTENTS: u64 = 1;
 const MATROSKA_TRACK_ENCODING_TYPE_COMPRESSION: u64 = 0;
 const MATROSKA_TRACK_ENCODING_COMP_HEADERSTRIP: u64 = 3;
@@ -171,10 +181,6 @@ pub(crate) fn parse_mkv_source(
     let mut hdr10plus_probe = None;
 
     if let Some(video_idx) = primary_video_index {
-        if let Some(dovi_config) = primary_video_signals.dovi_config.clone() {
-            tracks[video_idx].dovi_config = Some(dovi_config);
-        }
-
         if !profile.skips_deep_probes() {
             if let Some(track_num) = primary_video_track_num
                 && !primary_video_signals.nondefault_timestamp_scale
@@ -766,7 +772,9 @@ fn parse_mkv_track_entry(payload: &[u8]) -> Option<ParsedMkvTrack> {
             default_track,
             frame_rate_fps,
             color_transfer,
-            dovi_config: None,
+            // Each track keeps its own record, so the primary video chosen later
+            // (which skips cover-art tracks) still sees it.
+            dovi_config: signals.dovi_config.clone(),
             has_hdr10plus: false,
         },
         signals,
@@ -2442,9 +2450,13 @@ fn track_entry_signals(track_entry_payload: &[u8]) -> MkvTrackSignals {
             if block_addition_mapping_has_type(payload, MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35) {
                 signals.has_itu_t_t35_mapping = true;
             }
-            if signals.dovi_config.is_none() {
-                signals.dovi_config =
-                    block_addition_mapping_extra_data(payload, DOVI_BLOCK_ADD_ID_TYPE);
+            // Like FFmpeg, a later record replaces an earlier one; a record that does
+            // not parse is ignored rather than shadowing a valid one.
+            if let Some(record) =
+                block_addition_mapping_extra_data(payload, &DOVI_BLOCK_ADD_ID_TYPES)
+                    .filter(|record| parse_dovi_config(record).is_some())
+            {
+                signals.dovi_config = Some(record);
             }
         } else if id == EBML_ID_TRACK_CONTENT_ENCODINGS && signals.header_strip_prefix.is_none() {
             signals.header_strip_prefix = track_header_strip_prefix(payload);
@@ -2533,8 +2545,9 @@ fn block_addition_mapping_has_type(payload: &[u8], target_type: u64) -> bool {
     block_addition_mapping_type(payload) == Some(target_type)
 }
 
-fn block_addition_mapping_extra_data(payload: &[u8], target_type: u64) -> Option<Vec<u8>> {
-    (block_addition_mapping_type(payload) == Some(target_type))
+fn block_addition_mapping_extra_data(payload: &[u8], target_types: &[u64]) -> Option<Vec<u8>> {
+    block_addition_mapping_type(payload)
+        .is_some_and(|mapping_type| target_types.contains(&mapping_type))
         .then(|| find_first_direct_ebml_child(payload, EBML_ID_BLOCK_ADD_ID_EXTRA_DATA))
         .flatten()
         .map(|payload| payload.to_vec())
@@ -3459,27 +3472,85 @@ mod tests {
 
     #[test]
     fn track_entry_signals_detect_t35_mapping_and_dovi_config() {
-        let dovi_config = vec![1, 0, 0x10, 0x00, 0x10];
-        let track_entry = [
-            make_uint_element(&[0xD7], 1),
-            make_ebml_element(
-                &[0x41, 0xE4],
-                &make_uint_element(&[0x41, 0xE7], MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35),
-            ),
+        let track_entry_with_dovi = |block_add_id_type: u64, dovi_config: &[u8]| {
+            [
+                make_uint_element(&[0xD7], 1),
+                make_ebml_element(
+                    &[0x41, 0xE4],
+                    &make_uint_element(&[0x41, 0xE7], MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35),
+                ),
+                make_ebml_element(
+                    &[0x41, 0xE4],
+                    &[
+                        make_uint_element(&[0x41, 0xE7], block_add_id_type),
+                        make_ebml_element(&[0x41, 0xED], dovi_config),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat()
+        };
+
+        // Wire values as muxers write them: the FourCCs 'dvcC' (profile 7 here) and
+        // 'dvvC' (profile 8 here).
+        for (block_add_id_type, dovi_config) in [
+            (0x6476_6343, vec![1, 0, 0x0E, 0x37, 0x60]),
+            (0x6476_7643, vec![1, 0, 0x10, 0x35, 0x10]),
+        ] {
+            let signals =
+                track_entry_signals(&track_entry_with_dovi(block_add_id_type, &dovi_config));
+            assert!(signals.has_itu_t_t35_mapping);
+            assert_eq!(
+                signals.dovi_config,
+                Some(dovi_config),
+                "{block_add_id_type:#x}"
+            );
+        }
+
+        // A truncated two-byte type is not a Dolby Vision mapping.
+        let signals =
+            track_entry_signals(&track_entry_with_dovi(0x6476, &[1, 0, 0x10, 0x35, 0x10]));
+        assert!(signals.has_itu_t_t35_mapping);
+        assert_eq!(signals.dovi_config, None);
+    }
+
+    #[test]
+    fn track_entry_signals_keep_the_last_dovi_record_that_parses() {
+        let mapping = |block_add_id_type: u64, record: &[u8]| {
             make_ebml_element(
                 &[0x41, 0xE4],
                 &[
-                    make_uint_element(&[0x41, 0xE7], DOVI_BLOCK_ADD_ID_TYPE),
-                    make_ebml_element(&[0x41, 0xED], &dovi_config),
+                    make_uint_element(&[0x41, 0xE7], block_add_id_type),
+                    make_ebml_element(&[0x41, 0xED], record),
                 ]
                 .concat(),
-            ),
-        ]
-        .concat();
+            )
+        };
+        let profile_7 = [1, 0, 0x0E, 0x37, 0x60];
+        let profile_8 = [1, 0, 0x10, 0x35, 0x10];
+        let truncated = [1, 0, 0x10];
 
-        let signals = track_entry_signals(&track_entry);
-        assert!(signals.has_itu_t_t35_mapping);
-        assert_eq!(signals.dovi_config, Some(dovi_config));
+        // Two valid mappings: the later one wins, as in FFmpeg.
+        let signals = track_entry_signals(
+            &[
+                mapping(0x6476_6343, &profile_7),
+                mapping(0x6476_7643, &profile_8),
+            ]
+            .concat(),
+        );
+        assert_eq!(signals.dovi_config.as_deref(), Some(&profile_8[..]));
+
+        // A record too short to parse is never stored and never displaces a valid one.
+        let signals = track_entry_signals(&mapping(0x6476_7643, &truncated));
+        assert_eq!(signals.dovi_config, None);
+        let signals = track_entry_signals(
+            &[
+                mapping(0x6476_6343, &profile_7),
+                mapping(0x6476_7643, &truncated),
+            ]
+            .concat(),
+        );
+        assert_eq!(signals.dovi_config.as_deref(), Some(&profile_7[..]));
     }
 
     #[test]

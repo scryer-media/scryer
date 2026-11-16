@@ -6,23 +6,23 @@
 //! keep the media once it arrives, not about how long the grab takes. Starting
 //! that clock is what this module does, at the moment the title's first import
 //! completes — and, for the imports that happened while the hook was missing or
-//! failing, at the start of every maintenance evaluation pass.
+//! failing, at the start of every lifecycle evaluation pass.
 //!
 //! Nothing here fails the caller. An import that cannot start a lease is still
-//! a completed import, and an unreadable claim store makes maintenance facts
+//! a completed import, and an unreadable claim store makes lifecycle facts
 //! unknown (which holds rules) rather than stopping the pass.
 
 use chrono::{DateTime, Duration, Utc};
 use scryer_domain::{LifecycleClaim, LifecycleClaimState};
 use tracing::warn;
 
-use crate::maintenance_rules::facts::first_imported_instant;
+use crate::lifecycle_rules::facts::first_imported_instant;
 use crate::{AppResult, AppUseCase};
 
 /// How many dormant claims one reconcile pass will look at.
 ///
 /// The sweep is a safety net, not the primary path — the import hook is — so it
-/// is bounded to keep a backlog from making the maintenance job's runtime
+/// is bounded to keep a backlog from making the lifecycle job's runtime
 /// unbounded. Anything past the bound is picked up by the next pass, and the
 /// claims are read oldest-first, so the backlog drains in the order it formed.
 pub const LIFECYCLE_CLAIM_DORMANT_SWEEP_LIMIT: usize = 500;
@@ -109,11 +109,11 @@ impl AppUseCase {
                 );
             }
             // Never fails the import: the title is on disk either way, and the
-            // reconcile sweep in the maintenance pass picks the claim up.
+            // reconcile sweep in the lifecycle pass picks the claim up.
             Err(error) => warn!(
                 title_id,
                 error = %error,
-                "could not start request lease clocks at import; the maintenance pass will retry"
+                "could not start request lease clocks at import; the lifecycle pass will retry"
             ),
         }
     }
@@ -121,7 +121,7 @@ impl AppUseCase {
     /// Expire what has run out and start what has already arrived.
     ///
     /// Returns `(expired, activated)`. Both halves are best-effort and logged:
-    /// this runs at the head of the maintenance evaluation job, and a claim
+    /// this runs at the head of the lifecycle evaluation job, and a claim
     /// store that is down must not stop rules from evaluating (their claim
     /// facts go unknown on their own, which holds any rule that reads one).
     pub(crate) async fn reconcile_lifecycle_claims(&self, now: DateTime<Utc>) -> (u64, u64) {
@@ -134,7 +134,7 @@ impl AppUseCase {
             )
             .await
         {
-            warn!(error = %error, "could not release orphaned lifecycle claims; the next maintenance pass will retry");
+            warn!(error = %error, "could not release orphaned lifecycle claims; the next lifecycle pass will retry");
         }
         let expired = match claims.expire_due(now).await {
             Ok(expired) => expired,
@@ -186,7 +186,7 @@ impl AppUseCase {
     }
 
     /// Release every live claim on a deleted title. Best effort: the title row
-    /// is already gone; the maintenance sweep retries any claims left behind.
+    /// is already gone; the lifecycle sweep retries any claims left behind.
     pub(crate) async fn release_lifecycle_claims_for_deleted_title(&self, title_id: &str) {
         match self
             .services

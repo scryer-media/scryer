@@ -49,7 +49,7 @@ import {
 import { GutterPanelContext } from "@/lib/context/gutter-panel-context";
 import type {
   IndexerSettingsTab,
-  MaintenanceRulesSection,
+  LifecycleRulesSection,
   RulesSection,
   SettingsSection,
 } from "@/components/root/types";
@@ -66,7 +66,7 @@ import {
   buildRulesPath,
   indexerSettingsTabFromPath,
   INDEXER_SETTINGS_TABS,
-  maintenanceRulesSectionFromPath,
+  lifecycleRulesSectionFromPath,
   BETA_RULES_SECTIONS,
   RULES_SECTIONS,
   rulesSectionFromPath,
@@ -163,10 +163,10 @@ const SettingsRulesContainer = lazy(async () => ({
     await import("@/components/containers/settings/settings-rules-container")
   ).SettingsRulesContainer,
 }));
-const SettingsMaintenanceRulesContainer = lazy(async () => ({
+const SettingsLifecycleRulesContainer = lazy(async () => ({
   default: (
-    await import("@/components/containers/settings/settings-maintenance-rules-container")
-  ).SettingsMaintenanceRulesContainer,
+    await import("@/components/containers/settings/settings-lifecycle-rules-container")
+  ).SettingsLifecycleRulesContainer,
 }));
 const SettingsRequestRulesContainer = lazy(async () => ({
   default: (
@@ -272,39 +272,39 @@ const RULES_SECTION_ITEMS: Record<
   { labelKey: string; icon: LucideIcon }
 > = {
   scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
-  maintenance: { labelKey: "settings.maintenanceRules", icon: Wrench },
+  lifecycle: { labelKey: "settings.lifecycleRules", icon: Wrench },
   request: { labelKey: "settings.requestRules", icon: Inbox },
 };
 
-const MAINTENANCE_RULES_SECTIONS: {
-  section: MaintenanceRulesSection;
+const LIFECYCLE_RULES_SECTIONS: {
+  section: LifecycleRulesSection;
   labelKey: string;
   icon: LucideIcon;
 }[] = [
-  { section: "rules", labelKey: "settings.maintenanceNavRules", icon: Wrench },
+  { section: "rules", labelKey: "settings.lifecycleNavRules", icon: Wrench },
   {
     section: "candidates",
-    labelKey: "settings.maintenanceCandidatesTitle",
+    labelKey: "settings.lifecycleCandidatesTitle",
     icon: ListChecks,
   },
   {
     section: "history",
-    labelKey: "settings.maintenanceNavHistory",
+    labelKey: "settings.lifecycleNavHistory",
     icon: History,
   },
 ];
 
-/// Kind switcher for the Rules page. Scoring and maintenance rules are two
+/// Kind switcher for the Rules page. Scoring and lifecycle rules are two
 /// kinds of the same subject, so they share a page instead of taking a sidebar
 /// entry each. Same shape as the Wanted view's section rail.
 function RulesSubnav({
   activeSection,
-  maintenanceRulesSection,
+  lifecycleRulesSection,
   sections,
   t,
 }: {
   activeSection: RulesSection;
-  maintenanceRulesSection: MaintenanceRulesSection;
+  lifecycleRulesSection: LifecycleRulesSection;
   sections: readonly RulesSection[];
   t: ReturnType<typeof useTranslate>;
 }) {
@@ -353,39 +353,39 @@ function RulesSubnav({
                   </Badge>
                 ) : null}
               </Link>
-              {section === "maintenance" && active ? (
+              {section === "lifecycle" && active ? (
                 <div className="flex shrink-0 gap-2 2xl:ml-3 2xl:flex-col 2xl:border-l 2xl:border-[var(--scry-border3)] 2xl:pl-3">
-                  {MAINTENANCE_RULES_SECTIONS.map((maintenanceItem) => {
-                    const MaintenanceIcon = maintenanceItem.icon;
-                    const maintenanceActive =
-                      maintenanceRulesSection === maintenanceItem.section;
+                  {LIFECYCLE_RULES_SECTIONS.map((lifecycleItem) => {
+                    const LifecycleIcon = lifecycleItem.icon;
+                    const lifecycleActive =
+                      lifecycleRulesSection === lifecycleItem.section;
                     return (
                       <Link
-                        key={maintenanceItem.section}
+                        key={lifecycleItem.section}
                         id={selectorId(
-                          "settings-maintenance-rules-subnav",
-                          maintenanceItem.section,
+                          "settings-lifecycle-rules-subnav",
+                          lifecycleItem.section,
                         )}
                         to={buildRulesPath(
-                          "maintenance",
-                          maintenanceItem.section,
+                          "lifecycle",
+                          lifecycleItem.section,
                         )}
-                        aria-current={maintenanceActive ? "page" : undefined}
+                        aria-current={lifecycleActive ? "page" : undefined}
                         className={cn(
                           "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
-                          maintenanceActive &&
+                          lifecycleActive &&
                             "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
                         )}
                       >
-                        <MaintenanceIcon
+                        <LifecycleIcon
                           className={cn(
                             "h-[17px] w-[17px] text-[var(--scry-muted2)]",
-                            maintenanceActive &&
+                            lifecycleActive &&
                               "text-[var(--scry-accent-text)]",
                           )}
                         />
                         <span className="whitespace-nowrap">
-                          {t(maintenanceItem.labelKey)}
+                          {t(lifecycleItem.labelKey)}
                         </span>
                       </Link>
                     );
@@ -432,9 +432,9 @@ export const SettingsContainer = memo(function SettingsContainer({
   const pathname = useLocation().pathname;
   const indexerSettingsTab = indexerSettingsTabFromPath(pathname);
   // Same for the Rules page's two levels of pane. The kind is derivable from
-  // the settings section, but the maintenance pane exists only in the path.
+  // the settings section, but the lifecycle pane exists only in the path.
   const rulesSection = rulesSectionFromPath(pathname);
-  const maintenanceRulesSection = maintenanceRulesSectionFromPath(pathname);
+  const lifecycleRulesSection = lifecycleRulesSectionFromPath(pathname);
   const [
     indexerDownloadClientMappingCatalogResource,
     setIndexerDownloadClientMappingCatalogResource,
@@ -582,8 +582,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                       ? t("settings.proxies")
                       : settingsSection === "rules"
                         ? t("settings.rulesScoring")
-                        : settingsSection === "maintenanceRules"
-                          ? t("settings.maintenanceRules")
+                        : settingsSection === "lifecycleRules"
+                          ? t("settings.lifecycleRules")
                           : settingsSection === "requestRules"
                             ? t("settings.requestRules")
                             : settingsSection === "plugins"
@@ -650,7 +650,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   // Both kinds of rule are panes of one page, so both carry its gutter.
   const isRulesSection =
     settingsSection === "rules" ||
-    settingsSection === "maintenanceRules" ||
+    settingsSection === "lifecycleRules" ||
     settingsSection === "requestRules";
   const usesAutomationHeader =
     isRulesSection ||
@@ -670,7 +670,7 @@ export const SettingsContainer = memo(function SettingsContainer({
     switch (settingsSection) {
       case "rules":
         return SlidersHorizontal;
-      case "maintenanceRules":
+      case "lifecycleRules":
         return Wrench;
       case "requestRules":
         return Inbox;
@@ -703,18 +703,18 @@ export const SettingsContainer = memo(function SettingsContainer({
         );
     }
   })();
-  // The Maintenance Rules panes are pages in their own right, so the header
+  // The Lifecycle Rules panes are pages in their own right, so the header
   // and the breadcrumb name the pane rather than the section that hosts it.
   // The rule list is the page itself rather than a pane of it, so it adds no
   // crumb and keeps the page's icon.
-  const activeMaintenancePane =
-    settingsSection === "maintenanceRules" &&
-    maintenanceRulesSection !== "rules"
-      ? MAINTENANCE_RULES_SECTIONS.find(
-          (item) => item.section === maintenanceRulesSection,
+  const activeLifecyclePane =
+    settingsSection === "lifecycleRules" &&
+    lifecycleRulesSection !== "rules"
+      ? LIFECYCLE_RULES_SECTIONS.find(
+          (item) => item.section === lifecycleRulesSection,
         )
       : undefined;
-  const activePane = activeMaintenancePane;
+  const activePane = activeLifecyclePane;
   const pageLabel = activePane ? t(activePane.labelKey) : settingsSectionLabel;
   const PageIcon = activePane ? activePane.icon : SettingsSectionIcon;
   const breadcrumbRootLabel = usesAutomationHeader
@@ -758,7 +758,7 @@ export const SettingsContainer = memo(function SettingsContainer({
       {isRulesSection ? (
         <RulesSubnav
           activeSection={rulesSection}
-          maintenanceRulesSection={maintenanceRulesSection}
+          lifecycleRulesSection={lifecycleRulesSection}
           sections={RULES_SECTIONS}
           t={t}
         />
@@ -783,7 +783,7 @@ export const SettingsContainer = memo(function SettingsContainer({
             showReferenceRail
               ? null
               : settingsSection === "rules" ||
-                  settingsSection === "maintenanceRules" ||
+                  settingsSection === "lifecycleRules" ||
                   settingsSection === "requestRules" ||
                   settingsSection === "post-processing"
                 ? "max-w-none"
@@ -800,7 +800,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                 {activePane ? (
                   <>
                     <Link
-                      to={buildRulesPath("maintenance")}
+                      to={buildRulesPath("lifecycle")}
                       className="transition hover:text-[var(--scry-ink2)]"
                     >
                       {settingsSectionLabel}
@@ -945,9 +945,9 @@ export const SettingsContainer = memo(function SettingsContainer({
                       canManageCatalogSettings={canManageCatalogSettings}
                       canManageSystemSettings={canManageSystemSettings}
                     />
-                  ) : settingsSection === "maintenanceRules" ? (
-                    <SettingsMaintenanceRulesContainer
-                      section={maintenanceRulesSection}
+                  ) : settingsSection === "lifecycleRules" ? (
+                    <SettingsLifecycleRulesContainer
+                      section={lifecycleRulesSection}
                     />
                   ) : settingsSection === "requestRules" ? (
                     <SettingsRequestRulesContainer />

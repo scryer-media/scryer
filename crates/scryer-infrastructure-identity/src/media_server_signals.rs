@@ -117,7 +117,7 @@
 //! visibly ignored: an unplayed row in a watched-set listing, or a filtered
 //! history row naming another account or item. Publishing a partial history
 //! could turn an omitted played item into a false "never watched"
-//! maintenance fact.
+//! lifecycle fact.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};

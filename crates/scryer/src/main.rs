@@ -2141,9 +2141,9 @@ async fn bootstrap_application(
         tracing::warn!(error = %error, "failed to reconcile interrupted script runs on startup");
     }
 
-    // Durable maintenance search intents resume with their original job ids.
+    // Durable lifecycle search intents resume with their original job ids.
     // Keep those reservations out of generic interrupted-job reconciliation.
-    match app_use_case.resume_interrupted_maintenance_searches().await {
+    match app_use_case.resume_interrupted_lifecycle_searches().await {
         Ok(recovered) if location_reservations_readable => {
             upgrade_reconcile_exclusions.extend(recovered);
             // Other abandoned jobs cannot be resumed; close them before pollers start.
@@ -2155,13 +2155,13 @@ async fn bootstrap_application(
             }
         }
         // Either the location reservations could not be read, or the
-        // maintenance-search reservation failed. Keep recovery evidence: an
+        // lifecycle-search reservation failed. Keep recovery evidence: an
         // optional recovery pass must not prevent the rest of the application
         // from starting, and reconciling against a partial exclusion list
         // would fail runs that are about to be resumed.
         Ok(_) => {}
         Err(error) => {
-            tracing::warn!(error = %error, "could not reserve maintenance searches; preserved interrupted jobs for the next restart");
+            tracing::warn!(error = %error, "could not reserve lifecycle searches; preserved interrupted jobs for the next restart");
         }
     }
 

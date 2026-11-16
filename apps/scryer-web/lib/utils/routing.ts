@@ -5,7 +5,7 @@ import type {
   IndexerSettingsTab,
   ListsSection,
   LogsSection,
-  MaintenanceRulesSection,
+  LifecycleRulesSection,
   RulesSection,
   SettingsSection,
   SystemSection,
@@ -31,7 +31,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   titleTags: "tags",
   acquisition: "acquisition",
   rules: "rules",
-  maintenanceRules: "maintenance-rules",
+  lifecycleRules: "lifecycle-rules",
   requestRules: "request-rules",
   plugins: "plugins",
   scripts: "scripts",
@@ -49,31 +49,36 @@ const AUTOMATION_SETTINGS_SECTION_PATH: Partial<
   "post-processing": "post-processing",
 };
 
-/// Panes of the Rules page. Scoring, maintenance and request rules all hang off
+/// Panes of the Rules page. Scoring, lifecycle and request rules all hang off
 /// `/automation/rules`, so the sidebar carries one entry and the page's own
 /// gutter picks the kind.
 export const RULES_SECTION_PATH: Record<RulesSection, string> = {
   scoring: "scoring",
-  maintenance: "maintenance",
+  lifecycle: "lifecycle",
   request: "request",
 };
 
 const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
   scoring: "scoring",
   "scoring-rules": "scoring",
-  maintenance: "maintenance",
-  "maintenance-rules": "maintenance",
-  maintenancerules: "maintenance",
+  lifecycle: "lifecycle",
+  "lifecycle-rules": "lifecycle",
+  lifecyclerules: "lifecycle",
+  // Lifecycle rules were called maintenance rules; links that still name
+  // them redirect to the lifecycle pane.
+  maintenance: "lifecycle",
+  "maintenance-rules": "lifecycle",
+  maintenancerules: "lifecycle",
   request: "request",
   "request-rules": "request",
   requestrules: "request",
 };
 
-/// Panes of the Maintenance Rules page. The rule list is the default and has no
-/// segment of its own, so `/automation/rules/maintenance` keeps resolving to
-/// the list an existing maintenance-rules link expected.
-export const MAINTENANCE_RULES_SECTION_PATH: Record<
-  MaintenanceRulesSection,
+/// Panes of the Lifecycle Rules page. The rule list is the default and has no
+/// segment of its own, so `/automation/rules/lifecycle` keeps resolving to
+/// the list an existing lifecycle-rules link expected.
+export const LIFECYCLE_RULES_SECTION_PATH: Record<
+  LifecycleRulesSection,
   string
 > = {
   rules: "",
@@ -81,9 +86,9 @@ export const MAINTENANCE_RULES_SECTION_PATH: Record<
   history: "history",
 };
 
-const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<
+const LIFECYCLE_RULES_SECTION_BY_SEGMENT: Record<
   string,
-  MaintenanceRulesSection
+  LifecycleRulesSection
 > = {
   rules: "rules",
   candidates: "candidates",
@@ -96,44 +101,44 @@ const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<
   exclusions: "candidates",
 };
 
-/// Which kinds of rule the Rules page offers, in rail order. Maintenance and
+/// Which kinds of rule the Rules page offers, in rail order. Lifecycle and
 /// request rules are in beta and badged as such, but no longer wait behind the
 /// experimental-features switch.
 export const RULES_SECTIONS: readonly RulesSection[] = [
   "scoring",
-  "maintenance",
+  "lifecycle",
   "request",
 ];
 
 /// Rule kinds still in beta. The rail badges these.
 export const BETA_RULES_SECTIONS: ReadonlySet<RulesSection> = new Set([
-  "maintenance",
+  "lifecycle",
   "request",
 ]);
 
-/// The `rules` settings section is the Scoring pane, `maintenanceRules` the
-/// Maintenance pane and `requestRules` the Request pane. Which `SettingsSection`
+/// The `rules` settings section is the Scoring pane, `lifecycleRules` the
+/// Lifecycle pane and `requestRules` the Request pane. Which `SettingsSection`
 /// a pane maps to still decides its permissions, so the three stay distinct
 /// underneath one nav entry.
 export const RULES_SECTION_BY_SETTINGS_SECTION: Partial<
   Record<SettingsSection, RulesSection>
 > = {
   rules: "scoring",
-  maintenanceRules: "maintenance",
+  lifecycleRules: "lifecycle",
   requestRules: "request",
 };
 
-/// Path of one Rules pane. Maintenance carries its own pane as a fourth
-/// segment; the maintenance rule list is the default and adds none.
+/// Path of one Rules pane. Lifecycle carries its own pane as a fourth
+/// segment; the lifecycle rule list is the default and adds none.
 export function buildRulesPath(
   section: RulesSection,
-  maintenanceSection: MaintenanceRulesSection = "rules",
+  lifecycleSection: LifecycleRulesSection = "rules",
 ): string {
   const base = `/automation/rules/${RULES_SECTION_PATH[section]}`;
-  if (section !== "maintenance") {
+  if (section !== "lifecycle") {
     return base;
   }
-  const segment = MAINTENANCE_RULES_SECTION_PATH[maintenanceSection];
+  const segment = LIFECYCLE_RULES_SECTION_PATH[lifecycleSection];
   return segment ? `${base}/${segment}` : base;
 }
 
@@ -151,9 +156,9 @@ export function rulesSectionFromPath(pathname: string): RulesSection {
   );
 }
 
-export function maintenanceRulesSectionFromPath(
+export function lifecycleRulesSectionFromPath(
   pathname: string,
-): MaintenanceRulesSection {
+): LifecycleRulesSection {
   const segments = pathname.split("/").filter(Boolean);
   const rulesAt = segments.findIndex(
     (segment) => segment.toLowerCase() === "rules",
@@ -162,7 +167,7 @@ export function maintenanceRulesSectionFromPath(
     return "rules";
   }
   return (
-    MAINTENANCE_RULES_SECTION_BY_SEGMENT[
+    LIFECYCLE_RULES_SECTION_BY_SEGMENT[
       segments[rulesAt + 2]?.toLowerCase() ?? ""
     ] ?? "rules"
   );
@@ -357,7 +362,7 @@ export function buildViewPath(
 ) {
   const base = `/${nextView}`;
   if (nextView === "settings" && nextSettingsSection) {
-    // Scoring and maintenance rules are panes of one page, so their canonical
+    // Scoring and lifecycle rules are panes of one page, so their canonical
     // paths nest under `/automation/rules` rather than sitting beside it.
     const rulesSection = RULES_SECTION_BY_SETTINGS_SECTION[nextSettingsSection];
     if (rulesSection) {
@@ -486,9 +491,12 @@ const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   "post-procesing": "post-processing",
 };
 
-/// Segments that used to name a rules page of their own. Maintenance rules are
-/// a pane of the Rules page now, so these redirect rather than resolve.
-const MOVED_MAINTENANCE_RULES_SEGMENTS = new Set([
+/// Segments that used to name a rules page of their own. Lifecycle rules are
+/// a pane of the Rules page now, so these redirect rather than resolve. The
+/// maintenance spellings are from before lifecycle rules were renamed.
+const MOVED_LIFECYCLE_RULES_SEGMENTS = new Set([
+  "lifecycle-rules",
+  "lifecyclerules",
   "maintenance-rules",
   "maintenancerules",
 ]);
@@ -497,8 +505,11 @@ const MOVED_MAINTENANCE_RULES_SEGMENTS = new Set([
 /// sections of their own before the two kinds of rule shared a page.
 const MOVED_SETTINGS_RULES_BY_SEGMENT: Record<string, RulesSection> = {
   rules: "scoring",
-  "maintenance-rules": "maintenance",
-  maintenancerules: "maintenance",
+  "lifecycle-rules": "lifecycle",
+  lifecyclerules: "lifecycle",
+  // Lifecycle rules were called maintenance rules before.
+  "maintenance-rules": "lifecycle",
+  maintenancerules: "lifecycle",
   // Request rules never had a settings section of their own, but the section
   // path exists for the settings shell, so the spelling it implies resolves
   // rather than 404ing.
@@ -598,8 +609,8 @@ function settingsRoute(section: SettingsSection): ParsedAppRoute {
 /// `/automation/rules/...` — the Rules page and its two levels of panes.
 ///
 /// A bare `/automation/rules` names the page rather than a pane, so it lands on
-/// Scoring rather than 404ing. Maintenance takes a further segment for its own
-/// pane, and the rule list is the pane a segment-less maintenance path means.
+/// Scoring rather than 404ing. Lifecycle takes a further segment for its own
+/// pane, and the rule list is the pane a segment-less lifecycle path means.
 function resolveRulesRoute(
   currentPath: string,
   rawSegments: string[],
@@ -634,18 +645,18 @@ function resolveRulesRoute(
     return { kind: "not-found" };
   }
 
-  const maintenanceSection =
+  const lifecycleSection =
     rawSegments.length === 3
       ? "rules"
-      : MAINTENANCE_RULES_SECTION_BY_SEGMENT[normalizedSegments[3] ?? ""];
-  if (!maintenanceSection) {
+      : LIFECYCLE_RULES_SECTION_BY_SEGMENT[normalizedSegments[3] ?? ""];
+  if (!lifecycleSection) {
     return { kind: "not-found" };
   }
 
   return canonicalOrRedirect(
     currentPath,
-    parsedRoute(buildRulesPath("maintenance", maintenanceSection), "settings", {
-      settingsSection: "maintenanceRules",
+    parsedRoute(buildRulesPath("lifecycle", lifecycleSection), "settings", {
+      settingsSection: "lifecycleRules",
     }),
     search,
     hash,
@@ -920,8 +931,8 @@ export function resolveAppRoute(
       );
     }
 
-    if (MOVED_MAINTENANCE_RULES_SEGMENTS.has(section)) {
-      return redirectTo(buildRulesPath("maintenance"), search, hash);
+    if (MOVED_LIFECYCLE_RULES_SEGMENTS.has(section)) {
+      return redirectTo(buildRulesPath("lifecycle"), search, hash);
     }
 
     const settingsSection = AUTOMATION_SETTINGS_BY_SEGMENT[section];

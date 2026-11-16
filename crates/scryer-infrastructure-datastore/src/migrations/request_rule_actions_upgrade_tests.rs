@@ -125,6 +125,25 @@ async fn seed(pool: &sqlx::SqlitePool) {
     .await;
 }
 
+/// The table that holds `table`'s rows in this catalog. Lifecycle rule sets
+/// are `maintenance_rule_sets` until 0358 renames them.
+async fn current_table_name(pool: &sqlx::SqlitePool, table: &str) -> String {
+    let Some(rest) = table.strip_prefix("lifecycle_rule_") else {
+        return table.to_string();
+    };
+    let present: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .bind(table)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    if present == 1 {
+        table.to_string()
+    } else {
+        format!("maintenance_rule_{rest}")
+    }
+}
+
 /// Every row the upgrade must keep, as text, so a test can compare before and
 /// after: request decisions, media requests, libraries, scoring and lifecycle
 /// rule sets.
@@ -138,15 +157,16 @@ async fn kept_rows(pool: &sqlx::SqlitePool) -> Vec<String> {
         ("media_requests", "id, decision_id, decided_by_rule_set_ids"),
         ("libraries", "id, name"),
         ("rule_sets", "id, name, rego_source"),
-        ("maintenance_rule_sets", "id, name"),
+        ("lifecycle_rule_sets", "id, name"),
     ] {
+        let source = current_table_name(pool, table).await;
         let projection = columns
             .split(", ")
             .map(|column| format!("quote({column})"))
             .collect::<Vec<_>>()
             .join(" || '|' || ");
         let table_rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT '{table}|' || {projection} FROM {table} ORDER BY id"
+            "SELECT '{table}|' || {projection} FROM {source} ORDER BY id"
         )))
         .fetch_all(pool)
         .await

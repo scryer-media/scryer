@@ -121,21 +121,21 @@ pub const LEGACY_TOTP_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.totp.require_conf
 pub const LEGACY_TOTP_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.totp.require_local_login";
 pub const TOTP_REQUIRE_JELLYFIN_LOGIN_KEY: &str = "auth.totp.require_jellyfin_login";
 pub const TOTP_REQUIRE_EMBY_LOGIN_KEY: &str = "auth.totp.require_emby_login";
-// ── Maintenance instance gates ──────────────────────────────────────────────
+// ── Lifecycle instance gates ──────────────────────────────────────────────
 // Instance-wide switches, every one of them off unless a row says otherwise.
 // They are deliberately not one JSON blob: each gate authorizes a different
 // blast radius, and a partially-written blob must never be able to turn a
 // stronger one on. A missing row reads as off, so losing the settings table
-// disarms maintenance rather than arming it.
+// disarms lifecycle rather than arming it.
 /// Lets the scheduled evaluator run at all. Off means no rule is evaluated and
 /// nothing is recorded.
-pub const MAINTENANCE_GATE_EVALUATION_KEY: &str = "maintenance.gate.evaluation";
+pub const LIFECYCLE_GATE_EVALUATION_KEY: &str = "lifecycle.gate.evaluation";
 /// Lets candidate results reach the API.
-pub const MAINTENANCE_GATE_RESULT_DISPLAY_KEY: &str = "maintenance.gate.result_display";
+pub const LIFECYCLE_GATE_RESULT_DISPLAY_KEY: &str = "lifecycle.gate.result_display";
 /// Low and medium risk actions.
-pub const MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY: &str = "maintenance.gate.reversible_effects";
+pub const LIFECYCLE_GATE_REVERSIBLE_EFFECTS_KEY: &str = "lifecycle.gate.reversible_effects";
 /// High risk actions.
-pub const MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY: &str = "maintenance.gate.destructive_effects";
+pub const LIFECYCLE_GATE_DESTRUCTIVE_EFFECTS_KEY: &str = "lifecycle.gate.destructive_effects";
 
 pub const RECYCLE_BIN_ENABLED_KEY: &str = "recycle_bin.enabled";
 pub const RECYCLE_BIN_PATH_KEY: &str = "recycle_bin.path";

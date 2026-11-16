@@ -403,7 +403,7 @@ async fn resolve_existing_binding_row_tx(
         .trim()
         .to_ascii_lowercase();
     let native_item_id = row.opt_text("native_item_id")?;
-    let ended = opt_timestamp_string(&row, "ended_at")?.is_some();
+    let ended = row.opt_timestamp_text("ended_at")?.is_some();
     if !ended
         && native_item_id.as_deref() == Some(locator.item_id.as_str())
         && client_config_id == locator.client_id.clone().unwrap_or_default()
@@ -540,6 +540,99 @@ async fn client_name_snapshot_tx(
 
 fn canonical_tracked_state_key(canonical_download_id: &DownloadId) -> String {
     format!("download:{canonical_download_id}")
+}
+
+/// How a write meets the identity state a download already has.
+#[derive(Clone, Copy)]
+pub(super) enum IdentityStateConflict {
+    /// The write names the download's identity: every identity column moves.
+    ReplaceIdentity,
+    /// The write moves only the state; the identity the row was created with
+    /// stays.
+    KeepIdentity,
+}
+
+/// One download's identity state, as an upsert writes it.
+pub(super) struct IdentityStateWrite<'a> {
+    pub(super) canonical_download_id: DownloadId,
+    pub(super) download_id: Option<String>,
+    pub(super) source: Option<&'a ClientJobLocator>,
+    pub(super) tracked_state: &'a str,
+    pub(super) reason: Option<String>,
+    pub(super) detail: Option<String>,
+    pub(super) conflict: IdentityStateConflict,
+    pub(super) now: chrono::DateTime<Utc>,
+    /// Also moves the submission row's `tracked_state` and `tracked_state_at`.
+    pub(super) mirror_submission: bool,
+}
+
+/// The one upsert of `download_identity_states`, keyed by the download's
+/// canonical identity key, with the client id normalized as every reader
+/// compares it.
+pub(super) async fn upsert_identity_state_tx(
+    tx: &mut SqlTx<'_>,
+    write: IdentityStateWrite<'_>,
+) -> AppResult<()> {
+    let now = write.now;
+    let on_conflict = match write.conflict {
+        IdentityStateConflict::ReplaceIdentity => {
+            "canonical_download_id = excluded.canonical_download_id,
+             download_id = excluded.download_id,
+             client_id = excluded.client_id,
+             client_type = excluded.client_type,
+             download_client_item_id = excluded.download_client_item_id,
+             "
+        }
+        IdentityStateConflict::KeepIdentity => "",
+    };
+    let canonical_download_id = write.canonical_download_id.to_string();
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        &format!(
+            "INSERT INTO download_identity_states
+             (id, identity_key, canonical_download_id, download_id,
+              client_id, client_type, download_client_item_id,
+              tracked_state, reason, detail, created_at, updated_at)
+             VALUES ({{}}, {{}}, {{}}, {{}}, {{}}, {{}}, {{}}, {{}}, {{}}, {{}}, {{}}, {{}})
+             ON CONFLICT(identity_key) DO UPDATE
+             SET {on_conflict}tracked_state = excluded.tracked_state,
+                 reason = excluded.reason,
+                 detail = excluded.detail,
+                 updated_at = excluded.updated_at"
+        ),
+        &[
+            SqlArg::Text(Id::new().0),
+            SqlArg::Text(canonical_tracked_state_key(&write.canonical_download_id)),
+            SqlArg::Text(canonical_download_id.clone()),
+            SqlArg::OptText(write.download_id),
+            SqlArg::OptText(
+                write
+                    .source
+                    .map(|source| normalize_download_client_id(source.client_id.as_deref())),
+            ),
+            SqlArg::OptText(write.source.map(|source| source.client_type.clone())),
+            SqlArg::OptText(write.source.map(|source| source.item_id.clone())),
+            SqlArg::Text(write.tracked_state.to_string()),
+            SqlArg::OptText(write.reason),
+            SqlArg::OptText(write.detail),
+            SqlArg::Timestamp(now),
+            SqlArg::Timestamp(now),
+        ],
+    )
+    .await?;
+    if write.mirror_submission {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "UPDATE download_submissions SET tracked_state = {}, tracked_state_at = {} WHERE id = {}",
+            &[
+                SqlArg::Text(write.tracked_state.to_string()),
+                SqlArg::Timestamp(now),
+                SqlArg::Text(canonical_download_id),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// The latest identity state per client locator, for the locators `clauses`
@@ -776,7 +869,7 @@ fn lenient_timestamp(
     row: &SqlRow,
     column: &str,
 ) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
-    Ok(opt_timestamp_string(row, column)?.and_then(|value| {
+    Ok(row.opt_timestamp_text(column)?.and_then(|value| {
         chrono::DateTime::parse_from_rfc3339(value.trim())
             .ok()
             .map(|value| value.with_timezone(&Utc))
@@ -1498,7 +1591,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                 None => return Ok(()),
             },
         };
-        let identity_key = canonical_tracked_state_key(&canonical_download_id);
+        let canonical_id = canonical_download_id;
         let canonical_download_id = canonical_download_id.to_string();
         let identity = identity.clone();
         let source_identity = source_identity.cloned();
@@ -1509,7 +1602,6 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             &self.datastore,
             "record_download_identity_tracked_state",
             move |tx| {
-                let identity_key = identity_key.clone();
                 let canonical_download_id = canonical_download_id.clone();
                 let identity = identity.clone();
                 let source_identity = source_identity.clone();
@@ -1518,48 +1610,19 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                 let detail = detail.clone();
                 Box::pin(async move {
                     super::import_store::guard_import_retry_tx(tx, &canonical_download_id).await?;
-                    let now = Utc::now();
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "INSERT INTO download_identity_states
-                         (id, identity_key, canonical_download_id, download_id,
-                          client_id, client_type, download_client_item_id,
-                          tracked_state, reason, detail, created_at, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-                         ON CONFLICT(identity_key) DO UPDATE
-                         SET canonical_download_id = excluded.canonical_download_id,
-                             download_id = excluded.download_id,
-                             client_id = excluded.client_id,
-                             client_type = excluded.client_type,
-                             download_client_item_id = excluded.download_client_item_id,
-                             tracked_state = excluded.tracked_state,
-                             reason = excluded.reason,
-                             detail = excluded.detail,
-                             updated_at = excluded.updated_at",
-                        &[
-                            SqlArg::Text(Id::new().0),
-                            SqlArg::Text(identity_key),
-                            SqlArg::OptText(Some(canonical_download_id.clone())),
-                            SqlArg::OptText(identity.download_id),
-                            SqlArg::OptText(source_identity.as_ref().map(|source| {
-                                normalize_download_client_id(source.client_id.as_deref())
-                            })),
-                            SqlArg::OptText(
-                                source_identity
-                                    .as_ref()
-                                    .map(|source| source.client_type.clone()),
-                            ),
-                            SqlArg::OptText(
-                                source_identity
-                                    .as_ref()
-                                    .map(|source| source.item_id.clone()),
-                            ),
-                            SqlArg::Text(tracked_state.clone()),
-                            SqlArg::OptText(reason),
-                            SqlArg::OptText(detail),
-                            SqlArg::Timestamp(now),
-                            SqlArg::Timestamp(now),
-                        ],
+                    upsert_identity_state_tx(
+                        tx,
+                        IdentityStateWrite {
+                            canonical_download_id: canonical_id,
+                            download_id: identity.download_id,
+                            source: source_identity.as_ref(),
+                            tracked_state: &tracked_state,
+                            reason,
+                            detail,
+                            conflict: IdentityStateConflict::ReplaceIdentity,
+                            now: Utc::now(),
+                            mirror_submission: false,
+                        },
                     )
                     .await?;
                     enqueue_cleanup_tx(tx, &canonical_download_id, &tracked_state).await?;
@@ -1775,23 +1838,17 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     return Err(AppError::Repository("invalid client presence transition".into()));
                 }
                 let now = Utc::now();
-                let state = transition.state.as_str().to_string();
-                SqlRuntime::execute(SqlExec::Tx(tx),
-                    "INSERT INTO download_identity_states
-                     (id, identity_key, canonical_download_id, download_id, client_id, client_type,
-                      download_client_item_id, tracked_state, reason, detail, created_at, updated_at)
-                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-                     ON CONFLICT(identity_key) DO UPDATE SET tracked_state = excluded.tracked_state,
-                     reason = excluded.reason, detail = excluded.detail, updated_at = excluded.updated_at",
-                    &[SqlArg::Text(Id::new().0), SqlArg::Text(canonical_tracked_state_key(&transition.download_id)),
-                      SqlArg::Text(id.clone()), SqlArg::OptText(transition.identity.download_id),
-                      SqlArg::Text(normalize_download_client_id(transition.source.client_id.as_deref())),
-                      SqlArg::Text(transition.source.client_type), SqlArg::Text(transition.source.item_id),
-                      SqlArg::Text(state.clone()), SqlArg::OptText(transition.reason), SqlArg::OptText(transition.detail),
-                      SqlArg::Timestamp(now), SqlArg::Timestamp(now)]).await?;
-                SqlRuntime::execute(SqlExec::Tx(tx),
-                    "UPDATE download_submissions SET tracked_state = {}, tracked_state_at = {} WHERE id = {}",
-                    &[SqlArg::Text(state), SqlArg::Timestamp(now), SqlArg::Text(id)]).await?;
+                upsert_identity_state_tx(tx, IdentityStateWrite {
+                    canonical_download_id: transition.download_id,
+                    download_id: transition.identity.download_id,
+                    source: Some(&transition.source),
+                    tracked_state: transition.state.as_str(),
+                    reason: transition.reason,
+                    detail: transition.detail,
+                    conflict: IdentityStateConflict::KeepIdentity,
+                    now,
+                    mirror_submission: true,
+                }).await?;
                 for change in transition.scopes {
                     SqlRuntime::execute(SqlExec::Tx(tx),
                         "UPDATE wanted_items SET status = {}, grabbed_release = {}, updated_at = {}
@@ -1828,7 +1885,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                 None => return Ok(None),
             },
         };
-        let identity_key = canonical_tracked_state_key(&canonical_download_id);
+        let canonical_id = canonical_download_id;
         let canonical_download_id = canonical_download_id.to_string();
         let identity = target.identity.clone();
         let source_identity = target.source_identity.cloned();
@@ -1843,7 +1900,6 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             &self.datastore,
             "upsert_download_identity_tracked_state",
             move |tx| {
-                let identity_key = identity_key.clone();
                 let canonical_download_id = canonical_download_id.clone();
                 let identity = identity.clone();
                 let source_identity = source_identity.clone();
@@ -1875,48 +1931,19 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                         // concurrent ignore.
                         return Ok(Some(previous.to_string()));
                     }
-                    let now = Utc::now();
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "INSERT INTO download_identity_states
-                         (id, identity_key, canonical_download_id, download_id,
-                          client_id, client_type, download_client_item_id,
-                          tracked_state, reason, detail, created_at, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-                         ON CONFLICT(identity_key) DO UPDATE
-                         SET canonical_download_id = excluded.canonical_download_id,
-                             download_id = excluded.download_id,
-                             client_id = excluded.client_id,
-                             client_type = excluded.client_type,
-                             download_client_item_id = excluded.download_client_item_id,
-                             tracked_state = excluded.tracked_state,
-                             reason = excluded.reason,
-                             detail = excluded.detail,
-                             updated_at = excluded.updated_at",
-                        &[
-                            SqlArg::Text(Id::new().0),
-                            SqlArg::Text(identity_key),
-                            SqlArg::OptText(Some(canonical_download_id.clone())),
-                            SqlArg::OptText(identity.download_id),
-                            SqlArg::OptText(source_identity.as_ref().map(|source| {
-                                normalize_download_client_id(source.client_id.as_deref())
-                            })),
-                            SqlArg::OptText(
-                                source_identity
-                                    .as_ref()
-                                    .map(|source| source.client_type.clone()),
-                            ),
-                            SqlArg::OptText(
-                                source_identity
-                                    .as_ref()
-                                    .map(|source| source.item_id.clone()),
-                            ),
-                            SqlArg::Text(tracked_state.clone()),
-                            SqlArg::OptText(reason),
-                            SqlArg::OptText(detail),
-                            SqlArg::Timestamp(now),
-                            SqlArg::Timestamp(now),
-                        ],
+                    upsert_identity_state_tx(
+                        tx,
+                        IdentityStateWrite {
+                            canonical_download_id: canonical_id,
+                            download_id: identity.download_id,
+                            source: source_identity.as_ref(),
+                            tracked_state: &tracked_state,
+                            reason,
+                            detail,
+                            conflict: IdentityStateConflict::ReplaceIdentity,
+                            now: Utc::now(),
+                            mirror_submission: false,
+                        },
                     )
                     .await?;
                     enqueue_cleanup_tx(tx, &canonical_download_id, &tracked_state).await?;

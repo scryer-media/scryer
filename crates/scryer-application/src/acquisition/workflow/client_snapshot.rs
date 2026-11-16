@@ -1123,7 +1123,7 @@ async fn resolve_failed_pack_episode_wanted_items(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await?;
 
     let failed_release = normalize_release_name(submission.source_title.as_deref());
@@ -1540,7 +1540,7 @@ async fn resolve_failure_wanted_item(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(&[title_id.to_string()])
+        .list_acquisition_scope_states_for_title_ids_without_decisions(&[title_id.to_string()])
         .await
         .ok()?
         .into_iter()
@@ -1964,7 +1964,7 @@ async fn unconfirmed_grab_wanted_items(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await
     {
         Ok(items) => items,

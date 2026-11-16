@@ -1695,29 +1695,132 @@ pub async fn prepare_plugin_http_target_with_extra_ca(
     label: &'static str,
     policy: &PluginEgressPolicy,
 ) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
+    prepare_plugin_http_target_with_extra_ca_inner(raw, extra_ca_bundle_pem, label, policy, None)
+        .await
+}
+
+/// [`prepare_plugin_http_target_with_extra_ca`] reusing the clients `cache`
+/// holds. The URL is validated and the destination resolved and checked
+/// against `policy` on every call, exactly as the uncached path does; only the
+/// client build is skipped, and only when the cache holds one built from the
+/// same host, the same validated addresses in the same order, the same trust
+/// bundle and the same body-decoding choice. Those are every input the build
+/// takes, so the reused client is configured identically: the same pinned
+/// addresses, redirects disabled, the standard timeout and the same TLS roots.
+pub async fn prepare_plugin_http_target_with_extra_ca_cached(
+    raw: &str,
+    extra_ca_bundle_pem: &str,
+    label: &'static str,
+    policy: &PluginEgressPolicy,
+    cache: &PinnedPluginHttpClientCache,
+) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
+    prepare_plugin_http_target_with_extra_ca_inner(
+        raw,
+        extra_ca_bundle_pem,
+        label,
+        policy,
+        Some(cache),
+    )
+    .await
+}
+
+async fn prepare_plugin_http_target_with_extra_ca_inner(
+    raw: &str,
+    extra_ca_bundle_pem: &str,
+    label: &'static str,
+    policy: &PluginEgressPolicy,
+    cache: Option<&PinnedPluginHttpClientCache>,
+) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
     let url = validate_operator_http_url(raw, label)?;
     let resolved_addrs = resolve_plugin_http_destination(&url, label, policy).await?;
     let host = url
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
         .to_string();
+    let key = PinnedPluginHttpClientKey {
+        host: host.clone(),
+        resolved_addrs: resolved_addrs.clone(),
+        extra_ca_bundle_pem: extra_ca_bundle_pem.to_string(),
+        decode_bodies: !policy.raw_bodies,
+    };
+    if let Some(client) = cache.and_then(|cache| cache.get(&key)) {
+        return Ok(PinnedPluginHttpTarget {
+            url,
+            host,
+            resolved_addrs,
+            client,
+        });
+    }
     let builder = reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)
         .map_err(|message| OutboundDestinationError::TrustBundle { label, message })?
         .redirect(reqwest::redirect::Policy::none())
         .resolve_to_addrs(&host, &resolved_addrs);
-    let client = with_body_decoding(builder, !policy.raw_bodies)
+    let client = with_body_decoding(builder, key.decode_bodies)
         .build()
         .map_err(|source| OutboundDestinationError::ClientBuild {
             label,
             host: host.clone(),
             source,
         })?;
+    if let Some(cache) = cache {
+        cache.insert(key, client.clone());
+    }
     Ok(PinnedPluginHttpTarget {
         url,
         host,
         resolved_addrs,
         client,
     })
+}
+
+/// Everything a pinned plugin client is built from.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PinnedPluginHttpClientKey {
+    host: String,
+    resolved_addrs: Vec<SocketAddr>,
+    extra_ca_bundle_pem: String,
+    decode_bodies: bool,
+}
+
+/// Most pinned clients one cache keeps; reaching it starts the cache afresh.
+const MAX_CACHED_PINNED_PLUGIN_CLIENTS: usize = 32;
+
+/// Pinned plugin clients built by
+/// [`prepare_plugin_http_target_with_extra_ca_cached`], keyed by every input
+/// of the build. Owned by one plugin host, so clients and their connection
+/// pools are never shared between hosts.
+#[derive(Default)]
+pub struct PinnedPluginHttpClientCache {
+    clients: Mutex<HashMap<PinnedPluginHttpClientKey, Client>>,
+}
+
+impl PinnedPluginHttpClientCache {
+    fn get(&self, key: &PinnedPluginHttpClientKey) -> Option<Client> {
+        self.clients.lock().ok()?.get(key).cloned()
+    }
+
+    fn insert(&self, key: PinnedPluginHttpClientKey, client: Client) {
+        let Ok(mut clients) = self.clients.lock() else {
+            return;
+        };
+        if clients.len() >= MAX_CACHED_PINNED_PLUGIN_CLIENTS && !clients.contains_key(&key) {
+            clients.clear();
+        }
+        clients.insert(key, client);
+    }
+
+    /// How many clients the cache holds.
+    pub fn len(&self) -> usize {
+        self.clients
+            .lock()
+            .map(|clients| clients.len())
+            .unwrap_or(0)
+    }
+
+    /// Whether the cache holds no client.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Same as [`prepare_plugin_http_target`] but for an already-parsed URL; use
@@ -4030,6 +4133,115 @@ mod tests {
             .await,
             Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn cached_plugin_targets_reuse_a_client_only_for_the_same_build_inputs() {
+        let cache = PinnedPluginHttpClientCache::default();
+        let policy = PluginEgressPolicy::default();
+        let prepare = |raw: &'static str, policy: PluginEgressPolicy| {
+            let cache = &cache;
+            async move {
+                prepare_plugin_http_target_with_extra_ca_cached(
+                    raw,
+                    "",
+                    "plugin egress",
+                    &policy,
+                    cache,
+                )
+                .await
+            }
+        };
+
+        let first = prepare("http://127.0.0.1:8080/a", policy.clone())
+            .await
+            .expect("loopback prepares");
+        let second = prepare("http://127.0.0.1:8080/b?page=2", policy.clone())
+            .await
+            .expect("loopback prepares");
+        assert_eq!(
+            cache.len(),
+            1,
+            "the same host and addresses reuse one client"
+        );
+        assert_eq!(second.url().as_str(), "http://127.0.0.1:8080/b?page=2");
+        assert_eq!(first.resolved_addrs(), second.resolved_addrs());
+
+        // Another port pins another address; raw bodies change the build.
+        prepare("http://127.0.0.1:8081/", policy.clone())
+            .await
+            .expect("loopback prepares");
+        assert_eq!(cache.len(), 2);
+        prepare("http://127.0.0.1:8080/", policy.clone().with_raw_bodies())
+            .await
+            .expect("loopback prepares");
+        assert_eq!(cache.len(), 3);
+
+        // The policy still decides every request with clients cached.
+        for raw in PLUGIN_EGRESS_BLOCKED_TARGETS {
+            assert!(
+                matches!(
+                    prepare(raw, policy.clone()).await,
+                    Err(OutboundDestinationError::BlockedLinkLocalOrMetadata { .. })
+                ),
+                "{raw} must stay blocked with a warm cache"
+            );
+        }
+        assert_eq!(cache.len(), 3);
+
+        // The cache stays bounded.
+        for port in 0..(MAX_CACHED_PINNED_PLUGIN_CLIENTS as u16 + 5) {
+            let raw: &'static str =
+                Box::leak(format!("http://127.0.0.1:{}/", 9000 + port).into_boxed_str());
+            prepare(raw, policy.clone())
+                .await
+                .expect("loopback prepares");
+            assert!(cache.len() <= MAX_CACHED_PINNED_PLUGIN_CLIENTS);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cached_plugin_client_serves_requests_like_a_fresh_one() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = vec![0u8; 4096];
+                let _ = socket.read(&mut buffer).await.unwrap();
+                socket
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nConnection: close\r\nContent-Length: 5\r\n\r\nmoved",
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let cache = PinnedPluginHttpClientCache::default();
+        let url = format!("http://{addr}/start");
+        for _ in 0..2 {
+            let target = prepare_plugin_http_target_with_extra_ca_cached(
+                &url,
+                "",
+                "plugin egress",
+                &PluginEgressPolicy::default(),
+                &cache,
+            )
+            .await
+            .expect("loopback prepares");
+            let response = target
+                .client()
+                .get(target.url().clone())
+                .send()
+                .await
+                .expect("request");
+            // Redirects stay unfollowed through a reused client.
+            assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+            assert_eq!(response.text().await.unwrap(), "moved");
+        }
+        assert_eq!(cache.len(), 1);
+        server.await.unwrap();
     }
 
     fn validate_plugin_policy_ip(

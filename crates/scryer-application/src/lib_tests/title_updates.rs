@@ -2785,7 +2785,7 @@ async fn renaming_a_tag_rewrites_titles_and_delay_profiles() {
     assert_eq!(renamed.counts.delay_profiles, 1);
     // No rules are configured in this fixture, so nothing references the old
     // label; the counts exist so the UI can warn that Rego is never rewritten.
-    assert_eq!(renamed.counts.maintenance_rule_sets, 0);
+    assert_eq!(renamed.counts.lifecycle_rule_sets, 0);
     assert_eq!(renamed.counts.release_rule_sets, 0);
     assert_eq!(renamed.counts.managed_tag_filters, 0);
 
@@ -2964,7 +2964,7 @@ async fn renaming_a_tag_counts_rego_references_and_managed_tag_filters_apart() {
     assert_eq!(renamed.definition.label, "archive");
     assert_eq!(renamed.counts.release_rule_sets, 2);
     assert_eq!(renamed.counts.managed_tag_filters, 2);
-    assert_eq!(renamed.counts.maintenance_rule_sets, 0);
+    assert_eq!(renamed.counts.lifecycle_rule_sets, 0);
 
     // The label is only reported, never rewritten: every rule still names it.
     let stored = app

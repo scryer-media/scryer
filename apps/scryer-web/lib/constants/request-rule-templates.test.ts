@@ -23,13 +23,13 @@ const PINNED_SOURCES: Record<string, string> = {
   "low-resolution-approval":
     'package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == "alice"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n',
   "deny-adult-content":
-    'package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains "adult_content" if {\n\tinput.facts.is_adult\n}\n',
+    'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.is_adult == true\n}\n\ndeny if rule_applies\n\nreasons contains "adult_content" if rule_applies\n',
   "monthly-approval-quota":
-    "package rules\nimport rego.v1\n\nmanual if {\n\tinput.facts.approved_last_30d >= 5\n}\n",
+    "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.approved_last_30d >= 5\n}\n\nmanual if rule_applies\n",
   "hold-approval-policy-list-requests":
-    'package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n',
+    'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.owner_list_policy == "approval"\n}\n\nmanual if rule_applies\n',
   "deny-personal-list-above-1080p":
-    'package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n',
+    'package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.scope == "personal"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n\ndeny if rule_applies\n',
 };
 
 test("the gallery ships the seven worked examples exactly once, in order", () => {

@@ -2377,7 +2377,7 @@ pub struct AppRuntimeJobState {
     pub custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler,
     /// Serializes the overlap check and run start for scheduled scripts.
     pub(crate) custom_job_start_lock: Arc<tokio::sync::Mutex<()>>,
-    /// When this process started. A maintenance execution lease last
+    /// When this process started. A lifecycle execution lease last
     /// touched before it belongs to a worker that no longer exists.
     pub(crate) process_started_at: chrono::DateTime<chrono::Utc>,
     /// Cancelled at shutdown; every running script (scheduled, manual or

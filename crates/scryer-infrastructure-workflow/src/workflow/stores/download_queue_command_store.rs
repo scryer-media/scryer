@@ -332,22 +332,6 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
         }
         Ok(latest.into_values().collect())
     }
-
-    async fn prune_terminal_delete_commands_older_than(&self, days: i64) -> AppResult<u32> {
-        let cutoff = Utc::now() - chrono::Duration::days(days);
-        let rows = execute_write(
-            &self.datastore,
-            "prune_terminal_delete_download_commands_older_than",
-            "DELETE FROM download_queue_commands
-             WHERE action = 'delete'
-               AND status IN ('completed', 'failed')
-               AND updated_at < {}"
-                .to_string(),
-            vec![SqlArg::Timestamp(cutoff)],
-        )
-        .await?;
-        Ok(rows as u32)
-    }
 }
 
 #[cfg(test)]

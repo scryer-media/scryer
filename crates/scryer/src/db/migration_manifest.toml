@@ -4296,6 +4296,74 @@ file = "postgres/migrations/0356_media_server_audience_favorites.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 357
+description = "title content ratings"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0357_title_content_ratings.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0357_title_content_ratings.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 358
+description = "rename maintenance rules to lifecycle rules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0358_rename_maintenance_to_lifecycle.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0358_rename_maintenance_to_lifecycle.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 359
+description = "lifecycle rule targets"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0359_lifecycle_rule_targets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0359_lifecycle_rule_targets.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 360
+description = "lifecycle candidate actions conflict"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0360_lifecycle_candidate_actions_conflict.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0360_lifecycle_candidate_actions_conflict.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

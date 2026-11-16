@@ -23,7 +23,7 @@ export type RegoValidationResult = {
   valid: boolean;
   errors: string[];
   diagnostics?: RuleValidationDiagnostic[];
-  /// Findings that never block saving. Maintenance and request validation
+  /// Findings that never block saving. Lifecycle and request validation
   /// send them.
   warnings?: RuleValidationDiagnostic[];
   unavailable?: boolean;

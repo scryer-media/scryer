@@ -2,7 +2,7 @@ import { regoCodeAt } from "./rego-lexical.ts";
 export { regoCodeAt } from "./rego-lexical.ts";
 import releaseContract from "../contracts/rule-input-contract.json" with { type: "json" };
 import requestContract from "../contracts/request-input-contract.json" with { type: "json" };
-import maintenanceContract from "../contracts/maintenance-input-contract.json" with { type: "json" };
+import lifecycleContract from "../contracts/lifecycle-input-contract.json" with { type: "json" };
 import catalog from "../contracts/rego-assistance.json" with { type: "json" };
 import type { RuleBuilderOutputDescriptor } from "./rule-builder.ts";
 import {
@@ -12,7 +12,7 @@ import {
   ruleOutputSnippet,
 } from "./rule-output-vocabulary.ts";
 
-export type RegoFamily = "release" | "request" | "maintenance";
+export type RegoFamily = "release" | "request" | "lifecycle";
 export type RegoField = {
   path: string;
   type: string;
@@ -33,7 +33,7 @@ export type RegoHelper = {
 const FAMILY_HELPERS: Record<RegoFamily, RegoHelper[]> = {
   release: [],
   request: [],
-  maintenance: [
+  lifecycle: [
     {
       name: "days_since",
       args: ["ts"],
@@ -52,7 +52,7 @@ export function regoHelpers(family: RegoFamily): RegoHelper[] {
 export const REGO_FAMILY_OUTPUTS: Record<RegoFamily, string> = {
   release: "scoring",
   request: "request",
-  maintenance: "maintenance",
+  lifecycle: "lifecycle",
 };
 
 /// One head as the editor offers and explains it, built from the head's served
@@ -89,7 +89,7 @@ export function regoHeadAssists(
 export const regoContracts = {
   release: releaseContract,
   request: requestContract,
-  maintenance: maintenanceContract,
+  lifecycle: lifecycleContract,
 };
 
 export function regoFields(family: RegoFamily): RegoField[] {

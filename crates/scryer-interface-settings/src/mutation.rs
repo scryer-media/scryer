@@ -639,6 +639,16 @@ fn normalize_quality_profile(profile: QualityProfile) -> QualityProfile {
             min_upgrade_score_delta: criteria
                 .min_upgrade_score_delta
                 .filter(|delta| *delta != scryer_application::DEFAULT_MIN_UPGRADE_SCORE_DELTA),
+            // Stored as absent at the default, like the upgrade delta. These
+            // two never reach the convergence fingerprint either way.
+            min_missing_episodes_for_pack: criteria.min_missing_episodes_for_pack.filter(|count| {
+                *count != scryer_application::DEFAULT_MIN_MISSING_EPISODES_FOR_PACK
+            }),
+            min_missing_percent_for_series_pack: criteria
+                .min_missing_percent_for_series_pack
+                .filter(|percent| {
+                    *percent != scryer_application::DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK
+                }),
             decision_pipeline: criteria.decision_pipeline,
             facet_persona_overrides,
         },
@@ -686,6 +696,34 @@ fn quality_profile_from_input(
             ))
         })?;
     let requested_ignore_proper_repack = criteria.ignore_proper_repack;
+    let requested_min_missing_episodes_for_pack = criteria
+        .min_missing_episodes_for_pack
+        .map(|count| {
+            u32::try_from(count)
+                .ok()
+                .filter(|count| *count >= 1)
+                .ok_or_else(|| {
+                    to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID,
+                        "criteria.minMissingEpisodesForPack must be at least 1",
+                    ))
+                })
+        })
+        .transpose()?;
+    let requested_min_missing_percent_for_series_pack = criteria
+        .min_missing_percent_for_series_pack
+        .map(|percent| {
+            u32::try_from(percent)
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or_else(|| {
+                    to_gql_error(AppError::validation_refused(
+                        scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID,
+                        "criteria.minMissingPercentForSeriesPack must be from 0 to 100",
+                    ))
+                })
+        })
+        .transpose()?;
 
     let mut profile = normalize_quality_profile(QualityProfile {
         id: input.id.to_string(),
@@ -723,6 +761,16 @@ fn quality_profile_from_input(
             min_upgrade_score_delta: criteria
                 .min_upgrade_score_delta
                 .or_else(|| existing.and_then(|profile| profile.criteria.min_upgrade_score_delta)),
+            // Omitting either keeps the stored value; sending the default
+            // clears it back to unset in `normalize_quality_profile`.
+            min_missing_episodes_for_pack: requested_min_missing_episodes_for_pack.or_else(|| {
+                existing.and_then(|profile| profile.criteria.min_missing_episodes_for_pack)
+            }),
+            min_missing_percent_for_series_pack: requested_min_missing_percent_for_series_pack
+                .or_else(|| {
+                    existing
+                        .and_then(|profile| profile.criteria.min_missing_percent_for_series_pack)
+                }),
             // Settled below from the input, else kept from the stored profile.
             decision_pipeline: existing
                 .map(|profile| profile.criteria.decision_pipeline)
@@ -2788,6 +2836,109 @@ impl SettingsMutations {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pack_threshold_input(criteria: serde_json::Value) -> QualityProfileInput {
+        use async_graphql::InputType;
+        let mut input = serde_json::json!({
+            "id": "pack-policy", "name": "Pack policy",
+            "criteria": {
+                "qualityTiers": ["1080P"], "archivalQuality": "1080P",
+                "allowUnknownQuality": false,
+                "sourceAllowlist": [], "sourceBlocklist": [],
+                "videoCodecAllowlist": [], "videoCodecBlocklist": [],
+                "audioCodecAllowlist": [], "audioCodecBlocklist": [],
+                "dolbyVisionAllowed": true, "detectedHdrAllowed": true,
+                "preferRemux": false, "allowBdDisk": true,
+                "allowUpgrades": true, "scoringOverrides": {}
+            }
+        });
+        for (key, value) in criteria.as_object().expect("criteria object") {
+            input["criteria"][key] = value.clone();
+        }
+        QualityProfileInput::parse(Some(async_graphql::Value::from_json(input).unwrap()))
+            .unwrap_or_else(|_| panic!("invalid profile input"))
+    }
+
+    #[test]
+    fn pack_thresholds_default_unset_and_omission_preserves_them() {
+        let fresh =
+            quality_profile_from_input(pack_threshold_input(serde_json::json!({})), None).unwrap();
+        assert_eq!(fresh.criteria.min_missing_episodes_for_pack, None);
+        assert_eq!(fresh.criteria.min_missing_percent_for_series_pack, None);
+
+        let set = quality_profile_from_input(
+            pack_threshold_input(serde_json::json!({
+                "minMissingEpisodesForPack": 1,
+                "minMissingPercentForSeriesPack": 55,
+            })),
+            None,
+        )
+        .unwrap();
+        assert_eq!(set.criteria.min_missing_episodes_for_pack, Some(1));
+        assert_eq!(set.criteria.min_missing_percent_for_series_pack, Some(55));
+
+        let kept =
+            quality_profile_from_input(pack_threshold_input(serde_json::json!({})), Some(&set))
+                .unwrap();
+        assert_eq!(kept.criteria.min_missing_episodes_for_pack, Some(1));
+        assert_eq!(kept.criteria.min_missing_percent_for_series_pack, Some(55));
+
+        // Sending the defaults stores the profile as using them.
+        let reset = quality_profile_from_input(
+            pack_threshold_input(serde_json::json!({
+                "minMissingEpisodesForPack": 2,
+                "minMissingPercentForSeriesPack": 30,
+            })),
+            Some(&set),
+        )
+        .unwrap();
+        assert_eq!(reset.criteria.min_missing_episodes_for_pack, None);
+        assert_eq!(reset.criteria.min_missing_percent_for_series_pack, None);
+    }
+
+    #[test]
+    fn out_of_range_pack_thresholds_are_refused_with_their_reasons() {
+        let reason = |criteria: serde_json::Value| {
+            let error = quality_profile_from_input(pack_threshold_input(criteria), None)
+                .err()
+                .expect("refused");
+            error
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.get("reason"))
+                .cloned()
+        };
+        for count in [0, -1] {
+            assert_eq!(
+                reason(serde_json::json!({ "minMissingEpisodesForPack": count })),
+                Some(async_graphql::Value::from(
+                    scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID
+                )),
+                "count {count}"
+            );
+        }
+        for percent in [-1, 101] {
+            assert_eq!(
+                reason(serde_json::json!({ "minMissingPercentForSeriesPack": percent })),
+                Some(async_graphql::Value::from(
+                    scryer_interface_core::refusal::INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID
+                )),
+                "percent {percent}"
+            );
+        }
+        for percent in [0, 100] {
+            assert!(
+                quality_profile_from_input(
+                    pack_threshold_input(serde_json::json!({
+                        "minMissingPercentForSeriesPack": percent
+                    })),
+                    None,
+                )
+                .is_ok(),
+                "percent {percent}"
+            );
+        }
+    }
 
     #[test]
     fn omitted_revision_policy_preserves_existing_profile() {

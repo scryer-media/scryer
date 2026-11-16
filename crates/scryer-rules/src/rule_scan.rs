@@ -1,6 +1,6 @@
 //! Static scan machinery for families whose rules declare action heads in
 //! their own source. The request family uses it; the lifecycle family keeps
-//! its own copy in `maintenance_actions` until the two are folded together.
+//! its own copy in `lifecycle_actions` until the two are folded together.
 //!
 //! A family scan reads a parsed module without running it: which heads the
 //! source defines, which literal values it writes for them, and which shapes

@@ -4362,7 +4362,9 @@ pub enum DomainEventType {
     ListUnfollowed,
     ListSyncFinished,
     ListSubscriptionChanged,
-    MaintenanceRuleNotified,
+    // Stored and plugin-wire text predates the lifecycle name; keep it.
+    #[serde(rename = "maintenance_rule_notified")]
+    LifecycleRuleNotified,
 }
 
 impl DomainEventType {
@@ -4428,7 +4430,7 @@ impl DomainEventType {
             Self::ListUnfollowed => "list_unfollowed",
             Self::ListSyncFinished => "list_sync_finished",
             Self::ListSubscriptionChanged => "list_subscription_changed",
-            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
+            Self::LifecycleRuleNotified => "maintenance_rule_notified",
         }
     }
 
@@ -4494,7 +4496,7 @@ impl DomainEventType {
             "list_unfollowed" => Some(Self::ListUnfollowed),
             "list_sync_finished" => Some(Self::ListSyncFinished),
             "list_subscription_changed" => Some(Self::ListSubscriptionChanged),
-            "maintenance_rule_notified" => Some(Self::MaintenanceRuleNotified),
+            "maintenance_rule_notified" => Some(Self::LifecycleRuleNotified),
             _ => None,
         }
     }
@@ -4611,10 +4613,10 @@ pub struct TitleUpdatedEventData {
     pub title: TitleContextSnapshot,
 }
 
-/// A maintenance rule applied its actions to a subject and its `notify`
+/// A lifecycle rule applied its actions to a subject and its `notify`
 /// action asked for this message. Written once per applied candidate.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceRuleNotifiedEventData {
+pub struct LifecycleRuleNotifiedEventData {
     pub title: TitleContextSnapshot,
     pub rule_set_id: String,
     pub rule_name: String,
@@ -5463,7 +5465,10 @@ pub enum DomainEventPayload {
     ListUnfollowed(ListUnfollowedEventData),
     ListSyncFinished(ListSyncFinishedEventData),
     ListSubscriptionChanged(ListSubscriptionChangedEventData),
-    MaintenanceRuleNotified(MaintenanceRuleNotifiedEventData),
+    // Stored payloads and plugin subscriptions carry this tag; it predates the
+    // lifecycle name and must not change.
+    #[serde(rename = "maintenance_rule_notified")]
+    LifecycleRuleNotified(LifecycleRuleNotifiedEventData),
 }
 
 impl DomainEventPayload {
@@ -5531,7 +5536,7 @@ impl DomainEventPayload {
             Self::ListUnfollowed(_) => DomainEventType::ListUnfollowed,
             Self::ListSyncFinished(_) => DomainEventType::ListSyncFinished,
             Self::ListSubscriptionChanged(_) => DomainEventType::ListSubscriptionChanged,
-            Self::MaintenanceRuleNotified(_) => DomainEventType::MaintenanceRuleNotified,
+            Self::LifecycleRuleNotified(_) => DomainEventType::LifecycleRuleNotified,
         }
     }
 }
@@ -5906,18 +5911,18 @@ pub struct RulePackMember {
     pub removed: bool,
 }
 
-/// Whether a maintenance rule set is evaluated at all. Whether an evaluated
-/// rule may act is its [`MaintenanceEffectArming`].
+/// Whether a lifecycle rule set is evaluated at all. Whether an evaluated
+/// rule may act is its [`LifecycleEffectArming`].
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceEvaluationMode {
+pub enum LifecycleEvaluationMode {
     #[default]
     Disabled,
     /// Evaluate and record candidates.
     Observe,
 }
 
-impl MaintenanceEvaluationMode {
+impl LifecycleEvaluationMode {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
@@ -5934,31 +5939,31 @@ impl MaintenanceEvaluationMode {
     }
 }
 
-/// The one operator-facing control of a maintenance rule set.
+/// The one operator-facing control of a lifecycle rule set.
 ///
 /// Disabled is never evaluated. Dry run is evaluated and records candidates
 /// but never acts. Enabled is evaluated and armed for the effects its own
 /// action can have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MaintenanceRuleState {
+pub enum LifecycleRuleState {
     Disabled,
     DryRun,
     Enabled,
 }
 
-/// Granularity a maintenance rule set is scoped to.
+/// Granularity a lifecycle rule set is scoped to.
 ///
 /// Scope is immutable after creation. Omitted scope retains title behavior.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceRuleSubjectKind {
+pub enum LifecycleRuleSubjectKind {
     #[default]
     Title,
     Season,
     Episode,
 }
 
-impl MaintenanceRuleSubjectKind {
+impl LifecycleRuleSubjectKind {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Title => "title",
@@ -5977,21 +5982,21 @@ impl MaintenanceRuleSubjectKind {
     }
 }
 
-/// A user-authored maintenance rule set: identity, scope, and evaluation state.
+/// A user-authored lifecycle rule set: identity, scope, and evaluation state.
 ///
 /// The matcher and the action it authorizes live on
-/// [`MaintenanceRuleRevision`], never here, so changing what a rule *does*
+/// [`LifecycleRuleRevision`], never here, so changing what a rule *does*
 /// always produces a new revision.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceRuleSet {
+pub struct LifecycleRuleSet {
     pub id: String,
     pub name: String,
     pub description: String,
     pub enabled: bool,
-    pub evaluation_mode: MaintenanceEvaluationMode,
+    pub evaluation_mode: LifecycleEvaluationMode,
     /// How far this rule's effects are armed, independent of its mode. The
     /// action handler requires both this and the instance effect gates.
-    pub effect_arming: MaintenanceEffectArming,
+    pub effect_arming: LifecycleEffectArming,
     /// The rule was armed when its matcher, action, or scope last changed (or a
     /// compatibility migration widened what it can match), so it must be
     /// reviewed and enabled again. Any state change clears it.
@@ -5999,7 +6004,6 @@ pub struct MaintenanceRuleSet {
     pub destructive_rearm_required: bool,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
-    pub subject_kind: MaintenanceRuleSubjectKind,
     /// Shipped with Scryer: its name, matcher and action are fixed and it
     /// cannot be deleted. Its state, grace period and libraries stay editable.
     #[serde(default)]
@@ -6008,7 +6012,7 @@ pub struct MaintenanceRuleSet {
     pub current_revision_number: i64,
     /// When the rule evaluates and then acts on what it decided. `Manual`
     /// runs it only on request.
-    #[serde(default = "default_maintenance_rule_schedule")]
+    #[serde(default = "default_lifecycle_rule_schedule")]
     pub schedule: ScriptSchedule,
     /// The most titles (subjects) the rule acts on in one fire, scheduled or
     /// manual. `None` is no limit; a rule that can delete always has one.
@@ -6021,37 +6025,37 @@ pub struct MaintenanceRuleSet {
 
 /// The `max_titles_per_run` the shipped expired-request-leases rule carries:
 /// the ten titles per fire it acted on before rules carried a maximum.
-pub const SYSTEM_MAINTENANCE_RULE_MAX_TITLES_PER_RUN: u32 = 10;
+pub const SYSTEM_LIFECYCLE_RULE_MAX_TITLES_PER_RUN: u32 = 10;
 
-/// Seconds between runs of a maintenance rule that has no schedule of its
+/// Seconds between runs of a lifecycle rule that has no schedule of its
 /// own, matching the cadence of the instance-wide evaluation job.
-pub const DEFAULT_MAINTENANCE_RULE_INTERVAL_SECONDS: i64 = 8 * 60 * 60;
+pub const DEFAULT_LIFECYCLE_RULE_INTERVAL_SECONDS: i64 = 8 * 60 * 60;
 
-/// The schedule a maintenance rule runs on until its author picks one.
-pub fn default_maintenance_rule_schedule() -> ScriptSchedule {
+/// The schedule a lifecycle rule runs on until its author picks one.
+pub fn default_lifecycle_rule_schedule() -> ScriptSchedule {
     ScriptSchedule::Interval {
-        every_seconds: DEFAULT_MAINTENANCE_RULE_INTERVAL_SECONDS,
+        every_seconds: DEFAULT_LIFECYCLE_RULE_INTERVAL_SECONDS,
     }
 }
 
-impl MaintenanceRuleSet {
+impl LifecycleRuleSet {
     /// What a matcher or scope edit does to arming: an armed rule drops to dry
     /// run and is flagged for review.
     pub fn disarm_after_edit(&mut self) {
-        self.destructive_rearm_required |= self.effect_arming != MaintenanceEffectArming::None;
-        self.effect_arming = MaintenanceEffectArming::None;
+        self.destructive_rearm_required |= self.effect_arming != LifecycleEffectArming::None;
+        self.effect_arming = LifecycleEffectArming::None;
     }
 }
 
 /// The rule configuration an operator reviewed before arming deletion.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaintenanceRuleArmingConfirmation {
+pub struct LifecycleRuleArmingConfirmation {
     pub revision_number: i64,
     pub library_ids: Vec<String>,
 }
 
-impl From<&MaintenanceRuleSet> for MaintenanceRuleArmingConfirmation {
-    fn from(rule: &MaintenanceRuleSet) -> Self {
+impl From<&LifecycleRuleSet> for LifecycleRuleArmingConfirmation {
+    fn from(rule: &LifecycleRuleSet) -> Self {
         Self {
             revision_number: rule.current_revision_number,
             library_ids: rule.library_ids.clone(),
@@ -6059,8 +6063,8 @@ impl From<&MaintenanceRuleSet> for MaintenanceRuleArmingConfirmation {
     }
 }
 
-impl MaintenanceRuleArmingConfirmation {
-    pub fn matches(&self, rule: &MaintenanceRuleSet) -> bool {
+impl LifecycleRuleArmingConfirmation {
+    pub fn matches(&self, rule: &LifecycleRuleSet) -> bool {
         self.revision_number == rule.current_revision_number
             && self
                 .library_ids
@@ -6073,14 +6077,14 @@ impl MaintenanceRuleArmingConfirmation {
     }
 }
 
-/// One immutable revision of a maintenance rule set's matcher and action
+/// One immutable revision of a lifecycle rule set's matcher and action
 /// (RFC 137 section 7.1).
 ///
 /// Revisions are append-only: editing the matcher writes revision N+1 and
 /// repoints the rule set, so a candidate can always be attributed to the exact
 /// source and action that produced it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceRuleRevision {
+pub struct LifecycleRuleRevision {
     pub id: String,
     pub rule_set_id: String,
     pub revision_number: i64,
@@ -6093,10 +6097,6 @@ pub struct MaintenanceRuleRevision {
     /// passing the raw text around.
     pub action_spec_json: String,
     pub grace_days: i64,
-    /// Configured library root whose capacity and owned files this revision
-    /// may read. `None` preserves the legacy root-agnostic behavior.
-    #[serde(default)]
-    pub storage_root_id: Option<String>,
     pub matcher_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -6106,7 +6106,7 @@ pub struct MaintenanceRuleRevision {
     pub builder_model_json: Option<String>,
 }
 
-/// Lifecycle state of one maintenance candidate (RFC 137 section 8).
+/// Lifecycle state of one lifecycle candidate (RFC 137 section 8).
 ///
 /// The whole enum is pinned here, storage strings included, even though the
 /// dark evaluator only ever writes [`Self::Observing`], [`Self::Canceled`], and
@@ -6115,7 +6115,7 @@ pub struct MaintenanceRuleRevision {
 /// shipped.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceCandidateState {
+pub enum LifecycleCandidateState {
     /// Matching, grace clock running. The only state a first match creates.
     #[default]
     Observing,
@@ -6137,7 +6137,7 @@ pub enum MaintenanceCandidateState {
     Blocked,
 }
 
-impl MaintenanceCandidateState {
+impl LifecycleCandidateState {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Observing => "observing",
@@ -6171,7 +6171,7 @@ impl MaintenanceCandidateState {
     /// starts a new candidate with the next match generation instead. The set
     /// is duplicated as a literal list in the `lifecycle_candidates` partial
     /// unique index, which is what enforces one active candidate per
-    /// (rule, title); [`MAINTENANCE_TERMINAL_CANDIDATE_STATES`] is the storage
+    /// (rule, title); [`LIFECYCLE_TERMINAL_CANDIDATE_STATES`] is the storage
     /// form of the same set.
     pub const fn is_terminal(self) -> bool {
         matches!(
@@ -6183,10 +6183,10 @@ impl MaintenanceCandidateState {
 
 /// Storage strings of every terminal candidate state, in the order the
 /// migration's partial unique index lists them.
-pub const MAINTENANCE_TERMINAL_CANDIDATE_STATES: [&str; 4] =
+pub const LIFECYCLE_TERMINAL_CANDIDATE_STATES: [&str; 4] =
     ["succeeded", "failed", "canceled", "excluded"];
 
-/// Durable membership of one subject in one maintenance rule set
+/// Durable membership of one subject in one lifecycle rule set
 /// (RFC 137 section 8).
 ///
 /// `first_matched_at` is the grace clock's origin and is never rewritten while
@@ -6208,7 +6208,7 @@ pub struct LifecycleCandidate {
     /// Increments per (rule, subject kind, subject ID) for each fresh candidate, so
     /// a cancel-then-rematch is distinguishable from a continuing membership.
     pub match_generation: i64,
-    pub state: MaintenanceCandidateState,
+    pub state: LifecycleCandidateState,
     pub state_reason: String,
     pub reason_codes: Vec<String>,
     /// Action the revision authorizes, as its stored catalog wire name. The
@@ -6219,6 +6219,12 @@ pub struct LifecycleCandidate {
     /// stored JSON of its decided actions. Null on candidates written before
     /// rules declared their own actions.
     pub decided_actions_json: Option<String>,
+    /// An action the same rule decided, in its latest evaluation of the
+    /// title, for a subject enclosing or inside this one that cannot be
+    /// applied together with this candidate's own. While set, the candidate
+    /// is held with `actions_conflict` and acts on nothing.
+    #[serde(default)]
+    pub actions_conflict: Option<LifecycleActionsConflict>,
     pub grace_days: i64,
     pub first_matched_at: DateTime<Utc>,
     pub last_matched_at: DateTime<Utc>,
@@ -6237,17 +6243,32 @@ pub struct LifecycleCandidate {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A subject a maintenance rule must never act on (RFC 137 section 11).
+/// One head a candidate decided and the head the same rule decided for an
+/// enclosing or contained subject of the same title that cannot be applied
+/// with it, such as a title's `monitor` against a season's
+/// `delete_season_files`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleActionsConflict {
+    /// This candidate's own head, by its Rego rule name.
+    pub head: String,
+    /// The other subject's kind: `title`, `season` or `episode`.
+    pub other_subject_kind: String,
+    pub other_subject_id: String,
+    /// The other subject's head, by its Rego rule name.
+    pub other_head: String,
+}
+
+/// A subject a lifecycle rule must never act on (RFC 137 section 11).
 ///
 /// `rule_set_id` is `None` for a global exclusion, which covers the subject for
 /// every rule. Exclusions are honored from the first shadow evaluation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceRuleExclusion {
+pub struct LifecycleRuleExclusion {
     pub id: String,
     /// `None` means the exclusion is global.
     pub rule_set_id: Option<String>,
     pub title_id: String,
-    pub subject_kind: MaintenanceRuleSubjectKind,
+    pub subject_kind: LifecycleRuleSubjectKind,
     pub subject_id: String,
     pub reason: String,
     pub created_by: Option<String>,
@@ -6257,7 +6278,7 @@ pub struct MaintenanceRuleExclusion {
 /// Status of one recorded evaluation run.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceEvaluationRunStatus {
+pub enum LifecycleEvaluationRunStatus {
     /// Started and not yet finished. A row left in this state is the trace of
     /// a run that was interrupted.
     #[default]
@@ -6266,7 +6287,7 @@ pub enum MaintenanceEvaluationRunStatus {
     Failed,
 }
 
-impl MaintenanceEvaluationRunStatus {
+impl LifecycleEvaluationRunStatus {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -6287,14 +6308,14 @@ impl MaintenanceEvaluationRunStatus {
 
 /// One rule set's pass through one evaluation job run (RFC 137 section 11).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceEvaluationRun {
+pub struct LifecycleEvaluationRun {
     pub id: String,
     pub rule_set_id: String,
     pub revision_number: i64,
     pub matcher_content_hash: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
-    pub status: MaintenanceEvaluationRunStatus,
+    pub status: LifecycleEvaluationRunStatus,
     pub evaluated_count: i64,
     pub matched_count: i64,
     pub no_match_count: i64,
@@ -6306,12 +6327,12 @@ pub struct MaintenanceEvaluationRun {
     pub error: Option<String>,
 }
 
-/// How far a maintenance rule set's effects are armed (RFC 137 sections 8 and
+/// How far a lifecycle rule set's effects are armed (RFC 137 sections 8 and
 /// 17 D2/D3). Arming is per rule and independent of the instance-wide effect
 /// gates: an action executes only when both permit it.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceEffectArming {
+pub enum LifecycleEffectArming {
     /// Evaluate and track candidates; never act.
     #[default]
     None,
@@ -6321,7 +6342,7 @@ pub enum MaintenanceEffectArming {
     Destructive,
 }
 
-impl MaintenanceEffectArming {
+impl LifecycleEffectArming {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -6409,7 +6430,7 @@ pub struct LifecycleActionRun {
     pub created_at: DateTime<Utc>,
 }
 
-/// One stable step coordinate inside a versioned maintenance action sequence.
+/// One stable step coordinate inside a versioned lifecycle action sequence.
 ///
 /// A candidate generation and revision identify the rule decision; `step_id`
 /// identifies one user-authored operation within that immutable decision. The
@@ -6417,14 +6438,14 @@ pub struct LifecycleActionRun {
 /// same durable intent and increment its attempt counter rather than creating
 /// another logical request.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct MaintenanceActionStepKey {
+pub struct LifecycleActionStepKey {
     pub candidate_id: String,
     pub match_generation: i64,
     pub revision_number: i64,
     pub step_id: String,
 }
 
-impl MaintenanceActionStepKey {
+impl LifecycleActionStepKey {
     /// Stable logical identity shared by a step and any durable job receipt it
     /// creates. It is deliberately human-inspectable while the content hash
     /// remains a separate revision-bound verification value.
@@ -6436,14 +6457,14 @@ impl MaintenanceActionStepKey {
     }
 }
 
-/// State of the durable intent for one maintenance sequence step.
+/// State of the durable intent for one lifecycle sequence step.
 ///
 /// `Held` is not a failed attempt and must never consume retry budget. A
 /// `Skipped` step has reached its policy-defined no-op postcondition, such as a
 /// conditional search after an unchanged quality profile.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceActionStepState {
+pub enum LifecycleActionStepState {
     #[default]
     Pending,
     Running,
@@ -6454,7 +6475,7 @@ pub enum MaintenanceActionStepState {
     Failed,
 }
 
-impl MaintenanceActionStepState {
+impl LifecycleActionStepState {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -6513,8 +6534,8 @@ impl MaintenanceActionStepState {
 /// observed before-state, and provenance without reconstructing either from a
 /// later catalog read.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceActionStepRun {
-    pub key: MaintenanceActionStepKey,
+pub struct LifecycleActionStepRun {
+    pub key: LifecycleActionStepKey,
     pub rule_set_id: String,
     pub title_id: String,
     pub subject_kind: String,
@@ -6525,7 +6546,7 @@ pub struct MaintenanceActionStepRun {
     pub before_state_json: String,
     pub target_identity_json: String,
     pub provenance_json: String,
-    pub state: MaintenanceActionStepState,
+    pub state: LifecycleActionStepState,
     /// Reservation count for mutations. Holds do not advance it.
     pub attempt: i64,
     pub lease_id: Option<String>,
@@ -6539,15 +6560,15 @@ pub struct MaintenanceActionStepRun {
 
 /// Immutable evidence for one attempt beneath a stable sequence step.
 ///
-/// The mutable [`MaintenanceActionStepRun`] is the coordinator's current
+/// The mutable [`LifecycleActionStepRun`] is the coordinator's current
 /// checkpoint. This row preserves failed and reconciled job attempts so a
 /// later retry cannot overwrite the evidence that led to it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceActionStepAttempt {
+pub struct LifecycleActionStepAttempt {
     pub id: String,
-    pub key: MaintenanceActionStepKey,
+    pub key: LifecycleActionStepKey,
     pub attempt: i64,
-    pub state: MaintenanceActionStepState,
+    pub state: LifecycleActionStepState,
     pub intent_json: String,
     pub before_state_json: String,
     pub target_identity_json: String,
@@ -6567,7 +6588,7 @@ pub struct MaintenanceActionStepAttempt {
 /// to job history because action evidence must survive ordinary job pruning.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceActionJobReceiptState {
+pub enum LifecycleActionJobReceiptState {
     #[default]
     Dispatching,
     Accepted,
@@ -6578,7 +6599,7 @@ pub enum MaintenanceActionJobReceiptState {
     Unknown,
 }
 
-impl MaintenanceActionJobReceiptState {
+impl LifecycleActionJobReceiptState {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Dispatching => "dispatching",
@@ -6601,81 +6622,80 @@ impl MaintenanceActionJobReceiptState {
     }
 }
 
-pub const MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION: u32 = 1;
+pub const LIFECYCLE_ACTION_JOB_RECEIPT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceActionJobReceipt {
+pub struct LifecycleActionJobReceipt {
     pub schema_version: u32,
-    pub key: MaintenanceActionStepKey,
+    pub key: LifecycleActionStepKey,
     /// Retryable completed-job policies use a new dispatch attempt while
     /// retaining this step key as their logical identity.
     pub dispatch_attempt: i64,
     pub logical_request_key: String,
     pub request_hash: String,
     pub job_run_id: Option<String>,
-    pub state: MaintenanceActionJobReceiptState,
+    pub state: LifecycleActionJobReceiptState,
     pub reconciliation_evidence_json: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-impl MaintenanceActionJobReceipt {
-    pub fn validate_schema(&self) -> Result<(), MaintenanceActionJobReceiptError> {
-        if self.schema_version != MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION {
-            return Err(MaintenanceActionJobReceiptError::UnsupportedSchemaVersion {
+impl LifecycleActionJobReceipt {
+    pub fn validate_schema(&self) -> Result<(), LifecycleActionJobReceiptError> {
+        if self.schema_version != LIFECYCLE_ACTION_JOB_RECEIPT_SCHEMA_VERSION {
+            return Err(LifecycleActionJobReceiptError::UnsupportedSchemaVersion {
                 found: self.schema_version,
-                expected: MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION,
+                expected: LIFECYCLE_ACTION_JOB_RECEIPT_SCHEMA_VERSION,
             });
         }
         if self.dispatch_attempt <= 0 {
-            return Err(MaintenanceActionJobReceiptError::InvalidDispatchAttempt);
+            return Err(LifecycleActionJobReceiptError::InvalidDispatchAttempt);
         }
         if self.logical_request_key != self.key.logical_request_key() {
-            return Err(MaintenanceActionJobReceiptError::LogicalRequestKeyMismatch);
+            return Err(LifecycleActionJobReceiptError::LogicalRequestKeyMismatch);
         }
         if self.request_hash.trim().is_empty() {
-            return Err(MaintenanceActionJobReceiptError::MissingRequestHash);
+            return Err(LifecycleActionJobReceiptError::MissingRequestHash);
         }
         if matches!(
             self.state,
-            MaintenanceActionJobReceiptState::Accepted
-                | MaintenanceActionJobReceiptState::Completed
+            LifecycleActionJobReceiptState::Accepted | LifecycleActionJobReceiptState::Completed
         ) && self
             .job_run_id
             .as_deref()
             .is_none_or(|job_run_id| job_run_id.trim().is_empty())
         {
-            return Err(MaintenanceActionJobReceiptError::AcceptedWithoutJobRun);
+            return Err(LifecycleActionJobReceiptError::AcceptedWithoutJobRun);
         }
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum MaintenanceActionJobReceiptError {
+pub enum LifecycleActionJobReceiptError {
     #[error(
-        "maintenance action job receipt schema version {found} is unsupported; expected {expected}"
+        "lifecycle action job receipt schema version {found} is unsupported; expected {expected}"
     )]
     UnsupportedSchemaVersion { found: u32, expected: u32 },
-    #[error("maintenance action job receipt dispatch attempt must be positive")]
+    #[error("lifecycle action job receipt dispatch attempt must be positive")]
     InvalidDispatchAttempt,
-    #[error("maintenance action job receipt logical request key does not match its step key")]
+    #[error("lifecycle action job receipt logical request key does not match its step key")]
     LogicalRequestKeyMismatch,
-    #[error("maintenance action job receipt request hash is missing")]
+    #[error("lifecycle action job receipt request hash is missing")]
     MissingRequestHash,
-    #[error("an accepted maintenance action job receipt must name a real job run")]
+    #[error("an accepted lifecycle action job receipt must name a real job run")]
     AcceptedWithoutJobRun,
 }
 
 /// The terminal outcome that latches a continuous sequence membership.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MaintenanceSequenceTerminalOutcome {
+pub enum LifecycleSequenceTerminalOutcome {
     Succeeded,
     Failed,
 }
 
-impl MaintenanceSequenceTerminalOutcome {
+impl LifecycleSequenceTerminalOutcome {
     pub const fn as_storage_str(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
@@ -6700,7 +6720,7 @@ impl MaintenanceSequenceTerminalOutcome {
 /// permanently failing sequence would reset its retry budget by creating a new
 /// generation on every evaluator pass.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MaintenanceSequenceTerminalMembership {
+pub struct LifecycleSequenceTerminalMembership {
     pub id: String,
     pub candidate_id: String,
     pub rule_set_id: String,
@@ -6711,7 +6731,7 @@ pub struct MaintenanceSequenceTerminalMembership {
     pub subject_id: String,
     pub match_generation: i64,
     pub sequence_content_hash: String,
-    pub outcome: MaintenanceSequenceTerminalOutcome,
+    pub outcome: LifecycleSequenceTerminalOutcome,
     /// The complete ordered step-id list of the immutable sequence.
     pub expected_step_ids: Vec<String>,
     /// Completed step ids up to the terminal outcome, including a failed final
@@ -6772,7 +6792,7 @@ pub struct RequestRuleSet {
 
 /// One immutable revision of a request rule set's matcher.
 ///
-/// Revisions are append-only, exactly as maintenance revisions are: editing the
+/// Revisions are append-only, exactly as lifecycle revisions are: editing the
 /// matcher writes revision N+1 and repoints the rule set, so a decision can
 /// always be attributed to the exact source that produced it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -6947,7 +6967,7 @@ impl LifecycleClaimState {
         }
     }
 
-    /// A live claim holds every destructive maintenance action on its title
+    /// A live claim holds every destructive lifecycle action on its title
     /// (spec 0003 FR-042). A dormant claim counts: the title simply has not
     /// imported yet, and deleting it would destroy the very thing the claim was
     /// created to protect.
@@ -8311,7 +8331,9 @@ pub enum NotificationEventType {
     ListTitleLeft,
     ListSyncFailed,
     ListUnfollowed,
-    MaintenanceRuleNotified,
+    // Stored and plugin-wire text predates the lifecycle name; keep it.
+    #[serde(rename = "maintenance_rule_notified")]
+    LifecycleRuleNotified,
     Test,
 }
 
@@ -8347,7 +8369,7 @@ impl NotificationEventType {
             Self::ListTitleLeft => "list_title_left",
             Self::ListSyncFailed => "list_sync_failed",
             Self::ListUnfollowed => "list_unfollowed",
-            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
+            Self::LifecycleRuleNotified => "maintenance_rule_notified",
             Self::Test => "test",
         }
     }
@@ -8383,7 +8405,7 @@ impl NotificationEventType {
             Self::ListTitleLeft,
             Self::ListSyncFailed,
             Self::ListUnfollowed,
-            Self::MaintenanceRuleNotified,
+            Self::LifecycleRuleNotified,
             Self::Test,
         ]
     }
@@ -8419,7 +8441,7 @@ impl NotificationEventType {
             "list_title_left" => Some(Self::ListTitleLeft),
             "list_sync_failed" => Some(Self::ListSyncFailed),
             "list_unfollowed" => Some(Self::ListUnfollowed),
-            "maintenance_rule_notified" => Some(Self::MaintenanceRuleNotified),
+            "maintenance_rule_notified" => Some(Self::LifecycleRuleNotified),
             "test" => Some(Self::Test),
             "release_grabbed" => Some(Self::Grab),
             "download_failed" => Some(Self::Download),

@@ -1546,6 +1546,130 @@ async fn an_operator_delete_stops_conflicting_new_submissions_for_its_scope() {
 }
 
 #[tokio::test]
+async fn torrent_bilingual_release_names_are_not_archive_passwords() {
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Northern Lantern".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    for kind in [
+        DownloadSourceKind::TorrentFile,
+        DownloadSourceKind::MagnetUri,
+    ] {
+        for name in [
+            "Северный фонарь / Northern Lantern",
+            "Северный фонарь / Northern Lantern / S1E1-8 of 8 (2026) WEB-DL 2160p",
+        ] {
+            let mut request = crate::DownloadClientAddRequest::from_legacy(
+                &title,
+                None,
+                Some(kind),
+                Some(name.to_string()),
+                None,
+                None,
+            );
+            request.release_title = Some(name.to_string());
+            assert!(request.password_candidates().is_empty(), "{kind:?}");
+            assert_eq!(
+                request.source_title_without_password().as_deref(),
+                Some(name)
+            );
+            assert_eq!(
+                request.release_title_without_password().as_deref(),
+                Some(name)
+            );
+        }
+    }
+    // The resolved artifact also identifies torrents when the hint is absent.
+    for artifact in [
+        crate::ResolvedDownloadArtifact::Magnet {
+            uri: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789".into(),
+            info_hash_hint: None,
+        },
+        crate::ResolvedDownloadArtifact::TorrentFile {
+            bytes: vec![],
+            file_name: None,
+            content_type: None,
+            info_hash_hint: None,
+        },
+    ] {
+        let name = "Северный фонарь / Northern Lantern / S01";
+        let mut request = crate::DownloadClientAddRequest::from_legacy(
+            &title,
+            None,
+            None,
+            Some(name.into()),
+            None,
+            None,
+        );
+        request.resolved_download_artifact = Some(artifact);
+        assert!(request.password_candidates().is_empty());
+        assert_eq!(
+            request.source_title_without_password().as_deref(),
+            Some(name)
+        );
+    }
+    // NZB compatibility and actual, explicitly supplied passwords are unchanged.
+    for kind in [DownloadSourceKind::NzbFile, DownloadSourceKind::NzbUrl] {
+        let request = crate::DownloadClientAddRequest::from_legacy(
+            &title,
+            None,
+            Some(kind),
+            Some("Northern.Lantern / synthetic-secret".into()),
+            None,
+            None,
+        );
+        assert_eq!(
+            request.password_candidates().first(),
+            Some("synthetic-secret")
+        );
+        assert_eq!(
+            request.source_title_without_password().as_deref(),
+            Some("Northern.Lantern")
+        );
+    }
+    for kind in [
+        DownloadSourceKind::TorrentFile,
+        DownloadSourceKind::MagnetUri,
+    ] {
+        for name in [
+            "Northern.Lantern{{synthetic-secret}}",
+            "Northern.Lantern password=synthetic-secret",
+        ] {
+            let request = crate::DownloadClientAddRequest::from_legacy(
+                &title,
+                None,
+                Some(kind),
+                Some(name.into()),
+                Some("indexer-secret".into()),
+                None,
+            );
+            let candidates = request.password_candidates();
+            assert_eq!(
+                candidates.iter().map(String::as_str).collect::<Vec<_>>(),
+                vec!["indexer-secret", "synthetic-secret"]
+            );
+            assert_eq!(
+                request.source_title_without_password().as_deref(),
+                Some("Northern.Lantern")
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn queue_existing_title_download_submits_source_password_hint() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -4918,6 +5042,38 @@ async fn background_search_records_scope_indexer_coverage() {
         !fingerprints.into_iter().next().unwrap().is_empty(),
         "the recorded fingerprint is non-empty"
     );
+}
+
+#[tokio::test]
+async fn editing_custom_search_aliases_reopens_covered_convergence() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let configs = vec![synthetic_direct_nab_indexer_config("indexer-a", "newznab")];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let (mut title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    app.record_search_coverage(&title, &subject, &["indexer-a".into()], &[])
+        .await;
+    assert!(scope_is_converged(&app, &title, &subject).await);
+
+    // User-entered query names are persisted as reserved title tags. Old empty
+    // searches must not cover a newly corrected query after the next title walk.
+    title.tags.push(format!(
+        "{}Alternative Query Name",
+        scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+    ));
+    assert!(
+        !scope_is_converged(&app, &title, &subject).await,
+        "old coverage must not suppress the corrected custom query"
+    );
+    app.record_search_coverage(&title, &subject, &["indexer-a".into()], &[])
+        .await;
+    assert!(scope_is_converged(&app, &title, &subject).await);
 }
 
 #[tokio::test]

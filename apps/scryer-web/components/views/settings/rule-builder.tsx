@@ -1,7 +1,6 @@
 import * as React from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { HelpLabel } from "@/components/common/info-help";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,15 +17,28 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
   RULE_BUILDER_PROBLEM_KEYS,
+  addRuleBuilderAction,
   initialRuleBuilderOutputValue,
   isRuleBuilderOutputInVariant,
   ruleBuilderConflicts,
   ruleBuilderOutputHelp,
   ruleBuilderOutputLabel,
   ruleBuilderOutputPlaceholder,
+  ruleBuilderActionLabel,
+  ruleBuilderActionRows,
   ruleBuilderFields,
   ruleBuilderOperators,
+  ruleBuilderRowSubject,
+  ruleBuilderSubjectFields,
+  removeRuleBuilderAction,
+  setRuleBuilderActionConditions,
+  setRuleBuilderActionOutput,
+  setRuleBuilderActionSubject,
+  translatedOr,
+  type RuleBuilderActionRow,
   type RuleBuilderCondition,
+  type RuleBuilderField,
+  type RuleBuilderJoin,
   type RuleBuilderModel,
   type RuleBuilderOutput,
   type RuleBuilderOutputValue,
@@ -105,10 +117,14 @@ function ProblemText({
   );
 }
 
+/// One condition. `idBase` and `keys` name its elements: the rule's shared
+/// conditions are `<prefix>-condition-*` by index, an action row's own are
+/// `<prefix>-action-condition-*` by row and index.
 function ConditionRow({
   schema,
-  variant,
-  index,
+  fields,
+  idBase,
+  keys,
   condition,
   problems,
   readOnly,
@@ -116,8 +132,9 @@ function ConditionRow({
   onRemove,
 }: {
   schema: RuleBuilderSchema;
-  variant: string | null;
-  index: number;
+  fields: readonly RuleBuilderField[];
+  idBase: string;
+  keys: readonly (string | number)[];
   condition: RuleBuilderCondition;
   problems: RuleBuilderProblem[];
   readOnly: boolean;
@@ -125,24 +142,22 @@ function ConditionRow({
   onRemove: () => void;
 }) {
   const t = useTranslate();
-  const prefix = schema.idPrefix;
-  const fields = ruleBuilderFields(schema, variant);
   const field = fields.find((candidate) => candidate.path === condition.field);
   const operators = field ? ruleBuilderOperators(schema, field.kind) : [];
   const operator = operators.find(
     (candidate) => candidate.id === condition.operator,
   );
   const valueKind = operator?.value ?? "none";
-  const valueId = selectorId(`${prefix}-condition-value`, index);
+  const valueId = selectorId(`${idBase}-value`, ...keys);
 
   return (
     <div
-      id={selectorId(`${prefix}-condition`, index)}
+      id={selectorId(idBase, ...keys)}
       className="space-y-1 rounded border border-border p-2"
     >
       <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
         <SingleSelectField
-          id={selectorId(`${prefix}-condition-fact`, index)}
+          id={selectorId(`${idBase}-fact`, ...keys)}
           label={t("settings.ruleBuilderFact")}
           placeholder={t("settings.ruleBuilderFactPlaceholder")}
           valueKind="code"
@@ -158,13 +173,20 @@ function ConditionRow({
               value: "",
             });
           }}
-          options={fields.map((candidate) => ({
-            value: candidate.path,
-            label: candidate.label,
-          }))}
+          options={[
+            ...fields.map((candidate) => ({
+              value: candidate.path,
+              label: candidate.label,
+            })),
+            // A field this row cannot read stays visible, flagged below,
+            // rather than vanishing from the condition.
+            ...(condition.field && !field
+              ? [{ value: condition.field, label: condition.field.replace(/^input\./, "") }]
+              : []),
+          ]}
         />
         <SingleSelectField
-          id={selectorId(`${prefix}-condition-operator`, index)}
+          id={selectorId(`${idBase}-operator`, ...keys)}
           label={t("settings.ruleBuilderOperator")}
           value={condition.operator}
           disabled={readOnly || !field}
@@ -216,7 +238,7 @@ function ConditionRow({
           <div />
         )}
         <IconButton
-          id={selectorId(`${prefix}-condition-remove`, index)}
+          id={selectorId(`${idBase}-remove`, ...keys)}
           label={t("label.remove")}
           tone="delete"
           disabled={readOnly}
@@ -229,7 +251,7 @@ function ConditionRow({
         <p className="text-xs text-muted-foreground">{t(field.descKey)}</p>
       ) : null}
       <ProblemText
-        id={selectorId(`${prefix}-condition-problem`, index)}
+        id={selectorId(`${idBase}-problem`, ...keys)}
         schema={schema}
         problems={problems}
       />
@@ -468,11 +490,6 @@ function OutputRow({
             label
           )}
         </span>
-        {output.destructive && schema.labels.destructive ? (
-          <Badge tone="negative" className="text-[10px]">
-            {t(schema.labels.destructive)}
-          </Badge>
-        ) : null}
       </label>
       {!inVariant ? (
         <p
@@ -523,6 +540,216 @@ function OutputRow({
   );
 }
 
+/// A list of conditions with its join and its add button.
+function ConditionList({
+  schema,
+  fields,
+  idBase,
+  keys,
+  joinId,
+  join,
+  conditions,
+  problems,
+  readOnly,
+  label,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  fields: readonly RuleBuilderField[];
+  idBase: string;
+  keys: readonly (string | number)[];
+  joinId: string;
+  join: RuleBuilderJoin;
+  conditions: RuleBuilderCondition[];
+  problems: RuleBuilderProblem[];
+  readOnly: boolean;
+  label: React.ReactNode;
+  onChange: (change: {
+    join?: RuleBuilderJoin;
+    conditions?: RuleBuilderCondition[];
+  }) => void;
+}) {
+  const t = useTranslate();
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <Label className="block">{label}</Label>
+        <SingleSelectField
+          id={joinId}
+          size="sm"
+          className="w-56"
+          value={join}
+          disabled={readOnly}
+          onValueChange={(next) => onChange({ join: next as RuleBuilderJoin })}
+          options={[
+            { value: "ALL", label: t("settings.ruleBuilderJoinAll") },
+            { value: "ANY", label: t("settings.ruleBuilderJoinAny") },
+          ]}
+        />
+      </div>
+      {conditions.map((condition, index) => (
+        <ConditionRow
+          key={index}
+          schema={schema}
+          fields={fields}
+          idBase={idBase}
+          keys={[...keys, index]}
+          condition={condition}
+          readOnly={readOnly}
+          problems={problems.filter((problem) => problem.conditionIndex === index)}
+          onChange={(next) =>
+            onChange({
+              conditions: conditions.map((existing, at) =>
+                at === index ? next : existing,
+              ),
+            })
+          }
+          onRemove={() =>
+            onChange({ conditions: conditions.filter((_, at) => at !== index) })
+          }
+        />
+      ))}
+      <Button
+        id={selectorId(`${idBase}-add`, ...keys)}
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={readOnly}
+        onClick={() =>
+          onChange({
+            conditions: [...conditions, { field: "", operator: "", value: "" }],
+          })
+        }
+      >
+        <Plus className="mr-1 h-4 w-4" />
+        {t("settings.ruleBuilderAddCondition")}
+      </Button>
+    </div>
+  );
+}
+
+/// One action of a family with subjects: what it acts on, the action, its
+/// value, and the conditions that apply to it alone.
+function ActionRow({
+  schema,
+  variant,
+  model,
+  row,
+  index,
+  options,
+  problems,
+  readOnly,
+  onChange,
+}: {
+  schema: RuleBuilderSchema;
+  variant: string | null;
+  model: RuleBuilderModel;
+  row: RuleBuilderActionRow;
+  index: number;
+  options: RuleBuilderOptions;
+  problems: RuleBuilderProblem[];
+  readOnly: boolean;
+  onChange: (model: RuleBuilderModel) => void;
+}) {
+  const t = useTranslate();
+  const prefix = schema.idPrefix;
+  const subject = ruleBuilderRowSubject(schema, row);
+  const rows = ruleBuilderActionRows(schema, model);
+  const taken = new Set(
+    rows.filter((_, at) => at !== index).map((other) => other.output),
+  );
+  const offered = schema.outputs.filter(
+    (output) =>
+      subject?.outputs.includes(output.id) &&
+      (!taken.has(output.id) || output.id === row.output),
+  );
+  const output = schema.outputs.find((entry) => entry.id === row.output);
+  const help = output ? ruleBuilderOutputHelp(t, output) : null;
+  const rowProblems = problems.filter(
+    (problem) => problem.conditionIndex === undefined,
+  );
+  return (
+    <div
+      id={selectorId(`${prefix}-action-row`, index)}
+      className="space-y-2 rounded border border-border p-2"
+    >
+      <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] md:items-end">
+        <SingleSelectField
+          id={selectorId(`${prefix}-action-subject`, index)}
+          label={t("settings.ruleBuilderActionSubject")}
+          value={subject?.id ?? row.subject ?? ""}
+          disabled={readOnly}
+          onValueChange={(next) =>
+            onChange(setRuleBuilderActionSubject(schema, model, index, next))
+          }
+          options={(schema.subjects ?? []).map((entry) => ({
+            value: entry.id,
+            label: translatedOr(t, entry.labelKey, entry.id),
+          }))}
+        />
+        <SingleSelectField
+          id={selectorId(`${prefix}-action-output`, index)}
+          label={t("settings.ruleBuilderAction")}
+          placeholder={t("settings.ruleBuilderActionPlaceholder")}
+          value={row.output}
+          disabled={readOnly || !subject}
+          onValueChange={(next) =>
+            onChange(setRuleBuilderActionOutput(schema, model, index, next))
+          }
+          options={offered.map((entry) => ({
+            value: entry.id,
+            label: ruleBuilderActionLabel(t, entry),
+          }))}
+        />
+        <IconButton
+          id={selectorId(`${prefix}-action-remove`, index)}
+          label={t("label.remove")}
+          tone="delete"
+          disabled={readOnly}
+          onClick={() => onChange(removeRuleBuilderAction(schema, model, index))}
+        >
+          <Trash2 className="h-4 w-4" />
+        </IconButton>
+      </div>
+      {help ? <p className="text-xs text-muted-foreground">{help}</p> : null}
+      {output && output.value.kind !== "flag" ? (
+        <div className={cn(output.value.kind !== "structured" && "md:max-w-[50%]")}>
+          <OutputValuePicker
+            schema={schema}
+            output={output}
+            value={model.outputs[output.id] ?? initialRuleBuilderOutputValue(output)}
+            options={options}
+            readOnly={readOnly}
+            onChange={(value) =>
+              onChange({ ...model, outputs: { ...model.outputs, [output.id]: value } })
+            }
+          />
+        </div>
+      ) : null}
+      <ConditionList
+        schema={schema}
+        fields={ruleBuilderSubjectFields(schema, variant, subject)}
+        idBase={`${prefix}-action-condition`}
+        keys={[index]}
+        joinId={selectorId(`${prefix}-action-join`, index)}
+        join={row.join}
+        conditions={row.conditions}
+        problems={problems.filter((problem) => problem.conditionIndex !== undefined)}
+        readOnly={readOnly}
+        label={t("settings.ruleBuilderActionConditions")}
+        onChange={(change) =>
+          onChange(setRuleBuilderActionConditions(schema, model, index, change))
+        }
+      />
+      <ProblemText
+        id={selectorId(`${prefix}-action-row-problem`, index)}
+        schema={schema}
+        problems={rowProblems}
+      />
+    </div>
+  );
+}
+
 /// Conditions, then outputs, written into Rego by the generator. Everything
 /// here edits the model; the source the rule saves is always generated. What
 /// the builder offers comes entirely from the schema.
@@ -552,79 +779,37 @@ export function RuleBuilder({
   const t = useTranslate();
   const prefix = schema.idPrefix;
   const [sourceOpen, setSourceOpen] = React.useState(false);
+  const hasSubjects = (schema.subjects?.length ?? 0) > 0;
   const general = problems.filter(
     (problem) =>
-      problem.conditionIndex === undefined && problem.output === undefined,
+      problem.conditionIndex === undefined &&
+      problem.output === undefined &&
+      problem.actionIndex === undefined,
   );
-
-  const setConditions = (conditions: RuleBuilderCondition[]) =>
-    onChange({ ...model, conditions });
+  const sharedProblems = problems.filter(
+    (problem) => problem.actionIndex === undefined,
+  );
 
   return (
     <div id={prefix} className="space-y-4">
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-end justify-between gap-2">
-          <Label className="block">
-            <HelpLabel
-              label={t("settings.ruleBuilderConditions")}
-              help={t(schema.labels.conditionsHelp)}
-            />
-          </Label>
-          <SingleSelectField
-            id={`${prefix}-join`}
-            size="sm"
-            className="w-56"
-            value={model.join}
-            disabled={readOnly}
-            onValueChange={(join) =>
-              onChange({ ...model, join: join as RuleBuilderModel["join"] })
-            }
-            options={[
-              { value: "ALL", label: t("settings.ruleBuilderJoinAll") },
-              { value: "ANY", label: t("settings.ruleBuilderJoinAny") },
-            ]}
+      <ConditionList
+        schema={schema}
+        fields={ruleBuilderFields(schema, variant)}
+        idBase={`${prefix}-condition`}
+        keys={[]}
+        joinId={`${prefix}-join`}
+        join={model.join}
+        conditions={model.conditions}
+        problems={sharedProblems}
+        readOnly={readOnly}
+        label={
+          <HelpLabel
+            label={t("settings.ruleBuilderConditions")}
+            help={t(schema.labels.conditionsHelp)}
           />
-        </div>
-        {model.conditions.map((condition, index) => (
-          <ConditionRow
-            key={index}
-            schema={schema}
-            variant={variant}
-            index={index}
-            condition={condition}
-            readOnly={readOnly}
-            problems={problems.filter(
-              (problem) => problem.conditionIndex === index,
-            )}
-            onChange={(next) =>
-              setConditions(
-                model.conditions.map((existing, at) =>
-                  at === index ? next : existing,
-                ),
-              )
-            }
-            onRemove={() =>
-              setConditions(model.conditions.filter((_, at) => at !== index))
-            }
-          />
-        ))}
-        <Button
-          id={`${prefix}-condition-add`}
-          type="button"
-          size="sm"
-          variant="secondary"
-          disabled={readOnly}
-          onClick={() =>
-            setConditions([
-              ...model.conditions,
-              { field: "", operator: "", value: "" },
-            ])
-          }
-        >
-          <Plus className="mr-1 h-4 w-4" />
-          {t("settings.ruleBuilderAddCondition")}
-        </Button>
-      </div>
+        }
+        onChange={(change) => onChange({ ...model, ...change })}
+      />
 
       <div className="space-y-2">
         <Label className="block">
@@ -633,6 +818,37 @@ export function RuleBuilder({
             help={t(schema.labels.outputsHelp)}
           />
         </Label>
+        {hasSubjects ? (
+          <div className="space-y-2">
+            {ruleBuilderActionRows(schema, model).map((row, index) => (
+              <ActionRow
+                key={index}
+                schema={schema}
+                variant={variant}
+                model={model}
+                row={row}
+                index={index}
+                options={options}
+                readOnly={readOnly}
+                problems={problems.filter(
+                  (problem) => problem.actionIndex === index,
+                )}
+                onChange={onChange}
+              />
+            ))}
+            <Button
+              id={`${prefix}-action-add`}
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={readOnly}
+              onClick={() => onChange(addRuleBuilderAction(schema, model))}
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              {t("settings.ruleBuilderAddAction")}
+            </Button>
+          </div>
+        ) : (
         <div className="grid gap-2 md:grid-cols-2">
           {schema.outputs.map((output) => (
             <OutputRow
@@ -650,6 +866,7 @@ export function RuleBuilder({
             />
           ))}
         </div>
+        )}
       </div>
 
       <ProblemText

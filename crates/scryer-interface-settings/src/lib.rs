@@ -922,7 +922,7 @@ pub(crate) fn from_title_tag_rewrite_counts(
         titles: title_tag_count(counts.titles),
         series_movies: title_tag_count(counts.series_movies),
         delay_profiles: title_tag_count(counts.delay_profiles),
-        maintenance_rule_sets: title_tag_count(counts.maintenance_rule_sets),
+        lifecycle_rule_sets: title_tag_count(counts.lifecycle_rule_sets),
         release_rule_sets: title_tag_count(counts.release_rule_sets),
         managed_tag_filters: title_tag_count(counts.managed_tag_filters),
         request_rule_sets: title_tag_count(counts.request_rule_sets),

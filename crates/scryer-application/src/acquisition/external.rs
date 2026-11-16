@@ -3,17 +3,67 @@ use super::*;
 #[path = "arr_compat_bridge.rs"]
 mod arr_compat_bridge;
 
-pub(super) fn pending_explanation(candidate: &IndexerSearchResult) -> Option<String> {
-    let explanation = serialize_decision_explanation(candidate);
+/// The explanation a parked release stores. `explanation` is the text the
+/// decision row records, `release_decision_explanation_for(candidate,
+/// decision_code)`; a parked external release also carries its announcement.
+pub(super) fn pending_explanation_for(
+    candidate: &IndexerSearchResult,
+    decision_code: ReleaseAutoDecisionCode,
+    explanation: &str,
+) -> Option<String> {
     let Some(announcement) = candidate.extra.get("external_announcement") else {
-        return explanation;
+        return Some(explanation.to_owned());
     };
-    let mut value: serde_json::Value = explanation
-        .as_deref()
-        .and_then(|value| serde_json::from_str(value).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
+    if !explanation_reads_back_as_written(explanation) {
+        let value = serde_json::from_str(explanation).ok();
+        return Some(with_announcement(value, announcement));
+    }
+    // The serializer's own text reads back as the value it was written
+    // from, so the value is extended directly instead of being read back.
+    let value = decision_explanation_value_for(candidate, decision_code);
+    Some(with_announcement(Some(value), announcement))
+}
+
+fn with_announcement(value: Option<serde_json::Value>, announcement: &serde_json::Value) -> String {
+    let mut value = value.unwrap_or_else(|| serde_json::json!({}));
     value["external_announcement"] = announcement.clone();
-    Some(value.to_string())
+    value.to_string()
+}
+
+/// Whether reading the serializer's `text` back gives the value it was
+/// written from. It does unless an object's key is serde_json's raw-value
+/// marker, which the reader expands, or the nesting is deep enough for the
+/// reader's recursion limit; both are left to an actual read.
+fn explanation_reads_back_as_written(text: &str) -> bool {
+    const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+    const SAFE_NESTING: usize = 100;
+    if text.contains(RAW_VALUE_TOKEN) {
+        return false;
+    }
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    for byte in text.bytes() {
+        if in_string {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > SAFE_NESTING {
+                    return false;
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    true
 }
 
 pub(super) fn restore_announcement(
@@ -507,5 +557,118 @@ impl AppUseCase {
             }
         }
         Ok(grabbed)
+    }
+}
+
+#[cfg(test)]
+mod pending_explanation_tests {
+    use super::*;
+    use crate::acquisition_release_search::{
+        annotate_auto_decision, serialize_decision_explanation,
+    };
+
+    /// What a parked release stored before: the annotated copy's explanation,
+    /// read back and extended when it carries an announcement.
+    fn reparsed_pending_explanation(candidate: &IndexerSearchResult) -> Option<String> {
+        let explanation = serialize_decision_explanation(candidate);
+        let Some(announcement) = candidate.extra.get("external_announcement") else {
+            return explanation;
+        };
+        let mut value: serde_json::Value = explanation
+            .as_deref()
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        value["external_announcement"] = announcement.clone();
+        Some(value.to_string())
+    }
+
+    fn synthetic_candidate(title: &str) -> IndexerSearchResult {
+        IndexerSearchResult {
+            http: None,
+            indexer_id: None,
+            source: "synthetic-indexer".to_string(),
+            title: title.to_string(),
+            link: None,
+            download_url: Some("https://synthetic.invalid/get/1".to_string()),
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            size_bytes: Some(1_000),
+            published_at: None,
+            thumbs_up: None,
+            thumbs_down: None,
+            indexer_languages: None,
+            indexer_subtitles: None,
+            indexer_grabs: None,
+            password_hint: None,
+            parsed_release_metadata: Some(crate::parse_release_metadata(title)),
+            quality_profile_decision: None,
+            extra: Default::default(),
+            response_attributes: Default::default(),
+            guid: Some("synthetic-guid".to_string()),
+            info_url: None,
+            provenance: None,
+            candidate_token: None,
+            queue_scope: None,
+            coverage_scope: None,
+            auto_eligible: Some(true),
+            auto_decision_code: Some("synthetic_stale_code".to_string()),
+            auto_decision_summary: None,
+            release_listing_json: None,
+        }
+    }
+
+    fn nested(depth: usize) -> serde_json::Value {
+        (0..depth).fold(serde_json::json!(1), |inner, _| serde_json::json!([inner]))
+    }
+
+    #[test]
+    fn parked_text_matches_reading_the_explanation_back() {
+        let announcement = serde_json::json!({
+            "flags": ["freeleech", "internal"],
+            "tvdb_id": 101,
+            "tmdb_id": null,
+            "imdb_id": "tt0000001",
+        });
+        let conflicts = [
+            None,
+            Some(serde_json::json!([{"kind": "tvdb", "expected": "1", "actual": "2", "f": 0.1}])),
+            Some(serde_json::json!({"$serde_json::private::RawValue": "[1,2]"})),
+            Some(nested(110)),
+            Some(nested(140)),
+        ];
+        let codes = [
+            ReleaseAutoDecisionCode::PendingDelay,
+            ReleaseAutoDecisionCode::MinimumAge,
+            ReleaseAutoDecisionCode::ReleaseAgeUnknown,
+            ReleaseAutoDecisionCode::DownloadClientUnavailable,
+        ];
+        for title in [
+            "Synthetic.Show.S01E02.1080p.WEB-DL-SYNTH",
+            "Synthetic \"Film\" é 2026",
+        ] {
+            for conflict in &conflicts {
+                for with_announcement in [false, true] {
+                    let mut candidate = synthetic_candidate(title);
+                    if let Some(conflict) = conflict {
+                        candidate
+                            .extra
+                            .insert("scryer_external_id_conflicts".into(), conflict.clone());
+                    }
+                    if with_announcement {
+                        candidate
+                            .extra
+                            .insert("external_announcement".into(), announcement.clone());
+                    }
+                    for code in codes {
+                        let mut annotated = candidate.clone();
+                        annotate_auto_decision(&mut annotated, code);
+                        let expected = reparsed_pending_explanation(&annotated);
+                        let explanation = release_decision_explanation_for(&candidate, code);
+                        let parked =
+                            pending_explanation_for(&candidate, code, explanation.as_str());
+                        assert_eq!(parked, expected, "code {}", code.as_str());
+                    }
+                }
+            }
+        }
     }
 }

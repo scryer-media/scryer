@@ -761,7 +761,9 @@ async fn release_decision_explanations_are_compressed_and_hydrated_across_read_p
             candidate_score: 1050,
             current_score: Some(1000),
             score_delta: Some(50),
-            explanation_json: Some(explanation_json.clone()),
+            explanation_json: Some(scryer_application::ReleaseDecisionExplanation::from_value(
+                &explanation,
+            )),
             created_at: now.to_rfc3339(),
         })
         .await
@@ -858,7 +860,9 @@ async fn release_decision_explanations_are_compressed_and_hydrated_across_read_p
             candidate_score: 0,
             current_score: None,
             score_delta: None,
-            explanation_json: Some("not-json".to_string()),
+            explanation_json: Some(scryer_application::ReleaseDecisionExplanation::untrusted(
+                "not-json",
+            )),
             created_at: (now + chrono::Duration::seconds(1)).to_rfc3339(),
         })
         .await
@@ -1594,7 +1598,11 @@ async fn assert_decision_batch_matches_per_row(prefix: &str, fail_title: Option<
     }
     let decisions = decision_batch_fixture();
 
-    let batch = decision_batch_results(batch_store.insert_release_decisions(&decisions).await);
+    let batch = decision_batch_results(
+        batch_store
+            .insert_release_decisions(decisions.clone())
+            .await,
+    );
     let mut per_row = Vec::new();
     for decision in &decisions {
         per_row.push(row_store.insert_release_decision(decision).await);
@@ -1620,6 +1628,109 @@ async fn assert_decision_batch_matches_per_row(prefix: &str, fail_title: Option<
 #[tokio::test]
 async fn release_decision_batch_matches_per_row_outcomes() {
     assert_decision_batch_matches_per_row("scryer_decision_batch_ok", None).await;
+}
+
+/// A search-sized batch, spanning several preparation chunks, with
+/// explanations that encode, repeat, and fail to encode, lands exactly the rows,
+/// ids and stored explanation bytes the per-row path does.
+#[tokio::test]
+async fn release_decision_batch_with_explanations_matches_per_row_across_chunks() {
+    let (batch_services, batch_db, batch_store) =
+        seed_grab_batch_fixture("scryer_decision_batch_explained_batch").await;
+    let (row_services, row_db, row_store) =
+        seed_grab_batch_fixture("scryer_decision_batch_explained_rows").await;
+    let decisions = (0..700)
+        .map(|index| {
+            // Every seventh release repeats an earlier one, so it ages that
+            // row forward instead of appending.
+            let release = if index % 7 == 6 { index - 3 } else { index };
+            let explanation = || {
+                serde_json::json!({
+                        "candidate": {"source": "synthetic-indexer", "guid": format!("guid-{index}")},
+                        "auto_decision": {"eligible": false, "code": "quality_blocked"},
+                        "quality_profile_decision": {
+                            "allowed": index % 2 == 0,
+                            "release_score": index * 13,
+                            "scoring_log": (0..index % 9)
+                                .map(|step| serde_json::json!({"code": format!("rule_{step}"), "delta": step}))
+                                .collect::<Vec<_>>(),
+                        },
+                        "parsed": {"raw_title": format!("Emberfall.S01E{release:03}.1080p-SYNTH")},
+                    })
+            };
+            let explanation_json = match index % 11 {
+                0 => None,
+                5 => Some(scryer_application::ReleaseDecisionExplanation::untrusted(
+                    "not-json",
+                )),
+                // Foreign text with whitespace is canonicalized before storing.
+                8 => Some(scryer_application::ReleaseDecisionExplanation::untrusted(
+                    serde_json::to_string_pretty(&explanation()).unwrap(),
+                )),
+                _ => Some(scryer_application::ReleaseDecisionExplanation::from_value(
+                    &explanation(),
+                )),
+            };
+            scryer_application::ReleaseDecision {
+                id: format!("decision-{index:04}"),
+                wanted_item_id: "wanted-ep-1".to_string(),
+                title_id: "emberfall".to_string(),
+                release_title: format!("Emberfall.S01E{release:03}.1080p-SYNTH"),
+                release_url: Some(format!("https://indexer.invalid/{release}")),
+                release_size_bytes: Some(1_000 + i64::from(release)),
+                decision_code: "quality_blocked".to_string(),
+                candidate_score: index,
+                current_score: None,
+                score_delta: None,
+                explanation_json,
+                created_at: "2026-04-20T00:00:00Z".to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let batch = decision_batch_results(
+        batch_store
+            .insert_release_decisions(decisions.clone())
+            .await,
+    );
+    let mut per_row = Vec::new();
+    for decision in &decisions {
+        per_row.push(row_store.insert_release_decision(decision).await);
+    }
+    let per_row = decision_batch_results(per_row);
+
+    assert_eq!(batch, per_row);
+    assert_eq!(batch.len(), decisions.len());
+    assert_eq!(batch[6], Ok("decision-0003".to_string()));
+    let stored = |services: &SqliteServices| {
+        let pool = services.pool().clone();
+        async move {
+            sqlx::query(
+                "SELECT id, release_title, candidate_score, explanation_json
+                   FROM release_decisions ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("decision rows should load")
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("id"),
+                    row.get::<String, _>("release_title"),
+                    row.get::<i64, _>("candidate_score"),
+                    row.get::<Option<Vec<u8>>, _>("explanation_json"),
+                )
+            })
+            .collect::<Vec<_>>()
+        }
+    };
+    let batch_rows = stored(&batch_services).await;
+    assert_eq!(batch_rows, stored(&row_services).await);
+    assert!(batch_rows.iter().any(|row| row.3.is_some()));
+    assert!(batch_rows.iter().any(|row| row.3.is_none()));
+
+    let _ = std::fs::remove_file(batch_db);
+    let _ = std::fs::remove_file(row_db);
 }
 
 #[tokio::test]
@@ -1726,6 +1837,170 @@ async fn scope_coordinates_by_status_match_the_full_state_read() {
             assert_eq!(narrow.len(), 24);
         }
     }
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn scope_reads_find_the_oldest_rows_of_a_title_with_many_scopes() {
+    use scryer_application::AcquisitionScopeKey;
+
+    let (services, db) = temp_services("scryer_scope_read_by_key").await;
+    let (catalog, workflow, _index_dir) = super::search_stores(&services).await;
+    TitleRepository::create(&catalog, make_test_title("title-cinderwick", None))
+        .await
+        .expect("title should insert");
+
+    // More episode rows than one list page, all newer than the collection and
+    // link rows, so a newest-first page of the title's rows never reaches them.
+    // Every episode row carries the collection id, as episode scopes do.
+    let mut conn = services.pool().acquire().await.expect("connection");
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("waive foreign keys");
+    sqlx::query("BEGIN")
+        .execute(&mut *conn)
+        .await
+        .expect("begin");
+    for n in 0..520_usize {
+        sqlx::query(
+            "INSERT INTO wanted_items
+                (id, title_id, episode_id, collection_id, media_type, status, created_at,
+                 updated_at)
+             VALUES (?, 'title-cinderwick', ?, 'collection-cinderwick', 'episode', 'wanted',
+                     '2026-01-01T00:00:00Z', ?)",
+        )
+        .bind(format!("wanted-episode-{n:03}"))
+        .bind(format!("episode-{n:03}"))
+        .bind(format!("2026-03-01T00:{:02}:{:02}Z", n / 60, n % 60))
+        .execute(&mut *conn)
+        .await
+        .expect("episode row should insert");
+    }
+    for (id, collection_id, link_id, media_type) in [
+        (
+            "wanted-collection",
+            Some("collection-cinderwick"),
+            None,
+            "episode",
+        ),
+        ("wanted-link", None, Some("link-cinderwick"), "series_movie"),
+    ] {
+        sqlx::query(
+            "INSERT INTO wanted_items
+                (id, title_id, episode_id, collection_id, series_movie_link_id, media_type,
+                 status, created_at, updated_at)
+             VALUES (?, 'title-cinderwick', NULL, ?, ?, ?, 'wanted',
+                     '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(collection_id)
+        .bind(link_id)
+        .bind(media_type)
+        .execute(&mut *conn)
+        .await
+        .expect("scope row should insert");
+    }
+    sqlx::query("COMMIT")
+        .execute(&mut *conn)
+        .await
+        .expect("commit");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await
+        .expect("restore foreign keys");
+    drop(conn);
+
+    // A title-mismatch decision on the link row, so the joined projection has
+    // something to carry.
+    workflow
+        .insert_release_decision(&scryer_application::ReleaseDecision {
+            id: "decision-link".to_string(),
+            wanted_item_id: "wanted-link".to_string(),
+            title_id: "title-cinderwick".to_string(),
+            release_title: "Cinderwick.Special.1080p".to_string(),
+            release_url: None,
+            release_size_bytes: Some(1_000),
+            decision_code: "title_mismatch".to_string(),
+            candidate_score: 5,
+            current_score: None,
+            score_delta: None,
+            explanation_json: None,
+            created_at: "2026-04-20T00:00:00Z".to_string(),
+        })
+        .await
+        .expect("decision should insert");
+
+    let collection = workflow
+        .get_acquisition_scope_state_for_scope(
+            "title-cinderwick",
+            AcquisitionScopeKey::Collection("collection-cinderwick"),
+        )
+        .await
+        .expect("collection read")
+        .expect("the collection row is found past the episode rows");
+    assert_eq!(collection.id, "wanted-collection");
+    assert_eq!(
+        collection.episode_id, None,
+        "an episode row sharing the collection id is not the collection's row"
+    );
+
+    let link = workflow
+        .get_acquisition_scope_state_for_scope(
+            "title-cinderwick",
+            AcquisitionScopeKey::SeriesMovieLink("link-cinderwick"),
+        )
+        .await
+        .expect("link read")
+        .expect("the link row is found past the episode rows");
+    assert_eq!(link.id, "wanted-link");
+    assert_eq!(
+        link.latest_release_decision
+            .as_ref()
+            .map(|decision| decision.id.as_str()),
+        Some("decision-link")
+    );
+    assert!(link.mismatch_recovery_eligible);
+
+    // The scope read returns the same projection as the full-row reads.
+    for state in [&collection, &link] {
+        let by_id = workflow
+            .get_acquisition_scope_state_by_id(&state.id)
+            .await
+            .expect("by-id read")
+            .expect("row exists");
+        assert_eq!(format!("{state:?}"), format!("{by_id:?}"));
+    }
+
+    // A collection with only episode rows has no collection row of its own.
+    sqlx::query("DELETE FROM wanted_items WHERE id = 'wanted-collection'")
+        .execute(services.pool())
+        .await
+        .expect("drop the collection row");
+    assert!(
+        workflow
+            .get_acquisition_scope_state_for_scope(
+                "title-cinderwick",
+                AcquisitionScopeKey::Collection("collection-cinderwick"),
+            )
+            .await
+            .expect("collection read")
+            .is_none(),
+        "episode rows never answer for their collection"
+    );
+
+    // Another title's key finds nothing.
+    assert!(
+        workflow
+            .get_acquisition_scope_state_for_scope(
+                "title-elsewhere",
+                AcquisitionScopeKey::SeriesMovieLink("link-cinderwick"),
+            )
+            .await
+            .expect("link read")
+            .is_none()
+    );
 
     let _ = std::fs::remove_file(db);
 }

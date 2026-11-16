@@ -10,9 +10,10 @@ use crate::acquisition_decision_helpers::is_download_submit_unavailable_error;
 use crate::acquisition_release_search::title_with_bridge_cour_titles;
 use crate::acquisition_release_search::{
     AutoCandidateEvaluationContext, CandidateTitleMatch, ReleaseAutoDecisionCode,
-    annotate_auto_decision, candidate_presents_identity_disambiguator, canonical_title_evidence,
-    context_free_identity_anchor_keys, evaluate_auto_candidate_with_step, external_id_agreement,
-    parsed_release_matches_title_evidence, serialize_decision_explanation,
+    candidate_presents_identity_disambiguator, canonical_title_evidence,
+    context_free_identity_anchor_keys, decision_explanation_value_for,
+    evaluate_auto_candidate_with_step, external_id_agreement,
+    parsed_release_matches_title_evidence, release_decision_explanation_for,
     series_movie_search_title,
 };
 use crate::acquisition_search_queries::{
@@ -565,6 +566,18 @@ fn rss_pending_matches_candidate(
             && rss_listing_identity_prefix(&pending_release_as_rss_result(pending))
                 == rss_listing_identity_prefix(candidate)
             && rss_scopes_overlap(candidate_scope, pending_scope, episodes))
+}
+
+/// Whether a decision that is not a permanent rejection parks the release
+/// as pending instead of dropping it.
+fn rss_decision_parks(code: ReleaseAutoDecisionCode) -> bool {
+    matches!(
+        code,
+        ReleaseAutoDecisionCode::PendingDelay
+            | ReleaseAutoDecisionCode::MinimumAge
+            | ReleaseAutoDecisionCode::ReleaseAgeUnknown
+            | ReleaseAutoDecisionCode::DownloadClientUnavailable
+    )
 }
 
 fn rss_is_permanent_rejection(code: ReleaseAutoDecisionCode) -> bool {
@@ -3642,15 +3655,12 @@ impl AppUseCase {
             } else {
                 std::borrow::Cow::Borrowed(candidate)
             };
-            let mut decision_candidate = candidate.as_ref().clone();
-            annotate_auto_decision(&mut decision_candidate, decision_code);
             let eligible = decision_code.is_eligible();
             decided.push((
                 candidate_index,
                 admission,
                 candidate,
                 decision_code,
-                decision_candidate,
                 oldest_overlapping_pending_published_at,
             ));
             if eligible {
@@ -3660,29 +3670,62 @@ impl AppUseCase {
 
         // One construction, shared with the convergence path, so the two
         // cannot drift apart in what they record.
-        let decision_rows = decided
+        // Each explanation is built once; a parked release stores the same
+        // text its decision row records.
+        let explanations = decided
             .iter()
-            .map(|(_, admission, candidate, decision_code, _, _)| {
-                (candidate.as_ref(), *decision_code, admission.best_score())
+            .map(|(_, _, candidate, decision_code, _)| {
+                release_decision_explanation_for(candidate.as_ref(), *decision_code)
             })
             .collect::<Vec<_>>();
-        crate::acquisition_workflow::record_release_decisions(
+        let parked_explanations = decided
+            .iter()
+            .zip(&explanations)
+            .map(|((_, _, candidate, decision_code, _), explanation)| {
+                rss_decision_parks(*decision_code)
+                    .then(|| {
+                        external::pending_explanation_for(
+                            candidate.as_ref(),
+                            *decision_code,
+                            explanation.as_str(),
+                        )
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        let decision_rows = decided
+            .iter()
+            .zip(explanations)
+            .map(
+                |((_, admission, candidate, decision_code, _), explanation)| {
+                    crate::acquisition_workflow::ExplainedReleaseDecision {
+                        candidate: candidate.as_ref(),
+                        decision_code: *decision_code,
+                        incumbent_bar: admission.best_score(),
+                        explanation,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        crate::acquisition_workflow::record_explained_release_decisions(
             self,
             &wanted,
             title,
-            &decision_rows,
+            decision_rows,
             now,
         )
         .await;
 
         for (
-            candidate_index,
-            admission,
-            candidate,
-            decision_code,
-            decision_candidate,
-            oldest_overlapping_pending_published_at,
-        ) in decided
+            (
+                candidate_index,
+                admission,
+                candidate,
+                decision_code,
+                oldest_overlapping_pending_published_at,
+            ),
+            parked_explanation,
+        ) in decided.into_iter().zip(parked_explanations)
         {
             let candidate = candidate.as_ref();
             let candidate_scope = scored[candidate_index]
@@ -3720,12 +3763,7 @@ impl AppUseCase {
                 .map(|d| d.preference_score)
                 .unwrap_or(0);
             if let Some(outcome) = report.external_outcome.as_mut() {
-                outcome.reasons = vec![
-                    decision_candidate
-                        .auto_decision_summary
-                        .clone()
-                        .unwrap_or_else(|| decision_code.as_str().to_owned()),
-                ];
+                outcome.reasons = vec![decision_code.summary().to_owned()];
             }
 
             if rss_is_permanent_rejection(decision_code) {
@@ -3758,13 +3796,7 @@ impl AppUseCase {
                 continue;
             }
 
-            if matches!(
-                decision_code,
-                ReleaseAutoDecisionCode::PendingDelay
-                    | ReleaseAutoDecisionCode::MinimumAge
-                    | ReleaseAutoDecisionCode::ReleaseAgeUnknown
-                    | ReleaseAutoDecisionCode::DownloadClientUnavailable
-            ) {
+            if rss_decision_parks(decision_code) {
                 let delay = crate::acquisition_release_search::auto_candidate_delay_decision(
                     candidate,
                     &evaluation_context,
@@ -3834,7 +3866,7 @@ impl AppUseCase {
                         .or(candidate.source_kind),
                     release_size_bytes: candidate.size_bytes,
                     release_score: candidate_score,
-                    scoring_log_json: external::pending_explanation(&decision_candidate),
+                    scoring_log_json: parked_explanation,
                     indexer_source: Some(candidate.source.clone()),
                     indexer_id: candidate.indexer_id.clone(),
                     release_guid: candidate.guid.clone(),

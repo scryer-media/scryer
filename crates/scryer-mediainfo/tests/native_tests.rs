@@ -744,34 +744,48 @@ fn fixture_matrix_expected_metadata() {
 // Dolby Vision (MKV)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn mkv_dv_profile5() {
-    let a = analyze_file(&media("dv_profile5.mkv")).unwrap();
+/// Profile, level, compatibility id and the RPU / enhancement-layer / base-layer flags
+/// reported for the primary video stream.
+fn mkv_dovi_record(name: &str) -> (u8, u8, u8, bool, bool, bool) {
+    let a = analyze_file(&media(name)).unwrap();
     assert_eq!(a.video_codec.as_deref(), Some("hevc"));
     assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(5));
-    assert_eq!(a.dovi_bl_compat_id, Some(0));
     assert!(is_valid_video(&a));
+    let dovi = a.details.streams[0].metadata.hdr.dovi.clone().unwrap();
+    assert_eq!(dovi.profile, a.dovi_profile);
+    assert_eq!(dovi.base_layer_compatibility_id, a.dovi_bl_compat_id);
+    (
+        dovi.profile.unwrap(),
+        dovi.level.unwrap(),
+        dovi.base_layer_compatibility_id.unwrap(),
+        dovi.rpu_present.unwrap(),
+        dovi.enhancement_layer_present.unwrap(),
+        dovi.base_layer_present.unwrap(),
+    )
+}
+
+#[test]
+fn mkv_dv_profile5() {
+    assert_eq!(
+        mkv_dovi_record("dv_profile5.mkv"),
+        (5, 6, 0, true, false, true)
+    );
 }
 
 #[test]
 fn mkv_dv_profile7() {
-    let a = analyze_file(&media("dv_profile7.mkv")).unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(7));
-    assert_eq!(a.dovi_bl_compat_id, Some(6));
-    assert!(is_valid_video(&a));
+    assert_eq!(
+        mkv_dovi_record("dv_profile7.mkv"),
+        (7, 6, 6, true, true, true)
+    );
 }
 
 #[test]
 fn mkv_dv_profile8() {
-    let a = analyze_file(&media("dv_profile8.mkv")).unwrap();
-    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
-    assert_eq!(a.video_hdr_format.as_deref(), Some("Dolby Vision"));
-    assert_eq!(a.dovi_profile, Some(8));
-    assert_eq!(a.dovi_bl_compat_id, Some(1));
-    assert!(is_valid_video(&a));
+    assert_eq!(
+        mkv_dovi_record("dv_profile8.mkv"),
+        (8, 6, 1, true, false, true)
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -679,6 +679,14 @@ const zh_CN: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "同级最小分数差",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "同一质量级别的资源必须比当前文件的分数至少高出此值。",
+  "qualityProfile.minMissingEpisodesForPack":
+    "剧集包所需的最少缺失集数",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "仅当该季缺失至少这么多集时才搜索季包。默认 2。设为 1 时，针对单个缺失集的自动搜索也可以选择剧集包，这可能会下载你已有的剧集。",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "多季剧集包所需的最少缺失比例（%）",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "仅当剧集缺失的集数超过此百分比时才考虑多季剧集包。默认 30。设为 0 时任意缺失集都符合；设为 100 时从不选择多季剧集包。",
   "settings.acquisitionConvergence": "收敛与节奏",
   "settings.acquisitionPollIntervalSeconds": "轮询间隔（秒）",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -908,7 +916,7 @@ const zh_CN: LocaleDictionary = {
   "settings.featuresHeader": "功能",
   "settings.experimentalFeaturesLabel": "启用实验性功能",
   "settings.experimentalFeaturesHelp":
-    "显示仍在为此实例上的所有人完善的功能：在媒体库和根目录之间移动条目，以及维护规则。",
+    "显示仍在为此实例上的所有人完善的功能：在媒体库和根目录之间移动条目，以及生命周期规则。",
   "settings.personalizedDiscoveryLabel": "个性化发现",
   "settings.personalizedDiscoveryHelp":
     "将你的媒体库摘要发送到元数据网关，让发现页可以根据你拥有的内容推荐条目。关闭后，发现页仅使用公共信息流。",
@@ -2313,181 +2321,181 @@ const zh_CN: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "不受支持",
   "appUpgrade.success": "已升级到 {{version}}",
   "appUpgrade.failed": "升级失败。",
-  // ── Maintenance rules ──
-  "settings.maintenanceRules": "维护规则",
+  // ── Lifecycle rules ──
+  "settings.lifecycleRules": "生命周期规则",
   "nav.rules": "规则",
   "settings.rulesScoring": "评分规则",
-  "settings.maintenanceNavRules": "规则",
-  "settings.maintenanceNavHistory": "历史",
-  "settings.maintenanceRuleAction": "操作",
-  "settings.maintenanceRuleActionHelp": "维护操作启用后，此规则将执行的动作。",
-  "settings.maintenanceRuleActionPlaceholder": "选择操作",
-  "settings.maintenanceRuleNoActions": "没有可用的标题级操作。",
-  "settings.maintenanceRuleGraceDays": "宽限天数",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleNavRules": "规则",
+  "settings.lifecycleNavHistory": "历史",
+  "settings.lifecycleRuleAction": "操作",
+  "settings.lifecycleRuleActionHelp": "生命周期操作启用后，此规则将执行的动作。",
+  "settings.lifecycleRuleActionPlaceholder": "选择操作",
+  "settings.lifecycleRuleNoActions": "没有可用的标题级操作。",
+  "settings.lifecycleRuleGraceDays": "宽限天数",
+  "settings.lifecycleRuleGraceDaysHelp":
     "规则首次匹配后、操作执行前的天数（目前不会执行任何操作）。",
-  "settings.maintenanceRuleLibraries": "媒体库范围",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "媒体库范围",
+  "settings.lifecycleRuleLibrariesHelp":
     "不勾选任何媒体库时，规则将作用于整个收藏。",
-  "settings.maintenanceRuleLibrariesAll": "所有媒体库",
-  "settings.maintenanceRuleCreate": "创建维护规则",
-  "settings.maintenanceRuleUpdate": "更新维护规则",
-  "settings.maintenanceRuleCopy": "复制为新规则",
-  "settings.maintenanceRuleCreateNew": "新建维护规则",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "所有媒体库",
+  "settings.lifecycleRuleCreate": "创建生命周期规则",
+  "settings.lifecycleRuleUpdate": "更新生命周期规则",
+  "settings.lifecycleRuleCopy": "复制为新规则",
+  "settings.lifecycleRuleCreateNew": "新建生命周期规则",
+  "settings.lifecycleRuleValidationRequired":
     "名称、匹配器源码和操作为必填项。",
-  "settings.maintenanceRuleConfirmDiscardTitle": "放弃未保存的更改？",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "维护规则编辑器中有未保存的更改，将会丢失。",
-  "settings.maintenanceRuleDeleting": "删除维护规则 {{name}}？",
-  "settings.noMaintenanceRulesFound": "暂无维护规则。",
-  "settings.maintenanceRuleRevision": "修订版",
-  "settings.maintenanceRuleRisk": "风险",
-  "settings.maintenanceRiskNone": "无风险",
-  "settings.maintenanceRiskLow": "低风险",
-  "settings.maintenanceRiskMedium": "中等风险",
-  "settings.maintenanceRiskHigh": "高风险",
-  "settings.maintenanceActionDoNothing": "不执行任何操作",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardTitle": "放弃未保存的更改？",
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "生命周期规则编辑器中有未保存的更改，将会丢失。",
+  "settings.lifecycleRuleDeleting": "删除生命周期规则 {{name}}？",
+  "settings.noLifecycleRulesFound": "暂无生命周期规则。",
+  "settings.lifecycleRuleRevision": "修订版",
+  "settings.lifecycleRuleRisk": "风险",
+  "settings.lifecycleRiskNone": "无风险",
+  "settings.lifecycleRiskLow": "低风险",
+  "settings.lifecycleRiskMedium": "中等风险",
+  "settings.lifecycleRiskHigh": "高风险",
+  "settings.lifecycleActionDoNothing": "不执行任何操作",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "取消监控该范围，保留文件",
-  "settings.maintenanceActionDeleteTitleAndFiles": "删除该标题及其文件",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles": "删除该标题及其文件",
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "取消监控该标题，删除全部文件",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "取消监控该剧集，删除现有文件",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "取消监控该范围，删除其文件",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "取消监控该季，删除其文件，若剧集为空则删除该剧集",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "取消监控该季，若剧集为空则取消监控该剧集",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "更改质量配置，若发生变化则执行搜索",
-  "settings.maintenancePreviewTitle": "预览",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "预览",
+  "settings.lifecyclePreviewSubtitle":
     "针对真实标题运行匹配器。预览为只读：仅报告哪些内容会匹配，不做任何更改。",
-  "settings.maintenancePreviewSource": "匹配器",
-  "settings.maintenancePreviewSourceStored": "已保存的规则",
-  "settings.maintenancePreviewSourceDraft": "编辑器草稿",
-  "settings.maintenancePreviewLibrary": "媒体库",
-  "settings.maintenancePreviewLibraryPlaceholder": "选择媒体库",
-  "settings.maintenancePreviewLimit": "标题数",
-  "settings.maintenancePreviewLimitHelp": "每次运行最多 {{max}} 个标题。",
-  "settings.maintenancePreviewRun": "运行预览",
-  "settings.maintenancePreviewRunning": "正在运行预览...",
-  "settings.maintenancePreviewNoTitles": "没有评估任何标题。",
-  "settings.maintenancePreviewColOutcome": "结果",
-  "settings.maintenancePreviewColReasons": "原因代码",
-  "settings.maintenancePreviewOutcomeMatch": "匹配",
-  "settings.maintenancePreviewOutcomeNoMatch": "不匹配",
-  "settings.maintenancePreviewOutcomeUnknown": "未知",
-  "settings.maintenancePreviewOutcomeError": "错误",
-  "settings.maintenancePreviewMeta": "评估时间 {{time}} · 匹配器 {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "规则",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "选择已保存的规则",
-  "settings.maintenanceRuleUpdated": "维护规则已更新。",
-  "settings.maintenanceRuleCreated": "维护规则已创建，并以禁用状态保存。",
-  "settings.maintenanceRuleDeleted": "维护规则 {{name}} 已删除。",
+  "settings.lifecyclePreviewSource": "匹配器",
+  "settings.lifecyclePreviewSourceStored": "已保存的规则",
+  "settings.lifecyclePreviewSourceDraft": "编辑器草稿",
+  "settings.lifecyclePreviewLibrary": "媒体库",
+  "settings.lifecyclePreviewLibraryPlaceholder": "选择媒体库",
+  "settings.lifecyclePreviewLimit": "标题数",
+  "settings.lifecyclePreviewLimitHelp": "每次运行最多 {{max}} 个标题。",
+  "settings.lifecyclePreviewRun": "运行预览",
+  "settings.lifecyclePreviewRunning": "正在运行预览...",
+  "settings.lifecyclePreviewNoTitles": "没有评估任何标题。",
+  "settings.lifecyclePreviewColOutcome": "结果",
+  "settings.lifecyclePreviewColReasons": "原因代码",
+  "settings.lifecyclePreviewOutcomeMatch": "匹配",
+  "settings.lifecyclePreviewOutcomeNoMatch": "不匹配",
+  "settings.lifecyclePreviewOutcomeUnknown": "未知",
+  "settings.lifecyclePreviewOutcomeError": "错误",
+  "settings.lifecyclePreviewMeta": "评估时间 {{time}} · 匹配器 {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "规则",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "选择已保存的规则",
+  "settings.lifecycleRuleUpdated": "生命周期规则已更新。",
+  "settings.lifecycleRuleCreated": "生命周期规则已创建，并以禁用状态保存。",
+  "settings.lifecycleRuleDeleted": "生命周期规则 {{name}} 已删除。",
 
-  // ── 维护规则 — 实例状态 ──
+  // ── 生命周期规则 — 实例状态 ──
 
-  // ── 维护规则 — 实例闸门 ──
+  // ── 生命周期规则 — 实例闸门 ──
 
-  // ── 维护规则 — 模式与武装 ──
-  "settings.maintenanceArmDestructiveLoading": "正在统计该规则已持有的候选项…",
-  "settings.maintenanceArmDestructiveCount":
+  // ── 生命周期规则 — 模式与武装 ──
+  "settings.lifecycleArmDestructiveLoading": "正在统计该规则已持有的候选项…",
+  "settings.lifecycleArmDestructiveCount":
     "有 {{count}} 个候选项可能被处理。",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "该规则目前没有可被处理的候选项。",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "你阅读期间数量发生了变化：该规则现在持有 {{count}} 个。请核对数字并再次确认。",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "我明白该规则可能删除 {{count}} 个标题的文件。",
 
-  // ── 维护规则 — 候选项 ──
-  "settings.maintenanceCandidatesFilterRule": "规则",
-  "settings.maintenanceCandidatesFilterState": "状态",
-  "settings.maintenanceCandidatesFilterLibrary": "媒体库",
-  "settings.maintenanceCandidatesAllRules": "全部规则",
-  "settings.maintenanceCandidatesAllStates": "全部状态",
-  "settings.maintenanceCandidatesAllLibraries": "全部媒体库",
-  "settings.maintenanceCandidatesColRule": "规则",
-  "settings.maintenanceCandidatesColState": "状态",
-  "settings.maintenanceCandidatesColFirstMatched": "首次匹配",
-  "settings.maintenanceCandidatesColDue": "到期",
-  "settings.maintenanceCandidatesHeldSince": "自 {{time}} 起挂起",
-  "settings.maintenanceCandidatesEmpty": "没有符合这些筛选条件的候选项。",
-  "settings.maintenanceCandidateExclude": "排除此标题",
-  "settings.maintenanceCandidateStateObserving": "观察中",
-  "settings.maintenanceCandidateStatePendingAction": "待执行",
-  "settings.maintenanceCandidateStateDue": "已到期",
-  "settings.maintenanceCandidateStateExecuting": "执行中",
-  "settings.maintenanceCandidateStateSucceeded": "成功",
-  "settings.maintenanceCandidateStateFailed": "失败",
-  "settings.maintenanceCandidateStateCanceled": "已取消",
-  "settings.maintenanceCandidateStateExcluded": "已排除",
-  "settings.maintenanceCandidateStateBlocked": "已阻止",
-  "settings.maintenanceCountdownDueNow": "现已到期",
-  "settings.maintenanceCountdownInMinutes": "{{count}} 分钟后",
-  "settings.maintenanceCountdownInHours": "{{count}} 小时后",
-  "settings.maintenanceCountdownInDays": "{{count}} 天后",
-  "settings.maintenanceCountdownOverdueMinutes": "已逾期 {{count}} 分钟",
-  "settings.maintenanceCountdownOverdueHours": "已逾期 {{count}} 小时",
-  "settings.maintenanceCountdownOverdueDays": "已逾期 {{count}} 天",
+  // ── 生命周期规则 — 候选项 ──
+  "settings.lifecycleCandidatesFilterRule": "规则",
+  "settings.lifecycleCandidatesFilterState": "状态",
+  "settings.lifecycleCandidatesFilterLibrary": "媒体库",
+  "settings.lifecycleCandidatesAllRules": "全部规则",
+  "settings.lifecycleCandidatesAllStates": "全部状态",
+  "settings.lifecycleCandidatesAllLibraries": "全部媒体库",
+  "settings.lifecycleCandidatesColRule": "规则",
+  "settings.lifecycleCandidatesColState": "状态",
+  "settings.lifecycleCandidatesColFirstMatched": "首次匹配",
+  "settings.lifecycleCandidatesColDue": "到期",
+  "settings.lifecycleCandidatesHeldSince": "自 {{time}} 起挂起",
+  "settings.lifecycleCandidatesEmpty": "没有符合这些筛选条件的候选项。",
+  "settings.lifecycleCandidateExclude": "排除此标题",
+  "settings.lifecycleCandidateStateObserving": "观察中",
+  "settings.lifecycleCandidateStatePendingAction": "待执行",
+  "settings.lifecycleCandidateStateDue": "已到期",
+  "settings.lifecycleCandidateStateExecuting": "执行中",
+  "settings.lifecycleCandidateStateSucceeded": "成功",
+  "settings.lifecycleCandidateStateFailed": "失败",
+  "settings.lifecycleCandidateStateCanceled": "已取消",
+  "settings.lifecycleCandidateStateExcluded": "已排除",
+  "settings.lifecycleCandidateStateBlocked": "已阻止",
+  "settings.lifecycleCountdownDueNow": "现已到期",
+  "settings.lifecycleCountdownInMinutes": "{{count}} 分钟后",
+  "settings.lifecycleCountdownInHours": "{{count}} 小时后",
+  "settings.lifecycleCountdownInDays": "{{count}} 天后",
+  "settings.lifecycleCountdownOverdueMinutes": "已逾期 {{count}} 分钟",
+  "settings.lifecycleCountdownOverdueHours": "已逾期 {{count}} 小时",
+  "settings.lifecycleCountdownOverdueDays": "已逾期 {{count}} 天",
 
-  // ── 维护规则 — 运行与历史 ──
-  "settings.maintenanceRunsTitle": "运行与历史",
-  "settings.maintenanceRunScope": "范围",
-  "settings.maintenanceRunScopeAll": "全部规则",
-  "settings.maintenanceRunEvaluationNow": "立即评估",
-  "settings.maintenanceRunEvaluationRunning": "评估中…",
-  "settings.maintenanceRunActionsNow": "立即执行动作",
-  "settings.maintenanceRunActionsRunning": "正在执行动作…",
-  "settings.maintenanceRunStarted": "运行已启动。",
-  "settings.maintenanceRunNotStarted": "未启动任何内容：{{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "评估运行",
-  "settings.maintenanceEvaluationRunsEmpty": "尚未记录任何评估运行。",
-  "settings.maintenanceActionRunsTitle": "动作运行",
-  "settings.maintenanceActionRunsEmpty": "尚未记录任何动作运行。",
-  "settings.maintenanceRunColStarted": "开始时间",
-  "settings.maintenanceRunColStatus": "状态",
-  "settings.maintenanceRunColCounts": "计数",
-  "settings.maintenanceRunColDuration": "耗时",
-  "settings.maintenanceRunColError": "错误",
-  "settings.maintenanceRunCounts":
+  // ── 生命周期规则 — 运行与历史 ──
+  "settings.lifecycleRunsTitle": "运行与历史",
+  "settings.lifecycleRunScope": "范围",
+  "settings.lifecycleRunScopeAll": "全部规则",
+  "settings.lifecycleRunEvaluationNow": "立即评估",
+  "settings.lifecycleRunEvaluationRunning": "评估中…",
+  "settings.lifecycleRunActionsNow": "立即执行动作",
+  "settings.lifecycleRunActionsRunning": "正在执行动作…",
+  "settings.lifecycleRunStarted": "运行已启动。",
+  "settings.lifecycleRunNotStarted": "未启动任何内容：{{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "评估运行",
+  "settings.lifecycleEvaluationRunsEmpty": "尚未记录任何评估运行。",
+  "settings.lifecycleActionRunsTitle": "动作运行",
+  "settings.lifecycleActionRunsEmpty": "尚未记录任何动作运行。",
+  "settings.lifecycleRunColStarted": "开始时间",
+  "settings.lifecycleRunColStatus": "状态",
+  "settings.lifecycleRunColCounts": "计数",
+  "settings.lifecycleRunColDuration": "耗时",
+  "settings.lifecycleRunColError": "错误",
+  "settings.lifecycleRunCounts":
     "已评估 {{evaluated}} · 匹配 {{matched}} · 未匹配 {{noMatch}} · 未知 {{unknown}} · 错误 {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}} 秒",
-  "settings.maintenanceRunRevision": "修订 {{revision}}",
-  "settings.maintenanceRunStatusRunning": "运行中",
-  "settings.maintenanceRunStatusSucceeded": "成功",
-  "settings.maintenanceRunStatusFailed": "失败",
-  "settings.maintenanceRunStatusHeld": "已挂起",
-  "settings.maintenanceRunStatusAlreadySatisfied": "已满足",
-  "settings.maintenanceRunStatusSkipped": "已跳过",
-  "settings.maintenanceActionRunColAttempt": "尝试次数",
-  "settings.maintenanceActionRunColHoldReason": "挂起原因",
+  "settings.lifecycleRunDuration": "{{seconds}} 秒",
+  "settings.lifecycleRunRevision": "修订 {{revision}}",
+  "settings.lifecycleRunStatusRunning": "运行中",
+  "settings.lifecycleRunStatusSucceeded": "成功",
+  "settings.lifecycleRunStatusFailed": "失败",
+  "settings.lifecycleRunStatusHeld": "已挂起",
+  "settings.lifecycleRunStatusAlreadySatisfied": "已满足",
+  "settings.lifecycleRunStatusSkipped": "已跳过",
+  "settings.lifecycleActionRunColAttempt": "尝试次数",
+  "settings.lifecycleActionRunColHoldReason": "挂起原因",
 
-  // ── 维护规则 — 排除项 ──
-  "settings.maintenanceExclusionsTitle": "排除项",
-  "settings.maintenanceExclusionsSubtitle":
-    "维护规则绝不能处理的标题。全局排除对所有规则生效。",
-  "settings.maintenanceExclusionsEmpty": "没有排除项。",
-  "settings.maintenanceExclusionColScope": "范围",
-  "settings.maintenanceExclusionColReason": "原因",
-  "settings.maintenanceExclusionColCreated": "添加时间",
-  "settings.maintenanceExclusionScopeGlobal": "全部规则",
-  "settings.maintenanceExclusionRemove": "移除排除",
-  "settings.maintenanceExclusionRemoved": "已移除 {{title}} 的排除。",
-  "settings.maintenanceExclusionRemoving": "要移除 {{title}} 的排除吗？",
-  "settings.maintenanceExcludeTitle": "从维护中排除",
-  "settings.maintenanceExcludeBody":
+  // ── 生命周期规则 — 排除项 ──
+  "settings.lifecycleExclusionsTitle": "排除项",
+  "settings.lifecycleExclusionsSubtitle":
+    "生命周期规则绝不能处理的标题。全局排除对所有规则生效。",
+  "settings.lifecycleExclusionsEmpty": "没有排除项。",
+  "settings.lifecycleExclusionColScope": "范围",
+  "settings.lifecycleExclusionColReason": "原因",
+  "settings.lifecycleExclusionColCreated": "添加时间",
+  "settings.lifecycleExclusionScopeGlobal": "全部规则",
+  "settings.lifecycleExclusionRemove": "移除排除",
+  "settings.lifecycleExclusionRemoved": "已移除 {{title}} 的排除。",
+  "settings.lifecycleExclusionRemoving": "要移除 {{title}} 的排除吗？",
+  "settings.lifecycleExcludeTitle": "从生命周期规则中排除",
+  "settings.lifecycleExcludeBody":
     "{{title}} 将从下一次评估起被排除，其候选项会转为已排除。",
-  "settings.maintenanceExcludeScope": "范围",
-  "settings.maintenanceExcludeScopeGlobal": "全部规则",
-  "settings.maintenanceExcludeReason": "原因",
-  "settings.maintenanceExcludeReasonPlaceholder": "排除此标题的原因（可选）",
-  "settings.maintenanceExcludeConfirm": "排除",
-  "settings.maintenanceExcluded": "已将 {{title}} 从维护中排除。",
+  "settings.lifecycleExcludeScope": "范围",
+  "settings.lifecycleExcludeScopeGlobal": "全部规则",
+  "settings.lifecycleExcludeReason": "原因",
+  "settings.lifecycleExcludeReasonPlaceholder": "排除此标题的原因（可选）",
+  "settings.lifecycleExcludeConfirm": "排除",
+  "settings.lifecycleExcluded": "已将 {{title}} 从生命周期规则中排除。",
   "move.dialogTitle": "移动标题",
   "move.destinationLibrary": "目标库",
   "move.destinationRoot": "目标根目录",
@@ -3000,7 +3008,7 @@ const zh_CN: LocaleDictionary = {
   "search.keepForCustom": "指定天数…",
   "search.keepForCustomLabel": "保留天数",
   "search.keepForHelp":
-    "Scryer 为您保留此媒体的时长。到期后维护规则可能会将其删除；永久保留不会到期。",
+    "Scryer 为您保留此媒体的时长。到期后生命周期规则可能会将其删除；永久保留不会到期。",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "标签",
@@ -3034,7 +3042,7 @@ const zh_CN: LocaleDictionary = {
     "已重命名为 {{label}}。改写了 {{titles}} 个条目、{{seriesMovies}} 部剧集电影和 {{delayProfiles}} 个延迟配置。",
   "settings.titleTagRenameWarning":
     "规则源永远不会被改写，因此仍有 {{count}} 处规则引用旧标签 {{label}}，它们将不再匹配：{{references}}。",
-  "settings.titleTagReferenceMaintenanceRuleSets": "{{count}} 个维护规则集",
+  "settings.titleTagReferenceLifecycleRuleSets": "{{count}} 个生命周期规则集",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} 个发布规则集",
   "settings.titleTagReferenceManagedTagFilters": "{{count}} 个托管标签过滤器",
   "settings.titleTagReferenceRequestRuleSets": "{{count}} 个请求规则集",
@@ -3052,19 +3060,19 @@ const zh_CN: LocaleDictionary = {
   "title.catalogFilters.userTags": "标签",
   "title.catalogFilters.selectUserTags": "选择标签...",
 
-  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // Series-movie tags and the lifecycle tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,
   // the same way the WP3 block above does.
   "settings.titleTagSeriesMovieCount": "剧集电影",
-  "settings.maintenanceActionAddTags": "添加标签",
-  "settings.maintenanceActionRemoveTags": "移除标签",
-  "settings.maintenanceRuleTagsHelp":
+  "settings.lifecycleActionAddTags": "添加标签",
+  "settings.lifecycleActionRemoveTags": "移除标签",
+  "settings.lifecycleRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "标记为待删除",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "标记为待删除",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "标记待审核",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "标记待审核",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
@@ -3348,26 +3356,26 @@ const zh_CN: LocaleDictionary = {
   "lists.policy.value.auto": "自动批准",
   "lists.policy.value.approval": "需要审批",
   "lists.policy.value.none": "不允许使用列表",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "是否由列表而非用户将该对象添加到媒体库",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "是否仍有已启用的列表（公开或个人）包含该对象",
-  "settings.refMaintFactsListsNames": "仍包含该对象的已启用公开列表的名称",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsNames": "仍包含该对象的已启用公开列表的名称",
+  "settings.refLifecycleFactsListsLeftAll":
     "曾包含该对象的所有列表是否都已将其移除",
-  "settings.refMaintFactsListsLeftAt": "最后一个列表移除该对象的时间",
-  "settings.refMaintFactsListsLastListName": "该对象最近离开的公开列表",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsLeftAt": "最后一个列表移除该对象的时间",
+  "settings.refLifecycleFactsListsLastListName": "该对象最近离开的公开列表",
+  "settings.refLifecycleFactsListsAddedByListValue":
     "列表同步创建了该作品时为 true；无法读取列表存储时为未知，原因为 list_store_unreadable",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "至少有一个已启用列表包含该对象时为 true",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "仅包含公开列表名称并已排序；从不显示成员的个人列表名称",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "所有曾包含该对象的列表都已将其移除时为 true；仍有列表包含或从未进入任何列表时为 false",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339 时间戳；仍有列表包含该对象时缺失，原因为 not_left_every_list",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "该公开列表的名称；对象从未离开公开列表时缺失，原因为 no_public_list_left",
   "lists.providerSettings.heading": "提供方设置",
   "lists.providerSettings.copy": "此服务器上该提供方的所有列表共用这些设置。",
@@ -3464,27 +3472,27 @@ const zh_CN: LocaleDictionary = {
   "episodeAssign.refusal.renameFailed":
     "将文件移动到新名称失败。文件及其剧集保持原样。",
   "pendingImports.reason.anime_numbering_ambiguous": "剧集编号不明确",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "已暂缓：媒体服务器上正在播放内容。",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "已暂缓：无法向媒体服务器确认是否正在播放。",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "已暂缓：媒体服务器显示有比已存观看记录更新的播放。",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "已暂缓：媒体服务器的历史记录显示有观看记录未计入的账户播放。",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "已暂缓：执行前媒体服务器无法确认观看记录。",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "已暂缓：已连接的媒体服务器没有匹配的项目，执行前无法确认观看记录。",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "已连接媒体服务器上的任何账户是否播放过该项目,无论是否关联 Scryer;不指明具体是谁",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "已连接媒体服务器上的任何账户最后一次播放该项目的时间",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "当已启用媒体服务器上的任何账户播放过它时为 true,无论该账户是否关联到 Scryer 用户;对于季和剧集,任何已播出的单集都算。在过去 48 小时内的同步读取每个已启用连接上的所有账户之前,以原因 audience_not_read 视为未知;观看事实未知时,以常规原因视为未知。",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "任何账户最近一次播放的 RFC3339 时间戳;无人播放时以原因 never_watched 缺失,播放没有记录时间时以原因 play_time_missing(季和剧集为 episode_play_time_missing)未知,尚未读取所有账户时以 audience_not_read 未知",
-  "settings.maintenancePreviewFacts": "规则读取的事实",
+  "settings.lifecyclePreviewFacts": "规则读取的事实",
   "setup.sourceImportProgress": "正在导入来源",
   "setup.sourceImportInvalidRequest":
     "所选来源不可用。请刷新来源发现后重新选择。",

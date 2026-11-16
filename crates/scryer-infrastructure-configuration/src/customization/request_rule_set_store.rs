@@ -2,11 +2,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, RequestRuleSetRepository};
 use scryer_domain::{RequestRuleEvaluationMode, RequestRuleRevision, RequestRuleSet};
-use sqlx::Row;
 
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
-};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 #[derive(Clone)]
 pub struct RequestRuleSetStore {
@@ -65,7 +62,7 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         .await
     }
 
-    /// Unlike the maintenance twin there is no disarm riding along: a request
+    /// Unlike the lifecycle twin there is no disarm riding along: a request
     /// rule votes and never executes, so no acknowledgement is attached to the
     /// revision it was granted against.
     async fn add_revision(
@@ -337,8 +334,8 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<RequestRuleSet> {
             .unwrap_or_default(),
         library_ids: row.opt_text("scope_library_id")?.into_iter().collect(),
         current_revision_number: row.i64("current_revision_number")?,
-        created_at: timestamp_or_now(row, "created_at")?,
-        updated_at: timestamp_or_now(row, "updated_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
+        updated_at: row.timestamp_or_now("updated_at")?,
     })
 }
 
@@ -350,7 +347,7 @@ fn row_to_revision(row: &SqlRow) -> AppResult<RequestRuleRevision> {
         rego_source: row.text("rego_source")?,
         matcher_content_hash: row.text("matcher_content_hash")?,
         created_by: row.opt_text("created_by")?,
-        created_at: timestamp_or_now(row, "created_at")?,
+        created_at: row.timestamp_or_now("created_at")?,
     })
 }
 
@@ -394,19 +391,4 @@ async fn replace_library_scope(
         .await?;
     }
     Ok(())
-}
-
-/// The SQLite column defaults to `strftime(...)`, which a row inserted by the
-/// DDL default carries verbatim; parsing it leniently keeps such a row readable
-/// rather than failing the whole listing.
-fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            Ok(DateTime::parse_from_rfc3339(&raw)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()))
-        }
-        SqlRow::Postgres(_) => row.timestamp(column),
-    }
 }

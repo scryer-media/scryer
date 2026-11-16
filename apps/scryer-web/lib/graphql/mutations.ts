@@ -3,11 +3,11 @@ import {
   INDEXER_SEARCH_EXTRA_RESULT_FIELDS,
   JOB_RUN_FIELDS,
   LOCATION_OPERATION_FIELDS,
-  MAINTENANCE_EXCLUSION_FIELDS,
-  MAINTENANCE_DECIDED_ACTIONS_FIELDS,
-  MAINTENANCE_DECLARED_ACTIONS_FIELDS,
-  MAINTENANCE_RULE_SET_DETAIL_FIELDS,
-  MAINTENANCE_RULE_SET_FIELDS,
+  LIFECYCLE_EXCLUSION_FIELDS,
+  LIFECYCLE_DECIDED_ACTIONS_FIELDS,
+  LIFECYCLE_DECLARED_ACTIONS_FIELDS,
+  LIFECYCLE_RULE_SET_DETAIL_FIELDS,
+  LIFECYCLE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
   POST_PROCESSING_SCRIPT_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
@@ -1357,7 +1357,7 @@ const TITLE_TAG_REWRITE_COUNT_FIELDS = `
       titles
       seriesMovies
       delayProfiles
-      maintenanceRuleSets
+      lifecycleRuleSets
       releaseRuleSets
       managedTagFilters
       requestRuleSets`;
@@ -1434,6 +1434,8 @@ const qualityProfileCriteriaFields = `
       minScoreToGrab
       cutoffScore
       minUpgradeScoreDelta
+      minMissingEpisodesForPack
+      minMissingPercentForSeriesPack
       decisionPipeline`;
 
 const qualityProfileSettingsFieldSelection = `
@@ -2882,45 +2884,45 @@ export const uninstallTrackedRulePackMutation = `mutation UninstallTrackedRulePa
   }
 }`;
 
-// ── Maintenance Rules ─────────────────────────────────────────────────
+// ── Lifecycle Rules ─────────────────────────────────────────────────
 //
-// Maintenance rule sets are saved disabled. Preview runs a matcher read-only:
+// Lifecycle rule sets are saved disabled. Preview runs a matcher read-only:
 // it reports what a rule would select, and changes nothing.
 
-export const createMaintenanceRuleSetMutation = `mutation CreateMaintenanceRuleSet($input: CreateMaintenanceRuleSetInput!) {
-  createMaintenanceRuleSet(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+export const createLifecycleRuleSetMutation = `mutation CreateLifecycleRuleSet($input: CreateLifecycleRuleSetInput!) {
+  createLifecycleRuleSet(input: $input) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
-export const updateMaintenanceRuleMatcherMutation = `mutation UpdateMaintenanceRuleMatcher($input: UpdateMaintenanceRuleMatcherInput!) {
-  updateMaintenanceRuleMatcher(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+export const updateLifecycleRuleMatcherMutation = `mutation UpdateLifecycleRuleMatcher($input: UpdateLifecycleRuleMatcherInput!) {
+  updateLifecycleRuleMatcher(input: $input) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
   }
 }`;
 
-export const updateMaintenanceRuleMetadataMutation = `mutation UpdateMaintenanceRuleMetadata($input: UpdateMaintenanceRuleMetadataInput!) {
-  updateMaintenanceRuleMetadata(input: $input) {${MAINTENANCE_RULE_SET_FIELDS}
+export const updateLifecycleRuleMetadataMutation = `mutation UpdateLifecycleRuleMetadata($input: UpdateLifecycleRuleMetadataInput!) {
+  updateLifecycleRuleMetadata(input: $input) {${LIFECYCLE_RULE_SET_FIELDS}
   }
 }`;
 
-export const deleteMaintenanceRuleSetMutation = `mutation DeleteMaintenanceRuleSet($id: ID!) {
-  deleteMaintenanceRuleSet(id: $id) {
+export const deleteLifecycleRuleSetMutation = `mutation DeleteLifecycleRuleSet($id: ID!) {
+  deleteLifecycleRuleSet(id: $id) {
     id
   }
 }`;
 
-export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule($input: ValidateMaintenanceRuleInput!) {
-  validateMaintenanceRule(input: $input) {
+export const validateLifecycleRuleMutation = `mutation ValidateLifecycleRule($input: ValidateLifecycleRuleInput!) {
+  validateLifecycleRule(input: $input) {
     valid
     diagnostics { code message line column path }
     warnings { code message line column path }
     errors
-    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
+    declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
     }
   }
 }`;
 
-export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($input: PreviewMaintenanceRuleInput!) {
-  previewMaintenanceRule(input: $input) {
+export const previewLifecycleRuleMutation = `mutation PreviewLifecycleRule($input: PreviewLifecycleRuleInput!) {
+  previewLifecycleRule(input: $input) {
     ruleSetId
     matcherContentHash
     evaluatedAt
@@ -2941,7 +2943,7 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       reasonCodes
       error
       errorCode
-      actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
+      actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
       }
       facts
     }
@@ -2953,40 +2955,40 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
 /// rejects the call with the real count in the message and the dialog re-asks
 /// against that number. The caller refetches the list afterwards, so the
 /// selection stays at what it needs to correlate the response.
-export const setMaintenanceRuleStateMutation = `mutation SetMaintenanceRuleState($ruleSetId: ID!, $state: MaintenanceRuleState!, $confirmation: MaintenanceRuleArmingConfirmationInput) {
-  setMaintenanceRuleState(ruleSetId: $ruleSetId, state: $state, confirmation: $confirmation) {
+export const setLifecycleRuleStateMutation = `mutation SetLifecycleRuleState($ruleSetId: ID!, $state: LifecycleRuleState!, $confirmation: LifecycleRuleArmingConfirmationInput) {
+  setLifecycleRuleState(ruleSetId: $ruleSetId, state: $state, confirmation: $confirmation) {
     id
     state
   }
 }`;
 
-export const setMaintenanceInstanceGatesMutation = `mutation SetMaintenanceInstanceGates($input: SetMaintenanceInstanceGatesInput!) {
-  setMaintenanceInstanceGates(input: $input) {
+export const setLifecycleInstanceGatesMutation = `mutation SetLifecycleInstanceGates($input: SetLifecycleInstanceGatesInput!) {
+  setLifecycleInstanceGates(input: $input) {
     enabled
     actionsPaused
   }
 }`;
 
-export const excludeMaintenanceSubjectMutation = `mutation ExcludeMaintenanceSubject($input: ExcludeMaintenanceSubjectInput!) {
-  excludeMaintenanceSubject(input: $input) {${MAINTENANCE_EXCLUSION_FIELDS}
+export const excludeLifecycleSubjectMutation = `mutation ExcludeLifecycleSubject($input: ExcludeLifecycleSubjectInput!) {
+  excludeLifecycleSubject(input: $input) {${LIFECYCLE_EXCLUSION_FIELDS}
   }
 }`;
 
-export const removeMaintenanceExclusionMutation = `mutation RemoveMaintenanceExclusion($id: ID!) {
-  removeMaintenanceExclusion(id: $id) {
+export const removeLifecycleExclusionMutation = `mutation RemoveLifecycleExclusion($id: ID!) {
+  removeLifecycleExclusion(id: $id) {
     id
   }
 }`;
 
-export const runMaintenanceEvaluationNowMutation = `mutation RunMaintenanceEvaluationNow($ruleSetId: ID) {
-  runMaintenanceEvaluationNow(ruleSetId: $ruleSetId) {
+export const runLifecycleEvaluationNowMutation = `mutation RunLifecycleEvaluationNow($ruleSetId: ID) {
+  runLifecycleEvaluationNow(ruleSetId: $ruleSetId) {
     started
     message
   }
 }`;
 
-export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow($ruleSetId: ID!) {
-  runMaintenanceActionHandlerNow(ruleSetId: $ruleSetId) {
+export const runLifecycleActionHandlerNowMutation = `mutation RunLifecycleActionHandlerNow($ruleSetId: ID!) {
+  runLifecycleActionHandlerNow(ruleSetId: $ruleSetId) {
     started
     message
   }

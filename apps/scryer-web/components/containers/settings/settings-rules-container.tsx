@@ -39,7 +39,11 @@ import {
 } from "@/lib/utils/rule-sets";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
 import { loadQualityProfileNames } from "@/lib/utils/rule-builder-catalogs";
-import { isIncompleteRuleBuilderDraft } from "@/lib/utils/rule-builder-mode";
+import {
+  isIncompleteRuleBuilderDraft,
+  openRuleTemplateDraft,
+} from "@/lib/utils/rule-builder-mode";
+import { ruleTemplateBuilderModel } from "@/lib/constants/rule-template-builder-models";
 import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
 import {
   SCORING_RULE_BUILDER_BASE,
@@ -74,6 +78,7 @@ type PendingRuleEditorAction =
   | {
       type: "template";
       template: {
+        id?: string;
         title: string;
         description: string;
         regoSource: string;
@@ -155,6 +160,11 @@ export function SettingsRulesContainer({
     [servedSchema.schema],
   );
   const whenSchemaReady = servedSchema.whenReady;
+  /// The draft the editor shows, for a template open that settles later.
+  const shownDraftRef = useRef(ruleSetDraft);
+  useLayoutEffect(() => {
+    shownDraftRef.current = ruleSetDraft;
+  }, [ruleSetDraft]);
   const builderEditor = useRuleBuilderEditor({
     binding: builderBinding,
     draft: ruleSetDraft,
@@ -267,30 +277,44 @@ export function SettingsRulesContainer({
 
   const openTemplateRuleEditor = useCallback(
     (template: {
+      id?: string;
       title: string;
       description: string;
       regoSource: string;
       appliedFacets?: string[];
     }) => {
-      detailRequestRef.current += 1;
-      const nextDraft = {
-        ...RULE_SET_INITIAL_DRAFT,
-        name: template.title.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
-        description: template.description,
-        regoSource: template.regoSource,
-        appliedFacets: template.appliedFacets ?? [],
-      };
-      setEditingRuleSetId(null);
-      setCopyingTrackedRuleSetId(null);
-      setRuleSetDraft(nextDraft);
-      setRuleSetDraftBaseline(nextDraft);
-      beginBuilderSession(nextDraft);
-      setValidationResult(null);
-      setTranslationDiagnostics([]);
-      setFocusImportedEditor(false);
-      setIsEditorOpen(true);
+      const request = (detailRequestRef.current += 1);
+      return openRuleTemplateDraft<RuleSetDraft>({
+        schema: servedSchema.schema,
+        whenSchemaReady,
+        binding: scoringRuleBuilder,
+        draft: {
+          ...RULE_SET_INITIAL_DRAFT,
+          name: template.title.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+          description: template.description,
+          regoSource: template.regoSource,
+          appliedFacets: template.appliedFacets ?? [],
+        },
+        model: (schema) =>
+          template.id ? ruleTemplateBuilderModel(schema, template.id) : null,
+        open: (nextDraft) => {
+          shownDraftRef.current = nextDraft;
+          setEditingRuleSetId(null);
+          setCopyingTrackedRuleSetId(null);
+          setRuleSetDraft(nextDraft);
+          setRuleSetDraftBaseline(nextDraft);
+          beginBuilderSession(nextDraft);
+          setValidationResult(null);
+          setTranslationDiagnostics([]);
+          setFocusImportedEditor(false);
+          setIsEditorOpen(true);
+        },
+        isShowing: (draft) =>
+          request === detailRequestRef.current &&
+          shownDraftRef.current === draft,
+      });
     },
-    [beginBuilderSession, setValidationResult],
+    [beginBuilderSession, servedSchema.schema, setValidationResult, whenSchemaReady],
   );
 
   const openImportedRuleEditor = useCallback(
@@ -416,6 +440,7 @@ export function SettingsRulesContainer({
 
   const requestApplyTemplate = useCallback(
     (template: {
+      id?: string;
       title: string;
       description: string;
       regoSource: string;

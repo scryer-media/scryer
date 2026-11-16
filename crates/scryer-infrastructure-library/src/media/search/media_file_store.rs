@@ -13,13 +13,13 @@ use scryer_application::{
     derive_primary_quality_label,
 };
 use scryer_domain::Id;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::media::id_list_statements::{id_list_statements, max_binds};
-use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
@@ -120,7 +120,7 @@ fn media_file_insert_args(
         SqlArg::OptText(input.scoring_log.clone()),
         SqlArg::OptText(input.indexer_source.clone()),
         SqlArg::OptText(input.grabbed_release_title.clone()),
-        opt_timestamp_arg_for_datastore(datastore, input.grabbed_at.as_deref())?,
+        datastore.opt_timestamp_text_arg(input.grabbed_at.as_deref())?,
         SqlArg::OptText(input.edition.clone()),
         SqlArg::OptText(input.original_file_path.clone()),
         SqlArg::OptText(input.release_hash.clone()),
@@ -1315,7 +1315,7 @@ impl MediaFileRepository for MediaFileStore {
                     "media_files.series_movie_link_ids_json",
                 ),
                 quality_label: row.opt_text("quality_id")?,
-                created_at: timestamp_text(row, "created_at")?,
+                created_at: row.timestamp_text("created_at")?,
             })
         })
         .collect()
@@ -1380,10 +1380,11 @@ impl MediaFileRepository for MediaFileStore {
             .map(SqlArg::Text)
             .collect::<Vec<_>>();
         args.push(SqlArg::Text(title_id.to_string()));
+        let mut decoder = MediaFileRowDecoder::default();
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
             .await?
             .iter()
-            .map(row_to_episode_scoped_media_file)
+            .map(|row| row_to_episode_scoped_media_file(&mut decoder, row))
             .collect()
     }
 
@@ -1442,6 +1443,7 @@ impl MediaFileRepository for MediaFileStore {
         let mut files_by_id: HashMap<String, EpisodeScopedMediaFile> = HashMap::new();
         let mut order: Vec<(String, String)> = Vec::new();
         let statement_count = statements.len();
+        let mut decoder = MediaFileRowDecoder::default();
         for (title_ids, episode_ids) in statements {
             let sql = format!(
                 "SELECT {},
@@ -1472,7 +1474,7 @@ impl MediaFileRepository for MediaFileStore {
                 .map(SqlArg::Text)
                 .collect::<Vec<_>>();
             for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
-                let file = row_to_episode_scoped_media_file(&row)?;
+                let file = row_to_episode_scoped_media_file(&mut decoder, &row)?;
                 if !files_by_id.contains_key(&file.media_file.id) {
                     order.push((
                         file.media_file.created_at.clone(),
@@ -1783,7 +1785,7 @@ impl MediaFileRepository for MediaFileStore {
                     season_number: row.opt_text("season_number")?,
                     episode_number: row.opt_text("episode_number")?,
                     air_date: row.opt_text("air_date")?,
-                    title_created_at: timestamp_text(row, "title_created_at")?,
+                    title_created_at: row.timestamp_text("title_created_at")?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -1823,7 +1825,7 @@ impl MediaFileRepository for MediaFileStore {
                         .opt_text("movie_release_dates_json")?
                         .map(|value| serde_json::from_str(&value).map_err(repo_err))
                         .transpose()?,
-                    created_at: timestamp_text(row, "created_at")?,
+                    created_at: row.timestamp_text("created_at")?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -1866,7 +1868,7 @@ impl MediaFileRepository for MediaFileStore {
                         title_facet: row.text("facet")?,
                         continuity_status: row.opt_text("continuity_status")?,
                         movie_digital_release_date: row.opt_text("movie_digital_release_date")?,
-                        link_created_at: timestamp_text(row, "link_created_at")?,
+                        link_created_at: row.timestamp_text("link_created_at")?,
                     })
                 })
                 .collect::<AppResult<Vec<_>>>()?;
@@ -2105,7 +2107,7 @@ impl MediaFileRepository for MediaFileStore {
              ORDER BY mf.analysis_revision, mf.analysis_attempted_at, mf.id LIMIT {{}}",
             media_file_select_columns(dialect, "NULL", "mf.role"),
         );
-        fetch_media_files(
+        fetch_distinct_media_files(
             self.datastore.read_exec(),
             &query,
             &[
@@ -2826,7 +2828,9 @@ impl MediaFileRepository for MediaFileStore {
                  WHERE {where_clause}",
                 media_file_select_columns(dialect, "NULL", "mf.role")
             );
-            for media_file in fetch_media_files(self.datastore.read_exec(), &sql, &args).await? {
+            for media_file in
+                fetch_distinct_media_files(self.datastore.read_exec(), &sql, &args).await?
+            {
                 // Attribute each row to the path the caller asked for, using the
                 // same equivalence the predicate above matched on.
                 if let Some(requested_paths) =
@@ -3005,7 +3009,8 @@ impl MediaFileRepository for MediaFileStore {
                 SqlArg::OptText(snapshot.release_group.clone()),
                 SqlArg::OptText(snapshot.indexer_source.clone()),
                 SqlArg::OptText(snapshot.grabbed_release_title.clone()),
-                opt_timestamp_arg_for_datastore(&self.datastore, snapshot.grabbed_at.as_deref())?,
+                self.datastore
+                    .opt_timestamp_text_arg(snapshot.grabbed_at.as_deref())?,
                 SqlArg::OptText(snapshot.edition.clone()),
                 SqlArg::OptText(snapshot.release_hash.clone()),
                 SqlArg::OptText(snapshot.release_listing_json.clone()),
@@ -3470,7 +3475,25 @@ fn bool_column_is_true(dialect: SqlDialect, column: &str) -> String {
     }
 }
 
+/// Reads media file rows from a statement that can return one file on several
+/// rows (one per linked episode), decoding each file's analysis once.
 async fn fetch_media_files(
+    exec: SqlExec<'_, '_>,
+    sql: &str,
+    args: &[SqlArg],
+) -> AppResult<Vec<TitleMediaFile>> {
+    let mut decoder = MediaFileRowDecoder::default();
+    SqlRuntime::fetch_all(exec, sql, args)
+        .await?
+        .iter()
+        .map(|row| decoder.title_media_file(row))
+        .collect()
+}
+
+/// Reads media file rows from a statement that returns each file at most
+/// once. Every row's analysis is decoded and moved into its result, with
+/// nothing kept for later rows.
+async fn fetch_distinct_media_files(
     exec: SqlExec<'_, '_>,
     sql: &str,
     args: &[SqlArg],
@@ -3494,9 +3517,14 @@ async fn fetch_optional_media_file(
         .transpose()
 }
 
+/// `succeeded_parts` yields the stored analysis's report and disc; it is
+/// called only for a succeeded attempt.
 fn media_analysis_attempt_from_row(
     row: &SqlRow,
-    analysis: &serde_json::Value,
+    succeeded_parts: impl FnOnce() -> (
+        Option<scryer_media_types::ProbeReport>,
+        Option<scryer_media_types::DiscMetadata>,
+    ),
 ) -> AppResult<Option<scryer_media_types::AnalysisAttempt>> {
     let Some(revision) = row
         .opt_i64("analysis_attempt_revision")?
@@ -3509,68 +3537,302 @@ fn media_analysis_attempt_from_row(
     };
     let status = row.opt_text("analysis_attempt_status")?.unwrap_or_default();
     let succeeded = status == "succeeded";
-    let document = if succeeded {
-        Some(analysis.clone())
+    let (report, disc) = if succeeded {
+        succeeded_parts()
     } else {
-        row.opt_text("analysis_attempt_json")?
-            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        let document = row
+            .opt_text("analysis_attempt_json")?
+            .and_then(|json| serde_json::from_str::<JsonValue>(&json).ok());
+        let details = document
+            .as_ref()
+            .and_then(|document| document.get("details"));
+        (
+            details
+                .and_then(|details| details.get("report"))
+                .and_then(|report| scryer_media_types::ProbeReport::deserialize(report).ok()),
+            details
+                .and_then(|details| details.get("disc"))
+                .and_then(|disc| scryer_media_types::DiscMetadata::deserialize(disc).ok()),
+        )
     };
-    let report = document
-        .as_ref()
-        .and_then(|document| document.get("details")?.get("report"))
-        .and_then(|report| serde_json::from_value(report.clone()).ok())
-        .unwrap_or_else(|| scryer_media_types::ProbeReport {
-            status: serde_json::from_value(serde_json::Value::String(status)).unwrap_or_default(),
-            ..Default::default()
-        });
+    let report = report.unwrap_or_else(|| scryer_media_types::ProbeReport {
+        status: serde_json::from_value(JsonValue::String(status)).unwrap_or_default(),
+        ..Default::default()
+    });
     Ok(Some(scryer_media_types::AnalysisAttempt {
         revision,
         attempted_at,
         succeeded,
         report,
-        disc: document
-            .as_ref()
-            .and_then(|document| document.get("details")?.get("disc"))
-            .and_then(|disc| serde_json::from_value(disc.clone()).ok()),
+        disc,
     }))
 }
 
+/// Decodes one media file row on its own, moving its decoded analysis into
+/// the result.
 fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
-    let analysis = analysis_json_from_row(row);
-    let mut audio_streams: Vec<scryer_application::AudioStreamDetail> =
-        analysis_array_field(&analysis, "audio_streams");
-    let mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> =
-        analysis_array_field(&analysis, "subtitle_streams");
-
-    let audio_language_values: Vec<String> = analysis_array_field(&analysis, "audio_languages");
-    let audio_languages = scryer_application::normalize_detected_audio_languages(
-        audio_language_values.iter().map(String::as_str),
-    );
-    for stream in &mut audio_streams {
-        stream.language = stream
-            .language
-            .as_deref()
-            .and_then(scryer_application::normalize_detected_audio_language_code);
-    }
-    let subtitle_language_values: Vec<String> =
-        analysis_array_field(&analysis, "subtitle_languages");
-    let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
-        subtitle_language_values.iter().map(String::as_str),
-    );
-    for stream in &mut subtitle_streams {
-        stream.language = stream
-            .language
-            .as_deref()
-            .and_then(scryer_application::normalize_detected_subtitle_language_code);
-    }
-
+    let mut analysis = {
+        let stored = row.opt_bytes("analysis").ok();
+        AnalysisParts::from_stored(stored.as_ref().map(|stored| stored.as_deref()))
+    };
+    let analysis_attempt = media_analysis_attempt_from_row(row, || {
+        (analysis.attempt_report.take(), analysis.attempt_disc.take())
+    })?;
+    let AnalysisParts {
+        details,
+        audio_languages,
+        audio_streams,
+        subtitle_languages,
+        subtitle_codecs,
+        subtitle_streams,
+        dovi_profile,
+        dovi_bl_compat_id,
+        ..
+    } = analysis;
     Ok(TitleMediaFile {
-        analysis_details: analysis
-            .get("details")
-            .cloned()
-            .and_then(|details| serde_json::from_value(details).ok())
-            .unwrap_or_default(),
-        analysis_attempt: media_analysis_attempt_from_row(row, &analysis)?,
+        analysis_details: details,
+        dovi_profile,
+        dovi_bl_compat_id,
+        audio_languages,
+        audio_streams,
+        subtitle_languages,
+        subtitle_codecs,
+        subtitle_streams,
+        ..title_media_file_columns(row, analysis_attempt)?
+    })
+}
+
+/// What a file's stored analysis contributes to a decoded media file row.
+#[derive(Clone)]
+struct AnalysisParts {
+    details: scryer_media_types::AnalysisDetails,
+    audio_languages: Vec<String>,
+    audio_streams: Vec<scryer_application::AudioStreamDetail>,
+    subtitle_languages: Vec<String>,
+    subtitle_codecs: Vec<String>,
+    subtitle_streams: Vec<scryer_application::SubtitleStreamDetail>,
+    dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
+    /// `details.report` when the document carries a readable one; a succeeded
+    /// attempt reports it.
+    attempt_report: Option<scryer_media_types::ProbeReport>,
+    /// `details.disc` when the document carries a readable one.
+    attempt_disc: Option<scryer_media_types::DiscMetadata>,
+}
+
+/// The analysis fields a media file row reads, deserialized straight from the
+/// stored document. Any field that does not deserialize sends the whole
+/// document through [`AnalysisParts::from_value`], which falls back field by
+/// field.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct StoredAnalysisFields {
+    details: Option<scryer_media_types::AnalysisDetails>,
+    audio_languages: Vec<String>,
+    audio_streams: Vec<scryer_application::AudioStreamDetail>,
+    subtitle_languages: Vec<String>,
+    subtitle_codecs: Vec<String>,
+    subtitle_streams: Vec<scryer_application::SubtitleStreamDetail>,
+    dovi_profile: Option<u8>,
+    dovi_bl_compat_id: Option<u8>,
+}
+
+impl AnalysisParts {
+    /// Reads a stored analysis column value. A file without a stored analysis
+    /// reads as the empty document, as a blank one always did; an unreadable
+    /// one reads as null. Both give every field its default.
+    fn from_stored(stored: Option<Option<&[u8]>>) -> Self {
+        let empty = || Self::from_value(&JsonValue::Object(Default::default()));
+        let stored = match stored {
+            Some(Some(stored)) => stored,
+            Some(None) => return empty(),
+            None => return Self::from_value(&JsonValue::Null),
+        };
+        match scryer_infrastructure_sql::compressed_blob::decompress_text(
+            stored,
+            ANALYSIS_MAX_BYTES,
+        ) {
+            Ok(json) if json.trim().is_empty() => empty(),
+            Ok(json) => Self::from_json(&json),
+            Err(_) => Self::from_value(&JsonValue::Null),
+        }
+    }
+
+    fn from_json(json: &str) -> Self {
+        if json.trim_start().starts_with('{')
+            && let Ok(fields) = serde_json::from_str::<StoredAnalysisFields>(json)
+        {
+            let (details, attempt_report) = match fields.details {
+                None => (Default::default(), None),
+                // A default report may also mean the details carry no report,
+                // which a succeeded attempt reads differently; settle it from
+                // the document itself.
+                Some(details) if details.report == scryer_media_types::ProbeReport::default() => {
+                    let attempt_report = serde_json::from_str::<JsonValue>(json)
+                        .ok()
+                        .as_ref()
+                        .and_then(attempt_report_from_value);
+                    (details, attempt_report)
+                }
+                Some(details) => {
+                    let attempt_report = Some(details.report.clone());
+                    (details, attempt_report)
+                }
+            };
+            let attempt_disc = details.disc.clone();
+            return Self::normalized(
+                details,
+                fields.audio_languages,
+                fields.audio_streams,
+                fields.subtitle_languages,
+                fields.subtitle_codecs,
+                fields.subtitle_streams,
+                fields.dovi_profile,
+                fields.dovi_bl_compat_id,
+                attempt_report,
+                attempt_disc,
+            );
+        }
+        Self::from_value(&serde_json::from_str(json).unwrap_or(JsonValue::Null))
+    }
+
+    /// Reads each field on its own, so one unreadable field falls back to its
+    /// default without affecting the others.
+    fn from_value(analysis: &JsonValue) -> Self {
+        Self::normalized(
+            analysis
+                .get("details")
+                .and_then(|details| scryer_media_types::AnalysisDetails::deserialize(details).ok())
+                .unwrap_or_default(),
+            analysis_array_field(analysis, "audio_languages"),
+            analysis_array_field(analysis, "audio_streams"),
+            analysis_array_field(analysis, "subtitle_languages"),
+            analysis_array_field(analysis, "subtitle_codecs"),
+            analysis_array_field(analysis, "subtitle_streams"),
+            analysis_u8_field(analysis, "dovi_profile"),
+            analysis_u8_field(analysis, "dovi_bl_compat_id"),
+            attempt_report_from_value(analysis),
+            analysis
+                .get("details")
+                .and_then(|details| details.get("disc"))
+                .and_then(|disc| scryer_media_types::DiscMetadata::deserialize(disc).ok()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn normalized(
+        details: scryer_media_types::AnalysisDetails,
+        audio_language_values: Vec<String>,
+        mut audio_streams: Vec<scryer_application::AudioStreamDetail>,
+        subtitle_language_values: Vec<String>,
+        subtitle_codecs: Vec<String>,
+        mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail>,
+        dovi_profile: Option<u8>,
+        dovi_bl_compat_id: Option<u8>,
+        attempt_report: Option<scryer_media_types::ProbeReport>,
+        attempt_disc: Option<scryer_media_types::DiscMetadata>,
+    ) -> Self {
+        let audio_languages = scryer_application::normalize_detected_audio_languages(
+            audio_language_values.iter().map(String::as_str),
+        );
+        for stream in &mut audio_streams {
+            stream.language = stream
+                .language
+                .as_deref()
+                .and_then(scryer_application::normalize_detected_audio_language_code);
+        }
+        let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
+            subtitle_language_values.iter().map(String::as_str),
+        );
+        for stream in &mut subtitle_streams {
+            stream.language = stream
+                .language
+                .as_deref()
+                .and_then(scryer_application::normalize_detected_subtitle_language_code);
+        }
+        Self {
+            details,
+            audio_languages,
+            audio_streams,
+            subtitle_languages,
+            subtitle_codecs,
+            subtitle_streams,
+            dovi_profile,
+            dovi_bl_compat_id,
+            attempt_report,
+            attempt_disc,
+        }
+    }
+}
+
+fn attempt_report_from_value(analysis: &JsonValue) -> Option<scryer_media_types::ProbeReport> {
+    analysis
+        .get("details")
+        .and_then(|details| details.get("report"))
+        .and_then(|report| scryer_media_types::ProbeReport::deserialize(report).ok())
+}
+
+/// Decodes the media file rows of one read. A statement that returns a file
+/// on several rows, one per episode, decodes its stored analysis once.
+#[derive(Default)]
+struct MediaFileRowDecoder {
+    analyses: HashMap<String, (Option<Option<Vec<u8>>>, std::sync::Arc<AnalysisParts>)>,
+}
+
+impl MediaFileRowDecoder {
+    fn analysis(&mut self, row: &SqlRow) -> std::sync::Arc<AnalysisParts> {
+        let stored = row.opt_bytes("analysis").ok();
+        let decode = |stored: &Option<Option<Vec<u8>>>| {
+            std::sync::Arc::new(AnalysisParts::from_stored(
+                stored.as_ref().map(|stored| stored.as_deref()),
+            ))
+        };
+        let Ok(id) = row.text("id") else {
+            return decode(&stored);
+        };
+        if let Some((cached_stored, parts)) = self.analyses.get(&id)
+            && *cached_stored == stored
+        {
+            return parts.clone();
+        }
+        let parts = decode(&stored);
+        self.analyses.insert(id, (stored, parts.clone()));
+        parts
+    }
+
+    fn title_media_file(&mut self, row: &SqlRow) -> AppResult<TitleMediaFile> {
+        let analysis = self.analysis(row);
+        let analysis_attempt = media_analysis_attempt_from_row(row, || {
+            (
+                analysis.attempt_report.clone(),
+                analysis.attempt_disc.clone(),
+            )
+        })?;
+        Ok(TitleMediaFile {
+            analysis_details: analysis.details.clone(),
+            // Dolby Vision has no dedicated column: it rides in the serialized
+            // analysis, so rows written before it was captured read as `None`.
+            dovi_profile: analysis.dovi_profile,
+            dovi_bl_compat_id: analysis.dovi_bl_compat_id,
+            audio_languages: analysis.audio_languages.clone(),
+            audio_streams: analysis.audio_streams.clone(),
+            subtitle_languages: analysis.subtitle_languages.clone(),
+            subtitle_codecs: analysis.subtitle_codecs.clone(),
+            subtitle_streams: analysis.subtitle_streams.clone(),
+            ..title_media_file_columns(row, analysis_attempt)?
+        })
+    }
+}
+
+/// Every column-backed field of a media file row, with `analysis_attempt`
+/// placed first; the fields read from the stored analysis are left at their
+/// defaults for the caller to fill.
+fn title_media_file_columns(
+    row: &SqlRow,
+    analysis_attempt: Option<scryer_media_types::AnalysisAttempt>,
+) -> AppResult<TitleMediaFile> {
+    Ok(TitleMediaFile {
+        analysis_attempt,
         id: row.text("id")?,
         title_id: row.text("title_id")?,
         episode_id: row.opt_text("episode_id")?,
@@ -3592,28 +3854,19 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         content_hashes: row_to_persisted_content_hashes(row)?,
         quality_label: row.opt_text("quality_id")?,
         scan_status: row.text("scan_status")?,
-        created_at: timestamp_text(row, "created_at")?,
+        created_at: row.timestamp_text("created_at")?,
         video_codec: parse_stored_video_codec(row.opt_text("video_codec")?)?,
         video_width: row.opt_i32("video_width")?,
         video_height: row.opt_i32("video_height")?,
         video_bitrate_kbps: row.opt_i32("video_bitrate_kbps")?,
         video_bit_depth: row.opt_i32("video_bit_depth")?,
         video_hdr_format: row.opt_text("video_hdr_format")?,
-        // Dolby Vision has no dedicated column: it rides in the serialized
-        // analysis, so rows written before it was captured read as `None`.
-        dovi_profile: analysis_u8_field(&analysis, "dovi_profile"),
-        dovi_bl_compat_id: analysis_u8_field(&analysis, "dovi_bl_compat_id"),
         video_frame_rate: row.opt_text("video_frame_rate")?,
         video_profile: row.opt_text("video_profile")?,
         audio_codec: row.opt_text("audio_codec")?,
         audio_profile: row.opt_text("audio_profile")?,
         audio_channels: row.opt_i32("audio_channels")?,
         audio_bitrate_kbps: row.opt_i32("audio_bitrate_kbps")?,
-        audio_languages,
-        audio_streams,
-        subtitle_languages,
-        subtitle_codecs: analysis_array_field(&analysis, "subtitle_codecs"),
-        subtitle_streams,
         has_multiaudio: row.opt_bool("has_multiaudio")?.unwrap_or(false),
         duration_seconds: row.opt_i32("duration_seconds")?,
         num_chapters: row.opt_i32("num_chapters")?,
@@ -3629,11 +3882,12 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         scoring_log: row.opt_text("scoring_log")?,
         indexer_source: row.opt_text("indexer_source")?,
         grabbed_release_title: row.opt_text("grabbed_release_title")?,
-        grabbed_at: opt_timestamp_text(row, "grabbed_at")?,
+        grabbed_at: row.opt_timestamp_text("grabbed_at")?,
         edition: row.opt_text("edition")?,
         original_file_path: row.opt_text("original_file_path")?,
         release_hash: row.opt_text("release_hash")?,
         release_listing_json: row.opt_text("release_listing_json")?,
+        ..Default::default()
     })
 }
 
@@ -3705,8 +3959,11 @@ fn parse_stored_video_codec(
     .transpose()
 }
 
-fn row_to_episode_scoped_media_file(row: &SqlRow) -> AppResult<EpisodeScopedMediaFile> {
-    let media_file = row_to_title_media_file(row)?;
+fn row_to_episode_scoped_media_file(
+    decoder: &mut MediaFileRowDecoder,
+    row: &SqlRow,
+) -> AppResult<EpisodeScopedMediaFile> {
+    let media_file = decoder.title_media_file(row)?;
     let title_role = row
         .opt_text("title_role")?
         .as_deref()
@@ -3739,21 +3996,6 @@ fn encode_media_analysis(analysis_json: &str) -> AppResult<Vec<u8>> {
     scryer_infrastructure_sql::compressed_blob::compress_text(analysis_json, ANALYSIS_MAX_BYTES)
 }
 
-/// A file without a stored analysis reads as the empty document, as a blank
-/// one always did; an unreadable one reads as null.
-fn analysis_json_from_row(row: &SqlRow) -> JsonValue {
-    let stored = match row.opt_bytes("analysis") {
-        Ok(Some(stored)) => stored,
-        Ok(None) => return JsonValue::Object(Default::default()),
-        Err(_) => return JsonValue::Null,
-    };
-    match scryer_infrastructure_sql::compressed_blob::decompress_text(&stored, ANALYSIS_MAX_BYTES) {
-        Ok(json) if json.trim().is_empty() => JsonValue::Object(Default::default()),
-        Ok(json) => serde_json::from_str(&json).unwrap_or(JsonValue::Null),
-        Err(_) => JsonValue::Null,
-    }
-}
-
 fn analysis_u8_field(analysis: &JsonValue, field: &str) -> Option<u8> {
     analysis
         .get(field)
@@ -3764,38 +4006,8 @@ fn analysis_u8_field(analysis: &JsonValue, field: &str) -> Option<u8> {
 fn analysis_array_field<T: DeserializeOwned>(analysis: &JsonValue, field: &str) -> Vec<T> {
     analysis
         .get(field)
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
+        .and_then(|value| Vec::<T>::deserialize(value).ok())
         .unwrap_or_default()
-}
-
-fn opt_timestamp_arg_for_datastore(
-    datastore: &StoreDatastore,
-    value: Option<&str>,
-) -> AppResult<SqlArg> {
-    match datastore {
-        StoreDatastore::Sqlite { .. } => Ok(SqlArg::OptText(value.map(str::to_string))),
-        StoreDatastore::Postgres { .. } => value
-            .map(parse_utc_datetime)
-            .transpose()
-            .map(SqlArg::OptTimestamp),
-    }
-}
-
-fn timestamp_text(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(_) => row.text(column),
-        SqlRow::Postgres(_) => row.timestamp(column).map(|value| value.to_rfc3339()),
-    }
-}
-
-fn opt_timestamp_text(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
-    match row {
-        SqlRow::Sqlite(_) => row.opt_text(column),
-        SqlRow::Postgres(_) => row
-            .opt_timestamp(column)
-            .map(|value| value.map(|value| value.to_rfc3339())),
-    }
 }
 
 async fn execute_write(
@@ -8682,5 +8894,396 @@ mod tests {
 
         files.delete_media_file(&file_id).await.unwrap();
         assert!(stored_analysis(&services, &file_id).await.is_none());
+    }
+
+    /// The row decode as it stood before analysis documents were decoded
+    /// once per file and deserialized without an intermediate tree, kept
+    /// verbatim as the reference the current decode must match.
+    mod reference_decode {
+        use super::super::*;
+
+        fn analysis_json_from_row(row: &SqlRow) -> JsonValue {
+            let stored = match row.opt_bytes("analysis") {
+                Ok(Some(stored)) => stored,
+                Ok(None) => return JsonValue::Object(Default::default()),
+                Err(_) => return JsonValue::Null,
+            };
+            match scryer_infrastructure_sql::compressed_blob::decompress_text(
+                &stored,
+                ANALYSIS_MAX_BYTES,
+            ) {
+                Ok(json) if json.trim().is_empty() => JsonValue::Object(Default::default()),
+                Ok(json) => serde_json::from_str(&json).unwrap_or(JsonValue::Null),
+                Err(_) => JsonValue::Null,
+            }
+        }
+
+        fn array_field<T: DeserializeOwned>(analysis: &JsonValue, field: &str) -> Vec<T> {
+            analysis
+                .get(field)
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default()
+        }
+
+        fn attempt(
+            row: &SqlRow,
+            analysis: &serde_json::Value,
+        ) -> AppResult<Option<scryer_media_types::AnalysisAttempt>> {
+            let Some(revision) = row
+                .opt_i64("analysis_attempt_revision")?
+                .and_then(|value| u32::try_from(value).ok())
+            else {
+                return Ok(None);
+            };
+            let Some(attempted_at) = row.opt_text("analysis_attempted_at")? else {
+                return Ok(None);
+            };
+            let status = row.opt_text("analysis_attempt_status")?.unwrap_or_default();
+            let succeeded = status == "succeeded";
+            let document = if succeeded {
+                Some(analysis.clone())
+            } else {
+                row.opt_text("analysis_attempt_json")?
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            };
+            let report = document
+                .as_ref()
+                .and_then(|document| document.get("details")?.get("report"))
+                .and_then(|report| serde_json::from_value(report.clone()).ok())
+                .unwrap_or_else(|| scryer_media_types::ProbeReport {
+                    status: serde_json::from_value(serde_json::Value::String(status))
+                        .unwrap_or_default(),
+                    ..Default::default()
+                });
+            Ok(Some(scryer_media_types::AnalysisAttempt {
+                revision,
+                attempted_at,
+                succeeded,
+                report,
+                disc: document
+                    .as_ref()
+                    .and_then(|document| document.get("details")?.get("disc"))
+                    .and_then(|disc| serde_json::from_value(disc.clone()).ok()),
+            }))
+        }
+
+        /// The analysis-derived fields of one row, as the old decode built
+        /// them, in a comparable form.
+        pub(super) fn analysis_view(row: &SqlRow) -> String {
+            let analysis = analysis_json_from_row(row);
+            let mut audio_streams: Vec<scryer_application::AudioStreamDetail> =
+                array_field(&analysis, "audio_streams");
+            let mut subtitle_streams: Vec<scryer_application::SubtitleStreamDetail> =
+                array_field(&analysis, "subtitle_streams");
+            let audio_language_values: Vec<String> = array_field(&analysis, "audio_languages");
+            let audio_languages = scryer_application::normalize_detected_audio_languages(
+                audio_language_values.iter().map(String::as_str),
+            );
+            for stream in &mut audio_streams {
+                stream.language = stream
+                    .language
+                    .as_deref()
+                    .and_then(scryer_application::normalize_detected_audio_language_code);
+            }
+            let subtitle_language_values: Vec<String> =
+                array_field(&analysis, "subtitle_languages");
+            let subtitle_languages = scryer_application::normalize_detected_subtitle_languages(
+                subtitle_language_values.iter().map(String::as_str),
+            );
+            for stream in &mut subtitle_streams {
+                stream.language = stream
+                    .language
+                    .as_deref()
+                    .and_then(scryer_application::normalize_detected_subtitle_language_code);
+            }
+            let details: scryer_media_types::AnalysisDetails = analysis
+                .get("details")
+                .cloned()
+                .and_then(|details| serde_json::from_value(details).ok())
+                .unwrap_or_default();
+            format!(
+                "{:?}",
+                (
+                    row.text("id").unwrap(),
+                    row.opt_text("episode_id").unwrap(),
+                    details,
+                    attempt(row, &analysis).unwrap(),
+                    audio_languages,
+                    audio_streams,
+                    subtitle_languages,
+                    array_field::<String>(&analysis, "subtitle_codecs"),
+                    subtitle_streams,
+                    analysis_u8_field(&analysis, "dovi_profile"),
+                    analysis_u8_field(&analysis, "dovi_bl_compat_id"),
+                )
+            )
+        }
+    }
+
+    fn decoded_analysis_view(file: &TitleMediaFile) -> String {
+        format!(
+            "{:?}",
+            (
+                &file.id,
+                &file.episode_id,
+                &file.analysis_details,
+                &file.analysis_attempt,
+                &file.audio_languages,
+                &file.audio_streams,
+                &file.subtitle_languages,
+                &file.subtitle_codecs,
+                &file.subtitle_streams,
+                file.dovi_profile,
+                file.dovi_bl_compat_id,
+            )
+        )
+    }
+
+    #[tokio::test]
+    async fn row_decode_matches_the_reference_decode_over_seeded_analyses() {
+        let dir = tempfile::tempdir().unwrap();
+        let services = SqliteServices::new(dir.path().join("decode.db").to_string_lossy())
+            .await
+            .unwrap();
+        let title = make_test_series_title("decode-title");
+        title_store(&services).create(title.clone()).await.unwrap();
+        let shows = show_store(&services);
+        let episode_ids = ["decode-ep-1", "decode-ep-2", "decode-ep-3"];
+        for id in episode_ids {
+            shows
+                .create_episode(Episode {
+                    id: id.into(),
+                    title_id: title.id.clone(),
+                    collection_id: None,
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: None,
+                    season_number: Some("1".into()),
+                    episode_label: None,
+                    title: None,
+                    air_date: None,
+                    duration_seconds: Some(1800),
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: false,
+                    created_at: Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let mut full = stream_analysis("en");
+        full.dovi_profile = Some(8);
+        full.dovi_bl_compat_id = Some(1);
+        full.subtitle_languages = vec!["English".into(), "und".into(), "fre".into()];
+        full.subtitle_codecs = vec!["subrip".into()];
+        full.subtitle_streams = vec![scryer_application::SubtitleStreamDetail {
+            codec: Some("subrip".into()),
+            language: Some("en".into()),
+            name: Some("Synthetic".into()),
+            forced: false,
+            default: true,
+        }];
+        full.details.revision = 3;
+        full.details.duration_seconds = Some(1799.5);
+        full.details.report.status = scryer_media_types::ProbeStatus::Complete;
+        full.details.report.bytes_read = 4096;
+        full.details.disc = Some(scryer_media_types::DiscMetadata::default());
+        let full_json = serde_json::to_string(&full).unwrap();
+        let mut default_report = stream_analysis("de");
+        default_report.details.revision = 2;
+        let default_report_json = serde_json::to_string(&default_report).unwrap();
+
+        // (analysis bytes, attempt status, attempt json, linked episodes)
+        let compressed = |json: &str| Some(encode_media_analysis(json).unwrap());
+        let cases: Vec<(Option<Vec<u8>>, Option<&str>, Option<&str>, Vec<&str>)> = vec![
+            (
+                compressed(&full_json),
+                Some("succeeded"),
+                None,
+                episode_ids.to_vec(),
+            ),
+            (compressed(&full_json), None, None, vec![]),
+            (
+                compressed(&default_report_json),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"details":{"revision":1},"audio_languages":["ja"]}"#),
+                Some("succeeded"),
+                None,
+                vec!["decode-ep-1"],
+            ),
+            (
+                compressed(r#"{"details":{"revision":1,"report":{"status":"malformed"}}}"#),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(
+                    r#"{"audio_streams":"not a list","audio_languages":["fr"],"dovi_profile":5}"#,
+                ),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"details":null,"dovi_profile":300,"dovi_bl_compat_id":2}"#),
+                Some("failed"),
+                Some(r#"{"details":{"report":{"status":"encrypted"},"disc":{}}}"#),
+                vec![],
+            ),
+            (
+                compressed(r#"{"details":{"revision":"bad","report":{"status":"complete"}}}"#),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"subtitle_streams":[{"codec":"ass"}],"subtitle_codecs":["ass"]}"#),
+                None,
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"{"audio_languages":["en"],"audio_languages":["de"]}"#),
+                None,
+                None,
+                vec![],
+            ),
+            (
+                compressed(r#"[{"audio_languages":["en"]}]"#),
+                Some("succeeded"),
+                None,
+                vec![],
+            ),
+            (
+                compressed("{\"audio_languages\":[\"en\"]"),
+                None,
+                None,
+                vec![],
+            ),
+            (compressed("   "), Some("succeeded"), None, vec![]),
+            (
+                Some(br#"{"audio_languages":["it"],"dovi_profile":7.0}"#.to_vec()),
+                None,
+                None,
+                vec![],
+            ),
+            // A damaged frame: the magic and then garbage.
+            (
+                Some([0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x01, 0x02, 0x03].to_vec()),
+                Some("succeeded"),
+                None,
+                vec!["decode-ep-2", "decode-ep-3"],
+            ),
+            (None, Some("failed"), Some("not json"), vec![]),
+            (None, None, None, vec![]),
+        ];
+
+        let files = media_file_store(&services);
+        for (index, (analysis, status, attempt_json, linked)) in cases.into_iter().enumerate() {
+            let id = files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/synthetic/decode/{index:02}.mkv"),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            if let Some(analysis) = analysis {
+                sqlx::query(
+                    "INSERT INTO media_file_analyses (media_file_id, analysis) VALUES (?, ?)",
+                )
+                .bind(&id)
+                .bind(analysis)
+                .execute(services.pool())
+                .await
+                .unwrap();
+            }
+            if let Some(status) = status {
+                sqlx::query(
+                    "UPDATE media_files SET analysis_attempt_revision = 4,
+                            analysis_attempted_at = '2026-01-01T00:00:00Z',
+                            analysis_attempt_status = ?, analysis_attempt_json = ?
+                      WHERE id = ?",
+                )
+                .bind(status)
+                .bind(attempt_json)
+                .bind(&id)
+                .execute(services.pool())
+                .await
+                .unwrap();
+            }
+            for episode in linked {
+                files.link_file_to_episode(&id, episode).await.unwrap();
+            }
+        }
+
+        // One row per file and episode link, so linked files repeat.
+        let sql = format!(
+            "SELECT {}
+               FROM media_files mf
+               LEFT JOIN file_episode_map fem ON fem.file_id = mf.id
+              ORDER BY mf.file_path, fem.episode_id",
+            media_file_select_columns(SqlDialect::Sqlite, "fem.episode_id", "mf.role")
+        );
+        let rows = SqlRuntime::fetch_all(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        let expected: Vec<String> = rows.iter().map(reference_decode::analysis_view).collect();
+        let decoded = fetch_media_files(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        assert_eq!(decoded.len(), 20);
+        let actual: Vec<String> = decoded.iter().map(decoded_analysis_view).collect();
+        for (expected, actual) in expected.iter().zip(&actual) {
+            assert_eq!(expected, actual);
+        }
+        assert_eq!(expected.len(), actual.len());
+
+        // Each row decoded on its own matches too.
+        for (row, expected) in rows.iter().zip(&expected) {
+            let single = row_to_title_media_file(row).unwrap();
+            assert_eq!(&decoded_analysis_view(&single), expected);
+        }
+
+        // The uncached reader returns exactly what the cached one does, field
+        // for field and in the same order, repeated file ids included.
+        let distinct = fetch_distinct_media_files(files.datastore.read_exec(), &sql, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            distinct
+                .iter()
+                .filter(|file| file.file_path == "/synthetic/decode/00.mkv")
+                .count(),
+            3
+        );
+        assert_eq!(format!("{distinct:?}"), format!("{decoded:?}"));
+
+        // The repeated file shares one decoded analysis across its rows.
+        let mut decoder = MediaFileRowDecoder::default();
+        let shared: Vec<_> = rows
+            .iter()
+            .filter(|row| row.text("file_path").unwrap() == "/synthetic/decode/00.mkv")
+            .map(|row| decoder.analysis(row))
+            .collect();
+        assert_eq!(shared.len(), 3);
+        assert!(std::sync::Arc::ptr_eq(&shared[0], &shared[1]));
+        assert!(std::sync::Arc::ptr_eq(&shared[0], &shared[2]));
+        assert_eq!(shared[0].dovi_profile, Some(8));
     }
 }

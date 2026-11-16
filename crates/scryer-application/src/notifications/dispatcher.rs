@@ -10,9 +10,9 @@ use crate::{
 use scryer_domain::{
     DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType, DomainExternalIds,
     DownloadFailedEventData, Episode, ExternalId, ImportCompletedEventData,
-    ImportRejectedEventData, ListRequestSubmittedEventData, ListSyncFailedEventData,
-    ListTitleAddedEventData, ListTitleLeftEventData, ListUnfollowedEventData,
-    MaintenanceRuleNotifiedEventData, MediaFileDeletedEventData, MediaFileDeletedReason,
+    ImportRejectedEventData, LifecycleRuleNotifiedEventData, ListRequestSubmittedEventData,
+    ListSyncFailedEventData, ListTitleAddedEventData, ListTitleLeftEventData,
+    ListUnfollowedEventData, MediaFileDeletedEventData, MediaFileDeletedReason,
     MediaFileRenamedEventData, MediaFileRestoredEventData, MediaFileUpgradedEventData,
     MediaPathUpdate, MediaRequestResolvedEventData, MediaRequestSubmittedEventData,
     MediaUpdateType, NotificationEventType, NotificationTargetKind,
@@ -58,7 +58,7 @@ macro_rules! notification_event_mappings {
             list_title_left => DomainEventPayload::ListTitleLeft(_) => DomainEventPayload::ListTitleLeft(data) => DomainEventType::ListTitleLeft => NotificationEventType::ListTitleLeft => build_list_title_left_notification(data),
             list_sync_failed => DomainEventPayload::ListSyncFailed(_) => DomainEventPayload::ListSyncFailed(data) => DomainEventType::ListSyncFailed => NotificationEventType::ListSyncFailed => build_list_sync_failed_notification(data),
             list_unfollowed => DomainEventPayload::ListUnfollowed(_) => DomainEventPayload::ListUnfollowed(data) => DomainEventType::ListUnfollowed => NotificationEventType::ListUnfollowed => build_list_unfollowed_notification(data),
-            maintenance_rule_notified => DomainEventPayload::MaintenanceRuleNotified(_) => DomainEventPayload::MaintenanceRuleNotified(data) => DomainEventType::MaintenanceRuleNotified => NotificationEventType::MaintenanceRuleNotified => build_maintenance_rule_notified_notification(data),
+            lifecycle_rule_notified => DomainEventPayload::LifecycleRuleNotified(_) => DomainEventPayload::LifecycleRuleNotified(data) => DomainEventType::LifecycleRuleNotified => NotificationEventType::LifecycleRuleNotified => build_lifecycle_rule_notified_notification(data),
         }
     };
 }
@@ -1206,14 +1206,14 @@ fn build_list_unfollowed_notification(data: &ListUnfollowedEventData) -> BuiltNo
     }
 }
 
-/// A maintenance rule's own message, named by the rule and the subject it
+/// A lifecycle rule's own message, named by the rule and the subject it
 /// acted on. The message is the operator's, sent as the rule wrote it.
-fn build_maintenance_rule_notified_notification(
-    data: &MaintenanceRuleNotifiedEventData,
+fn build_lifecycle_rule_notified_notification(
+    data: &LifecycleRuleNotifiedEventData,
 ) -> BuiltNotification {
     BuiltNotification {
         payload: base_notification_payload(
-            NotificationEventType::MaintenanceRuleNotified,
+            NotificationEventType::LifecycleRuleNotified,
             format!("{}: {}", data.rule_name, data.subject_label),
             data.message.clone(),
             Some(&data.title),
@@ -3000,8 +3000,8 @@ mod tests {
             ),
             list_sample_event(
                 24,
-                DomainEventPayload::MaintenanceRuleNotified(
-                    scryer_domain::MaintenanceRuleNotifiedEventData {
+                DomainEventPayload::LifecycleRuleNotified(
+                    scryer_domain::LifecycleRuleNotifiedEventData {
                         title: title_context("Kept Movie", MediaFacet::Movie),
                         rule_set_id: "rule-1".to_string(),
                         rule_name: "Archive finished".to_string(),

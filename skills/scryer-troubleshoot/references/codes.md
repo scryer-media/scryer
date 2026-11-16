@@ -33,7 +33,7 @@ settings need **Manage catalog settings**.
 | `ambiguous_identity` | title name is ambiguous and no year or id disambiguates | |
 | `title_year_mismatch` | year is more than a year off | |
 | `episodic_release_for_movie` | a pack or episode release for a movie | |
-| `pack_for_single_episode` | automatic single-episode search skips packs | expected |
+| `pack_for_single_episode` | automatic single-episode search skips packs | expected; `minMissingEpisodesForPack` 1 lets one missing episode take a pack |
 | `anime_numbering_ambiguous` | several equally good episode readings | |
 | `quality_blocked` | quality profile blocked it | quality profile items, blocked codecs or sources |
 | `negative_score` | historical rows only; no longer emitted | |
@@ -51,7 +51,7 @@ settings need **Manage catalog settings**.
 | `repack_group_mismatch` | repack is from a different group than the file | expected |
 | `minimum_seeders` | too few seeders for the seeding profile | seeding profile |
 | `movie_availability_blocked` | movie has not reached its availability setting | media settings |
-| `pack_below_missing_threshold` | pack does not cover enough missing episodes | expected |
+| `pack_below_missing_threshold` | pack does not cover enough missing episodes | expected; multi-season packs follow `minMissingPercentForSeriesPack` |
 | `subtitles_only` | subtitles, no video | expected |
 
 Stored rows can also show `manual_override`, `initial` and `upgrade`, which

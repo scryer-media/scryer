@@ -849,8 +849,8 @@ pub struct TitleTagRewriteCountsPayload {
     pub series_movies: i32,
     /// Delay profiles whose tag list was rewritten.
     pub delay_profiles: i32,
-    /// Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
-    pub maintenance_rule_sets: i32,
+    /// Lifecycle rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+    pub lifecycle_rule_sets: i32,
     /// Release rule sets whose rule source names the old label; rule sources are never rewritten, so these rules stop matching.
     pub release_rule_sets: i32,
     /// Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.
@@ -960,6 +960,16 @@ pub struct QualityProfileCriteriaPayload {
     /// Score a same-tier candidate must beat the current file by to count as
     /// an upgrade. Profiles that never set it report the default, 120.
     pub min_upgrade_score_delta: i32,
+    /// Wanted episodes that must be missing before an automatic search takes
+    /// a pack. At 1, a search for one missing episode may take a pack.
+    /// Profiles that never set it report the default, 2. Changing it does
+    /// not re-open searches already covered.
+    pub min_missing_episodes_for_pack: i32,
+    /// A multi-season pack is taken only when more than this percentage of
+    /// its monitored, aired episodes is missing. Profiles that never set it
+    /// report the default, 30. Changing it does not re-open searches already
+    /// covered.
+    pub min_missing_percent_for_series_pack: i32,
     /// The steps releases are compared on, in order, before the score
     /// decides. Profiles that never set it report `QUALITY_TIER, REVISION,
     /// PREFERRED_LANGUAGE, OPTIONAL_LANGUAGES`; an empty list ranks on score
@@ -1763,6 +1773,16 @@ pub struct QualityProfileCriteriaInput {
     /// value, and sending the default (120) stores the profile as using the
     /// default.
     pub min_upgrade_score_delta: Option<i32>,
+    /// Optional count of wanted episodes that must be missing before an
+    /// automatic search takes a pack; at least 1. Omitting it keeps the stored
+    /// value, and sending the default (2) stores the profile as using the
+    /// default.
+    pub min_missing_episodes_for_pack: Option<i32>,
+    /// Optional percentage, 0 to 100, of a multi-season pack's monitored,
+    /// aired episodes that must be exceeded by the missing ones. Omitting it
+    /// keeps the stored value, and sending the default (30) stores the profile
+    /// as using the default.
+    pub min_missing_percent_for_series_pack: Option<i32>,
     /// Optional decision order; each step at most once. Omitting it keeps the
     /// stored order, and an empty list ranks on score alone. When sent,
     /// whether it lists `REVISION` sets `ignoreProperRepack`.

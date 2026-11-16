@@ -252,23 +252,23 @@ impl AppServicesBuilder {
         self
     }
 
-    /// Not a required service: maintenance rules ship dark, and an assembly
+    /// Not a required service: lifecycle rules ship dark, and an assembly
     /// that never configures the store simply has no rules to read.
-    pub fn with_maintenance_rule_set_store<T>(mut self, store: Arc<T>) -> Self
+    pub fn with_lifecycle_rule_set_store<T>(mut self, store: Arc<T>) -> Self
     where
-        T: MaintenanceRuleSetRepository + Send + Sync + 'static,
+        T: LifecycleRuleSetRepository + Send + Sync + 'static,
     {
-        self.services.customization.maintenance_rule_sets = store;
+        self.services.customization.lifecycle_rule_sets = store;
         self
     }
 
     /// Not a required service either: without it the evaluator has nowhere to
     /// record candidates, and the gate that would let it run is off anyway.
-    pub fn with_maintenance_evaluation_store<T>(mut self, store: Arc<T>) -> Self
+    pub fn with_lifecycle_evaluation_store<T>(mut self, store: Arc<T>) -> Self
     where
-        T: crate::ports::MaintenanceEvaluationRepository + Send + Sync + 'static,
+        T: crate::ports::LifecycleEvaluationRepository + Send + Sync + 'static,
     {
-        self.services.customization.maintenance_evaluation = store;
+        self.services.customization.lifecycle_evaluation = store;
         self
     }
 
@@ -677,7 +677,7 @@ impl AppServicesBuilder {
         integrations.srrdb_filename_lookup,
         Arc<dyn crate::ports::SrrdbFilenameLookup>
     );
-    // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────
+    // ── Lifecycle safety probes (RFC 137 §9.10, WP-G) ─────────────────────
     app_services_builder_setter!(
         with_media_server_playback_probe,
         integrations.media_server_playback_probe,

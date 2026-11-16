@@ -1,6 +1,6 @@
 //! Core mechanics proved against a family that exists only here.
 //!
-//! The maintenance and release suites prove the two shipped families still
+//! The lifecycle and release suites prove the two shipped families still
 //! behave as they did. These prove the *core* keeps its promises for a family
 //! nobody has written yet — which is the whole reason it exists.
 
@@ -107,7 +107,7 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
     type EvalError = ProbeError;
 
     fn limits() -> RuntimeLimits {
-        RuntimeLimits::maintenance_defaults()
+        RuntimeLimits::lifecycle_defaults()
     }
 
     fn user_policy_path(rule_id: &str) -> String {
@@ -175,6 +175,7 @@ impl<const BOUND: bool> PolicyFamily for Probe<BOUND> {
         _rule_id: &str,
         _rule_name: &str,
         _extra: &Self::RuleExtra,
+        _ctx: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         if matches!(value, Value::Undefined) {
             return Err("decision rule produced no value".to_string());
@@ -428,7 +429,7 @@ fn post_decode_rejection_drops_the_record() {
 
 #[test]
 fn oversized_input_is_refused_before_any_rule_runs() {
-    let mut limits = RuntimeLimits::maintenance_defaults();
+    let mut limits = RuntimeLimits::lifecycle_defaults();
     limits.max_input_bytes = 16;
     let engine =
         ProbeEngine::build_with_limits(&[policy("tiny", "normal", "allow := true\n")], limits)
@@ -446,7 +447,7 @@ fn a_family_that_opts_out_of_the_bound_evaluates_an_oversized_input() {
     // behaviour change for a family that shipped without one. Same policy, same
     // input, same limits as the test above — only `BOUND_INPUT` differs, and
     // the oversized document is scored instead of refused.
-    let mut limits = RuntimeLimits::maintenance_defaults();
+    let mut limits = RuntimeLimits::lifecycle_defaults();
     limits.max_input_bytes = 16;
     let policies = [policy("tiny", "normal", "allow := true\n")];
 

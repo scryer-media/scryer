@@ -119,12 +119,22 @@ async fn assert_plan_uses_without_sort(
     );
 }
 
+/// The name an index added here carries after the full catalog: 0358 renames
+/// the lifecycle rule tables' indexes.
+fn current_index_name(name: &str) -> String {
+    match name.strip_prefix("idx_maintenance_") {
+        Some(rest) => format!("idx_lifecycle_{rest}"),
+        None => name.to_string(),
+    }
+}
+
 async fn assert_sqlite_schema(pool: &sqlx::SqlitePool) {
     for name in ADDED.into_iter().chain(KEPT) {
+        let name = current_index_name(name);
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?",
         )
-        .bind(name)
+        .bind(&name)
         .fetch_one(pool)
         .await
         .unwrap();
@@ -293,9 +303,9 @@ async fn assert_sqlite_plans(pool: &sqlx::SqlitePool, state: &str) {
     assert_plan_uses_without_sort(
         pool,
         state,
-        "EXPLAIN QUERY PLAN SELECT id FROM maintenance_evaluation_runs \
+        "EXPLAIN QUERY PLAN SELECT id FROM lifecycle_evaluation_runs \
          ORDER BY started_at DESC, id ASC LIMIT 50",
-        "idx_maintenance_evaluation_runs_started",
+        "idx_lifecycle_evaluation_runs_started",
     )
     .await;
     assert_plan_uses(

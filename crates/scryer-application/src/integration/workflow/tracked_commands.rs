@@ -885,7 +885,7 @@ async fn reopen_scopes_released_by_ignored_submission(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await
     {
         Ok(rows) => rows,
@@ -1689,7 +1689,7 @@ async fn record_missing_client_download(
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&submission.title_id))
+        .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(&submission.title_id))
         .await?;
     let episodes = if rows.iter().any(|row| row.episode_id.is_some()) {
         app.services

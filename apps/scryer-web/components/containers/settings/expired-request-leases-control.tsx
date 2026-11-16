@@ -1,7 +1,7 @@
 import { userFacingGraphQlErrorMessage } from "../../../lib/graphql/error-message.ts";
 import { useCallback, useEffect, useState } from "react";
 import { useClient } from "urql";
-import { useMaintenanceRuleState } from "@/components/containers/settings/use-maintenance-rule-state";
+import { useLifecycleRuleState } from "@/components/containers/settings/use-lifecycle-rule-state";
 import { HelpLabel } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,30 +14,30 @@ import { SingleSelectField } from "@/components/ui/select";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
-  maintenanceRuleSetQuery,
-  maintenanceRuleSetsQuery,
+  lifecycleRuleSetQuery,
+  lifecycleRuleSetsQuery,
 } from "@/lib/graphql/queries";
 import {
-  updateMaintenanceRuleMatcherMutation,
-  updateMaintenanceRuleMetadataMutation,
+  updateLifecycleRuleMatcherMutation,
+  updateLifecycleRuleMetadataMutation,
 } from "@/lib/graphql/mutations";
 import type {
-  MaintenanceRuleSetDetail,
-  MaintenanceRuleSetRecord,
-  MaintenanceRuleState,
-} from "@/lib/types/maintenance-rule-sets";
+  LifecycleRuleSetDetail,
+  LifecycleRuleSetRecord,
+  LifecycleRuleState,
+} from "@/lib/types/lifecycle-rule-sets";
 import type { ScriptSchedule } from "@/lib/types/scripts";
 import { useRuleBuilderSchema } from "@/lib/hooks/use-rule-builder-schema";
-import { MAINTENANCE_RULE_BUILDER_BASE } from "@/lib/utils/maintenance-rule-builder-schema";
+import { LIFECYCLE_RULE_BUILDER_BASE } from "@/lib/utils/lifecycle-rule-builder-schema";
 import {
-  maintenanceRuleBuilder,
-  maintenanceRuleDraftFromDetail,
-  maintenanceRuleUpdatePlan,
+  lifecycleRuleBuilder,
+  lifecycleRuleDraftFromDetail,
+  lifecycleRuleUpdatePlan,
   ruleStateLabelKey,
   ruleStateOptionsFor,
-} from "@/lib/utils/maintenance-rule-sets";
+} from "@/lib/utils/lifecycle-rule-sets";
 import { toScriptScheduleInput } from "@/lib/utils/script-schedule";
-import { MaintenanceRuleScheduleField } from "@/components/views/settings/maintenance-rule-schedule";
+import { LifecycleRuleScheduleField } from "@/components/views/settings/lifecycle-rule-schedule";
 
 const sameSchedule = (left: ScriptSchedule, right: ScriptSchedule) =>
   JSON.stringify(toScriptScheduleInput(left)) ===
@@ -49,20 +49,20 @@ export function ExpiredRequestLeasesControl() {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
-  const [record, setRecord] = useState<MaintenanceRuleSetRecord | null>(null);
+  const [record, setRecord] = useState<LifecycleRuleSetRecord | null>(null);
   const [graceDays, setGraceDays] = useState(0);
   const [schedule, setSchedule] = useState<ScriptSchedule | null>(null);
   const [busyRuleSetId, setBusyRuleSetId] = useState<string | null>(null);
   const { whenReady: whenSchemaReady } = useRuleBuilderSchema(
-    MAINTENANCE_RULE_BUILDER_BASE,
+    LIFECYCLE_RULE_BUILDER_BASE,
   );
 
   const refresh = useCallback(async () => {
     const { data } = await client
-      .query(maintenanceRuleSetsQuery, {}, { requestPolicy: "network-only" })
+      .query(lifecycleRuleSetsQuery, {}, { requestPolicy: "network-only" })
       .toPromise();
     const shipped =
-      ((data?.maintenanceRuleSets ?? []) as MaintenanceRuleSetRecord[]).find(
+      ((data?.lifecycleRuleSets ?? []) as LifecycleRuleSetRecord[]).find(
         (rule) => rule.systemOwned,
       ) ?? null;
     setRecord(shipped);
@@ -76,7 +76,7 @@ export function ExpiredRequestLeasesControl() {
     void refresh();
   }, [refresh]);
 
-  const { setRuleState, armingDialog } = useMaintenanceRuleState({
+  const { setRuleState, armingDialog } = useLifecycleRuleState({
     onChanged: refresh,
     setBusyRuleSetId,
   });
@@ -92,19 +92,19 @@ export function ExpiredRequestLeasesControl() {
     try {
       const detail = await client
         .query(
-          maintenanceRuleSetQuery,
+          lifecycleRuleSetQuery,
           { id: record.id },
           { requestPolicy: "network-only" },
         )
         .toPromise();
       if (detail.error) throw detail.error;
       // Without the served schema the stored builder model is left as it is.
-      const binding = maintenanceRuleBuilder(await whenSchemaReady());
-      const draft = maintenanceRuleDraftFromDetail(
-        detail.data.maintenanceRuleSet as MaintenanceRuleSetDetail,
+      const binding = lifecycleRuleBuilder(await whenSchemaReady());
+      const draft = lifecycleRuleDraftFromDetail(
+        detail.data.lifecycleRuleSet as LifecycleRuleSetDetail,
         binding,
       );
-      const plan = maintenanceRuleUpdatePlan(
+      const plan = lifecycleRuleUpdatePlan(
         record.id,
         draft,
         { ...draft, graceDays, schedule },
@@ -112,7 +112,7 @@ export function ExpiredRequestLeasesControl() {
       );
       if (plan.matcher) {
         const { error } = await client
-          .mutation(updateMaintenanceRuleMatcherMutation, {
+          .mutation(updateLifecycleRuleMatcherMutation, {
             input: plan.matcher,
           })
           .toPromise();
@@ -120,13 +120,13 @@ export function ExpiredRequestLeasesControl() {
       }
       if (plan.metadata) {
         const { error } = await client
-          .mutation(updateMaintenanceRuleMetadataMutation, {
+          .mutation(updateLifecycleRuleMetadataMutation, {
             input: plan.metadata,
           })
           .toPromise();
         if (error) throw error;
       }
-      setGlobalStatus(t("settings.maintenanceRuleUpdated"), {
+      setGlobalStatus(t("settings.lifecycleRuleUpdated"), {
         level: "SUCCESS",
       });
     } catch (error) {
@@ -152,7 +152,7 @@ export function ExpiredRequestLeasesControl() {
           help={t("settings.expiredRequestLeasesHelp")}
         />
       </p>
-      <MaintenanceRuleScheduleField
+      <LifecycleRuleScheduleField
         key={record.updatedAt}
         idPrefix="settings-expired-request-leases-schedule"
         value={schedule}
@@ -164,12 +164,12 @@ export function ExpiredRequestLeasesControl() {
         <div className="w-48">
           <SingleSelectField
             id="settings-expired-request-leases-state"
-            label={t("settings.maintenanceRuleState")}
+            label={t("settings.lifecycleRuleState")}
             size="sm"
             value={record.state}
             disabled={busy}
             onValueChange={(value) =>
-              setRuleState(record, value as MaintenanceRuleState)
+              setRuleState(record, value as LifecycleRuleState)
             }
             options={ruleStateOptionsFor(record).map((state) => {
               const key = ruleStateLabelKey(state);
@@ -183,7 +183,7 @@ export function ExpiredRequestLeasesControl() {
         </div>
         <label className="w-32">
           <Label className="mb-2 block">
-            {t("settings.maintenanceRuleGraceDays")}
+            {t("settings.lifecycleRuleGraceDays")}
           </Label>
           <Input
             id="settings-expired-request-leases-grace-days"
@@ -209,7 +209,7 @@ export function ExpiredRequestLeasesControl() {
       </div>
       {record.editedSinceEnabled ? (
         <p className="text-xs text-[var(--scry-warning-text)]">
-          {t("settings.maintenanceRuleEditedSinceEnabled")}
+          {t("settings.lifecycleRuleEditedSinceEnabled")}
         </p>
       ) : null}
       {armingDialog}

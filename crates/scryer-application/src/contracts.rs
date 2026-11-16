@@ -1082,12 +1082,61 @@ pub struct AcquisitionScopeCoordinates {
     pub series_movie_link_id: Option<String>,
 }
 
+/// One scope under a title, as the acquisition state row for it is keyed.
+/// Each arm matches at most one row of the title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcquisitionScopeKey<'a> {
+    Episode(&'a str),
+    /// The collection's own row. Episode rows carry their collection id too,
+    /// so they never match this arm.
+    Collection(&'a str),
+    SeriesMovieLink(&'a str),
+    /// The title's own row: no episode, collection or series-movie link.
+    Title,
+}
+
+impl<'a> AcquisitionScopeKey<'a> {
+    /// The key `state`'s own row is stored under. The episode identity wins,
+    /// then the collection, then the series-movie link, then the bare title.
+    pub fn of(state: &'a AcquisitionScopeState) -> Self {
+        if let Some(episode_id) = state.episode_id.as_deref() {
+            Self::Episode(episode_id)
+        } else if let Some(collection_id) = state.collection_id.as_deref() {
+            Self::Collection(collection_id)
+        } else if let Some(link_id) = state.series_movie_link_id.as_deref() {
+            Self::SeriesMovieLink(link_id)
+        } else {
+            Self::Title
+        }
+    }
+
+    /// Whether `state` is this scope's row, given it belongs to the title.
+    pub fn matches(&self, state: &AcquisitionScopeState) -> bool {
+        match *self {
+            Self::Episode(episode_id) => state.episode_id.as_deref() == Some(episode_id),
+            Self::Collection(collection_id) => {
+                state.episode_id.is_none() && state.collection_id.as_deref() == Some(collection_id)
+            }
+            Self::SeriesMovieLink(link_id) => {
+                state.series_movie_link_id.as_deref() == Some(link_id)
+            }
+            Self::Title => {
+                state.episode_id.is_none()
+                    && state.collection_id.is_none()
+                    && state.series_movie_link_id.is_none()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseDecisionsQuery {
     pub wanted_item_id: Option<String>,
     pub title_id: Option<String>,
     pub limit: i64,
     pub offset: i64,
+    /// The caller reads no total, so it is not counted and comes back as 0.
+    pub skip_total: bool,
 }
 
 /// Ordering for a paged pending-releases read. Preserves the historic per-call
@@ -1534,15 +1583,38 @@ impl std::fmt::Debug for DownloadClientAddRequest {
 }
 
 impl DownloadClientAddRequest {
+    // Torrent labels commonly use "localized / original / season", not the
+    // legacy NZB "name / password" convention. Keep explicit password markers.
+    fn allow_slash_password(&self) -> bool {
+        !matches!(
+            self.source_kind,
+            Some(DownloadSourceKind::TorrentFile | DownloadSourceKind::MagnetUri)
+        ) && !matches!(
+            self.resolved_download_artifact,
+            Some(
+                ResolvedDownloadArtifact::TorrentFile { .. }
+                    | ResolvedDownloadArtifact::Magnet { .. }
+            )
+        )
+    }
+
     pub fn source_title_without_password(&self) -> Option<String> {
         self.source_title.as_deref().map(|name| {
-            crate::import::archive_passwords::release_name_without_password(name).to_string()
+            crate::import::archive_passwords::release_name_without_password_with_slash(
+                name,
+                self.allow_slash_password(),
+            )
+            .to_string()
         })
     }
 
     pub fn release_title_without_password(&self) -> Option<String> {
         self.release_title.as_deref().map(|name| {
-            crate::import::archive_passwords::release_name_without_password(name).to_string()
+            crate::import::archive_passwords::release_name_without_password_with_slash(
+                name,
+                self.allow_slash_password(),
+            )
+            .to_string()
         })
     }
 
@@ -1571,7 +1643,12 @@ impl DownloadClientAddRequest {
             .into_iter()
             .flatten()
         {
-            if let Some(password) = crate::import::archive_passwords::release_name_password(name) {
+            if let Some(password) =
+                crate::import::archive_passwords::release_name_password_with_slash(
+                    name,
+                    self.allow_slash_password(),
+                )
+            {
                 candidates.push(&password);
             }
         }

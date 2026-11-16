@@ -17,7 +17,7 @@
 //! fact was missing rather than a bare "needs review".
 //!
 //! Facts arrive in the shared [`Observation`] envelopes and are subject to the
-//! same host-derived hold as maintenance facts: a request rule reading a
+//! same host-derived hold as lifecycle facts: a request rule reading a
 //! certification Scryer never resolved is held before it is consulted, because
 //! on the bare `input.facts` surface an unknown certification is just a missing
 //! key, which a rule would read as a decisive "not rated above PG-13".
@@ -67,7 +67,7 @@ pub(crate) const USER_PACKAGE_PREFIX: &str = "scryer.request.user";
 const WRAPPER_PACKAGE_PREFIX: &str = "scryer.request.wrapper";
 
 /// The head an author writes to send a request to a human themselves.
-/// Maintenance says `unknown if`; requests say `manual if`. The name is a
+/// Lifecycle says `unknown if`; requests say `manual if`. The name is a
 /// per-family parameter of the policy core, and the wrapper below reads exactly
 /// what this constant says, so the two cannot drift.
 const HOLD_RULE_NAME: &str = "manual";
@@ -77,8 +77,8 @@ const HOLD_RULE_NAME: &str = "manual";
 /// Authoring or previewing a rule that reads anything under here is a way of
 /// asking the instance about a specific user, so the host requires the author to
 /// already hold the instance's permission-management authority — the same gate
-/// [`crate::maintenance::PERSON_TARGETED_MAINTENANCE_FACTS`] guards for
-/// maintenance. Unlike maintenance, where person-targeting is a property of
+/// [`crate::lifecycle::PERSON_TARGETED_LIFECYCLE_FACTS`] guards for
+/// lifecycle. Unlike lifecycle, where person-targeting is a property of
 /// individual facts, *every* field of the requester document is about one named
 /// person, so the whole subtree is the unit.
 ///
@@ -99,7 +99,7 @@ pub const PERSON_TARGETED_REQUEST_ROOT: &str = "input.requester";
 /// known: it is the draft the requester is looking at, and the account they are
 /// signed in as. Everything under `facts` is an [`Observation`] and may be
 /// unknown — which holds the rule — or absent, which is a real answer. The fact
-/// snapshot serializes into two namespaces exactly as maintenance's does:
+/// snapshot serializes into two namespaces exactly as lifecycle's does:
 /// `observations` is the envelope map verbatim, `facts` is derived from it by
 /// unwrapping the known values.
 #[derive(Debug, Clone)]
@@ -668,6 +668,7 @@ impl PolicyFamily for RequestFamily {
         _rule_id: &str,
         _rule_name: &str,
         _extra: &Self::RuleExtra,
+        _ctx: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         decode_decision(value)
     }
@@ -786,18 +787,17 @@ pub const EXAMPLE_SHORT_LEASE: &str = "package rules\nimport rego.v1\n\napprove 
 pub const EXAMPLE_LOW_RESOLUTION: &str = "package rules\nimport rego.v1\n\napprove if {\n\tinput.requester.username == \"alice\"\n\tinput.facts.quality_profile_max_resolution <= 720\n}\n";
 
 /// Deny adult content, with a reason code the requester is shown.
-pub const EXAMPLE_DENY_ADULT_CONTENT: &str = "package rules\nimport rego.v1\n\ndeny if {\n\tinput.facts.is_adult\n}\n\nreasons contains \"adult_content\" if {\n\tinput.facts.is_adult\n}\n";
+pub const EXAMPLE_DENY_ADULT_CONTENT: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.is_adult == true\n}\n\ndeny if rule_applies\n\nreasons contains \"adult_content\" if rule_applies\n";
 
 /// A monthly quota: after five approvals a human looks at the sixth.
-pub const EXAMPLE_MONTHLY_QUOTA: &str =
-    "package rules\nimport rego.v1\n\nmanual if {\n\tinput.facts.approved_last_30d >= 5\n}\n";
+pub const EXAMPLE_MONTHLY_QUOTA: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.approved_last_30d >= 5\n}\n\nmanual if rule_applies\n";
 
 /// Hold every list request whose owner is on the Approval list policy for a
 /// person to look at.
-pub const EXAMPLE_HOLD_APPROVAL_POLICY_LISTS: &str = "package rules\nimport rego.v1\n\nmanual if {\n\tinput.request.list.owner_list_policy == \"approval\"\n}\n";
+pub const EXAMPLE_HOLD_APPROVAL_POLICY_LISTS: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.owner_list_policy == \"approval\"\n}\n\nmanual if rule_applies\n";
 
 /// Deny personal-list requests for a quality profile above 1080p.
-pub const EXAMPLE_DENY_PERSONAL_LIST_ABOVE_1080P: &str = "package rules\nimport rego.v1\n\ndeny if {\n\tinput.request.list.scope == \"personal\"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n";
+pub const EXAMPLE_DENY_PERSONAL_LIST_ABOVE_1080P: &str = "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.request.list.scope == \"personal\"\n\tinput.facts.quality_profile_max_resolution > 1080\n}\n\ndeny if rule_applies\n";
 
 /// The shipped worked examples, keyed by the template ID the web gallery offers
 /// them under.
@@ -1583,7 +1583,7 @@ mod tests {
             "internal/rule_1_request_wrapper.rego"
         );
 
-        // Maintenance says `unknown if`; requests say `manual if`. The head the
+        // Lifecycle says `unknown if`; requests say `manual if`. The head the
         // wrapper reads is exactly what the family declares.
         let hold = RequestFamily::hold_rule_name().expect("requests hold");
         assert_eq!(hold, "manual");

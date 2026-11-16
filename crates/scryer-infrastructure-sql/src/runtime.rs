@@ -41,6 +41,16 @@ impl StoreDatastore {
         Self::Sqlite { pool, writer_gate }
     }
 
+    /// See [`timestamp_text_arg`].
+    pub fn timestamp_text_arg(&self, value: &str) -> AppResult<SqlArg> {
+        timestamp_text_arg(matches!(self, Self::Postgres { .. }), value)
+    }
+
+    /// See [`opt_timestamp_text_arg`].
+    pub fn opt_timestamp_text_arg(&self, value: Option<&str>) -> AppResult<SqlArg> {
+        opt_timestamp_text_arg(matches!(self, Self::Postgres { .. }), value)
+    }
+
     /// Read-only executor. On sqlite it bypasses the writer gate and busy
     /// retries, so writes must go through `SqlRuntime::execute_write`,
     /// `run_in_transaction`, or `run_serialized_sqlite` instead.
@@ -119,6 +129,10 @@ pub enum SqlArg {
     Json(JsonValue),
     OptJson(Option<JsonValue>),
     OptBytes(Option<Vec<u8>>),
+    /// Optional bytes held once and shared by every argument list that binds
+    /// them. Binds exactly as [`SqlArg::OptBytes`] does: a BLOB or BYTEA, and
+    /// NULL for `None`.
+    OptSharedBytes(Option<Arc<[u8]>>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -135,6 +149,41 @@ pub enum SqlRow {
 pub enum SqlTx<'db> {
     Sqlite(Transaction<'db, Sqlite>),
     Postgres(Transaction<'db, Postgres>),
+}
+
+impl SqlTx<'_> {
+    /// See [`timestamp_text_arg`].
+    pub fn timestamp_text_arg(&self, value: &str) -> AppResult<SqlArg> {
+        timestamp_text_arg(matches!(self, Self::Postgres(_)), value)
+    }
+
+    /// See [`opt_timestamp_text_arg`].
+    pub fn opt_timestamp_text_arg(&self, value: Option<&str>) -> AppResult<SqlArg> {
+        opt_timestamp_text_arg(matches!(self, Self::Postgres(_)), value)
+    }
+}
+
+/// A timestamp the caller holds as text, bound for one engine. SQLite stores
+/// the text as given; Postgres parses it into a timestamptz and refuses text
+/// that is not a timestamp.
+fn timestamp_text_arg(postgres: bool, value: &str) -> AppResult<SqlArg> {
+    if postgres {
+        parse_utc_datetime(value).map(SqlArg::Timestamp)
+    } else {
+        Ok(SqlArg::Text(value.to_string()))
+    }
+}
+
+/// [`timestamp_text_arg`] for a timestamp that may be absent.
+fn opt_timestamp_text_arg(postgres: bool, value: Option<&str>) -> AppResult<SqlArg> {
+    if postgres {
+        value
+            .map(parse_utc_datetime)
+            .transpose()
+            .map(SqlArg::OptTimestamp)
+    } else {
+        Ok(SqlArg::OptText(value.map(str::to_string)))
+    }
 }
 
 pub struct SqlRuntime;
@@ -551,6 +600,61 @@ impl SqlRow {
         }
     }
 
+    /// A timestamp column as text: SQLite's stored text as written, and a
+    /// Postgres timestamptz as RFC 3339.
+    pub fn timestamp_text(&self, column: &str) -> AppResult<String> {
+        match self {
+            SqlRow::Sqlite(row) => row.try_get(column).map_err(repo_err),
+            SqlRow::Postgres(row) => row
+                .try_get::<DateTime<Utc>, _>(column)
+                .map(|value| value.to_rfc3339())
+                .map_err(repo_err),
+        }
+    }
+
+    /// [`Self::timestamp_text`] for a nullable column. SQLite's dynamic typing
+    /// may hand back an integer, which reads as its text.
+    pub fn opt_timestamp_text(&self, column: &str) -> AppResult<Option<String>> {
+        match self {
+            SqlRow::Sqlite(row) => opt_text_from_sqlite_row(row, column),
+            SqlRow::Postgres(row) => row
+                .try_get::<Option<DateTime<Utc>>, _>(column)
+                .map(|value| value.map(|value| value.to_rfc3339()))
+                .map_err(repo_err),
+        }
+    }
+
+    /// A timestamp column where SQLite text that is not RFC 3339 reads as now,
+    /// so a row carrying a `strftime(...)` column default verbatim stays
+    /// readable instead of failing the whole listing.
+    pub fn timestamp_or_now(&self, column: &str) -> AppResult<DateTime<Utc>> {
+        match self {
+            SqlRow::Sqlite(row) => {
+                let raw: String = row.try_get(column).map_err(repo_err)?;
+                Ok(DateTime::parse_from_rfc3339(&raw)
+                    .map(|value| value.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()))
+            }
+            SqlRow::Postgres(_) => self.timestamp(column),
+        }
+    }
+
+    /// A nullable timestamp column where SQLite text that is not RFC 3339
+    /// reads as absent.
+    pub fn opt_timestamp_or_none(&self, column: &str) -> AppResult<Option<DateTime<Utc>>> {
+        match self {
+            SqlRow::Sqlite(row) => {
+                let raw: Option<String> = row.try_get(column).map_err(repo_err)?;
+                Ok(raw.and_then(|value| {
+                    DateTime::parse_from_rfc3339(&value)
+                        .map(|value| value.with_timezone(&Utc))
+                        .ok()
+                }))
+            }
+            SqlRow::Postgres(_) => self.opt_timestamp(column),
+        }
+    }
+
     pub fn opt_json(&self, column: &str) -> AppResult<Option<JsonValue>> {
         match self {
             SqlRow::Sqlite(row) => {
@@ -605,6 +709,7 @@ fn bind_sqlite<'q>(mut query: SqliteQuery<'q>, values: &'q [SqlArg]) -> SqliteQu
             SqlArg::Json(value) => query.bind(value.to_string()),
             SqlArg::OptJson(value) => query.bind(value.as_ref().map(JsonValue::to_string)),
             SqlArg::OptBytes(value) => query.bind(value),
+            SqlArg::OptSharedBytes(value) => query.bind(value.as_deref()),
         };
     }
     query
@@ -631,6 +736,7 @@ fn bind_postgres<'q>(mut query: PostgresQuery<'q>, values: &'q [SqlArg]) -> Post
             SqlArg::Json(value) => query.bind(Json(value)),
             SqlArg::OptJson(value) => query.bind(value.as_ref().map(Json)),
             SqlArg::OptBytes(value) => query.bind(value),
+            SqlArg::OptSharedBytes(value) => query.bind(value.as_deref()),
         };
     }
     query
@@ -1262,6 +1368,54 @@ mod tests {
             StoreDatastore::Sqlite { pool, .. } => pool,
             StoreDatastore::Postgres { .. } => panic!("expected sqlite datastore"),
         }
+    }
+
+    #[tokio::test]
+    async fn shared_bytes_bind_exactly_as_owned_bytes() {
+        let datastore = memory_datastore("shared_bytes_bind").await;
+        let pool = sqlite_pool(&datastore).clone();
+        sqlx::query(
+            "CREATE TABLE bytes_probe (n INTEGER NOT NULL, owned BLOB, shared BLOB, \
+             owned_type TEXT, shared_type TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create scratch table");
+
+        let cases: Vec<Option<Vec<u8>>> = vec![
+            None,
+            Some(Vec::new()),
+            Some(vec![0x28, 0xb5, 0x2f, 0xfd, 0x00, 0xff, 0x00]),
+        ];
+        for (index, case) in cases.iter().enumerate() {
+            SqlRuntime::execute(
+                SqlExec::Target(SqlTarget::Sqlite(&pool)),
+                "INSERT INTO bytes_probe (n, owned, shared) VALUES ({}, {}, {})",
+                &[
+                    SqlArg::I64(index as i64),
+                    SqlArg::OptBytes(case.clone()),
+                    SqlArg::OptSharedBytes(case.as_deref().map(Arc::from)),
+                ],
+            )
+            .await
+            .expect("insert bytes");
+        }
+
+        let rows: Vec<(i64, Option<Vec<u8>>, Option<Vec<u8>>, String, String)> = sqlx::query_as(
+            "SELECT n, owned, shared, typeof(owned), typeof(shared) FROM bytes_probe ORDER BY n",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read bytes back");
+        assert_eq!(rows.len(), cases.len());
+        for ((_, owned, shared, owned_type, shared_type), case) in rows.iter().zip(&cases) {
+            assert_eq!(owned, case, "owned bytes round-trip");
+            assert_eq!(shared, owned, "shared bytes store what owned bytes store");
+            assert_eq!(shared_type, owned_type, "both bind with the same SQL type");
+        }
+        assert_eq!(rows[0].3, "null");
+        assert_eq!(rows[1].3, "blob");
+        assert_eq!(rows[2].3, "blob");
     }
 
     #[tokio::test]

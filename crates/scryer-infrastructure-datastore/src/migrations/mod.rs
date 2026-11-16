@@ -34,6 +34,8 @@ mod legacy_monitor_snapshot_upgrade_tests;
 #[cfg(test)]
 mod lifecycle_claims_one_operator_keep_upgrade_tests;
 #[cfg(test)]
+mod lifecycle_rule_targets_upgrade_tests;
+#[cfg(test)]
 mod list_search_mode_upgrade_tests;
 #[cfg(test)]
 #[path = "migration_progress_tests.rs"]
@@ -50,6 +52,8 @@ mod query_audit_indexes_upgrade_tests;
 pub mod release_url_scrub;
 #[cfg(test)]
 mod remove_user_maintenance_rules_upgrade_tests;
+#[cfg(test)]
+mod rename_maintenance_to_lifecycle_upgrade_tests;
 pub mod repair_root_title_folders;
 #[cfg(test)]
 mod request_rule_actions_upgrade_tests;

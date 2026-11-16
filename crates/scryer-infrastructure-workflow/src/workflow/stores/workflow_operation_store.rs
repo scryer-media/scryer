@@ -3,10 +3,10 @@ use super::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, JobKey, JobRunRecord, JobRunRepository, MaintenanceSearchJobRunCreation,
+    AppError, AppResult, JobKey, JobRunRecord, JobRunRepository, LifecycleSearchJobRunCreation,
     WorkflowOperationInfo, WorkflowOperationRepository,
 };
-use scryer_domain::{MaintenanceActionJobReceipt, MaintenanceActionJobReceiptState};
+use scryer_domain::{LifecycleActionJobReceipt, LifecycleActionJobReceiptState};
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
@@ -90,10 +90,25 @@ impl JobRunRepository for WorkflowOperationStore {
                     let record = fetch_optional_workflow_operation(SqlExec::Tx(tx), &row.text("run_id")?).await?.ok_or_else(|| AppError::Repository("private job missing".into()))?;
                     return Ok((job_run_record_from_workflow(record)?, false));
                 }
-                let progress = json_arg_for_tx(tx, run.progress_json.as_deref())?;
-                SqlRuntime::execute(SqlExec::Tx(tx),
-                    "INSERT INTO workflow_operations (id, operation_type, status, job_key, trigger_source, actor_user_id, progress_json, started_at, created_at, updated_at) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    &[SqlArg::Text(run.id.clone()), SqlArg::Text(run.operation_type.clone()), SqlArg::Text(run.status.as_str().into()), SqlArg::Text(run.job_key.as_str().into()), SqlArg::Text(run.trigger_source.as_str().into()), SqlArg::OptText(run.actor_user_id.clone()), progress, SqlArg::Timestamp(run.started_at), SqlArg::Timestamp(run.created_at), SqlArg::Timestamp(run.updated_at)]).await?;
+                let progress_json = json_arg_for_tx(tx, run.progress_json.as_deref())?;
+                // A new private job has no outcome yet.
+                let summary_json = json_arg_for_tx(tx, None)?;
+                insert_workflow_operation_tx(tx, WorkflowOperationInsert {
+                    id: run.id.clone(),
+                    operation_type: run.operation_type.clone(),
+                    status: run.status.as_str().into(),
+                    job_key: Some(run.job_key.as_str().into()),
+                    trigger_source: Some(run.trigger_source.as_str().into()),
+                    actor_user_id: run.actor_user_id.clone(),
+                    progress_json,
+                    summary_json,
+                    summary_text: None,
+                    error_text: None,
+                    started_at: SqlArg::Timestamp(run.started_at),
+                    completed_at: SqlArg::OptTimestamp(None),
+                    created_at: SqlArg::Timestamp(run.created_at),
+                    updated_at: SqlArg::Timestamp(run.updated_at),
+                }).await?;
                 Ok((run, true))
             })
         }).await
@@ -166,21 +181,21 @@ impl JobRunRepository for WorkflowOperationStore {
         SqlRuntime::fetch_optional(self.datastore.read_exec(), "SELECT workflow_operations.* FROM workflow_operations INNER JOIN workflow_private_inputs ON workflow_operations.id = workflow_private_inputs.run_id WHERE workflow_private_inputs.actor_user_id = {} AND request_key = {}", &[SqlArg::Text(actor_id.into()), SqlArg::Text(request_key.into())]).await?.map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow)).transpose()
     }
 
-    async fn create_maintenance_search_job_run(
+    async fn create_lifecycle_search_job_run(
         &self,
         run: &JobRunRecord,
-        receipt: &MaintenanceActionJobReceipt,
-    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        receipt: &LifecycleActionJobReceipt,
+    ) -> AppResult<LifecycleSearchJobRunCreation> {
         receipt
             .validate_schema()
             .map_err(|error| AppError::Validation(error.to_string()))?;
-        if receipt.state != MaintenanceActionJobReceiptState::Accepted
+        if receipt.state != LifecycleActionJobReceiptState::Accepted
             || receipt.job_run_id.as_deref() != Some(run.id.as_str())
             || run.job_key != JobKey::AcquisitionSearch
         {
             return Err(AppError::validation_refused(
                 crate::error_reasons::WORKFLOW_ACQUISITION_RECEIPT_REQUIRED,
-                "maintenance Search requires an accepted receipt for its acquisition job run",
+                "lifecycle Search requires an accepted receipt for its acquisition job run",
             ));
         }
 
@@ -188,80 +203,75 @@ impl JobRunRepository for WorkflowOperationStore {
         let receipt = receipt.clone();
         SqlRuntime::run_in_transaction(
             &self.datastore,
-            "create_maintenance_search_job_run",
+            "create_lifecycle_search_job_run",
             move |tx| {
                 let run = run.clone();
                 let receipt = receipt.clone();
                 Box::pin(async move {
-                    if let Some(existing) = find_accepted_maintenance_search_receipt(tx, &receipt)
+                    if let Some(existing) = find_accepted_lifecycle_search_receipt(tx, &receipt)
                         .await?
                     {
-                        return Ok(MaintenanceSearchJobRunCreation::Existing { receipt: existing });
+                        return Ok(LifecycleSearchJobRunCreation::Existing { receipt: existing });
                     }
-                    if let Some(existing) = find_maintenance_search_receipt_for_attempt(tx, &receipt)
+                    if let Some(existing) = find_lifecycle_search_receipt_for_attempt(tx, &receipt)
                         .await?
                     {
-                        return Ok(MaintenanceSearchJobRunCreation::Existing { receipt: existing });
+                        return Ok(LifecycleSearchJobRunCreation::Existing { receipt: existing });
                     }
 
                     let inserted = SqlRuntime::execute(
                         SqlExec::Tx(tx),
-                        "INSERT INTO maintenance_action_job_receipts
+                        "INSERT INTO lifecycle_action_job_receipts
                          (candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
                           schema_version, logical_request_key, request_hash, job_run_id, state,
                           reconciliation_evidence_json, created_at, updated_at)
                          VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
                          ON CONFLICT DO NOTHING",
-                        &maintenance_search_receipt_args(&receipt),
+                        &lifecycle_search_receipt_args(&receipt),
                     )
                     .await?;
                     if inserted != 1 {
-                        let existing = find_accepted_maintenance_search_receipt(tx, &receipt)
+                        let existing = find_accepted_lifecycle_search_receipt(tx, &receipt)
                             .await?
-                            .or(find_maintenance_search_receipt_for_attempt(tx, &receipt).await?)
+                            .or(find_lifecycle_search_receipt_for_attempt(tx, &receipt).await?)
                             .ok_or_else(|| {
                                 AppError::Repository(
-                                    "maintenance Search receipt insert raced without a durable winner".into(),
+                                    "lifecycle Search receipt insert raced without a durable winner".into(),
                                 )
                             })?;
-                        return Ok(MaintenanceSearchJobRunCreation::Existing { receipt: existing });
+                        return Ok(LifecycleSearchJobRunCreation::Existing { receipt: existing });
                     }
 
                     let progress_json = json_arg_for_tx(tx, run.progress_json.as_deref())?;
                     let summary_json = json_arg_for_tx(tx, run.summary_json.as_deref())?;
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "INSERT INTO workflow_operations
-                         (id, operation_type, status, job_key, trigger_source, actor_user_id,
-                          progress_json, summary_json, summary_text, error_text, started_at,
-                          completed_at, created_at, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        &[
-                            SqlArg::Text(run.id.clone()),
-                            SqlArg::Text(run.operation_type.clone()),
-                            SqlArg::Text(run.status.as_str().to_string()),
-                            SqlArg::Text(run.job_key.as_str().to_string()),
-                            SqlArg::Text(run.trigger_source.as_str().to_string()),
-                            SqlArg::OptText(run.actor_user_id.clone()),
+                    insert_workflow_operation_tx(
+                        tx,
+                        WorkflowOperationInsert {
+                            id: run.id.clone(),
+                            operation_type: run.operation_type.clone(),
+                            status: run.status.as_str().to_string(),
+                            job_key: Some(run.job_key.as_str().to_string()),
+                            trigger_source: Some(run.trigger_source.as_str().to_string()),
+                            actor_user_id: run.actor_user_id.clone(),
                             progress_json,
                             summary_json,
-                            SqlArg::OptText(run.summary_text.clone()),
-                            SqlArg::OptText(run.error_text.clone()),
-                            SqlArg::Timestamp(run.started_at),
-                            SqlArg::OptTimestamp(run.completed_at),
-                            SqlArg::Timestamp(run.created_at),
-                            SqlArg::Timestamp(run.updated_at),
-                        ],
+                            summary_text: run.summary_text.clone(),
+                            error_text: run.error_text.clone(),
+                            started_at: SqlArg::Timestamp(run.started_at),
+                            completed_at: SqlArg::OptTimestamp(run.completed_at),
+                            created_at: SqlArg::Timestamp(run.created_at),
+                            updated_at: SqlArg::Timestamp(run.updated_at),
+                        },
                     )
                     .await?;
                     let run = fetch_optional_workflow_operation(SqlExec::Tx(tx), &run.id)
                         .await?
                         .ok_or_else(|| {
                             AppError::Repository(
-                                "failed to reload atomic maintenance Search job run".into(),
+                                "failed to reload atomic lifecycle Search job run".into(),
                             )
                         })?;
-                    Ok(MaintenanceSearchJobRunCreation::Created {
+                    Ok(LifecycleSearchJobRunCreation::Created {
                         run: Box::new(job_run_record_from_workflow(run)?),
                         receipt,
                     })
@@ -526,7 +536,7 @@ impl JobRunRepository for WorkflowOperationStore {
     }
 }
 
-fn maintenance_search_receipt_args(receipt: &MaintenanceActionJobReceipt) -> Vec<SqlArg> {
+fn lifecycle_search_receipt_args(receipt: &LifecycleActionJobReceipt) -> Vec<SqlArg> {
     vec![
         SqlArg::Text(receipt.key.candidate_id.clone()),
         SqlArg::I64(receipt.key.match_generation),
@@ -544,16 +554,16 @@ fn maintenance_search_receipt_args(receipt: &MaintenanceActionJobReceipt) -> Vec
     ]
 }
 
-async fn find_accepted_maintenance_search_receipt(
+async fn find_accepted_lifecycle_search_receipt(
     tx: &mut SqlTx<'_>,
-    receipt: &MaintenanceActionJobReceipt,
-) -> AppResult<Option<MaintenanceActionJobReceipt>> {
+    receipt: &LifecycleActionJobReceipt,
+) -> AppResult<Option<LifecycleActionJobReceipt>> {
     SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
                 schema_version, logical_request_key, request_hash, job_run_id, state,
                 reconciliation_evidence_json, created_at, updated_at
-           FROM maintenance_action_job_receipts
+           FROM lifecycle_action_job_receipts
           WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
             AND step_id = {} AND request_hash = {} AND state IN ('accepted', 'completed')
           ORDER BY created_at ASC, dispatch_attempt ASC
@@ -568,20 +578,20 @@ async fn find_accepted_maintenance_search_receipt(
     )
     .await?
     .as_ref()
-    .map(maintenance_search_receipt_from_row)
+    .map(lifecycle_search_receipt_from_row)
     .transpose()
 }
 
-async fn find_maintenance_search_receipt_for_attempt(
+async fn find_lifecycle_search_receipt_for_attempt(
     tx: &mut SqlTx<'_>,
-    receipt: &MaintenanceActionJobReceipt,
-) -> AppResult<Option<MaintenanceActionJobReceipt>> {
+    receipt: &LifecycleActionJobReceipt,
+) -> AppResult<Option<LifecycleActionJobReceipt>> {
     SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
                 schema_version, logical_request_key, request_hash, job_run_id, state,
                 reconciliation_evidence_json, created_at, updated_at
-           FROM maintenance_action_job_receipts
+           FROM lifecycle_action_job_receipts
           WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
             AND step_id = {} AND dispatch_attempt = {}
           LIMIT 1",
@@ -595,18 +605,18 @@ async fn find_maintenance_search_receipt_for_attempt(
     )
     .await?
     .as_ref()
-    .map(maintenance_search_receipt_from_row)
+    .map(lifecycle_search_receipt_from_row)
     .transpose()
 }
 
-fn maintenance_search_receipt_from_row(row: &SqlRow) -> AppResult<MaintenanceActionJobReceipt> {
+fn lifecycle_search_receipt_from_row(row: &SqlRow) -> AppResult<LifecycleActionJobReceipt> {
     let state =
-        MaintenanceActionJobReceiptState::parse_storage(&row.text("state")?).ok_or_else(|| {
-            AppError::Repository("maintenance Search receipt has an invalid state".into())
+        LifecycleActionJobReceiptState::parse_storage(&row.text("state")?).ok_or_else(|| {
+            AppError::Repository("lifecycle Search receipt has an invalid state".into())
         })?;
-    let receipt = MaintenanceActionJobReceipt {
+    let receipt = LifecycleActionJobReceipt {
         schema_version: row.i32("schema_version")? as u32,
-        key: scryer_domain::MaintenanceActionStepKey {
+        key: scryer_domain::LifecycleActionStepKey {
             candidate_id: row.text("candidate_id")?,
             match_generation: row.i64("match_generation")?,
             revision_number: row.i64("revision_number")?,

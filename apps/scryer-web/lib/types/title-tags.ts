@@ -20,7 +20,7 @@ export type TitleTagRewriteCounts = {
   titles: number;
   seriesMovies: number;
   delayProfiles: number;
-  maintenanceRuleSets: number;
+  lifecycleRuleSets: number;
   releaseRuleSets: number;
   managedTagFilters: number;
   requestRuleSets: number;

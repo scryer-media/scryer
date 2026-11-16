@@ -11,11 +11,15 @@ pub mod formats;
 
 /// Bump whenever a stored analysis summary would come out differently, so the
 /// background refresh re-extracts rows written by an older analyzer.
-pub const ANALYSIS_REVISION: u32 = AUTHORED_PRIMARY_AUDIO_REVISION;
+pub const ANALYSIS_REVISION: u32 = DOLBY_VISION_RECORD_REVISION;
 
 /// The first revision whose primary audio summary follows the authored default
 /// track rather than the highest channel count or codec rank.
 const AUTHORED_PRIMARY_AUDIO_REVISION: u32 = 2;
+
+/// The first revision that reads Dolby Vision configuration from Matroska track
+/// mappings, MP4 `dvwC` boxes and 4-byte records, per track.
+const DOLBY_VISION_RECORD_REVISION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -411,6 +415,14 @@ mod tests {
             primary_audio_stream_index([(false, false, None), (true, false, None)]),
             Some(1)
         );
+    }
+
+    #[test]
+    fn analyses_from_before_dolby_vision_records_are_refreshed() {
+        // Rows stored at revision 2 could report HDR10 for Dolby Vision tracks.
+        let stored_before_records = 2;
+        assert!(stored_before_records < ANALYSIS_REVISION);
+        const { assert!(ANALYSIS_REVISION >= DOLBY_VISION_RECORD_REVISION) };
     }
 
     #[test]

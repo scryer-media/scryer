@@ -34,8 +34,8 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
     let rows = SqlRuntime::fetch_all(
         datastore.read_exec(),
         "SELECT rules.id AS rule_set_id, rules.current_revision_number, revisions.rego_source
-           FROM maintenance_rule_sets rules
-           JOIN maintenance_rule_revisions revisions
+           FROM lifecycle_rule_sets rules
+           JOIN lifecycle_rule_revisions revisions
              ON revisions.rule_set_id = rules.id
             AND revisions.revision_number = rules.current_revision_number
           WHERE rules.subject_kind = 'title'
@@ -44,13 +44,13 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
             AND (
                 EXISTS (
                     SELECT 1
-                      FROM maintenance_rule_set_libraries scope
+                      FROM lifecycle_rule_set_libraries scope
                       JOIN libraries library ON library.id = scope.library_id
                      WHERE scope.rule_set_id = rules.id
                        AND library.facet IN ('series', 'anime')
                 )
                 OR NOT EXISTS (
-                    SELECT 1 FROM maintenance_rule_set_libraries scope
+                    SELECT 1 FROM lifecycle_rule_set_libraries scope
                      WHERE scope.rule_set_id = rules.id
                 )
             )
@@ -67,7 +67,7 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         let rego_source = row.text("rego_source").map_err(|error| error.to_string())?;
         let digest = scryer_rules::runtime::content_hash(&rego_source);
-        let review_detail = match scryer_rules::validation::maintenance_referenced_facts(
+        let review_detail = match scryer_rules::validation::lifecycle_referenced_facts(
             &rego_source,
             &rule_set_id,
         ) {
@@ -124,7 +124,7 @@ pub(crate) async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
                     // must not receive a stale compatibility flag.
                     let disarmed = SqlRuntime::execute(
                         SqlExec::Tx(tx),
-                        "UPDATE maintenance_rule_sets
+                        "UPDATE lifecycle_rule_sets
                             SET effect_arming = {}, destructive_rearm_required = {}, updated_at = {}
                           WHERE id = {} AND current_revision_number = {}
                             AND effect_arming = {}",
@@ -180,8 +180,8 @@ mod tests {
         let now = Utc::now();
         SqlRuntime::execute_write(
             datastore,
-            "seed_maintenance_rule_set",
-            "INSERT INTO maintenance_rule_sets
+            "seed_lifecycle_rule_set",
+            "INSERT INTO lifecycle_rule_sets
              (id, name, effect_arming, subject_kind, current_revision_number, created_at, updated_at)
              VALUES ({}, {}, 'destructive', 'title', 1, {}, {})",
             vec![
@@ -195,8 +195,8 @@ mod tests {
         .expect("seed rule set");
         SqlRuntime::execute_write(
             datastore,
-            "seed_maintenance_rule_revision",
-            "INSERT INTO maintenance_rule_revisions
+            "seed_lifecycle_rule_revision",
+            "INSERT INTO lifecycle_rule_revisions
              (id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
               matcher_content_hash, created_at)
              VALUES ({}, {}, 1, {}, {}, 0, {}, {})",
@@ -214,8 +214,8 @@ mod tests {
         if let Some(library_id) = library_id {
             SqlRuntime::execute_write(
                 datastore,
-                "seed_maintenance_rule_scope",
-                "INSERT INTO maintenance_rule_set_libraries (rule_set_id, library_id, position)
+                "seed_lifecycle_rule_scope",
+                "INSERT INTO lifecycle_rule_set_libraries (rule_set_id, library_id, position)
                  VALUES ({}, {}, 0)",
                 vec![
                     SqlArg::Text(id.to_string()),
@@ -231,7 +231,7 @@ mod tests {
         let row = SqlRuntime::fetch_optional(
             datastore.read_exec(),
             "SELECT effect_arming, destructive_rearm_required
-               FROM maintenance_rule_sets WHERE id = {}",
+               FROM lifecycle_rule_sets WHERE id = {}",
             &[SqlArg::Text(id.to_string())],
         )
         .await
@@ -299,7 +299,7 @@ mod tests {
         SqlRuntime::execute_write(
             &datastore,
             "operator_rearm",
-            "UPDATE maintenance_rule_sets
+            "UPDATE lifecycle_rule_sets
                 SET effect_arming = 'destructive', destructive_rearm_required = {} WHERE id = {}",
             vec![SqlArg::Bool(false), SqlArg::Text("global-show-fact".into())],
         )

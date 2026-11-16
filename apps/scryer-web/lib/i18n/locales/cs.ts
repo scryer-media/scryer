@@ -214,7 +214,7 @@ const cs: LocaleDictionary = {
   "settings.regoHelper.count":
     "Spočítá položky v poli, množině nebo objektu, nebo znaky v řetězci.",
   "settings.regoHelper.objectGet":
-    "Přečte klíč objektu a při jeho absenci vrátí výchozí hodnotu. Použijte pojmenovaný vstupní fakt v pravidlech žádostí a údržby.",
+    "Přečte klíč objektu a při jeho absenci vrátí výchozí hodnotu. Použijte pojmenovaný vstupní fakt v pravidlech žádostí a životního cyklu.",
   "settings.regoHelper.startsWith": "Vrátí, zda řetězec začíná daným prefixem.",
   "settings.regoSnippet.scoreEntry":
     "Přidá pojmenovanou úpravu skóre, pokud podmínka vydání vyhovuje.",
@@ -227,7 +227,7 @@ const cs: LocaleDictionary = {
   "settings.regoSnippet.manualRequest":
     "Vyžádá ruční kontrolu, jakmile počet nedávných schválení dosáhne prahu.",
   "settings.regoHelper.daysSince":
-    "Celé dny mezi časovým razítkem RFC3339 a časem vyhodnocení. Jen pro pravidla údržby.",
+    "Celé dny mezi časovým razítkem RFC3339 a časem vyhodnocení. Jen pro pravidla životního cyklu.",
   "settings.regoSnippet.unmonitorTagged":
     "Zruší sledování subjektu se štítkem.",
   "settings.regoSnippet.tagAfterDays":
@@ -1011,6 +1011,14 @@ const cs: LocaleDictionary = {
     "Minimální rozdíl skóre ve stejné úrovni",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Vydání ve stejné úrovni kvality musí překonat skóre aktuálního souboru alespoň o tuto hodnotu.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Minimum chybějících epizod pro balík",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Balík sezóny se hledá jen tehdy, když v sezóně chybí alespoň tolik epizod. Výchozí 2. Při hodnotě 1 může automatické hledání jedné chybějící epizody vzít i balík, což může stáhnout epizody, které už máte.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Minimum chybějících epizod pro vícesezónní balík (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Vícesezónní balík se zvažuje jen tehdy, když chybí více než toto procento epizod seriálu. Výchozí 30. Při 0 stačí jakákoli chybějící epizoda; při 100 se vícesezónní balíky nikdy neberou.",
   "settings.acquisitionConvergence": "Konvergence a tempo",
   "settings.acquisitionPollIntervalSeconds": "Interval kontroly (sekundy)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -4868,724 +4876,735 @@ const cs: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "Nepodporováno",
   "appUpgrade.success": "Aktualizováno na verzi {{version}}",
   "appUpgrade.failed": "Aktualizace se nezdařila.",
-  "settings.maintenanceRules": "Pravidla údržby",
+  "settings.lifecycleRules": "Pravidla životního cyklu",
   "nav.rules": "Pravidla",
   "settings.rulesScoring": "Pravidla hodnocení",
-  "settings.maintenanceNavRules": "Pravidla",
-  "settings.maintenanceNavHistory": "Historie",
-  "settings.maintenanceRuleAction": "Akce",
-  "settings.maintenanceRuleActionHelp":
-    "Co toto pravidlo udělá, jakmile se zapnou akce údržby.",
-  "settings.maintenanceRuleActionPlaceholder": "Vyberte akci",
-  "settings.maintenanceRuleNoActions":
+  "settings.lifecycleNavRules": "Pravidla",
+  "settings.lifecycleNavHistory": "Historie",
+  "settings.lifecycleRuleAction": "Akce",
+  "settings.lifecycleRuleActionHelp":
+    "Co toto pravidlo udělá, jakmile se zapnou akce životního cyklu.",
+  "settings.lifecycleRuleActionPlaceholder": "Vyberte akci",
+  "settings.lifecycleRuleNoActions":
     "Nejsou k dispozici žádné akce vázané na titul.",
-  "settings.maintenanceActionSequence": "Posloupnost akcí",
-  "settings.maintenanceSequenceObserveOnly": "Pouze zkušební běh",
-  "settings.maintenanceSequenceHistoryWaiting": "čeká na dřívější krok",
-  "settings.maintenanceSequenceHistorySearchRequested": "vyhledávání vyžádáno",
-  "settings.maintenanceSequenceHistorySearchAccepted": "přijato",
-  "settings.maintenanceSequenceHistoryJob": "úloha {{id}}",
-  "settings.maintenanceSequenceStepUnmonitor": "Zrušit sledování",
-  "settings.maintenanceSequenceStepDeleteFiles": "Smazat soubory",
-  "settings.maintenanceSequenceStepChangeQualityProfile":
+  "settings.lifecycleActionSequence": "Posloupnost akcí",
+  "settings.lifecycleSequenceObserveOnly": "Pouze zkušební běh",
+  "settings.lifecycleSequenceHistoryWaiting": "čeká na dřívější krok",
+  "settings.lifecycleSequenceHistorySearchRequested": "vyhledávání vyžádáno",
+  "settings.lifecycleSequenceHistorySearchAccepted": "přijato",
+  "settings.lifecycleSequenceHistoryJob": "úloha {{id}}",
+  "settings.lifecycleSequenceStepUnmonitor": "Zrušit sledování",
+  "settings.lifecycleSequenceStepDeleteFiles": "Smazat soubory",
+  "settings.lifecycleSequenceStepChangeQualityProfile":
     "Změnit profil kvality",
-  "settings.maintenanceSequenceStepSearch": "Vyhledat",
-  "settings.maintenanceSequenceStepAddTags": "Přidat štítky",
-  "settings.maintenanceSequenceStepRemoveTags": "Odebrat štítky",
-  "settings.maintenanceSequenceStepDeleteTitleAndFiles":
+  "settings.lifecycleSequenceStepSearch": "Vyhledat",
+  "settings.lifecycleSequenceStepAddTags": "Přidat štítky",
+  "settings.lifecycleSequenceStepRemoveTags": "Odebrat štítky",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles":
     "Smazat titul a soubory",
-  "settings.maintenanceRuleGraceDays": "Dny ochranné doby",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleRuleGraceDays": "Dny ochranné doby",
+  "settings.lifecycleRuleGraceDaysHelp":
     "Počet dní od první shody každého subjektu, než se jeho akce stane splatnou.",
-  "settings.maintenanceRuleScheduleHelp":
+  "settings.lifecycleRuleScheduleHelp":
     "Každé pravidlo běží podle vlastního plánu. Běh pravidlo vyhodnotí a poté provede akce u kandidátů, jejichž ochranná doba uplynula. Změna plánu stav pravidla nemění. Denní, týdenní a cron časy používají místní čas serveru.",
-  "settings.maintenanceRuleScheduleManualHelp":
+  "settings.lifecycleRuleScheduleManualHelp":
     "Toto pravidlo se samo nikdy nespustí. Spusťte ho z části Běhy a historie.",
-  "settings.maintenanceRuleLibraries": "Rozsah knihoven",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "Rozsah knihoven",
+  "settings.lifecycleRuleLibrariesHelp":
     "Ponecháním všech knihoven nezaškrtnutých rozšíříte rozsah pravidla na celou kolekci.",
-  "settings.maintenanceRuleLibrariesAll": "Všechny knihovny",
-  "settings.maintenanceRuleStorageRoot": "Kořen úložiště",
-  "settings.maintenanceRuleStorageRootNone": "Není vybrán žádný kořen úložiště",
-  "settings.maintenanceRuleStorageRootHelp":
-    "Vyberte nakonfigurovaný kořen, ze kterého se má číst kapacita, a omezte mazání souborů jen na soubory skutečně na tomto kořeni.",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp":
-    "Vybraný kořen omezuje pouze mazání souborů. Zrušení sledování se stále vztahuje na celý odpovídající subjekt, takže soubory na jiných kořenech zůstanou zachovány, ale přestanou být sledovány.",
-  "settings.maintenanceRuleStorageRootClear": "Vymazat kořen úložiště",
-  "settings.maintenanceStorageRootFileSummary":
-    "Vybraný kořen · soubory: {{count}} · {{size}}",
-  "settings.maintenanceRuleCreate": "Vytvořit pravidlo údržby",
-  "settings.maintenanceRuleUpdate": "Aktualizovat pravidlo údržby",
-  "settings.maintenanceRuleCopy": "Kopírovat jako nové pravidlo",
-  "settings.maintenanceRuleCreateNew": "Vytvořit nové pravidlo údržby",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "Všechny knihovny",
+  "settings.lifecycleRuleCreate": "Vytvořit pravidlo životního cyklu",
+  "settings.lifecycleRuleUpdate": "Aktualizovat pravidlo životního cyklu",
+  "settings.lifecycleRuleCopy": "Kopírovat jako nové pravidlo",
+  "settings.lifecycleRuleCreateNew": "Vytvořit nové pravidlo životního cyklu",
+  "settings.lifecycleRuleValidationRequired":
     "Je vyžadován název, zdroj porovnávání a akce.",
-  "settings.maintenanceRuleConfirmDiscardTitle": "Zahodit neuložené změny?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "Editor pravidla údržby obsahuje neuložené změny, které budou ztraceny.",
-  "settings.maintenanceRuleDeleting": "Smazat pravidlo údržby {{name}}?",
-  "settings.noMaintenanceRulesFound": "Zatím žádná pravidla údržby.",
-  "settings.maintenanceRuleRevision": "Revize",
-  "settings.maintenanceActionDoNothing": "Neprovádět nic",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardTitle": "Zahodit neuložené změny?",
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "Editor pravidla životního cyklu obsahuje neuložené změny, které budou ztraceny.",
+  "settings.lifecycleRuleDeleting": "Smazat pravidlo životního cyklu {{name}}?",
+  "settings.noLifecycleRulesFound": "Zatím žádná pravidla životního cyklu.",
+  "settings.lifecycleRuleRevision": "Revize",
+  "settings.lifecycleActionDoNothing": "Neprovádět nic",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Zrušit sledování rozsahu, soubory zachovat",
-  "settings.maintenanceActionDeleteTitleAndFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles":
     "Smazat titul a jeho soubory",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "Zrušit sledování titulu, smazat všechny soubory",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "Zrušit sledování seriálu, smazat existující soubory",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "Zrušit sledování rozsahu, smazat jeho soubory",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "Zrušit sledování řady, smazat její soubory a poté smazat seriál, je-li prázdný",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "Zrušit sledování řady a poté zrušit sledování seriálu, je-li prázdný",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "Změnit profil kvality a vyhledat, pokud se změnil",
-  "settings.maintenancePreviewTitle": "Náhled",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "Náhled",
+  "settings.lifecyclePreviewSubtitle":
     "Spustí porovnávání vůči titulům, řadám nebo epizodám v jeho rozsahu. Náhled ukazuje, co by odpovídalo, a nic nemění.",
-  "settings.maintenancePreviewSource": "Porovnávání",
-  "settings.maintenancePreviewSourceStored": "Uložené pravidlo",
-  "settings.maintenancePreviewSourceDraft": "Koncept z editoru",
-  "settings.maintenancePreviewLibrary": "Knihovna",
-  "settings.maintenancePreviewLibraryPlaceholder": "Vyberte knihovnu",
-  "settings.maintenancePreviewLimit": "Subjekty",
-  "settings.maintenancePreviewLimitHelp": "Subjektů na jeden běh: až {{max}}.",
-  "settings.maintenancePreviewRun": "Spustit náhled",
-  "settings.maintenancePreviewRunning": "Probíhá náhled...",
-  "settings.maintenancePreviewNoTitles": "Nebyl vyhodnocen žádný titul.",
-  "settings.maintenancePreviewColOutcome": "Výsledek",
-  "settings.maintenancePreviewColReasons": "Kódy důvodu",
-  "settings.maintenancePreviewOutcomeMatch": "SHODA",
-  "settings.maintenancePreviewOutcomeNoMatch": "BEZ SHODY",
-  "settings.maintenancePreviewOutcomeUnknown": "NEZNÁMÉ",
-  "settings.maintenancePreviewOutcomeError": "CHYBA",
-  "settings.maintenancePreviewMeta":
+  "settings.lifecyclePreviewSource": "Porovnávání",
+  "settings.lifecyclePreviewSourceStored": "Uložené pravidlo",
+  "settings.lifecyclePreviewSourceDraft": "Koncept z editoru",
+  "settings.lifecyclePreviewLibrary": "Knihovna",
+  "settings.lifecyclePreviewLibraryPlaceholder": "Vyberte knihovnu",
+  "settings.lifecyclePreviewLimit": "Subjekty",
+  "settings.lifecyclePreviewLimitHelp": "Subjektů na jeden běh: až {{max}}.",
+  "settings.lifecyclePreviewRun": "Spustit náhled",
+  "settings.lifecyclePreviewRunning": "Probíhá náhled...",
+  "settings.lifecyclePreviewNoTitles": "Nebyl vyhodnocen žádný titul.",
+  "settings.lifecyclePreviewColOutcome": "Výsledek",
+  "settings.lifecyclePreviewColReasons": "Kódy důvodu",
+  "settings.lifecyclePreviewOutcomeMatch": "SHODA",
+  "settings.lifecyclePreviewOutcomeNoMatch": "BEZ SHODY",
+  "settings.lifecyclePreviewOutcomeUnknown": "NEZNÁMÉ",
+  "settings.lifecyclePreviewOutcomeError": "CHYBA",
+  "settings.lifecyclePreviewMeta":
     "Vyhodnoceno {{time}} · porovnávání {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "Pravidlo",
-  "settings.maintenancePreviewRuleSelectPlaceholder":
+  "settings.lifecyclePreviewRuleSelect": "Pravidlo",
+  "settings.lifecyclePreviewRuleSelectPlaceholder":
     "Vyberte uložené pravidlo",
-  "settings.maintenanceRuleUpdated": "Pravidlo údržby aktualizováno.",
-  "settings.maintenanceRuleCreated":
-    "Pravidlo údržby vytvořeno a uloženo jako vypnuté.",
-  "settings.maintenanceRuleDeleted": "Pravidlo údržby {{name}} smazáno.",
-  "settings.maintenanceRuleState": "Stav",
-  "settings.maintenanceRuleStateHelp":
+  "settings.lifecycleRuleUpdated": "Pravidlo životního cyklu aktualizováno.",
+  "settings.lifecycleRuleCreated":
+    "Pravidlo životního cyklu vytvořeno a uloženo jako vypnuté.",
+  "settings.lifecycleRuleDeleted": "Pravidlo životního cyklu {{name}} smazáno.",
+  "settings.lifecycleRuleState": "Stav",
+  "settings.lifecycleRuleStateHelp":
     "Vypnutá pravidla se nikdy nevyhodnocují. Zkušební běh zaznamenává kandidáty, aniž by na nich cokoli prováděl. Zapnutá pravidla jednají na svých kandidátech po uplynutí každé ochranné doby.",
-  "settings.maintenanceRuleStateUpdated": "Aktualizováno: {{name}}.",
-  "settings.maintenanceRuleStateDisabled": "Vypnuto",
-  "settings.maintenanceRuleStateDisabledHelp": "Nikdy nevyhodnocováno.",
-  "settings.maintenanceRuleStateDryRun": "Zkušební běh",
-  "settings.maintenanceRuleStateDryRunHelp":
+  "settings.lifecycleRuleStateUpdated": "Aktualizováno: {{name}}.",
+  "settings.lifecycleRuleStateDisabled": "Vypnuto",
+  "settings.lifecycleRuleStateDisabledHelp": "Nikdy nevyhodnocováno.",
+  "settings.lifecycleRuleStateDryRun": "Zkušební běh",
+  "settings.lifecycleRuleStateDryRunHelp":
     "Zaznamenává kandidáty, neprovádí žádnou akci.",
-  "settings.maintenanceRuleStateEnabled": "Zapnuto",
-  "settings.maintenanceRuleStateEnabledHelp":
+  "settings.lifecycleRuleStateEnabled": "Zapnuto",
+  "settings.lifecycleRuleStateEnabledHelp":
     "Jedná na kandidátech po uplynutí jejich ochranné doby.",
-  "settings.maintenanceRuleEditedSinceEnabled":
+  "settings.lifecycleRuleEditedSinceEnabled":
     "Upraveno od zapnutí. Zkontrolujte kandidáty a zapněte jej znovu.",
-  "settings.maintenanceRuleSystemOwned": "Vestavěné",
+  "settings.lifecycleRuleSystemOwned": "Vestavěné",
   "settings.expiredRequestLeasesHelp":
-    "Smaže požadovaný titul a jeho soubory poté, co vyprší nárok žádosti a uplyne ochranná doba. Změna ochranné doby nastaví pravidlo na zkušební běh, dokud jej znovu nezapnete. Stejně jako každé pravidlo údržby funguje jen tehdy, když je údržba zapnutá.",
-  "settings.maintenanceSwitchEnabled": "Údržba",
-  "settings.maintenanceSwitchEnabledHelp":
+    "Smaže požadovaný titul a jeho soubory poté, co vyprší nárok žádosti a uplyne ochranná doba. Změna ochranné doby nastaví pravidlo na zkušební běh, dokud jej znovu nezapnete. Stejně jako každé pravidlo životního cyklu funguje jen tehdy, když je životní cyklus zapnutý.",
+  "settings.lifecycleSwitchEnabled": "Životní cyklus",
+  "settings.lifecycleSwitchEnabledHelp":
     "Vyhodnocuje pravidla a zobrazuje jejich kandidáty na této instanci.",
-  "settings.maintenanceSwitchActionsPaused": "Pozastavit všechny akce",
-  "settings.maintenanceSwitchActionsPausedHelp":
+  "settings.lifecycleSwitchActionsPaused": "Pozastavit všechny akce",
+  "settings.lifecycleSwitchActionsPausedHelp":
     "Během pozastavení zapnutá pravidla nadále zaznamenávají kandidáty, ale nic se neruší ze sledování, nemění ani nemaže.",
-  "settings.maintenanceSwitchesLocked":
-    "Čtení přepínačů údržby vyžaduje oprávnění k systémovému nastavení. Zeptejte se správce, zda je údržba zapnutá a zda jsou akce pozastavené.",
-  "settings.maintenanceSwitchesUpdated": "Nastavení údržby aktualizováno.",
-  "settings.maintenanceUnpauseConfirmTitle": "Obnovit akce údržby?",
-  "settings.maintenanceUnpauseConfirmBody":
+  "settings.lifecycleSwitchesLocked":
+    "Čtení přepínačů životního cyklu vyžaduje oprávnění k systémovému nastavení. Zeptejte se správce, zda jsou pravidla životního cyklu zapnutá a zda jsou akce pozastavené.",
+  "settings.lifecycleSwitchesUpdated": "Nastavení životního cyklu aktualizováno.",
+  "settings.lifecycleUnpauseConfirmTitle": "Obnovit akce životního cyklu?",
+  "settings.lifecycleUnpauseConfirmBody":
     "Zapnutá pravidla budou jednat na svých kandidátech po uplynutí každé ochranné doby, včetně pravidel, která mažou soubory.",
-  "settings.maintenanceUnpauseConfirmAction": "Obnovit akce",
-  "settings.maintenanceCandidatesEmptyMaintenanceOff":
-    "Pro tuto instanci není zapnutá údržba, takže se nezobrazují žádní kandidáti.",
-  "settings.maintenanceCandidatesEmptyAllDisabled":
+  "settings.lifecycleUnpauseConfirmAction": "Obnovit akce",
+  "settings.lifecycleCandidatesEmptyLifecycleOff":
+    "Pro tuto instanci nejsou zapnutá pravidla životního cyklu, takže se nezobrazují žádní kandidáti.",
+  "settings.lifecycleCandidatesEmptyAllDisabled":
     "Všechna pravidla jsou vypnutá, takže se nic nevyhodnocuje. Nejprve nastavte některé pravidlo na zkušební běh.",
-  "settings.maintenanceArmDestructiveIntro":
+  "settings.lifecycleArmDestructiveIntro":
     "{{name}} maže soubory. Po zapnutí bude jednat na níže uvedených kandidátech po uplynutí každé ochranné doby, pokud nejsou akce pozastaveny.",
-  "settings.maintenanceArmDestructiveTitle":
+  "settings.lifecycleArmDestructiveTitle":
     "Zapnout pravidlo, které maže soubory?",
-  "settings.maintenanceArmDestructiveLoading":
+  "settings.lifecycleArmDestructiveLoading":
     "Počítají se kandidáti, které toto pravidlo již drží…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "Kandidátů, na kterých lze jednat: {{count}}.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "Toto pravidlo aktuálně nedrží žádné kandidáty, na kterých by bylo možné jednat.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "Počet kandidátů se změnil: toto pravidlo nyní drží {{count}}. Pro pokračování potvrďte aktuální počet.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "Zapnout mazání souborů pro tituly: {{count}}.",
-  "settings.maintenanceArmDestructiveConfirm": "Zapnout",
-  "settings.maintenanceCandidatesTitle": "Brzy odejde",
-  "settings.maintenanceCandidatesSubtitle":
+  "settings.lifecycleArmDestructiveConfirm": "Zapnout",
+  "settings.lifecycleCandidatesTitle": "Brzy odejde",
+  "settings.lifecycleCandidatesSubtitle":
     "Tituly, kterým odpovídá nějaké pravidlo, nejdříve splatné jako první. Zatím se s nimi nic neprovedlo.",
-  "settings.maintenanceCandidatesFilterRule": "Pravidlo",
-  "settings.maintenanceCandidatesFilterState": "Stav",
-  "settings.maintenanceCandidatesFilterLibrary": "Knihovna",
-  "settings.maintenanceCandidatesAllRules": "Všechna pravidla",
-  "settings.maintenanceCandidatesAllStates": "Všechny stavy",
-  "settings.maintenanceCandidatesAllLibraries": "Všechny knihovny",
-  "settings.maintenanceCandidatesColRule": "Pravidlo",
-  "settings.maintenanceCandidatesColState": "Stav",
-  "settings.maintenanceCandidatesColFirstMatched": "První shoda",
-  "settings.maintenanceCandidatesColDue": "Splatnost",
-  "settings.maintenanceCandidatesHeldSince": "Drženo od {{time}}",
-  "settings.maintenanceCandidatesEmpty":
+  "settings.lifecycleCandidatesFilterRule": "Pravidlo",
+  "settings.lifecycleCandidatesFilterState": "Stav",
+  "settings.lifecycleCandidatesFilterLibrary": "Knihovna",
+  "settings.lifecycleCandidatesAllRules": "Všechna pravidla",
+  "settings.lifecycleCandidatesAllStates": "Všechny stavy",
+  "settings.lifecycleCandidatesAllLibraries": "Všechny knihovny",
+  "settings.lifecycleCandidatesColRule": "Pravidlo",
+  "settings.lifecycleCandidatesColState": "Stav",
+  "settings.lifecycleCandidatesColFirstMatched": "První shoda",
+  "settings.lifecycleCandidatesColDue": "Splatnost",
+  "settings.lifecycleCandidatesHeldSince": "Drženo od {{time}}",
+  "settings.lifecycleCandidatesEmpty":
     "Žádní kandidáti neodpovídají těmto filtrům.",
-  "settings.maintenanceCandidateExclude": "Vyloučit tento titul",
-  "settings.maintenanceCandidateStateObserving": "Sledováno",
-  "settings.maintenanceCandidateStatePendingAction": "Akce čeká na vyřízení",
-  "settings.maintenanceCandidateStateDue": "Splatné",
-  "settings.maintenanceCandidateStateExecuting": "Probíhá",
-  "settings.maintenanceCandidateStateSucceeded": "Úspěšné",
-  "settings.maintenanceCandidateStateFailed": "Neúspěšné",
-  "settings.maintenanceCandidateStateCanceled": "Zrušeno",
-  "settings.maintenanceCandidateStateExcluded": "Vyloučeno",
-  "settings.maintenanceCandidateStateBlocked": "Blokováno",
-  "settings.maintenanceCountdownDueNow": "Splatné nyní",
-  "settings.maintenanceCountdownInMinutes": "za {{count}} min",
-  "settings.maintenanceCountdownInHours": "za {{count}} h",
-  "settings.maintenanceCountdownInDays": "za {{count}} d",
-  "settings.maintenanceCountdownOverdueMinutes": "{{count}} min po splatnosti",
-  "settings.maintenanceCountdownOverdueHours": "{{count}} h po splatnosti",
-  "settings.maintenanceCountdownOverdueDays": "{{count}} d po splatnosti",
-  "settings.maintenanceRunsTitle": "Běhy a historie",
-  "settings.maintenanceRunScope": "Rozsah",
-  "settings.maintenanceRunScopeAll": "Každé pravidlo",
-  "settings.maintenanceRunEvaluationNow": "Vyhodnotit nyní",
-  "settings.maintenanceRunEvaluationRunning": "Probíhá vyhodnocování…",
-  "settings.maintenanceRunActionsNow": "Spustit akce nyní",
-  "settings.maintenanceRunActionsRunning": "Probíhají akce…",
-  "settings.maintenanceRunActionsNeedsRule":
+  "settings.lifecycleCandidateExclude": "Vyloučit tento titul",
+  "settings.lifecycleCandidateStateObserving": "Sledováno",
+  "settings.lifecycleCandidateStatePendingAction": "Akce čeká na vyřízení",
+  "settings.lifecycleCandidateStateDue": "Splatné",
+  "settings.lifecycleCandidateStateExecuting": "Probíhá",
+  "settings.lifecycleCandidateStateSucceeded": "Úspěšné",
+  "settings.lifecycleCandidateStateFailed": "Neúspěšné",
+  "settings.lifecycleCandidateStateCanceled": "Zrušeno",
+  "settings.lifecycleCandidateStateExcluded": "Vyloučeno",
+  "settings.lifecycleCandidateStateBlocked": "Blokováno",
+  "settings.lifecycleCountdownDueNow": "Splatné nyní",
+  "settings.lifecycleCountdownInMinutes": "za {{count}} min",
+  "settings.lifecycleCountdownInHours": "za {{count}} h",
+  "settings.lifecycleCountdownInDays": "za {{count}} d",
+  "settings.lifecycleCountdownOverdueMinutes": "{{count}} min po splatnosti",
+  "settings.lifecycleCountdownOverdueHours": "{{count}} h po splatnosti",
+  "settings.lifecycleCountdownOverdueDays": "{{count}} d po splatnosti",
+  "settings.lifecycleRunsTitle": "Běhy a historie",
+  "settings.lifecycleRunScope": "Rozsah",
+  "settings.lifecycleRunScopeAll": "Každé pravidlo",
+  "settings.lifecycleRunEvaluationNow": "Vyhodnotit nyní",
+  "settings.lifecycleRunEvaluationRunning": "Probíhá vyhodnocování…",
+  "settings.lifecycleRunActionsNow": "Spustit akce nyní",
+  "settings.lifecycleRunActionsRunning": "Probíhají akce…",
+  "settings.lifecycleRunActionsNeedsRule":
     "Vyberte výše jedno pravidlo, které má teď zasáhnout.",
-  "settings.maintenanceRunActionsHeldHelp":
-    "Okamžité spuštění akcí přeskočí tituly, které běh pozdržel, dokud se pravidlo znovu nevyhodnotí. Každý plánovaný běh nejprve vyhodnocuje, takže se na pozdržené tituly podívá znovu.",
-  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+  "settings.lifecycleRunActionsHeldHelp":
+    "Okamžité spuštění akcí nejprve vyhodnotí pravidlo, stejně jako každý plánovaný běh, takže se na pozdržené tituly podívá znovu. Titul, který vyhodnocení přidá a který je už splatný, například u pravidla bez ochranné lhůty, se zpracuje v témže běhu, včetně mazání.",
+  "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
     "Vyberte pravidlo, které má zasáhnout. Pravidla jednají jen sama za sebe, takže okamžitý zásah potřebuje jedno pravidlo.",
-  "settings.maintenanceRunStarted": "Běh spuštěn.",
-  "settings.maintenanceRunNotStarted": "Nic se nespustilo: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "Vyhodnocovací běhy",
-  "settings.maintenanceEvaluationRunsEmpty":
+  "settings.lifecycleRunStarted": "Běh spuštěn.",
+  "settings.lifecycleRunNotStarted": "Nic se nespustilo: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "Vyhodnocovací běhy",
+  "settings.lifecycleEvaluationRunsEmpty":
     "Zatím nejsou zaznamenány žádné vyhodnocovací běhy.",
-  "settings.maintenanceActionRunsTitle": "Běhy akcí",
-  "settings.maintenanceActionRunsEmpty":
+  "settings.lifecycleActionRunsTitle": "Běhy akcí",
+  "settings.lifecycleActionRunsEmpty":
     "Zatím nejsou zaznamenány žádné běhy akcí.",
-  "settings.maintenanceRunColStarted": "Spuštěno",
-  "settings.maintenanceRunColStatus": "Stav",
-  "settings.maintenanceRunColCounts": "Počty",
-  "settings.maintenanceRunColDuration": "Doba trvání",
-  "settings.maintenanceRunColError": "Chyba",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleRunColStarted": "Spuštěno",
+  "settings.lifecycleRunColStatus": "Stav",
+  "settings.lifecycleRunColCounts": "Počty",
+  "settings.lifecycleRunColDuration": "Doba trvání",
+  "settings.lifecycleRunColError": "Chyba",
+  "settings.lifecycleRunCounts":
     "Vyhodnoceno {{evaluated}} · shoda {{matched}} · bez shody {{noMatch}} · neznámé {{unknown}} · chyb {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}} s",
-  "settings.maintenanceRunRevision": "rev {{revision}}",
-  "settings.maintenanceRunStatusRunning": "Probíhá",
-  "settings.maintenanceRunStatusSucceeded": "Úspěšné",
-  "settings.maintenanceRunStatusFailed": "Neúspěšné",
-  "settings.maintenanceRunStatusHeld": "Pozdrženo",
-  "settings.maintenanceRunStatusAlreadySatisfied": "Již splněno",
-  "settings.maintenanceRunStatusSkipped": "Přeskočeno",
-  "settings.maintenanceActionRunColAttempt": "Pokus",
-  "settings.maintenanceActionRunColHoldReason": "Důvod pozdržení",
-  "settings.maintenanceExclusionsTitle": "Výjimky",
-  "settings.maintenanceExclusionsSubtitle":
-    "Tituly, na které pravidlo údržby nesmí nikdy jednat. Globální výjimka platí pro každé pravidlo.",
-  "settings.maintenanceExclusionsEmpty": "Žádné výjimky.",
-  "settings.maintenanceExclusionColScope": "Rozsah",
-  "settings.maintenanceExclusionColReason": "Důvod",
-  "settings.maintenanceExclusionColCreated": "Přidáno",
-  "settings.maintenanceExclusionScopeGlobal": "Každé pravidlo",
-  "settings.maintenanceExclusionRemove": "Odebrat výjimku",
-  "settings.maintenanceExclusionRemoved": "Výjimka pro {{title}} odebrána.",
-  "settings.maintenanceExclusionRemoving": "Odebrat výjimku pro {{title}}?",
-  "settings.maintenanceExcludeTitle": "Vyloučit z údržby",
-  "settings.maintenanceExcludeBody":
+  "settings.lifecycleRunDuration": "{{seconds}} s",
+  "settings.lifecycleRunRevision": "rev {{revision}}",
+  "settings.lifecycleRunStatusRunning": "Probíhá",
+  "settings.lifecycleRunStatusSucceeded": "Úspěšné",
+  "settings.lifecycleRunStatusFailed": "Neúspěšné",
+  "settings.lifecycleRunStatusHeld": "Pozdrženo",
+  "settings.lifecycleRunStatusAlreadySatisfied": "Již splněno",
+  "settings.lifecycleRunStatusSkipped": "Přeskočeno",
+  "settings.lifecycleActionRunColAttempt": "Pokus",
+  "settings.lifecycleActionRunColHoldReason": "Důvod pozdržení",
+  "settings.lifecycleExclusionsTitle": "Výjimky",
+  "settings.lifecycleExclusionsSubtitle":
+    "Tituly, na které pravidlo životního cyklu nesmí nikdy jednat. Globální výjimka platí pro každé pravidlo.",
+  "settings.lifecycleExclusionsEmpty": "Žádné výjimky.",
+  "settings.lifecycleExclusionColScope": "Rozsah",
+  "settings.lifecycleExclusionColReason": "Důvod",
+  "settings.lifecycleExclusionColCreated": "Přidáno",
+  "settings.lifecycleExclusionScopeGlobal": "Každé pravidlo",
+  "settings.lifecycleExclusionRemove": "Odebrat výjimku",
+  "settings.lifecycleExclusionRemoved": "Výjimka pro {{title}} odebrána.",
+  "settings.lifecycleExclusionRemoving": "Odebrat výjimku pro {{title}}?",
+  "settings.lifecycleExcludeTitle": "Vyloučit z pravidel životního cyklu",
+  "settings.lifecycleExcludeBody":
     "{{title}} bude od příštího vyhodnocení vyloučen a jeho kandidát se přesune do stavu vyloučeno.",
-  "settings.maintenanceExcludeScope": "Rozsah",
-  "settings.maintenanceExcludeScopeGlobal": "Každé pravidlo",
-  "settings.maintenanceExcludeReason": "Důvod",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "Rozsah",
+  "settings.lifecycleExcludeScopeGlobal": "Každé pravidlo",
+  "settings.lifecycleExcludeReason": "Důvod",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "Proč je tento titul vyloučen (volitelné)",
-  "settings.maintenanceExcludeConfirm": "Vyloučit",
-  "settings.maintenanceExcluded": "Vyloučeno z údržby: {{title}}.",
-  "settings.refMaintTitle": "Referenční vstupy údržby",
-  "settings.refMaintIntro":
-    "Každé pravidlo údržby dostane jeden vstupní objekt na subjekt: input.subject určuje, co se vyhodnocuje, input.library udává, kde to žije, input.facts nese snímek faktů a obálka vyhodnocení sedí přímo na input. Fakt je obyčejná hodnota a klíč jednoduše chybí, když není co hlásit — pište tedy input.facts.monitored, ne kontrolu stavu. Pokud pravidlo čte fakt, který Scryer pro daný subjekt nedokázal zjistit, Scryer za vás subjekt pozdrží; tuto pojistku nikdy nemusíte psát sami.",
-  "settings.refMaintOutputTitle": "Výstup pravidla",
-  "settings.refMaintOutputIntro":
+  "settings.lifecycleExcludeConfirm": "Vyloučit",
+  "settings.lifecycleExcluded": "Vyloučeno z pravidel životního cyklu: {{title}}.",
+  "settings.refLifecycleTitle": "Referenční vstupy životního cyklu",
+  "settings.refLifecycleIntro":
+    "Každé pravidlo životního cyklu dostane jeden vstupní objekt na subjekt: input.subject určuje, co se vyhodnocuje, input.library udává, kde to žije, input.facts nese snímek faktů a obálka vyhodnocení sedí přímo na input. Fakt je obyčejná hodnota a klíč jednoduše chybí, když není co hlásit — pište tedy input.facts.monitored, ne kontrolu stavu. Pokud pravidlo čte fakt, který Scryer pro daný subjekt nedokázal zjistit, Scryer za vás subjekt pozdrží; tuto pojistku nikdy nemusíte psát sami.",
+  "settings.refLifecycleOutputTitle": "Výstup pravidla",
+  "settings.refLifecycleOutputIntro":
     "Pravidlo určuje, co udělat, definováním akcí a volitelných unknown a reasons. Subjekt odpovídá, když pro něj platí alespoň jedna akce. Rozhodnutí, které nemá přesně tento tvar, je odmítnuto, ne převedeno.",
-  "settings.refMaintOutputUnknown":
+  "settings.refLifecycleOutputUnknown":
     "unknown — boolean. Nastavte jej, když samotné pravidlo nevidí dost na rozhodnutí; unknown má vždy přednost před shodou. Fakty, které Scryer nedokázal zjistit, jsou za vás už vyřešeny, takže tohle slouží jen pro vaše vlastní úsudky.",
-  "settings.refMaintOutputReasons":
+  "settings.refLifecycleOutputReasons":
     "reasons — sada krátkých strojových kódů vysvětlujících rozhodnutí. Ukládají se ke kandidátovi a zobrazují se v náhledu.",
-  "settings.refMaintOutputNoPackage":
+  "settings.refLifecycleOutputNoPackage":
     "Nepište řádek package ani import. Scryer oba přidává při ukládání pravidla a pro editor je zase odstraní.",
-  "settings.refMaintSectionInput": "— Obálka vyhodnocení",
-  "settings.refMaintInputSchemaVersion":
-    "Verze vstupního dokumentu údržby, pro kterou je toto pravidlo napsáno",
-  "settings.refMaintInputEvaluationTime":
+  "settings.refLifecycleSectionInput": "— Obálka vyhodnocení",
+  "settings.refLifecycleInputSchemaVersion":
+    "Verze vstupního dokumentu životního cyklu, pro kterou je toto pravidlo napsáno",
+  "settings.refLifecycleInputEvaluationTime":
     "Okamžik ve formátu RFC3339 zachycený jednou za běh, takže každý subjekt porovnává vůči stejným hodinám. Použijte jej pro výpočty s daty — time.now_ns() existuje, ale stejný subjekt by se při opakování mohl rozhodnout jinak.",
-  "settings.refMaintSectionSubject":
+  "settings.refLifecycleSectionSubject":
     "— Titul, řada nebo epizoda ve vyhodnocení",
-  "settings.maintenanceFileSummary": "Soubory: {{count}} · {{size}}",
-  "settings.maintenanceTestTitle": "Vyberte titul k otestování",
-  "settings.maintenanceNoSubjects":
+  "settings.lifecycleFileSummary": "Soubory: {{count}} · {{size}}",
+  "settings.lifecycleTestTitle": "Vyberte titul k otestování",
+  "settings.lifecycleNoSubjects":
     "Pro vybraný rozsah nejsou v tomto titulu žádné subjekty.",
-  "settings.maintenancePreviewExcluded": "Vyloučeno z akcí",
-  "settings.maintenancePreviewEstimatedDue": "Při shodě nyní: {{time}}",
-  "settings.maintenancePreviewDue": "Konec ochranné doby: {{time}}",
-  "settings.maintenancePreviewSubject": "Testovaný subjekt",
-  "settings.maintenancePreviewSample": "Vzorek knihovny",
-  "settings.maintenanceRuleScope": "Rozsah pravidla",
-  "settings.maintenanceRuleTemplate": "Šablona",
-  "settings.maintenanceRuleTemplatePlaceholder": "Začít od šablony",
-  "settings.maintenanceScopeSeason": "Řada",
-  "settings.maintenanceScopeEpisode": "Epizoda",
-  "settings.maintenanceFileDeleted": "Smazáno",
-  "settings.maintenanceFilePending": "Čeká",
-  "settings.maintenanceFileResults": "Výsledky souborů",
-  "settings.maintenanceFileProgress":
+  "settings.lifecyclePreviewExcluded": "Vyloučeno z akcí",
+  "settings.lifecyclePreviewEstimatedDue": "Při shodě nyní: {{time}}",
+  "settings.lifecyclePreviewDue": "Konec ochranné doby: {{time}}",
+  "settings.lifecyclePreviewSubject": "Testovaný subjekt",
+  "settings.lifecyclePreviewSample": "Vzorek knihovny",
+  "settings.lifecycleRuleTemplate": "Šablona",
+  "settings.lifecycleRuleTemplatePlaceholder": "Začít od šablony",
+  "settings.lifecycleScopeSeason": "Řada",
+  "settings.lifecycleScopeEpisode": "Epizoda",
+  "settings.lifecycleFileDeleted": "Smazáno",
+  "settings.lifecycleFilePending": "Čeká",
+  "settings.lifecycleFileResults": "Výsledky souborů",
+  "settings.lifecycleFileProgress":
     "Smazáno: {{completed}} · zbývá: {{remaining}}",
-  "settings.refMaintSubjectId":
+  "settings.refLifecycleSubjectId":
     "ID titulu, kolekce nebo epizody Scryer pro vybraný rozsah",
-  "settings.refMaintCollectionId":
+  "settings.refLifecycleCollectionId":
     "ID vlastnící kolekce řady pro subjekty typu řada a epizoda, je-li známo",
-  "settings.refMaintSubjectKind":
+  "settings.refLifecycleSubjectKind":
     "Granularita vyhodnocení: titul, řada nebo epizoda",
-  "settings.refMaintSubjectTitleId":
+  "settings.refLifecycleSubjectTitleId":
     "Identifikátor Scryer titulu, ke kterému subjekt patří",
-  "settings.refMaintSubjectSeasonNumber":
+  "settings.refLifecycleSubjectSeasonNumber":
     "Číslo řady pro subjekty typu řada a epizoda, je-li známo",
-  "settings.refMaintSubjectEpisodeId":
+  "settings.refLifecycleSubjectEpisodeId":
     "Identifikátor epizody; přítomen jen u subjektů typu epizoda",
-  "settings.refMaintSubjectFacet":
+  "settings.refLifecycleSubjectFacet":
     "Mediální oblast titulu (film, seriál, anime)",
-  "settings.refMaintSubjectName": "Zobrazovaný název titulu, řady nebo epizody",
-  "settings.refMaintSubjectYear": "Rok vydání titulu, je-li známý",
-  "settings.refMaintSectionLibrary": "— Knihovna, ve které subjekt žije",
-  "settings.refMaintLibraryId": "Identifikátor knihovny obsahující subjekt",
-  "settings.refMaintLibraryName": "Zobrazovaný název této knihovny",
-  "settings.refMaintSectionFacts":
+  "settings.refLifecycleSubjectName": "Zobrazovaný název titulu, řady nebo epizody",
+  "settings.refLifecycleSubjectYear": "Rok vydání titulu, je-li známý",
+  "settings.refLifecycleSectionLibrary": "— Knihovna, ve které subjekt žije",
+  "settings.refLifecycleLibraryId": "Identifikátor knihovny obsahující subjekt",
+  "settings.refLifecycleLibraryName": "Zobrazovaný název této knihovny",
+  "settings.refLifecycleSectionSeason": "Řada (jen akce pro řadu)",
+  "settings.refLifecycleSeasonId": "Id posuzované řady.",
+  "settings.refLifecycleSeasonFacts": "Vlastní údaje řady, které čtou akce pro řadu, například delete_season_files.",
+  "settings.refLifecycleSeasonObservations": "Obálky pozorování údajů řady.",
+  "settings.refLifecycleSectionEpisode": "Epizoda (jen akce pro epizodu)",
+  "settings.refLifecycleEpisodeId": "Id posuzované epizody.",
+  "settings.refLifecycleEpisodeNumber": "Číslo epizody v řadě, je-li známé.",
+  "settings.refLifecycleEpisodeFacts": "Vlastní údaje epizody, které čtou akce pro epizodu, například delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations": "Obálky pozorování údajů epizody.",
+  "settings.refLifecycleFactsStorageRoots": "Jedna položka pro každý nastavený kořen, na kterém jsou soubory subjektu, s volným místem daného kořene. Neznámé, pokud některý z těchto kořenů nelze přečíst.",
+  "settings.refLifecycleSectionStorageRoots": "Kořen úložiště",
+  "settings.refLifecycleStorageRootId": "Id nastaveného kořene.",
+  "settings.refLifecycleStorageRootPath": "Cesta nastaveného kořene.",
+  "settings.refLifecycleStorageRootAvailableBytes": "Volné bajty na svazku kořene.",
+  "settings.refLifecycleStorageRootTotalBytes": "Celkové bajty na svazku kořene.",
+  "settings.refLifecycleStorageRootAvailablePercent": "Volné místo na svazku kořene v procentech celku.",
+  "settings.refLifecycleFactsStorageRootsValue": "Kořeny, na kterých jsou soubory subjektu, jsou-li známé.",
+  "settings.refLifecycleSectionFacts":
     "— Snímek faktů; každý fakt je obyčejná hodnota a klíč chybí, pokud fakt není k dispozici nebo jej nelze zjistit",
-  "settings.refMaintFactsMonitored": "Zda je subjekt sledován",
-  "settings.refMaintFactsTags":
+  "settings.refLifecycleFactsMonitored": "Zda je subjekt sledován",
+  "settings.refLifecycleFactsTags":
     "Uživatelsky definované štítky zděděné z vlastnícího titulu, malými písmeny, z registru štítků, který spravuje administrátor v Nastavení; vyhrazené položky scryer: jsou vyloučeny",
-  "settings.refMaintFactsQualityProfileId":
+  "settings.refLifecycleFactsQualityProfileId":
     "Profil kvality zděděný z vlastnícího titulu",
-  "settings.refMaintFactsAddedAt": "Kdy byl subjekt přidán do knihovny",
-  "settings.refMaintFactsAddedByUserId":
+  "settings.refLifecycleFactsAddedAt": "Kdy byl subjekt přidán do knihovny",
+  "settings.refLifecycleFactsAddedByUserId":
     "Který uživatel subjekt přidal; chybí, pokud jej vytvořilo prohledávání nebo objevení",
-  "settings.refMaintFactsAddedByUsername":
+  "settings.refLifecycleFactsAddedByUsername":
     "Jméno uživatele, který subjekt přidal",
-  "settings.refMaintFactsRequested":
+  "settings.refLifecycleFactsRequested":
     "Zda subjekt vznikl na základě mediální žádosti",
-  "settings.refMaintFactsRequestedByUserIds":
+  "settings.refLifecycleFactsRequestedByUserIds":
     "Uživatelé, kteří subjekt požadovali: zadavatel plus případní další žadatelé",
-  "settings.refMaintFactsRequestedByUsernames": "Jména těchto žadatelů",
-  "settings.refMaintFactsFirstImportedAt":
+  "settings.refLifecycleFactsRequestedByUsernames": "Jména těchto žadatelů",
+  "settings.refLifecycleFactsFirstImportedAt":
     "Kdy byl pro subjekt poprvé importován soubor",
-  "settings.refMaintFactsLastUpgradedAt":
+  "settings.refLifecycleFactsLastUpgradedAt":
     "Kdy subjekt naposledy obdržel upgrade",
-  "settings.refMaintFactsHasFile":
+  "settings.refLifecycleFactsHasFile":
     "Zda má subjekt na disku alespoň jeden soubor",
-  "settings.refMaintFactsFileCount": "Kolik souborů má subjekt na disku",
-  "settings.refMaintFactsTotalFileSizeBytes":
+  "settings.refLifecycleFactsFileCount": "Kolik souborů má subjekt na disku",
+  "settings.refLifecycleFactsTotalFileSizeBytes":
     "Celková velikost souborů subjektu na disku",
-  "settings.refMaintFactsFiles":
+  "settings.refLifecycleFactsFiles":
     "Soubory subjektu, s detailem média pro každý soubor",
-  "settings.refMaintFactsEpisodeCount": "Kolik epizod subjekt pokrývá",
-  "settings.refMaintFactsEpisodeFileCount": "Kolik z těchto epizod má soubor",
-  "settings.refMaintFactsMonitoredEpisodeCount":
+  "settings.refLifecycleFactsEpisodeCount": "Kolik epizod subjekt pokrývá",
+  "settings.refLifecycleFactsEpisodeFileCount": "Kolik z těchto epizod má soubor",
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
     "Kolik z těchto epizod je sledováno",
-  "settings.refMaintFactsEpisodePositionByAirDate":
+  "settings.refLifecycleFactsEpisodePositionByAirDate":
     "Pořadí epizody podle data vysílání v rámci seriálu",
-  "settings.refMaintFactsSeasonPositionByAirDate":
+  "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Pořadí řady podle nejnovější způsobilé stažené epizody",
-  "settings.refMaintFactsStorageRootId":
+  "settings.refLifecycleFactsStorageRootId":
     "Nakonfigurovaný kořen vybraný pro kapacitu úložiště a mazání souborů",
-  "settings.refMaintFactsStorageAvailableBytes":
+  "settings.refLifecycleFactsStorageAvailableBytes":
     "Bajty aktuálně dostupné na vybraném kořeni",
-  "settings.refMaintFactsStorageTotalBytes":
+  "settings.refLifecycleFactsStorageTotalBytes":
     "Celková kapacita vybraného kořene v bajtech",
-  "settings.refMaintFactsStorageAvailablePercent":
+  "settings.refLifecycleFactsStorageAvailablePercent":
     "Procento aktuálně dostupné kapacity vybraného kořene",
-  "settings.refMaintFactsActiveDownloads":
+  "settings.refLifecycleFactsActiveDownloads":
     "Zda má subjekt probíhající stahování",
-  "settings.refMaintFactsWatchedByUserIds":
+  "settings.refLifecycleFactsWatchedByUserIds":
     "Uživatelé, kteří tuto epizodu shlédli; u řad musí stejní uživatelé shlédnout každou odvysílanou epizodu, včetně chybějících souborů. Budoucí epizody jsou vyloučeny; nevyřešená data vysílání nebo neúplné signály jsou neznámé. Prázdné řady nejsou nikdy dokončené.",
-  "settings.refMaintFactsLastWatchedAt":
+  "settings.refLifecycleFactsLastWatchedAt":
     "Kdy byl subjekt naposledy přehrán kýmkoli",
-  "settings.refMaintFactsWatchedByAnyRequester":
+  "settings.refLifecycleFactsWatchedByAnyRequester":
     "Zda jej přehrál alespoň jeden ze žadatelů o subjekt",
-  "settings.refMaintFactsWatchedByAllRequesters":
+  "settings.refLifecycleFactsWatchedByAllRequesters":
     "Zda jej přehráli úplně všichni žadatelé o subjekt",
-  "settings.refMaintFactsRequestLeaseState":
+  "settings.refLifecycleFactsRequestLeaseState":
     "Souhrnný stav nároků žádostí subjektu: žádný, spící, aktivní nebo vypršelý",
-  "settings.refMaintFactsRequestLeaseExpiresAt":
+  "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "Kdy vyprší poslední živý nárok na subjekt",
-  "settings.refMaintFactsActiveRetentionClaims":
+  "settings.refLifecycleFactsActiveRetentionClaims":
     "Kolik nároků žádostí stále drží subjekt",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Zda subjekt do knihovny přidal seznam, a ne osoba",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Zda subjekt stále uvádí nějaký zapnutý seznam, veřejný nebo osobní",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Názvy zapnutých veřejných seznamů, které subjekt stále uvádějí",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Zda subjekt opustily úplně všechny seznamy, které jej kdy uváděly",
-  "settings.refMaintFactsListsLeftAt": "Kdy subjekt opustil poslední seznam",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLeftAt": "Kdy subjekt opustil poslední seznam",
+  "settings.refLifecycleFactsListsLastListName":
     "Veřejný seznam, který subjekt naposledy opustil",
-  "settings.refMaintFactsListsEnabledIds":
+  "settings.refLifecycleFactsListsEnabledIds":
     "Identifikátory zapnutých seznamů, veřejných nebo osobních, které subjekt stále uvádějí",
-  "settings.refMaintFactsListsPublicCount":
+  "settings.refLifecycleFactsListsPublicCount":
     "Kolik veřejných seznamů subjekt stále uvádí",
-  "settings.refMaintFactsListsPersonalCount":
+  "settings.refLifecycleFactsListsPersonalCount":
     "Kolik osobních seznamů subjekt stále uvádí",
-  "settings.refMaintFactsListsFirstSeenAt":
+  "settings.refLifecycleFactsListsFirstSeenAt":
     "Kdy subjekt poprvé uvedl seznam, který jej stále drží",
-  "settings.refMaintFactsListsLastSeenAt":
+  "settings.refLifecycleFactsListsLastSeenAt":
     "Kdy subjekt naposledy uvedl seznam, který jej stále drží",
-  "settings.refMaintFactsListsDaysOnList":
+  "settings.refLifecycleFactsListsDaysOnList":
     "Celé dny od chvíle, kdy subjekt poprvé uvedl seznam, který jej stále drží",
-  "settings.refMaintFactsListsBestRank":
+  "settings.refLifecycleFactsListsBestRank":
     "Nejlepší (nejnižší) pořadí, které subjektu dává kterýkoli seznam, jenž jej stále drží",
-  "settings.refMaintFactsListsOnLeave":
+  "settings.refLifecycleFactsListsOnLeave":
     "Co zapnuté seznamy držící subjekt udělají, když jej opustí",
-  "settings.refMaintFactsListsLeftHandled":
+  "settings.refLifecycleFactsListsLeftHandled":
     "Zda byla u každého odchodu ze seznamu uplatněna akce při odchodu",
-  "settings.refMaintFactsListsMembershipStates":
+  "settings.refLifecycleFactsListsMembershipStates":
     "Stavy subjektu na seznamech, které jej stále drží",
-  "settings.refMaintFactsRequestOrigin":
+  "settings.refLifecycleFactsRequestOrigin":
     "Odkud pocházela žádost, která titul vytvořila",
-  "settings.refMaintFactsRequestListName":
+  "settings.refLifecycleFactsRequestListName":
     "Veřejný seznam, který titul požadoval",
-  "settings.refMaintObsStatus":
+  "settings.refLifecycleObsStatus":
     "known, absent nebo unknown. absent znamená, že zdroj odpověděl a hodnota neexistuje; unknown znamená, že to Scryer nedokázal zjistit. Otestujte toto před čtením value — neznámý fakt se nikdy nepřevádí na false, 0 ani prázdný řetězec.",
-  "settings.refMaintSectionObservations":
+  "settings.refLifecycleSectionObservations":
     "— Stejné fakty jako plné obálky, pro pravidla, která potřebují rozlišit absent od unknown nebo přečíst důvod. Čtení faktu zde vyřadí daný fakt z automatického pozdržení: přebíráte odpovědnost za trojhodnotovou odpověď.",
-  "settings.refMaintSectionObsFiles":
+  "settings.refLifecycleSectionObsFiles":
     "— Jedna položka na soubor v input.observations.files.value",
-  "settings.refMaintObsObservedAt":
+  "settings.refLifecycleObsObservedAt":
     "Kdy byla hodnota zjištěna, pokud zdroj zaznamenal čas",
-  "settings.refMaintObsReason":
+  "settings.refLifecycleObsReason":
     "Stabilní strojový kód vysvětlující, proč je fakt neznámý nebo proč chybějící fakt nemá hodnotu",
-  "settings.refMaintFactsMonitoredValue": "True, pokud je subjekt sledován",
-  "settings.refMaintFactsTagsValue":
+  "settings.refLifecycleFactsMonitoredValue": "True, pokud je subjekt sledován",
+  "settings.refLifecycleFactsTagsValue":
     "Uživatelsky definované názvy štítků malými písmeny z administrátorského registru štítků; nikdy vyhrazené položky scryer:",
-  "settings.refMaintFactsQualityProfileIdValue":
+  "settings.refLifecycleFactsQualityProfileIdValue":
     "Identifikátor přiřazeného profilu kvality",
-  "settings.refMaintFactsAddedAtValue":
+  "settings.refLifecycleFactsAddedAtValue":
     "Časové razítko RFC3339, kdy byl subjekt přidán",
-  "settings.refMaintFactsAddedByUserIdValue":
+  "settings.refLifecycleFactsAddedByUserIdValue":
     "Identifikátor uživatele, který subjekt přidal; důvod je title_added_by_system, pokud to neudělal nikdo",
-  "settings.refMaintFactsAddedByUsernameValue":
+  "settings.refLifecycleFactsAddedByUsernameValue":
     "Uživatelské jméno tohoto uživatele; unknown s důvodem user_not_found, pokud účet zanikl",
-  "settings.refMaintFactsRequestedValue":
+  "settings.refLifecycleFactsRequestedValue":
     "True, pokud subjekt vytvořila alespoň jedna mediální žádost; jinak potvrzené false",
-  "settings.refMaintFactsRequestedByUserIdsValue":
+  "settings.refLifecycleFactsRequestedByUserIdsValue":
     "Identifikátory žadatelů, bez duplicit; prázdný seznam, pokud subjekt nebyl požadován",
-  "settings.refMaintFactsRequestedByUsernamesValue":
+  "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Uživatelská jména žadatelů; unknown s důvodem user_not_found, pokud některý z těchto účtů zanikl",
-  "settings.refMaintFactsFirstImportedAtValue":
+  "settings.refLifecycleFactsFirstImportedAtValue":
     "Časové razítko RFC3339 prvního importu",
-  "settings.refMaintFactsLastUpgradedAtValue":
+  "settings.refLifecycleFactsLastUpgradedAtValue":
     "Časové razítko RFC3339 posledního upgradu",
-  "settings.refMaintFactsHasFileValue":
+  "settings.refLifecycleFactsHasFileValue":
     "True, pokud je na disku alespoň jeden soubor",
-  "settings.refMaintFactsFileCountValue": "Počet souborů na disku",
-  "settings.refMaintFactsTotalFileSizeBytesValue":
+  "settings.refLifecycleFactsFileCountValue": "Počet souborů na disku",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
     "Celková velikost těchto souborů v bajtech",
-  "settings.refMaintFactsFilesValue":
+  "settings.refLifecycleFactsFilesValue":
     "Jedna položka na soubor; viz input.observations.files.value[] níže",
-  "settings.refMaintFactsEpisodeCountValue": "Počet epizod v rozsahu",
-  "settings.refMaintFactsEpisodeFileCountValue":
+  "settings.refLifecycleFactsEpisodeCountValue": "Počet epizod v rozsahu",
+  "settings.refLifecycleFactsEpisodeFileCountValue":
     "Počet z těchto epizod, které mají soubor",
-  "settings.refMaintFactsMonitoredEpisodeCountValue":
+  "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "Počet z těchto epizod, které jsou sledovány",
-  "settings.refMaintFactsEpisodePositionByAirDateValue":
+  "settings.refLifecycleFactsEpisodePositionByAirDateValue":
     "Pořadí 1 má nejnovější způsobilá stažená, odvysílaná nespeciální epizoda. Při shodě dat vysílání rozhoduje číslo řady a epizody, poté stabilní ID.",
-  "settings.refMaintFactsSeasonPositionByAirDateValue":
+  "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Pořadí 1 má řada s nejnovější způsobilou staženou, odvysílanou nespeciální epizodou. Chráněné soubory stále zabírají pořadí.",
-  "settings.refMaintFactsStorageRootIdValue":
+  "settings.refLifecycleFactsStorageRootIdValue":
     "Trvalý identifikátor nakonfigurovaného kořene knihovny vybraný v této revizi",
-  "settings.refMaintFactsStorageAvailableBytesValue":
+  "settings.refLifecycleFactsStorageAvailableBytesValue":
     "Bajty dostupné na vybraném kořeni. Plánované běhy používají poslední měření, které probíhá každých pět minut; náhled a kontrola těsně před akcí čtou kořen v tu chvíli. Neznámé s důvodem storage_not_sampled před prvním měřením kořene, storage_sample_stale, když je poslední měření starší než deset minut, a storage_capacity_unavailable, když kořen nešlo přečíst",
-  "settings.refMaintFactsStorageTotalBytesValue":
+  "settings.refLifecycleFactsStorageTotalBytesValue":
     "Celková kapacita vybraného kořene v bajtech, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
-  "settings.refMaintFactsStorageAvailablePercentValue":
+  "settings.refLifecycleFactsStorageAvailablePercentValue":
     "Dostupná kapacita dělená celkovou kapacitou, od 0 do 100, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
-  "settings.refMaintFactsActiveDownloadsValue":
+  "settings.refLifecycleFactsActiveDownloadsValue":
     "True, pokud u subjektu právě probíhá stahování",
-  "settings.refMaintFactsWatchedByUserIdsValue":
+  "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Identifikátory všech, kdo to přehráli, seřazené a bez duplicit; prázdný seznam znamená, že to nikdo neudělal. Dokončení řady vyžaduje, aby stejná osoba shlédla každou odvysílanou epizodu, včetně chybějících souborů. Budoucí epizody jsou vyloučeny; chybějící historie sledování nebo nevyřešená data vysílání jsou neznámé. Fakty sledování jsou neznámé u titulů v rozsahu seriálu (show_watch_rollup_unavailable), když není připojen žádný mediální server (no_media_server_connection), když se připojení nikdy čistě nesynchronizovalo (signal_sync_never_succeeded), když je poslední čistá synchronizace starší než 48 hodin (signals_stale), když nikdo nemá ověřený propojený účet mediálního serveru (no_linked_participants), když propojené účty existují, ale žádná synchronizace je ještě nenačetla (participants_not_yet_swept), a když přehrání nelze přiřadit uživateli Scryer (signal_identity_missing).",
-  "settings.refMaintFactsLastWatchedAtValue":
+  "settings.refLifecycleFactsLastWatchedAtValue":
     "Časové razítko RFC3339 posledního přehrání; chybí s důvodem never_watched, pokud to nikdo nepřehrál, a unknown s důvodem play_time_missing, pokud přehrání nemá zaznamenaný čas",
-  "settings.refMaintFactsWatchedByAnyRequesterValue":
+  "settings.refLifecycleFactsWatchedByAnyRequesterValue":
     "True, pokud to přehrál alespoň jeden žadatel; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru, nebo requester_not_yet_swept, pokud propojený účet žadatele ještě žádná synchronizace nenačetla",
-  "settings.refMaintFactsWatchedByAllRequestersValue":
+  "settings.refLifecycleFactsWatchedByAllRequestersValue":
     "True, pokud to přehráli úplně všichni žadatelé; chybí s důvodem title_not_requested, pokud subjekt nikdo nepožadoval, a unknown s důvodem requester_not_linked, pokud žadatel nemá propojený účet mediálního serveru, nebo requester_not_yet_swept, pokud propojený účet žadatele ještě žádná synchronizace nenačetla",
-  "settings.refMaintFactsRequestLeaseStateValue":
+  "settings.refLifecycleFactsRequestLeaseStateValue":
     "none, pokud pro subjekt nikdy nebyl zapsán žádný nárok žádosti, dormant, pokud nárok čeká na první import, active, dokud nárok běží, a expired, jakmile vyprší úplně každý nárok. Nárok, který byl uvolněn nebo převeden, je stažen, ne vyčerpán, takže stav expired nezpůsobí. Vypršení se měří vůči času vyhodnocení, takže nárok se jeví jako expired ve chvíli, kdy se jeho okno uzavře.",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+  "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
     "Časové razítko RFC3339 nejpozdějšího vypršení mezi živými nároky; chybí s důvodem no_live_lease, pokud subjekt nic nedrží",
-  "settings.refMaintFactsActiveRetentionClaimsValue":
+  "settings.refLifecycleFactsActiveRetentionClaimsValue":
     "Počet nároků, které stále drží subjekt, včetně spících",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "True, pokud titul vytvořila synchronizace seznamu; unknown s důvodem list_store_unreadable, pokud nelze přečíst úložiště seznamů",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "True, dokud subjekt drží alespoň jeden zapnutý seznam",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Pouze názvy veřejných seznamů, seřazené; osobní seznam člena se nikdy nejmenuje",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "True, jakmile subjekt opustily úplně všechny seznamy, které jej uváděly; false, dokud jej drží alespoň jeden nebo pokud žádný seznam nikdy neuváděl",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "Časové razítko RFC3339; chybí s důvodem not_left_every_list, dokud subjekt drží jakýkoli seznam",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Název tohoto veřejného seznamu; chybí s důvodem no_public_list_left, pokud subjekt nikdy neopustil veřejný seznam",
-  "settings.refMaintFactsListsEnabledIdsValue":
+  "settings.refLifecycleFactsListsEnabledIdsValue":
     "Identifikátory seznamů, seřazené; nikdy název seznamu",
-  "settings.refMaintFactsListsPublicCountValue":
+  "settings.refLifecycleFactsListsPublicCountValue":
     "Počet veřejných seznamů, zapnutých nebo pozastavených",
-  "settings.refMaintFactsListsPersonalCountValue":
+  "settings.refLifecycleFactsListsPersonalCountValue":
     "Počet osobních seznamů, zapnutých nebo pozastavených",
-  "settings.refMaintFactsListsFirstSeenAtValue":
+  "settings.refLifecycleFactsListsFirstSeenAtValue":
     "Časové razítko RFC3339; chybí s důvodem not_on_a_list, pokud subjekt nedrží žádný seznam",
-  "settings.refMaintFactsListsLastSeenAtValue":
+  "settings.refLifecycleFactsListsLastSeenAtValue":
     "Časové razítko RFC3339; chybí s důvodem not_on_a_list, pokud subjekt nedrží žádný seznam",
-  "settings.refMaintFactsListsDaysOnListValue":
+  "settings.refLifecycleFactsListsDaysOnListValue":
     "Celé dny do času vyhodnocení; chybí s důvodem not_on_a_list, pokud subjekt nedrží žádný seznam",
-  "settings.refMaintFactsListsBestRankValue":
+  "settings.refLifecycleFactsListsBestRankValue":
     "Číslo pořadí; chybí s důvodem no_list_rank, pokud jej žádný seznam, který subjekt drží, neřadí",
-  "settings.refMaintFactsListsOnLeaveValue":
+  "settings.refLifecycleFactsListsOnLeaveValue":
     "Seřazené hodnoty z keep, log, unmonitor a tag",
-  "settings.refMaintFactsListsLeftHandledValue":
+  "settings.refLifecycleFactsListsLeftHandledValue":
     "True, jakmile byl vyřízen každý odchod; chybí s důvodem no_list_left, pokud subjekt neopustil žádný seznam",
-  "settings.refMaintFactsListsMembershipStatesValue":
+  "settings.refLifecycleFactsListsMembershipStatesValue":
     "Seřazené stavy, jako in_library, added, requested nebo held",
-  "settings.refMaintFactsRequestOriginValue":
+  "settings.refLifecycleFactsRequestOriginValue":
     "Jedno z manual, public_list nebo personal_list; chybí s důvodem title_not_requested, pokud titul nevytvořila žádná žádost",
-  "settings.refMaintFactsRequestListNameValue":
+  "settings.refLifecycleFactsRequestListNameValue":
     "Název tohoto veřejného seznamu; chybí s důvodem no_public_request_list u ručních a osobních žádostí ze seznamu, protože osobní seznam se nikdy nejmenuje",
-  "settings.refMaintSectionFiles":
+  "settings.refLifecycleSectionFiles":
     "— Jedna položka na soubor v input.facts.files",
-  "settings.refMaintFileSizeBytes": "Velikost souboru v bajtech",
-  "settings.refMaintFileQuality":
+  "settings.refLifecycleFileSizeBytes": "Velikost souboru v bajtech",
+  "settings.refLifecycleFileQuality":
     "Zjištěná kvalita souboru (například 2160P, 1080P)",
-  "settings.refMaintFileVideoCodec":
+  "settings.refLifecycleFileVideoCodec":
     "Video kodek souboru (například H.265, H.264)",
-  "settings.refMaintFileIs3d":
+  "settings.refLifecycleFileIs3d":
     "True, když mediální metadata deklarují video 3D. False znamená nezjištěno, včetně souborů dosud neanalyzovaných.",
-  "settings.refMaintFileVideoWidth": "Šířka videa v pixelech",
-  "settings.refMaintFileVideoHeight": "Výška videa v pixelech",
-  "settings.refMaintFactsRuntimeMinutes":
+  "settings.refLifecycleFileVideoWidth": "Šířka videa v pixelech",
+  "settings.refLifecycleFileVideoHeight": "Výška videa v pixelech",
+  "settings.refLifecycleFactsRuntimeMinutes":
     "Délka v minutách podle poskytovatele metadat",
-  "settings.refMaintFactsOriginalLanguage": "Původní jazyk titulu",
-  "settings.refMaintFactsSeriesStatus":
+  "settings.refLifecycleFactsOriginalLanguage": "Původní jazyk titulu",
+  "settings.refLifecycleFactsSeriesStatus":
     "Stav seriálu podle poskytovatele metadat, například pokračuje nebo skončil",
-  "settings.refMaintFactsFirstAired":
+  "settings.refLifecycleFactsFirstAired":
     "Datum první premiéry seriálu (YYYY-MM-DD)",
-  "settings.refMaintFactsNetwork": "Stanice, která seriál vysílá",
-  "settings.refMaintFactsStudio": "Studio, které titul natočilo",
-  "settings.refMaintFactsCountry": "Země původu",
-  "settings.refMaintFactsPopularity":
+  "settings.refLifecycleFactsNetwork": "Stanice, která seriál vysílá",
+  "settings.refLifecycleFactsStudio": "Studio, které titul natočilo",
+  "settings.refLifecycleFactsCountry": "Země původu",
+  "settings.refLifecycleFactsPopularity":
     "Skóre popularity od poskytovatele metadat",
-  "settings.refMaintFactsTheatricalReleaseDate":
+  "settings.refLifecycleFactsTheatricalReleaseDate":
     "Datum uvedení filmu v kinech (YYYY-MM-DD)",
-  "settings.refMaintFactsDigitalReleaseDate":
+  "settings.refLifecycleFactsDigitalReleaseDate":
     "Datum digitálního vydání filmu (YYYY-MM-DD)",
-  "settings.refMaintFactsPhysicalReleaseDate":
+  "settings.refLifecycleFactsPhysicalReleaseDate":
     "Datum fyzického vydání filmu (YYYY-MM-DD)",
-  "settings.refMaintFactsDaysSinceAdded": "Celé dny od přidání subjektu",
-  "settings.refMaintFactsMaxVideoHeight":
+  "settings.refLifecycleFactsDaysSinceAdded": "Celé dny od přidání subjektu",
+  "settings.refLifecycleFactsMaxVideoHeight":
     "Nejvyšší video stopa mezi soubory subjektu, v pixelech",
-  "settings.refMaintFactsSeasonCount": "Počet řad seriálu bez speciálů",
-  "settings.refMaintFactsAiredEpisodeCount":
+  "settings.refLifecycleFactsSeasonCount": "Počet řad seriálu bez speciálů",
+  "settings.refLifecycleFactsAiredEpisodeCount":
     "Počet běžných epizod seriálu, které již byly odvysílány",
-  "settings.refMaintFactsUnairedEpisodeCount":
+  "settings.refLifecycleFactsUnairedEpisodeCount":
     "Počet běžných epizod seriálu, které ještě nebyly odvysílány",
-  "settings.refMaintFactsMissingEpisodeCount":
+  "settings.refLifecycleFactsMissingEpisodeCount":
     "Počet odvysílaných sledovaných epizod seriálu bez souboru",
-  "settings.refMaintFactsAiredEpisodeFilePercent":
+  "settings.refLifecycleFactsAiredEpisodeFilePercent":
     "Odvysílané epizody se souborem jako procento odvysílaných epizod",
-  "settings.refMaintFactsLatestSeasonNumber": "Číslo poslední řady seriálu",
-  "settings.refMaintFactsLatestAiredEpisodeDate":
+  "settings.refLifecycleFactsLatestSeasonNumber": "Číslo poslední řady seriálu",
+  "settings.refLifecycleFactsLatestAiredEpisodeDate":
     "Datum vysílání naposledy odvysílané epizody seriálu (YYYY-MM-DD)",
-  "settings.refMaintFactsNextEpisodeAirDate":
+  "settings.refLifecycleFactsNextEpisodeAirDate":
     "Datum vysílání příští naplánované epizody seriálu (YYYY-MM-DD)",
-  "settings.refMaintFactsGenres": "Názvy žánrů z uložených metadat titulu",
-  "settings.refMaintFactsRating": "Uložené souhrnné hodnocení titulu",
-  "settings.refMaintFactsRatings":
+  "settings.refLifecycleFactsGenres": "Názvy žánrů z uložených metadat titulu",
+  "settings.refLifecycleFactsRating": "Uložené souhrnné hodnocení titulu",
+  "settings.refLifecycleFactsRatings":
     "Všechna externí hodnocení, ze kterých souhrn vychází",
-  "settings.refMaintFactsPlayCountTotal":
+  "settings.refLifecycleFactsPlayCountTotal":
     "Součet přehrání subjektu všemi účty na všech povolených mediálních serverech; nikoho nejmenuje",
-  "settings.refMaintFactsWatchlistedByUserIds":
+  "settings.refLifecycleFactsWatchlistedByUserIds":
     "Uživatelé, jejichž seznamy ke zhlédnutí obsahují titul",
-  "settings.refMaintFactsWatchlistedByUsernames":
+  "settings.refLifecycleFactsWatchlistedByUsernames":
     "Uživatelská jména uživatelů, jejichž seznamy ke zhlédnutí obsahují titul",
-  "settings.refMaintFactsWatchlistedByAnyone":
+  "settings.refLifecycleFactsWatchlistedByAnyone":
     "Zda titul obsahuje seznam ke zhlédnutí kteréhokoli uživatele",
-  "settings.refMaintFactsWatchlistedByAnyRequester":
+  "settings.refLifecycleFactsWatchlistedByAnyRequester":
     "Zda titul obsahuje seznam ke zhlédnutí některého z jeho žadatelů",
-  "settings.refMaintFactsWatchlistAddedAt":
+  "settings.refLifecycleFactsWatchlistAddedAt":
     "Kdy Scryer poprvé viděl titul na některém seznamu ke zhlédnutí",
-  "settings.refMaintFactsWatchlistOrigins":
+  "settings.refLifecycleFactsWatchlistOrigins":
     "Poskytovatelé, jejichž seznamy ke zhlédnutí titul nyní obsahují",
-  "settings.refMaintFactsFavoritedByUserIds":
+  "settings.refLifecycleFactsFavoritedByUserIds":
     "Uživatelé, kteří subjekt označili jako oblíbený v Jellyfinu nebo Emby",
-  "settings.refMaintFactsFavoritedByUsernames":
+  "settings.refLifecycleFactsFavoritedByUsernames":
     "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený v Jellyfinu nebo Emby",
-  "settings.refMaintFactsFavoritedByAnyone":
+  "settings.refLifecycleFactsFavoritedByAnyone":
     "Zda subjekt kterýkoli uživatel označil jako oblíbený v Jellyfinu nebo Emby",
-  "settings.refMaintFactsFavoritedByAnyRequester":
+  "settings.refLifecycleFactsFavoritedByAnyRequester":
     "Zda subjekt některý z žadatelů titulu označil jako oblíbený v Jellyfinu nebo Emby",
-  "settings.refMaintFileAudioCodec":
+  "settings.refLifecycleFileAudioCodec":
     "Zvukový kodek hlavní zvukové stopy souboru",
-  "settings.refMaintFileAudioChannels": "Počet zvukových kanálů",
-  "settings.refMaintFileAudioBitrateKbps": "Datový tok zvuku v kb/s",
-  "settings.refMaintFileVideoBitrateKbps": "Datový tok videa v kb/s",
-  "settings.refMaintFileVideoBitDepth": "Bitová hloubka videa",
-  "settings.refMaintFileVideoHdrFormat":
+  "settings.refLifecycleFileAudioChannels": "Počet zvukových kanálů",
+  "settings.refLifecycleFileAudioBitrateKbps": "Datový tok zvuku v kb/s",
+  "settings.refLifecycleFileVideoBitrateKbps": "Datový tok videa v kb/s",
+  "settings.refLifecycleFileVideoBitDepth": "Bitová hloubka videa",
+  "settings.refLifecycleFileVideoHdrFormat":
     "Formát HDR videa, například HDR10 nebo Dolby Vision",
-  "settings.refMaintSectionRatings":
+  "settings.refLifecycleSectionRatings":
     "— Jedna položka na každé externí hodnocení v input.facts.ratings",
-  "settings.refMaintSectionObsRatings":
+  "settings.refLifecycleSectionObsRatings":
     "— Jedna položka na každé externí hodnocení v input.observations.ratings.value",
-  "settings.refMaintRatingSource": "Zdroj hodnocení",
-  "settings.refMaintRatingValue":
+  "settings.refLifecycleRatingSource": "Zdroj hodnocení",
+  "settings.refLifecycleRatingValue":
     "Hodnocení na vlastní stupnici zdroje, pokud ji zdroj uvádí",
-  "settings.refMaintRatingNormalized":
+  "settings.refLifecycleRatingNormalized":
     "Hodnocení na společné stupnici Scryeru, srovnatelné mezi zdroji",
-  "settings.refMaintRatingVotes":
+  "settings.refLifecycleRatingVotes":
     "Počet hlasů za hodnocením, pokud jej zdroj uvádí",
-  "settings.refMaintFactsRuntimeMinutesValue":
+  "settings.refLifecycleFactsRuntimeMinutesValue":
     "Délka v minutách; chybí, pokud poskytovatel metadat hodnotu neuvedl",
-  "settings.refMaintFactsOriginalLanguageValue":
+  "settings.refLifecycleFactsOriginalLanguageValue":
     "Původní jazyk; chybí, pokud poskytovatel metadat hodnotu neuvedl",
-  "settings.refMaintFactsSeriesStatusValue":
+  "settings.refLifecycleFactsSeriesStatusValue":
     "Stav seriálu podle poskytovatele; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsFirstAiredValue":
+  "settings.refLifecycleFactsFirstAiredValue":
     "Datum první premiéry (YYYY-MM-DD), datum, nikoli časové razítko; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsNetworkValue":
+  "settings.refLifecycleFactsNetworkValue":
     "Název stanice; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsStudioValue":
+  "settings.refLifecycleFactsStudioValue":
     "Název studia; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsCountryValue":
+  "settings.refLifecycleFactsCountryValue":
     "Země původu; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsPopularityValue":
+  "settings.refLifecycleFactsPopularityValue":
     "Skóre popularity; chybí, pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsTheatricalReleaseDateValue":
+  "settings.refLifecycleFactsTheatricalReleaseDateValue":
     "Datum uvedení v kinech (YYYY-MM-DD); chybí u seriálu nebo pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsDigitalReleaseDateValue":
+  "settings.refLifecycleFactsDigitalReleaseDateValue":
     "Datum digitálního vydání (YYYY-MM-DD); chybí u seriálu nebo pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsPhysicalReleaseDateValue":
+  "settings.refLifecycleFactsPhysicalReleaseDateValue":
     "Datum fyzického vydání (YYYY-MM-DD); chybí u seriálu nebo pokud poskytovatel hodnotu neuvedl",
-  "settings.refMaintFactsDaysSinceAddedValue":
+  "settings.refLifecycleFactsDaysSinceAddedValue":
     "Celé dny od přidání subjektu, počítané podle hodin vyhodnocení",
-  "settings.refMaintFactsMaxVideoHeightValue":
+  "settings.refLifecycleFactsMaxVideoHeightValue":
     "Výška nejvyšší video stopy mezi soubory v pixelech; chybí, pokud ji žádný soubor neuvádí. Neznámé s důvodem not_yet_collected, dokud každý soubor titulu nemá dokončenou kontrolu, včetně souborů, jejichž kontrola selhala nebo vyžaduje posouzení",
-  "settings.refMaintFactsSeasonCountValue":
+  "settings.refLifecycleFactsSeasonCountValue":
     "Série v celém seznamu epizod pořadu bez speciálů, bez ohledu na subjekt; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsAiredEpisodeCountValue":
+  "settings.refLifecycleFactsAiredEpisodeCountValue":
     "Běžné epizody s datem vysílání v den vyhodnocení nebo dříve; epizoda bez data vysílání se počítá jako neodvysílaná. U filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsUnairedEpisodeCountValue":
+  "settings.refLifecycleFactsUnairedEpisodeCountValue":
     "Běžné epizody bez data vysílání nebo s datem po dni vyhodnocení; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsMissingEpisodeCountValue":
+  "settings.refLifecycleFactsMissingEpisodeCountValue":
     "Běžné epizody, které byly odvysílány, jsou sledované a nemají soubor; u filmů chybí, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+  "settings.refLifecycleFactsAiredEpisodeFilePercentValue":
     "Procento odvysílaných epizod, které mají soubor; chybí s důvodem no_aired_episode, když nic nebylo odvysíláno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsLatestSeasonNumberValue":
+  "settings.refLifecycleFactsLatestSeasonNumberValue":
     "Nejvyšší číslo běžné série; chybí u filmů nebo pořadu bez sérií, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+  "settings.refLifecycleFactsLatestAiredEpisodeDateValue":
     "Datum vysílání (YYYY-MM-DD) naposledy odvysílané běžné epizody; chybí s důvodem no_aired_episode, když nic nebylo odvysíláno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsNextEpisodeAirDateValue":
+  "settings.refLifecycleFactsNextEpisodeAirDateValue":
     "Nejbližší datum vysílání (YYYY-MM-DD) po dni vyhodnocení; chybí s důvodem no_scheduled_episode, když nic není naplánováno, neznámé s důvodem episode_store_unreadable, když nešlo načíst úložiště epizod, a s důvodem episode_list_empty, když pořad zatím nemá uloženou žádnou běžnou epizodu",
-  "settings.refMaintFactsGenresValue":
+  "settings.refLifecycleFactsGenresValue":
     "Názvy žánrů; unknown s důvodem metadata_unreadable, pokud nelze přečíst uložená metadata",
-  "settings.refMaintFactsRatingValue":
+  "settings.refLifecycleFactsRatingValue":
     "Souhrnné hodnocení; chybí, pokud titul žádný zdroj nehodnotil, unknown s důvodem metadata_unreadable, pokud nelze přečíst úložiště hodnocení",
-  "settings.refMaintFactsRatingsValue":
+  "settings.refLifecycleFactsRatingsValue":
     "Jedna položka na každé externí hodnocení; unknown s důvodem metadata_unreadable, pokud nelze přečíst úložiště hodnocení",
-  "settings.refMaintFactsPlayCountTotalValue":
+  "settings.refLifecycleFactsPlayCountTotalValue":
     "Součet přehrání všemi účty na všech povolených mediálních serverech, ať jsou propojeny s uživatelem Scryeru, nebo ne. Unknown s důvodem audience_not_read, dokud nejsou nedávno přečteny všechny účty, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
-  "settings.refMaintFactsWatchlistedByUserIdsValue":
+  "settings.refLifecycleFactsWatchlistedByUserIdsValue":
     "ID uživatelů, jejichž seznamy ke zhlédnutí titul obsahují. Seznamem ke zhlédnutí je vlastní zapnutý a přihlášený watchlist uživatele na Plexu, Traktu, TMDb nebo MDBList, seznam plan-to-watch na Simkl nebo MyAnimeList, nebo seznam planning na AniList. Neznámé s důvodem watchlist_not_synced, dokud se některý seznam nikdy nesynchronizoval, naposledy selhal, je vypnutý, nemá se synchronizovat nebo ztratil svůj účet, a s důvodem watchlist_stale, dokud se některý nedávno nesynchronizoval.",
-  "settings.refMaintFactsWatchlistedByUsernamesValue":
+  "settings.refLifecycleFactsWatchlistedByUsernamesValue":
     "Uživatelská jména uživatelů, jejichž seznamy ke zhlédnutí obsahují titul; unknown s důvodem user_not_found, pokud některý z nich již neexistuje, a s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
-  "settings.refMaintFactsWatchlistedByAnyoneValue":
+  "settings.refLifecycleFactsWatchlistedByAnyoneValue":
     "True, pokud titul obsahuje seznam ke zhlédnutí kteréhokoli uživatele; unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
-  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+  "settings.refLifecycleFactsWatchlistedByAnyRequesterValue":
     "True, pokud titul obsahuje seznam ke zhlédnutí některého žadatele; chybí s důvodem title_not_requested, pokud o něj nikdo nepožádal, unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
-  "settings.refMaintFactsWatchlistAddedAtValue":
+  "settings.refLifecycleFactsWatchlistAddedAtValue":
     "Časové razítko RFC3339, kdy Scryer poprvé viděl titul na některém seznamu ke zhlédnutí; chybí s důvodem not_on_a_watchlist, pokud jej žádný seznam neobsahuje, unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
-  "settings.refMaintFactsWatchlistOriginsValue":
+  "settings.refLifecycleFactsWatchlistOriginsValue":
     "Poskytovatelé, jejichž seznamy ke zhlédnutí titul nyní obsahují; unknown s důvodem watchlist_not_synced nebo watchlist_stale, dokud se některý seznam nedávno nesynchronizoval",
-  "settings.refMaintFactsFavoritedByUserIdsValue":
+  "settings.refLifecycleFactsFavoritedByUserIdsValue":
     "ID uživatelů, kteří subjekt označili jako oblíbený na zapnutém serveru Jellyfin nebo Emby. Titul počítá každé své oblíbení; oblíbení seriálu nebo série platí pro všechny série a epizody seriálu; oblíbení epizody platí pro tuto epizodu, její sérii a seriál. Scryer neumí číst oblíbené z Plexu: neznámé s důvodem favorites_unsupported, když jsou všechny zapnuté servery Plex, a s důvodem favorite_member_unobservable, dokud je propojený uživatel vidět jen přes Plex. Neznámé s důvodem favorites_member_not_read, dokud oblíbené propojeného uživatele nebyly nedávno načteny celé, a s důvodem favorites_unreadable, když nešlo načíst uložená oblíbení. Po aktualizaci zůstávají fakty oblíbených neznámé, dokud první synchronizace oblíbené nenačte.",
-  "settings.refMaintFactsFavoritedByUsernamesValue":
+  "settings.refLifecycleFactsFavoritedByUsernamesValue":
     "Uživatelská jména uživatelů, kteří subjekt označili jako oblíbený, počítáno jako u favorited_by_user_ids; neznámé s důvodem user_not_found, když některý z nich už neexistuje, a ze stejných důvodů jako favorited_by_user_ids.",
-  "settings.refMaintFactsFavoritedByAnyoneValue":
+  "settings.refLifecycleFactsFavoritedByAnyoneValue":
     "Pravda, když subjekt pokrývá oblíbení načtené z Jellyfinu nebo Emby, počítáno jako u favorited_by_user_ids, ať je účet propojen s uživatelem Scryeru, nebo ne. Nepravda, když byla oblíbená každého účtu na každém zapnutém serveru Jellyfin a Emby nedávno načtena celá a žádné subjekt nepokrývá. Neznámé s důvodem audience_favorites_not_read, dokud některý účet na takovém serveru nemá nedávné úplné načtení, s důvodem audience_favorites_unsupported, dokud je zapnutý server Plex, protože účty Plexu mohou mít oblíbené, které Scryer nepřečte, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
-  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+  "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
     "Pravda, když subjekt označil jako oblíbený některý žadatel, počítáno jako u favorited_by_user_ids; chybí s důvodem title_not_requested, když titul nikdo nevyžádal, neznámé s důvodem requester_not_linked, když žadatel nemá propojený účet mediálního serveru, s důvodem favorites_member_not_read, když oblíbené žadatele nebyly nedávno načteny celé, a s důvodem favorites_unsupported, favorite_member_unobservable nebo favorites_unreadable jako u favorited_by_user_ids.",
-  "settings.refMaintFileAudioLanguages": "Jazyky zvuku přítomné v souboru",
-  "settings.refMaintFileSubtitleLanguages": "Jazyky titulků přítomné v souboru",
-  "settings.refMaintFileAddedAt":
+  "settings.refLifecycleFileAudioLanguages": "Jazyky zvuku přítomné v souboru",
+  "settings.refLifecycleFileSubtitleLanguages": "Jazyky titulků přítomné v souboru",
+  "settings.refLifecycleFileAddedAt":
     "Časové razítko RFC3339, kdy byl soubor přidán",
-  "settings.refMaintFactsSeriesMovies":
+  "settings.refLifecycleFactsSeriesMovies":
     "Filmy propojené do časové osy tohoto seriálu, každý s vlastními štítky. Přítomno pouze u seriálů: u subjektu film klíč zcela chybí, u seriálu bez propojených filmů je prázdné, ale známé. add_tags a remove_tags tyto nikdy nezapisují: působí na titul subjektu.",
-  "settings.refMaintFactsSeriesMoviesValue":
+  "settings.refLifecycleFactsSeriesMoviesValue":
     "Jedna položka na propojený film; viz input.observations.series_movies.value[] níže",
-  "settings.refMaintSectionSeriesMovies":
+  "settings.refLifecycleSectionSeriesMovies":
     "— Jedna položka na propojený film v input.facts.series_movies",
-  "settings.refMaintSectionObsSeriesMovies":
+  "settings.refLifecycleSectionObsSeriesMovies":
     "— Jedna položka na propojený film v input.observations.series_movies.value",
-  "settings.refMaintSeriesMovieLinkId": "Identifikátor propojení seriál–film",
-  "settings.refMaintSeriesMovieName": "Název propojeného filmu",
-  "settings.refMaintSeriesMovieYear":
+  "settings.refLifecycleSeriesMovieLinkId": "Identifikátor propojení seriál–film",
+  "settings.refLifecycleSeriesMovieName": "Název propojeného filmu",
+  "settings.refLifecycleSeriesMovieYear":
     "Rok vydání propojeného filmu, je-li známý",
-  "settings.refMaintSeriesMovieMonitored":
+  "settings.refLifecycleSeriesMovieMonitored":
     "Zda je pro tento propojený film zapnuto získávání",
-  "settings.refMaintSeriesMovieHasFile":
+  "settings.refLifecycleSeriesMovieHasFile":
     "Zda má tento propojený film soubor na disku",
-  "settings.refMaintSeriesMovieTags":
+  "settings.refLifecycleSeriesMovieTags":
     "Uživatelsky definované štítky tohoto propojeného filmu ze stejného registru jako štítky titulů. Propojený film nese vlastní štítky; nededí je od seriálu.",
   "settings.ruleBuilderTitle": "Pravidlo",
   "settings.ruleBuilderModeLabel": "Editor",
   "settings.ruleBuilderModeSimple": "Jednoduchý",
   "settings.ruleBuilderModeHelp":
-    "Jednoduchý režim sestaví pravidlo z podmínek a výsledků a napíše Rego za vás. Pokročilý režim zobrazí toto Rego jen pro čtení a do jednoduchého režimu se můžete kdykoli vrátit. Chcete-li Rego měnit sami, zvolte Upravit jako Rego; poté už pravidlo nepůjde otevřít v jednoduchém editoru.",
+    "Jednoduchý režim sestaví pravidlo z podmínek a výsledků a napíše Rego za vás. Pokročilý režim toto Rego zobrazí a do jednoduchého režimu se můžete vrátit, dokud ho neupravíte. Jakmile kód upravíte, pravidlo musí zůstat pokročilé.",
   "settings.ruleBuilderUnavailable":
     "Kód tohoto pravidla byl upraven ručně nebo nevznikl v jednoduchém editoru, takže jej lze upravovat jen jako Rego.",
   "settings.ruleBuilderEditAsRego": "Upravit jako Rego",
   "settings.ruleBuilderEditAsRegoTitle": "Upravit toto pravidlo jako Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
-    "Jakmile toto pravidlo upravíte jako Rego, už ho nebude možné otevřít v jednoduchém editoru, ani po uložení. Současný kód Rego zůstane zachován jako výchozí bod.",
+    "Jakmile kód upravíte, pravidlo musí zůstat pokročilé a už ho nebude možné otevřít v jednoduchém režimu, ani po uložení.",
   "settings.ruleBuilderIncomplete":
     "Před uložením dokončete podmínky a výsledky.",
   "settings.ruleBuilderConditions": "Podmínky",
-  "settings.maintenanceBuilderConditionsHelp":
+  "settings.lifecycleBuilderConditionsHelp":
     "Každá podmínka ověřuje jeden údaj o položce. Zvolte, zda musí platit všechny podmínky, nebo stačí kterákoli z nich, aby se akce použily.",
   "settings.ruleBuilderJoinAll": "Platí všechny podmínky",
   "settings.ruleBuilderJoinAny": "Platí kterákoli podmínka",
   "settings.ruleBuilderAddCondition": "Přidat podmínku",
+  "settings.ruleBuilderActionSubject": "Působí na",
+  "settings.ruleBuilderAction": "Akce",
+  "settings.ruleBuilderActionPlaceholder": "Vyberte akci",
+  "settings.ruleBuilderActionConditions": "Jen když",
+  "settings.ruleBuilderAddAction": "Přidat akci",
+  "settings.ruleBuilderProblemActionRequired": "Vyberte akci.",
   "settings.ruleBuilderFact": "Údaj",
   "settings.ruleBuilderFactPlaceholder": "Vyberte údaj",
   "settings.ruleBuilderOperator": "Porovnání",
   "settings.ruleBuilderValue": "Hodnota",
   "settings.ruleBuilderDays": "Dny",
-  "settings.maintenanceBuilderActionsHelp":
+  "settings.lifecycleBuilderActionsHelp":
     "Akce proběhnou v uvedeném pořadí. Akce, které nelze kombinovat, se po výběru konfliktní akce zakážou.",
-  "settings.maintenanceBuilderActionTitleOnly":
-    "Dostupné jen pro pravidla titulů.",
   "settings.ruleBuilderOutputConflict": "Nelze kombinovat s: {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Vyberte profil kvality",
-  "settings.maintenanceBuilderLibraryPlaceholder": "Vyberte knihovnu",
-  "settings.maintenanceBuilderRootPlaceholder": "Vyberte kořenovou složku",
+  "settings.lifecycleBuilderLibraryPlaceholder": "Vyberte knihovnu",
+  "settings.lifecycleBuilderRootPlaceholder": "Vyberte kořenovou složku",
   "settings.ruleBuilderTagsPlaceholder": "Vyberte štítky",
   "settings.ruleBuilderNoTags": "Zatím nejsou vytvořeny žádné štítky.",
   "settings.ruleBuilderGeneratedSource": "Vygenerované Rego",
@@ -5678,95 +5697,94 @@ const cs: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "Zadáno ručně",
   "settings.requestBuilderOriginPublicList": "Z veřejného seznamu",
   "settings.requestBuilderOriginPersonalList": "Z osobního seznamu",
-  "settings.maintenanceDeclaredActionsTitle": "Deklarované akce",
-  "settings.maintenanceDeclaredActionsHelp":
+  "settings.lifecycleDeclaredActionsTitle": "Deklarované akce",
+  "settings.lifecycleDeclaredActionsHelp":
     "Akce, které definuje zdroj pravidla. Odpovídající subjekt dostane jen ty, jejichž podmínky pro něj platí, a to v tomto pořadí: {{order}}.",
-  "settings.maintenanceDeclaredActionsNone": "Žádné akce",
-  "settings.maintenanceDeclaredActionsUnavailable":
+  "settings.lifecycleDeclaredActionsNone": "Žádné akce",
+  "settings.lifecycleDeclaredActionsUnavailable":
     "Opravte chyby, abyste viděli, co toto pravidlo dělá.",
-  "settings.maintenanceDecidedActionsNone": "Žádné akce",
-  "settings.maintenanceRuleWarningsTitle": "Upozornění",
-  "settings.maintenanceRuleWarningLocation":
+  "settings.lifecycleDecidedActionsNone": "Žádné akce",
+  "settings.lifecycleRuleWarningsTitle": "Upozornění",
+  "settings.lifecycleRuleWarningLocation":
     "Řádek {{line}}, sloupec {{column}}:",
-  "settings.refMaintOutputFlagHeads":
+  "settings.refLifecycleOutputFlagHeads":
     "Akce bez hodnoty (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) jsou logické hodnoty: definujte je pomocí if a akce se použije, když tělo platí.",
-  "settings.refMaintOutputValueHeads":
+  "settings.refLifecycleOutputValueHeads":
     "Akce s hodnotou (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) přiřazují pomocí := prostý literál. Řetězec else může vybírat mezi literály; vypočtená hodnota je odmítnuta.",
-  "settings.refMaintOutputHelpers":
+  "settings.refLifecycleOutputHelpers":
     "Jakýkoli jiný název pravidla je váš vlastní pomocník. Projeví se jen tehdy, když ho použije akce, unknown nebo reasons.",
-  "settings.refMaintActionsTitle": "Akce",
-  "settings.refMaintActionsOrder":
+  "settings.refLifecycleActionsTitle": "Akce",
+  "settings.refLifecycleActionsOrder":
     "Scryer použije akce subjektu v tomto pořadí bez ohledu na pořadí ve zdroji: {{order}}.",
-  "settings.refMaintActionsDaysSince":
+  "settings.refLifecycleActionsDaysSince":
     "days_since(timestamp) vrací počet celých dní mezi časovým razítkem RFC3339 a časem vyhodnocení, takže days_since(input.facts.added_at) > 180 znamená přidáno před více než 180 dny.",
-  "settings.refMaintActionsNotify":
+  "settings.refLifecycleActionsNotify":
     "notify odešle zprávu jednou, když se akce použijí. Náhledy a zkušební běhy ji nikdy neodešlou.",
-  "settings.refMaintActionsConflicts":
-    "Protichůdné akce pro jeden subjekt, například monitor spolu s unmonitor nebo tentýž štítek přidaný i odebraný, subjekt podrží s důvodem, místo aby se použila kterákoli z nich.",
-  "settings.refMaintTagActionsTitle": "Akce se štítky",
-  "settings.refMaintTagActionsNote":
+  "settings.refLifecycleActionsConflicts":
+    "Protichůdné akce se podrží s důvodem, místo aby se použila kterákoli z nich. Platí to pro jeden subjekt, například monitor spolu s unmonitor nebo tentýž štítek přidaný i odebraný, a také pro titul proti jeho sezónám či epizodám a pro sezónu proti jejím epizodám, například když se seriál monitoruje a zároveň se mažou soubory jedné z jeho sezón.",
+  "settings.refLifecycleTagActionsTitle": "Akce se štítky",
+  "settings.refLifecycleTagActionsNote":
     "add_tags a remove_tags zapisují uživatelské štítky na odpovídající titul. Každý název musí existovat v registru štítků, který spravuje administrátor v Nastavení, a štítky se ukládají malými písmeny — pravidlo odkazující na štítek, který byl mezitím smazán, se pozdrží s tag_not_defined místo zápisu.",
-  "settings.refMaintTagOscillationNote":
+  "settings.refLifecycleTagOscillationNote":
     "Dvě pravidla, která zapisují opačnou úpravu stejného štítku na stejný titul, pozdrží oba kandidáty s tag_patch_conflict místo toho, aby vyhrálo to, které běželo naposled. Pravidlo, které štítek přidá, a jiné, které jej v pozdějším běhu odebere, takto zachyceno není: jde o chybu v návrhu, která štítek navždy přepíná tam a zpět, takže rozsahy obou pravidel nastavte tak, aby se nemohly shodovat zároveň.",
-  "settings.maintenanceTemplateGallery": "Úvodní šablony",
-  "settings.maintenanceTemplateApply": "Použít šablonu",
-  "settings.maintenanceTemplateFacetMovie": "Filmy",
-  "settings.maintenanceTemplateFacetShow": "Seriály",
-  "settings.maintenanceTemplateGraceBadge": "{{count}}denní ochranná doba",
-  "settings.maintenanceTemplateNoGraceBadge": "Bez ochranné doby",
-  "settings.maintenanceTemplateDestructiveBadge": "Maže soubory",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Pojmenujte cílový profil",
-  "settings.maintenanceTemplateDeadWantedTitle": "Mrtvé požadované položky",
-  "settings.maintenanceTemplateDeadWantedDescription":
+  "settings.lifecycleTemplateGallery": "Úvodní šablony",
+  "settings.lifecycleTemplateApply": "Použít šablonu",
+  "settings.lifecycleTemplateFacetMovie": "Filmy",
+  "settings.lifecycleTemplateFacetShow": "Seriály",
+  "settings.lifecycleTemplateGraceBadge": "{{count}}denní ochranná doba",
+  "settings.lifecycleTemplateNoGraceBadge": "Bez ochranné doby",
+  "settings.lifecycleTemplateNeedsProfileBadge": "Pojmenujte cílový profil",
+  "settings.lifecycleTemplateDeadWantedTitle": "Mrtvé požadované položky",
+  "settings.lifecycleTemplateDeadWantedDescription":
     "Tituly, které stále sledujete, ale žádný soubor pro ně nikdy nedorazil. Fakty jsou obyčejné hodnoty, takže titul, jehož stav sledování nebo souboru Scryer nevidí, se pozdrží místo shody. Po 30denní ochranné době se rozsah přestane sledovat a cokoli už je na disku, zůstane beze změny.",
-  "settings.maintenanceTemplateLibraryAgingTitle": "Stárnutí knihovny",
-  "settings.maintenanceTemplateLibraryAgingDescription":
+  "settings.lifecycleTemplateLibraryAgingTitle": "Stárnutí knihovny",
+  "settings.lifecycleTemplateLibraryAgingDescription":
     "Pozor: tato šablona maže titul a jeho soubory. Cokoli má soubor, zestárne a bude odstraněno, pokud nenese štítek „keep“. Nejprve proběhne 180denní ochranná doba a přepínače instance i vlastní zapnutí tohoto pravidla se stále musí shodnout, než se cokoli odstraní.",
-  "settings.maintenanceTemplateAddedLongAgoTitle":
+  "settings.lifecycleTemplateAddedLongAgoTitle":
     "Přidáno před více než 180 dny",
-  "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Skutečná práce s daty: days_since porovná added_at titulu s časem vyhodnocení a odpovídá po 180 dnech. Sledování se zruší a soubory zůstanou. Titul bez hodnoty added_at se podrží, místo aby odpovídal.",
-  "settings.maintenanceTemplateOversizedTitle": "Předimenzovaná vydání",
-  "settings.maintenanceTemplateOversizedDescription":
-    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na pojmenovaný profil kvality a znovu vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
-  "settings.maintenanceTemplateFourKPurgeTitle": "Čištění 4K",
-  "settings.maintenanceTemplateFourKPurgeDescription":
+  "settings.lifecycleTemplateAddedLongAgoDescription":
+    "Odpovídá titulům, které byly přidány před více než 180 dny. Sledování se zruší a soubory zůstanou. Titul, u kterého není zaznamenáno datum přidání, neodpovídá.",
+  "settings.lifecycleTemplateOversizedTitle": "Předimenzovaná vydání",
+  "settings.lifecycleTemplateOversizedDescription":
+    "Tituly, jejichž soubory mají dohromady více než 40 GB. Přesune titul na pojmenovaný profil kvality a znovu vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ jedním ze svých profilů.",
+  "settings.lifecycleTemplateFourKPurgeTitle": "Čištění 4K",
+  "settings.lifecycleTemplateFourKPurgeDescription":
     "Jakýkoli titul se souborem 2160p. Po 7denní lhůtě se přesune na pojmenovaný profil kvality a znovu se vyhledá. Před uložením nahraďte zástupný název „Compact 1080p“ ve zdroji jedním ze svých profilů.",
-  "settings.maintenanceTemplateRequestedExpiryTitle":
+  "settings.lifecycleTemplateRequestedExpiryTitle":
     "Vypršení požadovaných médií",
-  "settings.maintenanceTemplateRequestedExpiryDescription":
+  "settings.lifecycleTemplateRequestedExpiryDescription":
     "Pozor: tato šablona maže titul a jeho soubory. Tituly, které přišly na základě žádosti, zestárnou po 120 dnech, pokud nenesou štítek „keep“.",
-  "settings.maintenanceTemplateDepartedRequesterTitle": "Žadatel, který odešel",
-  "settings.maintenanceTemplateDepartedRequesterDescription":
-    "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům požadovaným jedním konkrétním uživatelem — před uložením upravte zástupný text „departed-user“ v porovnávání na jméno uživatele, které máte na mysli, jinak nebude odpovídat ničemu.",
-  "settings.maintenanceTemplateSystemAddedTitle": "Úklid po systémovém přidání",
-  "settings.maintenanceTemplateSystemAddedDescription":
+  "settings.lifecycleTemplateDepartedRequesterTitle": "Žadatel, který odešel",
+  "settings.lifecycleTemplateDepartedRequesterDescription":
+    "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům požadovaným jedním konkrétním uživatelem — před uložením změňte zástupný text „departed-user“ na jméno uživatele, které máte na mysli, jinak nebude odpovídat ničemu.",
+  "settings.lifecycleTemplateSystemAddedTitle": "Úklid po systémovém přidání",
+  "settings.lifecycleTemplateSystemAddedDescription":
     "Tituly, které objevilo prohledávání a ne osoba, a mají soubor. Po 60 dnech se rozsah přestane sledovat a soubory zůstanou tam, kde jsou.",
-  "settings.maintenanceTemplateWatchedRequestedTitle":
+  "settings.lifecycleTemplateWatchedRequestedTitle":
     "Shlédnuto všemi, kdo požádali",
-  "settings.maintenanceTemplateWatchedRequestedDescription":
+  "settings.lifecycleTemplateWatchedRequestedDescription":
     "Pozor: tato šablona maže titul a jeho soubory. Odpovídá požadovaným filmům, které už shlédli úplně všichni jejich žadatelé, po 30denní ochranné době. Pouze filmy: Scryer eviduje přehrání na úrovni filmu a epizody, nikdy seriálu, takže seriál se pozdrží místo shody. Pozdrží se také vždy, když žadatel nemá propojený účet mediálního serveru nebo když je poslední synchronizace signálu starší než 48 hodin — neúplný obraz sledování není důvod k mazání.",
-  "settings.maintenanceTemplateExpiredLeasesTitle": "Vypršelé nároky žádostí",
-  "settings.maintenanceTemplateExpiredLeasesDescription":
+  "settings.lifecycleTemplateExpiredLeasesTitle": "Vypršelé nároky žádostí",
+  "settings.lifecycleTemplateExpiredLeasesDescription":
     "Pozor: tato šablona maže titul a jeho soubory. Odpovídá titulům, jejichž všechny nároky žádostí vypršely, po 7denní ochranné době. Nárok, který ještě nezačal — titul nebyl importován — se ponechá beze změny, stejně jako titul, který nikdy nárok neměl.",
-  "settings.maintenanceTemplateNoProfileTitle": "Bez profilu kvality",
-  "settings.maintenanceTemplateNoProfileDescription":
+  "settings.lifecycleTemplateNoProfileTitle": "Bez profilu kvality",
+  "settings.lifecycleTemplateNoProfileDescription":
     "Tituly bez přiřazeného profilu kvality. Přidá štítek needs-review, aby profil mohl vybrat člověk; nic jiného se nemění.",
-  "settings.maintenanceTemplateNewestEpisodesTitle":
+  "settings.lifecycleTemplateNewestEpisodesTitle":
     "Ponechat 3 nejnovější stažené epizody",
-  "settings.maintenanceTemplateNewestEpisodesDescription":
+  "settings.lifecycleTemplateNewestEpisodesDescription":
     "Pozor: tato šablona v rozsahu epizody přestane sledovat a smaže stažené epizody s pořadím starším než tři nejnovější podle data vysílání. Speciály, budoucí epizody, chybějící soubory a nevyřešená data pořadí nedostanou, takže se neshodují. Chráněné epizody stále zabírají místa mezi třemi nejnovějšími.",
-  "settings.maintenanceTemplateNewestSeasonsTitle":
+  "settings.lifecycleTemplateNewestSeasonsTitle":
     "Ponechat 2 nejnovější stažené řady",
-  "settings.maintenanceTemplateNewestSeasonsDescription":
+  "settings.lifecycleTemplateNewestSeasonsDescription":
     "Pozor: tato šablona v rozsahu řady přestane sledovat a smaže soubory z řad s pořadím starším než dvě nejnovější podle nejnovější způsobilé stažené epizody každé řady. Speciály, budoucí epizody, chybějící soubory a nevyřešená data pořadí nedostanou; chráněné řady stále zabírají místa.",
-  "settings.maintenanceTemplateLeftEveryListTitle":
+  "settings.lifecycleTemplateLeftEveryListTitle":
     "Opustily úplně všechny seznamy",
-  "settings.maintenanceTemplateLeftEveryListDescription":
+  "settings.lifecycleTemplateLeftEveryListDescription":
     "Tituly, které opustily úplně všechny seznamy, veřejné i osobní, jakmile byl vyřízen každý odchod a poslední je starší než 30 dní. Rozsah se přestane sledovat a soubory zůstanou tam, kde jsou.",
-  "settings.maintenanceTemplateListAddedUnwatchedTitle":
+  "settings.lifecycleTemplateListAddedUnwatchedTitle":
     "Přidáno seznamem a nikdy nezhlédnuto",
-  "settings.maintenanceTemplateListAddedUnwatchedDescription":
+  "settings.lifecycleTemplateListAddedUnwatchedDescription":
     "Přidá štítek „needs-review“ titulům, které seznam přidal před více než 90 dny a nikdo je nepřehrál. Pozdrží se vždy, když je obraz sledování neúplný. Nic se nemaže.",
   "settings.requestRules": "Pravidla žádostí",
   "settings.noRequestRulesFound": "Zatím žádná pravidla žádostí.",
@@ -5911,7 +5929,7 @@ const cs: LocaleDictionary = {
   "search.keepForCustom": "Zadat počet dní…",
   "search.keepForCustomLabel": "Počet dní k uchování",
   "search.keepForHelp":
-    "Jak dlouho Scryer toto médium pro vás podrží. Po uplynutí doby ho může odstranit pravidlo údržby; trvalé uchování nikdy nevyprší.",
+    "Jak dlouho Scryer toto médium pro vás podrží. Po uplynutí doby ho může odstranit pravidlo životního cyklu; trvalé uchování nikdy nevyprší.",
   "requests.preflightAutoApprove": "Toto bude schváleno automaticky",
   "requests.preflightManualReview": "Toto vyžaduje schválení",
   "requests.preflightDeny": "Toto by bylo zamítnuto: {{reasons}}",
@@ -6968,8 +6986,8 @@ const cs: LocaleDictionary = {
     "Přejmenováno na {{label}}. Přepsáno – titulů: {{titles}}, seriálových filmů: {{seriesMovies}}, profilů zpoždění: {{delayProfiles}}.",
   "settings.titleTagRenameWarning":
     "Zdroje pravidel se nikdy nepřepisují. Odkazy v pravidlech, které stále jmenují starý popisek {{label}} a přestanou odpovídat ({{count}}): {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "sady pravidel údržby: {{count}}",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "sady pravidel životního cyklu: {{count}}",
   "settings.titleTagReferenceReleaseRuleSets":
     "sady pravidel hodnocení vydání: {{count}}",
   "settings.titleTagReferenceManagedTagFilters":
@@ -7006,15 +7024,15 @@ const cs: LocaleDictionary = {
   "title.catalogFilters.needsAttentionHint":
     "Obsahuje soubor, jehož skenování selhalo nebo vyžaduje revizi, takže je nutné se na něj podívat, než ho bude možné použít.",
   "settings.titleTagSeriesMovieCount": "Seriálové filmy",
-  "settings.maintenanceActionAddTags": "Přidat štítky",
-  "settings.maintenanceActionRemoveTags": "Odebrat štítky",
-  "settings.maintenanceRuleTagsHelp":
+  "settings.lifecycleActionAddTags": "Přidat štítky",
+  "settings.lifecycleActionRemoveTags": "Odebrat štítky",
+  "settings.lifecycleRuleTagsHelp":
     "Pravidlo zapíše tyto štítky na každý titul, kterému odpovídá. Vybrat lze jen štítky, které administrátor definoval v Nastavení > Štítky.",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "Označeno k odstranění",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Označeno k odstranění",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Pozor: tato šablona smaže titul i jeho soubory. Odpovídá všemu, co nese štítek „remove“, po týdenní odkladné lhůtě, takže ruční označení titulu je celým spouštěčem a odebrání štítku v rámci týdne odstranění zruší. Nejprve definujte štítek „remove“ v Nastavení > Štítky.",
-  "settings.maintenanceTemplateFlagForReviewTitle": "Označit k revizi",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "Označit k revizi",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Přidá štítek needs-review ke všemu, co bylo importováno před více než rokem, aby se mohl někdo rozhodnout, co s tím udělat. Nic se nemaže.",
   "mediaFile.allInfo": "Informace",
   "mediaFile.noAnalysis":
@@ -7694,159 +7712,159 @@ const cs: LocaleDictionary = {
     "Přesun souboru pod novým názvem se nezdařil. Soubor i jeho epizody zůstaly beze změny.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Číslování epizod je nejednoznačné",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "Pozdrženo: na mediálním serveru se něco přehrává.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Pozdrženo: mediálního serveru se nepodařilo zjistit, zda se něco přehrává.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Pozdrženo: mediální server ukazuje přehrání novější než uložená historie sledování.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Pozdrženo: historie mediálního serveru ukazuje přehrání účtem, který historie sledování nezapočítává.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Pozdrženo: mediální server nemohl před provedením akce potvrdit historii sledování.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Pozdrženo: připojený mediální server nemá odpovídající položku, takže historii sledování nebylo možné před provedením akce ověřit.",
-  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+  "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "Toto pravidlo maže, ale nemá limit titulů na běh, takže jeho akce se neprovádějí. Dál se vyhodnocuje a lze ho zobrazit v náhledu; nastavte limit, aby mohlo zasáhnout.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
-    "Odeslání údržbového hledání vyžaduje přijatý záměr potvrzení.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
-    "Odeslání údržbového hledání vyžaduje předem přidělené ID běhu úlohy.",
-  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
-    "Dokončení kroku akce údržby musí nést výsledek pokusu.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
-    "Pravidlo údržby už má pro tento titul aktivního kandidáta.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
-    "Průběh sekvence údržby přijímá nejvýše 100 kandidátů na stránku.",
-  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
-    "Neplatný limit dokončení údržby.",
-  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
-    "Obecné odeslání úlohy údržby musí začít ve stavu odesílání.",
-  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
-    "Značce neúspěšné sekvence údržby chybí ID neúspěšného kroku.",
-  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
-    "Neplatné uvolnění pozdrženého pokusu údržby.",
-  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
-    "Přijatá potvrzení úloh údržby vyžadují skutečné ID běhu úlohy.",
-  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
-    "Členství v sekvenci údržby je konečné až do potvrzené neshody.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
-    "Přechod potvrzení úlohy údržby musí uvést očekávané stavy.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
-    "Projekce potvrzení sekvence údržby přijímá nejvýše 700 kroků.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
-    "Uvolnění pozdrženého pokusu údržby nemá důvod.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
-    "Opakovaný krok akce údržby musí posunout svůj pokus.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
-    "Toto pravidlo údržby má živé kandidáty nebo historii akcí; místo smazání ho vypněte.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
-    "Krok akce údržby neodpovídá uložené identitě své sekvence.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
-    "Převzetí kroku akce údržby musí zahájit běžící pokus s nezáporným číslem.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
-    "Značka neúspěšné sekvence údržby nezachovává předponu svých kroků.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
-    "Převzetí kroku akce údržby má neplatnou identitu cíle.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
-    "Značce úspěšné sekvence údržby chybí úplné doklady o krocích.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
-    "Koncová značka údržby neodpovídá uloženým dokladům o krocích.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
-    "Koncová značka sekvence údržby a koncový stav kandidáta se neshodují.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
-    "Koncová značka sekvence údržby má neplatná očekávaná ID kroků.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
-    "Soubor určený ke smazání údržbou se změnil; je nutné nové vyhodnocení.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
-    "Otisk mazání údržbou se změnil.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
-    "Cíle mazání údržbou se změnily; je nutné nové vyhodnocení.",
-  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
-    "Konfigurace akce údržby je neplatná.",
-  "error.reason.MAINTENANCE_ACTION_INVALID":
-    "Akce údržby není platná pro pravidlo v rozsahu titulu.",
-  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE": "Akci údržby nelze uložit.",
-  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
-    "Tato akce údržby není pro tituly podporována.",
-  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "Odeslání hledání životního cyklu vyžaduje přijatý záměr potvrzení.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "Odeslání hledání životního cyklu vyžaduje předem přidělené ID běhu úlohy.",
+  "error.reason.CONFIGURATION_LIFECYCLE_ATTEMPT_RESULT_REQUIRED":
+    "Dokončení kroku akce životního cyklu musí nést výsledek pokusu.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_ALREADY_ACTIVE":
+    "Pravidlo životního cyklu už má pro tento titul aktivního kandidáta.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
+    "Průběh sekvence životního cyklu přijímá nejvýše 100 kandidátů na stránku.",
+  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
+    "Neplatný limit dokončení životního cyklu.",
+  "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
+    "Obecné odeslání úlohy životního cyklu musí začít ve stavu odesílání.",
+  "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
+    "Značce neúspěšné sekvence životního cyklu chybí ID neúspěšného kroku.",
+  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
+    "Neplatné uvolnění pozdrženého pokusu životního cyklu.",
+  "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
+    "Přijatá potvrzení úloh životního cyklu vyžadují skutečné ID běhu úlohy.",
+  "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
+    "Členství v sekvenci životního cyklu je konečné až do potvrzené neshody.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "Přechod potvrzení úlohy životního cyklu musí uvést očekávané stavy.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
+    "Projekce potvrzení sekvence životního cyklu přijímá nejvýše 700 kroků.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
+    "Uvolnění pozdrženého pokusu životního cyklu nemá důvod.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "Opakovaný krok akce životního cyklu musí posunout svůj pokus.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
+    "Toto pravidlo životního cyklu má živé kandidáty nebo historii akcí; místo smazání ho vypněte.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SEQUENCE_IDENTITY_MISMATCH":
+    "Krok akce životního cyklu neodpovídá uložené identitě své sekvence.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_ATTEMPT_INVALID":
+    "Převzetí kroku akce životního cyklu musí zahájit běžící pokus s nezáporným číslem.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_PREFIX_MISMATCH":
+    "Značka neúspěšné sekvence životního cyklu nezachovává předponu svých kroků.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_TARGET_INVALID":
+    "Převzetí kroku akce životního cyklu má neplatnou identitu cíle.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "Značce úspěšné sekvence životního cyklu chybí úplné doklady o krocích.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_EVIDENCE_MISMATCH":
+    "Koncová značka životního cyklu neodpovídá uloženým dokladům o krocích.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STATE_MISMATCH":
+    "Koncová značka sekvence životního cyklu a koncový stav kandidáta se neshodují.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STEP_IDS_INVALID":
+    "Koncová značka sekvence životního cyklu má neplatná očekávaná ID kroků.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED":
+    "Soubor určený ke smazání pravidly životního cyklu se změnil; je nutné nové vyhodnocení.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED":
+    "Otisk mazání pravidly životního cyklu se změnil.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
+    "Cíle mazání pravidly životního cyklu se změnily; je nutné nové vyhodnocení.",
+  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
+    "Konfigurace akce životního cyklu je neplatná.",
+  "error.reason.LIFECYCLE_ACTION_INVALID":
+    "Akce životního cyklu není platná pro pravidlo v rozsahu titulu.",
+  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE": "Akci životního cyklu nelze uložit.",
+  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
+    "Tato akce životního cyklu není pro tituly podporována.",
+  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "Toto pravidlo už ve vaší knihovně provedlo akce a jeho smazání by vymazalo záznam o tom, co udělalo. Místo toho ho nastavte na Vypnuto: pravidlo se okamžitě zastaví a jeho historie zůstane.",
-  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
-    "Nejednoznačné pokrytí souborů údržbou.",
-  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+    "Nejednoznačné pokrytí souborů pravidly životního cyklu.",
+  "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "Počet kandidátů se změnil. Před zapnutím zkontrolujte aktuální počet.",
-  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
     "Mazání podřízených položek vyžaduje epizodu nebo sérii.",
-  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
     "Toto pravidlo právě sleduje tituly a jeho smazání by je beze stopy zahodilo. Místo toho ho nastavte na Vypnuto, nebo nejprve vymažte kandidáty.",
-  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
     "DeleteFiles má nekompatibilní předpoklad Unmonitor.",
-  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
     "DeleteFiles vyžaduje dřívější krok Unmonitor.",
-  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
-    "Výjimka z údržby nebyla nalezena.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED": "Povinné pole je prázdné.",
-  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
-    "Vlastnictví souboru pro údržbu se změnilo.",
-  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
-    "Cílové soubory údržby se změnily; je nutné další vyhodnocení.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
+  "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
+    "Výjimka z pravidel životního cyklu nebyla nalezena.",
+  "error.reason.LIFECYCLE_FIELD_REQUIRED": "Povinné pole je prázdné.",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "Vlastnictví souboru pro životní cyklus se změnilo.",
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+    "Cílové soubory životního cyklu se změnily; je nutné další vyhodnocení.",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Ochranná lhůta musí být nula nebo více dní.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
+  "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Ochranná lhůta smí být nejvýše 3650 dní (deset let).",
-  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
+  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
     "Podmínka, která čte fakty o úložišti, musí vybrat nakonfigurovaný kořen knihovny.",
-  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "Filmové tituly nemají seznam epizod.",
-  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+  "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Toto pravidlo čte fakty o konkrétních lidech, takže jeho uložení vyžaduje oprávnění spravovat oprávnění. Požádejte o uložení správce, nebo pravidlo přepište bez těchto faktů.",
-  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
     "Náhled přijímá nejvýše 50 titulů.",
-  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
     "Náhled vyžaduje jeden až padesát subjektů.",
-  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Subjekt náhledu chybí, leží mimo knihovny pravidla, nebo nepatří k vybraným titulům a rozsahu.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
     "Akce profilu kvality nemá cílový profil.",
-  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+  "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Pravidlo se během potvrzování změnilo; před zapnutím mazání ho zkontrolujte znovu.",
-  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
     "Konfiguraci pravidla je před zapnutím mazání nutné znovu zkontrolovat; otevřete potvrzení znovu.",
-  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED":
+  "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Vyhodnocení pravidla selhalo.",
-  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
-    "Pravidlo údržby se nepodařilo zkompilovat.",
-  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
-    "Sada pravidel údržby nebyla nalezena.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE":
+    "Pravidlo životního cyklu se nepodařilo zkompilovat.",
+  "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
+    "Sada pravidel životního cyklu nebyla nalezena.",
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
     "Toto pravidlo je součástí Scryeru: jeho podmínku a akce nelze změnit. Jeho ochrannou lhůtu, knihovny a stav ano.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
     "Toto pravidlo je součástí Scryeru a nelze ho smazat. Místo toho ho nastavte na Vypnuto.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
     "Toto pravidlo je součástí Scryeru a nelze ho přejmenovat.",
-  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID":
-    "Zdroj pravidla údržby je neplatný.",
-  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
+    "Zdroj pravidla životního cyklu je neplatný.",
+  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "Akce tohoto pravidla nikdy nic nemění, takže může běžet jen jako zkušební běh.",
-  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED":
+  "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Ověření pravidla selhalo.",
-  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
+  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
     "Akce sekvence musí používat vykonavatele sekvencí.",
-  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
-    "Parametry kroku sekvence údržby jsou neplatné.",
-  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
+  "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "Parametry kroku sekvence životního cyklu jsou neplatné.",
+  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
     "Kořen úložiště, který pravidlo vybírá, není nakonfigurován.",
-  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
-    "ID subjektu údržby je povinné.",
-  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
-    "Neplatný druh subjektu údržby.",
-  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
-    "Subjekt údržby nebyl nalezen, nebo už k tomuto titulu nepatří.",
-  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
+  "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
+    "ID subjektu životního cyklu je povinné.",
+  "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
+    "Neplatný druh subjektu životního cyklu.",
+  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+    "Subjekt životního cyklu nebyl nalezen, nebo už k tomuto titulu nepatří.",
+  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
     "Akce štítku nemá nastavené žádné štítky.",
-  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
+  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "Cílový profil kvality neexistuje.",
-  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
     "Identita kandidáta na zrušení sledování neodpovídá jeho titulu.",
   "error.reason.MEDIA_LIFECYCLE_CLAIM_NOT_LIVE":
     "Nárok životního cyklu už není živý.",
@@ -7854,90 +7872,90 @@ const cs: LocaleDictionary = {
     "Nárok životního cyklu nebyl nalezen.",
   "error.reason.SERVICES_MAINTENANCE_OPERATION_PROGRESS":
     "Probíhá operace údržby.",
-  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND":
-    "Pravidlo údržby nebylo nalezeno.",
-  "error.maintenanceArmCountMismatch":
+  "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND":
+    "Pravidlo životního cyklu nebylo nalezeno.",
+  "error.lifecycleArmCountMismatch":
     "Počet kandidátů se změnil. Zkontrolujte aktuální počet a znovu ho potvrďte.",
   "setup.restoreRefusal.maintenanceActive":
     "Obnova nebo zotavení už probíhá. Počkejte, až skončí.",
-  "jobs.builtin.MaintenanceRuleEvaluation.name": "Vyhodnocení pravidel údržby",
-  "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Podle plánu zahajuje a ukončuje zápůjčky požadavků. Každé pravidlo údržby se vyhodnocuje podle vlastního plánu; spuštění teď vyhodnotí všechna zapnutá pravidla a nikdy neprovede akci.",
-  "jobs.builtin.LifecycleActionHandling.name": "Zpracování akcí údržby",
+  "jobs.builtin.LifecycleRuleEvaluation.name": "Vyhodnocení pravidel životního cyklu",
+  "jobs.builtin.LifecycleRuleEvaluation.description":
+    "Podle plánu zahajuje a ukončuje zápůjčky požadavků. Každé pravidlo životního cyklu se vyhodnocuje podle vlastního plánu; spuštění teď vyhodnotí všechna zapnutá pravidla a nikdy neprovede akci.",
+  "jobs.builtin.LifecycleActionHandling.name": "Zpracování akcí životního cyklu",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Každé pravidlo údržby zasahuje na své splatné kandidáty hned po svém plánovaném vyhodnocení nebo při ručním spuštění daného pravidla, za branami účinků instance a s úplnými bezpečnostními kontrolami. Tato úloha nezasahuje za žádné pravidlo.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+    "Každé pravidlo životního cyklu zasahuje na své splatné kandidáty hned po svém plánovaném vyhodnocení nebo při ručním spuštění daného pravidla, za branami účinků instance a s úplnými bezpečnostními kontrolami. Tato úloha nezasahuje za žádné pravidlo.",
+  "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
     "Pozdrženo: od posledního načtení oblíbených označil účet na mediálním serveru jako oblíbenou tuto položku, nebo seriál či sérii kontrolovaných epizod.",
-  "settings.maintenanceExecutionReason.ruleNotEligible":
+  "settings.lifecycleExecutionReason.ruleNotEligible":
     "Pozdrženo: před provedením akce bylo pravidlo vypnuto, přepnuto na zkušební běh nebo odjištěno, nebo se zavřela jeho bezpečnostní brána.",
-  "settings.maintenanceExecutionReason.noMatchAtExecution":
+  "settings.lifecycleExecutionReason.noMatchAtExecution":
     "Neprovedeno: při kontrole těsně před akcí už titul pravidlu neodpovídá.",
-  "settings.maintenanceExecutionReason.unknownAtExecution":
+  "settings.lifecycleExecutionReason.unknownAtExecution":
     "Pozdrženo: při kontrole těsně před akcí pravidlo nedokázalo rozhodnout. Znovu se zkontroluje při příštím běhu.",
-  "settings.maintenanceExecutionReason.activeAcquisition":
+  "settings.lifecycleExecutionReason.activeAcquisition":
     "Pozdrženo: u titulu probíhá stahování, získávání nebo import.",
-  "settings.maintenanceExecutionReason.acquisitionUnknown":
+  "settings.lifecycleExecutionReason.acquisitionUnknown":
     "Pozdrženo: Scryer nedokázal zjistit, zda u titulu probíhá stahování, získávání nebo import.",
-  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+  "settings.lifecycleExecutionReason.storageDeletionInProgress":
     "Pozdrženo: úklid úložiště právě maže soubory. Akce počká, až skončí.",
-  "settings.maintenanceExecutionReason.actionNotFullySupported":
+  "settings.lifecycleExecutionReason.actionNotFullySupported":
     "Pozdrženo: tuto akci nelze na tento subjekt použít, například akci pro celý titul na sérii nebo epizodu.",
-  "settings.maintenanceExecutionReason.titleMissing":
+  "settings.lifecycleExecutionReason.titleMissing":
     "Titul už v knihovně není, takže se nic neprovedlo.",
-  "settings.maintenanceExecutionReason.locationOperationHold":
+  "settings.lifecycleExecutionReason.locationOperationHold":
     "Pozdrženo: soubory titulu se přesouvají nebo přejmenovávají. Akce proběhne, až to skončí.",
-  "settings.maintenanceExecutionReason.passActionStepBudget":
+  "settings.lifecycleExecutionReason.passActionStepBudget":
     "Pozdrženo dřívějším během, který vyčerpal své kroky akcí. Běhy už tento limit nemají; akce proběhne při příštím běhu.",
-  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+  "settings.lifecycleExecutionReason.passHighRiskStepBudget":
     "Pozdrženo: mazání v tomto běhu opakovaně selhalo, takže zbývající mazání počkají na příští běh.",
-  "settings.maintenanceExecutionReason.actionSucceeded": "Akce byla dokončena.",
-  "settings.maintenanceExecutionReason.alreadySatisfied":
+  "settings.lifecycleExecutionReason.actionSucceeded": "Akce byla dokončena.",
+  "settings.lifecycleExecutionReason.alreadySatisfied":
     "Není co měnit: titul už byl ve stavu, do kterého by ho akce uvedla.",
-  "settings.maintenanceExecutionReason.retryPending":
+  "settings.lifecycleExecutionReason.retryPending":
     "Akce selhala z důvodu, který může pominout. Zkusí se znovu.",
-  "settings.maintenanceExecutionReason.actionFailed":
+  "settings.lifecycleExecutionReason.actionFailed":
     "Akce selhala a znovu se nezkusí. Chybu najdete v historii akcí.",
-  "settings.maintenanceExecutionReason.leaseReclaimed":
+  "settings.lifecycleExecutionReason.leaseReclaimed":
     "Akce skončila dřív, než doběhla, například při restartu Scryeru. Byla uvolněna k novému spuštění.",
-  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+  "settings.lifecycleExecutionReason.ambiguousEpisodeFileCoverage":
     "Pozdrženo: některé soubory nelze přiřadit k epizodám této série nebo epizody, takže jejich smazání není bezpečné.",
-  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+  "settings.lifecycleExecutionReason.qualityProfileUnresolved":
     "Pozdrženo: profil kvality, který pravidlo nastavuje, už neoznačuje právě jeden profil. Byl přejmenován nebo odstraněn, nebo dva profily mají stejný název.",
-  "settings.maintenanceExecutionReason.actionsNotRunnable":
+  "settings.lifecycleExecutionReason.actionsNotRunnable":
     "Pozdrženo: akce rozhodnuté pro tento subjekt nelze provést společně, například přidání a odebrání stejného štítku.",
-  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+  "settings.lifecycleExecutionReason.actionsChangedAtExecution":
     "Pozdrženo: při kontrole těsně před akcí pravidlo rozhodlo o jiných akcích. Příští vyhodnocení tohoto kandidáta nahradí.",
-  "settings.maintenanceExecutionReason.actionNotDeclared":
+  "settings.lifecycleExecutionReason.actionNotDeclared":
     "Pozdrženo: kandidát nese akci, kterou aktuální zdroj pravidla už nedeklaruje, takže se nikdy neprovede.",
-  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
     "Pozdrženo: pravidlo pro kořen úložiště nemůže provést jednu z těchto akcí.",
-  "settings.maintenanceRuleMaxTitlesPerRun": "Titulů na běh",
-  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+  "settings.lifecycleRuleMaxTitlesPerRun": "Titulů na běh",
+  "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "Nejvyšší počet titulů, na které toto pravidlo v jednom běhu zasáhne. Pravidlo, které maže soubory nebo tituly, tento limit potřebuje.",
-  "settings.maintenanceRuleMaxTitlesPerRunNone": "Bez limitu",
-  "settings.maintenanceRuleLoadRefused":
+  "settings.lifecycleRuleMaxTitlesPerRunNone": "Bez limitu",
+  "settings.lifecycleRuleLoadRefused":
     "Toto pravidlo nelze v uložené podobě spustit.",
-  "settings.maintenanceSequenceStepMonitor": "Sledovat",
-  "settings.maintenanceSequenceStepFetchSubtitles": "Stáhnout titulky",
-  "settings.maintenanceSequenceStepMoveToLibrary": "Přesunout do knihovny",
-  "settings.maintenanceSequenceStepMoveToRoot": "Přesunout do kořenové složky",
-  "settings.notificationEvent.maintenanceRuleNotified":
-    "Oznámení pravidla údržby",
-  "settings.maintenanceExecutionReason.tagNotDefined":
+  "settings.lifecycleSequenceStepMonitor": "Sledovat",
+  "settings.lifecycleSequenceStepFetchSubtitles": "Stáhnout titulky",
+  "settings.lifecycleSequenceStepMoveToLibrary": "Přesunout do knihovny",
+  "settings.lifecycleSequenceStepMoveToRoot": "Přesunout do kořenové složky",
+  "settings.notificationEvent.lifecycleRuleNotified":
+    "Oznámení pravidla životního cyklu",
+  "settings.lifecycleExecutionReason.tagNotDefined":
     "Pozdrženo: štítek, který toto pravidlo zapisuje, už není definován v Nastavení › Štítky.",
-  "settings.maintenanceExecutionReason.tagPatchConflict":
+  "settings.lifecycleExecutionReason.tagPatchConflict":
     "Pozdrženo: jiné pravidlo by přidalo štítek, který toto pravidlo odebírá, nebo odebralo štítek, který přidává.",
-  "settings.maintenanceExecutionReason.monitoringConflict":
+  "settings.lifecycleExecutionReason.monitoringConflict":
     "Pozdrženo: jiné pravidlo nedávno udělalo se sledováním tohoto titulu opak.",
-  "settings.maintenanceExecutionReason.actionsConflict":
+  "settings.lifecycleExecutionReason.actionsConflict":
     "Pozdrženo: pravidlo rozhodlo o akcích, které nelze provést společně, takže se nic neprovedlo.",
-  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+  "settings.lifecycleExecutionReason.moveLibraryUnresolved":
     "Pozdrženo: knihovna, kterou tento přesun uvádí, už neodpovídá právě jedné knihovně.",
-  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+  "settings.lifecycleExecutionReason.moveLibraryFacetMismatch":
     "Pozdrženo: knihovna, kterou tento přesun uvádí, obsahuje jiný druh titulů.",
-  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+  "settings.lifecycleExecutionReason.moveRootNotInLibrary":
     "Pozdrženo: kořenová složka, kterou tento přesun uvádí, nepatří do knihovny titulu.",
-  "settings.maintenanceExecutionReason.moveRefused":
+  "settings.lifecycleExecutionReason.moveRefused":
     "Pozdrženo: přesun byl odmítnut nebo jeho plán zastaral. Soubory zůstávají na místě a přesun se zopakuje.",
   "error.ruleActionRequired":
     "Definujte alespoň jednu akci, například unmonitor, delete_files nebo add_tags, aby pravidlo mohlo něco udělat.",
@@ -7958,39 +7976,37 @@ const cs: LocaleDictionary = {
   "error.ruleMonitorUnsupported":
     "Žádná knihovna, na kterou se pravidlo vztahuje, tento typ sledování nepřijímá.",
   "error.ruleAudioLanguageUnknown": "Scryer tento jazyk zvuku nezná.",
-  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+  "error.lifecycleMaxTitlesPerRunRequiredNamed":
     "Nastavte počet titulů na běh. Potřebují ho tyto akce pravidla: {{actions}}.",
-  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+  "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
     "Pravidlo nedefinuje žádnou akci, takže by nikdy nic neudělalo.",
-  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
-    "Pravidlo definuje akci, kterou jeho rozsah nemůže provést.",
-  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
     "Knihovna, kterou tento přesun uvádí, obsahuje jiný druh titulů než knihovny pravidla.",
-  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
     "Knihovna, kterou tento přesun uvádí, neexistuje.",
-  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+  "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
     "Kořenová složka, kterou tento přesun uvádí, není nastaveným kořenem knihovny.",
-  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+  "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
     "Pravidlo pro tento subjekt nevrátilo rozhodnutí ani chybu.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND":
     "Profil kvality, který toto pravidlo nastavuje, neexistuje.",
-  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID":
     "Počet titulů na běh musí být alespoň 1.",
-  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
     "Nastavte počet titulů na běh: toto pravidlo může mazat.",
-  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+  "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "Pravidlo mezitím změnilo jiné uložení. Nic nebylo uloženo; načtěte pravidlo znovu a zkuste to znovu.",
-  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
     "Toto pravidlo bylo uloženo dříve, než pravidla deklarovala vlastní akce, a proto se nikdy nespustí. Nahraďte jeho zdroj, aby se znovu spouštělo.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "Kdy položku naposledy přehrál kdokoli s účtem na připojeném mediálním serveru",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True, když ji přehrál jakýkoli účet na povoleném mediálním serveru, bez ohledu na propojení s uživatelem Scryeru; u sérií a seriálů stačí kterákoli odvysílaná epizoda. Neznámé s důvodem audience_not_read, dokud synchronizace za posledních 48 hodin nepřečte všechny účty na všech povolených připojeních, a s obvyklými důvody, kdykoli jsou fakta o sledování neznámá.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "Časové razítko RFC3339 posledního přehrání kterýmkoli účtem; chybí s důvodem never_watched, když ji nikdo nepřehrál, a je neznámé s důvodem play_time_missing (episode_play_time_missing u sérií a seriálů), když přehrání nemá zaznamenaný čas, nebo audience_not_read, když nebyly přečteny všechny účty",
-  "settings.maintenancePreviewFacts": "Fakta, která pravidlo četlo",
+  "settings.lifecyclePreviewFacts": "Fakta, která pravidlo četlo",
   "setup.sourceImportProgress": "Import zdrojů",
   "setup.sourceImportInvalidRequest":
     "Vybraný zdroj není dostupný. Obnovte vyhledávání zdrojů a vyberte ho znovu.",
@@ -8072,19 +8088,32 @@ const cs: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Přetažením změnit pořadí {{value}}",
   "qualityProfile.decisionStepMoveUp": "Posunout {{value}} nahoru",
   "qualityProfile.decisionStepMoveDown": "Posunout {{value}} dolů",
-  "ruleOutput.maintenance.add_tags": "Přidat štítky",
-  "ruleOutput.maintenance.remove_tags": "Odebrat štítky",
-  "ruleOutput.maintenance.set_quality_profile": "Změnit profil kvality",
-  "ruleOutput.maintenance.monitor": "Sledovat",
-  "ruleOutput.maintenance.search": "Vyhledat",
-  "ruleOutput.maintenance.fetch_subtitles": "Stáhnout titulky",
-  "ruleOutput.maintenance.move_to_library": "Přesunout do knihovny",
-  "ruleOutput.maintenance.move_to_root": "Přesunout do kořenové složky",
-  "ruleOutput.maintenance.unmonitor": "Zrušit sledování",
-  "ruleOutput.maintenance.delete_files": "Smazat soubory",
-  "ruleOutput.maintenance.delete_title": "Smazat titul a soubory",
-  "ruleOutput.maintenance.notify": "Upozornit",
-  "ruleOutput.maintenance.notify.placeholder": "Text oznámení",
+  "ruleOutput.lifecycle.add_tags": "Přidat štítky",
+  "ruleOutput.lifecycle.remove_tags": "Odebrat štítky",
+  "ruleOutput.lifecycle.set_quality_profile": "Změnit profil kvality",
+  "ruleOutput.lifecycle.monitor": "Sledovat",
+  "ruleOutput.lifecycle.search": "Vyhledat",
+  "ruleOutput.lifecycle.fetch_subtitles": "Stáhnout titulky",
+  "ruleOutput.lifecycle.move_to_library": "Přesunout do knihovny",
+  "ruleOutput.lifecycle.move_to_root": "Přesunout do kořenové složky",
+  "ruleOutput.lifecycle.unmonitor": "Zrušit sledování",
+  "ruleOutput.lifecycle.delete_files": "Smazat soubory",
+  "ruleOutput.lifecycle.delete_title": "Smazat titul a soubory",
+  "ruleOutput.lifecycle.notify": "Upozornit",
+  "ruleOutput.lifecycle.monitor_season": "Sledovat řadu",
+  "ruleOutput.lifecycle.fetch_season_subtitles": "Stáhnout titulky řady",
+  "ruleOutput.lifecycle.unmonitor_season": "Zrušit sledování řady",
+  "ruleOutput.lifecycle.delete_season_files": "Smazat soubory řady",
+  "ruleOutput.lifecycle.notify_season": "Upozornit na řadu",
+  "ruleOutput.lifecycle.monitor_episode": "Sledovat epizodu",
+  "ruleOutput.lifecycle.fetch_episode_subtitles": "Stáhnout titulky epizody",
+  "ruleOutput.lifecycle.unmonitor_episode": "Zrušit sledování epizody",
+  "ruleOutput.lifecycle.delete_episode_files": "Smazat soubory epizody",
+  "ruleOutput.lifecycle.notify_episode": "Upozornit na epizodu",
+  "ruleSubject.lifecycle.title": "Titul",
+  "ruleSubject.lifecycle.season": "Řada",
+  "ruleSubject.lifecycle.episode": "Epizoda",
+  "ruleOutput.lifecycle.notify.placeholder": "Text oznámení",
   "ruleOutput.request.approve": "Schválit",
   "ruleOutput.request.deny": "Zamítnout",
   "ruleOutput.request.manual": "Ponechat k posouzení",

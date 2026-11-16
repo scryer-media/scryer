@@ -127,19 +127,19 @@
       "source": "add_tags := [\"${1:family}\"] if {\n    input.facts.certification_rank <= ${2:1}\n}"
     },
     {
-      "family": "maintenance",
+      "family": "lifecycle",
       "label": "unmonitor-tagged",
       "descKey": "settings.regoSnippet.unmonitorTagged",
       "source": "unmonitor if {\n    \"${1:retire}\" in input.facts.tags\n}"
     },
     {
-      "family": "maintenance",
+      "family": "lifecycle",
       "label": "tag-after-days",
       "descKey": "settings.regoSnippet.tagAfterDays",
       "source": "add_tags := [\"${1:needs-review}\"] if {\n    days_since(input.facts.added_at) > ${2:365}\n}"
     },
     {
-      "family": "maintenance",
+      "family": "lifecycle",
       "label": "set-profile",
       "descKey": "settings.regoSnippet.setProfile",
       "source": "set_quality_profile := \"${1:Profile name}\" if {\n    input.facts.total_file_size_bytes > ${2:40000000000}\n}"

@@ -1752,7 +1752,82 @@ pub(crate) fn annotate_auto_decision(
     candidate.auto_decision_summary = Some(code.summary().to_string());
 }
 
+/// Whether `candidate` already carries the annotation
+/// [`annotate_auto_decision`] gives `code`, so that its own explanation is
+/// [`release_decision_explanation_for`] with that code.
+pub(crate) fn candidate_carries_auto_decision(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> bool {
+    candidate.auto_eligible == Some(code.is_eligible())
+        && candidate.auto_decision_code.as_deref() == Some(code.as_str())
+        && candidate.auto_decision_summary.as_deref() == Some(code.summary())
+}
+
 pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) -> Option<String> {
+    serde_json::to_string(&decision_explanation_value(candidate)).ok()
+}
+
+/// The explanation a release decision records, serialized once into the
+/// form the store compresses as it is.
+#[cfg(test)]
+pub(crate) fn release_decision_explanation(
+    candidate: &IndexerSearchResult,
+) -> crate::ReleaseDecisionExplanation {
+    crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value(candidate))
+}
+
+/// The explanation `candidate` records once annotated with `code` — what
+/// [`annotate_auto_decision`] on a copy of the candidate and then serializing
+/// its explanation produce — without copying the candidate.
+pub(crate) fn release_decision_explanation_for(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> crate::ReleaseDecisionExplanation {
+    crate::ReleaseDecisionExplanation::from_value(&decision_explanation_value_for(candidate, code))
+}
+
+/// [`release_decision_explanation_for`] as a value.
+pub(crate) fn decision_explanation_value_for(
+    candidate: &IndexerSearchResult,
+    code: ReleaseAutoDecisionCode,
+) -> serde_json::Value {
+    explanation_value(
+        candidate,
+        AutoDecisionAnnotation {
+            eligible: Some(code.is_eligible()),
+            code: Some(code.as_str()),
+            summary: Some(code.summary()),
+        },
+    )
+}
+
+/// The `auto_decision` fields an explanation records, as
+/// [`annotate_auto_decision`] sets them on a candidate.
+struct AutoDecisionAnnotation<'a> {
+    eligible: Option<bool>,
+    code: Option<&'a str>,
+    summary: Option<&'a str>,
+}
+
+impl<'a> AutoDecisionAnnotation<'a> {
+    fn of(candidate: &'a IndexerSearchResult) -> Self {
+        Self {
+            eligible: candidate.auto_eligible,
+            code: candidate.auto_decision_code.as_deref(),
+            summary: candidate.auto_decision_summary.as_deref(),
+        }
+    }
+}
+
+fn decision_explanation_value(candidate: &IndexerSearchResult) -> serde_json::Value {
+    explanation_value(candidate, AutoDecisionAnnotation::of(candidate))
+}
+
+fn explanation_value(
+    candidate: &IndexerSearchResult,
+    auto_decision: AutoDecisionAnnotation<'_>,
+) -> serde_json::Value {
     let quality = candidate.quality_profile_decision.as_ref();
     let scoring_log = quality
         .map(|decision| {
@@ -1779,7 +1854,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "parse_hints": &parsed.parse_hints,
         })
     });
-    let payload = serde_json::json!({
+    serde_json::json!({
         "candidate": {
             "source": candidate.source.as_str(),
             "source_kind": candidate.source_kind.map(|kind| kind.as_str()),
@@ -1789,9 +1864,9 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "external_id_conflicts": candidate.extra.get(EXTERNAL_ID_CONFLICTS_EXTRA_KEY),
         },
         "auto_decision": {
-            "eligible": candidate.auto_eligible,
-            "code": candidate.auto_decision_code.as_deref(),
-            "summary": candidate.auto_decision_summary.as_deref(),
+            "eligible": auto_decision.eligible,
+            "code": auto_decision.code,
+            "summary": auto_decision.summary,
             "decided_by": quality
                 .and_then(|decision| decision.decided_by)
                 .map(crate::ReleaseDecidingStep::as_str),
@@ -1804,9 +1879,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             "scoring_log": scoring_log,
         },
         "parsed": parsed,
-    });
-
-    serde_json::to_string(&payload).ok()
+    })
 }
 
 /// Sonarr-style episode anchoring for numbering-scoped subjects: an episode or
@@ -2367,8 +2440,12 @@ fn evaluate_auto_candidate_recording(
     // for one episode takes that episode, or a double episode that holds it,
     // never a season. The season and collection searches own packs and their
     // missing-episode threshold. An operator-started search and the feed are
-    // not single-episode searches and are left alone.
-    if !context.user_invoked
+    // not single-episode searches and are left alone. A profile whose pack
+    // minimum is one missing episode asks for exactly the pack this refuses,
+    // so the refusal stands only while the minimum is above one; the title,
+    // numbering, monitoring, quality and upgrade checks still apply.
+    if !context.thresholds.allows_pack_for_one_missing_episode()
+        && !context.user_invoked
         && !context.is_rss_lane
         && matches!(
             context.subject.submission_scope,
@@ -4995,6 +5072,141 @@ mod tests {
         }
     }
 
+    /// The recorded explanation is the serializer's own output, and that
+    /// output is already what parse-then-serialize would store, so the store
+    /// may compress it as it is.
+    #[test]
+    fn recorded_decision_explanation_is_already_canonical() {
+        let titles = [
+            "Synthetic.Show.S02E07.1080p.WEB-DL.DDP5.1.H.264-SYNTH",
+            "Synthetic Film 2026 2160p UHD BluRay REMUX HDR \"Cut\" \\ é-ÆON",
+            "Synthetic.Show.S01.COMPLETE.720p.HDTV.x264-PARITY",
+            "",
+        ];
+        for (index, title) in titles.iter().enumerate() {
+            let mut candidate = make_candidate(title, None);
+            candidate.guid = Some(format!("synthetic-guid-{index}\u{1}\t\n"));
+            candidate.download_url = Some(" ".to_string());
+            candidate.auto_eligible = Some(index % 2 == 0);
+            candidate.auto_decision_code = Some("quality_blocked".to_string());
+            candidate.extra.insert(
+                EXTERNAL_ID_CONFLICTS_EXTRA_KEY.to_string(),
+                serde_json::json!({"tvdb": [index, -1.5, 1e300, 0.1, u64::MAX], "z": null, "a": "é"}),
+            );
+            candidate.quality_profile_decision = Some(crate::QualityProfileDecision {
+                release_score: -40 + index as i32,
+                scoring_log: (0..index * 3)
+                    .map(|step| crate::ScoringEntry {
+                        code: format!("synthetic_rule_{step}"),
+                        delta: step as i32 * 7 - 10,
+                        source: crate::ScoringSource::Builtin,
+                        kind: crate::ScoringEntryKind::ScoreContribution,
+                    })
+                    .collect(),
+                allowed: index % 2 == 1,
+                block_codes: vec!["synthetic_block".to_string()],
+                preference_score: 12,
+                tier_index: None,
+                size_fit_penalty: 0,
+                revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
+            });
+            for candidate in [candidate.clone(), make_candidate(title, None)] {
+                let serialized = serialize_decision_explanation(&candidate)
+                    .expect("explanation should serialize");
+                let recorded = release_decision_explanation(&candidate);
+                assert_eq!(recorded.as_str(), serialized);
+                assert_eq!(recorded.canonical_text(), Some(serialized.as_str()));
+                let reparsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(serde_json::to_string(&reparsed).unwrap(), serialized);
+            }
+        }
+    }
+
+    /// Building the explanation from the borrowed candidate and the decision
+    /// code records exactly what annotating a copy of the candidate and then
+    /// serializing it recorded.
+    #[test]
+    fn explanation_for_a_code_matches_annotating_a_copy() {
+        let codes = [
+            ReleaseAutoDecisionCode::Eligible,
+            ReleaseAutoDecisionCode::QualityBlocked,
+            ReleaseAutoDecisionCode::PendingDelay,
+            ReleaseAutoDecisionCode::MinimumAge,
+            ReleaseAutoDecisionCode::ReleaseAgeUnknown,
+            ReleaseAutoDecisionCode::DownloadClientUnavailable,
+            ReleaseAutoDecisionCode::UpgradeRejected,
+            ReleaseAutoDecisionCode::DbBlocklisted,
+            ReleaseAutoDecisionCode::SubtitlesOnly,
+        ];
+        let titles = [
+            "Synthetic.Show.S02E07.1080p.WEB-DL.DDP5.1.H.264-SYNTH",
+            "Synthetic Film 2026 2160p UHD BluRay REMUX HDR \"Cut\" \\ é-ÆON",
+            "",
+        ];
+        let mut candidates = Vec::new();
+        for (index, title) in titles.iter().enumerate() {
+            candidates.push(make_candidate(title, None));
+            let mut varied = make_candidate(title, None);
+            varied.guid = Some(format!("synthetic-guid-{index}"));
+            // Stale annotations the code must replace.
+            varied.auto_eligible = Some(index % 2 == 0);
+            varied.auto_decision_code = Some("synthetic_stale_code".to_string());
+            varied.auto_decision_summary = Some("synthetic stale summary".to_string());
+            varied.extra.insert(
+                EXTERNAL_ID_CONFLICTS_EXTRA_KEY.to_string(),
+                serde_json::json!({"tvdb": [index, -1.5, 0.1], "a": "é"}),
+            );
+            varied.quality_profile_decision = Some(crate::QualityProfileDecision {
+                release_score: -40 + index as i32,
+                scoring_log: (0..index * 2)
+                    .map(|step| crate::ScoringEntry {
+                        code: format!("synthetic_rule_{step}"),
+                        delta: step as i32 * 7 - 10,
+                        source: crate::ScoringSource::Builtin,
+                        kind: crate::ScoringEntryKind::ScoreContribution,
+                    })
+                    .collect(),
+                allowed: index % 2 == 1,
+                block_codes: vec!["synthetic_block".to_string()],
+                preference_score: 12,
+                tier_index: None,
+                size_fit_penalty: 0,
+                revision_preference: 0,
+                language: Default::default(),
+                decision_pipeline: Default::default(),
+                decided_by: None,
+            });
+            candidates.push(varied);
+        }
+        for candidate in &candidates {
+            for code in codes {
+                let mut annotated = candidate.clone();
+                annotate_auto_decision(&mut annotated, code);
+                let expected = release_decision_explanation(&annotated);
+                let built = release_decision_explanation_for(candidate, code);
+                assert_eq!(built.as_str(), expected.as_str(), "code {}", code.as_str());
+                assert_eq!(built.canonical_text(), expected.canonical_text());
+                assert_eq!(
+                    decision_explanation_value_for(candidate, code),
+                    decision_explanation_value(&annotated)
+                );
+                // A candidate that already carries the annotation shares one
+                // text between its review park and its decision row.
+                assert!(candidate_carries_auto_decision(&annotated, code));
+                assert_eq!(
+                    serialize_decision_explanation(&annotated).as_deref(),
+                    Some(release_decision_explanation_for(&annotated, code).as_str())
+                );
+                if candidate.auto_decision_code.is_some() {
+                    assert!(!candidate_carries_auto_decision(candidate, code));
+                }
+            }
+        }
+    }
+
     fn make_media_file(release_title: &str, episode_id: Option<&str>) -> TitleMediaFile {
         TitleMediaFile {
             analysis_details: Default::default(),
@@ -5715,6 +5927,22 @@ mod tests {
         coverage_scope: Option<SubmissionScope>,
         user_invoked: bool,
     ) -> ReleaseAutoDecisionCode {
+        single_episode_decision_with_pack_minimum(
+            release,
+            wanted_episode,
+            coverage_scope,
+            user_invoked,
+            None,
+        )
+    }
+
+    fn single_episode_decision_with_pack_minimum(
+        release: &str,
+        wanted_episode: u32,
+        coverage_scope: Option<SubmissionScope>,
+        user_invoked: bool,
+        min_missing_episodes_for_pack: Option<u32>,
+    ) -> ReleaseAutoDecisionCode {
         let mut title = make_title();
         title.name = "Synthetic Show".to_string();
         title.facet = MediaFacet::Series;
@@ -5732,8 +5960,9 @@ mod tests {
         ));
         candidate.quality_profile_decision = Some(allowed_quality_decision(2400));
         candidate.coverage_scope = coverage_scope;
-        let profile = QualityProfile::default();
-        let thresholds = AcquisitionThresholds::default();
+        let mut profile = QualityProfile::default();
+        profile.criteria.min_missing_episodes_for_pack = min_missing_episodes_for_pack;
+        let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
         let now = Utc::now();
         let db_blocklist = crate::app_usecase_discovery::TitleReleaseBlocklistSignatures::default();
         let no_minimum_seeders = HashMap::new();
@@ -5757,6 +5986,59 @@ mod tests {
             unmonitored_episode_ids: &HashSet::new(),
         };
         evaluate_auto_candidate(&candidate, &context)
+    }
+
+    #[test]
+    fn a_pack_minimum_of_one_lets_a_single_episode_search_take_a_pack() {
+        let release = "Synthetic.Show.S01E01-E03.1080p.WEB-DL-SYNTH";
+        let triple = Some(SubmissionScope::EpisodeSet {
+            episode_ids: vec!["ep-1".into(), "ep-2".into(), "ep-3".into()],
+        });
+        let season = Some(SubmissionScope::Collection {
+            collection_id: "season-1".to_string(),
+        });
+        // Unset and the stored default both refuse, as before the setting.
+        for minimum in [None, Some(2), Some(5)] {
+            assert_eq!(
+                single_episode_decision_with_pack_minimum(
+                    release,
+                    1,
+                    triple.clone(),
+                    false,
+                    minimum
+                ),
+                ReleaseAutoDecisionCode::PackForSingleEpisode,
+                "minimum {minimum:?}"
+            );
+        }
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(release, 1, triple.clone(), false, Some(1)),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(
+                "Synthetic.Show.S01.1080p.WEB-DL-SYNTH",
+                1,
+                season,
+                false,
+                Some(1)
+            ),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        // The identity checks ahead of the pack gate still decide.
+        let foreign = "Another.Show.S01E01-E03.1080p.WEB-DL-SYNTH";
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, Some(1)),
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, None),
+        );
+        assert_ne!(
+            single_episode_decision_with_pack_minimum(foreign, 1, triple.clone(), false, Some(1)),
+            ReleaseAutoDecisionCode::Eligible,
+        );
+        assert_eq!(
+            single_episode_decision_with_pack_minimum(release, 7, triple, false, Some(1)),
+            ReleaseAutoDecisionCode::EpisodeMismatch,
+        );
     }
 
     #[test]

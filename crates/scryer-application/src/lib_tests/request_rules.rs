@@ -2615,7 +2615,7 @@ async fn the_builder_model_round_trips_and_is_bounded() {
             crate::error_reasons::rules::BUILDER_MODEL_INVALID,
         ),
         (
-            serde_json::json!({ "family": "maintenance", "version": 1 }),
+            serde_json::json!({ "family": "lifecycle", "version": 1 }),
             crate::error_reasons::rules::BUILDER_MODEL_INVALID,
         ),
         (

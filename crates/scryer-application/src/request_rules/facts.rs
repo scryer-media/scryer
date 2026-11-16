@@ -835,7 +835,14 @@ fn history_fact<T: serde::Serialize, F: FnOnce() -> T>(
 fn us_content_rating(
     snapshot: &MediaRequestMetadataSnapshot,
 ) -> Option<&crate::types::ContentRating> {
-    snapshot.content_ratings.iter().find(|rating| {
+    us_content_rating_in(&snapshot.content_ratings)
+}
+
+/// The US row of a list of content ratings, if there is one.
+fn us_content_rating_in(
+    content_ratings: &[crate::types::ContentRating],
+) -> Option<&crate::types::ContentRating> {
+    content_ratings.iter().find(|rating| {
         US_COUNTRY_CODES
             .iter()
             .any(|code| rating.country.trim().eq_ignore_ascii_case(code))
@@ -875,7 +882,18 @@ pub fn snapshot_age_rating(snapshot: &MediaRequestMetadataSnapshot) -> Option<i6
 /// The US certification value, if there is one. Public for the same reason
 /// [`snapshot_age_rating`] is.
 pub fn us_certification_label(snapshot: &MediaRequestMetadataSnapshot) -> Option<String> {
-    us_content_rating(snapshot).and_then(|rating| {
+    content_ratings_us_certification_label(&snapshot.content_ratings)
+}
+
+/// The US certification value of a list of content ratings, if there is one.
+///
+/// The one place the label is chosen: the `certification_label` fact reads a
+/// request snapshot through it, and a library title's badge reads the title's
+/// stored ratings through it, so the two always show the same value.
+pub fn content_ratings_us_certification_label(
+    content_ratings: &[crate::types::ContentRating],
+) -> Option<String> {
+    us_content_rating_in(content_ratings).and_then(|rating| {
         rating
             .certifications
             .iter()

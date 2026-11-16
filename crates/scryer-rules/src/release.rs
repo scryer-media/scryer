@@ -406,7 +406,7 @@ pub(crate) fn score_entry_wrapper_policy_path(rule_id: &str) -> String {
 ///
 /// Release has no fact envelopes and no hold: every field of a release document
 /// is either present or absent, and absence is an answer. What it does have,
-/// and maintenance does not, is per-rule applicability (facets) and a managed
+/// and lifecycle does not, is per-rule applicability (facets) and a managed
 /// origin whose scores are held to a contract at build and at evaluation.
 pub struct ReleaseFamily;
 
@@ -512,6 +512,7 @@ impl PolicyFamily for ReleaseFamily {
         rule_id: &str,
         rule_name: &str,
         extra: &Self::RuleExtra,
+        _facet: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         Ok(UserRulesEvaluator::extract_entries(
             value,
@@ -2275,13 +2276,13 @@ score_entry["internal"] := 300 if {
         templates
     }
 
-    /// The maintenance family's source scan (action heads, host helpers,
+    /// The lifecycle family's source scan (action heads, host helpers,
     /// `with` targets, foreign `data`) never reaches a scoring rule: a scoring
-    /// source that uses `with`, defines rules named like maintenance heads or
+    /// source that uses `with`, defines rules named like lifecycle heads or
     /// helpers, or is one of the shipped templates validates and scores as it
     /// always has.
     #[test]
-    fn scoring_sources_are_untouched_by_the_maintenance_source_contract() {
+    fn scoring_sources_are_untouched_by_the_lifecycle_source_contract() {
         let cases = [
             (
                 "with_override",
@@ -2293,7 +2294,7 @@ score_entry["internal"] := 300 if {
                 vec![("forced", 100)],
             ),
             (
-                "maintenance_names",
+                "lifecycle_names",
                 "import rego.v1\n\n\
                  delete_files := true\n\
                  unmonitor := 1\n\

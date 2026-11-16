@@ -304,6 +304,7 @@ mod tests {
                         movie_release_dates: None,
                         ratings: None,
                         credits: None,
+                        content_ratings: None,
                         extra_external_ids: Vec::new(),
                         extra_tags: Vec::new(),
                     },
@@ -1344,7 +1345,14 @@ mod tests {
         ] {
             assert!(indexes.insert(added.to_string()), "{added} is new in 0336");
         }
+        // 0358 renames the lifecycle rule tables' indexes.
         indexes
+            .into_iter()
+            .map(|name| match name.strip_prefix("idx_maintenance_") {
+                Some(rest) => format!("idx_lifecycle_{rest}"),
+                None => name,
+            })
+            .collect()
     }
 
     fn postgres_0341_baseline_path() -> PathBuf {

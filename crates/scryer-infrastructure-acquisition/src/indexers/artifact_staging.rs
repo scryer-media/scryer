@@ -517,6 +517,7 @@ where
         let mut raw_size_bytes = 0u64;
         let mut category_probe = expected_facet.map(NzbCategoryProbe::new);
         let mut error_probe = Vec::new();
+        let mut validator_stopped = false;
 
         let stream_result: AppResult<()> = loop {
             let next = tokio::select! {
@@ -552,9 +553,12 @@ where
                 _ = cancellation.cancelled() => break cancellation_error(),
                 sent = validator_tx.send(bytes.to_vec()) => match sent {
                     Ok(()) => {},
-                    Err(_) => break Err(AppError::Repository(
-                        "nzb validation task stopped before download completed".into()
-                    )),
+                    Err(_) => {
+                        validator_stopped = true;
+                        break Err(AppError::Repository(
+                            "nzb validation task stopped before download completed".into()
+                        ));
+                    }
                 },
             }
         };
@@ -562,8 +566,15 @@ where
         let validator_result = validator_task.await.map_err(|error| {
             AppError::Repository(format!("nzb validation task failed to join: {error}"))
         })?;
-        stream_result?;
-        validator_result?;
+        // A validator that refused the document mid-stream says why; the
+        // stream only saw it stop.
+        if validator_stopped {
+            validator_result?;
+            stream_result?;
+        } else {
+            stream_result?;
+            validator_result?;
+        }
         if raw_size_bytes == 0 {
             return Err(AppError::Repository(
                 "nzb download response body was empty".into(),
@@ -798,10 +809,18 @@ fn stream_validate_and_compress_nzb(
 ) -> AppResult<()> {
     let source = MpscChunkReader::new(receiver);
     let tee = TeeZstdReader::new(source, output_path)?;
-    let mut reader = Reader::from_reader(StdBufReader::new(tee));
+    // The staged copy keeps the original bytes; only the validator reads the
+    // Latin-1 bytes of an older NZB as text.
+    let text = scryer_application::nzb_text::Utf8OrLatin1::new(StdBufReader::new(tee));
+    let mut reader = Reader::from_reader(StdBufReader::new(text));
     reader.config_mut().trim_text(false);
     let reader = validate_nzb_reader(reader)?;
-    reader.into_inner().into_inner().finish()
+    reader
+        .into_inner()
+        .into_inner()
+        .into_inner()
+        .into_inner()
+        .finish()
 }
 
 fn validate_nzb_reader<R: BufRead>(mut reader: Reader<R>) -> AppResult<Reader<R>> {
@@ -1228,6 +1247,77 @@ mod tests {
         let mut members = compress(super::NzbCompression::Gzip, first).await;
         members.extend(compress(super::NzbCompression::Gzip, second).await);
         assert_eq!(super::inflate_compressed_nzb(members).await.unwrap(), nzb);
+    }
+
+    #[tokio::test]
+    async fn latin1_entities_cdata_and_a_prolog_stage_like_sabnzbd_reads_them() {
+        for (label, bytes) in [
+            (
+                "latin-1",
+                b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n<nzb><head><meta type=\"category\">TV</meta><meta type=\"poster\">Andr\xe9</meta></head><file poster=\"Andr\xe9\" subject=\"Synthetic.Caf\xe9.mkv yEnc (1/1)\"><groups><group>alt.binaries.test</group></groups><segments><segment number=\"1\">a@example.invalid</segment></segments></file></nzb>".to_vec(),
+            ),
+            (
+                "named entities",
+                b"<nzb><head><meta type=\"category\">TV</meta></head><file subject=\"Synthetic&nbsp;Caf&eacute;.mkv&unknownentity; yEnc\"><groups><group>alt.binaries.test</group></groups><segments><segment number=\"1\">a&nbsp;b@example.invalid</segment></segments></file></nzb>".to_vec(),
+            ),
+            (
+                "cdata",
+                b"<nzb><head><meta type=\"category\"><![CDATA[TV]]></meta></head><file subject=\"Synthetic.mkv\"><groups><group><![CDATA[alt.binaries.test]]></group></groups><segments><segment number=\"1\"><![CDATA[a<b>@example.invalid]]></segment></segments></file></nzb>".to_vec(),
+            ),
+            (
+                "byte order mark and comment",
+                b"\xef\xbb\xbf<!-- synthetic -->\n<nzb><file/></nzb>".to_vec(),
+            ),
+        ] {
+            let tempdir = TempDir::new().unwrap();
+            let store = store(&tempdir).await;
+            let chunks = stream::iter(
+                bytes
+                    .chunks(5)
+                    .map(|chunk| Ok::<_, std::io::Error>(chunk.to_vec()))
+                    .collect::<Vec<_>>(),
+            );
+            let lease = stage_nzb_from_stream(
+                chunks,
+                &store,
+                &Arc::new(Semaphore::new(1)),
+                "loose-nzb",
+                None,
+                Some(&scryer_domain::MediaFacet::Series),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+            assert_eq!(staged_bytes(&lease), bytes, "{label}");
+        }
+    }
+
+    /// The stream keeps sending after the validator refuses the document, so
+    /// the send fails; the refusal is what reaches the caller.
+    #[tokio::test]
+    async fn a_refusal_mid_stream_reports_the_validators_reason() {
+        let tempdir = TempDir::new().unwrap();
+        let store = store(&tempdir).await;
+        let chunks = stream::iter(vec![Ok::<_, std::io::Error>(b"<html>".to_vec())])
+            .chain(stream::repeat_with(|| Ok(b" ".to_vec())));
+        let error = stage_nzb_from_stream(
+            chunks,
+            &store,
+            &Arc::new(Semaphore::new(1)),
+            "refused-mid-stream",
+            None,
+            None,
+            &CancellationToken::new(),
+        )
+        .await
+        .err()
+        .expect("an html page must reject");
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::ACQUISITION_NZB_ROOT_INVALID),
+            "{error:?}"
+        );
+        assert!(!contains_partial(tempdir.path()));
     }
 
     #[tokio::test]

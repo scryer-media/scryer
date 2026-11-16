@@ -278,14 +278,14 @@ pub mod library {
     /// Scoped policy deletion cannot remove directories.
     pub const SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES: &str =
         "LIBRARY_SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES";
-    /// Maintenance deletion targets changed; re-evaluation required.
-    pub const MAINTENANCE_DELETION_TARGETS_CHANGED: &str =
-        "LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED";
-    /// Maintenance deletion file changed; re-evaluation required.
-    pub const MAINTENANCE_DELETION_FILE_CHANGED: &str = "LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED";
-    /// Maintenance deletion fingerprint changed.
-    pub const MAINTENANCE_DELETION_FINGERPRINT_CHANGED: &str =
-        "LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED";
+    /// Lifecycle deletion targets changed; re-evaluation required.
+    pub const LIFECYCLE_DELETION_TARGETS_CHANGED: &str =
+        "LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED";
+    /// Lifecycle deletion file changed; re-evaluation required.
+    pub const LIFECYCLE_DELETION_FILE_CHANGED: &str = "LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED";
+    /// Lifecycle deletion fingerprint changed.
+    pub const LIFECYCLE_DELETION_FINGERPRINT_CHANGED: &str =
+        "LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED";
     /// External subtitle was not found.
     pub const EXTERNAL_SUBTITLE_NOT_FOUND: &str = "LIBRARY_EXTERNAL_SUBTITLE_NOT_FOUND";
     /// Only provider-backed downloaded subtitles can be blocklisted.
@@ -433,9 +433,9 @@ pub mod library {
         DESTINATION_OCCUPIED,
         EPISODE_ID_REQUIRED,
         SCOPED_POLICY_DELETION_CANNOT_REMOVE_DIRECTORIES,
-        MAINTENANCE_DELETION_TARGETS_CHANGED,
-        MAINTENANCE_DELETION_FILE_CHANGED,
-        MAINTENANCE_DELETION_FINGERPRINT_CHANGED,
+        LIFECYCLE_DELETION_TARGETS_CHANGED,
+        LIFECYCLE_DELETION_FILE_CHANGED,
+        LIFECYCLE_DELETION_FINGERPRINT_CHANGED,
         EXTERNAL_SUBTITLE_NOT_FOUND,
         ONLY_PROVIDER_BACKED_DOWNLOADED_SUBTITLES_BLOCKLISTED,
         MEDIA_FILE_NOT_FOUND,
@@ -1880,160 +1880,152 @@ pub mod oauth {
     ];
 }
 
-pub mod maintenance {
+pub mod lifecycle {
     /// The candidate count changed. Review the current count before arming.
-    pub const ARM_COUNT_MISMATCH: &str = "MAINTENANCE_ARM_COUNT_MISMATCH";
-    /// Maintenance exclusion was not found.
-    pub const EXCLUSION_NOT_FOUND: &str = "MAINTENANCE_EXCLUSION_NOT_FOUND";
-    /// The maintenance rule failed to compile.
-    pub const RULE_FAILED_COMPILE: &str = "MAINTENANCE_RULE_FAILED_COMPILE";
-    /// Ambiguous maintenance file coverage.
-    pub const AMBIGUOUS_MAINTENANCE_FILE_COVERAGE: &str =
-        "MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE";
+    pub const ARM_COUNT_MISMATCH: &str = "LIFECYCLE_ARM_COUNT_MISMATCH";
+    /// Lifecycle exclusion was not found.
+    pub const EXCLUSION_NOT_FOUND: &str = "LIFECYCLE_EXCLUSION_NOT_FOUND";
+    /// The lifecycle rule failed to compile.
+    pub const RULE_FAILED_COMPILE: &str = "LIFECYCLE_RULE_FAILED_COMPILE";
+    /// Ambiguous lifecycle file coverage.
+    pub const AMBIGUOUS_LIFECYCLE_FILE_COVERAGE: &str =
+        "LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE";
     /// Child deletion requires an episode or season.
     pub const CHILD_DELETION_REQUIRES_EPISODE_SEASON: &str =
-        "MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON";
-    /// Maintenance unmonitoring candidate identity does not match its title.
+        "LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON";
+    /// Lifecycle unmonitoring candidate identity does not match its title.
     pub const UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE: &str =
-        "MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE";
-    /// Maintenance file targets changed; another evaluation is required.
+        "LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE";
+    /// Lifecycle file targets changed; another evaluation is required.
     pub const FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED: &str =
-        "MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED";
-    /// Maintenance file ownership changed.
-    pub const FILE_OWNERSHIP_CHANGED: &str = "MAINTENANCE_FILE_OWNERSHIP_CHANGED";
+        "LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED";
+    /// Lifecycle file ownership changed.
+    pub const FILE_OWNERSHIP_CHANGED: &str = "LIFECYCLE_FILE_OWNERSHIP_CHANGED";
     /// This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.
-    pub const RULE_SHIPS_SCRYER: &str = "MAINTENANCE_RULE_SHIPS_SCRYER";
+    pub const RULE_SHIPS_SCRYER: &str = "LIFECYCLE_RULE_SHIPS_SCRYER";
     /// This rule ships with Scryer and cannot be renamed.
-    pub const RULE_SHIPS_SCRYER_CANNOT_RENAMED: &str =
-        "MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED";
+    pub const RULE_SHIPS_SCRYER_CANNOT_RENAMED: &str = "LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED";
     /// This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.
-    pub const RULE_SHIPS_SCRYER_CANNOT_DELETED: &str =
-        "MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED";
+    pub const RULE_SHIPS_SCRYER_CANNOT_DELETED: &str = "LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED";
     /// This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.
     pub const ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID: &str =
-        "MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID";
+        "LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID";
     /// This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.
     pub const CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE: &str =
-        "MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE";
+        "LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE";
     /// Rule validation failed.
-    pub const RULE_VALIDATION_FAILED: &str = "MAINTENANCE_RULE_VALIDATION_FAILED";
+    pub const RULE_VALIDATION_FAILED: &str = "LIFECYCLE_RULE_VALIDATION_FAILED";
     /// Preview requires between one and fifty subjects.
     pub const PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS: &str =
-        "MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS";
+        "LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS";
     /// Rule evaluation failed.
-    pub const RULE_EVALUATION_FAILED: &str = "MAINTENANCE_RULE_EVALUATION_FAILED";
+    pub const RULE_EVALUATION_FAILED: &str = "LIFECYCLE_RULE_EVALUATION_FAILED";
     /// Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.
-    pub const PREVIEW_SUBJECT_OUTSIDE_SCOPE: &str = "MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE";
+    pub const PREVIEW_SUBJECT_OUTSIDE_SCOPE: &str = "LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE";
     /// This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.
     pub const PERSON_TARGETING_PERMISSION_REQUIRED: &str =
-        "MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED";
+        "LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED";
     /// A matcher that reads storage facts must select a configured library root.
     pub const MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT: &str =
-        "MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT";
+        "LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT";
     /// The storage root the rule selects is not configured.
-    pub const STORAGE_ROOT_NOT_CONFIGURED: &str = "MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED";
-    /// Maintenance rule set was not found.
-    pub const RULE_SET_NOT_FOUND: &str = "MAINTENANCE_RULE_SET_NOT_FOUND";
+    pub const STORAGE_ROOT_NOT_CONFIGURED: &str = "LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED";
+    /// Lifecycle rule set was not found.
+    pub const RULE_SET_NOT_FOUND: &str = "LIFECYCLE_RULE_SET_NOT_FOUND";
     /// Preview accepts at most 50 titles.
     pub const PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED: &str =
-        "MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED";
+        "LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED";
     /// Grace period must be zero or more days.
-    pub const GRACE_PERIOD_INVALID: &str = "MAINTENANCE_GRACE_PERIOD_INVALID";
+    pub const GRACE_PERIOD_INVALID: &str = "LIFECYCLE_GRACE_PERIOD_INVALID";
     /// Grace period must be at most 3650 days (ten years).
-    pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE";
-    /// Maintenance action is not storable.
-    pub const ACTION_NOT_STORABLE: &str = "MAINTENANCE_ACTION_NOT_STORABLE";
+    pub const GRACE_PERIOD_OUT_OF_RANGE: &str = "LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE";
+    /// Lifecycle action is not storable.
+    pub const ACTION_NOT_STORABLE: &str = "LIFECYCLE_ACTION_NOT_STORABLE";
     /// The rule's current revision stores its action the way builds before
     /// rules declared their own actions did. It is never evaluated or run
     /// until a revision that declares its actions replaces it.
-    pub const RULE_STORED_ACTIONS_NOT_DECLARED: &str =
-        "MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED";
+    pub const RULE_STORED_ACTIONS_NOT_DECLARED: &str = "LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED";
     /// The rule is armed to run an action that deletes but has no most titles
     /// per run. It still evaluates and previews; its actions do not run until
     /// a maximum is set or the rule is disarmed.
     pub const RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN: &str =
-        "MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN";
+        "LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN";
     /// Another save gave the rule a new revision first; this save wrote
     /// nothing and can be retried against the current revision.
-    pub const RULE_REVISION_CONFLICT: &str = "MAINTENANCE_RULE_REVISION_CONFLICT";
+    pub const RULE_REVISION_CONFLICT: &str = "LIFECYCLE_RULE_REVISION_CONFLICT";
     /// A previewed subject got neither a decision nor an error from the rule.
-    pub const PREVIEW_NO_DECISION: &str = "MAINTENANCE_PREVIEW_NO_DECISION";
-    /// This maintenance action is not supported for titles.
-    pub const ACTION_UNSUPPORTED: &str = "MAINTENANCE_ACTION_UNSUPPORTED";
-    /// Maintenance action is not valid for a title-scoped rule.
-    pub const ACTION_INVALID: &str = "MAINTENANCE_ACTION_INVALID";
+    pub const PREVIEW_NO_DECISION: &str = "LIFECYCLE_PREVIEW_NO_DECISION";
+    /// This lifecycle action is not supported for titles.
+    pub const ACTION_UNSUPPORTED: &str = "LIFECYCLE_ACTION_UNSUPPORTED";
+    /// Lifecycle action is not valid for a title-scoped rule.
+    pub const ACTION_INVALID: &str = "LIFECYCLE_ACTION_INVALID";
     /// A required field is empty.
-    pub const FIELD_REQUIRED: &str = "MAINTENANCE_FIELD_REQUIRED";
+    pub const FIELD_REQUIRED: &str = "LIFECYCLE_FIELD_REQUIRED";
     /// Movie titles do not have an episode inventory.
     pub const MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY: &str =
-        "MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY";
-    /// Invalid maintenance subject kind.
-    pub const SUBJECT_KIND_INVALID: &str = "MAINTENANCE_SUBJECT_KIND_INVALID";
-    /// Maintenance subject ID is required.
-    pub const SUBJECT_ID_REQUIRED: &str = "MAINTENANCE_SUBJECT_ID_REQUIRED";
-    /// Maintenance subject no longer belongs to this title was not found.
+        "LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY";
+    /// Invalid lifecycle subject kind.
+    pub const SUBJECT_KIND_INVALID: &str = "LIFECYCLE_SUBJECT_KIND_INVALID";
+    /// Lifecycle subject ID is required.
+    pub const SUBJECT_ID_REQUIRED: &str = "LIFECYCLE_SUBJECT_ID_REQUIRED";
+    /// Lifecycle subject no longer belongs to this title was not found.
     pub const SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND: &str =
-        "MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND";
+        "LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND";
     /// This rule's action never changes anything, so it can only run as a dry run.
     pub const RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN: &str =
-        "MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN";
+        "LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN";
     /// The rule configuration must be reviewed again before arming deletion; reopen the confirmation.
-    pub const RULE_CONFIGURATION_INVALID: &str = "MAINTENANCE_RULE_CONFIGURATION_INVALID";
+    pub const RULE_CONFIGURATION_INVALID: &str = "LIFECYCLE_RULE_CONFIGURATION_INVALID";
     /// The rule changed while confirming; review it again before arming deletion.
-    pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING";
+    pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING";
     /// Sequence actions must use the sequence executor.
-    pub const SEQUENCE_ACTIONS_INVALID: &str = "MAINTENANCE_SEQUENCE_ACTIONS_INVALID";
+    pub const SEQUENCE_ACTIONS_INVALID: &str = "LIFECYCLE_SEQUENCE_ACTIONS_INVALID";
     /// Tag action has no tags configured.
-    pub const TAG_ACTION_NO_TAGS_CONFIGURED: &str = "MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED";
+    pub const TAG_ACTION_NO_TAGS_CONFIGURED: &str = "LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED";
     /// Quality-profile action has no target profile.
     pub const QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE: &str =
-        "MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE";
+        "LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE";
     /// The target quality profile does not exist.
     pub const TARGET_QUALITY_PROFILE_DOES_NOT_EXIST: &str =
-        "MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST";
-    /// Maintenance sequence step parameters are invalid.
-    pub const SEQUENCE_STEP_PARAMETERS_INVALID: &str =
-        "MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID";
+        "LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST";
+    /// Lifecycle sequence step parameters are invalid.
+    pub const SEQUENCE_STEP_PARAMETERS_INVALID: &str = "LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID";
     /// DeleteFiles requires an earlier Unmonitor step.
     pub const DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP: &str =
-        "MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP";
+        "LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP";
     /// DeleteFiles has an incompatible Unmonitor prerequisite.
     pub const DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE: &str =
-        "MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE";
-    /// The maintenance rule source is invalid.
-    pub const RULE_SOURCE_INVALID: &str = "MAINTENANCE_RULE_SOURCE_INVALID";
-    /// The maintenance action configuration is invalid.
-    pub const ACTION_CONFIGURATION_INVALID: &str = "MAINTENANCE_ACTION_CONFIGURATION_INVALID";
+        "LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE";
+    /// The lifecycle rule source is invalid.
+    pub const RULE_SOURCE_INVALID: &str = "LIFECYCLE_RULE_SOURCE_INVALID";
+    /// The lifecycle action configuration is invalid.
+    pub const ACTION_CONFIGURATION_INVALID: &str = "LIFECYCLE_ACTION_CONFIGURATION_INVALID";
     /// The rule source defines no action head, so it could never do anything.
-    pub const ACTION_HEAD_REQUIRED: &str = "MAINTENANCE_ACTION_HEAD_REQUIRED";
-    /// The rule defines an action head its scope cannot run.
-    pub const ACTION_HEAD_UNSUPPORTED_FOR_SCOPE: &str =
-        "MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE";
+    pub const ACTION_HEAD_REQUIRED: &str = "LIFECYCLE_ACTION_HEAD_REQUIRED";
     /// A `set_quality_profile` literal names no existing quality profile.
-    pub const QUALITY_PROFILE_NOT_FOUND: &str = "MAINTENANCE_QUALITY_PROFILE_NOT_FOUND";
+    pub const QUALITY_PROFILE_NOT_FOUND: &str = "LIFECYCLE_QUALITY_PROFILE_NOT_FOUND";
     /// A `move_to_library` literal names no library.
-    pub const MOVE_LIBRARY_NOT_FOUND: &str = "MAINTENANCE_MOVE_LIBRARY_NOT_FOUND";
+    pub const MOVE_LIBRARY_NOT_FOUND: &str = "LIFECYCLE_MOVE_LIBRARY_NOT_FOUND";
     /// A `move_to_library` literal names a library of another media kind
     /// than the rule's libraries.
-    pub const MOVE_LIBRARY_FACET_MISMATCH: &str = "MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH";
+    pub const MOVE_LIBRARY_FACET_MISMATCH: &str = "LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH";
     /// A `move_to_root` literal names no configured library root.
-    pub const MOVE_ROOT_NOT_FOUND: &str = "MAINTENANCE_MOVE_ROOT_NOT_FOUND";
+    pub const MOVE_ROOT_NOT_FOUND: &str = "LIFECYCLE_MOVE_ROOT_NOT_FOUND";
     /// A rule that can delete was saved or armed without the most titles it
     /// may act on in one run. The `destructiveActions` extension names the
     /// delete actions that require it.
-    pub const RULE_MAX_TITLES_PER_RUN_REQUIRED: &str =
-        "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
+    pub const RULE_MAX_TITLES_PER_RUN_REQUIRED: &str = "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED";
     /// The most titles a rule acts on in one run is below one.
-    pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID";
+    pub const RULE_MAX_TITLES_PER_RUN_INVALID: &str = "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID";
     /// A request to act now named no rule. Rules act only through their own
     /// fires, so acting now needs the rule to act for.
-    pub const ACTION_RUN_RULE_REQUIRED: &str = "MAINTENANCE_ACTION_RUN_RULE_REQUIRED";
+    pub const ACTION_RUN_RULE_REQUIRED: &str = "LIFECYCLE_ACTION_RUN_RULE_REQUIRED";
     /// Every reason owned by this policy area.
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
         EXCLUSION_NOT_FOUND,
         RULE_FAILED_COMPILE,
-        AMBIGUOUS_MAINTENANCE_FILE_COVERAGE,
+        AMBIGUOUS_LIFECYCLE_FILE_COVERAGE,
         CHILD_DELETION_REQUIRES_EPISODE_SEASON,
         UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE,
         FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED,
@@ -2079,7 +2071,6 @@ pub mod maintenance {
         RULE_SOURCE_INVALID,
         ACTION_CONFIGURATION_INVALID,
         ACTION_HEAD_REQUIRED,
-        ACTION_HEAD_UNSUPPORTED_FOR_SCOPE,
         QUALITY_PROFILE_NOT_FOUND,
         MOVE_LIBRARY_NOT_FOUND,
         MOVE_LIBRARY_FACET_MISMATCH,
@@ -2157,12 +2148,12 @@ pub mod acquisition {
         "ACQUISITION_AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM";
     /// Another search is running. Wait for it to finish or cancel it before starting this search.
     pub const ANOTHER_SEARCH_RUNNING: &str = "ACQUISITION_ANOTHER_SEARCH_RUNNING";
-    /// Maintenance Search dispatch requires a preallocated job run id.
-    pub const MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID: &str =
-        "ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID";
-    /// Maintenance Search dispatch requires an accepted receipt intent.
-    pub const MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT: &str =
-        "ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT";
+    /// Lifecycle Search dispatch requires a preallocated job run id.
+    pub const LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID: &str =
+        "ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID";
+    /// Lifecycle Search dispatch requires an accepted receipt intent.
+    pub const LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT: &str =
+        "ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT";
     /// Recovery search job was not found.
     pub const RECOVERY_SEARCH_JOB_NOT_FOUND: &str = "ACQUISITION_RECOVERY_SEARCH_JOB_NOT_FOUND";
     /// Unsupported saved search version.
@@ -2227,8 +2218,8 @@ pub mod acquisition {
         SEASON_INVALID,
         AUTOMATIC_SEARCH_REQUIRES_TITLE_CANNOT_SELECT_WANTED_ITEM,
         ANOTHER_SEARCH_RUNNING,
-        MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID,
-        MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT,
+        LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID,
+        LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT,
         RECOVERY_SEARCH_JOB_NOT_FOUND,
         SEARCH_VERSION_UNSUPPORTED,
         WANTED_KIND_INVALID,
@@ -6349,7 +6340,7 @@ mod tests {
             ("SECURITY_", security::ALL),
             ("RULE_", rules::ALL),
             ("OAUTH_", oauth::ALL),
-            ("MAINTENANCE_", maintenance::ALL),
+            ("LIFECYCLE_", lifecycle::ALL),
             ("ACQUISITION_", acquisition::ALL),
             ("STANDBY_", standby::ALL),
             ("LOCATION_", location::ALL),

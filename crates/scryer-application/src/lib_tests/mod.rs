@@ -42,25 +42,25 @@ mod job_run_terminal_write;
 mod landed_bar_memo;
 mod libraries;
 mod library_scan;
+mod lifecycle_action_sequences;
+mod lifecycle_claims;
+mod lifecycle_evaluation;
+mod lifecycle_execution;
+mod lifecycle_rules;
+mod lifecycle_safety;
+mod lifecycle_sequence_deletion;
+mod lifecycle_sequence_execution;
+mod lifecycle_sequence_history;
+mod lifecycle_storage_execution;
+mod lifecycle_title_completion;
+mod lifecycle_watch_facts;
+mod lifecycle_watch_recheck;
 mod list_account_keys;
 mod list_accounts;
 mod list_actions;
 mod list_experimental_gate;
 mod list_provider_settings;
 mod list_user_events;
-mod maintenance_action_sequences;
-mod maintenance_claims;
-mod maintenance_evaluation;
-mod maintenance_execution;
-mod maintenance_rules;
-mod maintenance_safety;
-mod maintenance_sequence_deletion;
-mod maintenance_sequence_execution;
-mod maintenance_sequence_history;
-mod maintenance_storage_execution;
-mod maintenance_title_completion;
-mod maintenance_watch_facts;
-mod maintenance_watch_recheck;
 mod media_analysis;
 mod media_requests;
 mod media_server_signals;
@@ -100,6 +100,7 @@ mod unconfirmed_grab_release;
 mod user_permissions;
 mod users_admin_titles;
 mod verification_settings;
+mod wanted_scope_lookup;
 
 mod request_rules_support;
 mod support_acquisition_downloads;
@@ -314,10 +315,10 @@ impl ScopeIndexerCoverageRepository for RecordingScopeIndexerCoverageRepo {
 /// meant, each firing when `match` holds.
 pub(crate) fn legacy_source(
     source: impl AsRef<str>,
-    kind: crate::maintenance_rules::MaintenanceActionKind,
+    kind: crate::lifecycle_rules::LifecycleActionKind,
 ) -> String {
-    use crate::maintenance_rules::MaintenanceActionKind as Kind;
-    use scryer_rules::maintenance_actions::MaintenanceActionHead as Head;
+    use crate::lifecycle_rules::LifecycleActionKind as Kind;
+    use scryer_rules::lifecycle_actions::LifecycleActionHead as Head;
     let heads: &[Head] = match kind {
         Kind::UnmonitorScopeKeepFiles | Kind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
             &[Head::Unmonitor]
@@ -332,16 +333,62 @@ pub(crate) fn legacy_source(
     append_heads_to_match_source(source.as_ref(), heads)
 }
 
+/// [`legacy_source`] for a fixture written when a rule was scoped to seasons
+/// or episodes: its heads act at that level and the facts it read as the
+/// subject's are read from that level's document.
+pub(crate) fn legacy_source_at(
+    source: impl AsRef<str>,
+    kind: crate::lifecycle_rules::LifecycleActionKind,
+    scope: scryer_domain::LifecycleRuleSubjectKind,
+) -> String {
+    use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
+    let (level, path) = match scope {
+        scryer_domain::LifecycleRuleSubjectKind::Title => return legacy_source(source, kind),
+        scryer_domain::LifecycleRuleSubjectKind::Season => (Level::Season, "season"),
+        scryer_domain::LifecycleRuleSubjectKind::Episode => (Level::Episode, "episode"),
+    };
+    let source = source
+        .as_ref()
+        .replace("input.facts.", &format!("input.{path}.facts."))
+        .replace(
+            "input.observations.",
+            &format!("input.{path}.observations."),
+        );
+    narrow_heads(&legacy_source(&source, kind), level)
+}
+
+/// Rename a title-level source's bare heads to their heads at `level`.
+fn narrow_heads(source: &str, level: scryer_rules::lifecycle::LifecycleSubjectKind) -> String {
+    use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
+    let mut narrowed = source.to_string();
+    for head in scryer_rules::lifecycle_actions::LifecycleActionHead::ALL {
+        if head.level() != Level::Title {
+            continue;
+        }
+        if let Some(at) = head.at_level(level) {
+            let bare = format!("\n{} if", head.rule_name());
+            narrowed = narrowed.replace(&bare, &format!("\n{} if", at.rule_name()));
+        }
+    }
+    narrowed
+}
+
+/// A title-level source whose heads act on episodes instead.
+pub(crate) fn episode_heads(source: &str) -> String {
+    narrow_heads(
+        source,
+        scryer_rules::lifecycle::LifecycleSubjectKind::Episode,
+    )
+}
+
 /// A `match`-form fixture source with the heads a step list means. A profile id is used
 /// as its name, the way the shared bootstrap names its test profiles.
 pub(crate) fn steps_source(
     source: impl AsRef<str>,
-    steps: &[crate::maintenance_rules::MaintenanceActionStep],
+    steps: &[crate::lifecycle_rules::LifecycleActionStep],
 ) -> String {
-    use crate::maintenance_rules::{
-        MaintenanceActionStepKind as Kind, MaintenanceActionStepParameters,
-    };
-    let mut actions = scryer_rules::maintenance_actions::MaintenanceActions::default();
+    use crate::lifecycle_rules::{LifecycleActionStepKind as Kind, LifecycleActionStepParameters};
+    let mut actions = scryer_rules::lifecycle_actions::LifecycleActions::default();
     for step in steps {
         match step.kind {
             Kind::Unmonitor => actions.unmonitor = true,
@@ -355,7 +402,7 @@ pub(crate) fn steps_source(
                 .remove_tags
                 .extend(step.parameters.tag_labels().iter().cloned()),
             Kind::ChangeQualityProfile => {
-                let MaintenanceActionStepParameters::ChangeQualityProfile {
+                let LifecycleActionStepParameters::ChangeQualityProfile {
                     target_quality_profile_id,
                 } = &step.parameters
                 else {
@@ -367,10 +414,10 @@ pub(crate) fn steps_source(
             Kind::Monitor => actions.monitor = true,
             Kind::FetchSubtitles => actions.fetch_subtitles = true,
             Kind::MoveToLibrary | Kind::MoveToRoot => match &step.parameters {
-                MaintenanceActionStepParameters::Library { library } => {
+                LifecycleActionStepParameters::Library { library } => {
                     actions.move_to_library = Some(library.clone());
                 }
-                MaintenanceActionStepParameters::Root { root } => {
+                LifecycleActionStepParameters::Root { root } => {
                     actions.move_to_root = Some(root.clone());
                 }
                 _ => panic!("move step without a target"),
@@ -384,10 +431,10 @@ pub(crate) fn steps_source(
 /// `match` holds, in the fixed execution order.
 pub(crate) fn append_heads_to_match_source(
     source: &str,
-    heads: &[scryer_rules::maintenance_actions::MaintenanceActionHead],
+    heads: &[scryer_rules::lifecycle_actions::LifecycleActionHead],
 ) -> String {
-    use scryer_rules::maintenance_actions::MaintenanceActionHead as Head;
-    let actions = scryer_rules::maintenance_actions::MaintenanceActions {
+    use scryer_rules::lifecycle_actions::LifecycleActionHead as Head;
+    let actions = scryer_rules::lifecycle_actions::LifecycleActions {
         unmonitor: heads.contains(&Head::Unmonitor),
         delete_files: heads.contains(&Head::DeleteFiles),
         delete_title: heads.contains(&Head::DeleteTitle),
@@ -399,7 +446,7 @@ pub(crate) fn append_heads_to_match_source(
 
 fn append_actions_to_match_source(
     source: &str,
-    actions: &scryer_rules::maintenance_actions::MaintenanceActions,
+    actions: &scryer_rules::lifecycle_actions::LifecycleActions,
 ) -> String {
     fn rego_string(value: &str) -> String {
         serde_json::to_string(value).expect("a string always serializes")

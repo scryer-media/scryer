@@ -913,6 +913,96 @@ fn sparse_mkv_reference_defaults_require_exact_authored_evidence() {
 }
 
 #[test]
+fn mkv_dolby_vision_mapping_never_adds_reads() {
+    // Same bytes, only the BlockAddIDType differs: 'dvvC' versus an unregistered value.
+    let dolby_vision = sparse_mkv::pq_dolby_vision_bytes(u32::from_be_bytes(*b"dvvC").into());
+    let plain = sparse_mkv::pq_dolby_vision_bytes(u32::from_be_bytes(*b"xxxx").into());
+    assert_eq!(dolby_vision.len(), plain.len());
+    assert!(dolby_vision.len() > 256 * 1024);
+
+    let analyze = |bytes: &[u8], profile| {
+        scryer_mediainfo::analyze_source(
+            &mut std::io::Cursor::new(bytes.to_vec()),
+            "mkv",
+            scryer_mediainfo::AnalyzeOptions { profile },
+        )
+        .unwrap()
+    };
+    for profile in [
+        scryer_mediainfo::AnalysisProfile::ContentProbe,
+        scryer_mediainfo::AnalysisProfile::Fast,
+        scryer_mediainfo::AnalysisProfile::DefaultRich,
+        scryer_mediainfo::AnalysisProfile::FfprobeParity,
+    ] {
+        let with_dv = analyze(&dolby_vision, profile);
+        let without_dv = analyze(&plain, profile);
+        assert_eq!(
+            with_dv.video_hdr_format.as_deref(),
+            Some("Dolby Vision"),
+            "{profile:?}"
+        );
+        assert_eq!(with_dv.dovi_profile, Some(8), "{profile:?}");
+        assert_eq!(
+            without_dv.video_hdr_format.as_deref(),
+            Some("HDR10"),
+            "{profile:?}"
+        );
+        let (dv_read, plain_read) = (
+            with_dv.details.report.bytes_read,
+            without_dv.details.report.bytes_read,
+        );
+        assert!(plain_read > 0, "{profile:?}");
+        if profile == scryer_mediainfo::AnalysisProfile::FfprobeParity {
+            // The PQ frame-payload HDR10+ probe runs only without a Dolby Vision record.
+            assert!(
+                dv_read + 256 * 1024 <= plain_read,
+                "{profile:?}: {dv_read} vs {plain_read}"
+            );
+        } else {
+            assert_eq!(dv_read, plain_read, "{profile:?}");
+        }
+    }
+}
+
+#[test]
+fn mkv_dolby_vision_record_follows_its_track_past_cover_art() {
+    let analysis = scryer_mediainfo::analyze_source(
+        &mut std::io::Cursor::new(sparse_mkv::cover_art_then_dolby_vision_bytes()),
+        "mkv",
+        scryer_mediainfo::AnalyzeOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(analysis.video_codec.as_deref(), Some("hevc"));
+    assert_eq!(analysis.video_hdr_format.as_deref(), Some("Dolby Vision"));
+    assert_eq!(analysis.dovi_profile, Some(7));
+    assert_eq!(analysis.dovi_bl_compat_id, Some(6));
+    let dolby_vision: Vec<_> = analysis
+        .details
+        .streams
+        .iter()
+        .map(|stream| {
+            (
+                stream.codec.as_deref(),
+                stream.metadata.hdr.dolby_vision,
+                stream
+                    .metadata
+                    .hdr
+                    .dovi
+                    .as_ref()
+                    .and_then(|dovi| dovi.profile),
+            )
+        })
+        .collect();
+    assert_eq!(
+        dolby_vision,
+        [
+            (Some("mjpeg"), None, None),
+            (Some("hevc"), Some(true), Some(7))
+        ]
+    );
+}
+
+#[test]
 #[ignore = "development reference requires FFprobe"]
 fn compare_explicit_sparse_mkv_variants_against_ffprobe() {
     let ffprobe = ffprobe_bin().expect("FFprobe is required for this explicit comparison");

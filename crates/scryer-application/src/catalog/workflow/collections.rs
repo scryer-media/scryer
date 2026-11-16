@@ -643,7 +643,7 @@ impl AppUseCase {
                 Some(ep.aired.clone())
             };
             // A retained, unmonitored season also governs episodes discovered
-            // after a scoped maintenance deletion or a manual unmonitor.
+            // after a scoped lifecycle deletion or a manual unmonitor.
             let collection_unmonitored = collection_id
                 .as_ref()
                 .and_then(|id| existing_collections_by_id.get(id))

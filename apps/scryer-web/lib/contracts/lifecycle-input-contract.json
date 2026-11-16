@@ -1,0 +1,3543 @@
+{
+  "sections": [
+    {
+      "titleKey": "settings.refLifecycleSectionInput",
+      "path": "input",
+      "fields": [
+        {
+          "field": "schema_version",
+          "type": "number",
+          "descKey": "settings.refLifecycleInputSchemaVersion"
+        },
+        {
+          "field": "evaluation_time",
+          "type": "string",
+          "descKey": "settings.refLifecycleInputEvaluationTime"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionSubject",
+      "path": "input.subject",
+      "fields": [
+        {
+          "field": "kind",
+          "type": "string",
+          "descKey": "settings.refLifecycleSubjectKind"
+        },
+        {
+          "field": "title_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleSubjectTitleId"
+        },
+        {
+          "field": "subject_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleSubjectId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refLifecycleCollectionId"
+        },
+        {
+          "field": "season_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSubjectSeasonNumber"
+        },
+        {
+          "field": "episode_id",
+          "type": "string?",
+          "descKey": "settings.refLifecycleSubjectEpisodeId"
+        },
+        {
+          "field": "facet",
+          "type": "string",
+          "descKey": "settings.refLifecycleSubjectFacet"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refLifecycleSubjectName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSubjectYear"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionLibrary",
+      "path": "input.library",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refLifecycleLibraryId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refLifecycleLibraryName"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionSeason",
+      "path": "input.season",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refLifecycleSeasonId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refLifecycleCollectionId"
+        },
+        {
+          "field": "season_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSubjectSeasonNumber"
+        },
+        {
+          "field": "facts",
+          "type": "object",
+          "descKey": "settings.refLifecycleSeasonFacts"
+        },
+        {
+          "field": "observations",
+          "type": "object",
+          "descKey": "settings.refLifecycleSeasonObservations"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionEpisode",
+      "path": "input.episode",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refLifecycleEpisodeId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refLifecycleCollectionId"
+        },
+        {
+          "field": "season_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSubjectSeasonNumber"
+        },
+        {
+          "field": "episode_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleEpisodeNumber"
+        },
+        {
+          "field": "facts",
+          "type": "object",
+          "descKey": "settings.refLifecycleEpisodeFacts"
+        },
+        {
+          "field": "observations",
+          "type": "object",
+          "descKey": "settings.refLifecycleEpisodeObservations"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionFacts",
+      "path": "input.facts",
+      "fields": [
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsMonitored"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsTags"
+        },
+        {
+          "field": "quality_profile_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsQualityProfileId"
+        },
+        {
+          "field": "added_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsAddedAt"
+        },
+        {
+          "field": "added_by_user_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsAddedByUserId"
+        },
+        {
+          "field": "added_by_username",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsAddedByUsername"
+        },
+        {
+          "field": "requested",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsRequested"
+        },
+        {
+          "field": "requested_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsRequestedByUserIds"
+        },
+        {
+          "field": "requested_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsRequestedByUsernames"
+        },
+        {
+          "field": "first_imported_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsFirstImportedAt"
+        },
+        {
+          "field": "last_upgraded_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLastUpgradedAt"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsHasFile"
+        },
+        {
+          "field": "file_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsFileCount"
+        },
+        {
+          "field": "total_file_size_bytes",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsTotalFileSizeBytes"
+        },
+        {
+          "field": "files",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsFiles"
+        },
+        {
+          "field": "episode_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsEpisodeCount"
+        },
+        {
+          "field": "episode_file_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsEpisodeFileCount"
+        },
+        {
+          "field": "monitored_episode_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsMonitoredEpisodeCount"
+        },
+        {
+          "field": "episode_position_by_air_date",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsEpisodePositionByAirDate"
+        },
+        {
+          "field": "season_position_by_air_date",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsSeasonPositionByAirDate"
+        },
+        {
+          "field": "active_downloads",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsActiveDownloads"
+        },
+        {
+          "field": "watched_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchedByUserIds"
+        },
+        {
+          "field": "last_watched_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLastWatchedAt"
+        },
+        {
+          "field": "watched_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchedByAnyRequester"
+        },
+        {
+          "field": "watched_by_all_requesters",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchedByAllRequesters"
+        },
+        {
+          "field": "watched_by_anyone",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchedByAnyone"
+        },
+        {
+          "field": "last_watched_by_anyone_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLastWatchedByAnyoneAt"
+        },
+        {
+          "field": "request_lease_state",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestLeaseState"
+        },
+        {
+          "field": "request_lease_expires_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestLeaseExpiresAt"
+        },
+        {
+          "field": "active_retention_claims",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsActiveRetentionClaims"
+        },
+        {
+          "field": "lists_added_by_list",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsAddedByList"
+        },
+        {
+          "field": "lists_on_enabled_list",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsOnEnabledList"
+        },
+        {
+          "field": "lists_names",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsNames"
+        },
+        {
+          "field": "lists_left_all",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsLeftAll"
+        },
+        {
+          "field": "lists_left_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsLeftAt"
+        },
+        {
+          "field": "lists_last_list_name",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsLastListName"
+        },
+        {
+          "field": "lists_enabled_ids",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsEnabledIds"
+        },
+        {
+          "field": "lists_public_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsPublicCount"
+        },
+        {
+          "field": "lists_personal_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsPersonalCount"
+        },
+        {
+          "field": "lists_first_seen_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsFirstSeenAt"
+        },
+        {
+          "field": "lists_last_seen_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsLastSeenAt"
+        },
+        {
+          "field": "lists_days_on_list",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsDaysOnList"
+        },
+        {
+          "field": "lists_best_rank",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsBestRank"
+        },
+        {
+          "field": "lists_on_leave",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsOnLeave"
+        },
+        {
+          "field": "lists_left_handled",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsLeftHandled"
+        },
+        {
+          "field": "lists_membership_states",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsMembershipStates"
+        },
+        {
+          "field": "request_origin",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestOrigin"
+        },
+        {
+          "field": "request_list_name",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestListName"
+        },
+        {
+          "field": "series_movies",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsSeriesMovies"
+        },
+        {
+          "field": "storage_roots",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsStorageRoots"
+        },
+        {
+          "field": "runtime_minutes",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsRuntimeMinutes"
+        },
+        {
+          "field": "original_language",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsOriginalLanguage"
+        },
+        {
+          "field": "series_status",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsSeriesStatus"
+        },
+        {
+          "field": "first_aired",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsFirstAired"
+        },
+        {
+          "field": "network",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsNetwork"
+        },
+        {
+          "field": "studio",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsStudio"
+        },
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsCountry"
+        },
+        {
+          "field": "popularity",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsPopularity"
+        },
+        {
+          "field": "theatrical_release_date",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsTheatricalReleaseDate"
+        },
+        {
+          "field": "digital_release_date",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsDigitalReleaseDate"
+        },
+        {
+          "field": "physical_release_date",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsPhysicalReleaseDate"
+        },
+        {
+          "field": "days_since_added",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsDaysSinceAdded"
+        },
+        {
+          "field": "max_video_height",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsMaxVideoHeight"
+        },
+        {
+          "field": "season_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsSeasonCount"
+        },
+        {
+          "field": "aired_episode_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAiredEpisodeCount"
+        },
+        {
+          "field": "unaired_episode_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsUnairedEpisodeCount"
+        },
+        {
+          "field": "missing_episode_count",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsMissingEpisodeCount"
+        },
+        {
+          "field": "aired_episode_file_percent",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAiredEpisodeFilePercent"
+        },
+        {
+          "field": "latest_season_number",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsLatestSeasonNumber"
+        },
+        {
+          "field": "latest_aired_episode_date",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLatestAiredEpisodeDate"
+        },
+        {
+          "field": "next_episode_air_date",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsNextEpisodeAirDate"
+        },
+        {
+          "field": "genres",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsGenres"
+        },
+        {
+          "field": "rating",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsRating"
+        },
+        {
+          "field": "ratings",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsRatings"
+        },
+        {
+          "field": "play_count_total",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsPlayCountTotal"
+        },
+        {
+          "field": "watchlisted_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchlistedByUserIds"
+        },
+        {
+          "field": "watchlisted_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchlistedByUsernames"
+        },
+        {
+          "field": "watchlisted_by_anyone",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchlistedByAnyone"
+        },
+        {
+          "field": "watchlisted_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchlistedByAnyRequester"
+        },
+        {
+          "field": "watchlist_added_at",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsWatchlistAddedAt"
+        },
+        {
+          "field": "watchlist_origins",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchlistOrigins"
+        },
+        {
+          "field": "favorited_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsFavoritedByUserIds"
+        },
+        {
+          "field": "favorited_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsFavoritedByUsernames"
+        },
+        {
+          "field": "favorited_by_anyone",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsFavoritedByAnyone"
+        },
+        {
+          "field": "favorited_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsFavoritedByAnyRequester"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionSeriesMovies",
+      "path": "input.facts.series_movies[]",
+      "fields": [
+        {
+          "field": "link_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleSeriesMovieLinkId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refLifecycleSeriesMovieName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSeriesMovieYear"
+        },
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refLifecycleSeriesMovieMonitored"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refLifecycleSeriesMovieHasFile"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleSeriesMovieTags"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionFiles",
+      "path": "input.facts.files[]",
+      "fields": [
+        {
+          "field": "is_3d",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFileIs3d"
+        },
+        {
+          "field": "size_bytes",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileSizeBytes"
+        },
+        {
+          "field": "quality",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileQuality"
+        },
+        {
+          "field": "video_codec",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileVideoCodec"
+        },
+        {
+          "field": "video_width",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoWidth"
+        },
+        {
+          "field": "video_height",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoHeight"
+        },
+        {
+          "field": "audio_languages",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFileAudioLanguages"
+        },
+        {
+          "field": "subtitle_languages",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFileSubtitleLanguages"
+        },
+        {
+          "field": "audio_codec",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileAudioCodec"
+        },
+        {
+          "field": "audio_channels",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileAudioChannels"
+        },
+        {
+          "field": "audio_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileAudioBitrateKbps"
+        },
+        {
+          "field": "video_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoBitrateKbps"
+        },
+        {
+          "field": "video_bit_depth",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoBitDepth"
+        },
+        {
+          "field": "video_hdr_format",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileVideoHdrFormat"
+        },
+        {
+          "field": "added_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileAddedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionRatings",
+      "path": "input.facts.ratings[]",
+      "fields": [
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refLifecycleRatingSource"
+        },
+        {
+          "field": "value",
+          "type": "number?",
+          "descKey": "settings.refLifecycleRatingValue"
+        },
+        {
+          "field": "normalized",
+          "type": "number",
+          "descKey": "settings.refLifecycleRatingNormalized"
+        },
+        {
+          "field": "votes",
+          "type": "number?",
+          "descKey": "settings.refLifecycleRatingVotes"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionStorageRoots",
+      "path": "input.facts.storage_roots[]",
+      "fields": [
+        {
+          "field": "root_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleStorageRootId"
+        },
+        {
+          "field": "path",
+          "type": "string",
+          "descKey": "settings.refLifecycleStorageRootPath"
+        },
+        {
+          "field": "available_bytes",
+          "type": "number",
+          "descKey": "settings.refLifecycleStorageRootAvailableBytes"
+        },
+        {
+          "field": "total_bytes",
+          "type": "number",
+          "descKey": "settings.refLifecycleStorageRootTotalBytes"
+        },
+        {
+          "field": "available_percent",
+          "type": "number",
+          "descKey": "settings.refLifecycleStorageRootAvailablePercent"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObservations",
+      "path": "input.observations",
+      "fields": [
+        {
+          "field": "monitored",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsMonitored"
+        },
+        {
+          "field": "tags",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsTags"
+        },
+        {
+          "field": "quality_profile_id",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsQualityProfileId"
+        },
+        {
+          "field": "added_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAddedAt"
+        },
+        {
+          "field": "added_by_user_id",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAddedByUserId"
+        },
+        {
+          "field": "added_by_username",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAddedByUsername"
+        },
+        {
+          "field": "requested",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequested"
+        },
+        {
+          "field": "requested_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestedByUserIds"
+        },
+        {
+          "field": "requested_by_usernames",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestedByUsernames"
+        },
+        {
+          "field": "first_imported_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFirstImportedAt"
+        },
+        {
+          "field": "last_upgraded_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsLastUpgradedAt"
+        },
+        {
+          "field": "has_file",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsHasFile"
+        },
+        {
+          "field": "file_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFileCount"
+        },
+        {
+          "field": "total_file_size_bytes",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsTotalFileSizeBytes"
+        },
+        {
+          "field": "files",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFiles"
+        },
+        {
+          "field": "episode_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsEpisodeCount"
+        },
+        {
+          "field": "episode_file_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsEpisodeFileCount"
+        },
+        {
+          "field": "monitored_episode_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsMonitoredEpisodeCount"
+        },
+        {
+          "field": "episode_position_by_air_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsEpisodePositionByAirDate"
+        },
+        {
+          "field": "season_position_by_air_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsSeasonPositionByAirDate"
+        },
+        {
+          "field": "active_downloads",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsActiveDownloads"
+        },
+        {
+          "field": "watched_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchedByUserIds"
+        },
+        {
+          "field": "last_watched_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsLastWatchedAt"
+        },
+        {
+          "field": "watched_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchedByAnyRequester"
+        },
+        {
+          "field": "watched_by_all_requesters",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchedByAllRequesters"
+        },
+        {
+          "field": "watched_by_anyone",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchedByAnyone"
+        },
+        {
+          "field": "last_watched_by_anyone_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsLastWatchedByAnyoneAt"
+        },
+        {
+          "field": "request_lease_state",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestLeaseState"
+        },
+        {
+          "field": "request_lease_expires_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestLeaseExpiresAt"
+        },
+        {
+          "field": "active_retention_claims",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsActiveRetentionClaims"
+        },
+        {
+          "field": "lists_added_by_list",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsAddedByList"
+        },
+        {
+          "field": "lists_on_enabled_list",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsOnEnabledList"
+        },
+        {
+          "field": "lists_names",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsNames"
+        },
+        {
+          "field": "lists_left_all",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsLeftAll"
+        },
+        {
+          "field": "lists_left_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsLeftAt"
+        },
+        {
+          "field": "lists_last_list_name",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsLastListName"
+        },
+        {
+          "field": "lists_enabled_ids",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsEnabledIds"
+        },
+        {
+          "field": "lists_public_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsPublicCount"
+        },
+        {
+          "field": "lists_personal_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsPersonalCount"
+        },
+        {
+          "field": "lists_first_seen_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsFirstSeenAt"
+        },
+        {
+          "field": "lists_last_seen_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsLastSeenAt"
+        },
+        {
+          "field": "lists_days_on_list",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsDaysOnList"
+        },
+        {
+          "field": "lists_best_rank",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsBestRank"
+        },
+        {
+          "field": "lists_on_leave",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsOnLeave"
+        },
+        {
+          "field": "lists_left_handled",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsLeftHandled"
+        },
+        {
+          "field": "lists_membership_states",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsListsMembershipStates"
+        },
+        {
+          "field": "request_origin",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestOrigin"
+        },
+        {
+          "field": "request_list_name",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRequestListName"
+        },
+        {
+          "field": "series_movies",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsSeriesMovies"
+        },
+        {
+          "field": "storage_roots",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsStorageRoots"
+        },
+        {
+          "field": "runtime_minutes",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRuntimeMinutes"
+        },
+        {
+          "field": "original_language",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsOriginalLanguage"
+        },
+        {
+          "field": "series_status",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsSeriesStatus"
+        },
+        {
+          "field": "first_aired",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFirstAired"
+        },
+        {
+          "field": "network",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsNetwork"
+        },
+        {
+          "field": "studio",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsStudio"
+        },
+        {
+          "field": "country",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsCountry"
+        },
+        {
+          "field": "popularity",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsPopularity"
+        },
+        {
+          "field": "theatrical_release_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsTheatricalReleaseDate"
+        },
+        {
+          "field": "digital_release_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsDigitalReleaseDate"
+        },
+        {
+          "field": "physical_release_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsPhysicalReleaseDate"
+        },
+        {
+          "field": "days_since_added",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsDaysSinceAdded"
+        },
+        {
+          "field": "max_video_height",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsMaxVideoHeight"
+        },
+        {
+          "field": "season_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsSeasonCount"
+        },
+        {
+          "field": "aired_episode_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAiredEpisodeCount"
+        },
+        {
+          "field": "unaired_episode_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsUnairedEpisodeCount"
+        },
+        {
+          "field": "missing_episode_count",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsMissingEpisodeCount"
+        },
+        {
+          "field": "aired_episode_file_percent",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsAiredEpisodeFilePercent"
+        },
+        {
+          "field": "latest_season_number",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsLatestSeasonNumber"
+        },
+        {
+          "field": "latest_aired_episode_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsLatestAiredEpisodeDate"
+        },
+        {
+          "field": "next_episode_air_date",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsNextEpisodeAirDate"
+        },
+        {
+          "field": "genres",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsGenres"
+        },
+        {
+          "field": "rating",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRating"
+        },
+        {
+          "field": "ratings",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsRatings"
+        },
+        {
+          "field": "play_count_total",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsPlayCountTotal"
+        },
+        {
+          "field": "watchlisted_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchlistedByUserIds"
+        },
+        {
+          "field": "watchlisted_by_usernames",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchlistedByUsernames"
+        },
+        {
+          "field": "watchlisted_by_anyone",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchlistedByAnyone"
+        },
+        {
+          "field": "watchlisted_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchlistedByAnyRequester"
+        },
+        {
+          "field": "watchlist_added_at",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchlistAddedAt"
+        },
+        {
+          "field": "watchlist_origins",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsWatchlistOrigins"
+        },
+        {
+          "field": "favorited_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFavoritedByUserIds"
+        },
+        {
+          "field": "favorited_by_usernames",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFavoritedByUsernames"
+        },
+        {
+          "field": "favorited_by_anyone",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFavoritedByAnyone"
+        },
+        {
+          "field": "favorited_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refLifecycleFactsFavoritedByAnyRequester"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsMonitored",
+      "path": "input.observations.monitored",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsMonitoredValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsTags",
+      "path": "input.observations.tags",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsTagsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsQualityProfileId",
+      "path": "input.observations.quality_profile_id",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsQualityProfileIdValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAddedAt",
+      "path": "input.observations.added_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsAddedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAddedByUserId",
+      "path": "input.observations.added_by_user_id",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsAddedByUserIdValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAddedByUsername",
+      "path": "input.observations.added_by_username",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsAddedByUsernameValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequested",
+      "path": "input.observations.requested",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsRequestedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequestedByUserIds",
+      "path": "input.observations.requested_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsRequestedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequestedByUsernames",
+      "path": "input.observations.requested_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsRequestedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFirstImportedAt",
+      "path": "input.observations.first_imported_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsFirstImportedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsLastUpgradedAt",
+      "path": "input.observations.last_upgraded_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLastUpgradedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsHasFile",
+      "path": "input.observations.has_file",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsHasFileValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFileCount",
+      "path": "input.observations.file_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsFileCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsTotalFileSizeBytes",
+      "path": "input.observations.total_file_size_bytes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsTotalFileSizeBytesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFiles",
+      "path": "input.observations.files",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsFilesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsEpisodeCount",
+      "path": "input.observations.episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsEpisodeFileCount",
+      "path": "input.observations.episode_file_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsEpisodeFileCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsMonitoredEpisodeCount",
+      "path": "input.observations.monitored_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsMonitoredEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsEpisodePositionByAirDate",
+      "path": "input.observations.episode_position_by_air_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsEpisodePositionByAirDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsSeasonPositionByAirDate",
+      "path": "input.observations.season_position_by_air_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsSeasonPositionByAirDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsActiveDownloads",
+      "path": "input.observations.active_downloads",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsActiveDownloadsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchedByUserIds",
+      "path": "input.observations.watched_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsLastWatchedAt",
+      "path": "input.observations.last_watched_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLastWatchedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchedByAnyRequester",
+      "path": "input.observations.watched_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchedByAnyRequesterValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchedByAllRequesters",
+      "path": "input.observations.watched_by_all_requesters",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchedByAllRequestersValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchedByAnyone",
+      "path": "input.observations.watched_by_anyone",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchedByAnyoneValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsLastWatchedByAnyoneAt",
+      "path": "input.observations.last_watched_by_anyone_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLastWatchedByAnyoneAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequestLeaseState",
+      "path": "input.observations.request_lease_state",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestLeaseStateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequestLeaseExpiresAt",
+      "path": "input.observations.request_lease_expires_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestLeaseExpiresAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsActiveRetentionClaims",
+      "path": "input.observations.active_retention_claims",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsActiveRetentionClaimsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsAddedByList",
+      "path": "input.observations.lists_added_by_list",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsAddedByListValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsOnEnabledList",
+      "path": "input.observations.lists_on_enabled_list",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsOnEnabledListValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsNames",
+      "path": "input.observations.lists_names",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsNamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsLeftAll",
+      "path": "input.observations.lists_left_all",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsLeftAllValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsLeftAt",
+      "path": "input.observations.lists_left_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsLeftAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsLastListName",
+      "path": "input.observations.lists_last_list_name",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsLastListNameValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsEnabledIds",
+      "path": "input.observations.lists_enabled_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsEnabledIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsPublicCount",
+      "path": "input.observations.lists_public_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsPublicCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsPersonalCount",
+      "path": "input.observations.lists_personal_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsPersonalCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsFirstSeenAt",
+      "path": "input.observations.lists_first_seen_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsFirstSeenAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsLastSeenAt",
+      "path": "input.observations.lists_last_seen_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsListsLastSeenAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsDaysOnList",
+      "path": "input.observations.lists_days_on_list",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsDaysOnListValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsBestRank",
+      "path": "input.observations.lists_best_rank",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsListsBestRankValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsOnLeave",
+      "path": "input.observations.lists_on_leave",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsOnLeaveValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsLeftHandled",
+      "path": "input.observations.lists_left_handled",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsListsLeftHandledValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsListsMembershipStates",
+      "path": "input.observations.lists_membership_states",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsListsMembershipStatesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequestOrigin",
+      "path": "input.observations.request_origin",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestOriginValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRequestListName",
+      "path": "input.observations.request_list_name",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsRequestListNameValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsSeriesMovies",
+      "path": "input.observations.series_movies",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsSeriesMoviesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsStorageRoots",
+      "path": "input.observations.storage_roots",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsStorageRootsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRuntimeMinutes",
+      "path": "input.observations.runtime_minutes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsRuntimeMinutesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsOriginalLanguage",
+      "path": "input.observations.original_language",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsOriginalLanguageValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsSeriesStatus",
+      "path": "input.observations.series_status",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsSeriesStatusValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFirstAired",
+      "path": "input.observations.first_aired",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsFirstAiredValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsNetwork",
+      "path": "input.observations.network",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsNetworkValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsStudio",
+      "path": "input.observations.studio",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsStudioValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsCountry",
+      "path": "input.observations.country",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsCountryValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsPopularity",
+      "path": "input.observations.popularity",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsPopularityValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsTheatricalReleaseDate",
+      "path": "input.observations.theatrical_release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsTheatricalReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsDigitalReleaseDate",
+      "path": "input.observations.digital_release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsDigitalReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsPhysicalReleaseDate",
+      "path": "input.observations.physical_release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsPhysicalReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsDaysSinceAdded",
+      "path": "input.observations.days_since_added",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsDaysSinceAddedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsMaxVideoHeight",
+      "path": "input.observations.max_video_height",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsMaxVideoHeightValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsSeasonCount",
+      "path": "input.observations.season_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsSeasonCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAiredEpisodeCount",
+      "path": "input.observations.aired_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAiredEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsUnairedEpisodeCount",
+      "path": "input.observations.unaired_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsUnairedEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsMissingEpisodeCount",
+      "path": "input.observations.missing_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsMissingEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsAiredEpisodeFilePercent",
+      "path": "input.observations.aired_episode_file_percent",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsAiredEpisodeFilePercentValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsLatestSeasonNumber",
+      "path": "input.observations.latest_season_number",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsLatestSeasonNumberValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsLatestAiredEpisodeDate",
+      "path": "input.observations.latest_aired_episode_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsLatestAiredEpisodeDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsNextEpisodeAirDate",
+      "path": "input.observations.next_episode_air_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsNextEpisodeAirDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsGenres",
+      "path": "input.observations.genres",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsGenresValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRating",
+      "path": "input.observations.rating",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsRatingValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsRatings",
+      "path": "input.observations.ratings",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsRatingsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsPlayCountTotal",
+      "path": "input.observations.play_count_total",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refLifecycleFactsPlayCountTotalValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchlistedByUserIds",
+      "path": "input.observations.watchlisted_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchlistedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchlistedByUsernames",
+      "path": "input.observations.watchlisted_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchlistedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchlistedByAnyone",
+      "path": "input.observations.watchlisted_by_anyone",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchlistedByAnyoneValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchlistedByAnyRequester",
+      "path": "input.observations.watchlisted_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsWatchlistedByAnyRequesterValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchlistAddedAt",
+      "path": "input.observations.watchlist_added_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refLifecycleFactsWatchlistAddedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsWatchlistOrigins",
+      "path": "input.observations.watchlist_origins",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsWatchlistOriginsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFavoritedByUserIds",
+      "path": "input.observations.favorited_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsFavoritedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFavoritedByUsernames",
+      "path": "input.observations.favorited_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFactsFavoritedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFavoritedByAnyone",
+      "path": "input.observations.favorited_by_anyone",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsFavoritedByAnyoneValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleFactsFavoritedByAnyRequester",
+      "path": "input.observations.favorited_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refLifecycleObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFactsFavoritedByAnyRequesterValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refLifecycleObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObsSeriesMovies",
+      "path": "input.observations.series_movies.value[]",
+      "fields": [
+        {
+          "field": "link_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleSeriesMovieLinkId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refLifecycleSeriesMovieName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSeriesMovieYear"
+        },
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refLifecycleSeriesMovieMonitored"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refLifecycleSeriesMovieHasFile"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleSeriesMovieTags"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObsFiles",
+      "path": "input.observations.files.value[]",
+      "fields": [
+        {
+          "field": "is_3d",
+          "type": "bool",
+          "descKey": "settings.refLifecycleFileIs3d"
+        },
+        {
+          "field": "size_bytes",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileSizeBytes"
+        },
+        {
+          "field": "quality",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileQuality"
+        },
+        {
+          "field": "video_codec",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileVideoCodec"
+        },
+        {
+          "field": "video_width",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoWidth"
+        },
+        {
+          "field": "video_height",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoHeight"
+        },
+        {
+          "field": "audio_languages",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFileAudioLanguages"
+        },
+        {
+          "field": "subtitle_languages",
+          "type": "string[]",
+          "descKey": "settings.refLifecycleFileSubtitleLanguages"
+        },
+        {
+          "field": "audio_codec",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileAudioCodec"
+        },
+        {
+          "field": "audio_channels",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileAudioChannels"
+        },
+        {
+          "field": "audio_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileAudioBitrateKbps"
+        },
+        {
+          "field": "video_bitrate_kbps",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoBitrateKbps"
+        },
+        {
+          "field": "video_bit_depth",
+          "type": "number?",
+          "descKey": "settings.refLifecycleFileVideoBitDepth"
+        },
+        {
+          "field": "video_hdr_format",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileVideoHdrFormat"
+        },
+        {
+          "field": "added_at",
+          "type": "string?",
+          "descKey": "settings.refLifecycleFileAddedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionObsRatings",
+      "path": "input.observations.ratings.value[]",
+      "fields": [
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refLifecycleRatingSource"
+        },
+        {
+          "field": "value",
+          "type": "number?",
+          "descKey": "settings.refLifecycleRatingValue"
+        },
+        {
+          "field": "normalized",
+          "type": "number",
+          "descKey": "settings.refLifecycleRatingNormalized"
+        },
+        {
+          "field": "votes",
+          "type": "number?",
+          "descKey": "settings.refLifecycleRatingVotes"
+        }
+      ]
+    }
+  ]
+}

@@ -3569,18 +3569,18 @@ async fn a_catalog_change_after_the_preview_refuses_the_confirmation_as_stale() 
     );
 }
 
-mod maintenance_moves {
+mod lifecycle_moves {
     //! A lifecycle rule's `move_to_root` and `move_to_library` actions run
     //! through the same managed move an operator starts, so the files are
     //! copied and verified before the source is released.
 
     use super::*;
-    use crate::maintenance_rules::action_execution::execution_reason;
-    use crate::maintenance_rules::title_actions::{MaintenanceMoveOutcome, MaintenanceMoveTarget};
+    use crate::lifecycle_rules::action_execution::execution_reason;
+    use crate::lifecycle_rules::title_actions::{LifecycleMoveOutcome, LifecycleMoveTarget};
 
-    async fn started_operation(outcome: MaintenanceMoveOutcome) -> String {
+    async fn started_operation(outcome: LifecycleMoveOutcome) -> String {
         match outcome {
-            MaintenanceMoveOutcome::Started { operation_id, .. } => operation_id,
+            LifecycleMoveOutcome::Started { operation_id, .. } => operation_id,
             other => panic!("expected the move to start, got {other:?}"),
         }
     }
@@ -3620,10 +3620,10 @@ mod maintenance_moves {
         let root_b = format!("{}/", fixture.root_b().to_string_lossy());
         let outcome = fixture
             .app
-            .maintenance_move_title(&title, MaintenanceMoveTarget::Root(&root_b))
+            .lifecycle_move_title(&title, LifecycleMoveTarget::Root(&root_b))
             .await
             .expect("ask for the move");
-        if let MaintenanceMoveOutcome::Started {
+        if let LifecycleMoveOutcome::Started {
             library_id,
             root_id,
             ..
@@ -3671,10 +3671,10 @@ mod maintenance_moves {
         assert_eq!(
             fixture
                 .app
-                .maintenance_move_title(&moved, MaintenanceMoveTarget::Root(&root_b))
+                .lifecycle_move_title(&moved, LifecycleMoveTarget::Root(&root_b))
                 .await
                 .unwrap(),
-            MaintenanceMoveOutcome::AlreadyThere
+            LifecycleMoveOutcome::AlreadyThere
         );
     }
 
@@ -3694,7 +3694,7 @@ mod maintenance_moves {
         let root_b = fixture.root_b().to_string_lossy().to_string();
         let planned = fixture
             .app
-            .maintenance_resolve_move(&title, MaintenanceMoveTarget::Root(&root_b))
+            .lifecycle_resolve_move(&title, LifecycleMoveTarget::Root(&root_b))
             .await
             .expect("resolve the move")
             .expect("the move has somewhere to go");
@@ -3706,7 +3706,7 @@ mod maintenance_moves {
         assert!(
             !fixture
                 .app
-                .maintenance_any_move_operation_completed(std::slice::from_ref(&recorded))
+                .lifecycle_any_move_operation_completed(std::slice::from_ref(&recorded))
                 .await
                 .expect("read operations")
         );
@@ -3714,7 +3714,7 @@ mod maintenance_moves {
         let operation_id = started_operation(
             fixture
                 .app
-                .maintenance_start_move(&title, planned, Some(recorded.clone()))
+                .lifecycle_start_move(&title, planned, Some(recorded.clone()))
                 .await
                 .expect("start the move"),
         )
@@ -3729,7 +3729,7 @@ mod maintenance_moves {
         assert!(
             fixture
                 .app
-                .maintenance_any_move_operation_completed(&[
+                .lifecycle_any_move_operation_completed(&[
                     "synthetic-never-created".to_string(),
                     recorded,
                 ])
@@ -3762,7 +3762,7 @@ mod maintenance_moves {
         let root_b = fixture.root_b().to_string_lossy().to_string();
         let outcome = fixture
             .app
-            .maintenance_move_title(&title, MaintenanceMoveTarget::Root(&root_b))
+            .lifecycle_move_title(&title, LifecycleMoveTarget::Root(&root_b))
             .await
             .expect("ask for the move");
         let operation = fixture.settle(&started_operation(outcome).await).await;
@@ -3803,24 +3803,24 @@ mod maintenance_moves {
 
         let outcome = fixture
             .app
-            .maintenance_move_title(
+            .lifecycle_move_title(
                 &title,
-                MaintenanceMoveTarget::Root(elsewhere.to_string_lossy().as_ref()),
+                LifecycleMoveTarget::Root(elsewhere.to_string_lossy().as_ref()),
             )
             .await
             .unwrap();
         assert_eq!(
             outcome,
-            MaintenanceMoveOutcome::Held(execution_reason::MOVE_ROOT_NOT_IN_LIBRARY)
+            LifecycleMoveOutcome::Held(execution_reason::MOVE_ROOT_NOT_IN_LIBRARY)
         );
         let outcome = fixture
             .app
-            .maintenance_move_title(&title, MaintenanceMoveTarget::Library("Synthetic Missing"))
+            .lifecycle_move_title(&title, LifecycleMoveTarget::Library("Synthetic Missing"))
             .await
             .unwrap();
         assert_eq!(
             outcome,
-            MaintenanceMoveOutcome::Held(execution_reason::MOVE_LIBRARY_UNRESOLVED)
+            LifecycleMoveOutcome::Held(execution_reason::MOVE_LIBRARY_UNRESOLVED)
         );
         assert!(fixture.operations.operation_count() == 0);
         assert!(
@@ -3848,16 +3848,16 @@ mod maintenance_moves {
             .await;
         let root_a = fixture.root_a().to_string_lossy().to_string();
         for target in [
-            MaintenanceMoveTarget::Root(&root_a),
-            MaintenanceMoveTarget::Library("Movies"),
+            LifecycleMoveTarget::Root(&root_a),
+            LifecycleMoveTarget::Library("Movies"),
         ] {
             assert_eq!(
                 fixture
                     .app
-                    .maintenance_move_title(&title, target)
+                    .lifecycle_move_title(&title, target)
                     .await
                     .unwrap(),
-                MaintenanceMoveOutcome::AlreadyThere
+                LifecycleMoveOutcome::AlreadyThere
             );
         }
         assert!(fixture.operations.operation_count() == 0);

@@ -4,9 +4,9 @@ mod config;
 mod filesystem;
 mod interactive_search;
 mod library;
+mod lifecycle_rules;
 mod lists;
 mod location;
-mod maintenance_rules;
 mod notifications;
 mod recycle_bin;
 mod request_rules;
@@ -40,7 +40,7 @@ pub struct MutationRoot(
     MediaRequestMutations,
     WantedMutations,
     rules::RulesMutations,
-    maintenance_rules::MaintenanceRuleMutations,
+    lifecycle_rules::LifecycleRuleMutations,
     request_rules::RequestRuleMutations,
     PluginMutations,
     notifications::NotificationMutations,

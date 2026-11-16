@@ -720,6 +720,14 @@ const ko: LocaleDictionary = {
   "qualityProfile.minUpgradeScoreDelta": "동일 등급 최소 점수 차",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "같은 품질 등급의 릴리스는 현재 파일의 점수를 최소 이 값만큼 넘어야 합니다.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "팩에 필요한 누락 에피소드 최소 수",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "시즌에서 이 수 이상의 에피소드가 누락된 경우에만 시즌 팩을 검색합니다. 기본값 2. 1로 설정하면 누락된 에피소드 하나에 대한 자동 검색도 팩을 받을 수 있으며, 이미 보유한 에피소드가 다운로드될 수 있습니다.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "멀티 시즌 팩에 필요한 누락 에피소드 최소 비율(%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "시리즈 에피소드 중 이 비율을 초과하여 누락된 경우에만 멀티 시즌 팩을 고려합니다. 기본값 30. 0이면 누락된 에피소드가 하나라도 있으면 해당되고, 100이면 멀티 시즌 팩을 받지 않습니다.",
   "settings.acquisitionConvergence": "수렴 및 속도",
   "settings.acquisitionPollIntervalSeconds": "폴링 간격(초)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -953,7 +961,7 @@ const ko: LocaleDictionary = {
   "settings.featuresHeader": "기능",
   "settings.experimentalFeaturesLabel": "실험적 기능 사용",
   "settings.experimentalFeaturesHelp":
-    "이 인스턴스의 모든 사용자를 위해 아직 마무리 중인 기능을 표시합니다. 라이브러리와 루트 간 타이틀 이동, 그리고 유지 관리 규칙입니다.",
+    "이 인스턴스의 모든 사용자를 위해 아직 마무리 중인 기능을 표시합니다. 라이브러리와 루트 간 타이틀 이동, 그리고 수명 주기 규칙입니다.",
   "settings.personalizedDiscoveryLabel": "개인화된 발견",
   "settings.personalizedDiscoveryHelp":
     "라이브러리 요약을 메타데이터 게이트웨이로 보내 보유한 작품을 기준으로 발견이 타이틀을 추천할 수 있게 합니다. 끄면 발견은 공개 피드만 사용합니다.",
@@ -2454,191 +2462,191 @@ const ko: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "지원 안 됨",
   "appUpgrade.success": "{{version}}(으)로 업그레이드됨",
   "appUpgrade.failed": "업그레이드에 실패했습니다.",
-  // ── Maintenance rules ──
-  "settings.maintenanceRules": "유지 관리 규칙",
+  // ── Lifecycle rules ──
+  "settings.lifecycleRules": "수명 주기 규칙",
   "nav.rules": "규칙",
   "settings.rulesScoring": "점수 규칙",
-  "settings.maintenanceNavRules": "규칙",
-  "settings.maintenanceNavHistory": "기록",
-  "settings.maintenanceRuleAction": "작업",
-  "settings.maintenanceRuleActionHelp":
-    "유지 관리 작업이 켜지면 이 규칙이 수행할 동작입니다.",
-  "settings.maintenanceRuleActionPlaceholder": "작업 선택",
-  "settings.maintenanceRuleNoActions": "타이틀 범위의 작업이 없습니다.",
-  "settings.maintenanceRuleGraceDays": "유예 일수",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleNavRules": "규칙",
+  "settings.lifecycleNavHistory": "기록",
+  "settings.lifecycleRuleAction": "작업",
+  "settings.lifecycleRuleActionHelp":
+    "수명 주기 작업이 켜지면 이 규칙이 수행할 동작입니다.",
+  "settings.lifecycleRuleActionPlaceholder": "작업 선택",
+  "settings.lifecycleRuleNoActions": "타이틀 범위의 작업이 없습니다.",
+  "settings.lifecycleRuleGraceDays": "유예 일수",
+  "settings.lifecycleRuleGraceDaysHelp":
     "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",
-  "settings.maintenanceRuleLibraries": "라이브러리 범위",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "라이브러리 범위",
+  "settings.lifecycleRuleLibrariesHelp":
     "모든 라이브러리를 선택하지 않으면 규칙이 전체 컬렉션에 적용됩니다.",
-  "settings.maintenanceRuleLibrariesAll": "모든 라이브러리",
-  "settings.maintenanceRuleCreate": "유지 관리 규칙 만들기",
-  "settings.maintenanceRuleUpdate": "유지 관리 규칙 업데이트",
-  "settings.maintenanceRuleCopy": "새 규칙으로 복사",
-  "settings.maintenanceRuleCreateNew": "새 유지 관리 규칙 만들기",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "모든 라이브러리",
+  "settings.lifecycleRuleCreate": "수명 주기 규칙 만들기",
+  "settings.lifecycleRuleUpdate": "수명 주기 규칙 업데이트",
+  "settings.lifecycleRuleCopy": "새 규칙으로 복사",
+  "settings.lifecycleRuleCreateNew": "새 수명 주기 규칙 만들기",
+  "settings.lifecycleRuleValidationRequired":
     "이름, 매처 소스, 작업은 필수입니다.",
-  "settings.maintenanceRuleConfirmDiscardTitle":
+  "settings.lifecycleRuleConfirmDiscardTitle":
     "저장하지 않은 변경 사항을 버릴까요?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "유지 관리 규칙 편집기에 저장되지 않은 변경 사항이 있으며 사라집니다.",
-  "settings.maintenanceRuleDeleting":
-    "유지 관리 규칙 {{name}}을(를) 삭제할까요?",
-  "settings.noMaintenanceRulesFound": "아직 유지 관리 규칙이 없습니다.",
-  "settings.maintenanceRuleRevision": "리비전",
-  "settings.maintenanceRuleRisk": "위험도",
-  "settings.maintenanceRiskNone": "위험 없음",
-  "settings.maintenanceRiskLow": "낮은 위험",
-  "settings.maintenanceRiskMedium": "중간 위험",
-  "settings.maintenanceRiskHigh": "높은 위험",
-  "settings.maintenanceActionDoNothing": "아무 작업도 하지 않음",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "수명 주기 규칙 편집기에 저장되지 않은 변경 사항이 있으며 사라집니다.",
+  "settings.lifecycleRuleDeleting":
+    "수명 주기 규칙 {{name}}을(를) 삭제할까요?",
+  "settings.noLifecycleRulesFound": "아직 수명 주기 규칙이 없습니다.",
+  "settings.lifecycleRuleRevision": "리비전",
+  "settings.lifecycleRuleRisk": "위험도",
+  "settings.lifecycleRiskNone": "위험 없음",
+  "settings.lifecycleRiskLow": "낮은 위험",
+  "settings.lifecycleRiskMedium": "중간 위험",
+  "settings.lifecycleRiskHigh": "높은 위험",
+  "settings.lifecycleActionDoNothing": "아무 작업도 하지 않음",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "범위 모니터링 해제, 파일 유지",
-  "settings.maintenanceActionDeleteTitleAndFiles": "타이틀과 해당 파일 삭제",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles": "타이틀과 해당 파일 삭제",
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "타이틀 모니터링 해제, 모든 파일 삭제",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "시리즈 모니터링 해제, 기존 파일 삭제",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "범위 모니터링 해제, 해당 파일 삭제",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "시즌 모니터링 해제, 해당 파일 삭제, 시리즈가 비면 시리즈 삭제",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "시즌 모니터링 해제, 시리즈가 비면 시리즈 모니터링도 해제",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "품질 프로필을 변경하고, 변경된 경우 검색",
-  "settings.maintenancePreviewTitle": "미리 보기",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "미리 보기",
+  "settings.lifecyclePreviewSubtitle":
     "실제 타이틀에 매처를 실행합니다. 미리 보기는 읽기 전용이며, 무엇이 일치할지 보고할 뿐 아무것도 변경하지 않습니다.",
-  "settings.maintenancePreviewSource": "매처",
-  "settings.maintenancePreviewSourceStored": "저장된 규칙",
-  "settings.maintenancePreviewSourceDraft": "편집기 초안",
-  "settings.maintenancePreviewLibrary": "라이브러리",
-  "settings.maintenancePreviewLibraryPlaceholder": "라이브러리 선택",
-  "settings.maintenancePreviewLimit": "타이틀 수",
-  "settings.maintenancePreviewLimitHelp":
+  "settings.lifecyclePreviewSource": "매처",
+  "settings.lifecyclePreviewSourceStored": "저장된 규칙",
+  "settings.lifecyclePreviewSourceDraft": "편집기 초안",
+  "settings.lifecyclePreviewLibrary": "라이브러리",
+  "settings.lifecyclePreviewLibraryPlaceholder": "라이브러리 선택",
+  "settings.lifecyclePreviewLimit": "타이틀 수",
+  "settings.lifecyclePreviewLimitHelp":
     "실행당 최대 {{max}}개의 타이틀입니다.",
-  "settings.maintenancePreviewRun": "미리 보기 실행",
-  "settings.maintenancePreviewRunning": "미리 보기 실행 중...",
-  "settings.maintenancePreviewNoTitles": "평가된 타이틀이 없습니다.",
-  "settings.maintenancePreviewColOutcome": "결과",
-  "settings.maintenancePreviewColReasons": "사유 코드",
-  "settings.maintenancePreviewOutcomeMatch": "일치",
-  "settings.maintenancePreviewOutcomeNoMatch": "불일치",
-  "settings.maintenancePreviewOutcomeUnknown": "알 수 없음",
-  "settings.maintenancePreviewOutcomeError": "오류",
-  "settings.maintenancePreviewMeta": "평가 시각 {{time}} · 매처 {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "규칙",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "저장된 규칙 선택",
-  "settings.maintenanceRuleUpdated": "유지 관리 규칙을 업데이트했습니다.",
-  "settings.maintenanceRuleCreated":
-    "유지 관리 규칙을 만들었으며 비활성 상태로 저장했습니다.",
-  "settings.maintenanceRuleDeleted":
-    "유지 관리 규칙 {{name}}을(를) 삭제했습니다.",
+  "settings.lifecyclePreviewRun": "미리 보기 실행",
+  "settings.lifecyclePreviewRunning": "미리 보기 실행 중...",
+  "settings.lifecyclePreviewNoTitles": "평가된 타이틀이 없습니다.",
+  "settings.lifecyclePreviewColOutcome": "결과",
+  "settings.lifecyclePreviewColReasons": "사유 코드",
+  "settings.lifecyclePreviewOutcomeMatch": "일치",
+  "settings.lifecyclePreviewOutcomeNoMatch": "불일치",
+  "settings.lifecyclePreviewOutcomeUnknown": "알 수 없음",
+  "settings.lifecyclePreviewOutcomeError": "오류",
+  "settings.lifecyclePreviewMeta": "평가 시각 {{time}} · 매처 {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "규칙",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "저장된 규칙 선택",
+  "settings.lifecycleRuleUpdated": "수명 주기 규칙을 업데이트했습니다.",
+  "settings.lifecycleRuleCreated":
+    "수명 주기 규칙을 만들었으며 비활성 상태로 저장했습니다.",
+  "settings.lifecycleRuleDeleted":
+    "수명 주기 규칙 {{name}}을(를) 삭제했습니다.",
 
-  // ── 유지 관리 규칙 — 인스턴스 상태 ──
+  // ── 수명 주기 규칙 — 인스턴스 상태 ──
 
-  // ── 유지 관리 규칙 — 인스턴스 게이트 ──
+  // ── 수명 주기 규칙 — 인스턴스 게이트 ──
 
-  // ── 유지 관리 규칙 — 모드와 무장 ──
-  "settings.maintenanceArmDestructiveLoading":
+  // ── 수명 주기 규칙 — 모드와 무장 ──
+  "settings.lifecycleArmDestructiveLoading":
     "이 규칙이 이미 보유한 후보를 세는 중…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "후보 {{count}}건이 작업 대상이 될 수 있습니다.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "지금 이 규칙에는 작업 대상이 될 후보가 없습니다.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "읽는 사이 수가 바뀌었습니다. 이 규칙은 이제 {{count}}건을 보유합니다. 숫자를 확인하고 다시 동의해 주세요.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "이 규칙이 타이틀 {{count}}건의 파일을 삭제할 수 있음을 이해합니다.",
 
-  // ── 유지 관리 규칙 — 후보 ──
-  "settings.maintenanceCandidatesFilterRule": "규칙",
-  "settings.maintenanceCandidatesFilterState": "상태",
-  "settings.maintenanceCandidatesFilterLibrary": "라이브러리",
-  "settings.maintenanceCandidatesAllRules": "모든 규칙",
-  "settings.maintenanceCandidatesAllStates": "모든 상태",
-  "settings.maintenanceCandidatesAllLibraries": "모든 라이브러리",
-  "settings.maintenanceCandidatesColRule": "규칙",
-  "settings.maintenanceCandidatesColState": "상태",
-  "settings.maintenanceCandidatesColFirstMatched": "최초 일치",
-  "settings.maintenanceCandidatesColDue": "기한",
-  "settings.maintenanceCandidatesHeldSince": "{{time}}부터 보류 중",
-  "settings.maintenanceCandidatesEmpty": "이 필터에 맞는 후보가 없습니다.",
-  "settings.maintenanceCandidateExclude": "이 타이틀 제외",
-  "settings.maintenanceCandidateStateObserving": "관찰 중",
-  "settings.maintenanceCandidateStatePendingAction": "작업 대기",
-  "settings.maintenanceCandidateStateDue": "기한 도래",
-  "settings.maintenanceCandidateStateExecuting": "실행 중",
-  "settings.maintenanceCandidateStateSucceeded": "성공",
-  "settings.maintenanceCandidateStateFailed": "실패",
-  "settings.maintenanceCandidateStateCanceled": "취소됨",
-  "settings.maintenanceCandidateStateExcluded": "제외됨",
-  "settings.maintenanceCandidateStateBlocked": "차단됨",
-  "settings.maintenanceCountdownDueNow": "지금 기한",
-  "settings.maintenanceCountdownInMinutes": "{{count}}분 후",
-  "settings.maintenanceCountdownInHours": "{{count}}시간 후",
-  "settings.maintenanceCountdownInDays": "{{count}}일 후",
-  "settings.maintenanceCountdownOverdueMinutes": "{{count}}분 지남",
-  "settings.maintenanceCountdownOverdueHours": "{{count}}시간 지남",
-  "settings.maintenanceCountdownOverdueDays": "{{count}}일 지남",
+  // ── 수명 주기 규칙 — 후보 ──
+  "settings.lifecycleCandidatesFilterRule": "규칙",
+  "settings.lifecycleCandidatesFilterState": "상태",
+  "settings.lifecycleCandidatesFilterLibrary": "라이브러리",
+  "settings.lifecycleCandidatesAllRules": "모든 규칙",
+  "settings.lifecycleCandidatesAllStates": "모든 상태",
+  "settings.lifecycleCandidatesAllLibraries": "모든 라이브러리",
+  "settings.lifecycleCandidatesColRule": "규칙",
+  "settings.lifecycleCandidatesColState": "상태",
+  "settings.lifecycleCandidatesColFirstMatched": "최초 일치",
+  "settings.lifecycleCandidatesColDue": "기한",
+  "settings.lifecycleCandidatesHeldSince": "{{time}}부터 보류 중",
+  "settings.lifecycleCandidatesEmpty": "이 필터에 맞는 후보가 없습니다.",
+  "settings.lifecycleCandidateExclude": "이 타이틀 제외",
+  "settings.lifecycleCandidateStateObserving": "관찰 중",
+  "settings.lifecycleCandidateStatePendingAction": "작업 대기",
+  "settings.lifecycleCandidateStateDue": "기한 도래",
+  "settings.lifecycleCandidateStateExecuting": "실행 중",
+  "settings.lifecycleCandidateStateSucceeded": "성공",
+  "settings.lifecycleCandidateStateFailed": "실패",
+  "settings.lifecycleCandidateStateCanceled": "취소됨",
+  "settings.lifecycleCandidateStateExcluded": "제외됨",
+  "settings.lifecycleCandidateStateBlocked": "차단됨",
+  "settings.lifecycleCountdownDueNow": "지금 기한",
+  "settings.lifecycleCountdownInMinutes": "{{count}}분 후",
+  "settings.lifecycleCountdownInHours": "{{count}}시간 후",
+  "settings.lifecycleCountdownInDays": "{{count}}일 후",
+  "settings.lifecycleCountdownOverdueMinutes": "{{count}}분 지남",
+  "settings.lifecycleCountdownOverdueHours": "{{count}}시간 지남",
+  "settings.lifecycleCountdownOverdueDays": "{{count}}일 지남",
 
-  // ── 유지 관리 규칙 — 실행과 기록 ──
-  "settings.maintenanceRunsTitle": "실행과 기록",
-  "settings.maintenanceRunScope": "범위",
-  "settings.maintenanceRunScopeAll": "모든 규칙",
-  "settings.maintenanceRunEvaluationNow": "지금 평가",
-  "settings.maintenanceRunEvaluationRunning": "평가 중…",
-  "settings.maintenanceRunActionsNow": "지금 작업 실행",
-  "settings.maintenanceRunActionsRunning": "작업 실행 중…",
-  "settings.maintenanceRunStarted": "실행을 시작했습니다.",
-  "settings.maintenanceRunNotStarted":
+  // ── 수명 주기 규칙 — 실행과 기록 ──
+  "settings.lifecycleRunsTitle": "실행과 기록",
+  "settings.lifecycleRunScope": "범위",
+  "settings.lifecycleRunScopeAll": "모든 규칙",
+  "settings.lifecycleRunEvaluationNow": "지금 평가",
+  "settings.lifecycleRunEvaluationRunning": "평가 중…",
+  "settings.lifecycleRunActionsNow": "지금 작업 실행",
+  "settings.lifecycleRunActionsRunning": "작업 실행 중…",
+  "settings.lifecycleRunStarted": "실행을 시작했습니다.",
+  "settings.lifecycleRunNotStarted":
     "아무것도 시작되지 않았습니다: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "평가 실행",
-  "settings.maintenanceEvaluationRunsEmpty":
+  "settings.lifecycleEvaluationRunsTitle": "평가 실행",
+  "settings.lifecycleEvaluationRunsEmpty":
     "아직 기록된 평가 실행이 없습니다.",
-  "settings.maintenanceActionRunsTitle": "작업 실행",
-  "settings.maintenanceActionRunsEmpty": "아직 기록된 작업 실행이 없습니다.",
-  "settings.maintenanceRunColStarted": "시작",
-  "settings.maintenanceRunColStatus": "상태",
-  "settings.maintenanceRunColCounts": "건수",
-  "settings.maintenanceRunColDuration": "소요 시간",
-  "settings.maintenanceRunColError": "오류",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleActionRunsTitle": "작업 실행",
+  "settings.lifecycleActionRunsEmpty": "아직 기록된 작업 실행이 없습니다.",
+  "settings.lifecycleRunColStarted": "시작",
+  "settings.lifecycleRunColStatus": "상태",
+  "settings.lifecycleRunColCounts": "건수",
+  "settings.lifecycleRunColDuration": "소요 시간",
+  "settings.lifecycleRunColError": "오류",
+  "settings.lifecycleRunCounts":
     "평가 {{evaluated}} · 일치 {{matched}} · 불일치 {{noMatch}} · 알 수 없음 {{unknown}} · 오류 {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}}초",
-  "settings.maintenanceRunRevision": "리비전 {{revision}}",
-  "settings.maintenanceRunStatusRunning": "실행 중",
-  "settings.maintenanceRunStatusSucceeded": "성공",
-  "settings.maintenanceRunStatusFailed": "실패",
-  "settings.maintenanceRunStatusHeld": "보류",
-  "settings.maintenanceRunStatusAlreadySatisfied": "이미 충족됨",
-  "settings.maintenanceRunStatusSkipped": "건너뜀",
-  "settings.maintenanceActionRunColAttempt": "시도",
-  "settings.maintenanceActionRunColHoldReason": "보류 사유",
+  "settings.lifecycleRunDuration": "{{seconds}}초",
+  "settings.lifecycleRunRevision": "리비전 {{revision}}",
+  "settings.lifecycleRunStatusRunning": "실행 중",
+  "settings.lifecycleRunStatusSucceeded": "성공",
+  "settings.lifecycleRunStatusFailed": "실패",
+  "settings.lifecycleRunStatusHeld": "보류",
+  "settings.lifecycleRunStatusAlreadySatisfied": "이미 충족됨",
+  "settings.lifecycleRunStatusSkipped": "건너뜀",
+  "settings.lifecycleActionRunColAttempt": "시도",
+  "settings.lifecycleActionRunColHoldReason": "보류 사유",
 
-  // ── 유지 관리 규칙 — 제외 ──
-  "settings.maintenanceExclusionsTitle": "제외 목록",
-  "settings.maintenanceExclusionsSubtitle":
-    "유지 관리 규칙이 절대 건드리면 안 되는 타이틀입니다. 전역 제외는 모든 규칙에 적용됩니다.",
-  "settings.maintenanceExclusionsEmpty": "제외 항목이 없습니다.",
-  "settings.maintenanceExclusionColScope": "범위",
-  "settings.maintenanceExclusionColReason": "사유",
-  "settings.maintenanceExclusionColCreated": "추가됨",
-  "settings.maintenanceExclusionScopeGlobal": "모든 규칙",
-  "settings.maintenanceExclusionRemove": "제외 해제",
-  "settings.maintenanceExclusionRemoved": "{{title}}의 제외를 해제했습니다.",
-  "settings.maintenanceExclusionRemoving": "{{title}}의 제외를 해제할까요?",
-  "settings.maintenanceExcludeTitle": "유지 관리에서 제외",
-  "settings.maintenanceExcludeBody":
+  // ── 수명 주기 규칙 — 제외 ──
+  "settings.lifecycleExclusionsTitle": "제외 목록",
+  "settings.lifecycleExclusionsSubtitle":
+    "수명 주기 규칙이 절대 건드리면 안 되는 타이틀입니다. 전역 제외는 모든 규칙에 적용됩니다.",
+  "settings.lifecycleExclusionsEmpty": "제외 항목이 없습니다.",
+  "settings.lifecycleExclusionColScope": "범위",
+  "settings.lifecycleExclusionColReason": "사유",
+  "settings.lifecycleExclusionColCreated": "추가됨",
+  "settings.lifecycleExclusionScopeGlobal": "모든 규칙",
+  "settings.lifecycleExclusionRemove": "제외 해제",
+  "settings.lifecycleExclusionRemoved": "{{title}}의 제외를 해제했습니다.",
+  "settings.lifecycleExclusionRemoving": "{{title}}의 제외를 해제할까요?",
+  "settings.lifecycleExcludeTitle": "수명 주기 규칙에서 제외",
+  "settings.lifecycleExcludeBody":
     "{{title}}은(는) 다음 평가부터 제외되고, 해당 후보는 제외 상태로 바뀝니다.",
-  "settings.maintenanceExcludeScope": "범위",
-  "settings.maintenanceExcludeScopeGlobal": "모든 규칙",
-  "settings.maintenanceExcludeReason": "사유",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "범위",
+  "settings.lifecycleExcludeScopeGlobal": "모든 규칙",
+  "settings.lifecycleExcludeReason": "사유",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "이 타이틀을 제외하는 이유 (선택)",
-  "settings.maintenanceExcludeConfirm": "제외",
-  "settings.maintenanceExcluded": "{{title}}을(를) 유지 관리에서 제외했습니다.",
+  "settings.lifecycleExcludeConfirm": "제외",
+  "settings.lifecycleExcluded": "{{title}}을(를) 수명 주기 규칙에서 제외했습니다.",
   "move.dialogTitle": "타이틀 이동",
   "move.destinationLibrary": "대상 라이브러리",
   "move.destinationRoot": "대상 루트",
@@ -3187,7 +3195,7 @@ const ko: LocaleDictionary = {
   "search.keepForCustom": "일수 지정…",
   "search.keepForCustomLabel": "보관할 일수",
   "search.keepForHelp":
-    "Scryer가 이 미디어를 보관하는 기간입니다. 기간이 지나면 유지관리 규칙이 삭제할 수 있습니다. 영구 보관은 만료되지 않습니다.",
+    "Scryer가 이 미디어를 보관하는 기간입니다. 기간이 지나면 수명 주기 규칙이 삭제할 수 있습니다. 영구 보관은 만료되지 않습니다.",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "태그",
@@ -3223,8 +3231,8 @@ const ko: LocaleDictionary = {
     "{{label}}(으)로 이름을 바꿨습니다. 타이틀 {{titles}}개, 시리즈 영화 {{seriesMovies}}개, 지연 프로필 {{delayProfiles}}개를 갱신했습니다.",
   "settings.titleTagRenameWarning":
     "규칙 소스는 다시 작성되지 않으므로 규칙 참조 {{count}}개가 여전히 이전 라벨 {{label}}을(를) 가리키며 더 이상 일치하지 않습니다: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "유지 관리 규칙 세트 {{count}}개",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "수명 주기 규칙 세트 {{count}}개",
   "settings.titleTagReferenceReleaseRuleSets": "릴리스 규칙 세트 {{count}}개",
   "settings.titleTagReferenceManagedTagFilters": "관리형 태그 필터 {{count}}개",
   "settings.titleTagReferenceRequestRuleSets": "요청 규칙 세트 {{count}}개",
@@ -3242,19 +3250,19 @@ const ko: LocaleDictionary = {
   "title.catalogFilters.userTags": "태그",
   "title.catalogFilters.selectUserTags": "태그 선택...",
 
-  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // Series-movie tags and the lifecycle tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,
   // the same way the WP3 block above does.
   "settings.titleTagSeriesMovieCount": "시리즈 영화",
-  "settings.maintenanceActionAddTags": "태그 추가",
-  "settings.maintenanceActionRemoveTags": "태그 제거",
-  "settings.maintenanceRuleTagsHelp":
+  "settings.lifecycleActionAddTags": "태그 추가",
+  "settings.lifecycleActionRemoveTags": "태그 제거",
+  "settings.lifecycleRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "삭제 대상 태그",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "삭제 대상 태그",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "검토 표시",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "검토 표시",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
@@ -3544,28 +3552,28 @@ const ko: LocaleDictionary = {
   "lists.policy.value.auto": "자동 승인",
   "lists.policy.value.approval": "승인 필요",
   "lists.policy.value.none": "목록 사용 안 함",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "사람이 아닌 목록이 대상을 라이브러리에 추가했는지 여부",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "활성화된 목록(공개 또는 개인)이 아직 대상을 포함하는지 여부",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "아직 대상을 포함하는 활성화된 공개 목록의 이름",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "대상을 포함했던 모든 목록이 대상을 제외했는지 여부",
-  "settings.refMaintFactsListsLeftAt": "마지막 목록이 대상을 제외한 시각",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLeftAt": "마지막 목록이 대상을 제외한 시각",
+  "settings.refLifecycleFactsListsLastListName":
     "대상이 가장 최근에 빠진 공개 목록",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "목록 동기화가 타이틀을 만든 경우 true. 목록 저장소를 읽을 수 없으면 사유 list_store_unreadable로 알 수 없음",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "활성화된 목록이 하나 이상 대상을 포함하는 동안 true",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "공개 목록 이름만 정렬하여 표시하며, 멤버의 개인 목록 이름은 표시하지 않음",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "대상을 포함했던 모든 목록이 제외하면 true. 아직 포함하는 목록이 있거나 목록에 오른 적이 없으면 false",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339 타임스탬프. 대상을 포함하는 목록이 남아 있으면 사유 not_left_every_list로 값 없음",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "해당 공개 목록의 이름. 대상이 공개 목록에서 빠진 적이 없으면 사유 no_public_list_left로 값 없음",
   "lists.providerSettings.heading": "제공자 설정",
   "lists.providerSettings.copy":
@@ -3671,27 +3679,27 @@ const ko: LocaleDictionary = {
     "파일을 새 이름으로 옮기지 못했습니다. 파일과 에피소드는 그대로 유지되었습니다.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "에피소드 번호가 모호합니다",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "보류: 미디어 서버에서 재생 중입니다.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "보류: 미디어 서버에 재생 여부를 확인할 수 없었습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "보류: 미디어 서버에 저장된 시청 기록보다 최신 재생이 있습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "보류: 미디어 서버 기록에 시청 기록이 반영하지 않는 계정의 재생이 있습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "보류: 실행 전에 미디어 서버에서 시청 기록을 확인할 수 없었습니다.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "보류: 연결된 미디어 서버에 일치하는 항목이 없어 실행 전에 시청 기록을 확인할 수 없었습니다.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "연결된 미디어 서버에 계정이 있는 누군가가 Scryer 연결 여부와 관계없이 재생했는지 여부. 누구인지는 밝히지 않습니다",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "연결된 미디어 서버에 계정이 있는 누군가가 마지막으로 재생한 시각",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "활성화된 미디어 서버의 어떤 계정이든 재생했으면 true이며, 계정이 Scryer 사용자에 연결되어 있는지는 상관없습니다. 시즌과 시리즈는 방영된 에피소드 중 하나라도 해당됩니다. 최근 48시간 안의 동기화가 모든 활성 연결의 모든 계정을 읽기 전까지는 audience_not_read 사유로 알 수 없으며, 시청 사실을 알 수 없을 때는 일반적인 사유로 알 수 없습니다.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "어떤 계정이든 가장 최근에 재생한 RFC3339 타임스탬프. 아무도 재생하지 않았으면 never_watched 사유로 값이 없고, 재생에 기록된 시각이 없으면 play_time_missing(시즌과 시리즈는 episode_play_time_missing), 모든 계정을 읽지 못했으면 audience_not_read 사유로 알 수 없습니다",
-  "settings.maintenancePreviewFacts": "규칙이 읽은 사실",
+  "settings.lifecyclePreviewFacts": "규칙이 읽은 사실",
   "setup.sourceImportProgress": "소스 가져오는 중",
   "setup.sourceImportInvalidRequest":
     "선택한 소스를 사용할 수 없습니다. 소스 검색을 새로 고친 후 다시 선택하세요.",

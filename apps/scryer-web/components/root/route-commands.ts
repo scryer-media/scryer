@@ -668,12 +668,13 @@ export function buildRouteCommands({
             onSelect: buildNavigate(onNavigate, "settings", "rules"),
           } satisfies RouteCommand,
           {
-            id: "settings-maintenance-rules",
-            label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.maintenanceRules")}`,
-            description: t("settings.maintenanceRules"),
+            id: "settings-lifecycle-rules",
+            label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.lifecycleRules")}`,
+            description: t("settings.lifecycleRules"),
             groupLabel: automationGroupLabel,
             keywords: [
               "settings",
+              "lifecycle",
               "maintenance",
               "rules",
               "rego",
@@ -681,7 +682,7 @@ export function buildRouteCommands({
               "prune",
             ],
             icon: Wrench,
-            onSelect: buildNavigate(onNavigate, "settings", "maintenanceRules"),
+            onSelect: buildNavigate(onNavigate, "settings", "lifecycleRules"),
           } satisfies RouteCommand,
           {
             id: "settings-post-processing",

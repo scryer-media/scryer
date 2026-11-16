@@ -28,7 +28,7 @@ export type RuleBuilderBinding<D extends RuleBuilderDraft> = {
   /// Null until the family's outputs are read from the server, and after a
   /// failed read: a draft then can only be edited as Rego.
   schema: RuleBuilderSchema | null;
-  /// The variant a draft is written for, such as a maintenance rule's scope.
+  /// The variant a draft is written for, such as a lifecycle rule's scope.
   variant: (draft: D) => string | null;
   /// Where the Rego editor starts when an untouched builder is left.
   starterSource: string;
@@ -75,6 +75,62 @@ export function withNewRuleBuilderModel<D extends RuleBuilderDraft>(
 ): D {
   if (!binding.schema) return draft;
   return withRuleBuilderModel(binding, draft, emptyRuleBuilderModel(binding.schema));
+}
+
+/// A template's draft, filled in from the template's builder model. The draft
+/// opens in the builder only when the builder writes exactly the template's
+/// source from that model, the same check a saved rule passes to reopen in
+/// it. Otherwise, and before the schema is read, it is left as written, for
+/// the Rego editor.
+export function withTemplateRuleBuilderModel<D extends RuleBuilderDraft>(
+  binding: RuleBuilderBinding<D>,
+  draft: D,
+  model: RuleBuilderModel | null,
+): D {
+  const attached = attachedRuleBuilderModel(
+    binding.schema,
+    model,
+    binding.variant(draft),
+    draft.regoSource,
+  );
+  return attached ? { ...draft, builderModel: attached } : draft;
+}
+
+/// Open a starter template's draft. With the schema already read it opens at
+/// once, in the builder when the builder expresses it. Otherwise it opens at
+/// once as Rego, and moves into the builder when the read settles only while
+/// the editor still shows that draft untouched: typing, closing the editor or
+/// opening anything else since keeps what the operator has. A failed or
+/// unanswered read leaves the template in the Rego editor.
+export function openRuleTemplateDraft<D extends RuleBuilderDraft>(options: {
+  schema: RuleBuilderSchema | null;
+  whenSchemaReady: () => Promise<RuleBuilderSchema | null>;
+  binding: (schema: RuleBuilderSchema | null) => RuleBuilderBinding<D>;
+  draft: D;
+  model: (schema: RuleBuilderSchema | null) => RuleBuilderModel | null;
+  open: (draft: D) => void;
+  isShowing: (draft: D) => boolean;
+}): Promise<void> {
+  const { draft, open } = options;
+  const attach = (schema: RuleBuilderSchema | null) =>
+    withTemplateRuleBuilderModel(
+      options.binding(schema),
+      draft,
+      options.model(schema),
+    );
+  if (options.schema) {
+    open(attach(options.schema));
+    return Promise.resolve();
+  }
+  open(draft);
+  return options.whenSchemaReady().then(
+    (schema) => {
+      if (!options.isShowing(draft)) return;
+      const next = attach(schema);
+      if (next !== draft) open(next);
+    },
+    () => undefined,
+  );
 }
 
 /// Rewrite an attached draft after something the source depends on changed,

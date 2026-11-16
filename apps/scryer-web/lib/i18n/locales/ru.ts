@@ -987,6 +987,14 @@ const ru: LocaleDictionary = {
     "Минимальная разница оценки в одном уровне качества",
   "qualityProfile.minUpgradeScoreDeltaInfo":
     "Релиз того же уровня качества должен превзойти оценку текущего файла как минимум на указанное значение.",
+  "qualityProfile.minMissingEpisodesForPack":
+    "Минимум недостающих серий для пакета",
+  "qualityProfile.minMissingEpisodesForPackInfo":
+    "Пакет сезона ищется, только если в сезоне не хватает как минимум столько серий. По умолчанию 2. При значении 1 автоматический поиск одной недостающей серии может взять и пакет, из-за чего могут скачиваться уже имеющиеся серии.",
+  "qualityProfile.minMissingPercentForSeriesPack":
+    "Минимум недостающих серий для многосезонного пакета (%)",
+  "qualityProfile.minMissingPercentForSeriesPackInfo":
+    "Многосезонный пакет рассматривается, только если не хватает более указанного процента серий сериала. По умолчанию 30. При 0 подходит любая недостающая серия; при 100 многосезонные пакеты не берутся.",
   "settings.acquisitionConvergence": "Сходимость и распределение нагрузки",
   "settings.acquisitionPollIntervalSeconds": "Интервал опроса (секунды)",
   "settings.acquisitionPollIntervalSecondsHelp":
@@ -1379,7 +1387,7 @@ const ru: LocaleDictionary = {
   "settings.featuresHeader": "Функции",
   "settings.experimentalFeaturesLabel": "Включить экспериментальные функции",
   "settings.experimentalFeaturesHelp":
-    "Показывает функции, которые ещё дорабатываются для всех на этом экземпляре: перемещение тайтлов между библиотеками и корневыми каталогами, а также правила обслуживания.",
+    "Показывает функции, которые ещё дорабатываются для всех на этом экземпляре: перемещение тайтлов между библиотеками и корневыми каталогами, а также правила жизненного цикла.",
   "settings.personalizedDiscoveryLabel": "Персонализированные рекомендации",
   "settings.personalizedDiscoveryHelp":
     "Отправляет сводку вашей библиотеки в шлюз метаданных, чтобы рекомендации могли предлагать тайтлы на основе того, что у вас есть. Отключите, чтобы ограничить рекомендации только публичными лентами.",
@@ -4614,542 +4622,563 @@ const ru: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "Не поддерживается",
   "appUpgrade.success": "Обновлено до {{version}}",
   "appUpgrade.failed": "Не удалось обновить приложение.",
-  "settings.maintenanceRules": "Правила обслуживания",
+  "settings.lifecycleRules": "Правила жизненного цикла",
   "nav.rules": "Правила",
   "settings.rulesScoring": "Правила оценки",
-  "settings.maintenanceNavRules": "Правила",
-  "settings.maintenanceNavHistory": "История",
-  "settings.maintenanceRuleAction": "Действия",
-  "settings.maintenanceRuleActionHelp":
-    "Что сделало бы это правило, когда действия обслуживания будут включены.",
-  "settings.maintenanceRuleActionPlaceholder": "Выберите действие",
-  "settings.maintenanceRuleNoActions": "Действия уровня тайтла недоступны.",
-  "settings.maintenanceRuleGraceDays": "Дни отсрочки",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleNavRules": "Правила",
+  "settings.lifecycleNavHistory": "История",
+  "settings.lifecycleRuleAction": "Действия",
+  "settings.lifecycleRuleActionHelp":
+    "Что сделало бы это правило, когда действия жизненного цикла будут включены.",
+  "settings.lifecycleRuleActionPlaceholder": "Выберите действие",
+  "settings.lifecycleRuleNoActions": "Действия уровня тайтла недоступны.",
+  "settings.lifecycleRuleGraceDays": "Дни отсрочки",
+  "settings.lifecycleRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
-  "settings.maintenanceRuleScheduleHelp":
+  "settings.lifecycleRuleScheduleHelp":
     "Каждое правило выполняется по собственному расписанию. При запуске правило проверяется, а затем выполняются действия над кандидатами, у которых закончился период отсрочки. Изменение расписания не меняет состояние правила. Для ежедневного, еженедельного и cron-расписания используется местное время сервера.",
-  "settings.maintenanceRuleScheduleManualHelp":
+  "settings.lifecycleRuleScheduleManualHelp":
     "Это правило никогда не запускается само. Запустите его в разделе «Запуски и история».",
-  "settings.maintenanceRuleLibraries": "Область библиотек",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "Область библиотек",
+  "settings.lifecycleRuleLibrariesHelp":
     "Не отмечайте ни одной библиотеки, чтобы правило действовало на всю коллекцию.",
-  "settings.maintenanceRuleLibrariesAll": "Все библиотеки",
-  "settings.maintenanceRuleCreate": "Создать правило обслуживания",
-  "settings.maintenanceRuleUpdate": "Обновить правило обслуживания",
-  "settings.maintenanceRuleCopy": "Скопировать как новое правило",
-  "settings.maintenanceRuleCreateNew": "Создать новое правило обслуживания",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "Все библиотеки",
+  "settings.lifecycleRuleCreate": "Создать правило жизненного цикла",
+  "settings.lifecycleRuleUpdate": "Обновить правило жизненного цикла",
+  "settings.lifecycleRuleCopy": "Скопировать как новое правило",
+  "settings.lifecycleRuleCreateNew": "Создать новое правило жизненного цикла",
+  "settings.lifecycleRuleValidationRequired":
     "Имя, исходный код правила и действие обязательны.",
-  "settings.maintenanceRuleConfirmDiscardTitle":
+  "settings.lifecycleRuleConfirmDiscardTitle":
     "Отменить несохранённые изменения?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "В редакторе правил обслуживания есть несохранённые изменения, которые будут потеряны.",
-  "settings.maintenanceRuleDeleting": "Удалить правило обслуживания {{name}}?",
-  "settings.noMaintenanceRulesFound": "Правил обслуживания пока нет.",
-  "settings.maintenanceRuleRevision": "Ревизия",
-  "settings.maintenanceRuleRisk": "Риск",
-  "settings.maintenanceRiskNone": "Без риска",
-  "settings.maintenanceRiskLow": "Низкий риск",
-  "settings.maintenanceRiskMedium": "Средний риск",
-  "settings.maintenanceRiskHigh": "Высокий риск",
-  "settings.maintenanceActionDoNothing": "Ничего не делать",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "В редакторе правил жизненного цикла есть несохранённые изменения, которые будут потеряны.",
+  "settings.lifecycleRuleDeleting": "Удалить правило жизненного цикла {{name}}?",
+  "settings.noLifecycleRulesFound": "Правил жизненного цикла пока нет.",
+  "settings.lifecycleRuleRevision": "Ревизия",
+  "settings.lifecycleRuleRisk": "Риск",
+  "settings.lifecycleRiskNone": "Без риска",
+  "settings.lifecycleRiskLow": "Низкий риск",
+  "settings.lifecycleRiskMedium": "Средний риск",
+  "settings.lifecycleRiskHigh": "Высокий риск",
+  "settings.lifecycleActionDoNothing": "Ничего не делать",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Снять отслеживание области, сохранить файлы",
-  "settings.maintenanceActionDeleteTitleAndFiles": "Удалить тайтл и его файлы",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles": "Удалить тайтл и его файлы",
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "Снять отслеживание тайтла, удалить все файлы",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "Снять отслеживание сериала, удалить существующие файлы",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "Снять отслеживание области, удалить её файлы",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "Снять отслеживание сезона, удалить его файлы, затем удалить сериал, если он пуст",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "Снять отслеживание сезона, затем снять отслеживание сериала, если он пуст",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "Изменить профиль качества и выполнить поиск, если он изменился",
-  "settings.maintenancePreviewTitle": "Предпросмотр",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "Предпросмотр",
+  "settings.lifecyclePreviewSubtitle":
     "Запустите правило на реальных тайтлах. Предпросмотр только читает: он сообщает, что совпало бы, и ничего не меняет.",
-  "settings.maintenancePreviewSource": "Правило",
-  "settings.maintenancePreviewSourceStored": "Сохранённое правило",
-  "settings.maintenancePreviewSourceDraft": "Черновик редактора",
-  "settings.maintenancePreviewLibrary": "Библиотека",
-  "settings.maintenancePreviewLibraryPlaceholder": "Выберите библиотеку",
-  "settings.maintenancePreviewLimit": "Тайтлы",
-  "settings.maintenancePreviewLimitHelp": "До {{max}} тайтлов за прогон.",
-  "settings.maintenancePreviewRun": "Запустить предпросмотр",
-  "settings.maintenancePreviewRunning": "Выполняется предпросмотр...",
-  "settings.maintenancePreviewNoTitles": "Ни один тайтл не был оценён.",
-  "settings.maintenancePreviewColOutcome": "Результат",
-  "settings.maintenancePreviewColReasons": "Коды причин",
-  "settings.maintenancePreviewOutcomeMatch": "СОВПАЛО",
-  "settings.maintenancePreviewOutcomeNoMatch": "НЕ СОВПАЛО",
-  "settings.maintenancePreviewOutcomeUnknown": "НЕИЗВЕСТНО",
-  "settings.maintenancePreviewOutcomeError": "ОШИБКА",
-  "settings.maintenancePreviewMeta": "Оценено {{time}} · правило {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "Правило",
-  "settings.maintenancePreviewRuleSelectPlaceholder":
+  "settings.lifecyclePreviewSource": "Правило",
+  "settings.lifecyclePreviewSourceStored": "Сохранённое правило",
+  "settings.lifecyclePreviewSourceDraft": "Черновик редактора",
+  "settings.lifecyclePreviewLibrary": "Библиотека",
+  "settings.lifecyclePreviewLibraryPlaceholder": "Выберите библиотеку",
+  "settings.lifecyclePreviewLimit": "Тайтлы",
+  "settings.lifecyclePreviewLimitHelp": "До {{max}} тайтлов за прогон.",
+  "settings.lifecyclePreviewRun": "Запустить предпросмотр",
+  "settings.lifecyclePreviewRunning": "Выполняется предпросмотр...",
+  "settings.lifecyclePreviewNoTitles": "Ни один тайтл не был оценён.",
+  "settings.lifecyclePreviewColOutcome": "Результат",
+  "settings.lifecyclePreviewColReasons": "Коды причин",
+  "settings.lifecyclePreviewOutcomeMatch": "СОВПАЛО",
+  "settings.lifecyclePreviewOutcomeNoMatch": "НЕ СОВПАЛО",
+  "settings.lifecyclePreviewOutcomeUnknown": "НЕИЗВЕСТНО",
+  "settings.lifecyclePreviewOutcomeError": "ОШИБКА",
+  "settings.lifecyclePreviewMeta": "Оценено {{time}} · правило {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "Правило",
+  "settings.lifecyclePreviewRuleSelectPlaceholder":
     "Выберите сохранённое правило",
-  "settings.maintenanceRuleUpdated": "Правило обслуживания обновлено.",
-  "settings.maintenanceRuleCreated":
-    "Правило обслуживания создано и сохранено отключённым.",
-  "settings.maintenanceRuleDeleted": "Правило обслуживания {{name}} удалено.",
-  "settings.maintenanceArmDestructiveLoading":
+  "settings.lifecycleRuleUpdated": "Правило жизненного цикла обновлено.",
+  "settings.lifecycleRuleCreated":
+    "Правило жизненного цикла создано и сохранено отключённым.",
+  "settings.lifecycleRuleDeleted": "Правило жизненного цикла {{name}} удалено.",
+  "settings.lifecycleArmDestructiveLoading":
     "Подсчёт кандидатов, которые уже удерживает это правило…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "Действие может затронуть {{count}} кандидатов.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "Сейчас у этого правила нет кандидатов, которых могло бы затронуть действие.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "Пока вы читали, число изменилось: теперь правило удерживает {{count}}. Проверьте число и подтвердите ещё раз.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "Я понимаю, что это правило может удалить файлы {{count}} тайтлов.",
-  "settings.maintenanceCandidatesFilterRule": "Правило",
-  "settings.maintenanceCandidatesFilterState": "Состояние",
-  "settings.maintenanceCandidatesFilterLibrary": "Библиотека",
-  "settings.maintenanceCandidatesAllRules": "Все правила",
-  "settings.maintenanceCandidatesAllStates": "Все состояния",
-  "settings.maintenanceCandidatesAllLibraries": "Все библиотеки",
-  "settings.maintenanceCandidatesColRule": "Правило",
-  "settings.maintenanceCandidatesColState": "Состояние",
-  "settings.maintenanceCandidatesColFirstMatched": "Первое совпадение",
-  "settings.maintenanceCandidatesColDue": "Срок",
-  "settings.maintenanceCandidatesHeldSince": "Удерживается с {{time}}",
-  "settings.maintenanceCandidatesEmpty":
+  "settings.lifecycleCandidatesFilterRule": "Правило",
+  "settings.lifecycleCandidatesFilterState": "Состояние",
+  "settings.lifecycleCandidatesFilterLibrary": "Библиотека",
+  "settings.lifecycleCandidatesAllRules": "Все правила",
+  "settings.lifecycleCandidatesAllStates": "Все состояния",
+  "settings.lifecycleCandidatesAllLibraries": "Все библиотеки",
+  "settings.lifecycleCandidatesColRule": "Правило",
+  "settings.lifecycleCandidatesColState": "Состояние",
+  "settings.lifecycleCandidatesColFirstMatched": "Первое совпадение",
+  "settings.lifecycleCandidatesColDue": "Срок",
+  "settings.lifecycleCandidatesHeldSince": "Удерживается с {{time}}",
+  "settings.lifecycleCandidatesEmpty":
     "Ни один кандидат не подходит под эти фильтры.",
-  "settings.maintenanceCandidateExclude": "Исключить этот тайтл",
-  "settings.maintenanceCandidateStateObserving": "Наблюдение",
-  "settings.maintenanceCandidateStatePendingAction": "Ожидает действия",
-  "settings.maintenanceCandidateStateDue": "Срок наступил",
-  "settings.maintenanceCandidateStateExecuting": "Выполняется",
-  "settings.maintenanceCandidateStateSucceeded": "Успешно",
-  "settings.maintenanceCandidateStateFailed": "Не удалось",
-  "settings.maintenanceCandidateStateCanceled": "Отменено",
-  "settings.maintenanceCandidateStateExcluded": "Исключено",
-  "settings.maintenanceCandidateStateBlocked": "Заблокировано",
-  "settings.maintenanceCountdownDueNow": "Срок наступил",
-  "settings.maintenanceCountdownInMinutes": "через {{count}} мин",
-  "settings.maintenanceCountdownInHours": "через {{count}} ч",
-  "settings.maintenanceCountdownInDays": "через {{count}} дн.",
-  "settings.maintenanceCountdownOverdueMinutes": "просрочено на {{count}} мин",
-  "settings.maintenanceCountdownOverdueHours": "просрочено на {{count}} ч",
-  "settings.maintenanceCountdownOverdueDays": "просрочено на {{count}} дн.",
-  "settings.maintenanceRunsTitle": "Запуски и история",
-  "settings.maintenanceRunScope": "Охват",
-  "settings.maintenanceRunScopeAll": "Все правила",
-  "settings.maintenanceRunEvaluationNow": "Оценить сейчас",
-  "settings.maintenanceRunEvaluationRunning": "Идёт оценка…",
-  "settings.maintenanceRunActionsNow": "Выполнить действия сейчас",
-  "settings.maintenanceRunActionsRunning": "Выполняются действия…",
-  "settings.maintenanceRunActionsNeedsRule":
+  "settings.lifecycleCandidateExclude": "Исключить этот тайтл",
+  "settings.lifecycleCandidateStateObserving": "Наблюдение",
+  "settings.lifecycleCandidateStatePendingAction": "Ожидает действия",
+  "settings.lifecycleCandidateStateDue": "Срок наступил",
+  "settings.lifecycleCandidateStateExecuting": "Выполняется",
+  "settings.lifecycleCandidateStateSucceeded": "Успешно",
+  "settings.lifecycleCandidateStateFailed": "Не удалось",
+  "settings.lifecycleCandidateStateCanceled": "Отменено",
+  "settings.lifecycleCandidateStateExcluded": "Исключено",
+  "settings.lifecycleCandidateStateBlocked": "Заблокировано",
+  "settings.lifecycleCountdownDueNow": "Срок наступил",
+  "settings.lifecycleCountdownInMinutes": "через {{count}} мин",
+  "settings.lifecycleCountdownInHours": "через {{count}} ч",
+  "settings.lifecycleCountdownInDays": "через {{count}} дн.",
+  "settings.lifecycleCountdownOverdueMinutes": "просрочено на {{count}} мин",
+  "settings.lifecycleCountdownOverdueHours": "просрочено на {{count}} ч",
+  "settings.lifecycleCountdownOverdueDays": "просрочено на {{count}} дн.",
+  "settings.lifecycleRunsTitle": "Запуски и история",
+  "settings.lifecycleRunScope": "Охват",
+  "settings.lifecycleRunScopeAll": "Все правила",
+  "settings.lifecycleRunEvaluationNow": "Оценить сейчас",
+  "settings.lifecycleRunEvaluationRunning": "Идёт оценка…",
+  "settings.lifecycleRunActionsNow": "Выполнить действия сейчас",
+  "settings.lifecycleRunActionsRunning": "Выполняются действия…",
+  "settings.lifecycleRunActionsNeedsRule":
     "Выберите выше одно правило, чтобы выполнить его действия сейчас.",
-  "settings.maintenanceRunActionsHeldHelp":
-    "Немедленный запуск пропускает тайтлы, отложенные запуском, пока правило не будет оценено снова. Каждый плановый запуск сначала оценивает правило и поэтому снова рассматривает отложенные тайтлы.",
-  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+  "settings.lifecycleRunActionsHeldHelp":
+    "Немедленный запуск сначала оценивает правило, как и каждый плановый запуск, и поэтому снова рассматривает отложенные тайтлы. Тайтл, добавленный оценкой, срок которого уже наступил, например у правила без льготного периода, обрабатывается в том же запуске, включая удаление.",
+  "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
     "Выберите правило для выполнения действий. Правила действуют только за себя, поэтому для запуска сейчас нужно одно правило.",
-  "settings.maintenanceRunStarted": "Запуск начат.",
-  "settings.maintenanceRunNotStarted": "Ничего не запущено: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "Запуски оценки",
-  "settings.maintenanceEvaluationRunsEmpty":
+  "settings.lifecycleRunStarted": "Запуск начат.",
+  "settings.lifecycleRunNotStarted": "Ничего не запущено: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "Запуски оценки",
+  "settings.lifecycleEvaluationRunsEmpty":
     "Запусков оценки пока не записано.",
-  "settings.maintenanceActionRunsTitle": "Запуски действий",
-  "settings.maintenanceActionRunsEmpty": "Запусков действий пока не записано.",
-  "settings.maintenanceRunColStarted": "Начат",
-  "settings.maintenanceRunColStatus": "Статус",
-  "settings.maintenanceRunColCounts": "Счётчики",
-  "settings.maintenanceRunColDuration": "Длительность",
-  "settings.maintenanceRunColError": "Ошибка",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleActionRunsTitle": "Запуски действий",
+  "settings.lifecycleActionRunsEmpty": "Запусков действий пока не записано.",
+  "settings.lifecycleRunColStarted": "Начат",
+  "settings.lifecycleRunColStatus": "Статус",
+  "settings.lifecycleRunColCounts": "Счётчики",
+  "settings.lifecycleRunColDuration": "Длительность",
+  "settings.lifecycleRunColError": "Ошибка",
+  "settings.lifecycleRunCounts":
     "оценено {{evaluated}} · совпало {{matched}} · без совпадения {{noMatch}} · неизвестно {{unknown}} · ошибок {{errors}}",
-  "settings.maintenanceRunDuration": "{{seconds}} с",
-  "settings.maintenanceRunRevision": "рев. {{revision}}",
-  "settings.maintenanceRunStatusRunning": "Выполняется",
-  "settings.maintenanceRunStatusSucceeded": "Успешно",
-  "settings.maintenanceRunStatusFailed": "Не удалось",
-  "settings.maintenanceRunStatusHeld": "Удержано",
-  "settings.maintenanceRunStatusAlreadySatisfied": "Уже выполнено",
-  "settings.maintenanceRunStatusSkipped": "Пропущено",
-  "settings.maintenanceActionRunColAttempt": "Попытка",
-  "settings.maintenanceActionRunColHoldReason": "Причина удержания",
-  "settings.maintenanceExclusionsTitle": "Исключения",
-  "settings.maintenanceExclusionsSubtitle":
-    "Тайтлы, которых правило обслуживания не должно касаться. Глобальное исключение действует для всех правил.",
-  "settings.maintenanceExclusionsEmpty": "Исключений нет.",
-  "settings.maintenanceExclusionColScope": "Охват",
-  "settings.maintenanceExclusionColReason": "Причина",
-  "settings.maintenanceExclusionColCreated": "Добавлено",
-  "settings.maintenanceExclusionScopeGlobal": "Все правила",
-  "settings.maintenanceExclusionRemove": "Удалить исключение",
-  "settings.maintenanceExclusionRemoved": "Исключение для {{title}} удалено.",
-  "settings.maintenanceExclusionRemoving": "Удалить исключение для {{title}}?",
-  "settings.maintenanceExcludeTitle": "Исключить из обслуживания",
-  "settings.maintenanceExcludeBody":
+  "settings.lifecycleRunDuration": "{{seconds}} с",
+  "settings.lifecycleRunRevision": "рев. {{revision}}",
+  "settings.lifecycleRunStatusRunning": "Выполняется",
+  "settings.lifecycleRunStatusSucceeded": "Успешно",
+  "settings.lifecycleRunStatusFailed": "Не удалось",
+  "settings.lifecycleRunStatusHeld": "Удержано",
+  "settings.lifecycleRunStatusAlreadySatisfied": "Уже выполнено",
+  "settings.lifecycleRunStatusSkipped": "Пропущено",
+  "settings.lifecycleActionRunColAttempt": "Попытка",
+  "settings.lifecycleActionRunColHoldReason": "Причина удержания",
+  "settings.lifecycleExclusionsTitle": "Исключения",
+  "settings.lifecycleExclusionsSubtitle":
+    "Тайтлы, которых правило жизненного цикла не должно касаться. Глобальное исключение действует для всех правил.",
+  "settings.lifecycleExclusionsEmpty": "Исключений нет.",
+  "settings.lifecycleExclusionColScope": "Охват",
+  "settings.lifecycleExclusionColReason": "Причина",
+  "settings.lifecycleExclusionColCreated": "Добавлено",
+  "settings.lifecycleExclusionScopeGlobal": "Все правила",
+  "settings.lifecycleExclusionRemove": "Удалить исключение",
+  "settings.lifecycleExclusionRemoved": "Исключение для {{title}} удалено.",
+  "settings.lifecycleExclusionRemoving": "Удалить исключение для {{title}}?",
+  "settings.lifecycleExcludeTitle": "Исключить из правил жизненного цикла",
+  "settings.lifecycleExcludeBody":
     "{{title}} будет исключён начиная со следующей оценки, а его кандидат перейдёт в состояние «Исключено».",
-  "settings.maintenanceExcludeScope": "Охват",
-  "settings.maintenanceExcludeScopeGlobal": "Все правила",
-  "settings.maintenanceExcludeReason": "Причина",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "Охват",
+  "settings.lifecycleExcludeScopeGlobal": "Все правила",
+  "settings.lifecycleExcludeReason": "Причина",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "Почему этот тайтл исключается (необязательно)",
-  "settings.maintenanceExcludeConfirm": "Исключить",
-  "settings.maintenanceExcluded": "{{title}} исключён из обслуживания.",
-  "settings.refMaintTitle": "Справочник входных данных обслуживания",
-  "settings.refMaintIntro":
-    "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
-  "settings.refMaintOutputTitle": "Результат правила",
-  "settings.refMaintOutputIntro":
+  "settings.lifecycleExcludeConfirm": "Исключить",
+  "settings.lifecycleExcluded": "{{title}} исключён из правил жизненного цикла.",
+  "settings.refLifecycleTitle": "Справочник входных данных жизненного цикла",
+  "settings.refLifecycleIntro":
+    "Каждое правило жизненного цикла получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
+  "settings.refLifecycleOutputTitle": "Результат правила",
+  "settings.refLifecycleOutputIntro":
     "Правило указывает, что делать, определяя действия и необязательные unknown и reasons. Объект подходит, когда для него выполняется хотя бы одно действие. Решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
-  "settings.refMaintOutputUnknown":
+  "settings.refLifecycleOutputUnknown":
     "unknown — логическое значение. Устанавливайте его, когда само правило не может принять решение; unknown всегда имеет приоритет над совпадением. Факты, которые Scryer не смог наблюдать, уже обрабатываются автоматически.",
-  "settings.refMaintOutputReasons":
+  "settings.refLifecycleOutputReasons":
     "reasons — набор коротких машинных кодов, объясняющих решение. Они сохраняются у кандидата и показываются в предпросмотре.",
-  "settings.refMaintOutputNoPackage":
+  "settings.refLifecycleOutputNoPackage":
     "Не пишите строки package или import. Scryer добавляет их при сохранении правила и удаляет обратно для редактора.",
-  "settings.refMaintSectionInput": "— Конверт оценки",
-  "settings.refMaintInputSchemaVersion":
-    "Версия документа входных данных обслуживания, под которую написано правило",
-  "settings.refMaintInputEvaluationTime":
+  "settings.refLifecycleSectionInput": "— Конверт оценки",
+  "settings.refLifecycleInputSchemaVersion":
+    "Версия документа входных данных жизненного цикла, под которую написано правило",
+  "settings.refLifecycleInputEvaluationTime":
     "Момент времени в формате RFC3339, фиксируемый один раз за прогон, чтобы все субъекты сравнивались с одними и теми же часами. Используйте его для вычислений с датами: time.now_ns() существует, но тогда один и тот же субъект при повторе решался бы иначе.",
-  "settings.refMaintSectionSubject": "— Оцениваемый тайтл, сезон или эпизод",
-  "settings.refMaintSubjectKind": "Уровень оценки: тайтл, сезон или эпизод",
-  "settings.refMaintSubjectTitleId":
+  "settings.refLifecycleSectionSubject": "— Оцениваемый тайтл, сезон или эпизод",
+  "settings.refLifecycleSubjectKind": "Уровень оценки: тайтл, сезон или эпизод",
+  "settings.refLifecycleSubjectTitleId":
     "Идентификатор Scryer для тайтла, к которому относится субъект",
-  "settings.refMaintSubjectSeasonNumber":
+  "settings.refLifecycleSubjectSeasonNumber":
     "Номер сезона; присутствует только для субъектов-сезонов",
-  "settings.refMaintSubjectEpisodeId":
+  "settings.refLifecycleSubjectEpisodeId":
     "Идентификатор эпизода; присутствует только для субъектов-эпизодов",
-  "settings.refMaintSubjectFacet": "Медиа-фасет тайтла (фильм, сериал, аниме)",
-  "settings.refMaintSubjectName": "Отображаемое название тайтла",
-  "settings.refMaintSubjectYear": "Год выпуска тайтла, если он известен",
-  "settings.refMaintSectionLibrary":
+  "settings.refLifecycleSubjectFacet": "Медиа-фасет тайтла (фильм, сериал, аниме)",
+  "settings.refLifecycleSubjectName": "Отображаемое название тайтла",
+  "settings.refLifecycleSubjectYear": "Год выпуска тайтла, если он известен",
+  "settings.refLifecycleSectionLibrary":
     "— Библиотека, в которой находится субъект",
-  "settings.refMaintLibraryId": "Идентификатор библиотеки, содержащей субъект",
-  "settings.refMaintLibraryName": "Отображаемое имя этой библиотеки",
-  "settings.refMaintSectionFacts":
+  "settings.refLifecycleLibraryId": "Идентификатор библиотеки, содержащей субъект",
+  "settings.refLifecycleLibraryName": "Отображаемое имя этой библиотеки",
+  "settings.refLifecycleSectionSeason": "Сезон (только действия для сезона)",
+  "settings.refLifecycleSeasonId": "Id рассматриваемого сезона.",
+  "settings.refLifecycleSeasonFacts": "Собственные факты сезона, которые читают действия для сезона, например delete_season_files.",
+  "settings.refLifecycleSeasonObservations": "Конверты наблюдений для фактов сезона.",
+  "settings.refLifecycleSectionEpisode": "Эпизод (только действия для эпизода)",
+  "settings.refLifecycleEpisodeId": "Id рассматриваемого эпизода.",
+  "settings.refLifecycleEpisodeNumber": "Номер эпизода в сезоне, если известен.",
+  "settings.refLifecycleEpisodeFacts": "Собственные факты эпизода, которые читают действия для эпизода, например delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations": "Конверты наблюдений для фактов эпизода.",
+  "settings.refLifecycleFactsStorageRoots": "По одной записи на каждую настроенную корневую папку, где лежат файлы субъекта, со свободным местом этой папки. Неизвестно, если хотя бы одну из этих папок не удалось прочитать.",
+  "settings.refLifecycleSectionStorageRoots": "Корневая папка хранилища",
+  "settings.refLifecycleStorageRootId": "Id настроенной корневой папки.",
+  "settings.refLifecycleStorageRootPath": "Путь настроенной корневой папки.",
+  "settings.refLifecycleStorageRootAvailableBytes": "Свободные байты на томе корневой папки.",
+  "settings.refLifecycleStorageRootTotalBytes": "Всего байтов на томе корневой папки.",
+  "settings.refLifecycleStorageRootAvailablePercent": "Свободное место на томе корневой папки в процентах от общего объёма.",
+  "settings.refLifecycleFactsStorageRootsValue": "Корневые папки, где лежат файлы субъекта, если известны.",
+  "settings.refLifecycleSectionFacts":
     "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
-  "settings.refMaintFactsMonitored": "Отслеживается ли субъект",
-  "settings.refMaintFactsTags":
+  "settings.refLifecycleFactsMonitored": "Отслеживается ли субъект",
+  "settings.refLifecycleFactsTags":
     "Пользовательские теги субъекта в нижнем регистре из реестра тегов, который администратор ведёт в настройках; служебные записи с префиксом scryer: исключены",
-  "settings.refMaintFactsQualityProfileId":
+  "settings.refLifecycleFactsQualityProfileId":
     "Профиль качества, назначенный субъекту",
-  "settings.refMaintFactsAddedAt": "Когда субъект был добавлен в библиотеку",
-  "settings.refMaintFactsAddedByUserId":
+  "settings.refLifecycleFactsAddedAt": "Когда субъект был добавлен в библиотеку",
+  "settings.refLifecycleFactsAddedByUserId":
     "Какой пользователь добавил субъект; отсутствует, если его создало сканирование или обнаружение",
-  "settings.refMaintFactsAddedByUsername":
+  "settings.refLifecycleFactsAddedByUsername":
     "Имя пользователя, добавившего субъект",
-  "settings.refMaintFactsRequested": "Был ли субъект создан по медиа-запросу",
-  "settings.refMaintFactsRequestedByUserIds":
+  "settings.refLifecycleFactsRequested": "Был ли субъект создан по медиа-запросу",
+  "settings.refLifecycleFactsRequestedByUserIds":
     "Пользователи, запросившие субъект: автор запроса и все дополнительные запросившие",
-  "settings.refMaintFactsRequestedByUsernames":
+  "settings.refLifecycleFactsRequestedByUsernames":
     "Имена этих запросивших пользователей",
-  "settings.refMaintFactsFirstImportedAt":
+  "settings.refLifecycleFactsFirstImportedAt":
     "Когда для субъекта был впервые импортирован файл",
-  "settings.refMaintFactsLastUpgradedAt":
+  "settings.refLifecycleFactsLastUpgradedAt":
     "Когда субъект в последний раз получал улучшение",
-  "settings.refMaintFactsHasFile":
+  "settings.refLifecycleFactsHasFile":
     "Есть ли у субъекта хотя бы один файл на диске",
-  "settings.refMaintFactsFileCount":
+  "settings.refLifecycleFactsFileCount":
     "Сколько файлов субъекта находится на диске",
-  "settings.refMaintFactsTotalFileSizeBytes":
+  "settings.refLifecycleFactsTotalFileSizeBytes":
     "Суммарный размер файлов субъекта на диске",
-  "settings.refMaintFactsFiles":
+  "settings.refLifecycleFactsFiles":
     "Файлы субъекта с подробностями по каждому файлу",
-  "settings.refMaintFactsEpisodeCount": "Сколько эпизодов охватывает субъект",
-  "settings.refMaintFactsEpisodeFileCount":
+  "settings.refLifecycleFactsEpisodeCount": "Сколько эпизодов охватывает субъект",
+  "settings.refLifecycleFactsEpisodeFileCount":
     "Сколько из этих эпизодов имеют файл",
-  "settings.refMaintFactsMonitoredEpisodeCount":
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
     "Сколько из этих эпизодов отслеживается",
-  "settings.refMaintFactsActiveDownloads":
+  "settings.refLifecycleFactsActiveDownloads":
     "Есть ли у субъекта активная загрузка",
-  "settings.refMaintFactsWatchedByUserIds":
+  "settings.refLifecycleFactsWatchedByUserIds":
     "Пользователи, которые смотрели субъект на подключённом медиасервере",
-  "settings.refMaintFactsLastWatchedAt":
+  "settings.refLifecycleFactsLastWatchedAt":
     "Когда субъект в последний раз кто-либо смотрел",
-  "settings.refMaintFactsWatchedByAnyRequester":
+  "settings.refLifecycleFactsWatchedByAnyRequester":
     "Смотрел ли субъект хотя бы один из запросивших его пользователей",
-  "settings.refMaintFactsWatchedByAllRequesters":
+  "settings.refLifecycleFactsWatchedByAllRequesters":
     "Смотрели ли субъект все запросившие его пользователи",
-  "settings.refMaintFactsRequestLeaseState":
+  "settings.refLifecycleFactsRequestLeaseState":
     "Сводное состояние сроков хранения по запросам: none, dormant, active или expired",
-  "settings.refMaintFactsRequestLeaseExpiresAt":
+  "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "Когда истекает последний действующий срок хранения субъекта",
-  "settings.refMaintFactsActiveRetentionClaims":
+  "settings.refLifecycleFactsActiveRetentionClaims":
     "Сколько сроков хранения по запросам всё ещё удерживают субъект",
-  "settings.refMaintObsStatus":
+  "settings.refLifecycleObsStatus":
     "known, absent или unknown. absent означает, что источник ответил и значения нет; unknown означает, что Scryer не смог выяснить. Проверяйте это перед чтением value — неизвестный факт никогда не приводится к false, 0 или пустой строке.",
-  "settings.refMaintSectionObservations":
+  "settings.refLifecycleSectionObservations":
     "— Те же факты в виде полных конвертов, для правил, которым нужно отличать absent от unknown или читать причину. Чтение факта здесь отключает для него автоматическое удержание: ответственность за трёхзначный ответ берёте на себя вы.",
-  "settings.refMaintSectionObsFiles":
+  "settings.refLifecycleSectionObsFiles":
     "— По одной записи на файл в input.observations.files.value",
-  "settings.refMaintObsObservedAt":
+  "settings.refLifecycleObsObservedAt":
     "Когда значение было получено, если источник записал время",
-  "settings.refMaintObsReason":
+  "settings.refLifecycleObsReason":
     "Устойчивый машинный код, объясняющий, почему факт неизвестен или почему у отсутствующего факта нет значения",
-  "settings.refMaintFactsMonitoredValue": "True, когда субъект отслеживается",
-  "settings.refMaintFactsTagsValue":
+  "settings.refLifecycleFactsMonitoredValue": "True, когда субъект отслеживается",
+  "settings.refLifecycleFactsTagsValue":
     "Имена пользовательских тегов в нижнем регистре из реестра тегов администратора; никогда не служебные записи с префиксом scryer:",
-  "settings.refMaintFactsQualityProfileIdValue":
+  "settings.refLifecycleFactsQualityProfileIdValue":
     "Идентификатор назначенного профиля качества",
-  "settings.refMaintFactsAddedAtValue":
+  "settings.refLifecycleFactsAddedAtValue":
     "Метка времени RFC3339 добавления субъекта",
-  "settings.refMaintFactsAddedByUserIdValue":
+  "settings.refLifecycleFactsAddedByUserIdValue":
     "Идентификатор пользователя, добавившего субъект; причина title_added_by_system, если этого не сделал никто",
-  "settings.refMaintFactsAddedByUsernameValue":
+  "settings.refLifecycleFactsAddedByUsernameValue":
     "Имя этого пользователя; unknown с причиной user_not_found, если учётной записи больше нет",
-  "settings.refMaintFactsRequestedValue":
+  "settings.refLifecycleFactsRequestedValue":
     "True, когда субъект создан хотя бы одним медиа-запросом; в противном случае — подтверждённое false",
-  "settings.refMaintFactsRequestedByUserIdsValue":
+  "settings.refLifecycleFactsRequestedByUserIdsValue":
     "Идентификаторы запросивших без повторов; пустой список, если субъект не запрашивали",
-  "settings.refMaintFactsRequestedByUsernamesValue":
+  "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Имена запросивших; unknown с причиной user_not_found, если хотя бы одной из этих учётных записей больше нет",
-  "settings.refMaintFactsFirstImportedAtValue":
+  "settings.refLifecycleFactsFirstImportedAtValue":
     "Метка времени RFC3339 первого импорта",
-  "settings.refMaintFactsLastUpgradedAtValue":
+  "settings.refLifecycleFactsLastUpgradedAtValue":
     "Метка времени RFC3339 последнего улучшения",
-  "settings.refMaintFactsHasFileValue":
+  "settings.refLifecycleFactsHasFileValue":
     "True, когда на диске есть хотя бы один файл",
-  "settings.refMaintFactsFileCountValue": "Количество файлов на диске",
-  "settings.refMaintFactsTotalFileSizeBytesValue":
+  "settings.refLifecycleFactsFileCountValue": "Количество файлов на диске",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
     "Суммарный размер этих файлов в байтах",
-  "settings.refMaintFactsFilesValue":
+  "settings.refLifecycleFactsFilesValue":
     "По одной записи на файл; см. input.observations.files.value[] ниже",
-  "settings.refMaintFactsEpisodeCountValue":
+  "settings.refLifecycleFactsEpisodeCountValue":
     "Количество эпизодов в области действия",
-  "settings.refMaintFactsEpisodeFileCountValue":
+  "settings.refLifecycleFactsEpisodeFileCountValue":
     "Количество этих эпизодов, у которых есть файл",
-  "settings.refMaintFactsMonitoredEpisodeCountValue":
+  "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "Количество этих эпизодов, которые отслеживаются",
-  "settings.refMaintFactsActiveDownloadsValue":
+  "settings.refLifecycleFactsActiveDownloadsValue":
     "True, когда для субъекта выполняется загрузка",
-  "settings.refMaintFactsWatchedByUserIdsValue":
+  "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Факты о просмотрах неизвестны для сериалов (show_watch_rollup_unavailable), когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale), когда ни у кого нет подтверждённой привязанной учётной записи медиасервера (no_linked_participants), когда привязанные учётные записи есть, но ни одна синхронизация их ещё не прочитала (participants_not_yet_swept), и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
-  "settings.refMaintFactsLastWatchedAtValue":
+  "settings.refLifecycleFactsLastWatchedAtValue":
     "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел, и unknown с причиной play_time_missing, если у просмотра нет записанного времени",
-  "settings.refMaintFactsWatchedByAnyRequesterValue":
+  "settings.refLifecycleFactsWatchedByAnyRequesterValue":
     "True, когда субъект смотрел хотя бы один запросивший; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
-  "settings.refMaintFactsWatchedByAllRequestersValue":
+  "settings.refLifecycleFactsWatchedByAllRequestersValue":
     "True, когда субъект смотрели все запросившие; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера, или requester_not_yet_swept, если привязанную учётную запись запросившего ещё не прочитала ни одна синхронизация",
-  "settings.refMaintFactsRequestLeaseStateValue":
+  "settings.refLifecycleFactsRequestLeaseStateValue":
     "none, когда для субъекта никогда не записывалось хранение по запросу; dormant, когда хранение ждёт первого импорта; active, пока хранение действует; expired, когда все сроки истекли. Снятое или заменённое хранение считается отозванным, а не истёкшим, поэтому оно не делает состояние expired. Истечение измеряется относительно времени оценки, поэтому хранение читается как expired в тот же момент, когда закрывается его окно.",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+  "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
     "Отметка времени RFC3339 самого позднего истечения среди действующих сроков; absent с причиной no_live_lease, когда субъект ничем не удерживается",
-  "settings.refMaintFactsActiveRetentionClaimsValue":
+  "settings.refLifecycleFactsActiveRetentionClaimsValue":
     "Количество сроков хранения, всё ещё удерживающих субъект, включая ожидающие импорта",
-  "settings.refMaintSectionFiles":
+  "settings.refLifecycleSectionFiles":
     "— По одной записи на файл в input.facts.files",
-  "settings.refMaintFileSizeBytes": "Размер файла в байтах",
-  "settings.refMaintFileQuality":
+  "settings.refLifecycleFileSizeBytes": "Размер файла в байтах",
+  "settings.refLifecycleFileQuality":
     "Определённое качество файла (например, 2160P, 1080P)",
-  "settings.refMaintFileVideoCodec":
+  "settings.refLifecycleFileVideoCodec":
     "Видеокодек файла (например, H.265, H.264)",
-  "settings.refMaintFileVideoWidth": "Ширина видео в пикселях",
-  "settings.refMaintFileVideoHeight": "Высота видео в пикселях",
-  "settings.refMaintFactsRuntimeMinutes":
+  "settings.refLifecycleFileVideoWidth": "Ширина видео в пикселях",
+  "settings.refLifecycleFileVideoHeight": "Высота видео в пикселях",
+  "settings.refLifecycleFactsRuntimeMinutes":
     "Продолжительность в минутах по данным поставщика метаданных",
-  "settings.refMaintFactsOriginalLanguage": "Язык оригинала",
-  "settings.refMaintFactsSeriesStatus":
+  "settings.refLifecycleFactsOriginalLanguage": "Язык оригинала",
+  "settings.refLifecycleFactsSeriesStatus":
     "Статус сериала по данным поставщика метаданных, например продолжается или завершён",
-  "settings.refMaintFactsFirstAired": "Дата премьеры сериала (YYYY-MM-DD)",
-  "settings.refMaintFactsNetwork": "Телеканал, показывающий сериал",
-  "settings.refMaintFactsStudio": "Студия, снявшая тайтл",
-  "settings.refMaintFactsCountry": "Страна производства",
-  "settings.refMaintFactsPopularity":
+  "settings.refLifecycleFactsFirstAired": "Дата премьеры сериала (YYYY-MM-DD)",
+  "settings.refLifecycleFactsNetwork": "Телеканал, показывающий сериал",
+  "settings.refLifecycleFactsStudio": "Студия, снявшая тайтл",
+  "settings.refLifecycleFactsCountry": "Страна производства",
+  "settings.refLifecycleFactsPopularity":
     "Оценка популярности от поставщика метаданных",
-  "settings.refMaintFactsTheatricalReleaseDate":
+  "settings.refLifecycleFactsTheatricalReleaseDate":
     "Дата выхода фильма в кинотеатрах (YYYY-MM-DD)",
-  "settings.refMaintFactsDigitalReleaseDate":
+  "settings.refLifecycleFactsDigitalReleaseDate":
     "Дата цифрового релиза фильма (YYYY-MM-DD)",
-  "settings.refMaintFactsPhysicalReleaseDate":
+  "settings.refLifecycleFactsPhysicalReleaseDate":
     "Дата выхода фильма на физических носителях (YYYY-MM-DD)",
-  "settings.refMaintFactsDaysSinceAdded":
+  "settings.refLifecycleFactsDaysSinceAdded":
     "Полных дней с момента добавления субъекта",
-  "settings.refMaintFactsMaxVideoHeight":
+  "settings.refLifecycleFactsMaxVideoHeight":
     "Наибольшая высота видеопотока среди файлов субъекта, в пикселях",
-  "settings.refMaintFactsSeasonCount":
+  "settings.refLifecycleFactsSeasonCount":
     "Количество сезонов сериала без спецвыпусков",
-  "settings.refMaintFactsAiredEpisodeCount":
+  "settings.refLifecycleFactsAiredEpisodeCount":
     "Количество вышедших обычных эпизодов сериала",
-  "settings.refMaintFactsUnairedEpisodeCount":
+  "settings.refLifecycleFactsUnairedEpisodeCount":
     "Количество ещё не вышедших обычных эпизодов сериала",
-  "settings.refMaintFactsMissingEpisodeCount":
+  "settings.refLifecycleFactsMissingEpisodeCount":
     "Количество вышедших отслеживаемых эпизодов сериала без файла",
-  "settings.refMaintFactsAiredEpisodeFilePercent":
+  "settings.refLifecycleFactsAiredEpisodeFilePercent":
     "Доля вышедших эпизодов с файлом, в процентах от вышедших эпизодов",
-  "settings.refMaintFactsLatestSeasonNumber": "Номер последнего сезона сериала",
-  "settings.refMaintFactsLatestAiredEpisodeDate":
+  "settings.refLifecycleFactsLatestSeasonNumber": "Номер последнего сезона сериала",
+  "settings.refLifecycleFactsLatestAiredEpisodeDate":
     "Дата выхода последнего вышедшего эпизода сериала (YYYY-MM-DD)",
-  "settings.refMaintFactsNextEpisodeAirDate":
+  "settings.refLifecycleFactsNextEpisodeAirDate":
     "Дата выхода следующего запланированного эпизода сериала (YYYY-MM-DD)",
-  "settings.refMaintFactsGenres":
+  "settings.refLifecycleFactsGenres":
     "Названия жанров из сохранённых метаданных тайтла",
-  "settings.refMaintFactsRating": "Сохранённый сводный рейтинг тайтла",
-  "settings.refMaintFactsRatings":
+  "settings.refLifecycleFactsRating": "Сохранённый сводный рейтинг тайтла",
+  "settings.refLifecycleFactsRatings":
     "Все внешние рейтинги, на которых основан сводный рейтинг",
-  "settings.refMaintFactsPlayCountTotal":
+  "settings.refLifecycleFactsPlayCountTotal":
     "Сумма воспроизведений субъекта всеми учётными записями на всех включённых медиасерверах; никого не называет",
-  "settings.refMaintFactsWatchlistedByUserIds":
+  "settings.refLifecycleFactsWatchlistedByUserIds":
     "Пользователи, в чьих списках к просмотру есть тайтл",
-  "settings.refMaintFactsWatchlistedByUsernames":
+  "settings.refLifecycleFactsWatchlistedByUsernames":
     "Имена пользователей, в чьих списках к просмотру есть тайтл",
-  "settings.refMaintFactsWatchlistedByAnyone":
+  "settings.refLifecycleFactsWatchlistedByAnyone":
     "Есть ли тайтл в списке к просмотру какого-либо пользователя",
-  "settings.refMaintFactsWatchlistedByAnyRequester":
+  "settings.refLifecycleFactsWatchlistedByAnyRequester":
     "Есть ли тайтл в списке к просмотру одного из его запросивших",
-  "settings.refMaintFactsWatchlistAddedAt":
+  "settings.refLifecycleFactsWatchlistAddedAt":
     "Когда Scryer впервые увидел тайтл в каком-либо списке к просмотру",
-  "settings.refMaintFactsWatchlistOrigins":
+  "settings.refLifecycleFactsWatchlistOrigins":
     "Поставщики, в чьих списках к просмотру тайтл есть сейчас",
-  "settings.refMaintFactsFavoritedByUserIds":
+  "settings.refLifecycleFactsFavoritedByUserIds":
     "Пользователи, отметившие субъект как избранное в Jellyfin или Emby",
-  "settings.refMaintFactsFavoritedByUsernames":
+  "settings.refLifecycleFactsFavoritedByUsernames":
     "Имена пользователей, отметивших субъект как избранное в Jellyfin или Emby",
-  "settings.refMaintFactsFavoritedByAnyone":
+  "settings.refLifecycleFactsFavoritedByAnyone":
     "Отметил ли какой-либо пользователь субъект как избранное в Jellyfin или Emby",
-  "settings.refMaintFactsFavoritedByAnyRequester":
+  "settings.refLifecycleFactsFavoritedByAnyRequester":
     "Отметил ли один из запросивших тайтл субъект как избранное в Jellyfin или Emby",
-  "settings.refMaintFileAudioCodec":
+  "settings.refLifecycleFileAudioCodec":
     "Аудиокодек основной звуковой дорожки файла",
-  "settings.refMaintFileAudioChannels": "Количество аудиоканалов",
-  "settings.refMaintFileAudioBitrateKbps": "Битрейт аудио в кбит/с",
-  "settings.refMaintFileVideoBitrateKbps": "Битрейт видео в кбит/с",
-  "settings.refMaintFileVideoBitDepth": "Глубина цвета видео в битах",
-  "settings.refMaintFileVideoHdrFormat":
+  "settings.refLifecycleFileAudioChannels": "Количество аудиоканалов",
+  "settings.refLifecycleFileAudioBitrateKbps": "Битрейт аудио в кбит/с",
+  "settings.refLifecycleFileVideoBitrateKbps": "Битрейт видео в кбит/с",
+  "settings.refLifecycleFileVideoBitDepth": "Глубина цвета видео в битах",
+  "settings.refLifecycleFileVideoHdrFormat":
     "Формат HDR видео, например HDR10 или Dolby Vision",
-  "settings.refMaintSectionRatings":
+  "settings.refLifecycleSectionRatings":
     "— Одна запись на каждый внешний рейтинг в input.facts.ratings",
-  "settings.refMaintSectionObsRatings":
+  "settings.refLifecycleSectionObsRatings":
     "— Одна запись на каждый внешний рейтинг в input.observations.ratings.value",
-  "settings.refMaintRatingSource": "Источник рейтинга",
-  "settings.refMaintRatingValue":
+  "settings.refLifecycleRatingSource": "Источник рейтинга",
+  "settings.refLifecycleRatingValue":
     "Рейтинг по собственной шкале источника, если источник её даёт",
-  "settings.refMaintRatingNormalized":
+  "settings.refLifecycleRatingNormalized":
     "Рейтинг по общей шкале Scryer, сопоставимый между источниками",
-  "settings.refMaintRatingVotes":
+  "settings.refLifecycleRatingVotes":
     "Количество голосов за рейтингом, если источник его даёт",
-  "settings.refMaintFactsRuntimeMinutesValue":
+  "settings.refLifecycleFactsRuntimeMinutesValue":
     "Продолжительность в минутах; отсутствует, если поставщик метаданных не дал значения",
-  "settings.refMaintFactsOriginalLanguageValue":
+  "settings.refLifecycleFactsOriginalLanguageValue":
     "Язык оригинала; отсутствует, если поставщик метаданных не дал значения",
-  "settings.refMaintFactsSeriesStatusValue":
+  "settings.refLifecycleFactsSeriesStatusValue":
     "Статус сериала по данным поставщика; отсутствует, если поставщик не дал значения",
-  "settings.refMaintFactsFirstAiredValue":
+  "settings.refLifecycleFactsFirstAiredValue":
     "Дата премьеры (YYYY-MM-DD) — дата, а не метка времени; отсутствует, если поставщик не дал значения",
-  "settings.refMaintFactsNetworkValue":
+  "settings.refLifecycleFactsNetworkValue":
     "Название телеканала; отсутствует, если поставщик не дал значения",
-  "settings.refMaintFactsStudioValue":
+  "settings.refLifecycleFactsStudioValue":
     "Название студии; отсутствует, если поставщик не дал значения",
-  "settings.refMaintFactsCountryValue":
+  "settings.refLifecycleFactsCountryValue":
     "Страна производства; отсутствует, если поставщик не дал значения",
-  "settings.refMaintFactsPopularityValue":
+  "settings.refLifecycleFactsPopularityValue":
     "Оценка популярности; отсутствует, если поставщик не дал значения",
-  "settings.refMaintFactsTheatricalReleaseDateValue":
+  "settings.refLifecycleFactsTheatricalReleaseDateValue":
     "Дата выхода в кинотеатрах (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
-  "settings.refMaintFactsDigitalReleaseDateValue":
+  "settings.refLifecycleFactsDigitalReleaseDateValue":
     "Дата цифрового релиза (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
-  "settings.refMaintFactsPhysicalReleaseDateValue":
+  "settings.refLifecycleFactsPhysicalReleaseDateValue":
     "Дата выхода на физических носителях (YYYY-MM-DD); отсутствует для сериала или если поставщик не дал значения",
-  "settings.refMaintFactsDaysSinceAddedValue":
+  "settings.refLifecycleFactsDaysSinceAddedValue":
     "Полных дней с момента добавления субъекта по часам оценки",
-  "settings.refMaintFactsMaxVideoHeightValue":
+  "settings.refLifecycleFactsMaxVideoHeightValue":
     "Высота в пикселях самого высокого видеопотока среди файлов; отсутствует, если ни один файл её не сообщает. Неизвестно с причиной not_yet_collected, пока каждый файл тайтла не прошёл сканирование до конца, включая файлы, сканирование которых не удалось или требует проверки",
-  "settings.refMaintFactsSeasonCountValue":
+  "settings.refLifecycleFactsSeasonCountValue":
     "Сезоны во всём списке эпизодов шоу без спецвыпусков, независимо от объекта; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsAiredEpisodeCountValue":
+  "settings.refLifecycleFactsAiredEpisodeCountValue":
     "Обычные эпизоды с датой выхода не позже дня оценки; эпизод без даты выхода считается не вышедшим. Отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsUnairedEpisodeCountValue":
+  "settings.refLifecycleFactsUnairedEpisodeCountValue":
     "Обычные эпизоды без даты выхода или с датой после дня оценки; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsMissingEpisodeCountValue":
+  "settings.refLifecycleFactsMissingEpisodeCountValue":
     "Обычные эпизоды, которые вышли, отслеживаются и не имеют файла; отсутствует для фильмов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+  "settings.refLifecycleFactsAiredEpisodeFilePercentValue":
     "Доля вышедших эпизодов с файлом в процентах; отсутствует с причиной no_aired_episode, если ничего не вышло, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsLatestSeasonNumberValue":
+  "settings.refLifecycleFactsLatestSeasonNumberValue":
     "Наибольший номер обычного сезона; отсутствует для фильмов или шоу без сезонов, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+  "settings.refLifecycleFactsLatestAiredEpisodeDateValue":
     "Дата выхода (YYYY-MM-DD) последнего вышедшего обычного эпизода; отсутствует с причиной no_aired_episode, если ничего не вышло, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsNextEpisodeAirDateValue":
+  "settings.refLifecycleFactsNextEpisodeAirDateValue":
     "Ближайшая дата выхода (YYYY-MM-DD) после дня оценки; отсутствует с причиной no_scheduled_episode, если ничего не запланировано, неизвестно с причиной episode_store_unreadable, если хранилище эпизодов не удалось прочитать, и с причиной episode_list_empty, если у шоу ещё не сохранено ни одного обычного эпизода",
-  "settings.refMaintFactsGenresValue":
+  "settings.refLifecycleFactsGenresValue":
     "Названия жанров; неизвестно с причиной metadata_unreadable, если сохранённые метаданные не удалось прочитать",
-  "settings.refMaintFactsRatingValue":
+  "settings.refLifecycleFactsRatingValue":
     "Сводный рейтинг; отсутствует, если ни один источник не оценил тайтл, неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
-  "settings.refMaintFactsRatingsValue":
+  "settings.refLifecycleFactsRatingsValue":
     "Одна запись на каждый внешний рейтинг; неизвестно с причиной metadata_unreadable, если хранилище рейтингов не удалось прочитать",
-  "settings.refMaintFactsPlayCountTotalValue":
+  "settings.refLifecycleFactsPlayCountTotalValue":
     "Сумма воспроизведений всеми учётными записями на всех включённых медиасерверах, связанными с пользователем Scryer или нет. Неизвестно с причиной audience_not_read, пока все учётные записи не прочитаны недавно, и с обычными причинами, когда факты просмотра неизвестны.",
-  "settings.refMaintFactsWatchlistedByUserIdsValue":
+  "settings.refLifecycleFactsWatchlistedByUserIdsValue":
     "ID пользователей, в чьих списках к просмотру есть тайтл. Список к просмотру — это собственный включённый и авторизованный watchlist пользователя в Plex, Trakt, TMDb или MDBList, список plan-to-watch в Simkl или MyAnimeList или список planning в AniList. Неизвестно с причиной watchlist_not_synced, пока какой-либо список ни разу не синхронизировался, завершился ошибкой в последний раз, выключен, настроен не синхронизироваться или потерял свою учётную запись, и с причиной watchlist_stale, пока какой-либо давно не синхронизировался.",
-  "settings.refMaintFactsWatchlistedByUsernamesValue":
+  "settings.refLifecycleFactsWatchlistedByUsernamesValue":
     "Имена пользователей, в чьих списках к просмотру есть тайтл; неизвестно с причиной user_not_found, если кого-то из них больше нет, и с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
-  "settings.refMaintFactsWatchlistedByAnyoneValue":
+  "settings.refLifecycleFactsWatchlistedByAnyoneValue":
     "True, если тайтл есть в списке к просмотру какого-либо пользователя; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
-  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+  "settings.refLifecycleFactsWatchlistedByAnyRequesterValue":
     "True, если тайтл есть в списке к просмотру запросившего; отсутствует с причиной title_not_requested, если его никто не запрашивал, неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
-  "settings.refMaintFactsWatchlistAddedAtValue":
+  "settings.refLifecycleFactsWatchlistAddedAtValue":
     "Метка времени RFC3339, когда Scryer впервые увидел тайтл в каком-либо списке к просмотру; отсутствует с причиной not_on_a_watchlist, если его нет ни в одном списке, неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
-  "settings.refMaintFactsWatchlistOriginsValue":
+  "settings.refLifecycleFactsWatchlistOriginsValue":
     "Поставщики, в чьих списках к просмотру тайтл есть сейчас; неизвестно с причиной watchlist_not_synced или watchlist_stale, пока какой-либо список давно не синхронизировался",
-  "settings.refMaintFactsFavoritedByUserIdsValue":
+  "settings.refLifecycleFactsFavoritedByUserIdsValue":
     "ID пользователей, отметивших объект как избранное на включённом сервере Jellyfin или Emby. Тайтл учитывает каждое своё избранное; избранное сериала или сезона учитывается для каждого сезона и эпизода сериала; избранное эпизода — для этого эпизода, его сезона и сериала. Scryer не умеет читать избранное Plex: неизвестно с причиной favorites_unsupported, если все включённые серверы — Plex, и с причиной favorite_member_unobservable, пока связанного пользователя видно только через Plex. Неизвестно с причиной favorites_member_not_read, пока избранное связанного пользователя давно не читалось полностью, и с причиной favorites_unreadable, если сохранённое избранное не удалось прочитать. После обновления факты избранного остаются неизвестными, пока первый обход не прочитает избранное.",
-  "settings.refMaintFactsFavoritedByUsernamesValue":
+  "settings.refLifecycleFactsFavoritedByUsernamesValue":
     "Имена пользователей, отметивших объект как избранное, с подсчётом как для favorited_by_user_ids; неизвестно с причиной user_not_found, если кого-то из них больше нет, и по тем же причинам, что и favorited_by_user_ids.",
-  "settings.refMaintFactsFavoritedByAnyoneValue":
+  "settings.refLifecycleFactsFavoritedByAnyoneValue":
     "Истина, когда объект покрывает избранное, прочитанное из Jellyfin или Emby, с подсчётом как для favorited_by_user_ids, независимо от того, связана ли учётная запись с пользователем Scryer. Ложь, когда избранное каждой учётной записи на каждом включённом сервере Jellyfin и Emby недавно прочитано полностью и ничто не покрывает объект. Неизвестно с причиной audience_favorites_not_read, пока у какой-либо учётной записи на таком сервере нет недавнего полного чтения, с причиной audience_favorites_unsupported, пока включён сервер Plex, ведь у учётных записей Plex может быть избранное, которое Scryer не читает, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
-  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+  "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
     "Истина, когда объект отметил как избранное кто-то из запросивших, с подсчётом как для favorited_by_user_ids; отсутствует с причиной title_not_requested, если тайтл никто не запрашивал, неизвестно с причиной requester_not_linked, если у запросившего нет связанной учётной записи медиасервера, с причиной favorites_member_not_read, если избранное запросившего давно не читалось полностью, и с причиной favorites_unsupported, favorite_member_unobservable или favorites_unreadable, как для favorited_by_user_ids.",
-  "settings.refMaintFileAudioLanguages": "Языки аудиодорожек в файле",
-  "settings.refMaintFileSubtitleLanguages": "Языки субтитров в файле",
-  "settings.refMaintFileAddedAt": "Метка времени RFC3339 добавления файла",
-  "settings.refMaintFactsSeriesMovies":
+  "settings.refLifecycleFileAudioLanguages": "Языки аудиодорожек в файле",
+  "settings.refLifecycleFileSubtitleLanguages": "Языки субтитров в файле",
+  "settings.refLifecycleFileAddedAt": "Метка времени RFC3339 добавления файла",
+  "settings.refLifecycleFactsSeriesMovies":
     "Фильмы, привязанные к таймлайну сериала, каждый со своими тегами. Только для сериалов: у фильма этот ключ отсутствует, а у сериала без привязанных фильмов он известен и пуст. add_tags и remove_tags никогда не пишут сюда — они действуют на сам тайтл.",
-  "settings.refMaintFactsSeriesMoviesValue":
+  "settings.refLifecycleFactsSeriesMoviesValue":
     "По одной записи на привязанный фильм; см. input.observations.series_movies.value[] ниже",
-  "settings.refMaintSectionSeriesMovies":
+  "settings.refLifecycleSectionSeriesMovies":
     "— По одной записи на привязанный фильм в input.facts.series_movies",
-  "settings.refMaintSectionObsSeriesMovies":
+  "settings.refLifecycleSectionObsSeriesMovies":
     "— По одной записи на привязанный фильм в input.observations.series_movies.value",
-  "settings.refMaintSeriesMovieLinkId": "Идентификатор связи сериала и фильма",
-  "settings.refMaintSeriesMovieName": "Название привязанного фильма",
-  "settings.refMaintSeriesMovieYear":
+  "settings.refLifecycleSeriesMovieLinkId": "Идентификатор связи сериала и фильма",
+  "settings.refLifecycleSeriesMovieName": "Название привязанного фильма",
+  "settings.refLifecycleSeriesMovieYear":
     "Год выпуска привязанного фильма, если известен",
-  "settings.refMaintSeriesMovieMonitored":
+  "settings.refLifecycleSeriesMovieMonitored":
     "Включено ли получение для этого привязанного фильма",
-  "settings.refMaintSeriesMovieHasFile":
+  "settings.refLifecycleSeriesMovieHasFile":
     "Есть ли у этого привязанного фильма файл на диске",
-  "settings.refMaintSeriesMovieTags":
+  "settings.refLifecycleSeriesMovieTags":
     "Пользовательские теги этого привязанного фильма из того же реестра, что и теги тайтлов. Фильм сериала несёт свои теги и не наследует теги сериала.",
   "settings.ruleBuilderTitle": "Правило",
   "settings.ruleBuilderModeLabel": "Редактор",
   "settings.ruleBuilderModeSimple": "Простой",
   "settings.ruleBuilderModeHelp":
-    "Простой режим собирает правило из условий и результатов и сам пишет Rego. Расширенный режим показывает этот Rego только для чтения, и в простой режим можно вернуться в любой момент. Чтобы изменить Rego самостоятельно, выберите «Редактировать как Rego»; после этого правило больше нельзя будет открыть в простом конструкторе.",
+    "Простой режим собирает правило из условий и результатов и сам пишет Rego. Расширенный режим показывает этот Rego, и в простой режим можно вернуться, пока вы его не изменили. После изменения кода правило останется расширенным.",
   "settings.ruleBuilderUnavailable":
     "Код этого правила был изменён вручную или создан не простым конструктором, поэтому его можно редактировать только как Rego.",
   "settings.ruleBuilderEditAsRego": "Редактировать как Rego",
   "settings.ruleBuilderEditAsRegoTitle": "Редактировать это правило как Rego?",
   "settings.ruleBuilderEditAsRegoIntro":
-    "После перехода к редактированию Rego это правило больше нельзя будет открыть в простом конструкторе, даже после сохранения. Текущий код Rego сохранится как отправная точка.",
+    "После изменения кода правило останется расширенным и больше не откроется в простом режиме, даже после сохранения.",
   "settings.ruleBuilderIncomplete":
     "Перед сохранением заполните условия и результаты.",
   "settings.ruleBuilderConditions": "Условия",
-  "settings.maintenanceBuilderConditionsHelp":
+  "settings.lifecycleBuilderConditionsHelp":
     "Каждое условие проверяет один факт об объекте. Выберите, должны ли выполняться все условия или достаточно любого из них, чтобы применились действия.",
   "settings.ruleBuilderJoinAll": "Выполняются все условия",
   "settings.ruleBuilderJoinAny": "Выполняется любое условие",
   "settings.ruleBuilderAddCondition": "Добавить условие",
+  "settings.ruleBuilderActionSubject": "Применяется к",
+  "settings.ruleBuilderAction": "Действие",
+  "settings.ruleBuilderActionPlaceholder": "Выберите действие",
+  "settings.ruleBuilderActionConditions": "Только если",
+  "settings.ruleBuilderAddAction": "Добавить действие",
+  "settings.ruleBuilderProblemActionRequired": "Выберите действие.",
   "settings.ruleBuilderFact": "Факт",
   "settings.ruleBuilderFactPlaceholder": "Выберите факт",
   "settings.ruleBuilderOperator": "Сравнение",
   "settings.ruleBuilderValue": "Значение",
   "settings.ruleBuilderDays": "Дней",
-  "settings.maintenanceBuilderActionsHelp":
+  "settings.lifecycleBuilderActionsHelp":
     "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
-  "settings.maintenanceBuilderActionTitleOnly":
-    "Доступно только для правил тайтлов.",
   "settings.ruleBuilderOutputConflict": "Нельзя сочетать с: {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Выберите профиль качества",
-  "settings.maintenanceBuilderLibraryPlaceholder": "Выберите библиотеку",
-  "settings.maintenanceBuilderRootPlaceholder": "Выберите корневую папку",
+  "settings.lifecycleBuilderLibraryPlaceholder": "Выберите библиотеку",
+  "settings.lifecycleBuilderRootPlaceholder": "Выберите корневую папку",
   "settings.ruleBuilderTagsPlaceholder": "Выберите теги",
   "settings.ruleBuilderNoTags": "Теги ещё не созданы.",
   "settings.ruleBuilderGeneratedSource": "Сгенерированный Rego",
@@ -5242,96 +5271,95 @@ const ru: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "Запрошено вручную",
   "settings.requestBuilderOriginPublicList": "Из публичного списка",
   "settings.requestBuilderOriginPersonalList": "Из личного списка",
-  "settings.maintenanceDeclaredActionsTitle": "Объявленные действия",
-  "settings.maintenanceDeclaredActionsHelp":
+  "settings.lifecycleDeclaredActionsTitle": "Объявленные действия",
+  "settings.lifecycleDeclaredActionsHelp":
     "Действия, которые определяет исходный код правила. Подходящий объект получает только те, чьи условия для него выполняются, в таком порядке: {{order}}.",
-  "settings.maintenanceDeclaredActionsNone": "Нет действий",
-  "settings.maintenanceDeclaredActionsUnavailable":
+  "settings.lifecycleDeclaredActionsNone": "Нет действий",
+  "settings.lifecycleDeclaredActionsUnavailable":
     "Исправьте ошибки, чтобы увидеть, что делает это правило.",
-  "settings.maintenanceDecidedActionsNone": "Нет действий",
-  "settings.maintenanceRuleWarningsTitle": "Предупреждения",
-  "settings.maintenanceRuleWarningLocation":
+  "settings.lifecycleDecidedActionsNone": "Нет действий",
+  "settings.lifecycleRuleWarningsTitle": "Предупреждения",
+  "settings.lifecycleRuleWarningLocation":
     "Строка {{line}}, столбец {{column}}:",
-  "settings.refMaintOutputFlagHeads":
+  "settings.refLifecycleOutputFlagHeads":
     "Действия без значения (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) логические: определите их через if, и действие применяется, когда тело выполняется.",
-  "settings.refMaintOutputValueHeads":
+  "settings.refLifecycleOutputValueHeads":
     "Действия со значением (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) присваивают простой литерал через :=. Цепочка else может выбирать между литералами; вычисляемое значение отклоняется.",
-  "settings.refMaintOutputHelpers":
+  "settings.refLifecycleOutputHelpers":
     "Любое другое имя правила — ваш собственный помощник. Он влияет на результат, только если его использует действие, unknown или reasons.",
-  "settings.refMaintActionsTitle": "Действия",
-  "settings.refMaintActionsOrder":
+  "settings.refLifecycleActionsTitle": "Действия",
+  "settings.refLifecycleActionsOrder":
     "Scryer применяет действия объекта в таком порядке, независимо от порядка в исходном коде: {{order}}.",
-  "settings.refMaintActionsDaysSince":
+  "settings.refLifecycleActionsDaysSince":
     "days_since(timestamp) возвращает число полных дней между меткой времени RFC3339 и временем вычисления, поэтому days_since(input.facts.added_at) > 180 означает «добавлено более 180 дней назад».",
-  "settings.refMaintActionsNotify":
+  "settings.refLifecycleActionsNotify":
     "notify отправляет сообщение один раз, когда действия применяются. Предпросмотр и пробные запуски его не отправляют.",
-  "settings.refMaintActionsConflicts":
-    "Противоречащие действия для одного объекта, например monitor вместе с unmonitor или один и тот же тег, который и добавляется, и удаляется, удерживают объект с указанием причины вместо применения любого из них.",
-  "settings.refMaintTagActionsTitle": "Действия с тегами",
-  "settings.refMaintTagActionsNote":
+  "settings.refLifecycleActionsConflicts":
+    "Противоречащие действия удерживаются с указанием причины вместо применения любого из них. Это касается одного объекта, например monitor вместе с unmonitor или одного и того же тега, который и добавляется, и удаляется, а также тайтла против его сезонов или эпизодов и сезона против его эпизодов, например когда сериал ставится на мониторинг, а файлы одного из его сезонов удаляются.",
+  "settings.refLifecycleTagActionsTitle": "Действия с тегами",
+  "settings.refLifecycleTagActionsNote":
     "add_tags и remove_tags записывают пользовательские теги на совпавший тайтл. Каждая метка должна существовать в реестре тегов, который администратор ведёт в настройках, и хранится в нижнем регистре: правило, называющее удалённый тег, удерживается с причиной tag_not_defined вместо записи.",
-  "settings.refMaintTagOscillationNote":
+  "settings.refLifecycleTagOscillationNote":
     "Два правила, записывающие противоположные изменения одной метки на одном тайтле, удерживают обоих кандидатов с причиной tag_patch_conflict, а не отдают победу тому, кто отработал последним. Правило, которое добавляет метку, и другое, которое снимает её на следующем прогоне, так не ловится: это ошибка автора, из-за которой тег переключается бесконечно, поэтому ограничьте их так, чтобы они не совпадали одновременно.",
-  "settings.maintenanceTemplateGallery": "Готовые шаблоны",
-  "settings.maintenanceTemplateApply": "Использовать шаблон",
-  "settings.maintenanceTemplateFacetMovie": "Фильмы",
-  "settings.maintenanceTemplateFacetShow": "Сериалы",
-  "settings.maintenanceTemplateGraceBadge": "Отсрочка {{count}} дн.",
-  "settings.maintenanceTemplateNoGraceBadge": "Без отсрочки",
-  "settings.maintenanceTemplateDestructiveBadge": "Удаляет файлы",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Укажите целевой профиль",
-  "settings.maintenanceTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
-  "settings.maintenanceTemplateDeadWantedDescription":
+  "settings.lifecycleTemplateGallery": "Готовые шаблоны",
+  "settings.lifecycleTemplateApply": "Использовать шаблон",
+  "settings.lifecycleTemplateFacetMovie": "Фильмы",
+  "settings.lifecycleTemplateFacetShow": "Сериалы",
+  "settings.lifecycleTemplateGraceBadge": "Отсрочка {{count}} дн.",
+  "settings.lifecycleTemplateNoGraceBadge": "Без отсрочки",
+  "settings.lifecycleTemplateNeedsProfileBadge": "Укажите целевой профиль",
+  "settings.lifecycleTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
+  "settings.lifecycleTemplateDeadWantedDescription":
     "Отслеживаемые тайтлы, для которых так и не появился ни один файл. Факты — это обычные значения, поэтому тайтл, у которого Scryer не видит состояние отслеживания или наличия файла, удерживается, а не совпадает. После отсрочки в 30 дней область снимается с отслеживания, а всё, что уже есть на диске, остаётся нетронутым.",
-  "settings.maintenanceTemplateLibraryAgingTitle": "Устаревание библиотеки",
-  "settings.maintenanceTemplateLibraryAgingDescription":
+  "settings.lifecycleTemplateLibraryAgingTitle": "Устаревание библиотеки",
+  "settings.lifecycleTemplateLibraryAgingDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Всё, у чего есть файл, устаревает, если на нём нет тега «keep». Сначала идёт отсрочка в 180 дней, и прежде чем что-либо будет удалено, должны совпасть общие ограничители экземпляра и собственное вооружение правила.",
-  "settings.maintenanceTemplateAddedLongAgoTitle":
+  "settings.lifecycleTemplateAddedLongAgoTitle":
     "Добавлено более 180 дней назад",
-  "settings.maintenanceTemplateAddedLongAgoDescription":
-    "Настоящая работа с датами: days_since сравнивает added_at тайтла со временем вычисления и срабатывает после 180 дней. Отслеживание отключается, файлы остаются. Тайтл без значения added_at удерживается, а не подходит.",
-  "settings.maintenanceTemplateOversizedTitle": "Слишком большие релизы",
-  "settings.maintenanceTemplateOversizedDescription":
-    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на указанный профиль качества и снова запускает поиск. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
-  "settings.maintenanceTemplateFourKPurgeTitle": "Очистка 4K",
-  "settings.maintenanceTemplateFourKPurgeDescription":
+  "settings.lifecycleTemplateAddedLongAgoDescription":
+    "Срабатывает для тайтлов, добавленных более 180 дней назад. Отслеживание отключается, файлы остаются. Тайтл без записанной даты добавления не подходит.",
+  "settings.lifecycleTemplateOversizedTitle": "Слишком большие релизы",
+  "settings.lifecycleTemplateOversizedDescription":
+    "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на указанный профиль качества и снова запускает поиск. Перед сохранением замените заполнитель «Compact 1080p» одним из своих профилей.",
+  "settings.lifecycleTemplateFourKPurgeTitle": "Очистка 4K",
+  "settings.lifecycleTemplateFourKPurgeDescription":
     "Любой тайтл с файлом 2160p. После 7-дневной отсрочки он переводится на указанный профиль качества, и поиск запускается снова. Перед сохранением замените заполнитель «Compact 1080p» в исходном коде одним из своих профилей.",
-  "settings.maintenanceTemplateRequestedExpiryTitle":
+  "settings.lifecycleTemplateRequestedExpiryTitle":
     "Истечение срока запрошенного",
-  "settings.maintenanceTemplateRequestedExpiryDescription":
+  "settings.lifecycleTemplateRequestedExpiryDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Тайтлы, пришедшие по запросу, устаревают через 120 дней, если на них нет тега «keep».",
-  "settings.maintenanceTemplateDepartedRequesterTitle": "Ушедший заказчик",
-  "settings.maintenanceTemplateDepartedRequesterDescription":
-    "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, запрошенными одним указанным пользователем — замените в матчере заполнитель «departed-user» на нужное имя пользователя до сохранения, иначе правило не совпадёт ни с чем.",
-  "settings.maintenanceTemplateSystemAddedTitle":
+  "settings.lifecycleTemplateDepartedRequesterTitle": "Ушедший заказчик",
+  "settings.lifecycleTemplateDepartedRequesterDescription":
+    "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, запрошенными одним указанным пользователем — замените заполнитель «departed-user» на нужное имя пользователя до сохранения, иначе правило не совпадёт ни с чем.",
+  "settings.lifecycleTemplateSystemAddedTitle":
     "Очистка добавленного системой",
-  "settings.maintenanceTemplateSystemAddedDescription":
+  "settings.lifecycleTemplateSystemAddedDescription":
     "Тайтлы, которые обнаружило сканирование, а не добавил человек, и у которых есть файл. Через 60 дней область снимается с отслеживания, а файлы остаются на месте.",
-  "settings.maintenanceTemplateWatchedRequestedTitle":
+  "settings.lifecycleTemplateWatchedRequestedTitle":
     "Посмотрели все, кто запрашивал",
-  "settings.maintenanceTemplateWatchedRequestedDescription":
+  "settings.lifecycleTemplateWatchedRequestedDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с запрошенными фильмами, которые посмотрели все запросившие их пользователи, после отсрочки в 30 дней. Только фильмы: Scryer записывает просмотры по фильмам и эпизодам, но не по сериалам, поэтому сериал удерживается, а не совпадает. Правило также удерживается, если у запросившего нет привязанной учётной записи медиасервера или последняя синхронизация сигналов старше 48 часов — неполная картина просмотров не является основанием для удаления.",
-  "settings.maintenanceTemplateExpiredLeasesTitle":
+  "settings.lifecycleTemplateExpiredLeasesTitle":
     "Истёкшее хранение запросов",
-  "settings.maintenanceTemplateExpiredLeasesDescription":
+  "settings.lifecycleTemplateExpiredLeasesDescription":
     "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, у которых истекли все сроки хранения по запросам, после отсрочки в 7 дней. Хранение, которое ещё не началось — тайтл не импортирован, — остаётся нетронутым, как и тайтл, у которого срока хранения никогда не было.",
-  "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
-  "settings.maintenanceTemplateNoProfileDescription":
+  "settings.lifecycleTemplateNoProfileTitle": "Без профиля качества",
+  "settings.lifecycleTemplateNoProfileDescription":
     "Тайтлы без назначенного профиля качества. Добавляет тег needs-review, чтобы человек выбрал профиль; больше ничего не меняется.",
-  "settings.maintenanceTemplateNewestEpisodesTitle":
+  "settings.lifecycleTemplateNewestEpisodesTitle":
     "Оставить 3 новейших загруженных эпизода",
-  "settings.maintenanceTemplateNewestEpisodesDescription":
+  "settings.lifecycleTemplateNewestEpisodesDescription":
     "Внимание: этот шаблон для серий отключает мониторинг и удаляет скачанные серии, которые по дате выхода старше трёх самых новых. Спецвыпуски, будущие серии, отсутствующие файлы и серии с неизвестной датой не участвуют в ранжировании и не подпадают под правило. Защищённые серии всё равно занимают места среди трёх самых новых.",
-  "settings.maintenanceTemplateNewestSeasonsTitle":
+  "settings.lifecycleTemplateNewestSeasonsTitle":
     "Оставить 2 новейших загруженных сезона",
-  "settings.maintenanceTemplateNewestSeasonsDescription":
+  "settings.lifecycleTemplateNewestSeasonsDescription":
     "Внимание: этот шаблон для сезонов отключает мониторинг и удаляет файлы сезонов, которые старше двух самых новых. Сезоны ранжируются по самой новой подходящей скачанной серии каждого сезона. Спецвыпуски, будущие серии, отсутствующие файлы и серии с неизвестной датой не участвуют в ранжировании; защищённые сезоны всё равно занимают места в этом списке.",
-  "settings.maintenanceTemplateLeftEveryListTitle": "Выбыло из всех списков",
-  "settings.maintenanceTemplateLeftEveryListDescription":
+  "settings.lifecycleTemplateLeftEveryListTitle": "Выбыло из всех списков",
+  "settings.lifecycleTemplateLeftEveryListDescription":
     "Тайтлы, из которых выбыли все списки, публичные и личные, когда каждое выбытие обработано и последнее произошло более 30 дней назад. Область снимается с отслеживания, а файлы остаются на месте.",
-  "settings.maintenanceTemplateListAddedUnwatchedTitle":
+  "settings.lifecycleTemplateListAddedUnwatchedTitle":
     "Добавлено списком и ни разу не просмотрено",
-  "settings.maintenanceTemplateListAddedUnwatchedDescription":
+  "settings.lifecycleTemplateListAddedUnwatchedDescription":
     "Добавляет тег needs-review к тайтлам, которые список добавил более 90 дней назад и которые никто не смотрел. Удерживается, пока картина просмотров неполная. Ничего не удаляется.",
   "settings.requestRules": "Правила запросов",
   "settings.noRequestRulesFound": "Правил запросов пока нет.",
@@ -5472,7 +5500,7 @@ const ru: LocaleDictionary = {
   "search.keepForCustom": "Указать число дней…",
   "search.keepForCustomLabel": "Дней хранения",
   "search.keepForHelp":
-    "Сколько Scryer будет хранить это медиа для вас. Когда срок истечёт, правило обслуживания может его удалить; вечное хранение не истекает.",
+    "Сколько Scryer будет хранить это медиа для вас. Когда срок истечёт, правило жизненного цикла может его удалить; вечное хранение не истекает.",
   "requests.preflightAutoApprove": "Это будет одобрено автоматически",
   "requests.preflightManualReview": "Это требует одобрения",
   "requests.preflightDeny": "Это было бы отклонено: {{reasons}}",
@@ -6359,8 +6387,8 @@ const ru: LocaleDictionary = {
     "Переименован в {{label}}. Переписано тайтлов: {{titles}}, фильмов сериала: {{seriesMovies}}, профилей задержки: {{delayProfiles}}.",
   "settings.titleTagRenameWarning":
     "Исходники правил никогда не переписываются, поэтому {{count}} ссылок в правилах всё ещё называют старую метку {{label}} и перестанут срабатывать: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "наборы правил обслуживания: {{count}}",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "наборы правил жизненного цикла: {{count}}",
   "settings.titleTagReferenceReleaseRuleSets":
     "наборы правил релизов: {{count}}",
   "settings.titleTagReferenceManagedTagFilters":
@@ -6381,15 +6409,15 @@ const ru: LocaleDictionary = {
   "title.catalogFilters.userTags": "Теги",
   "title.catalogFilters.selectUserTags": "Выберите теги...",
   "settings.titleTagSeriesMovieCount": "Фильмы сериала",
-  "settings.maintenanceActionAddTags": "Добавить теги",
-  "settings.maintenanceActionRemoveTags": "Удалить теги",
-  "settings.maintenanceRuleTagsHelp":
+  "settings.lifecycleActionAddTags": "Добавить теги",
+  "settings.lifecycleActionRemoveTags": "Удалить теги",
+  "settings.lifecycleRuleTagsHelp":
     "Правило назначает эти теги каждому подходящему тайтлу. Можно выбрать только теги, заданные администратором в разделе «Настройки → Теги».",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "Помечено к удалению",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Помечено к удалению",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Внимание: этот шаблон удаляет тайтл и его файлы. Он применяется ко всем тайтлам с тегом «remove» после недели ожидания. Достаточно назначить тег вручную, чтобы запустить отсчёт; снятие тега в течение недели отменяет удаление. Сначала создайте тег «remove» в разделе «Настройки → Теги».",
-  "settings.maintenanceTemplateFlagForReviewTitle": "Пометить для проверки",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "Пометить для проверки",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Назначает тег needs-review тайтлам, импортированным более года назад, чтобы человек решил, что с ними делать. Ничего не удаляется.",
   "mediaFile.allInfo": "Сведения",
   "mediaFile.noAnalysis":
@@ -6691,28 +6719,28 @@ const ru: LocaleDictionary = {
   "settings.notificationEvent.listTitleLeft": "Тайтл выбыл из списка",
   "settings.notificationEvent.listSyncFailed": "Сбой синхронизации списка",
   "settings.notificationEvent.listUnfollowed": "Подписка на список отменена",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Добавил ли объект в библиотеку список, а не человек",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Содержит ли объект ещё хотя бы один включённый список, публичный или личный",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Названия включённых публичных списков, которые ещё содержат объект",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Убрали ли объект все списки, которые когда-либо его содержали",
-  "settings.refMaintFactsListsLeftAt": "Когда последний список убрал объект",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLeftAt": "Когда последний список убрал объект",
+  "settings.refLifecycleFactsListsLastListName":
     "Публичный список, из которого объект выбыл последним",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "Истина, если тайтл создан синхронизацией списка; неизвестно с причиной list_store_unreadable, если хранилище списков не удалось прочитать",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "Истина, пока хотя бы один включённый список содержит объект",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Только названия публичных списков, по алфавиту; личный список участника никогда не называется",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "Истина, когда все списки, содержавшие объект, его убрали; ложь, пока он есть хотя бы в одном списке или если его никогда не было в списках",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "Метка времени RFC3339; отсутствует с причиной not_left_every_list, пока объект есть хотя бы в одном списке",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Название этого публичного списка; отсутствует с причиной no_public_list_left, если объект никогда не выбывал из публичного списка",
   "lists.providerSettings.heading": "Настройки провайдера",
   "lists.providerSettings.copy":
@@ -6820,92 +6848,92 @@ const ru: LocaleDictionary = {
     "Не удалось переместить файл под новое имя. Файл и его эпизоды остались без изменений.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Нумерация эпизодов неоднозначна",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "Отложено: на медиасервере идёт воспроизведение.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Отложено: не удалось узнать у медиасервера, идёт ли воспроизведение.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Отложено: медиасервер показывает просмотр новее сохранённой истории просмотров.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Отложено: в истории медиасервера есть просмотр учётной записью, которую история просмотров не учитывает.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Отложено: медиасервер не смог подтвердить историю просмотров перед действием.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Отложено: на подключённом медиасервере нет соответствующего элемента, поэтому историю просмотров не удалось проверить перед действием.",
-  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+  "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "Это правило удаляет, но у него нет лимита тайтлов за запуск, поэтому его действия не выполняются. Оно по-прежнему оценивается и доступно для предпросмотра; задайте лимит, чтобы оно могло действовать.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+  "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
     "Отложено: после последнего чтения избранного учётная запись на медиасервере добавила в избранное этот элемент либо сериал или сезон проверенных эпизодов.",
-  "settings.maintenanceExecutionReason.ruleNotEligible":
+  "settings.lifecycleExecutionReason.ruleNotEligible":
     "Отложено: до выполнения действия правило отключили, перевели в пробный режим или сняли с боевого режима, либо закрылся его защитный шлюз.",
-  "settings.maintenanceExecutionReason.noMatchAtExecution":
+  "settings.lifecycleExecutionReason.noMatchAtExecution":
     "Не выполнено: при повторной проверке перед действием тайтл больше не подходит под правило.",
-  "settings.maintenanceExecutionReason.unknownAtExecution":
+  "settings.lifecycleExecutionReason.unknownAtExecution":
     "Отложено: при повторной проверке перед действием правило не смогло принять решение. Проверка повторится при следующем запуске.",
-  "settings.maintenanceExecutionReason.activeAcquisition":
+  "settings.lifecycleExecutionReason.activeAcquisition":
     "Отложено: для тайтла идёт захват, загрузка или импорт.",
-  "settings.maintenanceExecutionReason.acquisitionUnknown":
+  "settings.lifecycleExecutionReason.acquisitionUnknown":
     "Отложено: Scryer не смог определить, идёт ли для тайтла захват, загрузка или импорт.",
-  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+  "settings.lifecycleExecutionReason.storageDeletionInProgress":
     "Отложено: очистка хранилища сейчас удаляет файлы. Действие подождёт её завершения.",
-  "settings.maintenanceExecutionReason.actionNotFullySupported":
+  "settings.lifecycleExecutionReason.actionNotFullySupported":
     "Отложено: это действие нельзя применить к этому объекту, например действие для всего тайтла к сезону или эпизоду.",
-  "settings.maintenanceExecutionReason.titleMissing":
+  "settings.lifecycleExecutionReason.titleMissing":
     "Тайтла больше нет в библиотеке, поэтому ничего не сделано.",
-  "settings.maintenanceExecutionReason.locationOperationHold":
+  "settings.lifecycleExecutionReason.locationOperationHold":
     "Отложено: файлы тайтла перемещаются или переименовываются. Действие выполнится после завершения.",
-  "settings.maintenanceExecutionReason.passActionStepBudget":
+  "settings.lifecycleExecutionReason.passActionStepBudget":
     "Отложено одним из прошлых запусков, исчерпавшим свои шаги действий. У запусков больше нет такого лимита; действие выполнится при следующем запуске.",
-  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+  "settings.lifecycleExecutionReason.passHighRiskStepBudget":
     "Отложено: удаление в этом запуске несколько раз завершилось ошибкой, поэтому оставшиеся удаления ждут следующего запуска.",
-  "settings.maintenanceExecutionReason.actionSucceeded": "Действие выполнено.",
-  "settings.maintenanceExecutionReason.alreadySatisfied":
+  "settings.lifecycleExecutionReason.actionSucceeded": "Действие выполнено.",
+  "settings.lifecycleExecutionReason.alreadySatisfied":
     "Менять нечего: тайтл уже был в том состоянии, в которое его привело бы действие.",
-  "settings.maintenanceExecutionReason.retryPending":
+  "settings.lifecycleExecutionReason.retryPending":
     "Действие завершилось ошибкой, которая может пройти. Оно будет повторено.",
-  "settings.maintenanceExecutionReason.actionFailed":
+  "settings.lifecycleExecutionReason.actionFailed":
     "Действие завершилось ошибкой и повторяться не будет. Ошибка указана в истории действий.",
-  "settings.maintenanceExecutionReason.leaseReclaimed":
+  "settings.lifecycleExecutionReason.leaseReclaimed":
     "Действие прервалось до завершения, например при перезапуске Scryer. Оно освобождено для повторного запуска.",
-  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+  "settings.lifecycleExecutionReason.ambiguousEpisodeFileCoverage":
     "Отложено: часть файлов нельзя сопоставить с эпизодами этого сезона или эпизода, поэтому удалять их небезопасно.",
-  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+  "settings.lifecycleExecutionReason.qualityProfileUnresolved":
     "Отложено: профиль качества, который задаёт правило, больше не соответствует ровно одному профилю. Его переименовали или удалили, либо два профиля названы одинаково.",
-  "settings.maintenanceExecutionReason.actionsNotRunnable":
+  "settings.lifecycleExecutionReason.actionsNotRunnable":
     "Отложено: действия, выбранные для этого объекта, нельзя выполнить вместе, например добавление и удаление одного и того же тега.",
-  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+  "settings.lifecycleExecutionReason.actionsChangedAtExecution":
     "Отложено: при повторной проверке перед действием правило выбрало другие действия. Следующая оценка заменит этого кандидата.",
-  "settings.maintenanceExecutionReason.actionNotDeclared":
+  "settings.lifecycleExecutionReason.actionNotDeclared":
     "Отложено: у кандидата есть действие, которое текущий исходный код правила больше не объявляет, поэтому оно никогда не выполнится.",
-  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
     "Отложено: правило для корня хранилища не может выполнить одно из этих действий.",
-  "settings.maintenanceRuleMaxTitlesPerRun": "Тайтлов за запуск",
-  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+  "settings.lifecycleRuleMaxTitlesPerRun": "Тайтлов за запуск",
+  "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "Наибольшее число тайтлов, с которыми правило работает за один запуск. Правилу, удаляющему файлы или тайтлы, этот лимит обязателен.",
-  "settings.maintenanceRuleMaxTitlesPerRunNone": "Без ограничения",
-  "settings.maintenanceRuleLoadRefused":
+  "settings.lifecycleRuleMaxTitlesPerRunNone": "Без ограничения",
+  "settings.lifecycleRuleLoadRefused":
     "Это правило нельзя запустить в сохранённом виде.",
-  "settings.maintenanceSequenceStepMonitor": "Включить отслеживание",
-  "settings.maintenanceSequenceStepFetchSubtitles": "Загрузить субтитры",
-  "settings.maintenanceSequenceStepMoveToLibrary": "Переместить в библиотеку",
-  "settings.maintenanceSequenceStepMoveToRoot": "Переместить в корневую папку",
-  "settings.notificationEvent.maintenanceRuleNotified":
-    "Уведомление правила обслуживания",
-  "settings.maintenanceExecutionReason.tagNotDefined":
+  "settings.lifecycleSequenceStepMonitor": "Включить отслеживание",
+  "settings.lifecycleSequenceStepFetchSubtitles": "Загрузить субтитры",
+  "settings.lifecycleSequenceStepMoveToLibrary": "Переместить в библиотеку",
+  "settings.lifecycleSequenceStepMoveToRoot": "Переместить в корневую папку",
+  "settings.notificationEvent.lifecycleRuleNotified":
+    "Уведомление правила жизненного цикла",
+  "settings.lifecycleExecutionReason.tagNotDefined":
     "Отложено: тег, который записывает правило, больше не определён в Настройки › Теги.",
-  "settings.maintenanceExecutionReason.tagPatchConflict":
+  "settings.lifecycleExecutionReason.tagPatchConflict":
     "Отложено: другое правило добавило бы тег, который это правило удаляет, или удалило бы добавляемый им тег.",
-  "settings.maintenanceExecutionReason.monitoringConflict":
+  "settings.lifecycleExecutionReason.monitoringConflict":
     "Отложено: другое правило недавно сделало обратное с отслеживанием этого тайтла.",
-  "settings.maintenanceExecutionReason.actionsConflict":
+  "settings.lifecycleExecutionReason.actionsConflict":
     "Отложено: правило выбрало действия, которые нельзя выполнить вместе, поэтому ничего не применено.",
-  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+  "settings.lifecycleExecutionReason.moveLibraryUnresolved":
     "Отложено: библиотека, указанная для перемещения, больше не соответствует ровно одной библиотеке.",
-  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+  "settings.lifecycleExecutionReason.moveLibraryFacetMismatch":
     "Отложено: библиотека, указанная для перемещения, содержит другой вид тайтлов.",
-  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+  "settings.lifecycleExecutionReason.moveRootNotInLibrary":
     "Отложено: корневая папка, указанная для перемещения, не принадлежит библиотеке тайтла.",
-  "settings.maintenanceExecutionReason.moveRefused":
+  "settings.lifecycleExecutionReason.moveRefused":
     "Отложено: перемещение отклонено или его план устарел. Файлы остаются на месте, перемещение будет повторено.",
   "error.ruleActionRequired":
     "Определите хотя бы одно действие, например unmonitor, delete_files или add_tags, чтобы правило могло что-то делать.",
@@ -6926,39 +6954,37 @@ const ru: LocaleDictionary = {
   "error.ruleMonitorUnsupported":
     "Ни одна библиотека, к которой относится правило, не принимает этот тип отслеживания.",
   "error.ruleAudioLanguageUnknown": "Scryer не знает этот язык аудио.",
-  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+  "error.lifecycleMaxTitlesPerRunRequiredNamed":
     "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
-  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+  "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
     "Правило не определяет ни одного действия, поэтому никогда ничего не сделает.",
-  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
-    "Правило определяет действие, которое его область не может выполнить.",
-  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
     "Библиотека, указанная для перемещения, содержит другой вид тайтлов, чем библиотеки правила.",
-  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
     "Библиотека, указанная для перемещения, не существует.",
-  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+  "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
     "Корневая папка, указанная для перемещения, не является настроенным корнем библиотеки.",
-  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+  "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
     "Правило не дало этому объекту ни решения, ни ошибки.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND":
     "Профиль качества, который задаёт правило, не существует.",
-  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID":
     "Число тайтлов за запуск должно быть не меньше 1.",
-  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
     "Задайте число тайтлов за запуск: это правило может удалять.",
-  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+  "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "Правило уже изменено другим сохранением. Ничего не сохранено; перезагрузите правило и повторите.",
-  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
     "Это правило сохранено до того, как правила стали объявлять свои действия, поэтому оно никогда не запускается. Замените его исходный код, чтобы оно снова работало.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "Когда кто-либо с учётной записью на подключённом медиасервере в последний раз воспроизводил субъект",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True, если субъект воспроизвела любая учётная запись на включённом медиасервере, независимо от того, связана ли она с пользователем Scryer; для сезонов и сериалов учитывается любой вышедший эпизод. Неизвестно с причиной audience_not_read, пока синхронизация за последние 48 часов не прочитает все учётные записи на всех включённых подключениях, и с обычными причинами, когда факты просмотра неизвестны.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "Метка времени RFC3339 последнего воспроизведения любой учётной записью; отсутствует с причиной never_watched, если никто не воспроизводил, и неизвестна с причиной play_time_missing (episode_play_time_missing для сезонов и сериалов), если у воспроизведения нет записанного времени, или audience_not_read, если прочитаны не все учётные записи",
-  "settings.maintenancePreviewFacts": "Факты, прочитанные правилом",
+  "settings.lifecyclePreviewFacts": "Факты, прочитанные правилом",
   "setup.sourceImportProgress": "Импорт источников",
   "setup.sourceImportInvalidRequest":
     "Выбранный источник недоступен. Обновите обнаружение источников и выберите его снова.",
@@ -7290,10 +7316,10 @@ const ru: LocaleDictionary = {
     "Необходимо указать хотя бы одно поле конфигурации индексатора.",
   "error.reason.ACQUISITION_MAGNET_REQUIRES_TORRENT_PROTOCOL":
     "Для magnet требуется протокол torrent.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
-    "Для отправки поискового задания обслуживания требуется принятое намерение регистрации подтверждения.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
-    "Для отправки поискового задания обслуживания требуется заранее выделенный идентификатор запуска задания.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "Для отправки поискового задания жизненного цикла требуется принятое намерение регистрации подтверждения.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "Для отправки поискового задания жизненного цикла требуется заранее выделенный идентификатор запуска задания.",
   "error.reason.ACQUISITION_MATCHED_TITLE_NO_LONGER_EXISTS_NOT_FOUND":
     "Сопоставленный тайтл не найден.",
   "error.reason.ACQUISITION_MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING":
@@ -7632,50 +7658,50 @@ const ru: LocaleDictionary = {
     "Идентификатор Tvdb должен быть числовым.",
   "error.reason.CONFIGURATION_CANDIDATE_EXPECTED_STATES_REQUIRED":
     "При переходе кандидата необходимо указать ожидаемые состояния.",
-  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
-    "При завершении шага действия обслуживания необходимо передать результат попытки.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
-    "У правила обслуживания уже есть активный кандидат для этого тайтла.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
-    "Для хода последовательности обслуживания допускается не более 100 кандидатов на страницу.",
-  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
-    "Недопустимый лимит завершения обслуживания.",
-  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
-    "Отправка универсального задания обслуживания должна начинаться в состоянии dispatching.",
-  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
-    "В маркере сбоя последовательности обслуживания отсутствует идентификатор неудавшегося шага.",
-  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
-    "Недопустимое освобождение удерживаемой попытки обслуживания.",
-  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
-    "Для принятых подтверждений заданий обслуживания требуется действительный идентификатор запуска задания.",
-  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
-    "Участие в последовательности обслуживания остаётся в конечном состоянии до подтверждённого отсутствия совпадения.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
-    "При переходе подтверждения задания обслуживания необходимо указать ожидаемые состояния.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
-    "Проекция подтверждений последовательности обслуживания допускает не более 700 шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
-    "Для освобождения удерживаемой попытки обслуживания не указана причина.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
-    "При повторном выполнении шага действия обслуживания необходимо увеличить номер попытки.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
-    "У этого правила обслуживания есть активные кандидаты или история действий; вместо удаления отключите его.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
-    "Шаг действия обслуживания не соответствует сохранённому идентификатору своей последовательности.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
-    "При захвате шага действия обслуживания должна запускаться выполняемая попытка с неотрицательным номером.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
-    "Маркер сбоя последовательности обслуживания не сохраняет префикс своих шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
-    "Захват шага действия обслуживания содержит недопустимые идентификационные данные цели.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
-    "В маркере успешного завершения последовательности обслуживания отсутствует полный набор подтверждений шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
-    "Конечный маркер обслуживания не соответствует сохранённым подтверждениям шагов.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
-    "Конечный маркер последовательности обслуживания не согласуется с конечным состоянием кандидата.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
-    "Конечный маркер последовательности обслуживания содержит недопустимые ожидаемые идентификаторы шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_ATTEMPT_RESULT_REQUIRED":
+    "При завершении шага действия жизненного цикла необходимо передать результат попытки.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_ALREADY_ACTIVE":
+    "У правила жизненного цикла уже есть активный кандидат для этого тайтла.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
+    "Для хода последовательности жизненного цикла допускается не более 100 кандидатов на страницу.",
+  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
+    "Недопустимый лимит завершения жизненного цикла.",
+  "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
+    "Отправка универсального задания жизненного цикла должна начинаться в состоянии dispatching.",
+  "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
+    "В маркере сбоя последовательности жизненного цикла отсутствует идентификатор неудавшегося шага.",
+  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
+    "Недопустимое освобождение удерживаемой попытки жизненного цикла.",
+  "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
+    "Для принятых подтверждений заданий жизненного цикла требуется действительный идентификатор запуска задания.",
+  "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
+    "Участие в последовательности жизненного цикла остаётся в конечном состоянии до подтверждённого отсутствия совпадения.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "При переходе подтверждения задания жизненного цикла необходимо указать ожидаемые состояния.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
+    "Проекция подтверждений последовательности жизненного цикла допускает не более 700 шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
+    "Для освобождения удерживаемой попытки жизненного цикла не указана причина.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "При повторном выполнении шага действия жизненного цикла необходимо увеличить номер попытки.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
+    "У этого правила жизненного цикла есть активные кандидаты или история действий; вместо удаления отключите его.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SEQUENCE_IDENTITY_MISMATCH":
+    "Шаг действия жизненного цикла не соответствует сохранённому идентификатору своей последовательности.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_ATTEMPT_INVALID":
+    "При захвате шага действия жизненного цикла должна запускаться выполняемая попытка с неотрицательным номером.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_PREFIX_MISMATCH":
+    "Маркер сбоя последовательности жизненного цикла не сохраняет префикс своих шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_TARGET_INVALID":
+    "Захват шага действия жизненного цикла содержит недопустимые идентификационные данные цели.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "В маркере успешного завершения последовательности жизненного цикла отсутствует полный набор подтверждений шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_EVIDENCE_MISMATCH":
+    "Конечный маркер жизненного цикла не соответствует сохранённым подтверждениям шагов.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STATE_MISMATCH":
+    "Конечный маркер последовательности жизненного цикла не согласуется с конечным состоянием кандидата.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STEP_IDS_INVALID":
+    "Конечный маркер последовательности жизненного цикла содержит недопустимые ожидаемые идентификаторы шагов.",
   "error.reason.CONFIGURATION_PLUGIN_NOT_INSTALLED":
     "Плагин больше не установлен.",
   "error.reason.CONFIGURATION_PLUGIN_SETTINGS_PLUGIN_REQUIRED":
@@ -8769,12 +8795,12 @@ const ru: LocaleDictionary = {
     "Папки с конфликтами принадлежности нельзя привязать или присвоить.",
   "error.reason.LIBRARY_LINKED_FOLDER_REQUIRES_EXPLICIT_OWNERSHIP_RESOLUTION_BEFORE_SCANNING":
     "Перед сканированием связанной папки требуется явно разрешить вопрос её принадлежности.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
-    "Файл для удаления в ходе обслуживания изменился; требуется повторная оценка.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
-    "Отпечаток удаления в ходе обслуживания изменился.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
-    "Объекты удаления в ходе обслуживания изменились; требуется повторная оценка.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED":
+    "Файл для удаления по правилам жизненного цикла изменился; требуется повторная оценка.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED":
+    "Отпечаток удаления по правилам жизненного цикла изменился.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
+    "Объекты удаления по правилам жизненного цикла изменились; требуется повторная оценка.",
   "error.reason.LIBRARY_MEDIA_FILE_NOT_FOUND": "Медиафайл не найден.",
   "error.reason.LIBRARY_MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER":
     "Идентификационные данные медиа конфликтуют с предложенной папкой тайтла.",
@@ -9165,92 +9191,92 @@ const ru: LocaleDictionary = {
     "Проверка перенесённого файла не пройдена.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "Файл в месте назначения не прошёл проверку.",
-  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
-    "Недопустимая конфигурация действия обслуживания.",
-  "error.reason.MAINTENANCE_ACTION_INVALID":
-    "Это действие обслуживания недопустимо для правила уровня тайтла.",
-  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE":
-    "Действие обслуживания нельзя сохранить.",
-  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
-    "Это действие обслуживания не поддерживается для тайтлов.",
-  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
+    "Недопустимая конфигурация действия жизненного цикла.",
+  "error.reason.LIFECYCLE_ACTION_INVALID":
+    "Это действие жизненного цикла недопустимо для правила уровня тайтла.",
+  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE":
+    "Действие жизненного цикла нельзя сохранить.",
+  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
+    "Это действие жизненного цикла не поддерживается для тайтлов.",
+  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "Это правило уже выполняло действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
-  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
-    "Неоднозначно определены файлы, охватываемые обслуживанием.",
-  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+    "Неоднозначно определены файлы, охватываемые правилами жизненного цикла.",
+  "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "Количество кандидатов изменилось. Проверьте текущее количество перед разрешением удаления.",
-  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
     "Для удаления дочернего элемента требуется серия или сезон.",
-  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
     "Это правило сейчас отслеживает тайтлы, и его удаление бесследно их отбросит. Вместо этого отключите его или сначала очистите список кандидатов.",
-  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
     "У действия DeleteFiles несовместимое предварительное условие Unmonitor.",
-  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
     "Перед действием DeleteFiles требуется шаг Unmonitor.",
-  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
-    "Исключение обслуживания не найдено.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
-  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
-    "Принадлежность файла обслуживания изменилась.",
-  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
-    "Набор файлов для обслуживания изменился; требуется повторная оценка.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
+  "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
+    "Исключение жизненного цикла не найдено.",
+  "error.reason.LIFECYCLE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "Принадлежность файла жизненного цикла изменилась.",
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+    "Набор файлов для жизненного цикла изменился; требуется повторная оценка.",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Период ожидания должен составлять ноль или более дней.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
+  "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Период ожидания не должен превышать 3650 дней (десять лет).",
-  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
+  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
     "Условие, использующее сведения о хранилище, должно выбирать настроенный корень библиотеки.",
-  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "У фильмов нет списка серий.",
-  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+  "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения требуется право управления разрешениями. Попросите администратора сохранить правило или перепишите его без этих сведений.",
-  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
     "Предварительный просмотр принимает не более 50 тайтлов.",
-  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
     "Для предварительного просмотра требуется от одного до пятидесяти объектов.",
-  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Объект предварительного просмотра отсутствует, находится вне библиотек правила или не относится к выбранным тайтлам и области действия.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
     "Для действия изменения профиля качества не указан целевой профиль.",
-  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+  "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Правило изменилось во время подтверждения; проверьте его ещё раз перед разрешением удаления.",
-  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
     "Перед разрешением удаления необходимо повторно проверить конфигурацию правила; откройте подтверждение заново.",
-  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED":
+  "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить оценку правила.",
-  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
-    "Не удалось скомпилировать правило обслуживания.",
-  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
-    "Набор правил обслуживания не найден.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE":
+    "Не удалось скомпилировать правило жизненного цикла.",
+  "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
+    "Набор правил жизненного цикла не найден.",
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
     "Это правило входит в состав Scryer: его условие и действия изменить нельзя. Можно изменить период ожидания, библиотеки и состояние.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
     "Это правило входит в состав Scryer и не может быть удалено. Вместо этого отключите его.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
     "Это правило входит в состав Scryer и не может быть переименовано.",
-  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID":
-    "Недопустимый исходный код правила обслуживания.",
-  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
+    "Недопустимый исходный код правила жизненного цикла.",
+  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "Действие этого правила ничего не изменяет, поэтому оно доступно только в режиме проверки без применения.",
-  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED":
+  "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Проверка правила не удалась.",
-  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
+  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
     "Действия последовательности должны использовать исполнитель последовательностей.",
-  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
-    "Недопустимые параметры шага последовательности обслуживания.",
-  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
+  "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "Недопустимые параметры шага последовательности жизненного цикла.",
+  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
     "Корень хранилища, выбранный правилом, не настроен.",
-  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
-    "Требуется идентификатор объекта обслуживания.",
-  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
-    "Недопустимый тип объекта обслуживания.",
-  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
-    "Объект обслуживания не найден или больше не относится к этому тайтлу.",
-  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
+  "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
+    "Требуется идентификатор объекта жизненного цикла.",
+  "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
+    "Недопустимый тип объекта жизненного цикла.",
+  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+    "Объект жизненного цикла не найден или больше не относится к этому тайтлу.",
+  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
     "Для действия назначения тегов не заданы теги.",
-  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
+  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "Целевой профиль качества не существует.",
-  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
     "Идентификатор кандидата на отключение мониторинга не соответствует его тайтлу.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
     "Недопустимый результат анализа медиафайла.",
@@ -10811,7 +10837,7 @@ const ru: LocaleDictionary = {
   "error.reason.SUBTITLES_TITLE_NOT_FOUND": "Тайтл не найден.",
   "error.reason.TITLE_NOT_FOUND": "Не удалось найти тайтл.",
   "error.reason.WORKFLOW_ACQUISITION_RECEIPT_REQUIRED":
-    "Для поиска в рамках обслуживания необходимо принятое подтверждение запуска соответствующего задания получения контента.",
+    "Для поиска в рамках жизненного цикла необходимо принятое подтверждение запуска соответствующего задания получения контента.",
   "error.reason.WORKFLOW_CLEANUP_IDENTITY_REQUIRED":
     "Для ручной очистки необходимо указать тайтл и тип медиаконтента.",
   "error.reason.WORKFLOW_DOWNLOAD_AWAITING_RETRY_RECONCILIATION":
@@ -10867,7 +10893,7 @@ const ru: LocaleDictionary = {
   "error.ruleUnreferencedRule":
     "Это правило не является действием, и ничто в исходном коде его не использует. Проверьте написание, если оно задумывалось как действие.",
   "error.ruleMatchRequired":
-    "Определите логическое правило match для этого условия обслуживания.",
+    "Определите логическое правило match для этого условия жизненного цикла.",
   "error.ruleVoteRequired":
     "Определите для этого правила запросов голос (approve, deny или manual), значение, меняющее одобрение, или add_tags.",
   "error.reason.INTERFACE_ACTION_DEFINITION_CONFLICT":
@@ -10939,7 +10965,7 @@ const ru: LocaleDictionary = {
   "error.reason.INTERFACE_BROWSE_DIRECTORY_UNAVAILABLE":
     "Не удаётся открыть каталог.",
   "error.reason.INTERFACE_RULE_ACTION_INVALID":
-    "Недопустимое определение действия обслуживания.",
+    "Недопустимое определение действия жизненного цикла.",
   "error.reason.INTERFACE_REQUEST_RULE_SAMPLE_INVALID":
     "Недопустимый пример для правила запросов.",
   "error.reason.INTERFACE_ACQUISITION_SCOPE_INVALID":
@@ -11052,8 +11078,8 @@ const ru: LocaleDictionary = {
     "Задайте непротиворечивые требования MFA для этого способа входа.",
   "error.reason.INTERFACE_LOGIN_MFA_REQUIRED":
     "Выберите требование MFA для входа через Jellyfin.",
-  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND":
-    "Не удалось найти правило обслуживания.",
+  "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND":
+    "Не удалось найти правило жизненного цикла.",
   "error.reason.INTERFACE_METADATA_DATE_INVALID":
     "Введите допустимую дату метаданных.",
   "error.reason.INTERFACE_METADATA_ID_INVALID":
@@ -11070,6 +11096,10 @@ const ru: LocaleDictionary = {
     "Введите идентификатор профиля качества.",
   "error.reason.INTERFACE_QUALITY_PROFILE_NAME_REQUIRED":
     "Введите имя профиля качества.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_PACK_MIN_MISSING_EPISODES_INVALID":
+    "Минимум недостающих серий для пакета должен быть не меньше 1.",
+  "error.reason.INTERFACE_QUALITY_PROFILE_SERIES_PACK_MIN_MISSING_PERCENT_INVALID":
+    "Укажите процент от 0 до 100 для многосезонных пакетов.",
   "error.reason.INTERFACE_QUALITY_PROFILE_TIERS_REQUIRED":
     "Добавьте хотя бы один уровень качества.",
   "error.reason.INTERFACE_QUALITY_PROFILE_VALUE_INVALID":
@@ -11138,7 +11168,7 @@ const ru: LocaleDictionary = {
   "error.ruleTargetsPerson":
     "Для использования полей автора запроса в правиле необходимы права управления разрешениями.",
   "error.rulePackUpToDate": "Этот набор правил уже обновлён.",
-  "error.maintenanceArmCountMismatch":
+  "error.lifecycleArmCountMismatch":
     "Число кандидатов изменилось. Ещё раз проверьте и подтвердите текущее число.",
   "error.mfaStepUpRequired":
     "Срок действия проверки настроек истёк. Введите код из приложения-аутентификатора, чтобы продолжить.",
@@ -11215,7 +11245,7 @@ const ru: LocaleDictionary = {
   "settings.regoHelper.count":
     "Подсчитать элементы массива, множества или объекта либо символы строки.",
   "settings.regoHelper.objectGet":
-    "Прочитать значение по ключу объекта, возвращая значение по умолчанию при отсутствии ключа. В правилах запросов и обслуживания используйте именованный факт входных данных.",
+    "Прочитать значение по ключу объекта, возвращая значение по умолчанию при отсутствии ключа. В правилах запросов и жизненного цикла используйте именованный факт входных данных.",
   "settings.regoHelper.startsWith":
     "Вернуть признак того, что строка начинается с префикса.",
   "settings.regoSnippet.scoreEntry":
@@ -11229,7 +11259,7 @@ const ru: LocaleDictionary = {
   "settings.regoSnippet.manualRequest":
     "Потребовать ручной проверки, когда число недавних одобрений достигает порога.",
   "settings.regoHelper.daysSince":
-    "Полные дни между меткой времени RFC3339 и временем вычисления. Только для правил обслуживания.",
+    "Полные дни между меткой времени RFC3339 и временем вычисления. Только для правил жизненного цикла.",
   "settings.regoSnippet.unmonitorTagged":
     "Отключить отслеживание объекта с тегом.",
   "settings.regoSnippet.tagAfterDays":
@@ -12377,171 +12407,159 @@ const ru: LocaleDictionary = {
   "settings.recycleBinValidationError":
     "Автоматическая очистка приостановлена до устранения проблемы: {{error}}",
   "settings.recycleBinScheduledDeletion": "Удаление по расписанию",
-  "settings.maintenanceActionSequence": "Последовательность действий",
-  "settings.maintenanceSequenceObserveOnly": "Только пробный запуск",
-  "settings.maintenanceSequenceHistoryWaiting": "ожидание предыдущего шага",
-  "settings.maintenanceSequenceHistorySearchRequested": "поиск запрошен",
-  "settings.maintenanceSequenceHistorySearchAccepted": "принято",
-  "settings.maintenanceSequenceHistoryJob": "задание {{id}}",
-  "settings.maintenanceSequenceStepUnmonitor": "Отключить отслеживание",
-  "settings.maintenanceSequenceStepDeleteFiles": "Удалить файлы",
-  "settings.maintenanceSequenceStepChangeQualityProfile":
+  "settings.lifecycleActionSequence": "Последовательность действий",
+  "settings.lifecycleSequenceObserveOnly": "Только пробный запуск",
+  "settings.lifecycleSequenceHistoryWaiting": "ожидание предыдущего шага",
+  "settings.lifecycleSequenceHistorySearchRequested": "поиск запрошен",
+  "settings.lifecycleSequenceHistorySearchAccepted": "принято",
+  "settings.lifecycleSequenceHistoryJob": "задание {{id}}",
+  "settings.lifecycleSequenceStepUnmonitor": "Отключить отслеживание",
+  "settings.lifecycleSequenceStepDeleteFiles": "Удалить файлы",
+  "settings.lifecycleSequenceStepChangeQualityProfile":
     "Изменить профиль качества",
-  "settings.maintenanceSequenceStepSearch": "Поиск",
-  "settings.maintenanceSequenceStepAddTags": "Добавить теги",
-  "settings.maintenanceSequenceStepRemoveTags": "Удалить теги",
-  "settings.maintenanceSequenceStepDeleteTitleAndFiles":
+  "settings.lifecycleSequenceStepSearch": "Поиск",
+  "settings.lifecycleSequenceStepAddTags": "Добавить теги",
+  "settings.lifecycleSequenceStepRemoveTags": "Удалить теги",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles":
     "Удалить тайтл и файлы",
-  "settings.maintenanceRuleStorageRoot": "Корневая папка хранилища",
-  "settings.maintenanceRuleStorageRootNone":
-    "Корневая папка хранилища не выбрана",
-  "settings.maintenanceRuleStorageRootHelp":
-    "Выберите настроенную корневую папку, чтобы получать сведения о её ёмкости и удалять только файлы, действительно расположенные в ней.",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp":
-    "Выбранная корневая папка ограничивает только удаление файлов. Отключение отслеживания по-прежнему применяется ко всему соответствующему условию объекту, поэтому файлы в других корневых папках сохраняются, но больше не отслеживаются.",
-  "settings.maintenanceRuleStorageRootClear":
-    "Сбросить корневую папку хранилища",
-  "settings.maintenanceStorageRootFileSummary":
-    "Выбранная корневая папка: файлов — {{count}} · {{size}}",
-  "settings.maintenanceRuleState": "Состояние",
-  "settings.maintenanceRuleStateHelp":
+  "settings.lifecycleRuleState": "Состояние",
+  "settings.lifecycleRuleStateHelp":
     "Отключённые правила никогда не проверяются. Пробный запуск фиксирует кандидатов без выполнения действий. Включённые правила выполняют действия над кандидатами по окончании периода отсрочки для каждого из них.",
-  "settings.maintenanceRuleStateUpdated": "Правило «{{name}}» обновлено.",
-  "settings.maintenanceRuleStateDisabled": "Отключено",
-  "settings.maintenanceRuleStateDisabledHelp": "Никогда не проверяется.",
-  "settings.maintenanceRuleStateDryRun": "Пробный запуск",
-  "settings.maintenanceRuleStateDryRunHelp":
+  "settings.lifecycleRuleStateUpdated": "Правило «{{name}}» обновлено.",
+  "settings.lifecycleRuleStateDisabled": "Отключено",
+  "settings.lifecycleRuleStateDisabledHelp": "Никогда не проверяется.",
+  "settings.lifecycleRuleStateDryRun": "Пробный запуск",
+  "settings.lifecycleRuleStateDryRunHelp":
     "Фиксирует кандидатов; не выполняет действий.",
-  "settings.maintenanceRuleStateEnabled": "Включено",
-  "settings.maintenanceRuleStateEnabledHelp":
+  "settings.lifecycleRuleStateEnabled": "Включено",
+  "settings.lifecycleRuleStateEnabledHelp":
     "Выполняет действия над кандидатами по окончании их периода отсрочки.",
-  "settings.maintenanceRuleEditedSinceEnabled":
+  "settings.lifecycleRuleEditedSinceEnabled":
     "Правило изменено после включения. Проверьте кандидатов и включите его снова.",
-  "settings.maintenanceRuleSystemOwned": "Встроенное",
+  "settings.lifecycleRuleSystemOwned": "Встроенное",
   "settings.expiredRequestLeasesHelp":
-    "Удаляет запрошенный тайтл и его файлы после истечения срока хранения по запросу и окончания периода отсрочки. При изменении периода отсрочки правило переходит в режим пробного запуска, пока вы не включите его снова. Как и любое правило обслуживания, оно работает только при включённом обслуживании.",
-  "settings.maintenanceSwitchEnabled": "Обслуживание",
-  "settings.maintenanceSwitchEnabledHelp":
+    "Удаляет запрошенный тайтл и его файлы после истечения срока хранения по запросу и окончания периода отсрочки. При изменении периода отсрочки правило переходит в режим пробного запуска, пока вы не включите его снова. Как и любое правило жизненного цикла, оно работает только при включённом жизненном цикле.",
+  "settings.lifecycleSwitchEnabled": "Жизненный цикл",
+  "settings.lifecycleSwitchEnabledHelp":
     "Проверять правила и показывать их кандидатов на этом экземпляре.",
-  "settings.maintenanceSwitchActionsPaused": "Приостановить все действия",
-  "settings.maintenanceSwitchActionsPausedHelp":
+  "settings.lifecycleSwitchActionsPaused": "Приостановить все действия",
+  "settings.lifecycleSwitchActionsPausedHelp":
     "Во время приостановки включённые правила продолжают фиксировать кандидатов, но отслеживание не отключается, ничего не изменяется и не удаляется.",
-  "settings.maintenanceSwitchesLocked":
-    "Для просмотра переключателей обслуживания требуется разрешение на доступ к системным настройкам. Уточните у администратора, включено ли обслуживание и приостановлены ли действия.",
-  "settings.maintenanceSwitchesUpdated": "Настройки обслуживания обновлены.",
-  "settings.maintenanceUnpauseConfirmTitle":
-    "Возобновить действия обслуживания?",
-  "settings.maintenanceUnpauseConfirmBody":
+  "settings.lifecycleSwitchesLocked":
+    "Для просмотра переключателей жизненного цикла требуется разрешение на доступ к системным настройкам. Уточните у администратора, включены ли правила жизненного цикла и приостановлены ли действия.",
+  "settings.lifecycleSwitchesUpdated": "Настройки жизненного цикла обновлены.",
+  "settings.lifecycleUnpauseConfirmTitle":
+    "Возобновить действия жизненного цикла?",
+  "settings.lifecycleUnpauseConfirmBody":
     "Включённые правила будут выполнять действия над кандидатами по окончании периода отсрочки для каждого из них, в том числе правила, удаляющие файлы.",
-  "settings.maintenanceUnpauseConfirmAction": "Возобновить действия",
-  "settings.maintenanceCandidatesEmptyMaintenanceOff":
-    "Обслуживание на этом экземпляре не включено, поэтому кандидаты не отображаются.",
-  "settings.maintenanceCandidatesEmptyAllDisabled":
+  "settings.lifecycleUnpauseConfirmAction": "Возобновить действия",
+  "settings.lifecycleCandidatesEmptyLifecycleOff":
+    "Правила жизненного цикла на этом экземпляре не включены, поэтому кандидаты не отображаются.",
+  "settings.lifecycleCandidatesEmptyAllDisabled":
     "Все правила отключены, поэтому проверка не выполняется. Сначала переведите правило в режим пробного запуска.",
-  "settings.maintenanceArmDestructiveIntro":
+  "settings.lifecycleArmDestructiveIntro":
     "Правило «{{name}}» удаляет файлы. После включения оно будет выполнять действия над указанными ниже кандидатами по окончании периода отсрочки для каждого из них, если действия не приостановлены.",
-  "settings.maintenanceArmDestructiveTitle":
+  "settings.lifecycleArmDestructiveTitle":
     "Включить правило, удаляющее файлы?",
-  "settings.maintenanceArmDestructiveConfirm": "Включить",
-  "settings.maintenanceCandidatesTitle": "Скоро будут удалены",
-  "settings.maintenanceCandidatesSubtitle":
+  "settings.lifecycleArmDestructiveConfirm": "Включить",
+  "settings.lifecycleCandidatesTitle": "Скоро будут удалены",
+  "settings.lifecycleCandidatesSubtitle":
     "Тайтлы, соответствующие правилу, начиная с ближайшего срока. Действия ни над одним из них ещё не выполнялись.",
-  "settings.maintenanceFileSummary": "Файлов: {{count}} · {{size}}",
-  "settings.maintenanceTestTitle": "Выберите тайтл для проверки",
-  "settings.maintenanceNoSubjects":
+  "settings.lifecycleFileSummary": "Файлов: {{count}} · {{size}}",
+  "settings.lifecycleTestTitle": "Выберите тайтл для проверки",
+  "settings.lifecycleNoSubjects":
     "В этом тайтле нет объектов для выбранной области действия.",
-  "settings.maintenancePreviewExcluded": "Исключено из действий",
-  "settings.maintenancePreviewEstimatedDue": "При совпадении сейчас: {{time}}",
-  "settings.maintenancePreviewDue": "Окончание отсрочки: {{time}}",
-  "settings.maintenancePreviewSubject": "Проверяемый объект",
-  "settings.maintenancePreviewSample": "Выборка из медиатеки",
-  "settings.maintenanceRuleScope": "Область действия правила",
-  "settings.maintenanceRuleTemplate": "Шаблон",
-  "settings.maintenanceRuleTemplatePlaceholder": "Начать с шаблона",
-  "settings.maintenanceScopeSeason": "Сезон",
-  "settings.maintenanceScopeEpisode": "Эпизод",
-  "settings.maintenanceFileDeleted": "Удалён",
-  "settings.maintenanceFilePending": "Ожидает",
-  "settings.maintenanceFileResults": "Результаты обработки файлов",
-  "settings.maintenanceFileProgress":
+  "settings.lifecyclePreviewExcluded": "Исключено из действий",
+  "settings.lifecyclePreviewEstimatedDue": "При совпадении сейчас: {{time}}",
+  "settings.lifecyclePreviewDue": "Окончание отсрочки: {{time}}",
+  "settings.lifecyclePreviewSubject": "Проверяемый объект",
+  "settings.lifecyclePreviewSample": "Выборка из медиатеки",
+  "settings.lifecycleRuleTemplate": "Шаблон",
+  "settings.lifecycleRuleTemplatePlaceholder": "Начать с шаблона",
+  "settings.lifecycleScopeSeason": "Сезон",
+  "settings.lifecycleScopeEpisode": "Эпизод",
+  "settings.lifecycleFileDeleted": "Удалён",
+  "settings.lifecycleFilePending": "Ожидает",
+  "settings.lifecycleFileResults": "Результаты обработки файлов",
+  "settings.lifecycleFileProgress":
     "Удалено: {{completed}} · осталось: {{remaining}}",
-  "settings.refMaintSubjectId":
+  "settings.refLifecycleSubjectId":
     "ID тайтла, коллекции или эпизода Scryer для выбранной области действия",
-  "settings.refMaintCollectionId":
+  "settings.refLifecycleCollectionId":
     "ID коллекции сезона, которой принадлежит сезон или эпизод, если известен",
-  "settings.refMaintFactsEpisodePositionByAirDate":
+  "settings.refLifecycleFactsEpisodePositionByAirDate":
     "Позиция эпизода по дате выхода в рамках сериала",
-  "settings.refMaintFactsSeasonPositionByAirDate":
+  "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Позиция сезона по самому новому подходящему загруженному эпизоду",
-  "settings.refMaintFactsStorageRootId":
+  "settings.refLifecycleFactsStorageRootId":
     "Настроенная корневая папка, выбранная для определения ёмкости хранилища и удаления файлов",
-  "settings.refMaintFactsStorageAvailableBytes":
+  "settings.refLifecycleFactsStorageAvailableBytes":
     "Количество байтов, доступных сейчас в выбранной корневой папке",
-  "settings.refMaintFactsStorageTotalBytes":
+  "settings.refLifecycleFactsStorageTotalBytes":
     "Общая ёмкость выбранной корневой папки в байтах",
-  "settings.refMaintFactsStorageAvailablePercent":
+  "settings.refLifecycleFactsStorageAvailablePercent":
     "Процент доступного сейчас места в выбранной корневой папке",
-  "settings.refMaintFactsListsEnabledIds":
+  "settings.refLifecycleFactsListsEnabledIds":
     "Идентификаторы включённых списков, общедоступных или личных, в которых объект ещё присутствует",
-  "settings.refMaintFactsListsPublicCount":
+  "settings.refLifecycleFactsListsPublicCount":
     "Количество общедоступных списков, в которых объект ещё присутствует",
-  "settings.refMaintFactsListsPersonalCount":
+  "settings.refLifecycleFactsListsPersonalCount":
     "Количество личных списков, в которых объект ещё присутствует",
-  "settings.refMaintFactsListsFirstSeenAt":
+  "settings.refLifecycleFactsListsFirstSeenAt":
     "Когда объект впервые появился в списке, в котором он всё ещё присутствует",
-  "settings.refMaintFactsListsLastSeenAt":
+  "settings.refLifecycleFactsListsLastSeenAt":
     "Когда объект последний раз отмечался в списке, в котором он всё ещё присутствует",
-  "settings.refMaintFactsListsDaysOnList":
+  "settings.refLifecycleFactsListsDaysOnList":
     "Количество полных дней с первого появления объекта в списке, в котором он всё ещё присутствует",
-  "settings.refMaintFactsListsBestRank":
+  "settings.refLifecycleFactsListsBestRank":
     "Наилучшая (наименьшая) позиция объекта среди списков, в которых он всё ещё присутствует",
-  "settings.refMaintFactsListsOnLeave":
+  "settings.refLifecycleFactsListsOnLeave":
     "Что делают включённые списки, содержащие объект, при его исключении",
-  "settings.refMaintFactsListsLeftHandled":
+  "settings.refLifecycleFactsListsLeftHandled":
     "Применено ли действие при исключении для каждого случая исключения из списка",
-  "settings.refMaintFactsListsMembershipStates":
+  "settings.refLifecycleFactsListsMembershipStates":
     "Состояния объекта в списках, в которых он всё ещё присутствует",
-  "settings.refMaintFactsRequestOrigin":
+  "settings.refLifecycleFactsRequestOrigin":
     "Источник запроса, по которому был создан тайтл",
-  "settings.refMaintFactsRequestListName":
+  "settings.refLifecycleFactsRequestListName":
     "Общедоступный список, из которого был запрошен тайтл",
-  "settings.refMaintFactsEpisodePositionByAirDateValue":
+  "settings.refLifecycleFactsEpisodePositionByAirDateValue":
     "Позиция 1 — самый новый подходящий загруженный эпизод, уже вышедший в эфир и не являющийся специальным. При одинаковых датах выхода порядок определяется номерами сезона и эпизода, затем стабильными ID.",
-  "settings.refMaintFactsSeasonPositionByAirDateValue":
+  "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Позиция 1 — сезон с самым новым подходящим загруженным эпизодом, уже вышедшим в эфир и не являющимся специальным. Защищённые файлы также занимают позиции.",
-  "settings.refMaintFactsStorageRootIdValue":
+  "settings.refLifecycleFactsStorageRootIdValue":
     "Постоянный идентификатор настроенной корневой папки медиатеки, выбранной в этой редакции",
-  "settings.refMaintFactsStorageAvailableBytesValue":
+  "settings.refLifecycleFactsStorageAvailableBytesValue":
     "Байты, доступные в выбранной корневой папке. Плановые запуски берут последний замер, который делается каждые пять минут; предпросмотр и проверка непосредственно перед действием читают корневую папку в этот момент. Неизвестно с причиной storage_not_sampled до первого замера корневой папки, storage_sample_stale, если последнему замеру больше десяти минут, и storage_capacity_unavailable, если корневую папку не удалось прочитать",
-  "settings.refMaintFactsStorageTotalBytesValue":
+  "settings.refLifecycleFactsStorageTotalBytesValue":
     "Общая ёмкость выбранной корневой папки в байтах, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
-  "settings.refMaintFactsStorageAvailablePercentValue":
+  "settings.refLifecycleFactsStorageAvailablePercentValue":
     "Доступная ёмкость, делённая на общую ёмкость, от 0 до 100, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
-  "settings.refMaintFactsListsEnabledIdsValue":
+  "settings.refLifecycleFactsListsEnabledIdsValue":
     "Отсортированные идентификаторы списков; никогда не название списка",
-  "settings.refMaintFactsListsPublicCountValue":
+  "settings.refLifecycleFactsListsPublicCountValue":
     "Количество общедоступных списков, включённых или приостановленных",
-  "settings.refMaintFactsListsPersonalCountValue":
+  "settings.refLifecycleFactsListsPersonalCountValue":
     "Количество личных списков, включённых или приостановленных",
-  "settings.refMaintFactsListsFirstSeenAtValue":
+  "settings.refLifecycleFactsListsFirstSeenAtValue":
     "Метка времени RFC3339; отсутствует с причиной not_on_a_list, если объект не содержится ни в одном списке",
-  "settings.refMaintFactsListsLastSeenAtValue":
+  "settings.refLifecycleFactsListsLastSeenAtValue":
     "Метка времени RFC3339; отсутствует с причиной not_on_a_list, если объект не содержится ни в одном списке",
-  "settings.refMaintFactsListsDaysOnListValue":
+  "settings.refLifecycleFactsListsDaysOnListValue":
     "Полные дни до момента проверки; отсутствует с причиной not_on_a_list, если объект не содержится ни в одном списке",
-  "settings.refMaintFactsListsBestRankValue":
+  "settings.refLifecycleFactsListsBestRankValue":
     "Номер позиции; отсутствует с причиной no_list_rank, если ни один список, содержащий объект, не присваивает ему позицию",
-  "settings.refMaintFactsListsOnLeaveValue":
+  "settings.refLifecycleFactsListsOnLeaveValue":
     "Отсортированные значения из keep, log, unmonitor и tag",
-  "settings.refMaintFactsListsLeftHandledValue":
+  "settings.refLifecycleFactsListsLeftHandledValue":
     "True после обработки всех случаев исключения; отсутствует с причиной no_list_left, если объект не был исключён ни из одного списка",
-  "settings.refMaintFactsListsMembershipStatesValue":
+  "settings.refLifecycleFactsListsMembershipStatesValue":
     "Отсортированные состояния, например in_library, added, requested или held",
-  "settings.refMaintFactsRequestOriginValue":
+  "settings.refLifecycleFactsRequestOriginValue":
     "Одно из значений manual, public_list или personal_list; отсутствует с причиной title_not_requested, если тайтл создан не по запросу",
-  "settings.refMaintFactsRequestListNameValue":
+  "settings.refLifecycleFactsRequestListNameValue":
     "Название этого общедоступного списка; отсутствует с причиной no_public_request_list для ручных запросов и запросов из личных списков, поскольку название личного списка никогда не раскрывается",
-  "settings.refMaintFileIs3d":
+  "settings.refLifecycleFileIs3d":
     "True, если метаданные медиафайла указывают на 3D-видео. False означает, что оно не обнаружено, в том числе для ещё не проанализированных файлов.",
   "settings.requestRulesDefault":
     "Если нет включённых правил, запросы участников с разрешением на автоодобрение одобряются, а все остальные ожидают проверки.",
@@ -13468,7 +13486,7 @@ const ru: LocaleDictionary = {
   "rules.template.block-old-releases.title":
     "Понижать оценку релизов старше года",
   "rules.template.block-old-releases.description":
-    "Резко понижает оценку релизов, которым было более 365 дней на момент обнаружения или захвата. Возраст фиксируется при захвате: хранение файла в библиотеке не делает его старым.",
+    "Резко понижает оценку релизов, которым было более 365 дней на момент обнаружения или захвата. Возраст фиксируется при захвате: хранение файла в библиотеке не делает его старым. Оценка релизов, возраст которых неизвестен, не понижается.",
   "rules.template.block-obfuscated-retagged.title":
     "Понижать оценку релизов с запутанными или изменёнными именами",
   "rules.template.block-obfuscated-retagged.description":
@@ -13572,13 +13590,13 @@ const ru: LocaleDictionary = {
   "jobs.builtin.ApplicationUpgrade.name": "Обновление приложения",
   "jobs.builtin.ApplicationUpgrade.description":
     "Загрузка, проверка и применение подписанного обновления приложения.",
-  "jobs.builtin.MaintenanceRuleEvaluation.name": "Оценка правил обслуживания",
-  "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Запуск и истечение аренд запросов по расписанию. Каждое правило обслуживания оценивается по собственному расписанию; запуск вручную оценивает все включённые правила и никогда не выполняет действия.",
+  "jobs.builtin.LifecycleRuleEvaluation.name": "Оценка правил жизненного цикла",
+  "jobs.builtin.LifecycleRuleEvaluation.description":
+    "Запуск и истечение аренд запросов по расписанию. Каждое правило жизненного цикла оценивается по собственному расписанию; запуск вручную оценивает все включённые правила и никогда не выполняет действия.",
   "jobs.builtin.LifecycleActionHandling.name":
-    "Выполнение действий обслуживания",
+    "Выполнение действий жизненного цикла",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Каждое правило обслуживания выполняет действия над своими кандидатами сразу после собственной плановой оценки или при ручном запуске этого правила, с учётом шлюзов эффектов экземпляра и полных повторных проверок безопасности. Эта задача не выполняет действия ни для одного правила.",
+    "Каждое правило жизненного цикла выполняет действия над своими кандидатами сразу после собственной плановой оценки или при ручном запуске этого правила, с учётом шлюзов эффектов экземпляра и полных повторных проверок безопасности. Эта задача не выполняет действия ни для одного правила.",
   "jobs.builtin.MediaServerSignalSync.name":
     "Синхронизация просмотров медиасерверов",
   "jobs.builtin.MediaServerSignalSync.description":
@@ -14087,19 +14105,32 @@ const ru: LocaleDictionary = {
     "Перетащите, чтобы изменить порядок {{value}}",
   "qualityProfile.decisionStepMoveUp": "Переместить {{value}} вверх",
   "qualityProfile.decisionStepMoveDown": "Переместить {{value}} вниз",
-  "ruleOutput.maintenance.add_tags": "Добавить теги",
-  "ruleOutput.maintenance.remove_tags": "Удалить теги",
-  "ruleOutput.maintenance.set_quality_profile": "Изменить профиль качества",
-  "ruleOutput.maintenance.monitor": "Отслеживать",
-  "ruleOutput.maintenance.search": "Поиск",
-  "ruleOutput.maintenance.fetch_subtitles": "Загрузить субтитры",
-  "ruleOutput.maintenance.move_to_library": "Переместить в библиотеку",
-  "ruleOutput.maintenance.move_to_root": "Переместить в корневую папку",
-  "ruleOutput.maintenance.unmonitor": "Отключить отслеживание",
-  "ruleOutput.maintenance.delete_files": "Удалить файлы",
-  "ruleOutput.maintenance.delete_title": "Удалить тайтл и файлы",
-  "ruleOutput.maintenance.notify": "Уведомить",
-  "ruleOutput.maintenance.notify.placeholder": "Текст уведомления",
+  "ruleOutput.lifecycle.add_tags": "Добавить теги",
+  "ruleOutput.lifecycle.remove_tags": "Удалить теги",
+  "ruleOutput.lifecycle.set_quality_profile": "Изменить профиль качества",
+  "ruleOutput.lifecycle.monitor": "Отслеживать",
+  "ruleOutput.lifecycle.search": "Поиск",
+  "ruleOutput.lifecycle.fetch_subtitles": "Загрузить субтитры",
+  "ruleOutput.lifecycle.move_to_library": "Переместить в библиотеку",
+  "ruleOutput.lifecycle.move_to_root": "Переместить в корневую папку",
+  "ruleOutput.lifecycle.unmonitor": "Отключить отслеживание",
+  "ruleOutput.lifecycle.delete_files": "Удалить файлы",
+  "ruleOutput.lifecycle.delete_title": "Удалить тайтл и файлы",
+  "ruleOutput.lifecycle.notify": "Уведомить",
+  "ruleOutput.lifecycle.monitor_season": "Отслеживать сезон",
+  "ruleOutput.lifecycle.fetch_season_subtitles": "Загрузить субтитры сезона",
+  "ruleOutput.lifecycle.unmonitor_season": "Отключить отслеживание сезона",
+  "ruleOutput.lifecycle.delete_season_files": "Удалить файлы сезона",
+  "ruleOutput.lifecycle.notify_season": "Уведомить о сезоне",
+  "ruleOutput.lifecycle.monitor_episode": "Отслеживать эпизод",
+  "ruleOutput.lifecycle.fetch_episode_subtitles": "Загрузить субтитры эпизода",
+  "ruleOutput.lifecycle.unmonitor_episode": "Отключить отслеживание эпизода",
+  "ruleOutput.lifecycle.delete_episode_files": "Удалить файлы эпизода",
+  "ruleOutput.lifecycle.notify_episode": "Уведомить об эпизоде",
+  "ruleSubject.lifecycle.title": "Тайтл",
+  "ruleSubject.lifecycle.season": "Сезон",
+  "ruleSubject.lifecycle.episode": "Эпизод",
+  "ruleOutput.lifecycle.notify.placeholder": "Текст уведомления",
   "ruleOutput.request.approve": "Одобрить",
   "ruleOutput.request.deny": "Отклонить",
   "ruleOutput.request.manual": "Оставить на рассмотрение",

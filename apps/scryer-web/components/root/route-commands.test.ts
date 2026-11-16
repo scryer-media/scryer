@@ -148,7 +148,7 @@ test("scripts is grouped with Settings for system-settings managers only", () =>
   assert.equal(find([APP_PERMISSIONS.manageCatalogSettings]), undefined);
 });
 
-test("maintenance-rules command is offered to catalog managers without the experimental switch", () => {
+test("lifecycle-rules command is offered to catalog managers without the experimental switch", () => {
   const catalogManager = user({
     appPermissions: [APP_PERMISSIONS.manageCatalogSettings],
   });
@@ -158,7 +158,7 @@ test("maintenance-rules command is offered to catalog managers without the exper
       t,
       user: catalogManager,
       onNavigate: () => {},
-    }).some((command) => command.id === "settings-maintenance-rules"),
+    }).some((command) => command.id === "settings-lifecycle-rules"),
   );
   // The catalog-settings permission still gates it.
   assert.equal(
@@ -166,7 +166,7 @@ test("maintenance-rules command is offered to catalog managers without the exper
       t,
       user: user(),
       onNavigate: () => {},
-    }).some((command) => command.id === "settings-maintenance-rules"),
+    }).some((command) => command.id === "settings-lifecycle-rules"),
     false,
   );
 });
