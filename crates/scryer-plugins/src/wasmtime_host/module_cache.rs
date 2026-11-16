@@ -152,26 +152,6 @@ pub(crate) fn indexer_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
     component_for(ModuleFlavor::Indexer, wasm)
 }
 
-pub(crate) fn archive_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::Archive, wasm)
-}
-
-pub(crate) fn subtitle_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::Subtitle, wasm)
-}
-
-pub(crate) fn download_client_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::DownloadClient, wasm)
-}
-
-pub(crate) fn notification_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::Notification, wasm)
-}
-
-pub(crate) fn list_provider_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    component_for(ModuleFlavor::ListProvider, wasm)
-}
-
 /// A deliberate plugin load retries a prior compilation failure. This is used
 /// for installs, updates, and explicit provider reloads; ordinary invocations
 /// keep returning the retained failure instead of starting surprise work.
@@ -513,8 +493,8 @@ mod tests {
         let first_wasm = Arc::clone(&wasm);
         let second_wasm = Arc::clone(&wasm);
 
-        let first = std::thread::spawn(move || archive_component(&first_wasm));
-        let second = std::thread::spawn(move || archive_component(&second_wasm));
+        let first = std::thread::spawn(move || component_for(ModuleFlavor::Archive, &first_wasm));
+        let second = std::thread::spawn(move || component_for(ModuleFlavor::Archive, &second_wasm));
         let first = first
             .join()
             .expect("first request must not panic")
