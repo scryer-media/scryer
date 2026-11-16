@@ -144,6 +144,9 @@ struct ComponentHostInner {
     indexer_error_capture: Mutex<Option<ComponentIndexerErrorCapture>>,
     strategy_events: Mutex<StrategyEventState>,
     transport_proxy_client: Mutex<Option<CachedTransportProxyClient>>,
+    /// Pinned direct clients, reused while a request resolves to the same
+    /// validated addresses under the same trust bundle.
+    request_clients: scryer_outbound_http::PinnedPluginHttpClientCache,
 }
 
 /// A transport-proxied egress client plus what it was built from.
@@ -266,6 +269,7 @@ impl ComponentHost {
                 indexer_error_capture: Mutex::new(None),
                 strategy_events: Mutex::new(StrategyEventState::default()),
                 transport_proxy_client: Mutex::new(None),
+                request_clients: scryer_outbound_http::PinnedPluginHttpClientCache::default(),
             }),
         })
     }
@@ -554,11 +558,12 @@ impl ComponentHost {
             let cancellation = self.cancellation();
             let target = tokio::select! {
                 _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
-                result = scryer_outbound_http::prepare_plugin_http_target_with_extra_ca(
+                result = scryer_outbound_http::prepare_plugin_http_target_with_extra_ca_cached(
                     &request.url,
                     &extra_ca_bundle_pem,
                     "component plugin HTTP",
                     &self.inner.egress_policy,
+                    &self.inner.request_clients,
                 ) => result
                     .inspect_err(|error| {
                         tracing::warn!(
