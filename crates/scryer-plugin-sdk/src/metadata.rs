@@ -3,7 +3,7 @@
 //! A metadata provider answers for titles the metadata gateway cannot: a film
 //! with an IMDb id SMG has never heard of, such as a fan edit. The host calls
 //! it only after SMG came back empty, so a provider whose upstream counts
-//! requests (OMDb's free key allows 1,000 a day) is spent on genuine gaps.
+//! requests is spent on genuine gaps.
 //! The host owns everything around the answer: matching, creating the title,
 //! storing it and deciding when to ask again.
 
@@ -141,10 +141,10 @@ mod tests {
     #[test]
     fn imdb_ids_are_normalized_or_refused() {
         assert_eq!(
-            normalize_imdb_id(" TT18183916 ").as_deref(),
-            Some("tt18183916")
+            normalize_imdb_id(" TT90000001 ").as_deref(),
+            Some("tt90000001")
         );
-        assert_eq!(normalize_imdb_id("tt0111161").as_deref(), Some("tt0111161"));
+        assert_eq!(normalize_imdb_id("tt0000042").as_deref(), Some("tt0000042"));
         for bad in ["", "tt", "nm0000001", "tt12a", "18183916"] {
             assert_eq!(normalize_imdb_id(bad), None, "{bad}");
         }
@@ -153,15 +153,15 @@ mod tests {
     #[test]
     fn titles_round_trip_without_empty_fields() {
         let title = MetadataPluginTitle {
-            imdb_id: "tt18183916".into(),
-            title: "Star War The Third Gathers: Backstroke of the West".into(),
+            imdb_id: "tt90000001".into(),
+            title: "Fixture Feature: The Long Edit".into(),
             year: Some(2005),
             ..MetadataPluginTitle::default()
         };
         let json = serde_json::to_string(&title).unwrap();
         assert_eq!(
             json,
-            r#"{"imdb_id":"tt18183916","title":"Star War The Third Gathers: Backstroke of the West","year":2005}"#
+            r#"{"imdb_id":"tt90000001","title":"Fixture Feature: The Long Edit","year":2005}"#
         );
         assert_eq!(
             serde_json::from_str::<MetadataPluginTitle>(&json).unwrap(),
