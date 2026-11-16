@@ -894,8 +894,13 @@ fn with_publish_time(
     (hydrated, observation)
 }
 
+/// The provisional read only matches active rows, so a row grabbed while it
+/// still waits for its publish time is never matched here, and the sighting
+/// is stored as its own row. A row grabbed between that read and the fill is
+/// the race the fill's own status check covers; the store's unit tests drive
+/// that check directly.
 #[tokio::test]
-async fn publish_time_fill_updates_an_active_row_and_never_revives_a_grabbed_one() {
+async fn publish_time_fill_updates_an_active_row_and_stores_a_sighting_of_a_grabbed_one_apart() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-publish-fill").await;
     let wanted = seed_wanted_item(&ctx, "title-publish-fill", AcquisitionScopeStatus::Wanted).await;
@@ -922,17 +927,34 @@ async fn publish_time_fill_updates_an_active_row_and_never_revives_a_grabbed_one
     assert_eq!(filled.status, PendingReleaseStatus::Waiting);
     assert!(!filled.release_age_unknown);
 
-    // Grabbed first, then the sighting with a publish time: the grabbed row
-    // keeps its status, and the sighting is stored as its own row.
+    // A second provisional row, grabbed while its publish time is still
+    // unknown, then seen again with one.
+    let (provisional, provisional_observation) =
+        release_age_unknown_sighting(&wanted.id, "title-publish-fill");
+    let provisional = scryer_application::PendingRelease {
+        id: scryer_domain::Id::new().0,
+        release_title: "Synthetic.Grabbed.Unknown.Age.1080p.WEB-DL".to_string(),
+        release_guid: Some("grabbed-unknown-age-guid".to_string()),
+        ..provisional
+    };
+    let provisional_observation = scryer_application::PendingReleaseObservation {
+        release_identity: "guid:synthetic-indexer:grabbed-unknown-age-guid".to_string(),
+        ..provisional_observation
+    };
+    let grabbed_id = store
+        .insert_pending_release_observation(&provisional, &provisional_observation)
+        .await
+        .expect("provisional sighting");
+    assert_ne!(grabbed_id, first_id);
     store
         .update_pending_release_status(
-            &first_id,
+            &grabbed_id,
             PendingReleaseStatus::Grabbed,
             Some(&Utc::now().to_rfc3339()),
         )
         .await
         .expect("grab");
-    let (later, later_observation) = with_publish_time(&release, &observation);
+    let (later, later_observation) = with_publish_time(&provisional, &provisional_observation);
     let later = scryer_application::PendingRelease {
         id: scryer_domain::Id::new().0,
         ..later
@@ -941,14 +963,25 @@ async fn publish_time_fill_updates_an_active_row_and_never_revives_a_grabbed_one
         .insert_pending_release_observation(&later, &later_observation)
         .await
         .expect("sighting after the grab");
-    assert_ne!(later_id, first_id);
+    assert_ne!(later_id, grabbed_id);
+
     let grabbed = ctx
         .library_state
-        .get_pending_release(&first_id)
+        .get_pending_release(&grabbed_id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(grabbed.status, PendingReleaseStatus::Grabbed);
+    assert!(grabbed.release_age_unknown);
+    assert!(grabbed.published_at.is_none());
+    let stored = ctx
+        .library_state
+        .get_pending_release(&later_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, PendingReleaseStatus::Waiting);
+    assert!(!stored.release_age_unknown);
 }
 
 #[tokio::test]

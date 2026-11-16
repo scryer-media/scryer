@@ -4203,3 +4203,183 @@ mod subtitle_search_backoff_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod pending_release_fill_tests {
+    use std::sync::{Arc, RwLock};
+
+    use chrono::{Duration, Utc};
+    use scryer_application::{
+        DownloadSourceKind, PendingRelease, PendingReleaseObservation, PendingReleaseRepository,
+        PendingReleaseRole, PendingReleaseStatus,
+    };
+
+    use super::PendingReleaseStore;
+    use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
+
+    async fn store() -> (StoreDatastore, PendingReleaseStore) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .unwrap();
+        let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        // The guard under test is the status check on the fill; the title and
+        // scope rows the foreign keys name are not part of it.
+        SqlRuntime::execute(datastore.read_exec(), "PRAGMA foreign_keys = OFF", &[])
+            .await
+            .unwrap();
+        let store = PendingReleaseStore::new(datastore.clone(), Arc::new(RwLock::new(None)));
+        (datastore, store)
+    }
+
+    /// A release first seen without a publish time, and that observation.
+    fn provisional(name: &str) -> (PendingRelease, PendingReleaseObservation) {
+        let now = Utc::now();
+        let release = PendingRelease {
+            http_release: None,
+            id: format!("pr-fill-{name}"),
+            wanted_item_id: "w-fill".to_string(),
+            title_id: "t-fill".to_string(),
+            release_title: format!("Synthetic.Fill.{name}.1080p.WEB-DL"),
+            release_url: Some(format!("https://example.com/{name}.nzb")),
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            release_size_bytes: Some(1024),
+            release_score: 100,
+            scoring_log_json: None,
+            indexer_source: Some("Synthetic Indexer".to_string()),
+            indexer_id: Some("synthetic-indexer".to_string()),
+            release_guid: Some(format!("guid-{name}")),
+            added_at: now.to_rfc3339(),
+            last_observed_at: now.to_rfc3339(),
+            delay_until: (now + Duration::minutes(5)).to_rfc3339(),
+            status: PendingReleaseStatus::Waiting,
+            grabbed_at: None,
+            source_password: None,
+            published_at: None,
+            info_hash: None,
+            seed_minimums: Default::default(),
+            seeders: None,
+            release_identity: String::new(),
+            coverage_identity: String::new(),
+            role: PendingReleaseRole::Primary,
+            last_decision_code: None,
+            release_age_unknown: true,
+            release_listing_json: None,
+        };
+        let observation = PendingReleaseObservation {
+            eligible_at: release.delay_until.clone(),
+            last_observed_at: now.to_rfc3339(),
+            latest_decision_code: None,
+            release_identity: format!("guid:synthetic-indexer:guid-{name}"),
+            coverage_identity: "scope:w-fill".to_string(),
+            role: PendingReleaseRole::Primary,
+            release_age_unknown: true,
+        };
+        (release, observation)
+    }
+
+    fn with_publish_time(
+        release: &PendingRelease,
+        observation: &PendingReleaseObservation,
+    ) -> (PendingRelease, PendingReleaseObservation) {
+        let mut hydrated = release.clone();
+        hydrated.published_at = Some((Utc::now() - Duration::minutes(30)).to_rfc3339());
+        let observation = PendingReleaseObservation {
+            release_age_unknown: false,
+            ..observation.clone()
+        };
+        (hydrated, observation)
+    }
+
+    async fn status_and_unknown(datastore: &StoreDatastore, id: &str) -> (String, bool) {
+        let row = SqlRuntime::fetch_optional(
+            datastore.read_exec(),
+            "SELECT status, release_age_unknown FROM pending_releases WHERE id = {}",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await
+        .unwrap()
+        .expect("row exists");
+        (
+            row.text("status").unwrap(),
+            row.bool("release_age_unknown").unwrap(),
+        )
+    }
+
+    /// The fill runs after the provisional read. A row that left the active
+    /// set between the read and the fill is the race the status check
+    /// covers; calling the fill with that row's id reproduces it without
+    /// timing.
+    #[tokio::test]
+    async fn the_fill_never_revives_a_row_grabbed_after_it_was_matched() {
+        let (datastore, store) = store().await;
+
+        let (active, active_observation) = provisional("active");
+        let active_id = store
+            .insert_pending_release_observation(&active, &active_observation)
+            .await
+            .unwrap();
+        let (hydrated, hydrated_observation) = with_publish_time(&active, &active_observation);
+        assert!(
+            store
+                .fill_provisional_pending_release(&active_id, &hydrated, &hydrated_observation)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            status_and_unknown(&datastore, &active_id).await,
+            ("waiting".to_string(), false)
+        );
+
+        // Matched while waiting, then grabbed before the fill lands.
+        let (matched, matched_observation) = provisional("matched");
+        let matched_id = store
+            .insert_pending_release_observation(&matched, &matched_observation)
+            .await
+            .unwrap();
+        store
+            .update_pending_release_status(
+                &matched_id,
+                PendingReleaseStatus::Grabbed,
+                Some(&Utc::now().to_rfc3339()),
+            )
+            .await
+            .unwrap();
+        let (hydrated, hydrated_observation) = with_publish_time(&matched, &matched_observation);
+        assert!(
+            !store
+                .fill_provisional_pending_release(&matched_id, &hydrated, &hydrated_observation)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            status_and_unknown(&datastore, &matched_id).await,
+            ("grabbed".to_string(), true)
+        );
+
+        // The sighting itself is stored as its own active row.
+        let sighting = PendingRelease {
+            id: "pr-fill-matched-again".to_string(),
+            ..hydrated
+        };
+        let stored_id = store
+            .insert_pending_release_observation(&sighting, &hydrated_observation)
+            .await
+            .unwrap();
+        assert_ne!(stored_id, matched_id);
+        assert_eq!(
+            status_and_unknown(&datastore, &stored_id).await,
+            ("waiting".to_string(), false)
+        );
+        assert_eq!(
+            status_and_unknown(&datastore, &matched_id).await,
+            ("grabbed".to_string(), true)
+        );
+    }
+}
