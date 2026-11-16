@@ -7,8 +7,7 @@ use scryer_domain::User;
 pub(crate) struct MediaSourceVersion {
     length: u64,
     modified: Option<std::time::SystemTime>,
-    #[cfg(unix)]
-    identity: (u64, u64),
+    identity: Option<crate::disk::FileIdentity>,
 }
 
 impl MediaSourceVersion {
@@ -19,20 +18,22 @@ impl MediaSourceVersion {
     /// transient metadata failure would then read as "the source changed"
     /// and blame the file for a fault of the mount.
     pub(crate) async fn read(path: &std::path::Path) -> AppResult<Self> {
-        let metadata = tokio::fs::metadata(path).await.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read media source metadata for {}: {error}",
+        match crate::disk::Disk::process().follow(path).await {
+            crate::disk::PathReading::Known {
+                len,
+                modified,
+                identity,
+                ..
+            } => Ok(Self {
+                length: len.unwrap_or(0),
+                modified,
+                identity,
+            }),
+            _ => Err(AppError::Repository(format!(
+                "failed to read media source metadata for {}",
                 path.display()
-            ))
-        })?;
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-        Ok(Self {
-            length: metadata.len(),
-            modified: metadata.modified().ok(),
-            #[cfg(unix)]
-            identity: (metadata.dev(), metadata.ino()),
-        })
+            ))),
+        }
     }
 }
 

@@ -305,6 +305,9 @@ impl AppUseCase {
     }
 }
 
+// disk-guard: the report names the root's device number, which the owner's
+// readings do not expose.
+#[allow(clippy::disallowed_methods)]
 fn probe_root(path: &str) -> RootFacts {
     let path = std::path::Path::new(path);
     let Ok(metadata) = std::fs::metadata(path) else {

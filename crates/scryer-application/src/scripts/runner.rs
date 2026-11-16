@@ -5,13 +5,13 @@
 //! file, runs the process in its own process group, enforces the timeout by
 //! killing that whole group, and keeps the tail of each captured stream.
 
+use crate::disk::{Access, Disk, EntryKind, Open, Parents, Replace, reason};
 use chrono::{DateTime, Utc};
 use scryer_domain::ScriptLanguage;
 use std::ffi::OsString;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -476,7 +476,7 @@ fn plan_materialized(
 ) -> Result<LaunchPlan, String> {
     if let Some((program, mut args)) = parse_shebang_text(content)
         && program.is_absolute()
-        && program.is_file()
+        && Disk::process().follow_blocking(&program).kind() == Some(EntryKind::File)
     {
         args.push(file.as_os_str().to_owned());
         return Ok(LaunchPlan {
@@ -508,6 +508,9 @@ fn plan_materialized(
 /// directly, whatever its extension. Otherwise the extension picks the
 /// interpreter, then a shebang does, and as a last resort the file is
 /// executed directly so the OS reports why it cannot run.
+// disk-guard: whether the file is executable needs its permission bits, which
+// the owner's readings do not carry.
+#[allow(clippy::disallowed_methods)]
 fn plan_file_script(
     entrypoint: &Path,
     invocation: &ScriptInvocation,
@@ -612,7 +615,7 @@ fn plan_by_extension(
 fn parse_shebang_file(entrypoint: &Path) -> io::Result<Option<(PathBuf, Vec<OsString>)>> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(entrypoint)?;
+    let mut file = Disk::process().open_blocking(entrypoint, Open::read())?;
     let mut bytes = [0_u8; 4096];
     let count = file.read(&mut bytes)?;
     Ok(parse_shebang_text(&String::from_utf8_lossy(
@@ -670,32 +673,31 @@ fn materialize_inline_script(
     language: ScriptLanguage,
 ) -> io::Result<PathBuf> {
     validate_script_id(script_id)?;
+    let disk = Disk::process();
     let dir = root.join(script_id);
     create_private_dir_all(&dir)?;
     let digest = blake3::hash(content.as_bytes()).to_hex();
     let path = dir.join(format!("{digest}.{}", language.file_extension()));
-    if path.try_exists()? {
+    if disk.follow_blocking(&path).exists() == Some(true) {
         return Ok(path);
     }
 
-    // Write under a unique temporary name and rename into place, so a
-    // concurrent run never executes a partially written file.
-    let temp = dir.join(format!(
-        ".{digest}.{}.{}.{}.tmp",
-        std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
-        MATERIALIZE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-    ));
-    write_new_private_file(&temp, content.as_bytes())?;
-    match std::fs::rename(&temp, &path) {
-        Ok(()) => Ok(path),
+    // Written aside and renamed into place, so a concurrent run never
+    // executes a partially written file.
+    #[cfg(unix)]
+    let access = {
+        use std::os::unix::fs::PermissionsExt;
+        Access::like(&std::fs::Permissions::from_mode(0o700))
+    };
+    #[cfg(not(unix))]
+    let access = Access::Default;
+    match disk.write_atomic_blocking(&path, content.as_bytes(), Replace::Never, access) {
+        Ok(_) => Ok(path),
         // A concurrent run installed the same content first.
-        Err(_) if path.try_exists().unwrap_or(false) => Ok(path),
-        Err(err) => Err(err),
+        Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => Ok(path),
+        Err(error) => Err(error.into()),
     }
 }
-
-static MATERIALIZE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn validate_script_id(script_id: &str) -> io::Result<()> {
     let valid = !script_id.is_empty()
@@ -714,36 +716,7 @@ fn validate_script_id(script_id: &str) -> io::Result<()> {
 }
 
 fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(dir)
-    }
-}
-
-fn write_new_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o700);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o700))?;
-    }
-    file.sync_all()
+    Ok(Disk::process().create_dir_as_blocking(dir, Parents::Create, Access::OwnerOnly)?)
 }
 
 /// Return the last `max_bytes` of `buf` as a trimmed UTF-8 string.

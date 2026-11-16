@@ -770,17 +770,7 @@ impl Disk {
     }
 
     pub fn create_dir_blocking(&self, path: &Path, parents: Parents) -> Result<(), DiskError> {
-        let backend = &self.inner.backend;
-        let result = match parents {
-            Parents::Create => self.call("create_dir_all", || backend.create_dir_all(path)),
-            Parents::MustExist => {
-                self.call("create_dir", || backend.create_dir(path, Access::Default))
-            }
-        };
-        // Any ancestor may have been created, and a cached "missing" for it
-        // would now be wrong.
-        self.inner.cache.evict_ancestors(&key_of(path));
-        result.map_err(|error| DiskError::new(DiskVerb::CreateDir, path, error))
+        self.create_dir_as_blocking(path, parents, Access::Default)
     }
 
     pub async fn create_dir(
@@ -788,8 +778,36 @@ impl Disk {
         path: impl Into<PathBuf>,
         parents: Parents,
     ) -> Result<(), DiskError> {
+        self.create_dir_as(path, parents, Access::Default).await
+    }
+
+    /// [`Self::create_dir_blocking`], with `access` applied to every
+    /// directory this call creates. Directories already there keep theirs.
+    pub fn create_dir_as_blocking(
+        &self,
+        path: &Path,
+        parents: Parents,
+        access: Access,
+    ) -> Result<(), DiskError> {
+        let backend = &self.inner.backend;
+        let result = match parents {
+            Parents::Create => self.call("create_dir_all", || backend.create_dir_all(path, access)),
+            Parents::MustExist => self.call("create_dir", || backend.create_dir(path, access)),
+        };
+        // Any ancestor may have been created, and a cached "missing" for it
+        // would now be wrong.
+        self.inner.cache.evict_ancestors(&key_of(path));
+        result.map_err(|error| DiskError::new(DiskVerb::CreateDir, path, error))
+    }
+
+    pub async fn create_dir_as(
+        &self,
+        path: impl Into<PathBuf>,
+        parents: Parents,
+        access: Access,
+    ) -> Result<(), DiskError> {
         self.run(DiskVerb::CreateDir, path.into(), None, move |disk, path| {
-            disk.create_dir_blocking(path, parents)
+            disk.create_dir_as_blocking(path, parents, access)
         })
         .await
     }

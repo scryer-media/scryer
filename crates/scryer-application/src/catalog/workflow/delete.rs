@@ -2793,10 +2793,11 @@ impl AppUseCase {
 /// title with no folder — is still on disk and must not be reported as gone.
 /// A read only; a path whose existence cannot be checked is not reported.
 async fn paths_no_longer_on_disk(paths: Vec<String>) -> Vec<String> {
+    let disk = crate::disk::Disk::process();
     let mut removed = Vec::with_capacity(paths.len());
     for path in paths {
         let on_disk = crate::stored_paths::stored_path_to_path_buf(&path);
-        if matches!(tokio::fs::try_exists(&on_disk).await, Ok(false)) {
+        if disk.follow(on_disk).await.exists() == Some(false) {
             removed.push(path);
         }
     }

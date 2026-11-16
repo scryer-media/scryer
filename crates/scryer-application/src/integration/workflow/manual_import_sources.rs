@@ -194,10 +194,11 @@ impl AppUseCase {
             return Err(AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_TITLE_DOES_NOT_MATCH_SCRYER_SUBMISSION_GRABBED_DOWNLOAD, "manual import title does not match the Scryer submission that grabbed this download"
                     .to_string()));
         }
+        let disk = crate::disk::Disk::process();
         let trusted_root = if selection.trusted_source_root.trim().is_empty() {
-            tokio::fs::canonicalize(&completed.dest_dir).await
+            disk.canonicalize(&completed.dest_dir).await
         } else {
-            tokio::fs::canonicalize(crate::stored_paths::stored_path_to_path_buf(
+            disk.canonicalize(crate::stored_paths::stored_path_to_path_buf(
                 &selection.trusted_source_root,
             ))
             .await
@@ -205,7 +206,7 @@ impl AppUseCase {
         .map_err(|_| {
             AppError::validation_refused(crate::error_reasons::integration::MANUAL_IMPORT_FILES_UNAVAILABLE, "manual import files are no longer available".to_string())
         })?;
-        let download_root = tokio::fs::canonicalize(&completed.dest_dir).await.ok();
+        let download_root = disk.canonicalize(&completed.dest_dir).await.ok();
         let mapped_candidate_ids = mappings
             .iter()
             .map(|mapping| mapping.candidate_id.as_str())

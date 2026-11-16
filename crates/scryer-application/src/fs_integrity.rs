@@ -28,7 +28,8 @@ pub fn import_io_failure(error: &std::io::Error, message: String) -> AppError {
 /// Compute the import content proof for `path`: file size plus a BLAKE3 digest
 /// over the first and last `IMPORT_CONTENT_PROOF_SAMPLE_BYTES` bytes.
 pub fn import_content_proof(path: &Path) -> AppResult<ImportContentProof> {
-    let mut file = std::fs::File::open(path).map_err(|error| {
+    let opened = crate::disk::Disk::process().open_blocking(path, crate::disk::Open::read());
+    let mut file = opened.map_err(std::io::Error::from).map_err(|error| {
         import_io_failure(
             &error,
             format!(

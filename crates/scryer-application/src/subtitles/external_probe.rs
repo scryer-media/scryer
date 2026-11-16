@@ -6,6 +6,7 @@ use tokio::{fs, io::AsyncReadExt};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use whatlang::{Lang, detect};
 
+use crate::disk::{Disk, Open};
 use crate::stored_paths::path_to_stored_string;
 use crate::{AppError, AppResult};
 
@@ -335,6 +336,10 @@ fn text_probe_capable_extension(extension: &str) -> bool {
     !extension.eq_ignore_ascii_case("idx")
 }
 
+// disk-guard: the fingerprint decides whether a sidecar edited moments ago is
+// probed again, so it needs a current lstat; the owner's readings may be
+// reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn collect_fingerprint(path: &Path) -> AppResult<ExternalSubtitleFingerprint> {
     let metadata = fs::symlink_metadata(path)
         .await
@@ -393,22 +398,10 @@ fn subtitle_file_fingerprint(metadata: &std::fs::Metadata) -> SubtitleFileFinger
 }
 
 async fn open_subtitle_sidecar(path: &Path) -> AppResult<fs::File> {
-    #[cfg(unix)]
-    {
-        let mut options = fs::OpenOptions::new();
-        options.read(true).custom_flags(libc::O_NOFOLLOW);
-        options
-            .open(path)
-            .await
-            .map_err(|error| AppError::Repository(format!("cannot open subtitle file: {error}")))
-    }
-
-    #[cfg(not(unix))]
-    {
-        fs::File::open(path)
-            .await
-            .map_err(|error| AppError::Repository(format!("cannot open subtitle file: {error}")))
-    }
+    Disk::process()
+        .open(path, Open::read().without_following_links())
+        .await
+        .map_err(|error| AppError::Repository(format!("cannot open subtitle file: {error}")))
 }
 
 fn cache_matches_fingerprint(
@@ -420,6 +413,10 @@ fn cache_matches_fingerprint(
         && cache_entry.probe_version == fingerprint.probe_version
 }
 
+// disk-guard: the lstat is compared with the opened handle's own metadata to
+// catch a swap between them, so it must be current; the owner's readings may
+// be reused for up to a second.
+#[allow(clippy::disallowed_methods)]
 async fn read_subtitle_to_string(path: &Path) -> AppResult<DecodedSubtitleText> {
     let metadata = fs::symlink_metadata(path)
         .await

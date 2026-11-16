@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -7,8 +6,10 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use aws_lc_rs::rand::{SystemRandom, generate};
 use serde::{Deserialize, Serialize};
-use tempfile::TempDir;
 
+use crate::disk::{
+    Access, Disk, EntryKind, Open, Parents, PathReading, Remove, Replace, ScratchDir, Staged,
+};
 use crate::{AppError, AppResult};
 
 pub const BACKUP_FORMAT_VERSION: &str = "scryer-backup-bundle-v2";
@@ -117,73 +118,34 @@ struct EncryptedBundleHeaderV1 {
     metadata: BackupEncryptionMetadataV1,
 }
 
+/// A backup written beside its destination and renamed into place by
+/// [`Self::finish`]; dropped unfinished, it leaves the destination as it was.
 struct AtomicOutputWriter {
-    temp_file: tempfile::NamedTempFile,
-    writer: BufWriter<File>,
-    final_path: PathBuf,
+    writer: BufWriter<Staged>,
 }
 
 impl AtomicOutputWriter {
     fn new(path: &Path) -> AppResult<Self> {
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(parent).map_err(|error| {
-            AppError::Repository(format!("failed to create {}: {error}", parent.display()))
-        })?;
-        let temp_file = tempfile::Builder::new()
-            .prefix(".scry-bk-")
-            .tempfile_in(parent)
+        let staged = Disk::process()
+            .stage_blocking(path, Parents::Create, Access::OwnerOnly)
             .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to create staged backup output in {}: {error}",
-                    parent.display()
-                ))
+                AppError::Repository(format!("failed to create staged backup output: {error}"))
             })?;
-        ensure_owner_only_permissions(temp_file.path())?;
-        let writer = BufWriter::new(temp_file.reopen().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to open staged backup output {}: {error}",
-                temp_file.path().display()
-            ))
-        })?);
         Ok(Self {
-            temp_file,
-            writer,
-            final_path: path.to_path_buf(),
+            writer: BufWriter::new(staged),
         })
     }
 
-    fn finish(mut self) -> AppResult<()> {
-        self.writer.flush().map_err(|error| {
+    fn finish(self) -> AppResult<()> {
+        let staged = self.writer.into_inner().map_err(|error| {
             AppError::Repository(format!(
-                "failed to flush staged backup output {}: {error}",
-                self.temp_file.path().display()
+                "failed to flush staged backup output: {}",
+                error.error()
             ))
         })?;
-        let file = self.writer.into_inner().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to finalize staged backup output {}: {error}",
-                self.temp_file.path().display()
-            ))
+        staged.commit_blocking(Replace::Allowed).map_err(|error| {
+            AppError::Repository(format!("failed to persist staged backup output: {error}"))
         })?;
-        file.sync_all().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to sync staged backup output {}: {error}",
-                self.temp_file.path().display()
-            ))
-        })?;
-        drop(file);
-
-        self.temp_file.persist(&self.final_path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to persist staged backup output to {}: {}",
-                self.final_path.display(),
-                error.error
-            ))
-        })?;
-        ensure_owner_only_permissions(&self.final_path)?;
         Ok(())
     }
 }
@@ -1679,7 +1641,7 @@ pub struct BackupExportOutcome {
 }
 
 pub struct BackupBundleStaging {
-    staging: TempDir,
+    staging: ScratchDir,
     row_counts: BTreeMap<String, u64>,
     part_checksums: BTreeMap<String, String>,
 }
@@ -1745,13 +1707,14 @@ impl PreparedBackupBundleDirectory {
 
 impl BackupBundleStaging {
     pub fn new() -> AppResult<Self> {
-        let staging = tempfile::tempdir().map_err(|error| {
+        let disk = Disk::process();
+        let staging = disk.scratch_dir_blocking("scry-bs-").map_err(|error| {
             AppError::Repository(format!("failed to create backup staging dir: {error}"))
         })?;
-        let tables_dir = staging.path().join(TABLES_DIRNAME);
-        std::fs::create_dir_all(&tables_dir).map_err(|error| {
-            AppError::Repository(format!("failed to create tables staging dir: {error}"))
-        })?;
+        disk.create_dir_blocking(&staging.path().join(TABLES_DIRNAME), Parents::Create)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to create tables staging dir: {error}"))
+            })?;
 
         Ok(Self {
             staging,
@@ -1829,7 +1792,7 @@ pub fn inspect_backup_bundle(
 }
 
 pub struct BackupBundleRestorePayload {
-    extracted: TempDir,
+    extracted: ScratchDir,
     manifest: BackupBundleManifest,
 }
 
@@ -1851,13 +1814,17 @@ impl BackupBundleRestorePayload {
     }
 
     pub fn persist_extracted_dir(&self, target_root: &Path) -> AppResult<()> {
-        if target_root.exists() {
-            std::fs::remove_dir_all(target_root).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to clear prepared backup directory {}: {error}",
-                    target_root.display()
-                ))
-            })?;
+        let disk = Disk::process();
+        // Only a path that resolves to something is cleared; a dangling link
+        // or a path that cannot be read is left alone.
+        if disk.follow_blocking(target_root).exists() == Some(true) {
+            disk.remove_blocking(target_root, Remove::Tree)
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to clear prepared backup directory {}: {error}",
+                        target_root.display()
+                    ))
+                })?;
         }
         copy_directory_contents(self.extracted.path(), target_root)
     }
@@ -1896,9 +1863,11 @@ fn push_env_assignment(output: &mut String, key: &str, value: &str) {
 }
 
 fn write_json_file(path: &Path, value: &impl Serialize) -> AppResult<()> {
-    let file = File::create(path).map_err(|error| {
-        AppError::Repository(format!("failed to create {}: {error}", path.display()))
-    })?;
+    let file = Disk::process()
+        .open_blocking(path, Open::create())
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create {}: {error}", path.display()))
+        })?;
     let writer = BufWriter::new(file);
     serde_json::to_writer_pretty(writer, value).map_err(|error| {
         AppError::Repository(format!("failed to serialize {}: {error}", path.display()))
@@ -1906,12 +1875,14 @@ fn write_json_file(path: &Path, value: &impl Serialize) -> AppResult<()> {
 }
 
 fn checksum_hex(path: impl AsRef<Path>) -> AppResult<String> {
-    let file = File::open(path.as_ref()).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open {} for checksum: {error}",
-            path.as_ref().display()
-        ))
-    })?;
+    let file = Disk::process()
+        .open_blocking(path.as_ref(), Open::read())
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open {} for checksum: {error}",
+                path.as_ref().display()
+            ))
+        })?;
     let mut file = crate::RestoreReader::new(file);
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -1964,12 +1935,17 @@ fn write_bundle_payload<W: Write>(_stage_dir: &Path, _writer: W) -> AppResult<W>
 }
 
 #[cfg(feature = "runtime-backups")]
-fn extract_bundle_to_tempdir(bundle_path: &Path, passphrase: Option<&str>) -> AppResult<TempDir> {
-    let tempdir = tempfile::tempdir().map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create restore staging directory: {error}"
-        ))
-    })?;
+fn extract_bundle_to_tempdir(
+    bundle_path: &Path,
+    passphrase: Option<&str>,
+) -> AppResult<ScratchDir> {
+    let tempdir = Disk::process()
+        .scratch_dir_blocking("scry-rs-")
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to create restore staging directory: {error}"
+            ))
+        })?;
 
     let payload_reader = open_bundle_payload_reader(bundle_path, passphrase)?;
     let decoder = zstd::Decoder::new(crate::RestoreReader::new(payload_reader))
@@ -1983,7 +1959,10 @@ fn extract_bundle_to_tempdir(bundle_path: &Path, passphrase: Option<&str>) -> Ap
 }
 
 #[cfg(not(feature = "runtime-backups"))]
-fn extract_bundle_to_tempdir(_bundle_path: &Path, _passphrase: Option<&str>) -> AppResult<TempDir> {
+fn extract_bundle_to_tempdir(
+    _bundle_path: &Path,
+    _passphrase: Option<&str>,
+) -> AppResult<ScratchDir> {
     Err(AppError::Repository(
         "backup bundle payload support is not compiled into this target".into(),
     ))
@@ -1994,12 +1973,14 @@ fn open_bundle_payload_reader(
     bundle_path: &Path,
     passphrase: Option<&str>,
 ) -> AppResult<Box<dyn Read>> {
-    let input = File::open(bundle_path).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open bundle {}: {error}",
-            bundle_path.display()
-        ))
-    })?;
+    let input = Disk::process()
+        .open_blocking(bundle_path, Open::read())
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open bundle {}: {error}",
+                bundle_path.display()
+            ))
+        })?;
     let mut reader = BufReader::new(input);
     let mut prefix = [0_u8; ENCRYPTED_BUNDLE_MAGIC.len()];
     let read = reader.read(&mut prefix).map_err(|error| {
@@ -2199,12 +2180,14 @@ where
 
 fn load_manifest(root: &Path) -> AppResult<BackupBundleManifest> {
     let path = root.join(MANIFEST_FILENAME);
-    let file = File::open(&path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::security::BACKUP_MANIFEST_MISSING,
-            format!("backup manifest missing: {error}"),
-        )
-    })?;
+    let file = Disk::process()
+        .open_blocking(&path, Open::read())
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_MANIFEST_MISSING,
+                format!("backup manifest missing: {error}"),
+            )
+        })?;
     serde_json::from_reader(BufReader::new(file)).map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::security::BACKUP_MANIFEST_INVALID,
@@ -2215,12 +2198,14 @@ fn load_manifest(root: &Path) -> AppResult<BackupBundleManifest> {
 
 fn load_instance_secrets(root: &Path) -> AppResult<BackupInstanceSecrets> {
     let path = root.join(INSTANCE_SECRETS_FILENAME);
-    let file = File::open(&path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_MISSING,
-            format!("backup secrets payload missing: {error}"),
-        )
-    })?;
+    let file = Disk::process()
+        .open_blocking(&path, Open::read())
+        .map_err(|error| {
+            AppError::validation_refused(
+                crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_MISSING,
+                format!("backup secrets payload missing: {error}"),
+            )
+        })?;
     serde_json::from_reader(BufReader::new(file)).map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::security::BACKUP_SECRETS_PAYLOAD_INVALID,
@@ -2240,41 +2225,40 @@ fn expected_bundle_parts(manifest: &BackupBundleManifest) -> BTreeSet<String> {
 
 fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
     crate::check_restore_deadline()?;
-    std::fs::create_dir_all(target).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create prepared backup directory {}: {error}",
-            target.display()
-        ))
-    })?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(target, Parents::Create)
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to create prepared backup directory {}: {error}",
+                target.display()
+            ))
+        })?;
 
-    for entry in std::fs::read_dir(source).map_err(|error| {
+    for entry in disk.list_blocking(source).map_err(|error| {
         AppError::Repository(format!(
             "failed to read prepared backup directory {}: {error}",
             source.display()
         ))
     })? {
-        let entry = entry.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect prepared backup directory {}: {error}",
-                source.display()
-            ))
-        })?;
-        let file_type = entry.file_type().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect prepared backup entry {}: {error}",
-                entry.path().display()
-            ))
-        })?;
+        let Some(kind) = entry.reading.kind() else {
+            return Err(AppError::Repository(format!(
+                "failed to inspect prepared backup entry {}",
+                entry.path.display()
+            )));
+        };
         crate::check_restore_deadline()?;
-        let destination = target.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_directory_contents(&entry.path(), &destination)?;
-        } else if file_type.is_file() {
+        let Some(name) = entry.path.file_name() else {
+            continue;
+        };
+        let destination = target.join(name);
+        if kind == EntryKind::Directory {
+            copy_directory_contents(&entry.path, &destination)?;
+        } else if kind == EntryKind::File {
             let copy = (|| -> std::io::Result<()> {
-                let source = File::open(entry.path())?;
+                let source = disk.open_blocking(&entry.path, Open::read())?;
                 let permissions = source.metadata()?.permissions();
                 let mut source = crate::RestoreReader::new(source);
-                let mut target = File::create(&destination)?;
+                let mut target = disk.open_blocking(&destination, Open::create())?;
                 std::io::copy(&mut source, &mut target)?;
                 target.set_permissions(permissions)
             })();
@@ -2287,7 +2271,7 @@ fn copy_directory_contents(source: &Path, target: &Path) -> AppResult<()> {
         } else {
             return Err(AppError::validation_refused(crate::error_reasons::security::PREPARED_BACKUP_DIRECTORY_CONTAINS_UNSUPPORTED_ENTRY, format!(
                 "prepared backup directory contains unsupported entry {}",
-                entry.path().display()
+                entry.path.display()
             )));
         }
     }
@@ -2306,7 +2290,8 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
         ));
     }
 
-    let canonical_root = root.canonicalize().map_err(|error| {
+    let disk = Disk::process();
+    let canonical_root = disk.canonicalize_blocking(root).map_err(|error| {
         AppError::Repository(format!(
             "failed to resolve extracted backup root {}: {error}",
             root.display()
@@ -2331,29 +2316,37 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
             ));
         }
 
-        let canonical_part = root.join(part_path).canonicalize().map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
-                format!("backup part path is invalid: {part}: {error}"),
-            )
-        })?;
+        let canonical_part =
+            disk.canonicalize_blocking(&root.join(part_path))
+                .map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                        format!("backup part path is invalid: {part}: {error}"),
+                    )
+                })?;
         if !canonical_part.starts_with(&canonical_root) {
             return Err(AppError::validation_refused(
                 crate::error_reasons::security::BACKUP_PART_PATH_ESCAPES_BUNDLE_ROOT,
                 format!("backup part path escapes the bundle root: {part}"),
             ));
         }
-        let metadata = std::fs::metadata(&canonical_part).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::security::BACKUP_PART_PATH_UNREADABLE,
-                format!("backup part path is unreadable: {part}: {error}"),
-            )
-        })?;
-        if !metadata.is_file() {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
-                format!("backup part path must be a regular file: {part}"),
-            ));
+        match disk.follow_blocking(&canonical_part) {
+            PathReading::Known {
+                kind: EntryKind::File,
+                ..
+            } => {}
+            PathReading::Known { .. } => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_PART_PATH_INVALID,
+                    format!("backup part path must be a regular file: {part}"),
+                ));
+            }
+            _ => {
+                return Err(AppError::validation_refused(
+                    crate::error_reasons::security::BACKUP_PART_PATH_UNREADABLE,
+                    format!("backup part path is unreadable: {part}"),
+                ));
+            }
         }
 
         let actual_checksum = checksum_hex(&canonical_part)?;
@@ -2389,25 +2382,6 @@ fn validate_extracted_bundle(root: &Path, manifest: &BackupBundleManifest) -> Ap
             ),
         ));
     }
-
-    Ok(())
-}
-
-fn ensure_owner_only_permissions(path: &Path) -> AppResult<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let permissions = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(path, permissions).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to set permissions on {}: {error}",
-                path.display()
-            ))
-        })?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
 
     Ok(())
 }
@@ -3012,18 +2986,14 @@ mod tests {
         std::fs::write(&output_path, b"known-good").expect("seed output");
 
         let mut writer = AtomicOutputWriter::new(&output_path).expect("create atomic writer");
-        let staged = writer
-            .temp_file
-            .path()
-            .file_name()
-            .unwrap()
-            .to_string_lossy();
-        assert!(staged.starts_with(".scry-bk-"), "{staged}");
+        let staged_path = writer.writer.get_ref().path().to_path_buf();
+        let staged = staged_path.file_name().unwrap().to_string_lossy();
+        assert!(staged.starts_with('.'), "{staged}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let mode = std::fs::metadata(writer.temp_file.path())
+            let mode = std::fs::metadata(&staged_path)
                 .expect("temp metadata")
                 .permissions()
                 .mode()
@@ -3041,6 +3011,7 @@ mod tests {
             std::fs::read(&output_path).expect("read preserved output"),
             b"known-good"
         );
+        assert!(!staged_path.exists(), "unfinished output is removed");
     }
 
     #[test]

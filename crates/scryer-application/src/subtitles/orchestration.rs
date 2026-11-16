@@ -1543,7 +1543,7 @@ async fn reference_subtitle_path_for_sync(
         .filter_map(|record| {
             let path = stored_path_to_path_buf(&record.file_path);
             if same_filesystem_path(&path, subtitle_path)
-                || !path.exists()
+                || crate::disk::Disk::process().follow_blocking(&path).exists() != Some(true)
                 || !is_supported_reference_subtitle_path(&path)
             {
                 return None;
@@ -1584,7 +1584,11 @@ fn same_filesystem_path(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
     }
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+    let disk = crate::disk::Disk::process();
+    match (
+        disk.canonicalize_blocking(left),
+        disk.canonicalize_blocking(right),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -2413,9 +2417,13 @@ async fn search_automatic_subtitles_for_file(
         .await?;
     }
     if actor.is_some()
-        && !tokio::fs::try_exists(stored_path_to_path_buf(&mf.file_path))
+        && !crate::disk::Disk::process()
+            .follow(stored_path_to_path_buf(&mf.file_path))
             .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
+            .exists()
+            .ok_or_else(|| {
+                AppError::Repository("could not read the media file's path".to_string())
+            })?
     {
         return Err(AppError::not_found_reason(
             crate::error_reasons::subtitles::MEDIA_FILE_NOT_FOUND,

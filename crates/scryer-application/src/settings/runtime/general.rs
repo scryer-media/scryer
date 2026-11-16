@@ -239,22 +239,24 @@ fn backup_path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
-    std::fs::create_dir_all(path).map_err(|error| {
+async fn validate_backup_storage_dir(path: &Path) -> AppResult<()> {
+    use crate::disk::{Access, Disk, Parents, Remove, Replace};
+    let disk = Disk::process();
+    // Creating the directory and its parents succeeds only when the path
+    // ends up a directory, so no separate check follows.
+    disk.create_dir(path, Parents::Create).await.map_err(|error| {
         AppError::validation_refused(crate::error_reasons::settings::FAILED_CREATE_BACKUP_DIRECTORY, format!("failed to create backup directory: {error}"))
     })?;
-    if !path.is_dir() {
-        return Err(AppError::validation_refused(crate::error_reasons::settings::BACKUP_PATH_INVALID, "backup path must be a directory".to_string()));
-    }
 
     let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
     let probe_path = path.join(format!(
         ".scry-bw-{}-{timestamp}.tmp",
         std::process::id()
     ));
-    std::fs::write(&probe_path, b"scryer backup path probe")
+    disk.write(&probe_path, b"scryer backup path probe".to_vec(), Replace::Allowed, Access::Default)
+        .await
         .map_err(|error| AppError::validation_refused(crate::error_reasons::settings::BACKUP_PATH_NOT_WRITABLE, format!("backup path is not writable: {error}")))?;
-    std::fs::remove_file(&probe_path).map_err(|error| {
+    disk.remove(&probe_path, Remove::File).await.map_err(|error| {
         AppError::validation_refused(crate::error_reasons::settings::FAILED_REMOVE_BACKUP_PATH_PROBE, format!("failed to remove backup path probe: {error}"))
     })?;
     Ok(())
@@ -724,7 +726,7 @@ impl AppUseCase {
 
         let custom_path = normalize_backup_path_setting(input.custom_backup_path)?;
         if let Some(path) = &custom_path {
-            validate_backup_storage_dir(path)?;
+            validate_backup_storage_dir(path).await?;
             self.upsert_system_setting_json(
                 BACKUP_PATH_KEY,
                 &backup_path_to_string(path),

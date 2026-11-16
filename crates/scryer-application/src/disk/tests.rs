@@ -215,7 +215,11 @@ impl DiskBackend for Scripted {
     fn symlink(&self, _target: &Path, at: &Path) -> io::Result<()> {
         self.record("symlink", at)
     }
-    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+    fn create_dir_all(&self, path: &Path, access: Access) -> io::Result<()> {
+        self.accesses
+            .lock()
+            .unwrap()
+            .push(("create_dir_all", access));
         self.record("create_dir_all", path)
     }
     fn create_dir(&self, path: &Path, access: Access) -> io::Result<()> {
@@ -1579,7 +1583,50 @@ fn an_atomic_write_passes_its_access_to_the_new_file_only() {
         Access::OwnerOnly,
     )
     .unwrap();
-    assert_eq!(backend.accesses(), vec![("write_new", Access::OwnerOnly)]);
+    assert_eq!(
+        backend.accesses(),
+        vec![
+            ("create_dir_all", Access::Default),
+            ("write_new", Access::OwnerOnly)
+        ]
+    );
+}
+
+#[test]
+fn a_directory_creation_passes_its_access_and_evicts_what_it_created() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    seed(
+        &disk,
+        &backend,
+        &["/srv/fixture-media/Show", "/srv/fixture-media/Other"],
+    );
+    disk.create_dir_as_blocking(
+        &p("/srv/fixture-media/Show/extras"),
+        Parents::Create,
+        Access::OwnerOnly,
+    )
+    .unwrap();
+    disk.create_dir_as_blocking(
+        &p("/srv/fixture-media/Other/notes"),
+        Parents::MustExist,
+        Access::OwnerOnly,
+    )
+    .unwrap();
+    disk.create_dir_blocking(&p("/srv/fixture-media/Show/plain"), Parents::Create)
+        .unwrap();
+    assert_eq!(
+        backend.accesses(),
+        vec![
+            ("create_dir_all", Access::OwnerOnly),
+            ("create_dir", Access::OwnerOnly),
+            ("create_dir_all", Access::Default),
+        ]
+    );
+    evicted(
+        &disk,
+        &["/srv/fixture-media/Show", "/srv/fixture-media/Other"],
+    );
 }
 
 /// The staging path the last staged write opened.
@@ -2373,6 +2420,18 @@ mod system {
             .unwrap();
         staged.commit_blocking(Replace::Never).unwrap();
         assert_eq!(mode(&staged_dest), 0o600);
+
+        let private_parent = temp.path().join("invented-private");
+        let private = private_parent.join("nested");
+        disk.create_dir_as_blocking(&private, Parents::Create, Access::OwnerOnly)
+            .unwrap();
+        assert_eq!(mode(&private_parent), 0o700);
+        assert_eq!(mode(&private), 0o700);
+        // An existing directory keeps its permissions, and is not an error.
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o750)).unwrap();
+        disk.create_dir_as_blocking(&private, Parents::Create, Access::OwnerOnly)
+            .unwrap();
+        assert_eq!(mode(&private), 0o750);
 
         let loose = temp.path().join("invented-loose.key");
         std::fs::write(&loose, b"k").unwrap();

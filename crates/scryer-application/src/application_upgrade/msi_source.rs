@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use application_updater::{manifest::UpgradeArtifact, pipeline::verify_artifact_hash};
 
+use crate::disk::{Access, Disk, Open, Parents, Replace, reason};
+
 /// Publish only verified bytes. An existing source is never overwritten, even
 /// if damaged: it may still be registered to an installed product.
 pub fn retain_installer(
@@ -21,30 +23,32 @@ pub fn retain_installer(
         ));
     }
     let directory = cache.join(&artifact.blake3);
-    std::fs::create_dir_all(&directory).map_err(|e| {
-        crate::AppError::Repository(format!("failed to create installer cache: {e}"))
-    })?;
+    let disk = Disk::process();
+    disk.create_dir_blocking(&directory, Parents::Create)
+        .map_err(|e| {
+            crate::AppError::Repository(format!("failed to create installer cache: {e}"))
+        })?;
     let destination = directory.join("installer.msi");
-    if !destination.exists() {
-        // Keep partial copies in disposable staging. Publish without replacing
-        // an existing source, including when two recovery attempts race. A copy
-        // also supports Windows data volumes without hard-link support.
+    if disk.follow_blocking(&destination).exists() != Some(true) {
+        // Keep partial copies in a staging file that is removed unless
+        // published. Publish without replacing an existing source, including
+        // when two recovery attempts race. A copy also supports Windows data
+        // volumes without hard-link support.
         let io_error = |e: std::io::Error| {
             crate::AppError::Repository(format!("failed to retain installer: {e}"))
         };
-        let mut temporary =
-            tempfile::NamedTempFile::new_in(source.parent().unwrap_or(cache)).map_err(io_error)?;
-        std::io::copy(
-            &mut std::fs::File::open(source).map_err(io_error)?,
-            temporary.as_file_mut(),
-        )
-        .map_err(io_error)?;
-        temporary.as_file().sync_all().map_err(io_error)?;
-        verify_artifact_hash(temporary.path(), artifact).map_err(super::map_updater_error)?;
-        if let Err(error) = temporary.persist_noclobber(&destination)
-            && error.error.kind() != std::io::ErrorKind::AlreadyExists
+        let mut staged = disk
+            .stage_blocking(&destination, Parents::MustExist, Access::OwnerOnly)
+            .map_err(|e| io_error(e.into()))?;
+        let mut input = disk
+            .open_blocking(source, Open::read())
+            .map_err(|e| io_error(e.into()))?;
+        std::io::copy(&mut input, staged.file()).map_err(io_error)?;
+        verify_artifact_hash(staged.path(), artifact).map_err(super::map_updater_error)?;
+        if let Err(error) = staged.commit_blocking(Replace::Never)
+            && error.reason() != reason::DISK_DESTINATION_EXISTS
         {
-            return Err(io_error(error.error));
+            return Err(io_error(error.into()));
         }
     }
     verify_artifact_hash(&destination, artifact).map_err(super::map_updater_error)?;

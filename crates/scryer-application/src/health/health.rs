@@ -29,7 +29,12 @@ fn download_client_status_health_results(
         .iter()
         .map(|path| path.trim())
         .filter(|path| !path.is_empty())
-        .filter(|path| !std::path::Path::new(path).exists())
+        .filter(|path| {
+            crate::disk::Disk::process()
+                .follow_blocking(std::path::Path::new(path))
+                .exists()
+                != Some(true)
+        })
         .map(ToString::to_string)
         .collect::<Vec<_>>();
 
@@ -379,6 +384,9 @@ impl AppUseCase {
         vec![]
     }
 
+    // disk-guard: whether a root is read-only needs its permission bits, which
+    // the owner's readings do not carry; one stat answers both questions.
+    #[allow(clippy::disallowed_methods)]
     async fn check_root_folders(&self) -> Vec<HealthCheckResult> {
         let mut results = Vec::new();
         let root_folders = match self.health_library_roots().await {
@@ -398,23 +406,20 @@ impl AppUseCase {
                 continue;
             }
             let label = health_library_root_label(&root);
-            let p = std::path::Path::new(&root.path);
-            if !p.exists() {
-                results.push(HealthCheckResult {
+            match tokio::fs::metadata(&root.path).await {
+                Err(_) => results.push(HealthCheckResult {
                     source: "RootFolder".into(),
                     status: HealthCheckStatus::Error,
                     message: format!("{label} root folder does not exist: {}", root.path),
-                });
-            } else if p
-                .metadata()
-                .map(|m| m.permissions().readonly())
-                .unwrap_or(true)
-            {
-                results.push(HealthCheckResult {
-                    source: "RootFolder".into(),
-                    status: HealthCheckStatus::Warning,
-                    message: format!("{label} root folder is read-only: {}", root.path),
-                });
+                }),
+                Ok(metadata) if metadata.permissions().readonly() => {
+                    results.push(HealthCheckResult {
+                        source: "RootFolder".into(),
+                        status: HealthCheckStatus::Warning,
+                        message: format!("{label} root folder is read-only: {}", root.path),
+                    });
+                }
+                Ok(_) => {}
             }
         }
 

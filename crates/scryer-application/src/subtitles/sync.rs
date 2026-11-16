@@ -8,13 +8,13 @@
 
 use std::{
     fmt,
-    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use crate::{
     AppError, AppResult,
+    disk::{Access, Disk, Replace},
     ports::{SubtitleSyncClient, SubtitleSyncJob, SubtitleSyncReferenceSubtitle},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -350,7 +350,11 @@ pub async fn sync_subtitle_with_plugin_sync(
                 "subtitle sync plugin returned invalid rewritten subtitle base64: {error}"
             ))
         })?;
-    write_subtitle_atomic(subtitle_path, &bytes)?;
+    // Written with owner-only access, as the rewritten file always has been.
+    Disk::process()
+        .write_atomic(subtitle_path, bytes, Replace::Allowed, Access::OwnerOnly)
+        .await
+        .map_err(|e| AppError::Repository(format!("cannot replace subtitle file: {e}")))?;
 
     tracing::info!(
         path = %subtitle_path.display(),
@@ -399,7 +403,8 @@ fn prepare_subtitle_sync_job(
     reference_subtitle_path: Option<&Path>,
     media_metadata: Option<SubtitleSyncMediaMetadataSnapshot>,
 ) -> AppResult<Option<PreparedSubtitleSyncJob>> {
-    let subtitle_content = std::fs::read(subtitle_path)
+    let subtitle_content = Disk::process()
+        .read_blocking(subtitle_path)
         .map_err(|e| AppError::Repository(format!("cannot read subtitle file: {e}")))?;
     let Some(subtitle_format) = detect_subtitle_format(subtitle_path, &subtitle_content) else {
         return Ok(None);
@@ -571,7 +576,7 @@ fn reference_subtitle_from_path(
         return None;
     }
 
-    let content = match std::fs::read(reference_path) {
+    let content = match Disk::process().read_blocking(reference_path) {
         Ok(content) => content,
         Err(error) => {
             tracing::debug!(
@@ -605,7 +610,11 @@ fn same_path(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
     }
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+    let disk = Disk::process();
+    match (
+        disk.canonicalize_blocking(left),
+        disk.canonicalize_blocking(right),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -618,24 +627,6 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window.eq_ignore_ascii_case(needle))
-}
-
-fn write_subtitle_atomic(subtitle_path: &Path, bytes: &[u8]) -> AppResult<()> {
-    let parent = subtitle_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty());
-    let mut temp = match parent {
-        Some(parent) => tempfile::NamedTempFile::new_in(parent),
-        None => tempfile::NamedTempFile::new_in("."),
-    }
-    .map_err(|e| AppError::Repository(format!("cannot create subtitle temp file: {e}")))?;
-    temp.write_all(bytes)
-        .and_then(|_| temp.flush())
-        .map_err(|e| AppError::Repository(format!("cannot write subtitle temp file: {e}")))?;
-    let temp_path = temp.into_temp_path();
-    std::fs::rename(&temp_path, subtitle_path)
-        .map_err(|e| AppError::Repository(format!("cannot replace subtitle file: {e}")))?;
-    Ok(())
 }
 
 #[cfg(test)]

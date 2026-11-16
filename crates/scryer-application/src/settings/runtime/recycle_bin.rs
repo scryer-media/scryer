@@ -224,17 +224,18 @@ impl AppUseCase {
     /// The real path of `candidate`, `None` when nothing is there, or why it
     /// cannot be told apart from either.
     fn resolve_existing_component(candidate: &Path) -> Result<Option<PathBuf>, String> {
-        match std::fs::symlink_metadata(candidate) {
-            Ok(metadata) => match std::fs::canonicalize(candidate) {
+        let disk = crate::disk::Disk::process();
+        match disk.fresh_blocking(candidate) {
+            crate::disk::PathReading::Known { kind, .. } => match disk.canonicalize_blocking(candidate) {
                 Ok(real) => Ok(Some(real)),
-                Err(error) if metadata.file_type().is_symlink() => Err(format!(
+                Err(error) if kind == crate::disk::EntryKind::Symlink => Err(format!(
                     "{} is a link that cannot be followed: {error}",
                     candidate.display()
                 )),
                 Err(error) => Err(format!("{} cannot be resolved: {error}", candidate.display())),
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(format!("{} cannot be inspected: {error}", candidate.display())),
+            crate::disk::PathReading::Missing { .. } => Ok(None),
+            _ => Err(format!("{} cannot be inspected", candidate.display())),
         }
     }
 }

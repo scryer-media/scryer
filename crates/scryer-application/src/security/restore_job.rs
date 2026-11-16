@@ -1,3 +1,4 @@
+use crate::disk::{Access, Disk, IfPresent, Parents, Replace};
 use crate::{
     AppError, AppResult, BackupBundleInspectSummary, RESTORE_WORK_BUDGET, RestoreDeadline,
     restore_refusal,
@@ -676,21 +677,20 @@ impl RestoreCoordinator {
 
 pub fn read_restore_job(data_dir: &Path) -> AppResult<Option<RestoreJobStatus>> {
     let path = data_dir.join(RESTORE_JOB_FILENAME);
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| AppError::Repository(format!("invalid restore status record: {e}"))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(AppError::Repository(format!(
-            "could not read restore status: {e}"
-        ))),
-    }
+    let bytes = Disk::process()
+        .read_blocking(&path)
+        .if_present()
+        .map_err(|e| AppError::Repository(format!("could not read restore status: {e}")))?;
+    bytes
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()
+        .map_err(|e| AppError::Repository(format!("invalid restore status record: {e}")))
 }
 
 fn persist_status(path: &Path, status: &RestoreJobStatus) -> AppResult<()> {
     use std::io::Write;
-    let directory = path.parent().expect("restore status parent");
-    let mut file = tempfile::NamedTempFile::new_in(directory)
+    let mut file = Disk::process()
+        .stage_blocking(path, Parents::MustExist, Access::OwnerOnly)
         .map_err(|e| AppError::Repository(format!("could not create restore status: {e}")))?;
     #[cfg(windows)]
     protect_restore_record(file.path())
@@ -698,11 +698,9 @@ fn persist_status(path: &Path, status: &RestoreJobStatus) -> AppResult<()> {
     serde_json::to_writer(&mut file, status)
         .map_err(|e| AppError::Repository(format!("could not encode restore status: {e}")))?;
     file.flush()
-        .and_then(|_| file.as_file().sync_all())
         .map_err(|e| AppError::Repository(format!("could not flush restore status: {e}")))?;
-    file.persist(path).map_err(|e| {
-        AppError::Repository(format!("could not persist restore status: {}", e.error))
-    })?;
+    file.commit_blocking(Replace::Allowed)
+        .map_err(|e| AppError::Repository(format!("could not persist restore status: {e}")))?;
     Ok(())
 }
 

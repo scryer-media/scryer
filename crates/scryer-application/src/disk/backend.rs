@@ -167,7 +167,8 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn rename_claimed(&self, source: &Path, dest: &Path) -> io::Result<()>;
     fn hard_link(&self, source: &Path, dest: &Path) -> io::Result<()>;
     fn symlink(&self, target: &Path, at: &Path) -> io::Result<()>;
-    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+    /// Creates `path` and its missing parents, each with `access`.
+    fn create_dir_all(&self, path: &Path, access: Access) -> io::Result<()>;
     fn create_dir(&self, path: &Path, access: Access) -> io::Result<()>;
     /// Creates `path` exclusively, writes `bytes`, and syncs it. A failure
     /// says whether this call had created the file.
@@ -203,6 +204,31 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
 /// The real filesystem.
 #[derive(Debug, Default)]
 pub(crate) struct SystemBackend;
+
+/// A directory builder that creates with `access`: a private directory keeps
+/// its owner's search permission.
+fn dir_builder(access: Access) -> std::fs::DirBuilder {
+    #[allow(unused_mut)]
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        match access {
+            Access::Default => {}
+            Access::OwnerOnly => {
+                builder.mode(0o700);
+            }
+            Access::Like(_) => {
+                if let Some(mode) = access.mode() {
+                    builder.mode(mode);
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = access;
+    builder
+}
 
 impl DiskBackend for SystemBackend {
     fn stat(&self, path: &Path) -> io::Result<RawStat> {
@@ -308,30 +334,12 @@ impl DiskBackend for SystemBackend {
         }
     }
 
-    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
-        std::fs::create_dir_all(path)
+    fn create_dir_all(&self, path: &Path, access: Access) -> io::Result<()> {
+        dir_builder(access).recursive(true).create(path)
     }
 
     fn create_dir(&self, path: &Path, access: Access) -> io::Result<()> {
-        let mut builder = std::fs::DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            match access {
-                Access::Default => {}
-                Access::OwnerOnly => {
-                    builder.mode(0o700);
-                }
-                Access::Like(_) => {
-                    if let Some(mode) = access.mode() {
-                        builder.mode(mode);
-                    }
-                }
-            }
-        }
-        #[cfg(not(unix))]
-        let _ = access;
-        builder.create(path)
+        dir_builder(access).create(path)
     }
 
     fn write_new(

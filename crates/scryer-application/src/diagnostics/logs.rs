@@ -1,6 +1,6 @@
 //! Reads the configured log file and its newest rotated archives, read only.
 
-use std::fs::File;
+use crate::disk::{Disk, Open};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -95,9 +95,15 @@ fn io_reason(error: &std::io::Error) -> String {
     }
 }
 
+fn open_log(path: &Path) -> Result<std::fs::File, String> {
+    Disk::process()
+        .open_blocking(path, Open::read())
+        .map_err(|error| io_reason(&error.into()))
+}
+
 /// The last `budget` bytes of a plain file, cut to whole lines.
 fn read_tail(path: &Path, budget: u64) -> Result<(Vec<String>, u64, bool), String> {
-    let mut file = File::open(path).map_err(|error| io_reason(&error))?;
+    let mut file = open_log(path)?;
     let length = file.metadata().map_err(|error| io_reason(&error))?.len();
     let capped = length > budget;
     if capped {
@@ -119,7 +125,7 @@ fn read_tail(path: &Path, budget: u64) -> Result<(Vec<String>, u64, bool), Strin
 
 /// A gzip archive's lines, keeping the newest `budget` bytes.
 fn read_gzip(path: &Path, budget: u64) -> Result<(Vec<String>, u64, bool), String> {
-    let file = File::open(path).map_err(|error| io_reason(&error))?;
+    let file = open_log(path)?;
     let decoder = flate2::read::GzDecoder::new(file);
     let mut lines = std::collections::VecDeque::new();
     let mut used = 0_u64;
@@ -169,20 +175,20 @@ fn rotated_archives(active: &Path) -> Vec<std::path::PathBuf> {
     let file_name = file_name.to_string_lossy();
     let prefixes = [LOG_ROTATION_MARKER, LEGACY_LOG_ROTATION_MARKER]
         .map(|marker| format!("{file_name}{marker}"));
-    let Ok(entries) = std::fs::read_dir(directory) else {
+    let Ok(entries) = Disk::process().list_blocking(directory) else {
         return Vec::new();
     };
     // Ordered by the timestamp and sequence after the marker, so archives
     // under either spelling interleave by age.
     let mut archives = entries
-        .filter_map(Result::ok)
+        .into_iter()
         .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = entry.path.file_name()?.to_string_lossy().into_owned();
             let rotation = prefixes
                 .iter()
                 .find_map(|prefix| name.strip_prefix(prefix.as_str()))?
                 .to_owned();
-            name.ends_with(".gz").then(|| (rotation, entry.path()))
+            name.ends_with(".gz").then_some((rotation, entry.path))
         })
         .collect::<Vec<_>>();
     archives.sort();
