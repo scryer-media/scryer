@@ -799,7 +799,7 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
 #[cfg(windows)]
 fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
     // Win32 error codes a filesystem returns for an operation it lacks.
     const ERROR_INVALID_FUNCTION: i32 = 1;
     const ERROR_NOT_SUPPORTED: i32 = 50;
@@ -824,8 +824,11 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     let source = wide(source)?;
     let dest = wide(dest)?;
     // SAFETY: both UTF-16 buffers are NUL-terminated and outlive the call.
-    // Without MOVEFILE_REPLACE_EXISTING an existing destination is refused.
-    let moved = unsafe { MoveFileExW(source.as_ptr(), dest.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+    // No flags, as std's own no-replace rename: without
+    // MOVEFILE_REPLACE_EXISTING an existing destination is refused, and
+    // without MOVEFILE_COPY_ALLOWED a move to another volume fails with
+    // ERROR_NOT_SAME_DEVICE instead of becoming an unverified copy.
+    let moved = unsafe { MoveFileExW(source.as_ptr(), dest.as_ptr(), 0) };
     if moved != 0 {
         return Ok(());
     }

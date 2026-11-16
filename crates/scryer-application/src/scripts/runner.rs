@@ -5,7 +5,7 @@
 //! file, runs the process in its own process group, enforces the timeout by
 //! killing that whole group, and keeps the tail of each captured stream.
 
-use crate::disk::{Access, Disk, EntryKind, Open, OwnerOnly, Parents, Replace, reason};
+use crate::disk::{Access, Disk, EntryKind, OwnerOnly, Parents, Replace, reason};
 use chrono::{DateTime, Utc};
 use scryer_domain::ScriptLanguage;
 use std::ffi::OsString;
@@ -615,7 +615,7 @@ fn plan_by_extension(
 fn parse_shebang_file(entrypoint: &Path) -> io::Result<Option<(PathBuf, Vec<OsString>)>> {
     use std::io::Read;
 
-    let mut file = Disk::process().open_blocking(entrypoint, Open::read())?;
+    let mut file = Disk::process().open_blocking(entrypoint, crate::disk::Open::read())?;
     let mut bytes = [0_u8; 4096];
     let count = file.read(&mut bytes)?;
     Ok(parse_shebang_text(&String::from_utf8_lossy(

@@ -84,6 +84,7 @@ pub struct FileIdentity {
 impl FileIdentity {
     /// `None` for a zero inode, which some network and FUSE filesystems
     /// report for every file: equality on it would prove nothing.
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn from_raw(device: u64, inode: u64) -> Option<Self> {
         (inode != 0).then_some(Self { device, inode })
     }
@@ -331,6 +332,19 @@ fn classify(error: &io::Error) -> &'static str {
     use io::ErrorKind as K;
     if is_cross_device_error(error) {
         return reason::DISK_MOVE_NEEDS_COPY;
+    }
+    // Win32's two answers for an occupied name, read from the raw code so the
+    // no-replace rename keeps its refusal whatever kind std gives them.
+    #[cfg(windows)]
+    {
+        const ERROR_FILE_EXISTS: i32 = 80;
+        const ERROR_ALREADY_EXISTS: i32 = 183;
+        if matches!(
+            error.raw_os_error(),
+            Some(ERROR_FILE_EXISTS | ERROR_ALREADY_EXISTS)
+        ) {
+            return reason::DISK_DESTINATION_EXISTS;
+        }
     }
     if let Some(refusal) = super::backend::Refused::of(error) {
         return match refusal {

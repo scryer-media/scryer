@@ -612,12 +612,8 @@ async fn verify_copy_with_retry(source: &Path, dest: &Path) -> io::Result<()> {
 }
 
 /// `Some` when the platform answered with an exclusive rename, `None` when the
-/// caller should claim the destination instead. Windows callers keep their
-/// own fallbacks.
+/// caller should claim the destination instead.
 pub(crate) async fn exclusive_rename(source: &Path, dest: &Path) -> Option<Result<(), DiskError>> {
-    if cfg!(not(any(target_os = "linux", target_os = "macos"))) {
-        return None;
-    }
     match Disk::process().rename_no_replace(source, dest).await {
         Ok(true) => Some(Ok(())),
         Ok(false) => None,
@@ -1021,6 +1017,73 @@ mod move_tests {
 
         assert_eq!(std::fs::read(&staged).expect("staged"), b"staged-payload");
         assert_eq!(std::fs::read(&source).expect("source"), b"payload");
+    }
+
+    /// NTFS renames without replacing, so an occupied destination is refused
+    /// in the one call and both files are left as they were.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_windows_exclusive_rename_refuses_an_occupied_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("dest.mkv");
+        write(&source, b"source-payload");
+        write(&dest, b"dest-payload");
+
+        let refused = exclusive_rename(&source, &dest).await;
+
+        let Some(Err(error)) = refused else {
+            panic!("an occupied destination must be refused: {refused:?}");
+        };
+        assert_eq!(error.reason(), reason::DISK_DESTINATION_EXISTS);
+        assert_eq!(std::fs::read(&source).expect("source"), b"source-payload");
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"dest-payload");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_windows_exclusive_rename_moves_to_a_free_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("dest.mkv");
+        write(&source, b"payload");
+
+        assert!(matches!(
+            exclusive_rename(&source, &dest).await,
+            Some(Ok(()))
+        ));
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+    }
+
+    /// A read-only file moves by rename, so no staging link is left behind
+    /// that its attribute would keep from being unlinked.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_windows_read_only_file_moves_without_a_staging_leftover() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("dest.mkv");
+        write(&source, b"payload");
+        let mut permissions = std::fs::metadata(&source).expect("source").permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&source, permissions).expect("mark read-only");
+
+        move_file_exclusive(&source, &dest, MoveOptions::default())
+            .await
+            .expect("the move succeeds");
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+        let names = std::fs::read_dir(dir.path())
+            .expect("list")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![std::ffi::OsString::from("dest.mkv")]);
+        let mut permissions = std::fs::metadata(&dest).expect("dest").permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&dest, permissions).expect("clear read-only");
     }
 
     #[test]
