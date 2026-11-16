@@ -61,6 +61,11 @@ pub(crate) struct LifecycleRetentionRanks {
 }
 
 impl LifecycleTitleEpisodeInventory {
+    /// The title's seasons and episodes as this inventory read them.
+    pub(crate) fn collections_and_episodes(&self) -> (&[Collection], &[Episode]) {
+        (&self.collections, &self.episodes)
+    }
+
     fn downloaded_episode_count(&self, episodes: &[Episode]) -> (i64, bool) {
         let mut count = 0;
         let mut unresolved = false;
@@ -771,6 +776,51 @@ impl AppUseCase {
         let kind = subject_coordinates_kind(kind, subject_id)?;
         self.lifecycle_subjects_for_title(kind, title, files)
             .await?
+            .into_iter()
+            .find(|subject| subject.id == subject_id)
+            .ok_or_else(subject_no_longer_belongs)
+    }
+
+    /// [`Self::lifecycle_resolve_subject`] from catalog rows alone, for a
+    /// question about the subject's monitoring. No media file is read and no
+    /// file is probed, so the subject's files and file coverage are empty;
+    /// its monitoring, episodes and ownership checks are the same.
+    pub(crate) async fn lifecycle_resolve_subject_monitoring(
+        &self,
+        kind: &str,
+        subject_id: &str,
+        title: &Title,
+    ) -> AppResult<LifecycleSubject> {
+        let kind = subject_coordinates_kind(kind, subject_id)?;
+        let subjects = if title.facet == scryer_domain::MediaFacet::Movie {
+            self.lifecycle_subjects_for_title(kind, title, &[]).await?
+        } else {
+            let collections = self
+                .services
+                .catalog
+                .shows
+                .list_collections_for_title(&title.id)
+                .await?;
+            let episodes = self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await?;
+            // No scoped files are handed in, so nothing is probed whatever
+            // the presence mode.
+            let inventory = self
+                .build_title_episode_inventory(
+                    title,
+                    collections,
+                    episodes,
+                    Vec::new(),
+                    FilePresence::Skip,
+                )
+                .await?;
+            self.lifecycle_subjects_from_episode_inventory(kind, title, &[], &inventory)?
+        };
+        subjects
             .into_iter()
             .find(|subject| subject.id == subject_id)
             .ok_or_else(subject_no_longer_belongs)

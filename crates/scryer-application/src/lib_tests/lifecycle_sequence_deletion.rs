@@ -135,11 +135,26 @@ async fn persist_completed_unmonitor(
     candidate: &scryer_domain::LifecycleCandidate,
     sequence: &LifecycleActionSequence,
 ) {
+    persist_succeeded_step(
+        fixture,
+        candidate,
+        sequence,
+        LifecycleActionStepKind::Unmonitor,
+    )
+    .await;
+}
+
+async fn persist_succeeded_step(
+    fixture: &ExecutionFixture,
+    candidate: &scryer_domain::LifecycleCandidate,
+    sequence: &LifecycleActionSequence,
+    kind: LifecycleActionStepKind,
+) {
     let step = sequence
         .steps
         .iter()
-        .find(|step| step.kind == LifecycleActionStepKind::Unmonitor)
-        .expect("unmonitor step");
+        .find(|step| step.kind == kind)
+        .expect("sequence step");
     let now = Utc::now();
     let run = LifecycleActionStepRun {
         key: LifecycleActionStepKey {
@@ -2260,4 +2275,89 @@ async fn a_candidate_without_a_started_delete_is_judged_on_live_facts() {
         .expect("candidate");
     assert!(reread.state.is_terminal(), "{reread:?}");
     assert!(path.exists());
+}
+
+/// The pass's batched step read gives every candidate the same started
+/// delete, or none, that its own read gives: no steps, a completed unmonitor,
+/// a started delete, and step rows that belong to another generation.
+#[tokio::test]
+async fn the_batched_started_delete_read_matches_per_candidate_reads() {
+    let fixture = execution_app(None);
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    update_default_library_roots(
+        &fixture.app,
+        &fixture.user,
+        MediaFacet::Movie,
+        vec![build_root_folder_entry(tempdir.path(), true)],
+    )
+    .await
+    .expect("configure isolated movie root");
+    let target = seed_title(&fixture.app, &fixture.user, "Synthetic Batched Read", true).await;
+    add_movie_file(
+        &fixture.app,
+        &target.id,
+        &tempdir.path().join("Batched/movie.mkv"),
+    )
+    .await;
+    let (_rule_set_id, mut base) =
+        arm_and_evaluate(&fixture, sequence_draft(deletion_steps())).await;
+    base.state = scryer_domain::LifecycleCandidateState::Due;
+    let sequence = LifecycleActionSequence::new(deletion_steps());
+    let variant = |id: &str| {
+        let mut candidate = base.clone();
+        candidate.id = id.to_string();
+        candidate
+    };
+
+    let no_steps = variant("synthetic-no-steps");
+    let unmonitored = variant("synthetic-unmonitored");
+    persist_completed_unmonitor(&fixture, &unmonitored, &sequence).await;
+    let delete_started = variant("synthetic-delete-started");
+    persist_completed_unmonitor(&fixture, &delete_started, &sequence).await;
+    persist_succeeded_step(
+        &fixture,
+        &delete_started,
+        &sequence,
+        LifecycleActionStepKind::DeleteFiles,
+    )
+    .await;
+    let other_generation = variant("synthetic-other-generation");
+    let mut earlier_generation = other_generation.clone();
+    earlier_generation.match_generation -= 1;
+    persist_completed_unmonitor(&fixture, &earlier_generation, &sequence).await;
+    let candidates = vec![
+        no_steps.clone(),
+        unmonitored.clone(),
+        delete_started.clone(),
+        other_generation.clone(),
+    ];
+
+    let mut batched = crate::lifecycle_rules::action_execution::StartedDeleteReads::default();
+    fixture
+        .app
+        .lifecycle_read_ahead_started_delete_steps(candidates.clone(), &mut batched)
+        .await;
+    assert_eq!(batched.read_ahead_len(), candidates.len());
+    let mut started = Vec::new();
+    for candidate in &candidates {
+        let batched_read = fixture
+            .app
+            .lifecycle_started_sequence_delete(candidate, &mut batched)
+            .await
+            .expect("batched read")
+            .map(|started| started.comparable());
+        let own_read = fixture
+            .app
+            .lifecycle_started_sequence_delete(candidate, &mut Default::default())
+            .await
+            .expect("per-candidate read")
+            .map(|started| started.comparable());
+        assert_eq!(batched_read, own_read, "{}", candidate.id);
+        started.push(batched_read.map(|(_, steps, journal)| (steps.len(), journal)));
+    }
+    assert_eq!(
+        started,
+        vec![None, Some((1, false)), Some((2, false)), None],
+        "no steps, unmonitor done, delete started, other generation"
+    );
 }

@@ -670,8 +670,10 @@ impl AppUseCase {
             .lifecycle_deletion_checkpoint_for_step(candidate, sequence_step_id)
             .await?;
         let mut checkpoint = match existing_checkpoint {
-            // A journal written for one configured root is refused by the
-            // read above: it never resumes over the subject's other roots.
+            // The read above refuses a journal that is not exactly this
+            // candidate's rule, revision, generation, action, step and
+            // subject. One that passes resumes from the files it saved, and
+            // the subject's current files must all be among them (below).
             Some(checkpoint) => checkpoint,
             None => {
                 let retention_inventory = if title.facet != scryer_domain::MediaFacet::Movie {

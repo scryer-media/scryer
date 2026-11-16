@@ -132,10 +132,34 @@ impl MonitoringSides {
     }
 }
 
+/// Other rules' recent monitoring changes, grouped by title once per rule
+/// pass: each title's (rule, direction) pairs.
+#[derive(Debug, Default)]
+pub(super) struct MonitoringActsByTitle(HashMap<String, Vec<(String, MonitoringSides)>>);
+
+impl MonitoringActsByTitle {
+    fn from_acts(acts: Vec<crate::LifecycleStepAct>) -> Self {
+        let monitor = LifecycleActionStepKind::Monitor.as_wire_str();
+        let mut by_title: HashMap<String, Vec<(String, MonitoringSides)>> = HashMap::new();
+        for act in acts {
+            let sides = MonitoringSides {
+                monitors: act.step_kind == monitor,
+                unmonitors: act.step_kind != monitor,
+            };
+            by_title
+                .entry(act.title_id)
+                .or_default()
+                .push((act.rule_set_id, sides));
+        }
+        Self(by_title)
+    }
+}
+
 /// The hold for a candidate whose steps would undo another rule's recent
-/// monitoring change on the same title, if any.
+/// monitoring change on the same title, if any. `None` acts is a picture
+/// that could not be completed, and holds.
 fn monitoring_conflict(
-    acts: &Option<Vec<crate::LifecycleStepAct>>,
+    acts: &Option<MonitoringActsByTitle>,
     candidate: &LifecycleCandidate,
     sequence: &LifecycleActionSequence,
 ) -> Option<&'static str> {
@@ -146,17 +170,12 @@ fn monitoring_conflict(
     let Some(acts) = acts else {
         return Some(execution_reason::UNKNOWN_AT_EXECUTION);
     };
-    let monitor = LifecycleActionStepKind::Monitor.as_wire_str();
-    acts.iter()
-        .filter(|act| {
-            act.title_id == candidate.title_id && act.rule_set_id != candidate.rule_set_id
-        })
-        .any(|act| {
-            let theirs = MonitoringSides {
-                monitors: act.step_kind == monitor,
-                unmonitors: act.step_kind != monitor,
-            };
-            own.opposes(&theirs)
+    acts.0
+        .get(&candidate.title_id)
+        .is_some_and(|title_acts| {
+            title_acts.iter().any(|(rule_set_id, theirs)| {
+                *rule_set_id != candidate.rule_set_id && own.opposes(theirs)
+            })
         })
         .then_some(execution_reason::MONITORING_CONFLICT)
 }
@@ -1288,7 +1307,7 @@ impl AppUseCase {
             // What other rules recently did to monitoring, read once for this
             // rule, only once something is due, and only when another
             // eligible rule declares the opposite.
-            let mut monitoring_acts: Option<Option<Vec<crate::LifecycleStepAct>>> = None;
+            let mut monitoring_acts: Option<Option<MonitoringActsByTitle>> = None;
             'walk: loop {
                 let due = self
                     .services
@@ -1556,22 +1575,23 @@ impl AppUseCase {
 
     /// What other rules did to monitoring within
     /// [`LIFECYCLE_MONITORING_CONFLICT_WINDOW_SECONDS`], for one rule about
-    /// to run. One bounded read, made only when another eligible rule
-    /// declares the opposite direction; otherwise nothing is read. `None` is
-    /// a picture Scryer could not complete: a failed read, or one that hit
-    /// its bound, which holds this rule's monitoring work for the pass.
+    /// to run, grouped by title. One bounded read, made only when another
+    /// eligible rule declares the opposite direction; otherwise nothing is
+    /// read. `None` is a picture Scryer could not complete: a failed read, or
+    /// one that hit its bound, which holds this rule's monitoring work for the
+    /// pass.
     async fn lifecycle_monitoring_acts(
         &self,
         detail: &LifecycleRuleSetDetail,
         monitoring_sides: &[(String, MonitoringSides)],
         now: chrono::DateTime<Utc>,
-    ) -> Option<Vec<crate::LifecycleStepAct>> {
+    ) -> Option<MonitoringActsByTitle> {
         let own = MonitoringSides::declared(&detail.declared_actions);
         let opposed = monitoring_sides
             .iter()
             .any(|(rule_set_id, other)| *rule_set_id != detail.rule_set.id && own.opposes(other));
         if !opposed {
-            return Some(Vec::new());
+            return Some(MonitoringActsByTitle::default());
         }
         let kinds = [
             LifecycleActionStepKind::Monitor.as_wire_str(),
@@ -1590,7 +1610,9 @@ impl AppUseCase {
             )
             .await
         {
-            Ok(acts) if acts.len() < LIFECYCLE_MONITORING_CONFLICT_SCAN_LIMIT => Some(acts),
+            Ok(acts) if acts.len() < LIFECYCLE_MONITORING_CONFLICT_SCAN_LIMIT => {
+                Some(MonitoringActsByTitle::from_acts(acts))
+            }
             Ok(_) => {
                 warn!(
                     rule_set_id = detail.rule_set.id,
@@ -2085,6 +2107,7 @@ impl AppUseCase {
                     deletion_checkpoint.as_ref(),
                     &mut input,
                     SequenceOwnEffects::All,
+                    OwnMonitoringEvidence::Catalog,
                 )
                 .await
             {
@@ -2269,6 +2292,18 @@ pub(super) enum SequenceOwnEffects {
     MonitoringAndFiles,
 }
 
+/// Where [`AppUseCase::restore_sequence_own_effects`] confirms that a
+/// completed monitoring step's own change still holds. Neither reads a media
+/// file or probes the filesystem.
+#[derive(Clone, Copy)]
+pub(super) enum OwnMonitoringEvidence<'a> {
+    /// Read the title, its seasons and its episodes from the catalog now.
+    Catalog,
+    /// The candidate's subject as this evaluation pass resolved it, with the
+    /// pass's title row: no read at all.
+    Pass(&'a super::subjects::LifecycleSubject),
+}
+
 impl AppUseCase {
     /// Put back onto `input` what this candidate's own completed steps
     /// changed, so the rule is judged on the subject as it was before its own
@@ -2295,6 +2330,7 @@ impl AppUseCase {
         deletion_checkpoint: Option<&super::scoped_deletion::ScopedDeletionCheckpoint>,
         input: &mut scryer_rules::lifecycle::LifecycleInput,
         effects: SequenceOwnEffects,
+        evidence: OwnMonitoringEvidence<'_>,
     ) -> Result<(), &'static str> {
         if let Some(checkpoint) = deletion_checkpoint {
             checkpoint.restore_sequence_owned_file_deltas(input);
@@ -2335,39 +2371,40 @@ impl AppUseCase {
                     else {
                         return Err(execution_reason::RULE_NOT_ELIGIBLE);
                     };
+                    let monitoring_changed = provenance
+                        .as_ref()
+                        .and_then(|value| value.get("monitoring_changed"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true);
+                    // A step that changed nothing has nothing to put back.
+                    if !monitoring_changed {
+                        continue;
+                    }
                     match self
-                        .lifecycle_unmonitoring_is_confirmed(
+                        .lifecycle_own_unmonitoring_holds(
                             candidate,
-                            &title,
+                            title,
                             *include_descendants,
+                            evidence,
                         )
                         .await
                     {
                         Ok(true) => {
-                            let monitoring_changed = provenance
-                                .as_ref()
-                                .and_then(|value| value.get("monitoring_changed"))
-                                .and_then(serde_json::Value::as_bool)
-                                == Some(true);
-                            let before_monitored = before
+                            if let Some(before_monitored) = before
                                 .as_ref()
                                 .and_then(|value| value.get("facts_monitored"))
-                                .and_then(serde_json::Value::as_bool);
-                            if monitoring_changed {
-                                if let Some(before_monitored) = before_monitored {
-                                    input.subject_facts_mut().monitored =
-                                        scryer_rules::lifecycle::Observation::known(
-                                            before_monitored,
-                                        );
-                                }
-                                if let Some(before_count) = before
-                                    .as_ref()
-                                    .and_then(|value| value.get("facts_monitored_episode_count"))
-                                    .and_then(serde_json::Value::as_i64)
-                                {
-                                    input.subject_facts_mut().monitored_episode_count =
-                                        scryer_rules::lifecycle::Observation::known(before_count);
-                                }
+                                .and_then(serde_json::Value::as_bool)
+                            {
+                                input.subject_facts_mut().monitored =
+                                    scryer_rules::lifecycle::Observation::known(before_monitored);
+                            }
+                            if let Some(before_count) = before
+                                .as_ref()
+                                .and_then(|value| value.get("facts_monitored_episode_count"))
+                                .and_then(serde_json::Value::as_i64)
+                            {
+                                input.subject_facts_mut().monitored_episode_count =
+                                    scryer_rules::lifecycle::Observation::known(before_count);
                             }
                         }
                         // A later external re-monitor is live input for
@@ -2394,7 +2431,7 @@ impl AppUseCase {
                     // from the matcher only while it still holds. An
                     // external unmonitor since is live input.
                     match self
-                        .lifecycle_monitoring_is_confirmed(candidate, &title)
+                        .lifecycle_own_monitoring_holds(candidate, title, evidence)
                         .await
                     {
                         Ok(true) => {
@@ -2520,24 +2557,191 @@ impl AppUseCase {
 
 /// A delete a candidate's own sequence already began: the sequence, its step
 /// rows, and the deletion journal once the delete itself has started.
-pub(super) struct StartedSequenceDelete {
+pub(crate) struct StartedSequenceDelete {
     pub(super) sequence: LifecycleActionSequence,
     pub(super) steps: Vec<LifecycleActionStepRun>,
     pub(super) checkpoint: Option<super::scoped_deletion::ScopedDeletionCheckpoint>,
 }
 
+#[cfg(test)]
+impl StartedSequenceDelete {
+    /// The sequence's step ids, the step rows read, and whether a journal
+    /// was read, for comparing two reads of the same started delete.
+    pub(crate) fn comparable(&self) -> (Vec<String>, Vec<LifecycleActionStepRun>, bool) {
+        (
+            self.sequence
+                .steps
+                .iter()
+                .map(|step| step.id.clone())
+                .collect(),
+            self.steps.clone(),
+            self.checkpoint.is_some(),
+        )
+    }
+}
+
+/// The sequence a started delete belongs to and the two steps that say it
+/// has begun.
+struct StartedDeletePlan {
+    sequence: LifecycleActionSequence,
+    delete_step_id: String,
+    unmonitor_step_id: Option<String>,
+}
+
+/// Candidates per batched step-row read: the store's page bound, three
+/// binds each, well inside both dialects' bind limits.
+const STARTED_DELETE_STEP_READ_PAGE: usize = 100;
+
+/// What one rule pass reads once for every candidate's started delete: the
+/// quality profile ids, loaded the first time a candidate needs them, and
+/// the step rows read ahead for the candidates of the current title chunk,
+/// each beside the candidate row it was read for.
+#[derive(Default)]
+pub(crate) struct StartedDeleteReads {
+    quality_profile_ids: Option<HashMap<String, String>>,
+    steps: HashMap<String, (LifecycleCandidate, Vec<LifecycleActionStepRun>)>,
+}
+
+#[cfg(test)]
+impl StartedDeleteReads {
+    /// How many candidates have step rows read ahead and not yet used.
+    pub(crate) fn read_ahead_len(&self) -> usize {
+        self.steps.len()
+    }
+}
+
 impl AppUseCase {
-    /// The delete this candidate's sequence already began, if any: its
-    /// Unmonitor prerequisite succeeded, or its DeleteFiles step left
-    /// `pending`. Reads nothing for a candidate the executor has never
-    /// leased (`observing`) or whose decided actions delete no files; for
-    /// any other it reads its step rows once, and the deletion journal only
-    /// when the DeleteFiles step itself has begun. An `Err` is a picture that
-    /// could not be completed.
-    pub(super) async fn lifecycle_started_sequence_delete(
+    /// Whether a completed Unmonitor step's change still holds: the subject
+    /// and every episode under it are unmonitored, and for a title with
+    /// `include_descendants` every season and episode too. Answers exactly
+    /// as [`Self::lifecycle_unmonitoring_is_confirmed`], without reading a
+    /// media file or probing one.
+    async fn lifecycle_own_unmonitoring_holds(
         &self,
         candidate: &LifecycleCandidate,
-    ) -> AppResult<Option<StartedSequenceDelete>> {
+        title: &Title,
+        include_descendants: bool,
+        evidence: OwnMonitoringEvidence<'_>,
+    ) -> AppResult<bool> {
+        let title_kind = scryer_domain::LifecycleRuleSubjectKind::Title.as_storage_str();
+        if candidate.title_id != title.id
+            || (candidate.subject_kind == title_kind && candidate.subject_id != title.id)
+        {
+            return Err(AppError::validation_refused(
+                crate::error_reasons::lifecycle::UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE,
+                "lifecycle unmonitoring candidate identity does not match its title",
+            ));
+        }
+        if candidate.subject_kind != title_kind {
+            let resolved;
+            let subject = match evidence {
+                OwnMonitoringEvidence::Pass(subject) => pass_subject(candidate, subject)?,
+                OwnMonitoringEvidence::Catalog => {
+                    resolved = self
+                        .lifecycle_resolve_subject_monitoring(
+                            &candidate.subject_kind,
+                            &candidate.subject_id,
+                            title,
+                        )
+                        .await?;
+                    &resolved
+                }
+            };
+            return Ok(
+                !subject.monitored && subject.episodes.iter().all(|episode| !episode.monitored)
+            );
+        }
+        match evidence {
+            OwnMonitoringEvidence::Pass(subject) => {
+                let subject = pass_subject(candidate, subject)?;
+                if title.monitored || !include_descendants {
+                    return Ok(!title.monitored);
+                }
+                let (collections, episodes) = subject
+                    .inventory
+                    .as_deref()
+                    .map(super::subjects::LifecycleTitleEpisodeInventory::collections_and_episodes)
+                    .unwrap_or((&[], &[]));
+                Ok(descendants_unmonitored(&title.id, collections, episodes))
+            }
+            OwnMonitoringEvidence::Catalog => {
+                let Some(fresh_title) = self.services.catalog.titles.get_by_id(&title.id).await?
+                else {
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", title.id),
+                    ));
+                };
+                if fresh_title.monitored || !include_descendants {
+                    return Ok(!fresh_title.monitored);
+                }
+                let collections = self
+                    .services
+                    .catalog
+                    .shows
+                    .list_collections_for_title(&title.id)
+                    .await?;
+                let episodes = self
+                    .services
+                    .catalog
+                    .shows
+                    .list_episodes_for_title(&title.id)
+                    .await?;
+                Ok(descendants_unmonitored(&title.id, &collections, &episodes))
+            }
+        }
+    }
+
+    /// Whether a completed Monitor step's change still holds: the subject is
+    /// monitored. Answers exactly as [`Self::lifecycle_monitoring_is_confirmed`],
+    /// without reading a media file or probing one.
+    async fn lifecycle_own_monitoring_holds(
+        &self,
+        candidate: &LifecycleCandidate,
+        title: &Title,
+        evidence: OwnMonitoringEvidence<'_>,
+    ) -> AppResult<bool> {
+        let title_kind = candidate.subject_kind
+            == scryer_domain::LifecycleRuleSubjectKind::Title.as_storage_str();
+        match evidence {
+            OwnMonitoringEvidence::Pass(subject) => {
+                let subject = pass_subject(candidate, subject)?;
+                Ok(if title_kind {
+                    title.monitored
+                } else {
+                    subject.monitored
+                })
+            }
+            OwnMonitoringEvidence::Catalog if title_kind => {
+                let Some(fresh) = self.services.catalog.titles.get_by_id(&title.id).await? else {
+                    return Err(AppError::not_found_reason(
+                        crate::error_reasons::catalog::TITLE_NOT_FOUND,
+                        format!("title {}", title.id),
+                    ));
+                };
+                Ok(fresh.monitored)
+            }
+            OwnMonitoringEvidence::Catalog => Ok(self
+                .lifecycle_resolve_subject_monitoring(
+                    &candidate.subject_kind,
+                    &candidate.subject_id,
+                    title,
+                )
+                .await?
+                .monitored),
+        }
+    }
+
+    /// The sequence a candidate's started delete would belong to, with its
+    /// DeleteFiles and Unmonitor step ids. `None` for a candidate that is
+    /// observing or executing, whose decided actions delete no files, or
+    /// whose sequence cannot be built. Reads the quality profile ids the
+    /// first time the pass meets a candidate that needs them.
+    async fn lifecycle_started_delete_plan(
+        &self,
+        candidate: &LifecycleCandidate,
+        reads: &mut StartedDeleteReads,
+    ) -> AppResult<Option<StartedDeletePlan>> {
         if candidate.action_kind != ACTION_SEQUENCE_KIND
             || matches!(
                 candidate.state,
@@ -2554,12 +2758,16 @@ impl AppUseCase {
         if !actions.delete_files || actions.delete_title {
             return Ok(None);
         }
-        let quality_profile_ids = if actions.set_quality_profile.is_some() {
-            self.lifecycle_quality_profile_ids_by_name().await?
-        } else {
-            HashMap::new()
+        let needs_profiles = actions.set_quality_profile.is_some();
+        if needs_profiles && reads.quality_profile_ids.is_none() {
+            reads.quality_profile_ids = Some(self.lifecycle_quality_profile_ids_by_name().await?);
+        }
+        let no_profiles = HashMap::new();
+        let quality_profile_ids = match reads.quality_profile_ids.as_ref() {
+            Some(ids) if needs_profiles => ids,
+            _ => &no_profiles,
         };
-        let Ok(sequence) = declared_candidate_sequence(candidate, &quality_profile_ids) else {
+        let Ok(sequence) = declared_candidate_sequence(candidate, quality_profile_ids) else {
             return Ok(None);
         };
         let step_of = |kind: LifecycleActionStepKind| {
@@ -2573,16 +2781,110 @@ impl AppUseCase {
             return Ok(None);
         };
         let unmonitor_step_id = step_of(LifecycleActionStepKind::Unmonitor);
-        let steps = self
-            .services
-            .customization
-            .lifecycle_evaluation
-            .list_action_steps(
-                &candidate.id,
-                candidate.match_generation,
-                candidate.revision_number,
-            )
-            .await?;
+        Ok(Some(StartedDeletePlan {
+            sequence,
+            delete_step_id,
+            unmonitor_step_id,
+        }))
+    }
+
+    /// Read ahead, in batched statements, the step rows of every candidate
+    /// among `candidates` whose started delete
+    /// [`Self::lifecycle_started_sequence_delete`] would read. A failed read
+    /// is not an answer: the candidates it covered read their own rows later,
+    /// exactly as without the read-ahead.
+    pub(crate) async fn lifecycle_read_ahead_started_delete_steps(
+        &self,
+        candidates: Vec<LifecycleCandidate>,
+        reads: &mut StartedDeleteReads,
+    ) {
+        reads.steps.clear();
+        let mut wanted = Vec::new();
+        for candidate in candidates {
+            if let Ok(Some(_)) = self.lifecycle_started_delete_plan(&candidate, reads).await {
+                wanted.push(candidate);
+            }
+        }
+        for page in wanted.chunks(STARTED_DELETE_STEP_READ_PAGE) {
+            let keys: Vec<LifecycleActionStepCandidateKey> = page
+                .iter()
+                .map(|candidate| LifecycleActionStepCandidateKey {
+                    candidate_id: candidate.id.clone(),
+                    match_generation: candidate.match_generation,
+                    revision_number: candidate.revision_number,
+                })
+                .collect();
+            let rows = match self
+                .services
+                .customization
+                .lifecycle_evaluation
+                .list_action_steps_for_candidates(&keys)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "could not read lifecycle step rows ahead; each candidate reads its own"
+                    );
+                    continue;
+                }
+            };
+            let mut by_candidate: HashMap<String, Vec<LifecycleActionStepRun>> = HashMap::new();
+            for row in rows {
+                by_candidate
+                    .entry(row.key.candidate_id.clone())
+                    .or_default()
+                    .push(row);
+            }
+            for candidate in page {
+                let steps = by_candidate.remove(&candidate.id).unwrap_or_default();
+                reads
+                    .steps
+                    .insert(candidate.id.clone(), (candidate.clone(), steps));
+            }
+        }
+    }
+
+    /// The delete this candidate's sequence already began, if any: its
+    /// Unmonitor prerequisite succeeded, or its DeleteFiles step left
+    /// `pending`. Reads nothing for a candidate that is observing or
+    /// executing, or whose decided actions delete no files. Any other
+    /// candidate, a due or pending one included even when the executor has
+    /// never leased it, has its step rows read: from the pass's read-ahead
+    /// when that read saw this exact candidate row, otherwise on its own.
+    /// The deletion journal is read only when the DeleteFiles step itself
+    /// has begun. An `Err` is a picture that could not be completed.
+    pub(crate) async fn lifecycle_started_sequence_delete(
+        &self,
+        candidate: &LifecycleCandidate,
+        reads: &mut StartedDeleteReads,
+    ) -> AppResult<Option<StartedSequenceDelete>> {
+        let Some(StartedDeletePlan {
+            sequence,
+            delete_step_id,
+            unmonitor_step_id,
+        }) = self.lifecycle_started_delete_plan(candidate, reads).await?
+        else {
+            return Ok(None);
+        };
+        // The executor writes step rows only under a lease, and taking one
+        // rewrites the candidate's state and `updated_at`. Rows read ahead
+        // for a candidate row identical to this one are therefore current.
+        let steps = match reads.steps.remove(&candidate.id) {
+            Some((read_with, steps)) if read_with == *candidate => steps,
+            _ => {
+                self.services
+                    .customization
+                    .lifecycle_evaluation
+                    .list_action_steps(
+                        &candidate.id,
+                        candidate.match_generation,
+                        candidate.revision_number,
+                    )
+                    .await?
+            }
+        };
         let delete_started = steps.iter().any(|run| {
             run.key.step_id == delete_step_id
                 && run.state != scryer_domain::LifecycleActionStepState::Pending
@@ -2606,6 +2908,34 @@ impl AppUseCase {
             checkpoint,
         }))
     }
+}
+
+/// The pass's subject, refused when it is not the candidate's.
+fn pass_subject<'a>(
+    candidate: &LifecycleCandidate,
+    subject: &'a super::subjects::LifecycleSubject,
+) -> AppResult<&'a super::subjects::LifecycleSubject> {
+    if subject.id != candidate.subject_id || subject.kind.as_storage_str() != candidate.subject_kind
+    {
+        return Err(AppError::Repository(
+            "lifecycle pass subject does not match its candidate".into(),
+        ));
+    }
+    Ok(subject)
+}
+
+/// Every season and episode of the title is unmonitored.
+fn descendants_unmonitored(
+    title_id: &str,
+    collections: &[scryer_domain::Collection],
+    episodes: &[scryer_domain::Episode],
+) -> bool {
+    collections
+        .iter()
+        .all(|collection| collection.title_id == title_id && !collection.monitored)
+        && episodes
+            .iter()
+            .all(|episode| episode.title_id == title_id && !episode.monitored)
 }
 
 /// The sequence a declared rule runs for one candidate, built from the
@@ -2712,5 +3042,149 @@ impl AppUseCase {
         } else {
             Ok(CandidateOutcome::LeaseLost)
         }
+    }
+}
+
+#[cfg(test)]
+mod monitoring_conflict_lookup_tests {
+    use super::*;
+    use crate::lifecycle_rules::{LifecycleActionStep, LifecycleActionStepParameters};
+
+    fn candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
+        let now = Utc::now();
+        LifecycleCandidate {
+            id: format!("{rule_set_id}-{title_id}"),
+            rule_set_id: rule_set_id.to_string(),
+            revision_number: 1,
+            matcher_content_hash: "hash".to_string(),
+            title_id: title_id.to_string(),
+            library_id: "library-a".to_string(),
+            facet: "movie".to_string(),
+            subject_kind: "title".to_string(),
+            subject_id: title_id.to_string(),
+            match_generation: 1,
+            state: LifecycleCandidateState::Due,
+            state_reason: "due".to_string(),
+            reason_codes: vec![],
+            action_kind: ACTION_SEQUENCE_KIND.to_string(),
+            decided_actions_json: None,
+            actions_conflict: None,
+            grace_days: 0,
+            first_matched_at: now,
+            last_matched_at: now,
+            due_at: now,
+            last_evaluated_at: now,
+            held_since: None,
+            action_attempts: 0,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn sequence(kind: LifecycleActionStepKind) -> LifecycleActionSequence {
+        let parameters = match kind {
+            LifecycleActionStepKind::Unmonitor => LifecycleActionStepParameters::Unmonitor {
+                include_descendants: true,
+            },
+            _ => LifecycleActionStepParameters::None,
+        };
+        LifecycleActionSequence::new(vec![LifecycleActionStep {
+            id: "only".to_string(),
+            kind,
+            parameters,
+        }])
+    }
+
+    fn act(
+        rule_set_id: &str,
+        title_id: &str,
+        kind: LifecycleActionStepKind,
+    ) -> crate::LifecycleStepAct {
+        crate::LifecycleStepAct {
+            rule_set_id: rule_set_id.to_string(),
+            title_id: title_id.to_string(),
+            step_kind: kind.as_wire_str().to_string(),
+        }
+    }
+
+    /// The linear scan the grouped lookup replaced.
+    fn scanned(
+        acts: &[crate::LifecycleStepAct],
+        candidate: &LifecycleCandidate,
+        sequence: &LifecycleActionSequence,
+    ) -> Option<&'static str> {
+        let own = MonitoringSides::of_sequence(sequence);
+        if !own.monitors && !own.unmonitors {
+            return None;
+        }
+        let monitor = LifecycleActionStepKind::Monitor.as_wire_str();
+        acts.iter()
+            .filter(|act| {
+                act.title_id == candidate.title_id && act.rule_set_id != candidate.rule_set_id
+            })
+            .any(|act| {
+                own.opposes(&MonitoringSides {
+                    monitors: act.step_kind == monitor,
+                    unmonitors: act.step_kind != monitor,
+                })
+            })
+            .then_some(execution_reason::MONITORING_CONFLICT)
+    }
+
+    #[test]
+    fn the_grouped_lookup_answers_as_the_linear_scan() {
+        use LifecycleActionStepKind as Kind;
+        let acts = vec![
+            act("rule-b", "title-1", Kind::Monitor),
+            act("rule-a", "title-1", Kind::Unmonitor),
+            act("rule-b", "title-2", Kind::DeleteFiles),
+            act("rule-a", "title-3", Kind::Monitor),
+            act("rule-c", "title-3", Kind::DeleteTitleAndFiles),
+        ];
+        let grouped = Some(MonitoringActsByTitle::from_acts(acts.clone()));
+        let mut conflicts = 0;
+        for rule in ["rule-a", "rule-b", "rule-c"] {
+            for title in ["title-1", "title-2", "title-3", "title-4"] {
+                for kind in [
+                    Kind::Monitor,
+                    Kind::Unmonitor,
+                    Kind::DeleteFiles,
+                    Kind::DeleteTitleAndFiles,
+                    Kind::Search,
+                ] {
+                    let candidate = candidate(rule, title);
+                    let sequence = sequence(kind);
+                    let expected = scanned(&acts, &candidate, &sequence);
+                    conflicts += usize::from(expected.is_some());
+                    assert_eq!(
+                        monitoring_conflict(&grouped, &candidate, &sequence),
+                        expected,
+                        "{rule} {title} {kind:?}"
+                    );
+                }
+            }
+        }
+        assert!(conflicts > 0, "the grid includes conflicts");
+    }
+
+    #[test]
+    fn an_incomplete_picture_holds_only_monitoring_work() {
+        let candidate = candidate("rule-a", "title-1");
+        assert_eq!(
+            monitoring_conflict(
+                &None,
+                &candidate,
+                &sequence(LifecycleActionStepKind::Unmonitor)
+            ),
+            Some(execution_reason::UNKNOWN_AT_EXECUTION)
+        );
+        assert_eq!(
+            monitoring_conflict(
+                &None,
+                &candidate,
+                &sequence(LifecycleActionStepKind::Search)
+            ),
+            None
+        );
     }
 }

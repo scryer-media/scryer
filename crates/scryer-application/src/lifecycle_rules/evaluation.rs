@@ -1189,6 +1189,8 @@ impl AppUseCase {
         // conflict marker.
         let cross_level =
             super::cross_level::cross_level_conflict_possible(&detail.declared_actions);
+        // Read once per rule pass for every candidate's started delete.
+        let mut started_reads = super::action_execution::StartedDeleteReads::default();
         let mut after_id = None;
         loop {
             // The rule's libraries filter in the page read (none means all).
@@ -1248,6 +1250,10 @@ impl AppUseCase {
                     Some(&mut batch_cache.file_presence),
                 )
                 .await;
+            // Every title of the chunk has its subjects built first, so the
+            // step rows of the chunk's candidates are read together before
+            // any subject is reconciled.
+            let mut prepared = Vec::with_capacity(chunk.len());
             for title in chunk {
                 let files = files_by_title
                     .get(&title.id)
@@ -1370,17 +1376,40 @@ impl AppUseCase {
                     .await;
                     title_input = Some(input);
                 }
+                if !evaluates_titles {
+                    subjects.retain(|subject| {
+                        subject.kind != scryer_domain::LifecycleRuleSubjectKind::Title
+                    });
+                }
+                prepared.push((
+                    title,
+                    subjects,
+                    title_input,
+                    people,
+                    watch,
+                    claims,
+                    series_movies,
+                ));
+            }
+            // Only a rule that deletes media can have a delete under way.
+            if detail.declared_actions.destructive {
+                let candidates = self
+                    .lifecycle_chunk_active_candidates(
+                        &rule_set.id,
+                        detail.rule_set.current_revision_number,
+                        prepared.iter().flat_map(|(_, subjects, ..)| subjects),
+                    )
+                    .await;
+                self.lifecycle_read_ahead_started_delete_steps(candidates, &mut started_reads)
+                    .await;
+            }
+            for (title, subjects, title_input, people, watch, claims, series_movies) in prepared {
                 let mut decisions: Vec<LifecycleSubjectDecision> = Vec::new();
                 // A subject that failed or lost a write this pass is missing
                 // from `decisions`, so its partners cannot be judged free of
                 // it: markers may then be set but never cleared.
                 let mut incomplete = false;
                 for subject in subjects {
-                    if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title
-                        && !evaluates_titles
-                    {
-                        continue;
-                    }
                     in_scope.insert(subject.id.clone());
                     match self
                         .reconcile_lifecycle_title(
@@ -1399,6 +1428,7 @@ impl AppUseCase {
                             &excluded,
                             evaluation_time,
                             &mut batch_cache.storage,
+                            &mut started_reads,
                             &mut counts,
                             &mut incomplete,
                         )
@@ -1446,6 +1476,46 @@ impl AppUseCase {
         .await?;
 
         Ok(counts)
+    }
+
+    /// The live candidates of the rule's current revision for a chunk's
+    /// subjects, one read per subject kind. A failed read is left out: those
+    /// candidates then read their own step rows when reconciled.
+    async fn lifecycle_chunk_active_candidates<'s>(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subjects: impl Iterator<Item = &'s super::subjects::LifecycleSubject>,
+    ) -> Vec<LifecycleCandidate> {
+        let mut ids_by_kind: HashMap<&'static str, Vec<String>> = HashMap::new();
+        for subject in subjects {
+            ids_by_kind
+                .entry(subject.kind.as_storage_str())
+                .or_default()
+                .push(subject.id.clone());
+        }
+        let mut candidates = Vec::new();
+        for (kind, ids) in ids_by_kind {
+            match self
+                .services
+                .customization
+                .lifecycle_evaluation
+                .list_active_subject_candidates(rule_set_id, kind, &ids)
+                .await
+            {
+                Ok(found) => candidates.extend(
+                    found
+                        .into_iter()
+                        .filter(|candidate| candidate.revision_number == revision_number),
+                ),
+                Err(error) => debug!(
+                    rule_set_id,
+                    error = %error,
+                    "could not read a chunk's lifecycle candidates ahead; each reads its own"
+                ),
+            }
+        }
+        candidates
     }
 
     /// Record on each of one title's live candidates whether the rule decided
@@ -1568,6 +1638,7 @@ impl AppUseCase {
         excluded: &[LifecycleRuleExclusion],
         evaluation_time: DateTime<Utc>,
         storage: &mut LifecyclePassStorage,
+        started_reads: &mut super::action_execution::StartedDeleteReads,
         counts: &mut RuleCounts,
         incomplete: &mut bool,
     ) -> AppResult<Option<LifecycleSubjectDecision>> {
@@ -1676,7 +1747,10 @@ impl AppUseCase {
         // subject as it was before that work, so a half-finished delete does
         // not cancel itself; any outside change still reads live.
         let started_delete = match active.as_ref() {
-            Some(candidate) => match self.lifecycle_started_sequence_delete(candidate).await {
+            Some(candidate) => match self
+                .lifecycle_started_sequence_delete(candidate, started_reads)
+                .await
+            {
                 Ok(started) => started,
                 Err(error) => {
                     warn!(
@@ -1741,6 +1815,7 @@ impl AppUseCase {
                     started.checkpoint.as_ref(),
                     &mut input,
                     super::action_execution::SequenceOwnEffects::MonitoringAndFiles,
+                    super::action_execution::OwnMonitoringEvidence::Pass(subject),
                 )
                 .await
         {
