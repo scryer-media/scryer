@@ -767,7 +767,7 @@ fn extract_archive(
     // path out of this function including the `?` returns below.
     let disk = Disk::process();
     let workspace = disk
-        .scratch_dir_blocking("scryer-archive-extract-")
+        .scratch_dir_blocking("scry-ex-")
         .map_err(|error| {
             ArchiveExtractFailure::temporary(format!(
                 "failed to create archive extraction workspace: {}",

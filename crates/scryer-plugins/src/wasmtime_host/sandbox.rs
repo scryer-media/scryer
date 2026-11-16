@@ -218,7 +218,7 @@ pub(crate) fn build_component_sandbox(
     preopens: &[PreopenSpec],
 ) -> AppResult<PreparedComponentSandbox> {
     let scratch = Disk::process()
-        .scratch_dir_blocking(".scryer-archive-scratch-")
+        .scratch_dir_blocking(".scry-sc-")
         .map_err(|error| {
             AppError::Repository(format!(
                 "failed to create archive plugin scratch dir: {}",
