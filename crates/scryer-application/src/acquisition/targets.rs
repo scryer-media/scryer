@@ -696,32 +696,22 @@ impl AppUseCase {
                 .await;
         }
         if let Some(link_id) = series_movie_link_id {
-            return Ok(repo
-                .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                    title_id: Some(title_id.to_string()),
-                    limit: 500,
-                    ..AcquisitionScopeStatesQuery::default()
-                })
-                .await?
-                .into_iter()
-                .find(|existing| existing.series_movie_link_id.as_deref() == Some(link_id)));
+            return repo
+                .get_acquisition_scope_state_for_scope(
+                    title_id,
+                    AcquisitionScopeKey::SeriesMovieLink(link_id),
+                )
+                .await;
         }
         if let Some(collection_id) = collection_id {
-            return Ok(repo
-                .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                    title_id: Some(title_id.to_string()),
-                    limit: 500,
-                    ..AcquisitionScopeStatesQuery::default()
-                })
-                .await?
-                .into_iter()
-                .find(|existing| {
-                    // Episode rows carry their owning collection id too, so the
-                    // collection scope only matches a row that is not an
-                    // episode's.
-                    existing.episode_id.is_none()
-                        && existing.collection_id.as_deref() == Some(collection_id)
-                }));
+            // Episode rows carry their owning collection id too; the collection
+            // key only matches a row that is not an episode's.
+            return repo
+                .get_acquisition_scope_state_for_scope(
+                    title_id,
+                    AcquisitionScopeKey::Collection(collection_id),
+                )
+                .await;
         }
         repo.get_acquisition_scope_state_for_title(title_id, None)
             .await

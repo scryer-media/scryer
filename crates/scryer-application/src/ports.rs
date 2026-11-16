@@ -10514,6 +10514,14 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         episode_id: Option<&str>,
     ) -> AppResult<Option<AcquisitionScopeState>>;
 
+    /// The one acquisition state row for `scope` under `title_id`, read by the
+    /// scope's own key. Returns the same projection as the list read.
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>>;
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()>;
 
     async fn delete_acquisition_scope_states_for_collection(
