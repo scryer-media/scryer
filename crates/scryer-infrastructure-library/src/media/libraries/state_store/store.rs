@@ -817,7 +817,6 @@ async fn fetch_seed_target_tx(
 
 /// A decision's bound arguments, built once so a batch and its per-row
 /// replay write exactly the same values.
-#[derive(Clone)]
 struct PreparedReleaseDecision {
     identity: ReleaseDecisionIdentityArgs,
     insert_args: Vec<SqlArg>,
@@ -898,6 +897,9 @@ impl PreparedReleaseDecision {
                 None
             }
         };
+        // Held once: the insert and update argument lists, and every copy of
+        // this prepared decision a transaction attempt takes, share the bytes.
+        let explanation_json: Option<Arc<[u8]>> = explanation_json.map(Arc::from);
         // The same verdict, on the same release, for the same scope is one
         // ledger row that ages forward — not a new row per re-evaluation.
         // RSS re-sees the same feed every cadence, so an idle instance was
@@ -919,7 +921,7 @@ impl PreparedReleaseDecision {
             SqlArg::I32(decision.candidate_score),
             SqlArg::OptI32(decision.current_score),
             SqlArg::OptI32(decision.score_delta),
-            SqlArg::OptBytes(explanation_json.clone()),
+            SqlArg::OptSharedBytes(explanation_json.clone()),
             created_at.clone(),
         ];
         let update_args = vec![
@@ -927,7 +929,7 @@ impl PreparedReleaseDecision {
             SqlArg::I32(decision.candidate_score),
             SqlArg::OptI32(decision.current_score),
             SqlArg::OptI32(decision.score_delta),
-            SqlArg::OptBytes(explanation_json),
+            SqlArg::OptSharedBytes(explanation_json),
             created_at,
         ];
         Ok(Self {
@@ -990,10 +992,10 @@ async fn write_release_decision_tx(
 impl WantedStore {
     async fn write_prepared_release_decision(
         &self,
-        prepared: PreparedReleaseDecision,
+        prepared: Arc<PreparedReleaseDecision>,
     ) -> AppResult<String> {
         SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decision", move |tx| {
-            let prepared = prepared.clone();
+            let prepared = Arc::clone(&prepared);
             Box::pin(async move { write_release_decision_tx(tx, &prepared).await })
         })
         .await
@@ -1422,26 +1424,34 @@ impl AcquisitionScopeStateRepository for WantedStore {
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
         let prepared = PreparedReleaseDecision::of(&self.datastore, decision)?;
-        self.write_prepared_release_decision(prepared).await
+        self.write_prepared_release_decision(Arc::new(prepared))
+            .await
     }
 
     async fn insert_release_decisions(
         &self,
         decisions: &[ReleaseDecision],
     ) -> Vec<AppResult<String>> {
-        let prepared = PreparedReleaseDecision::of_batch(&self.datastore, decisions).await;
+        // Shared, not copied: the batch transaction, each of its attempts, and
+        // the per-row replay all read the same prepared values.
+        let prepared = PreparedReleaseDecision::of_batch(&self.datastore, decisions)
+            .await
+            .into_iter()
+            .map(|prepared| prepared.map(Arc::new))
+            .collect::<Vec<_>>();
         let batch = prepared
             .iter()
-            .map(|prepared| prepared.as_ref().ok().cloned())
-            .collect::<Option<Vec<_>>>();
+            .map(|prepared| prepared.as_ref().ok().map(Arc::clone))
+            .collect::<Option<Vec<_>>>()
+            .map(Arc::<[Arc<PreparedReleaseDecision>]>::from);
         if let Some(batch) = batch.filter(|batch| batch.len() > 1) {
             let written =
                 SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decisions", {
                     move |tx| {
-                        let batch = batch.clone();
+                        let batch = Arc::clone(&batch);
                         Box::pin(async move {
                             let mut ids = Vec::with_capacity(batch.len());
-                            for prepared in &batch {
+                            for prepared in batch.iter() {
                                 ids.push(write_release_decision_tx(tx, prepared).await?);
                             }
                             Ok(ids)
