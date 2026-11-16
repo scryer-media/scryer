@@ -108,18 +108,72 @@ pub fn compress_blob(bytes: &[u8], level: i32) -> AppResult<Vec<u8>> {
     compress_with_thread_context(bytes, level, true).map_err(repo_err)
 }
 
-/// Decompresses one zstd frame, refusing output larger than `max_bytes`.
-/// A single frame that records a content size within `max_bytes` decodes into
-/// a buffer of exactly that size through a reused context. Any other input
-/// streams into a buffer that grows with the data rather than being sized to
-/// `max_bytes` up front.
-pub fn decompress_blob(encoded: &[u8], max_bytes: usize) -> AppResult<Vec<u8>> {
-    if let Some(size) = single_frame_content_size(encoded)
-        && size <= max_bytes as u64
-    {
-        return decompress_with_thread_context(encoded, size as usize).map_err(repo_err);
+/// Largest recorded content size [`decompress_blob`] decodes in one bulk
+/// call. Media analyses are a few kilobytes, domain event payloads are capped
+/// at 256 KiB and the compressed JSON helper already bulk-decodes up to
+/// 1 MiB, so ordinary values stay on the fast path, while a header can never
+/// make a read reserve more than this before its data has been checked.
+const BULK_DECODE_MAX_BYTES: usize = 1024 * 1024;
+
+/// The largest window the streaming decoder accepts: zstd's default
+/// `windowLogMax` of 27. The bulk decoder does not check a frame's window, so
+/// only frames within this go to it.
+const STREAMING_WINDOW_MAX_BYTES: u64 = 1 << 27;
+
+#[derive(Debug, PartialEq, Eq)]
+enum DecodePath {
+    /// One bulk call into a buffer of exactly this many bytes.
+    Bulk(usize),
+    Streaming,
+}
+
+/// How [`decompress_blob`] decodes `encoded`. Only a single frame that
+/// records a content size within both `max_bytes` and
+/// [`BULK_DECODE_MAX_BYTES`], with a window the streaming decoder would also
+/// accept, takes the bulk path; everything else streams exactly as before.
+fn decode_path(encoded: &[u8], max_bytes: usize) -> DecodePath {
+    match single_frame_content_size(encoded) {
+        Some(size)
+            if size <= max_bytes.min(BULK_DECODE_MAX_BYTES) as u64
+                && frame_window_within_streaming_limit(encoded) =>
+        {
+            DecodePath::Bulk(size as usize)
+        }
+        _ => DecodePath::Streaming,
     }
-    decompress_blob_streaming(encoded, max_bytes)
+}
+
+/// Whether a zstd frame's window is one the streaming decoder accepts. A
+/// single-segment frame's window is its content size; any other frame
+/// carries a window descriptor right after the frame header descriptor.
+fn frame_window_within_streaming_limit(encoded: &[u8]) -> bool {
+    if !encoded.starts_with(&ZSTD_FRAME_MAGIC) {
+        return false;
+    }
+    let Some(&descriptor) = encoded.get(4) else {
+        return false;
+    };
+    if descriptor & 0x20 != 0 {
+        return true;
+    }
+    let Some(&window_descriptor) = encoded.get(5) else {
+        return false;
+    };
+    let window_base = 1_u64 << (10 + u32::from(window_descriptor >> 3));
+    let window = window_base + (window_base / 8) * u64::from(window_descriptor & 0x07);
+    window <= STREAMING_WINDOW_MAX_BYTES
+}
+
+/// Decompresses one zstd frame, refusing output larger than `max_bytes`.
+/// A small single frame that records its content size decodes into a buffer
+/// of exactly that size through a reused context (see [`decode_path`]). Any
+/// other input streams into a buffer that grows with the data rather than
+/// being sized up front.
+pub fn decompress_blob(encoded: &[u8], max_bytes: usize) -> AppResult<Vec<u8>> {
+    match decode_path(encoded, max_bytes) {
+        DecodePath::Bulk(size) => decompress_with_thread_context(encoded, size).map_err(repo_err),
+        DecodePath::Streaming => decompress_blob_streaming(encoded, max_bytes),
+    }
 }
 
 fn decompress_blob_streaming(encoded: &[u8], max_bytes: usize) -> AppResult<Vec<u8>> {
@@ -333,6 +387,110 @@ mod tests {
             decompress_blob_streaming(&encoded, input.len() - 1)
                 .expect_err("over the cap")
                 .to_string()
+        );
+    }
+
+    /// A hand-built frame holding `payload_len` bytes of `x` in one raw block,
+    /// with the given window descriptor and a four-byte recorded content
+    /// size.
+    fn raw_frame(window_descriptor: u8, content_size: u32, payload_len: u32) -> Vec<u8> {
+        let mut frame = ZSTD_FRAME_MAGIC.to_vec();
+        // Four-byte content size field, not single-segment, no checksum.
+        frame.push(0b1000_0000);
+        frame.push(window_descriptor);
+        frame.extend_from_slice(&content_size.to_le_bytes());
+        // Last block, raw.
+        let block_header = 1 | (payload_len << 3);
+        frame.extend_from_slice(&block_header.to_le_bytes()[..3]);
+        frame.extend(std::iter::repeat_n(b'x', payload_len as usize));
+        frame
+    }
+
+    #[test]
+    fn frames_above_the_bulk_bound_decode_by_streaming() {
+        let input = b"synthetic payload ".repeat(BULK_DECODE_MAX_BYTES / 16);
+        assert!(input.len() > BULK_DECODE_MAX_BYTES);
+        let encoded = compress_blob(&input, 3).expect("compress");
+        assert_eq!(
+            single_frame_content_size(&encoded),
+            Some(input.len() as u64)
+        );
+        assert_eq!(
+            decode_path(&encoded, LOCATION_PLAN_MAX_BYTES),
+            DecodePath::Streaming
+        );
+        assert_eq!(
+            decompress_blob(&encoded, LOCATION_PLAN_MAX_BYTES).expect("decode"),
+            input
+        );
+
+        let small = b"synthetic payload ".repeat(100);
+        let encoded = compress_blob(&small, 3).expect("compress");
+        assert_eq!(
+            decode_path(&encoded, LOCATION_PLAN_MAX_BYTES),
+            DecodePath::Bulk(small.len())
+        );
+        assert_eq!(
+            decode_path(&encoded, small.len() - 1),
+            DecodePath::Streaming
+        );
+    }
+
+    #[test]
+    fn a_false_large_content_size_streams_and_is_refused() {
+        let frame = raw_frame(0x00, 900_000_000, 1);
+        assert_eq!(single_frame_content_size(&frame), Some(900_000_000));
+        assert_eq!(
+            decode_path(&frame, LOCATION_PLAN_MAX_BYTES),
+            DecodePath::Streaming
+        );
+        assert!(decompress_blob(&frame, LOCATION_PLAN_MAX_BYTES).is_err());
+        // The same frame claiming its true size decodes.
+        let honest = raw_frame(0x00, 1, 1);
+        assert_eq!(decode_path(&honest, 1024), DecodePath::Bulk(1));
+        assert_eq!(decompress_blob(&honest, 1024).expect("decode"), b"x");
+    }
+
+    #[test]
+    fn a_window_above_the_streaming_limit_is_refused_as_before() {
+        // A 256 MiB window (exponent 18, mantissa 0) over a payload larger
+        // than the streaming decoder's first read, so it checks the window.
+        let payload_len = 100_000_u32;
+        let payload = vec![b'x'; payload_len as usize];
+        let over = raw_frame(18 << 3, payload_len, payload_len);
+        // The bulk decoder alone would accept it.
+        assert_eq!(
+            zstd::bulk::decompress(&over, payload_len as usize).expect("bulk"),
+            payload
+        );
+        for max_bytes in [payload_len as usize, LOCATION_PLAN_MAX_BYTES] {
+            assert_eq!(decode_path(&over, max_bytes), DecodePath::Streaming);
+            assert!(decompress_blob_streaming(&over, max_bytes).is_err());
+            assert!(decompress_blob(&over, max_bytes).is_err());
+        }
+
+        // A one-byte frame with the same window decodes exactly as streaming
+        // always has.
+        let tiny_over = raw_frame(18 << 3, 1, 1);
+        assert_eq!(decode_path(&tiny_over, 1024), DecodePath::Streaming);
+        assert_eq!(
+            outcome(decompress_blob(&tiny_over, 1024)),
+            outcome(decompress_blob_streaming(&tiny_over, 1024))
+        );
+
+        // Exactly 128 MiB is accepted on either path.
+        let at_limit = raw_frame(17 << 3, payload_len, payload_len);
+        assert_eq!(
+            decode_path(&at_limit, LOCATION_PLAN_MAX_BYTES),
+            DecodePath::Bulk(payload_len as usize)
+        );
+        assert_eq!(
+            decompress_blob(&at_limit, LOCATION_PLAN_MAX_BYTES).expect("decode"),
+            payload
+        );
+        assert_eq!(
+            decompress_blob_streaming(&at_limit, LOCATION_PLAN_MAX_BYTES).expect("stream"),
+            payload
         );
     }
 
