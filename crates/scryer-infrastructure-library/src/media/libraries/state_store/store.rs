@@ -536,6 +536,22 @@ const WANTED_LATEST_DECISION_JOIN_SQL: &str = "
             LIMIT 1
        )";
 
+/// The columns of the joined `latest_decision`, each prefixed
+/// `latest_decision_` for [`release_decision_from_row`]. Ends with a comma.
+const WANTED_LATEST_DECISION_COLUMNS_SQL: &str = "
+            latest_decision.id AS latest_decision_id,
+            latest_decision.wanted_item_id AS latest_decision_wanted_item_id,
+            latest_decision.title_id AS latest_decision_title_id,
+            latest_decision.release_title AS latest_decision_release_title,
+            latest_decision.release_url AS latest_decision_release_url,
+            latest_decision.release_size_bytes AS latest_decision_release_size_bytes,
+            latest_decision.decision_code AS latest_decision_decision_code,
+            latest_decision.candidate_score AS latest_decision_candidate_score,
+            latest_decision.current_score AS latest_decision_current_score,
+            latest_decision.score_delta AS latest_decision_score_delta,
+            latest_decision.explanation_json AS latest_decision_explanation_json,
+            latest_decision.created_at AS latest_decision_created_at,";
+
 /// Title ids per statement once a title-id read is too long for one.
 const ID_LIST_CHUNK: usize = 1_000;
 
@@ -574,19 +590,7 @@ fn wanted_item_projection_sql(projection: WantedProjection) -> String {
        LEFT JOIN libraries ON libraries.id = t.library_id
        LEFT JOIN episodes e ON e.id = w.episode_id{}",
         if with_decision {
-            "
-            latest_decision.id AS latest_decision_id,
-            latest_decision.wanted_item_id AS latest_decision_wanted_item_id,
-            latest_decision.title_id AS latest_decision_title_id,
-            latest_decision.release_title AS latest_decision_release_title,
-            latest_decision.release_url AS latest_decision_release_url,
-            latest_decision.release_size_bytes AS latest_decision_release_size_bytes,
-            latest_decision.decision_code AS latest_decision_decision_code,
-            latest_decision.candidate_score AS latest_decision_candidate_score,
-            latest_decision.current_score AS latest_decision_current_score,
-            latest_decision.score_delta AS latest_decision_score_delta,
-            latest_decision.explanation_json AS latest_decision_explanation_json,
-            latest_decision.created_at AS latest_decision_created_at,"
+            WANTED_LATEST_DECISION_COLUMNS_SQL
         } else {
             ""
         },
@@ -1494,6 +1498,35 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .iter()
             .map(wanted_row_to_item)
             .collect()
+    }
+
+    async fn list_latest_release_decisions_for_acquisition_scope_states(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, ReleaseDecision>> {
+        let mut decisions = std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(decisions);
+        }
+        let exec = self.datastore.read_exec();
+        let (ids, per_statement) = id_list_statements(ids, 1, 0, max_binds(&exec), ID_LIST_CHUNK);
+        for chunk in ids.chunks(per_statement) {
+            let sql = format!(
+                "SELECT{WANTED_LATEST_DECISION_COLUMNS_SQL}
+                        w.id AS scope_state_id
+                   FROM wanted_items w{WANTED_LATEST_DECISION_JOIN_SQL}
+                  WHERE w.id IN ({})
+                    AND latest_decision.id IS NOT NULL",
+                placeholders(chunk.len())
+            );
+            let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+            for row in SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await? {
+                let decision_id = row.text("latest_decision_id")?;
+                let decision = release_decision_from_row(&row, "latest_decision_", decision_id)?;
+                decisions.insert(row.text("scope_state_id")?, decision);
+            }
+        }
+        Ok(decisions)
     }
 
     async fn list_acquisition_scope_statuses_by_ids(

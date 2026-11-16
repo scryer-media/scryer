@@ -582,3 +582,141 @@ async fn sqlite_wanted_list_filters_pages_and_counts_in_sql() {
     assert!(by_id("w2").latest_release_decision.is_none());
     assert!(!by_id("w5").mismatch_recovery_eligible);
 }
+
+/// Seeds a series with `episodes` episode scopes. Episode `n` has `n % 3`
+/// decisions, the newest last, so some scopes have none, one, or several.
+async fn seed_series_with_many_episodes(
+    datastore: &StoreDatastore,
+    store: &TitleStore,
+    episodes: usize,
+) {
+    let mut title = fixture_title("wl-series-many", "Slate Meadow", None);
+    title.facet = MediaFacet::Series;
+    title.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    title.root_folder_id = super::release_day_tests::root_for(datastore, &title.library_id).await;
+    TitleRepository::create(store, title).await.unwrap();
+    for n in 0..episodes {
+        let episode_id = format!("wl-many-ep-{n}");
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO episodes (id, title_id, episode_type, season_number, episode_number, created_at)
+             VALUES ({}, 'wl-series-many', 'standard', '1', {}, '2031-01-01T00:00:00+00:00')",
+            &[SqlArg::Text(episode_id.clone()), SqlArg::Text(n.to_string())],
+        )
+        .await
+        .unwrap();
+        let wanted_id = format!("wl-many-w-{n}");
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO wanted_items
+             (id, title_id, episode_id, media_type, status, created_at, updated_at)
+             VALUES ({}, 'wl-series-many', {}, 'episode', 'wanted',
+                     '2031-01-01T00:00:00+00:00', '2031-01-01T00:00:00+00:00')",
+            &[SqlArg::Text(wanted_id.clone()), SqlArg::Text(episode_id)],
+        )
+        .await
+        .unwrap();
+        for k in 0..(n % 3) {
+            let explanation = encode_release_decision_explanation(Some(&format!(
+                r#"{{"reason":"synthetic","episode":{n},"attempt":{k}}}"#
+            )))
+            .unwrap();
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO release_decisions
+                 (id, wanted_item_id, title_id, release_title, decision_code, candidate_score,
+                  explanation_json, created_at)
+                 VALUES ({}, {}, 'wl-series-many', 'Synthetic.Release', {}, {}, {}, {})",
+                &[
+                    SqlArg::Text(format!("wl-many-d-{n}-{k}")),
+                    SqlArg::Text(wanted_id.clone()),
+                    SqlArg::Text(
+                        if k == 0 {
+                            "rejected_quality"
+                        } else {
+                            "accepted"
+                        }
+                        .to_string(),
+                    ),
+                    SqlArg::I64((n * 10 + k) as i64),
+                    SqlArg::OptBytes(explanation),
+                    SqlArg::Text(format!("2031-03-01T00:00:{k:02}+00:00")),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn sqlite_latest_decisions_for_kept_scopes_match_the_full_title_read() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+        &pool, None, true,
+    )
+    .await
+    .unwrap();
+    let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+    let titles = TitleStore::new(datastore.clone());
+    seed(&datastore, &titles).await;
+    seed_series_with_many_episodes(&datastore, &titles, 90).await;
+    let wanted = WantedStore::new(datastore.clone());
+
+    let mut title_ids = TITLES
+        .iter()
+        .map(|(id, _, _)| id.to_string())
+        .collect::<Vec<_>>();
+    title_ids.push("wl-series-many".to_string());
+
+    // The old read: every row of the titles with its latest decision.
+    let mut full = wanted
+        .list_acquisition_scope_states_for_title_ids(&title_ids)
+        .await
+        .unwrap();
+    full.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(full.len(), WANTED.len() + 90);
+
+    // The new read: the rows without decisions, then the latest decision of
+    // the kept rows only, in one statement and split across several.
+    for max_binds in [None, Some(7)] {
+        let _lowered = max_binds.map(crate::media::id_list_statements::lower_max_binds_for_tests);
+        let mut lean = wanted
+            .list_acquisition_scope_states_for_title_ids_without_decisions(&title_ids)
+            .await
+            .unwrap();
+        lean.sort_by(|a, b| a.id.cmp(&b.id));
+        assert!(lean.iter().all(|row| row.latest_release_decision.is_none()));
+        let ids = lean.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+        let mut decisions = wanted
+            .list_latest_release_decisions_for_acquisition_scope_states(&ids)
+            .await
+            .unwrap();
+        for row in &mut lean {
+            row.latest_release_decision = decisions.remove(&row.id);
+        }
+        assert!(decisions.is_empty(), "{max_binds:?}");
+        assert_eq!(format!("{lean:?}"), format!("{full:?}"), "{max_binds:?}");
+
+        // A subset gets exactly its own decisions.
+        let kept = ["wl-many-w-2", "wl-many-w-3", "w3", "w2", "missing-scope"].map(str::to_string);
+        let subset = wanted
+            .list_latest_release_decisions_for_acquisition_scope_states(&kept)
+            .await
+            .unwrap();
+        let mut subset_ids = subset
+            .iter()
+            .map(|(scope, decision)| (scope.as_str(), decision.id.as_str()))
+            .collect::<Vec<_>>();
+        subset_ids.sort();
+        assert_eq!(
+            subset_ids,
+            vec![("w3", "d3"), ("wl-many-w-2", "wl-many-d-2-1")],
+            "{max_binds:?}"
+        );
+    }
+}

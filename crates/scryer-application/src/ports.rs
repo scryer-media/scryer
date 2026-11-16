@@ -10667,6 +10667,28 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
+    /// The newest release decision of each acquisition scope state in `ids`,
+    /// keyed by state id: the decision
+    /// [`Self::list_acquisition_scope_states_by_ids`] attaches. A state with
+    /// no decision, or a missing id, is absent. The default reads whole rows;
+    /// SQL stores override it with a read of the decision columns, chunked to
+    /// stay under the bind limit.
+    async fn list_latest_release_decisions_for_acquisition_scope_states(
+        &self,
+        ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, ReleaseDecision>> {
+        Ok(self
+            .list_acquisition_scope_states_by_ids(ids)
+            .await?
+            .into_iter()
+            .filter_map(|state| {
+                state
+                    .latest_release_decision
+                    .map(|decision| (state.id, decision))
+            })
+            .collect())
+    }
+
     async fn count_acquisition_scope_states(
         &self,
         query: AcquisitionScopeStatesQuery,
