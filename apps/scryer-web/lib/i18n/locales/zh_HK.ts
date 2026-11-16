@@ -4183,9 +4183,6 @@ const zh_HK: LocaleDictionary = {
   "settings.lifecycleNavRules": "規則",
   "settings.lifecycleNavHistory": "歷史",
   "settings.lifecycleRuleAction": "操作",
-  "settings.lifecycleRuleActionHelp": "生命週期操作啓用後，此規則將執行的動作。",
-  "settings.lifecycleRuleActionPlaceholder": "選擇操作",
-  "settings.lifecycleRuleNoActions": "沒有可用的標題級操作。",
   "settings.lifecycleActionSequence": "行動順序",
   "settings.lifecycleSequenceHistoryWaiting": "正在等待較早的步驟",
   "settings.lifecycleSequenceHistorySearchRequested": "已請求搜尋",
@@ -4486,14 +4483,11 @@ const zh_HK: LocaleDictionary = {
   "settings.refLifecycleSectionSubject": "— 評估中的作品、季或分集",
   "settings.lifecycleFileSummary": "{{count}} 個文件 · {{size}}",
   "settings.lifecycleTestTitle": "測試主體",
-  "settings.lifecycleNoSubjects": "在此媒體庫中找不到主體。",
   "settings.lifecyclePreviewExcluded": "排除的主體",
   "settings.lifecyclePreviewEstimatedDue": "若現在匹配條件：{{time}}",
   "settings.lifecyclePreviewDue": "寬限截止時間：{{time}}",
   "settings.lifecyclePreviewSubject": "測試主體",
   "settings.lifecyclePreviewSample": "媒體庫範例",
-  "settings.lifecycleScopeSeason": "季",
-  "settings.lifecycleScopeEpisode": "分集",
   "settings.lifecycleFileDeleted": "已刪除",
   "settings.lifecycleFilePending": "等待中",
   "settings.lifecycleFileResults": "文件結果",
@@ -4557,12 +4551,6 @@ const zh_HK: LocaleDictionary = {
     "分集在其節目中按播出日期的排名",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "依最新符合資格的已下載分集排名的季度順序",
-  "settings.refLifecycleFactsStorageRootId":
-    "針對儲存容量與文件刪除所選取的配置根目錄",
-  "settings.refLifecycleFactsStorageAvailableBytes": "所選根目錄上目前可用的字節數",
-  "settings.refLifecycleFactsStorageTotalBytes": "所選根目錄的總容量字節數",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "所選根目錄目前可用容量的百分比",
   "settings.refLifecycleFactsActiveDownloads": "主體是否有正在進行中的下載",
   "settings.refLifecycleFactsWatchedByUserIds":
     "觀看過此分集的用戶；對於季，相同用戶必須觀看過每一集已播出的分集（包括遺失的文件）。未來分集已排除；未確定的播出日期或不完整的信號為未知。空季度永遠不會完成。",
@@ -4615,14 +4603,6 @@ const zh_HK: LocaleDictionary = {
     "第 1 名是最新符合資格已下載且已播出的非特別篇分集。播出日期相同時依季與分集編號排序，然後使用穩定 ID。",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "第 1 名是具有最新符合資格已下載且已播出非特別篇分集的季度。受保護的文件仍佔據排名。",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "在此版本中選取的持久配置媒體庫根目錄標識符",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "所選根目錄的可用位元組。排程執行使用最近一次量測，每五分鐘量測一次；預覽與動作前的檢查則在當下讀取根目錄。根目錄尚未量測時為未知，原因為 storage_not_sampled；最近一次量測超過十分鐘時原因為 storage_sample_stale；無法讀取根目錄時原因為 storage_capacity_unavailable",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "所選根目錄的總容量（位元組），與 storage_available_bytes 來自同一次量測，未知的原因相同",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "可用容量除以總容量，介於 0 至 100，與 storage_available_bytes 來自同一次量測，未知的原因相同",
   "settings.refLifecycleFactsActiveDownloadsValue": "主體的下載正在進行中時為 true",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
     "播放過它的所有人的標識符，已排序並去重；空清單表示無人播放。完成季度觀看需要同一個人看過每一集已播出的分集，包括遺失的文件。未來分集已排除；缺少分集記錄或未確定的播出日期為 unknown。在以下情況下，觀看事實為 unknown：作品範圍的節目 (show_watch_rollup_unavailable)、未連線媒體伺服器 (no_media_server_connection)、連線從未乾淨同步 (signal_sync_never_succeeded)、上次乾淨同步已超過 48 小時 (signals_stale)、無人擁有經過驗證的已關聯媒體伺服器帳號 (no_linked_participants)、已有關聯帳號但尚未有同步讀取它們 (participants_not_yet_swept)，以及播放無法歸屬於 Scryer 用戶 (signal_identity_missing)。",
@@ -6095,8 +6075,6 @@ const zh_HK: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "分集電影",
   "settings.lifecycleActionAddTags": "添加標籤",
   "settings.lifecycleActionRemoveTags": "移除標籤",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "標記為待刪除",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
@@ -6236,14 +6214,10 @@ const zh_HK: LocaleDictionary = {
     "生命週期規則已有此作品的有效候選項目。",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "生命週期序列進度每頁最多接受 100 個候選項目。",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "生命週期完成上限無效。",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "一般生命週期工作派送必須從派送中狀態開始。",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "失敗的生命週期序列標記缺少失敗步驟 ID。",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "生命週期暫緩嘗試的釋放無效。",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "已接受的生命週期工作回執需要實際的工作執行 ID。",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -6252,8 +6226,6 @@ const zh_HK: LocaleDictionary = {
     "生命週期工作回執的狀態轉換必須指明預期狀態。",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "生命週期序列回執投影最多接受 700 個步驟。",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "生命週期暫緩嘗試的釋放缺少原因。",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "重試的生命週期動作步驟必須推進其嘗試次數。",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
@@ -6280,11 +6252,6 @@ const zh_HK: LocaleDictionary = {
     "生命週期刪除的指紋已變更。",
   "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
     "生命週期刪除的目標已變更；需要重新評估。",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID": "生命週期動作設定無效。",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "此生命週期動作不適用於作品範圍的規則。",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE": "此生命週期動作無法儲存。",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED": "作品不支援此生命週期動作。",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "此規則已在您的媒體庫執行過動作，刪除它會抹去其所做事項的紀錄。請改為設為停用：規則會立即停止，紀錄也會保留。",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -6307,8 +6274,6 @@ const zh_HK: LocaleDictionary = {
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID": "寬限期必須為零天或以上。",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "寬限期最多為 3650 天（十年）。",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "讀取儲存空間事實的條件必須選擇已設定的媒體庫根目錄。",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "電影作品沒有集數清單。",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -6319,8 +6284,6 @@ const zh_HK: LocaleDictionary = {
     "預覽需要一至五十個主體。",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "預覽主體不存在、不在規則的媒體庫中，或不屬於所選的作品與範圍。",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "質素設定檔動作沒有目標設定檔。",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "確認期間規則已變更；啟用刪除前請再次檢查。",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -6338,18 +6301,12 @@ const zh_HK: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "此規則的動作永遠不會變更任何東西，因此只能以試執行方式執行。",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "序列動作必須使用序列執行器。",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "生命週期序列步驟參數無效。",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "規則所選的儲存根目錄尚未設定。",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED": "必須提供生命週期主體 ID。",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID": "生命週期主體類型無效。",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "找不到生命週期主體，或它已不屬於此作品。",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "標籤動作沒有設定任何標籤。",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "目標質素設定檔不存在。",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -6412,8 +6369,6 @@ const zh_HK: LocaleDictionary = {
     "已暫緩：動作前重新檢查時，規則決定了不同的動作。下次評估會取代此候選項目。",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "已暫緩：此候選項目帶有規則目前原始碼已不再宣告的動作，因此永遠不會執行。",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "已暫緩：儲存根目錄規則無法執行其中一個動作。",
   "settings.lifecycleRuleMaxTitlesPerRun": "每次執行的作品數",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "此規則在一次執行中最多處理的作品數。會刪除文件或作品的規則必須設定此上限。",

@@ -61,7 +61,6 @@ test("the client translates exactly the server's execution reasons", () => {
     "retry_pending",
     "rule_not_eligible",
     "storage_deletion_in_progress",
-    "storage_root_action_not_allowed",
     "tag_not_defined",
     "tag_patch_conflict",
     "title_missing",

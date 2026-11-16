@@ -786,14 +786,10 @@ const en: LocaleDictionary = {
     "Lifecycle rule already has an active candidate for title.",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "Lifecycle sequence progress accepts at most 100 candidates per page.",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "Invalid lifecycle completion limit.",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "A generic lifecycle job dispatch must begin in dispatching state.",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "Failed lifecycle sequence marker lacks its failed step id.",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "Invalid lifecycle held-attempt release.",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "Accepted lifecycle job receipts require a real job run id.",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -802,8 +798,6 @@ const en: LocaleDictionary = {
     "A lifecycle job receipt transition must name expected states.",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "Lifecycle sequence receipt projection accepts at most 700 steps.",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "Lifecycle held-attempt release lacks a reason.",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "A retried lifecycle action step must advance its attempt.",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
@@ -2297,14 +2291,6 @@ const en: LocaleDictionary = {
     "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "The destination did not pass verification.",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
-    "The lifecycle action configuration is invalid.",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "Lifecycle action is not valid for a title-scoped rule.",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE":
-    "Lifecycle action is not storable.",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
-    "This lifecycle action is not supported for titles.",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -2330,8 +2316,6 @@ const en: LocaleDictionary = {
     "Grace period must be zero or more days.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Grace period must be at most 3650 days (ten years).",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "A matcher that reads storage facts must select a configured library root.",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "Movie titles do not have an episode inventory.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -2342,8 +2326,6 @@ const en: LocaleDictionary = {
     "Preview requires between one and fifty subjects.",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Quality-profile action has no target profile.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "The rule changed while confirming; review it again before arming deletion.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -2364,20 +2346,14 @@ const en: LocaleDictionary = {
   "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "This rule's action never changes anything, so it can only run as a dry run.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "Rule validation failed.",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "Sequence actions must use the sequence executor.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Lifecycle sequence step parameters are invalid.",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "The storage root the rule selects is not configured.",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
     "Lifecycle subject ID is required.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Invalid lifecycle subject kind.",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "The lifecycle subject was not found, or no longer belongs to this title.",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Tag action has no tags configured.",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "The target quality profile does not exist.",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -9553,10 +9529,6 @@ const en: LocaleDictionary = {
   "settings.lifecycleNavRules": "Rules",
   "settings.lifecycleNavHistory": "History",
   "settings.lifecycleRuleAction": "Actions",
-  "settings.lifecycleRuleActionHelp":
-    "What this rule would do once lifecycle actions are switched on.",
-  "settings.lifecycleRuleActionPlaceholder": "Choose an action",
-  "settings.lifecycleRuleNoActions": "No title-scoped actions are available.",
   "settings.lifecycleActionSequence": "Action sequence",
   "settings.lifecycleSequenceObserveOnly": "Dry run only",
   "settings.lifecycleSequenceHistoryWaiting": "waiting for an earlier step",
@@ -9812,8 +9784,6 @@ const en: LocaleDictionary = {
     "— The title, season, or episode under evaluation",
   "settings.lifecycleFileSummary": "{{count}} files · {{size}}",
   "settings.lifecycleTestTitle": "Choose a title to test",
-  "settings.lifecycleNoSubjects":
-    "No subjects in this title for the selected scope.",
   "settings.lifecyclePreviewExcluded": "Excluded from actions",
   "settings.lifecyclePreviewEstimatedDue": "If matched now: {{time}}",
   "settings.lifecyclePreviewDue": "Grace deadline: {{time}}",
@@ -9821,8 +9791,6 @@ const en: LocaleDictionary = {
   "settings.lifecyclePreviewSample": "Library sample",
   "settings.lifecycleRuleTemplate": "Template",
   "settings.lifecycleRuleTemplatePlaceholder": "Start from a template",
-  "settings.lifecycleScopeSeason": "Season",
-  "settings.lifecycleScopeEpisode": "Episode",
   "settings.lifecycleFileDeleted": "Deleted",
   "settings.lifecycleFilePending": "Pending",
   "settings.lifecycleFileResults": "File results",
@@ -9902,14 +9870,6 @@ const en: LocaleDictionary = {
     "Episode rank by air date within its show",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Season rank by newest eligible downloaded episode",
-  "settings.refLifecycleFactsStorageRootId":
-    "Configured root selected for storage capacity and file deletion",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "Bytes currently available on the selected root",
-  "settings.refLifecycleFactsStorageTotalBytes":
-    "Total capacity in bytes of the selected root",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "Percentage of the selected root currently available",
   "settings.refLifecycleFactsActiveDownloads":
     "Whether the subject has a download in flight",
   "settings.refLifecycleFactsWatchedByUserIds":
@@ -10008,14 +9968,6 @@ const en: LocaleDictionary = {
     "Rank 1 is the newest eligible downloaded, aired non-special episode. Equal air dates use season and episode numbers, then stable IDs.",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Rank 1 is the season with the newest eligible downloaded, aired non-special episode. Protected files still occupy a rank.",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "Durable configured library-root identifier selected on this revision",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "Bytes available on the selected root. Scheduled runs use the last sample, taken every five minutes; preview and the check just before an action read the root at that moment. Unknown with reason storage_not_sampled before the root's first sample, storage_sample_stale when the last sample is more than ten minutes old, and storage_capacity_unavailable when the root could not be read",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "Total capacity in bytes of the selected root, from the same reading as storage_available_bytes and unknown for the same reasons",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "Available capacity divided by total capacity, from 0 to 100, from the same reading as storage_available_bytes and unknown for the same reasons",
   "settings.refLifecycleFactsActiveDownloadsValue":
     "True when a download for the subject is in flight",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
@@ -11706,8 +11658,6 @@ const en: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Series movies",
   "settings.lifecycleActionAddTags": "Add tags",
   "settings.lifecycleActionRemoveTags": "Remove tags",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Tagged for removal",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
@@ -12440,8 +12390,6 @@ const en: LocaleDictionary = {
     "Held: checked again just before acting, the rule now decides different actions. The next evaluation replaces this candidate.",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "Held: this candidate carries an action the rule's current source no longer declares, so it never runs.",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "Held: a storage-root rule cannot run one of these actions.",
   "settings.lifecycleRuleMaxTitlesPerRun": "Titles per run",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",

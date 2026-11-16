@@ -55,8 +55,6 @@ export const LIFECYCLE_EXECUTION_REASON_KEYS: Readonly<
   actions_changed_at_execution:
     "settings.lifecycleExecutionReason.actionsChangedAtExecution",
   action_not_declared: "settings.lifecycleExecutionReason.actionNotDeclared",
-  storage_root_action_not_allowed:
-    "settings.lifecycleExecutionReason.storageRootActionNotAllowed",
   actions_conflict: "settings.lifecycleExecutionReason.actionsConflict",
   move_library_unresolved:
     "settings.lifecycleExecutionReason.moveLibraryUnresolved",

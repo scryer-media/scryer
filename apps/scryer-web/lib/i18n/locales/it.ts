@@ -2607,11 +2607,6 @@ const it: LocaleDictionary = {
   "settings.lifecycleNavRules": "Regole",
   "settings.lifecycleNavHistory": "Cronologia",
   "settings.lifecycleRuleAction": "Azione",
-  "settings.lifecycleRuleActionHelp":
-    "Cosa farebbe questa regola una volta attivate le azioni del ciclo di vita.",
-  "settings.lifecycleRuleActionPlaceholder": "Scegli un'azione",
-  "settings.lifecycleRuleNoActions":
-    "Nessuna azione con ambito titolo disponibile.",
   "settings.lifecycleRuleGraceDays": "Giorni di tolleranza",
   "settings.lifecycleRuleGraceDaysHelp":
     "Giorni dalla prima corrispondenza della regola prima che l'azione venga eseguita (nessuna azione viene ancora eseguita).",
@@ -2634,11 +2629,6 @@ const it: LocaleDictionary = {
   "settings.noLifecycleRulesFound":
     "Nessuna regola del ciclo di vita al momento.",
   "settings.lifecycleRuleRevision": "Revisione",
-  "settings.lifecycleRuleRisk": "Rischio",
-  "settings.lifecycleRiskNone": "Nessun rischio",
-  "settings.lifecycleRiskLow": "Rischio basso",
-  "settings.lifecycleRiskMedium": "Rischio medio",
-  "settings.lifecycleRiskHigh": "Rischio alto",
   "settings.lifecycleActionDoNothing": "Non fare nulla",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Smetti di monitorare l'ambito, mantieni i file",
@@ -3418,8 +3408,6 @@ const it: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Film della serie",
   "settings.lifecycleActionAddTags": "Aggiungi tag",
   "settings.lifecycleActionRemoveTags": "Rimuovi tag",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle":
     "Contrassegnato per la rimozione",
   "settings.lifecycleTemplateTaggedForRemovalDescription":

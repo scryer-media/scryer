@@ -4882,11 +4882,6 @@ const cs: LocaleDictionary = {
   "settings.lifecycleNavRules": "Pravidla",
   "settings.lifecycleNavHistory": "Historie",
   "settings.lifecycleRuleAction": "Akce",
-  "settings.lifecycleRuleActionHelp":
-    "Co toto pravidlo udělá, jakmile se zapnou akce životního cyklu.",
-  "settings.lifecycleRuleActionPlaceholder": "Vyberte akci",
-  "settings.lifecycleRuleNoActions":
-    "Nejsou k dispozici žádné akce vázané na titul.",
   "settings.lifecycleActionSequence": "Posloupnost akcí",
   "settings.lifecycleSequenceObserveOnly": "Pouze zkušební běh",
   "settings.lifecycleSequenceHistoryWaiting": "čeká na dřívější krok",
@@ -5132,8 +5127,6 @@ const cs: LocaleDictionary = {
     "— Titul, řada nebo epizoda ve vyhodnocení",
   "settings.lifecycleFileSummary": "Soubory: {{count}} · {{size}}",
   "settings.lifecycleTestTitle": "Vyberte titul k otestování",
-  "settings.lifecycleNoSubjects":
-    "Pro vybraný rozsah nejsou v tomto titulu žádné subjekty.",
   "settings.lifecyclePreviewExcluded": "Vyloučeno z akcí",
   "settings.lifecyclePreviewEstimatedDue": "Při shodě nyní: {{time}}",
   "settings.lifecyclePreviewDue": "Konec ochranné doby: {{time}}",
@@ -5141,8 +5134,6 @@ const cs: LocaleDictionary = {
   "settings.lifecyclePreviewSample": "Vzorek knihovny",
   "settings.lifecycleRuleTemplate": "Šablona",
   "settings.lifecycleRuleTemplatePlaceholder": "Začít od šablony",
-  "settings.lifecycleScopeSeason": "Řada",
-  "settings.lifecycleScopeEpisode": "Epizoda",
   "settings.lifecycleFileDeleted": "Smazáno",
   "settings.lifecycleFilePending": "Čeká",
   "settings.lifecycleFileResults": "Výsledky souborů",
@@ -5220,14 +5211,6 @@ const cs: LocaleDictionary = {
     "Pořadí epizody podle data vysílání v rámci seriálu",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Pořadí řady podle nejnovější způsobilé stažené epizody",
-  "settings.refLifecycleFactsStorageRootId":
-    "Nakonfigurovaný kořen vybraný pro kapacitu úložiště a mazání souborů",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "Bajty aktuálně dostupné na vybraném kořeni",
-  "settings.refLifecycleFactsStorageTotalBytes":
-    "Celková kapacita vybraného kořene v bajtech",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "Procento aktuálně dostupné kapacity vybraného kořene",
   "settings.refLifecycleFactsActiveDownloads":
     "Zda má subjekt probíhající stahování",
   "settings.refLifecycleFactsWatchedByUserIds":
@@ -5326,14 +5309,6 @@ const cs: LocaleDictionary = {
     "Pořadí 1 má nejnovější způsobilá stažená, odvysílaná nespeciální epizoda. Při shodě dat vysílání rozhoduje číslo řady a epizody, poté stabilní ID.",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Pořadí 1 má řada s nejnovější způsobilou staženou, odvysílanou nespeciální epizodou. Chráněné soubory stále zabírají pořadí.",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "Trvalý identifikátor nakonfigurovaného kořene knihovny vybraný v této revizi",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "Bajty dostupné na vybraném kořeni. Plánované běhy používají poslední měření, které probíhá každých pět minut; náhled a kontrola těsně před akcí čtou kořen v tu chvíli. Neznámé s důvodem storage_not_sampled před prvním měřením kořene, storage_sample_stale, když je poslední měření starší než deset minut, a storage_capacity_unavailable, když kořen nešlo přečíst",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "Celková kapacita vybraného kořene v bajtech, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "Dostupná kapacita dělená celkovou kapacitou, od 0 do 100, ze stejného měření jako storage_available_bytes a neznámá ze stejných důvodů",
   "settings.refLifecycleFactsActiveDownloadsValue":
     "True, pokud u subjektu právě probíhá stahování",
   "settings.refLifecycleFactsWatchedByUserIdsValue":
@@ -7026,8 +7001,6 @@ const cs: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Seriálové filmy",
   "settings.lifecycleActionAddTags": "Přidat štítky",
   "settings.lifecycleActionRemoveTags": "Odebrat štítky",
-  "settings.lifecycleRuleTagsHelp":
-    "Pravidlo zapíše tyto štítky na každý titul, kterému odpovídá. Vybrat lze jen štítky, které administrátor definoval v Nastavení > Štítky.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Označeno k odstranění",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Pozor: tato šablona smaže titul i jeho soubory. Odpovídá všemu, co nese štítek „remove“, po týdenní odkladné lhůtě, takže ruční označení titulu je celým spouštěčem a odebrání štítku v rámci týdne odstranění zruší. Nejprve definujte štítek „remove“ v Nastavení > Štítky.",
@@ -7736,14 +7709,10 @@ const cs: LocaleDictionary = {
     "Pravidlo životního cyklu už má pro tento titul aktivního kandidáta.",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "Průběh sekvence životního cyklu přijímá nejvýše 100 kandidátů na stránku.",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "Neplatný limit dokončení životního cyklu.",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "Obecné odeslání úlohy životního cyklu musí začít ve stavu odesílání.",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "Značce neúspěšné sekvence životního cyklu chybí ID neúspěšného kroku.",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "Neplatné uvolnění pozdrženého pokusu životního cyklu.",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "Přijatá potvrzení úloh životního cyklu vyžadují skutečné ID běhu úlohy.",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -7752,8 +7721,6 @@ const cs: LocaleDictionary = {
     "Přechod potvrzení úlohy životního cyklu musí uvést očekávané stavy.",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "Projekce potvrzení sekvence životního cyklu přijímá nejvýše 700 kroků.",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "Uvolnění pozdrženého pokusu životního cyklu nemá důvod.",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "Opakovaný krok akce životního cyklu musí posunout svůj pokus.",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
@@ -7780,13 +7747,6 @@ const cs: LocaleDictionary = {
     "Otisk mazání pravidly životního cyklu se změnil.",
   "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
     "Cíle mazání pravidly životního cyklu se změnily; je nutné nové vyhodnocení.",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
-    "Konfigurace akce životního cyklu je neplatná.",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "Akce životního cyklu není platná pro pravidlo v rozsahu titulu.",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE": "Akci životního cyklu nelze uložit.",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
-    "Tato akce životního cyklu není pro tituly podporována.",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "Toto pravidlo už ve vaší knihovně provedlo akce a jeho smazání by vymazalo záznam o tom, co udělalo. Místo toho ho nastavte na Vypnuto: pravidlo se okamžitě zastaví a jeho historie zůstane.",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -7812,8 +7772,6 @@ const cs: LocaleDictionary = {
     "Ochranná lhůta musí být nula nebo více dní.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Ochranná lhůta smí být nejvýše 3650 dní (deset let).",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "Podmínka, která čte fakty o úložišti, musí vybrat nakonfigurovaný kořen knihovny.",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "Filmové tituly nemají seznam epizod.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -7824,8 +7782,6 @@ const cs: LocaleDictionary = {
     "Náhled vyžaduje jeden až padesát subjektů.",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Subjekt náhledu chybí, leží mimo knihovny pravidla, nebo nepatří k vybraným titulům a rozsahu.",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Akce profilu kvality nemá cílový profil.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Pravidlo se během potvrzování změnilo; před zapnutím mazání ho zkontrolujte znovu.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -7848,20 +7804,14 @@ const cs: LocaleDictionary = {
     "Akce tohoto pravidla nikdy nic nemění, takže může běžet jen jako zkušební běh.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Ověření pravidla selhalo.",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "Akce sekvence musí používat vykonavatele sekvencí.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Parametry kroku sekvence životního cyklu jsou neplatné.",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Kořen úložiště, který pravidlo vybírá, není nakonfigurován.",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
     "ID subjektu životního cyklu je povinné.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Neplatný druh subjektu životního cyklu.",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "Subjekt životního cyklu nebyl nalezen, nebo už k tomuto titulu nepatří.",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Akce štítku nemá nastavené žádné štítky.",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "Cílový profil kvality neexistuje.",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -7927,8 +7877,6 @@ const cs: LocaleDictionary = {
     "Pozdrženo: při kontrole těsně před akcí pravidlo rozhodlo o jiných akcích. Příští vyhodnocení tohoto kandidáta nahradí.",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "Pozdrženo: kandidát nese akci, kterou aktuální zdroj pravidla už nedeklaruje, takže se nikdy neprovede.",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "Pozdrženo: pravidlo pro kořen úložiště nemůže provést jednu z těchto akcí.",
   "settings.lifecycleRuleMaxTitlesPerRun": "Titulů na běh",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "Nejvyšší počet titulů, na které toto pravidlo v jednom běhu zasáhne. Pravidlo, které maže soubory nebo tituly, tento limit potřebuje.",

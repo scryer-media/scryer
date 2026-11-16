@@ -4261,43 +4261,14 @@ export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!)
   }
 }`;
 
-export const lifecycleRuleRevisionsQuery = `query LifecycleRuleRevisions($ruleSetId: ID!) {
-  lifecycleRuleRevisions(ruleSetId: $ruleSetId) {${lifecycleRuleRevisionFieldSelection}
-  }
-}`;
-
-/// Candidates, soonest due first. The server returns none while lifecycle
-/// is switched off for the instance.
-export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: ID, $states: [LifecycleCandidateState!], $libraryId: ID, $limit: Int) {
-  lifecycleCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, limit: $limit) {
-    id
-    ruleSetId
-    ruleName
-      fileCount
-      totalSizeBytes
-    revisionNumber
-    subjectKind
-    subjectId
-    subjectLabel
-    titleId
-    titleName
-    libraryId
-    facet
-    state
-    stateReason
-    reasonCodes
-    actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
-    }
+/// A sequence's steps and each step's latest checkpoint, reduced to what the
+/// step-progress list shows. Shared by candidates and action runs.
+const LIFECYCLE_SEQUENCE_FIELDS = `
     actionSequence {
-      schemaVersion
       steps {
         id
         kind
         parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
           targetLibrary
           targetRoot
         }
@@ -4306,43 +4277,40 @@ export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: I
     sequenceSteps {
       step {
         id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-          targetLibrary
-          targetRoot
-        }
       }
       run {
-        stepId
-        stepKind
         state
-        attempt
         holdReason
         error
-        createdAt
-        updatedAt
-        finishedAt
       }
       receipts {
-        dispatchAttempt
-        logicalRequestKey
         jobRunId
         state
-        createdAt
-        updatedAt
       }
-    }
-    graceDays
-    matchGeneration
+    }`;
+
+/// Candidates, soonest due first. The server returns none while lifecycle
+/// is switched off for the instance.
+export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: ID, $states: [LifecycleCandidateState!], $libraryId: ID, $limit: Int) {
+  lifecycleCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, limit: $limit) {
+    id
+    ruleSetId
+    ruleName
+    fileCount
+    totalSizeBytes
+    subjectKind
+    subjectId
+    subjectLabel
+    titleId
+    titleName
+    state
+    stateReason
+    reasonCodes
+    actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
+    }${LIFECYCLE_SEQUENCE_FIELDS}
     firstMatchedAt
-    lastMatchedAt
     dueAt
     heldSince
-    updatedAt
   }
 }`;
 
@@ -4365,7 +4333,6 @@ export const lifecycleEvaluationRunsQuery = `query LifecycleEvaluationRuns($rule
     revisionNumber
     status
     startedAt
-    finishedAt
     evaluatedCount
     matchedCount
     noMatchCount
@@ -4379,70 +4346,16 @@ export const lifecycleEvaluationRunsQuery = `query LifecycleEvaluationRuns($rule
 export const lifecycleActionRunsQuery = `query LifecycleActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
   lifecycleActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
     id
-    ruleSetId
-    candidateId
     detail
     subjectKind
-    subjectId
     subjectLabel
-    titleId
     titleName
-    actionKind
-    actionSequence {
-      schemaVersion
-      steps {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-          targetLibrary
-          targetRoot
-        }
-      }
-    }
-    sequenceSteps {
-      step {
-        id
-        kind
-        parameters {
-          includeDescendants
-          targetQualityProfileId
-          searchCondition
-          tags
-          targetLibrary
-          targetRoot
-        }
-      }
-      run {
-        stepId
-        stepKind
-        state
-        attempt
-        holdReason
-        error
-        createdAt
-        updatedAt
-        finishedAt
-      }
-      receipts {
-        dispatchAttempt
-        logicalRequestKey
-        jobRunId
-        state
-        createdAt
-        updatedAt
-      }
-    }
-    matchGeneration
+    actionKind${LIFECYCLE_SEQUENCE_FIELDS}
     attempt
     status
     holdReason
     error
     startedAt
-    finishedAt
   }
 }`;
 
@@ -4460,12 +4373,9 @@ export const LIFECYCLE_EXCLUSION_FIELDS = `
     id
     ruleSetId
     subjectKind
-    subjectId
     subjectLabel
-    titleId
     titleName
     reason
-    createdBy
     createdAt`;
 
 export const lifecycleExclusionsQuery = `query LifecycleExclusions($ruleSetId: ID) {

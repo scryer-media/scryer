@@ -2469,10 +2469,6 @@ const ko: LocaleDictionary = {
   "settings.lifecycleNavRules": "규칙",
   "settings.lifecycleNavHistory": "기록",
   "settings.lifecycleRuleAction": "작업",
-  "settings.lifecycleRuleActionHelp":
-    "수명 주기 작업이 켜지면 이 규칙이 수행할 동작입니다.",
-  "settings.lifecycleRuleActionPlaceholder": "작업 선택",
-  "settings.lifecycleRuleNoActions": "타이틀 범위의 작업이 없습니다.",
   "settings.lifecycleRuleGraceDays": "유예 일수",
   "settings.lifecycleRuleGraceDaysHelp":
     "규칙이 처음 일치한 뒤 작업이 실행되기까지의 일수입니다(아직 실행되는 작업은 없습니다).",
@@ -2494,11 +2490,6 @@ const ko: LocaleDictionary = {
     "수명 주기 규칙 {{name}}을(를) 삭제할까요?",
   "settings.noLifecycleRulesFound": "아직 수명 주기 규칙이 없습니다.",
   "settings.lifecycleRuleRevision": "리비전",
-  "settings.lifecycleRuleRisk": "위험도",
-  "settings.lifecycleRiskNone": "위험 없음",
-  "settings.lifecycleRiskLow": "낮은 위험",
-  "settings.lifecycleRiskMedium": "중간 위험",
-  "settings.lifecycleRiskHigh": "높은 위험",
   "settings.lifecycleActionDoNothing": "아무 작업도 하지 않음",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "범위 모니터링 해제, 파일 유지",
@@ -3256,8 +3247,6 @@ const ko: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "시리즈 영화",
   "settings.lifecycleActionAddTags": "태그 추가",
   "settings.lifecycleActionRemoveTags": "태그 제거",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "삭제 대상 태그",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

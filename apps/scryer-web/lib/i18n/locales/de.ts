@@ -2578,11 +2578,6 @@ const de: LocaleDictionary = {
   "settings.lifecycleNavRules": "Regeln",
   "settings.lifecycleNavHistory": "Verlauf",
   "settings.lifecycleRuleAction": "Aktion",
-  "settings.lifecycleRuleActionHelp":
-    "Was diese Regel täte, sobald Lebenszyklusaktionen aktiviert sind.",
-  "settings.lifecycleRuleActionPlaceholder": "Aktion wählen",
-  "settings.lifecycleRuleNoActions":
-    "Es sind keine titelbezogenen Aktionen verfügbar.",
   "settings.lifecycleRuleGraceDays": "Karenztage",
   "settings.lifecycleRuleGraceDaysHelp":
     "Tage nach der ersten Übereinstimmung der Regel, bevor die Aktion ausgeführt würde (es werden noch keine Aktionen ausgeführt).",
@@ -2603,11 +2598,6 @@ const de: LocaleDictionary = {
   "settings.lifecycleRuleDeleting": "Lebenszyklusregel {{name}} löschen?",
   "settings.noLifecycleRulesFound": "Noch keine Lebenszyklusregeln.",
   "settings.lifecycleRuleRevision": "Revision",
-  "settings.lifecycleRuleRisk": "Risiko",
-  "settings.lifecycleRiskNone": "Kein Risiko",
-  "settings.lifecycleRiskLow": "Geringes Risiko",
-  "settings.lifecycleRiskMedium": "Mittleres Risiko",
-  "settings.lifecycleRiskHigh": "Hohes Risiko",
   "settings.lifecycleActionDoNothing": "Nichts tun",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Bereich nicht mehr überwachen, Dateien behalten",
@@ -3388,8 +3378,6 @@ const de: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Serienfilme",
   "settings.lifecycleActionAddTags": "Tags hinzufügen",
   "settings.lifecycleActionRemoveTags": "Tags entfernen",
-  "settings.lifecycleRuleTagsHelp":
-    "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Zum Entfernen markiert",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',

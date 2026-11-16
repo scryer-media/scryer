@@ -4628,10 +4628,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleNavRules": "Правила",
   "settings.lifecycleNavHistory": "История",
   "settings.lifecycleRuleAction": "Действия",
-  "settings.lifecycleRuleActionHelp":
-    "Что сделало бы это правило, когда действия жизненного цикла будут включены.",
-  "settings.lifecycleRuleActionPlaceholder": "Выберите действие",
-  "settings.lifecycleRuleNoActions": "Действия уровня тайтла недоступны.",
   "settings.lifecycleRuleGraceDays": "Дни отсрочки",
   "settings.lifecycleRuleGraceDaysHelp":
     "Дни после первого совпадения правила до момента, когда выполнилось бы действие (действия пока не выполняются).",
@@ -4656,11 +4652,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleRuleDeleting": "Удалить правило жизненного цикла {{name}}?",
   "settings.noLifecycleRulesFound": "Правил жизненного цикла пока нет.",
   "settings.lifecycleRuleRevision": "Ревизия",
-  "settings.lifecycleRuleRisk": "Риск",
-  "settings.lifecycleRiskNone": "Без риска",
-  "settings.lifecycleRiskLow": "Низкий риск",
-  "settings.lifecycleRiskMedium": "Средний риск",
-  "settings.lifecycleRiskHigh": "Высокий риск",
   "settings.lifecycleActionDoNothing": "Ничего не делать",
   "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Снять отслеживание области, сохранить файлы",
@@ -6411,8 +6402,6 @@ const ru: LocaleDictionary = {
   "settings.titleTagSeriesMovieCount": "Фильмы сериала",
   "settings.lifecycleActionAddTags": "Добавить теги",
   "settings.lifecycleActionRemoveTags": "Удалить теги",
-  "settings.lifecycleRuleTagsHelp":
-    "Правило назначает эти теги каждому подходящему тайтлу. Можно выбрать только теги, заданные администратором в разделе «Настройки → Теги».",
   "settings.lifecycleTemplateTaggedForRemovalTitle": "Помечено к удалению",
   "settings.lifecycleTemplateTaggedForRemovalDescription":
     "Внимание: этот шаблон удаляет тайтл и его файлы. Он применяется ко всем тайтлам с тегом «remove» после недели ожидания. Достаточно назначить тег вручную, чтобы запустить отсчёт; снятие тега в течение недели отменяет удаление. Сначала создайте тег «remove» в разделе «Настройки → Теги».",
@@ -6905,8 +6894,6 @@ const ru: LocaleDictionary = {
     "Отложено: при повторной проверке перед действием правило выбрало другие действия. Следующая оценка заменит этого кандидата.",
   "settings.lifecycleExecutionReason.actionNotDeclared":
     "Отложено: у кандидата есть действие, которое текущий исходный код правила больше не объявляет, поэтому оно никогда не выполнится.",
-  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
-    "Отложено: правило для корня хранилища не может выполнить одно из этих действий.",
   "settings.lifecycleRuleMaxTitlesPerRun": "Тайтлов за запуск",
   "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "Наибольшее число тайтлов, с которыми правило работает за один запуск. Правилу, удаляющему файлы или тайтлы, этот лимит обязателен.",
@@ -7662,14 +7649,10 @@ const ru: LocaleDictionary = {
     "У правила жизненного цикла уже есть активный кандидат для этого тайтла.",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "Для хода последовательности жизненного цикла допускается не более 100 кандидатов на страницу.",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "Недопустимый лимит завершения жизненного цикла.",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "Отправка универсального задания жизненного цикла должна начинаться в состоянии dispatching.",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "В маркере сбоя последовательности жизненного цикла отсутствует идентификатор неудавшегося шага.",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "Недопустимое освобождение удерживаемой попытки жизненного цикла.",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "Для принятых подтверждений заданий жизненного цикла требуется действительный идентификатор запуска задания.",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -7678,8 +7661,6 @@ const ru: LocaleDictionary = {
     "При переходе подтверждения задания жизненного цикла необходимо указать ожидаемые состояния.",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "Проекция подтверждений последовательности жизненного цикла допускает не более 700 шагов.",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "Для освобождения удерживаемой попытки жизненного цикла не указана причина.",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "При повторном выполнении шага действия жизненного цикла необходимо увеличить номер попытки.",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
@@ -9189,14 +9170,6 @@ const ru: LocaleDictionary = {
     "Проверка перенесённого файла не пройдена.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "Файл в месте назначения не прошёл проверку.",
-  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
-    "Недопустимая конфигурация действия жизненного цикла.",
-  "error.reason.LIFECYCLE_ACTION_INVALID":
-    "Это действие жизненного цикла недопустимо для правила уровня тайтла.",
-  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE":
-    "Действие жизненного цикла нельзя сохранить.",
-  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
-    "Это действие жизненного цикла не поддерживается для тайтлов.",
   "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "Это правило уже выполняло действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
   "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
@@ -9222,8 +9195,6 @@ const ru: LocaleDictionary = {
     "Период ожидания должен составлять ноль или более дней.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Период ожидания не должен превышать 3650 дней (десять лет).",
-  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
-    "Условие, использующее сведения о хранилище, должно выбирать настроенный корень библиотеки.",
   "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "У фильмов нет списка серий.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
@@ -9234,8 +9205,6 @@ const ru: LocaleDictionary = {
     "Для предварительного просмотра требуется от одного до пятидесяти объектов.",
   "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Объект предварительного просмотра отсутствует, находится вне библиотек правила или не относится к выбранным тайтлам и области действия.",
-  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
-    "Для действия изменения профиля качества не указан целевой профиль.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Правило изменилось во время подтверждения; проверьте его ещё раз перед разрешением удаления.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
@@ -9258,20 +9227,14 @@ const ru: LocaleDictionary = {
     "Действие этого правила ничего не изменяет, поэтому оно доступно только в режиме проверки без применения.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Проверка правила не удалась.",
-  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
-    "Действия последовательности должны использовать исполнитель последовательностей.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "Недопустимые параметры шага последовательности жизненного цикла.",
-  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
-    "Корень хранилища, выбранный правилом, не настроен.",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
     "Требуется идентификатор объекта жизненного цикла.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Недопустимый тип объекта жизненного цикла.",
   "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
     "Объект жизненного цикла не найден или больше не относится к этому тайтлу.",
-  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
-    "Для действия назначения тегов не заданы теги.",
   "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "Целевой профиль качества не существует.",
   "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
@@ -12465,8 +12428,6 @@ const ru: LocaleDictionary = {
     "Тайтлы, соответствующие правилу, начиная с ближайшего срока. Действия ни над одним из них ещё не выполнялись.",
   "settings.lifecycleFileSummary": "Файлов: {{count}} · {{size}}",
   "settings.lifecycleTestTitle": "Выберите тайтл для проверки",
-  "settings.lifecycleNoSubjects":
-    "В этом тайтле нет объектов для выбранной области действия.",
   "settings.lifecyclePreviewExcluded": "Исключено из действий",
   "settings.lifecyclePreviewEstimatedDue": "При совпадении сейчас: {{time}}",
   "settings.lifecyclePreviewDue": "Окончание отсрочки: {{time}}",
@@ -12474,8 +12435,6 @@ const ru: LocaleDictionary = {
   "settings.lifecyclePreviewSample": "Выборка из медиатеки",
   "settings.lifecycleRuleTemplate": "Шаблон",
   "settings.lifecycleRuleTemplatePlaceholder": "Начать с шаблона",
-  "settings.lifecycleScopeSeason": "Сезон",
-  "settings.lifecycleScopeEpisode": "Эпизод",
   "settings.lifecycleFileDeleted": "Удалён",
   "settings.lifecycleFilePending": "Ожидает",
   "settings.lifecycleFileResults": "Результаты обработки файлов",
@@ -12489,14 +12448,6 @@ const ru: LocaleDictionary = {
     "Позиция эпизода по дате выхода в рамках сериала",
   "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Позиция сезона по самому новому подходящему загруженному эпизоду",
-  "settings.refLifecycleFactsStorageRootId":
-    "Настроенная корневая папка, выбранная для определения ёмкости хранилища и удаления файлов",
-  "settings.refLifecycleFactsStorageAvailableBytes":
-    "Количество байтов, доступных сейчас в выбранной корневой папке",
-  "settings.refLifecycleFactsStorageTotalBytes":
-    "Общая ёмкость выбранной корневой папки в байтах",
-  "settings.refLifecycleFactsStorageAvailablePercent":
-    "Процент доступного сейчас места в выбранной корневой папке",
   "settings.refLifecycleFactsListsEnabledIds":
     "Идентификаторы включённых списков, общедоступных или личных, в которых объект ещё присутствует",
   "settings.refLifecycleFactsListsPublicCount":
@@ -12525,14 +12476,6 @@ const ru: LocaleDictionary = {
     "Позиция 1 — самый новый подходящий загруженный эпизод, уже вышедший в эфир и не являющийся специальным. При одинаковых датах выхода порядок определяется номерами сезона и эпизода, затем стабильными ID.",
   "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Позиция 1 — сезон с самым новым подходящим загруженным эпизодом, уже вышедшим в эфир и не являющимся специальным. Защищённые файлы также занимают позиции.",
-  "settings.refLifecycleFactsStorageRootIdValue":
-    "Постоянный идентификатор настроенной корневой папки медиатеки, выбранной в этой редакции",
-  "settings.refLifecycleFactsStorageAvailableBytesValue":
-    "Байты, доступные в выбранной корневой папке. Плановые запуски берут последний замер, который делается каждые пять минут; предпросмотр и проверка непосредственно перед действием читают корневую папку в этот момент. Неизвестно с причиной storage_not_sampled до первого замера корневой папки, storage_sample_stale, если последнему замеру больше десяти минут, и storage_capacity_unavailable, если корневую папку не удалось прочитать",
-  "settings.refLifecycleFactsStorageTotalBytesValue":
-    "Общая ёмкость выбранной корневой папки в байтах, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
-  "settings.refLifecycleFactsStorageAvailablePercentValue":
-    "Доступная ёмкость, делённая на общую ёмкость, от 0 до 100, из того же замера, что и storage_available_bytes, и неизвестна по тем же причинам",
   "settings.refLifecycleFactsListsEnabledIdsValue":
     "Отсортированные идентификаторы списков; никогда не название списка",
   "settings.refLifecycleFactsListsPublicCountValue":

@@ -208,6 +208,11 @@ const SEMANTICS_OUTPUT: Record<string, Record<string, unknown>> = {
   scoring: { BLOCK: { code: "sample_code" } },
 };
 
+/// A family with subjects lists its outputs as action rows too.
+const SEMANTICS_ACTIONS: Record<string, Pick<RuleBuilderModel, "actions">> = {
+  lifecycle: { actions: [{ output: "NOTIFY", join: "ALL", conditions: [] }] },
+};
+
 /// Operators that ask about a missing value, so may hold for one.
 const ASKS_ABOUT_MISSING = new Set(["HAS_NO_VALUE"]);
 
@@ -232,6 +237,7 @@ for (const family of FAMILIES) {
           join: "ALL",
           conditions: [{ field: row.field, operator: row.operator, value: row.value }],
           outputs: SEMANTICS_OUTPUT[family.name],
+          ...SEMANTICS_ACTIONS[family.name],
         } as RuleBuilderModel,
         semantics.variant,
       );

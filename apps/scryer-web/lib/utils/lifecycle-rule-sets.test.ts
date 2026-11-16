@@ -34,7 +34,6 @@ import {
   lifecycleRuleDraftFromDetail,
   lifecycleRuleUpdatePlan,
   newLifecycleRuleBuilderDraft,
-  nonTerminalCandidateCount,
   parseAcknowledgedCandidateCountMismatch,
   runStatusBadgeTone,
   ruleStateHelpKey,
@@ -498,6 +497,33 @@ test("declared actions keep each head once, with the values it carries, in the o
   assert.deepEqual(declaredActionEntries(declared()), []);
 });
 
+test("season and episode notify heads carry their notification text like the title head", () => {
+  assert.deepEqual(
+    declaredActionEntries(
+      declared({
+        heads: ["NOTIFY_SEASON", "NOTIFY_EPISODE"],
+        notifications: ["Season removed"],
+      }),
+    ),
+    [
+      { head: "NOTIFY_SEASON", values: ["Season removed"] },
+      { head: "NOTIFY_EPISODE", values: ["Season removed"] },
+    ],
+  );
+  assert.deepEqual(
+    decidedActionEntries({
+      heads: ["NOTIFY_EPISODE"],
+      qualityProfile: null,
+      addTags: [],
+      removeTags: [],
+      library: null,
+      root: null,
+      notification: "Episode removed",
+    }),
+    [{ head: "NOTIFY_EPISODE", values: ["Episode removed"] }],
+  );
+});
+
 test("a head the API does not carry values for is listed without values", () => {
   assert.deepEqual(declaredActionEntries(declared({ heads: ["ARCHIVE"] })), [
     { head: "ARCHIVE", values: [] },
@@ -793,21 +819,25 @@ test("every candidate state has a label and a tone", () => {
 });
 
 test("only the states an armed handler could still act on are acknowledged", () => {
-  const candidates = [
-    { state: "OBSERVING" as const },
-    { state: "PENDING_ACTION" as const },
-    { state: "DUE" as const },
-    { state: "EXECUTING" as const },
-    { state: "BLOCKED" as const },
-    { state: "SUCCEEDED" as const },
-    { state: "FAILED" as const },
-    { state: "CANCELED" as const },
-    { state: "EXCLUDED" as const },
+  const states = [
+    "OBSERVING",
+    "PENDING_ACTION",
+    "DUE",
+    "EXECUTING",
+    "BLOCKED",
+    "SUCCEEDED",
+    "FAILED",
+    "CANCELED",
+    "EXCLUDED",
   ];
 
-  assert.equal(nonTerminalCandidateCount(candidates), 5);
-  assert.equal(isNonTerminalCandidateState("SUCCEEDED"), false);
-  assert.equal(isNonTerminalCandidateState("BLOCKED"), true);
+  assert.deepEqual(states.filter(isNonTerminalCandidateState), [
+    "OBSERVING",
+    "PENDING_ACTION",
+    "DUE",
+    "EXECUTING",
+    "BLOCKED",
+  ]);
 });
 
 test("the due countdown picks its unit by magnitude and names overdue as overdue", () => {
@@ -894,53 +924,18 @@ test("search history stays waiting or skipped until a durable receipt is accepte
   assert.equal(lifecycleSearchHistoryState(undefined), "waiting");
   assert.equal(
     lifecycleSearchHistoryState({
-      step: {
-        id: "search",
-        kind: "SEARCH",
-        parameters: {
-          includeDescendants: null,
-          targetQualityProfileId: null,
-          searchCondition: "UNCONDITIONAL",
-          tags: [],
-        },
-      },
-      run: {
-        stepId: "search",
-        stepKind: "search",
-        state: "skipped",
-        attempt: 0,
-        holdReason: null,
-        error: null,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-        finishedAt: "2026-01-01T00:00:00Z",
-      },
+      step: { id: "search" },
+      run: { state: "skipped", holdReason: null, error: null },
       receipts: [],
     } satisfies LifecycleActionStepProgress),
     "skipped",
   );
   assert.equal(
     lifecycleSearchHistoryState({
-      step: {
-        id: "search",
-        kind: "SEARCH",
-        parameters: {
-          includeDescendants: null,
-          targetQualityProfileId: null,
-          searchCondition: "UNCONDITIONAL",
-          tags: [],
-        },
-      },
+      step: { id: "search" },
       run: null,
       receipts: [
-        {
-          dispatchAttempt: 1,
-          logicalRequestKey: "request",
-          jobRunId: "job-1",
-          state: "accepted",
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-        },
+        { jobRunId: "job-1", state: "accepted" },
       ],
     } satisfies LifecycleActionStepProgress),
     "accepted",

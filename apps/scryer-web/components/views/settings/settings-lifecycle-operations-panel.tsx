@@ -75,8 +75,8 @@ function timestamp(
   return formatUiDateTime(value, format, { fallback: value });
 }
 
-/// Candidates and runs recorded before rules declared their actions in source
-/// name their action by kind and sequence; these render that history.
+/// An action run names its action by kind, with the steps of its sequence
+/// shown beside it.
 function ActionKindLabel({ kind }: { kind: string }) {
   const t = useTranslate();
   const labelKey = actionKindLabelKey(kind);
