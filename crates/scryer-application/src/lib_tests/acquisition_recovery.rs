@@ -12316,6 +12316,16 @@ async fn trigger_title_mismatch_recovery_search_requeues_every_eligible_scope_pa
             .await
             .expect("seed mismatch decision");
     }
+    // Another writer updates the oldest eligible scopes while the pages are
+    // read, one after each read, moving each to the front of the
+    // `updated_at` order. Pages taken by offset over that order would repeat
+    // one scope and miss another.
+    wanted_items.update_after_each_list.lock().await.extend(
+        scopes[ELIGIBLE - 3..ELIGIBLE]
+            .iter()
+            .rev()
+            .map(|item| item.id.clone()),
+    );
 
     let queued = app
         .trigger_title_mismatch_recovery_search(&user, &title.id)

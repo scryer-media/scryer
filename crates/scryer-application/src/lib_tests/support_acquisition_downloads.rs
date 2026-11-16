@@ -413,6 +413,10 @@ pub(super) struct TrackingAcquisitionScopeStateRepo {
     /// is not running. Set this and each of this repository's writes behaves the
     /// same way.
     pub(super) writer_gate: Option<Arc<Mutex<()>>>,
+    /// Stands in for another writer between reads: after each list read, the
+    /// next id here is updated, which moves it to the front of the list's
+    /// `updated_at` order.
+    pub(super) update_after_each_list: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
 
 impl TrackingAcquisitionScopeStateRepo {
@@ -648,11 +652,12 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
         } = query;
         let latest_decisions = self.release_decisions.lock().await.clone();
         let normalized_title_search = title_search.as_deref().map(str::to_lowercase);
-        let items: Vec<AcquisitionScopeState> = self
-            .store
-            .lock()
-            .await
-            .iter()
+        let mut store = self.store.lock().await;
+        // The SQL store's order: newest update first.
+        let mut ordered = store.iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let items: Vec<AcquisitionScopeState> = ordered
+            .into_iter()
             .filter(|item| {
                 let latest_decision = latest_decisions
                     .iter()
@@ -689,6 +694,12 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
             .take(limit.max(0) as usize)
             .cloned()
             .collect();
+        if let Some(id) = self.update_after_each_list.lock().await.pop_front()
+            && let Some(item) = store.iter_mut().find(|item| item.id == id)
+        {
+            item.updated_at = Utc::now().to_rfc3339();
+        }
+        drop(store);
         Ok(items)
     }
 

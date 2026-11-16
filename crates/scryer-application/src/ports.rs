@@ -10667,6 +10667,38 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         Ok(states)
     }
 
+    /// The title's mismatch-recovery scopes, the rows
+    /// `AcquisitionScopeStatesQuery::mismatch_recovery_eligible_only` selects,
+    /// with an id after `after_id`, in id order, at most `limit` of them, and
+    /// with `latest_release_decision` left empty. Paging on the id, which
+    /// never changes, keeps every eligible row in exactly one page while rows
+    /// are updated or share an `updated_at`. The default reads the eligible
+    /// rows through [`Self::list_acquisition_scope_states`]; SQL stores
+    /// override it with one keyset read without the decision join.
+    async fn list_mismatch_recovery_scopes_for_title(
+        &self,
+        title_id: &str,
+        after_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                statuses: vec![AcquisitionScopeStatus::Wanted.as_str().to_string()],
+                title_id: Some(title_id.to_string()),
+                mismatch_recovery_eligible_only: true,
+                limit: i64::MAX,
+                ..AcquisitionScopeStatesQuery::default()
+            })
+            .await?;
+        states.retain(|state| after_id.is_none_or(|after| state.id.as_str() > after));
+        states.sort_by(|left, right| left.id.cmp(&right.id));
+        states.truncate(usize::try_from(limit).unwrap_or(0));
+        for state in &mut states {
+            state.latest_release_decision = None;
+        }
+        Ok(states)
+    }
+
     /// The newest release decision of each acquisition scope state in `ids`,
     /// keyed by state id: the decision
     /// [`Self::list_acquisition_scope_states_by_ids`] attaches. A state with

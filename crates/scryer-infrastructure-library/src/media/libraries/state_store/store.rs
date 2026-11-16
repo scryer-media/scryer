@@ -1299,6 +1299,33 @@ impl AcquisitionScopeStateRepository for WantedStore {
             .await
     }
 
+    async fn list_mismatch_recovery_scopes_for_title(
+        &self,
+        title_id: &str,
+        after_id: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        // The title filter is served by the leading column of the
+        // `(title_id, episode_id)` unique key; the id order is a sort of that
+        // one title's rows.
+        let mut sql = format!(
+            "{} WHERE w.title_id = {{}} AND {WANTED_MISMATCH_RECOVERY_ELIGIBLE_SQL}",
+            wanted_item_projection_sql(WantedProjection::WithoutLatestDecision)
+        );
+        let mut args = vec![SqlArg::Text(title_id.to_string())];
+        if let Some(after_id) = after_id {
+            sql.push_str(" AND w.id > {}");
+            args.push(SqlArg::Text(after_id.to_string()));
+        }
+        sql.push_str(" ORDER BY w.id LIMIT {}");
+        args.push(SqlArg::I64(limit));
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| wanted_projected_row_to_item(row, WantedProjection::WithoutLatestDecision))
+            .collect()
+    }
+
     async fn list_acquisition_scope_coordinates_for_statuses(
         &self,
         statuses: &[AcquisitionScopeStatus],

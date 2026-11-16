@@ -263,23 +263,21 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
-        // Every eligible scope is read, a page at a time, before any is
-        // re-opened: a re-open touches the row's `updated_at`, the list's
-        // order, and would shift the pages still to come.
-        let mut items = Vec::new();
+        // Every eligible scope is read, a page at a time in id order, before
+        // any is re-opened. Each page starts after the last id of the one
+        // before, so an update to a row between pages neither skips nor
+        // repeats it.
+        let mut items: Vec<AcquisitionScopeState> = Vec::new();
         loop {
             let page = self
                 .services
                 .workflow
                 .acquisition_scope_states
-                .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-                    statuses: vec!["wanted".into()],
-                    title_id: Some(title_id.to_string()),
-                    mismatch_recovery_eligible_only: true,
-                    limit: MISMATCH_RECOVERY_PAGE_SIZE,
-                    offset: items.len() as i64,
-                    ..AcquisitionScopeStatesQuery::default()
-                })
+                .list_mismatch_recovery_scopes_for_title(
+                    title_id,
+                    items.last().map(|item| item.id.as_str()),
+                    MISMATCH_RECOVERY_PAGE_SIZE,
+                )
                 .await?;
             let last_page = (page.len() as i64) < MISMATCH_RECOVERY_PAGE_SIZE;
             items.extend(page);

@@ -861,6 +861,178 @@ async fn sqlite_mismatch_recovery_filter_takes_every_decision_and_only_wanted_sc
 }
 
 #[tokio::test]
+async fn sqlite_mismatch_recovery_pages_by_id_take_every_eligible_scope_once_under_concurrent_updates()
+ {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+        &pool, None, true,
+    )
+    .await
+    .unwrap();
+    let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+    let titles = TitleStore::new(datastore.clone());
+    const SCOPES: usize = 60;
+    // Every scope shares one `updated_at`.
+    seed_series_with_many_episodes(&datastore, &titles, SCOPES).await;
+    SqlRuntime::execute(datastore.read_exec(), "DELETE FROM release_decisions", &[])
+        .await
+        .unwrap();
+    for n in 0..SCOPES {
+        if n % 10 == 4 {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "UPDATE wanted_items SET status = 'grabbed' WHERE id = {}",
+                &[SqlArg::Text(format!("wl-many-w-{n}"))],
+            )
+            .await
+            .unwrap();
+        }
+        if n % 2 == 0 {
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "INSERT INTO release_decisions
+                 (id, wanted_item_id, title_id, release_title, decision_code, candidate_score,
+                  created_at)
+                 VALUES ({}, {}, 'wl-series-many', 'Synthetic.Release', 'title_mismatch', 0,
+                         '2031-04-01T00:00:00+00:00')",
+                &[
+                    SqlArg::Text(format!("wl-many-mismatch-{n}")),
+                    SqlArg::Text(format!("wl-many-w-{n}")),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+    }
+    let wanted = WantedStore::new(datastore.clone());
+    let eligible_query = AcquisitionScopeStatesQuery {
+        statuses: vec!["wanted".into()],
+        title_id: Some("wl-series-many".into()),
+        mismatch_recovery_eligible_only: true,
+        limit: i64::MAX,
+        ..Default::default()
+    };
+    let mut expected = wanted
+        .list_acquisition_scope_states(eligible_query.clone())
+        .await
+        .unwrap();
+    expected.sort_by(|a, b| a.id.cmp(&b.id));
+    for row in &mut expected {
+        row.latest_release_decision = None;
+    }
+    let expected_ids = expected
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(expected_ids.len(), 24);
+
+    const PAGE: i64 = 7;
+    let reset = || async {
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "UPDATE wanted_items SET updated_at = '2031-01-01T00:00:00+00:00'",
+            &[],
+        )
+        .await
+        .unwrap();
+    };
+    // Between pages another writer updates one eligible row not read yet,
+    // moving it to the front of the `updated_at` order.
+    let touch = |read: Vec<String>, round: usize| {
+        let datastore = datastore.clone();
+        let unread = expected_ids
+            .iter()
+            .rev()
+            .find(|id| !read.contains(id))
+            .cloned();
+        async move {
+            let Some(id) = unread else {
+                return;
+            };
+            SqlRuntime::execute(
+                datastore.read_exec(),
+                "UPDATE wanted_items SET updated_at = {} WHERE id = {}",
+                &[
+                    SqlArg::Text(format!("2031-06-01T00:00:{round:02}+00:00")),
+                    SqlArg::Text(id),
+                ],
+            )
+            .await
+            .unwrap();
+        }
+    };
+
+    // Undisturbed, the id pages are the eligible rows themselves.
+    let mut undisturbed = Vec::new();
+    loop {
+        let page = wanted
+            .list_mismatch_recovery_scopes_for_title(
+                "wl-series-many",
+                undisturbed
+                    .last()
+                    .map(|row: &scryer_application::AcquisitionScopeState| row.id.as_str()),
+                PAGE,
+            )
+            .await
+            .unwrap();
+        let last = (page.len() as i64) < PAGE;
+        undisturbed.extend(page);
+        if last {
+            break;
+        }
+    }
+    assert_eq!(format!("{undisturbed:?}"), format!("{expected:?}"));
+
+    // Disturbed, the id pages still take every eligible row exactly once.
+    reset().await;
+    let mut keyset_ids: Vec<String> = Vec::new();
+    for round in 0.. {
+        let page = wanted
+            .list_mismatch_recovery_scopes_for_title(
+                "wl-series-many",
+                keyset_ids.last().map(String::as_str),
+                PAGE,
+            )
+            .await
+            .unwrap();
+        let last = (page.len() as i64) < PAGE;
+        keyset_ids.extend(page.into_iter().map(|row| row.id));
+        if last {
+            break;
+        }
+        touch(keyset_ids.clone(), round).await;
+    }
+    assert_eq!(keyset_ids, expected_ids);
+
+    // The same disturbance shifts offset pages over the `updated_at` order,
+    // which is what the id pages avoid.
+    reset().await;
+    let mut offset_ids: Vec<String> = Vec::new();
+    for round in 0.. {
+        let page = wanted
+            .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+                limit: PAGE,
+                offset: offset_ids.len() as i64,
+                ..eligible_query.clone()
+            })
+            .await
+            .unwrap();
+        let last = (page.len() as i64) < PAGE;
+        offset_ids.extend(page.into_iter().map(|row| row.id));
+        if last {
+            break;
+        }
+        touch(offset_ids.clone(), round).await;
+    }
+    offset_ids.sort();
+    assert_ne!(offset_ids, expected_ids);
+}
+
+#[tokio::test]
 async fn sqlite_title_scope_tally_counts_every_scope_past_the_old_500_row_read() {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
