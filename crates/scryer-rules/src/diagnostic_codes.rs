@@ -18,18 +18,18 @@ pub const RULE_TARGETS_PERSON: &str = "RULE_TARGETS_PERSON";
 pub const RULE_PACKAGE_REQUIRED: &str = "RULE_PACKAGE_REQUIRED";
 /// Rule input cannot be imported into another name.
 pub const RULE_INPUT_IMPORT_UNSUPPORTED: &str = "RULE_INPUT_IMPORT_UNSUPPORTED";
-/// Retired: maintenance rules defined `match` before their source declared
+/// Retired: lifecycle rules defined `match` before their source declared
 /// actions. No longer reported; kept so the code is never reused.
 pub const RULE_MATCH_REQUIRED: &str = "RULE_MATCH_REQUIRED";
-/// A maintenance rule defines none of the action heads, so it could never do
+/// A lifecycle rule defines none of the action heads, so it could never do
 /// anything to a subject.
 pub const RULE_ACTION_REQUIRED: &str = "RULE_ACTION_REQUIRED";
 /// A request matcher must define a vote, a shaping head, or `add_tags`.
 pub const RULE_VOTE_REQUIRED: &str = "RULE_VOTE_REQUIRED";
-/// A maintenance action head that carries a value (`set_quality_profile`,
+/// A lifecycle action head that carries a value (`set_quality_profile`,
 /// `add_tags`, `remove_tags`) is given something other than a plain literal.
 pub const RULE_ACTION_VALUE_NOT_LITERAL: &str = "RULE_ACTION_VALUE_NOT_LITERAL";
-/// A maintenance action head is given a literal the action does not accept,
+/// A lifecycle action head is given a literal the action does not accept,
 /// such as an empty profile name or a tag with an unsupported character.
 pub const RULE_ACTION_VALUE_INVALID: &str = "RULE_ACTION_VALUE_INVALID";
 /// The rule defines a name the host already provides as a helper.
@@ -41,7 +41,7 @@ pub const RULE_UNREFERENCED_RULE: &str = "RULE_UNREFERENCED_RULE";
 /// name such as `match` or `reasons`) is defined as a function, which never
 /// reaches the decision.
 pub const RULE_HEAD_DEFINED_AS_FUNCTION: &str = "RULE_HEAD_DEFINED_AS_FUNCTION";
-/// A maintenance action head is written as a function. A function of no
+/// A lifecycle action head is written as a function. A function of no
 /// arguments still defines the head when evaluated, so any function under an
 /// action name is refused rather than half understood.
 pub const RULE_ACTION_HEAD_FUNCTION: &str = "RULE_ACTION_HEAD_FUNCTION";
@@ -49,7 +49,7 @@ pub const RULE_ACTION_HEAD_FUNCTION: &str = "RULE_ACTION_HEAD_FUNCTION";
 /// path, another package, or an import of one. The decision would then depend
 /// on facts the host does not track.
 pub const RULE_FOREIGN_DATA_REFERENCE: &str = "RULE_FOREIGN_DATA_REFERENCE";
-/// A maintenance rule uses `with` to replace its input, its `data`, or a
+/// A lifecycle rule uses `with` to replace its input, its `data`, or a
 /// value the host's helpers depend on, so the decision would rest on facts
 /// the host never observed.
 pub const RULE_WITH_TARGET_NOT_ALLOWED: &str = "RULE_WITH_TARGET_NOT_ALLOWED";

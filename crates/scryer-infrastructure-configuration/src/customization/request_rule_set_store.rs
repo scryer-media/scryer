@@ -65,7 +65,7 @@ impl RequestRuleSetRepository for RequestRuleSetStore {
         .await
     }
 
-    /// Unlike the maintenance twin there is no disarm riding along: a request
+    /// Unlike the lifecycle twin there is no disarm riding along: a request
     /// rule votes and never executes, so no acknowledgement is attached to the
     /// revision it was granted against.
     async fn add_revision(

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import maintenanceFixtures from "../contracts/maintenance-builder-fixtures.json" with { type: "json" };
+import lifecycleFixtures from "../contracts/lifecycle-builder-fixtures.json" with { type: "json" };
 import regoAssistance from "../contracts/rego-assistance.json" with { type: "json" };
 import requestFixtures from "../contracts/request-builder-fixtures.json" with { type: "json" };
 import operatorSemantics from "../contracts/rule-builder-operator-semantics.json" with { type: "json" };
@@ -13,8 +13,8 @@ import zhHK from "../i18n/locales/zh_HK.ts";
 import zhTW from "../i18n/locales/zh_TW.ts";
 import { RULE_BUILDER_CATALOGS } from "./rule-builder-catalog-presentation.ts";
 import {
-  MAINTENANCE_CONTRACT_SCHEMA,
-  MAINTENANCE_SERVED_PAYLOAD,
+  LIFECYCLE_CONTRACT_SCHEMA,
+  LIFECYCLE_SERVED_PAYLOAD,
   REQUEST_CONTRACT_SCHEMA,
   REQUEST_SERVED_PAYLOAD,
   SCORING_CONTRACT_SCHEMA,
@@ -53,9 +53,9 @@ type Family = {
 
 const FAMILIES: Family[] = [
   {
-    name: "maintenance",
-    schema: MAINTENANCE_CONTRACT_SCHEMA,
-    fixtures: maintenanceFixtures as Fixture[],
+    name: "lifecycle",
+    schema: LIFECYCLE_CONTRACT_SCHEMA,
+    fixtures: lifecycleFixtures as Fixture[],
     variants: ["TITLE", "SEASON", "EPISODE"],
   },
   {
@@ -141,7 +141,7 @@ for (const family of FAMILIES) {
         assert.equal(typeof entryCase.expected, "boolean", entry.id);
         assert.equal(typeof entryCase.input, "object", entry.id);
         // `days_since` reads the clock from the input.
-        if (family.name === "maintenance")
+        if (family.name === "lifecycle")
           assert.equal(typeof entryCase.input.evaluation_time, "string", entry.id);
       }
     }
@@ -186,7 +186,7 @@ const SEMANTICS = operatorSemantics as Record<string, SemanticsFamily>;
 
 /// The output a semantics row is generated with; it only has to be valid.
 const SEMANTICS_OUTPUT: Record<string, Record<string, unknown>> = {
-  maintenance: { NOTIFY: "Sample notice" },
+  lifecycle: { NOTIFY: "Sample notice" },
   request: { MANUAL: true },
   scoring: { BLOCK: { code: "sample_code" } },
 };
@@ -241,7 +241,7 @@ for (const family of FAMILIES) {
       semantics.rows.map((row) => `${offered.get(row.field)}:${row.operator}`),
     );
     assert.deepEqual([...covered].sort(), [...expected].sort());
-    if (family.name === "maintenance") assert.ok(semantics.evaluationTime);
+    if (family.name === "lifecycle") assert.ok(semantics.evaluationTime);
   });
 
   test(`${family.name} comparisons hold for a missing or null value only when they ask about one`, () => {
@@ -271,11 +271,11 @@ for (const family of FAMILIES) {
 }
 
 test("a moment still to come is never some days ago", () => {
-  const rows = SEMANTICS.maintenance.rows.filter(
+  const rows = SEMANTICS.lifecycle.rows.filter(
     (row) => row.operator === "MORE_THAN_DAYS_AGO" || row.operator === "LESS_THAN_DAYS_AGO",
   );
   assert.equal(rows.length, 2);
-  const now = Date.parse(SEMANTICS.maintenance.evaluationTime ?? "");
+  const now = Date.parse(SEMANTICS.lifecycle.evaluationTime ?? "");
   for (const row of rows) {
     const future = row.present.filter((entry) => Date.parse(String(entry.value)) > now);
     assert.ok(future.length > 0, row.operator);
@@ -322,7 +322,7 @@ for (const family of FAMILIES) {
 }
 
 const SERVED: [string, RuleBuilderSchemaPayload][] = [
-  ["maintenance", MAINTENANCE_SERVED_PAYLOAD],
+  ["lifecycle", LIFECYCLE_SERVED_PAYLOAD],
   ["request", REQUEST_SERVED_PAYLOAD],
 ];
 
@@ -340,7 +340,7 @@ for (const [name, payload] of SERVED) {
       if (output.options)
         assert.ok(Object.hasOwn(RULE_BUILDER_CATALOGS, output.options), output.options);
     }
-    const schema = name === "maintenance" ? MAINTENANCE_CONTRACT_SCHEMA : REQUEST_CONTRACT_SCHEMA;
+    const schema = name === "lifecycle" ? LIFECYCLE_CONTRACT_SCHEMA : REQUEST_CONTRACT_SCHEMA;
     assert.deepEqual(
       schema.outputs.map((output) => output.id),
       ids,
@@ -348,13 +348,13 @@ for (const [name, payload] of SERVED) {
   });
 }
 
-test("maintenance conditions offer every fact except object lists", () => {
-  const section = MAINTENANCE_CONTRACT_SCHEMA.contract.sections.find(
+test("lifecycle conditions offer every fact except object lists", () => {
+  const section = LIFECYCLE_CONTRACT_SCHEMA.contract.sections.find(
     (entry) => entry.path === "input.facts",
   );
   assert.ok(section);
   const offered = new Map(
-    ruleBuilderFields(MAINTENANCE_CONTRACT_SCHEMA, "TITLE").map((field) => [
+    ruleBuilderFields(LIFECYCLE_CONTRACT_SCHEMA, "TITLE").map((field) => [
       field.label,
       field.kind,
     ]),
@@ -411,7 +411,7 @@ function builderKeys(schema: RuleBuilderSchema): string[] {
 /// Keys the builder owns. Anything else it reuses, such as a facet's name,
 /// keeps the coverage it already has.
 const BUILDER_KEY =
-  /^(settings\.(ruleBuilder|scoringBuilder|requestBuilder|maintenanceBuilder)|ruleOutput\.)/;
+  /^(settings\.(ruleBuilder|scoringBuilder|requestBuilder|lifecycleBuilder)|ruleOutput\.)/;
 
 for (const family of FAMILIES) {
   test(`every ${family.name} builder label is translated`, () => {

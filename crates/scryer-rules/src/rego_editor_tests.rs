@@ -1,4 +1,4 @@
-use crate::{maintenance, request, rewrite_package_declaration, runtime, validation};
+use crate::{lifecycle, request, rewrite_package_declaration, runtime, validation};
 use serde_json::Value;
 
 fn catalog() -> Value {
@@ -37,8 +37,8 @@ fn rego_editor_snippets_pass_their_family_validator() {
                 &request::rewrite_package_declaration(&source, id),
                 id,
             ),
-            "maintenance" => validation::validate_maintenance_rule(
-                &maintenance::rewrite_package_declaration(&source, id),
+            "lifecycle" => validation::validate_lifecycle_rule(
+                &lifecycle::rewrite_package_declaration(&source, id),
                 id,
             ),
             family => panic!("unknown editor family {family}"),

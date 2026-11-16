@@ -1280,7 +1280,7 @@
       }
     ]
   },
-  "maintenance": {
+  "lifecycle": {
     "variant": "TITLE",
     "evaluationTime": "2026-01-31T00:00:00Z",
     "rows": [

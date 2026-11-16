@@ -4421,29 +4421,29 @@ const nl: LocaleDictionary = {
   "lists.policy.value.auto": "Automatisch goedkeuren",
   "lists.policy.value.approval": "Goedkeuring nodig",
   "lists.policy.value.none": "Lijsten niet toegestaan",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Of een lijst, en niet een persoon, het onderwerp aan de bibliotheek heeft toegevoegd",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Of een ingeschakelde lijst, openbaar of persoonlijk, het onderwerp nog bevat",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Namen van de ingeschakelde openbare lijsten die het onderwerp nog bevatten",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Of elke lijst die het onderwerp ooit bevatte het heeft laten vallen",
-  "settings.refMaintFactsListsLeftAt":
+  "settings.refLifecycleFactsListsLeftAt":
     "Wanneer de laatste lijst het onderwerp liet vallen",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLastListName":
     "De openbare lijst die het onderwerp het laatst verliet",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "Waar wanneer een lijstsynchronisatie de titel heeft aangemaakt; onbekend met reden list_store_unreadable als de lijstopslag niet leesbaar was",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "Waar zolang ten minste één ingeschakelde lijst het onderwerp bevat",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Alleen namen van openbare lijsten, gesorteerd; de persoonlijke lijst van een lid wordt nooit genoemd",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "Waar zodra elke lijst die het onderwerp bevatte het heeft laten vallen; onwaar zolang een lijst het nog bevat of als het nooit op een lijst stond",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339-tijdstempel; ontbreekt met reden not_left_every_list zolang een lijst het onderwerp nog bevat",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Naam van die openbare lijst; ontbreekt met reden no_public_list_left als het onderwerp nooit een openbare lijst verliet",
   "lists.providerSettings.heading": "Providerinstellingen",
   "lists.providerSettings.copy":
@@ -4557,27 +4557,27 @@ const nl: LocaleDictionary = {
     "Het verplaatsen van het bestand naar de nieuwe naam is mislukt. Het bestand en de afleveringen zijn ongewijzigd gebleven.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Afleveringsnummering is dubbelzinnig",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "Aangehouden: er wordt iets afgespeeld op een mediaserver.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Aangehouden: een mediaserver kon niet worden gevraagd of er iets wordt afgespeeld.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Aangehouden: de mediaserver toont een weergave die nieuwer is dan de opgeslagen kijkgeschiedenis.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Aangehouden: de geschiedenis van de mediaserver toont een weergave door een account dat de kijkgeschiedenis niet meetelt.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Aangehouden: de mediaserver kon de kijkgeschiedenis niet bevestigen voordat er werd gehandeld.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Aangehouden: een verbonden mediaserver heeft geen overeenkomend item, dus de kijkgeschiedenis kon niet worden gecontroleerd voordat er werd gehandeld.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Of iemand met een account op een verbonden mediaserver het heeft afgespeeld, gekoppeld aan Scryer of niet; noemt niemand",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "Wanneer iemand met een account op een verbonden mediaserver het voor het laatst heeft afgespeeld",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True wanneer een willekeurig account op een ingeschakelde mediaserver het heeft afgespeeld, ongeacht of het account aan een Scryer-gebruiker is gekoppeld; bij seizoenen en series telt elke uitgezonden aflevering. Onbekend met reden audience_not_read totdat een synchronisatie in de afgelopen 48 uur elk account op elke ingeschakelde verbinding heeft gelezen, en met de gebruikelijke redenen wanneer kijkfeiten onbekend zijn.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "RFC3339-tijdstempel van de meest recente weergave door een willekeurig account; afwezig met reden never_watched wanneer niemand het heeft afgespeeld, en onbekend met reden play_time_missing (episode_play_time_missing bij seizoenen en series) wanneer een weergave geen vastgelegde tijd heeft, of audience_not_read wanneer niet alle accounts zijn gelezen",
-  "settings.maintenancePreviewFacts": "Feiten die de regel las",
+  "settings.lifecyclePreviewFacts": "Feiten die de regel las",
   "setup.sourceImportProgress": "Bronnen importeren",
   "setup.sourceImportInvalidRequest":
     "Een geselecteerde bron is niet beschikbaar. Vernieuw de bronnendetectie en selecteer de bron opnieuw.",

@@ -1,4 +1,4 @@
-use crate::maintenance::{self, USER_PACKAGE_PREFIX as MAINTENANCE_USER_PACKAGE_PREFIX};
+use crate::lifecycle::{self, USER_PACKAGE_PREFIX as LIFECYCLE_USER_PACKAGE_PREFIX};
 use crate::request::{
     self, PERSON_TARGETED_REQUEST_ROOT, USER_PACKAGE_PREFIX as REQUEST_USER_PACKAGE_PREFIX,
 };
@@ -73,9 +73,9 @@ static RELEASE_CONTRACT: FamilyContract = FamilyContract::new(
     "rule-input-contract.json",
 );
 
-static MAINTENANCE_CONTRACT: FamilyContract = FamilyContract::new(
-    include_str!("../maintenance-input-contract.json"),
-    "maintenance-input-contract.json",
+static LIFECYCLE_CONTRACT: FamilyContract = FamilyContract::new(
+    include_str!("../lifecycle-input-contract.json"),
+    "lifecycle-input-contract.json",
 );
 
 static REQUEST_CONTRACT: FamilyContract = FamilyContract::new(
@@ -125,13 +125,13 @@ impl InputPathContext {
         }
     }
 
-    fn maintenance() -> Self {
+    fn lifecycle() -> Self {
         Self {
-            family: "maintenance",
-            catalog: MAINTENANCE_CONTRACT.catalog(),
+            family: "lifecycle",
+            catalog: LIFECYCLE_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
-            limits: RuntimeLimits::maintenance_defaults(),
+            limits: RuntimeLimits::lifecycle_defaults(),
         }
     }
 
@@ -991,12 +991,12 @@ fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<Valid
     errors.into_values().collect()
 }
 
-/// Names of the `input.facts.<name>` facts a maintenance policy references.
+/// Names of the `input.facts.<name>` facts a lifecycle policy references.
 ///
 /// This is the compile-time half of host-derived unknownness: the engine holds
 /// this set per rule and, at evaluation time, refuses to consult a rule whose
 /// referenced facts are not all resolvable for that subject. It is deliberately
-/// *static* — [`validate_maintenance_rule`] rejects dynamic fact access,
+/// *static* — [`validate_lifecycle_rule`] rejects dynamic fact access,
 /// `input` imports and bare `input` references precisely so this set can never
 /// be an underestimate of what a rule actually reads.
 ///
@@ -1042,22 +1042,22 @@ fn walk_module_input_paths(
     }
 }
 
-/// Facts a maintenance policy reads, plus the parse work needed to find them.
+/// Facts a lifecycle policy reads, plus the parse work needed to find them.
 ///
 /// Fails rather than guessing: a source that will not parse, or that pulls part
 /// of `input` in through an import, has no statically resolvable fact set, and
 /// a rule whose fact set is unknown must never load.
-pub(crate) fn maintenance_fact_references(
+pub(crate) fn lifecycle_fact_references(
     rego_source: &str,
     policy_path: &str,
 ) -> Result<BTreeSet<String>, String> {
-    fact_references(rego_source, policy_path, InputPathContext::maintenance())
+    fact_references(rego_source, policy_path, InputPathContext::lifecycle())
 }
 
-pub(crate) fn maintenance_fact_references_from_module(
+pub(crate) fn lifecycle_fact_references_from_module(
     module: &Module,
 ) -> Result<BTreeSet<String>, String> {
-    module_fact_references(module, InputPathContext::maintenance())
+    module_fact_references(module, InputPathContext::lifecycle())
 }
 
 /// The same work for any family whose facts arrive in observation envelopes.
@@ -1080,7 +1080,7 @@ fn module_fact_references(
     module_referenced_facts(module, ctx)
 }
 
-/// The `input.facts.<name>` facts a maintenance matcher reads, for callers
+/// The `input.facts.<name>` facts a lifecycle matcher reads, for callers
 /// outside this crate that must decide something about a rule *before* it runs.
 ///
 /// This is the same static set the engine holds rules on, exposed once so an
@@ -1088,17 +1088,17 @@ fn module_fact_references(
 /// reads. It fails for exactly the sources the engine would refuse to load, so
 /// a caller that cannot get an answer here must reject the rule rather than
 /// assume it reads nothing.
-pub fn maintenance_referenced_facts(
+pub fn lifecycle_referenced_facts(
     rego_source: &str,
     rule_set_id: &str,
 ) -> Result<BTreeSet<String>, RulesError> {
-    maintenance_fact_references(rego_source, &maintenance::user_policy_path(rule_set_id))
+    lifecycle_fact_references(rego_source, &lifecycle::user_policy_path(rule_set_id))
         .map_err(RulesError::Compilation)
 }
 
 /// Facts a request rule reads, plus the parse work needed to find them.
 ///
-/// The request family holds a rule on unobservable facts exactly as maintenance
+/// The request family holds a rule on unobservable facts exactly as lifecycle
 /// does, so it needs the same statically resolvable set and fails for the same
 /// sources: one that will not parse, imports part of `input`, hands the document
 /// around whole, or selects a fact by a computed name.
@@ -1135,7 +1135,7 @@ pub fn request_referenced_facts(
 /// Authoring or previewing a rule that reads any of these is a way of asking the
 /// instance about one named person, so the application gates it on
 /// permission-management authority — the request-family counterpart of
-/// [`crate::maintenance::PERSON_TARGETED_MAINTENANCE_FACTS`]. An empty result
+/// [`crate::lifecycle::PERSON_TARGETED_LIFECYCLE_FACTS`]. An empty result
 /// means the rule decides on content and the draft alone.
 ///
 /// Fails for the same sources the engine would refuse to load: a rule whose
@@ -1651,10 +1651,10 @@ pub fn validate_managed_rule(
     validate_user_rule(rego_source, rule_set_id)
 }
 
-/// Validate a user-authored maintenance matcher without persisting it.
+/// Validate a user-authored lifecycle matcher without persisting it.
 ///
 /// The caller is expected to have already called
-/// [`crate::maintenance::rewrite_package_declaration`] on the source.
+/// [`crate::lifecycle::rewrite_package_declaration`] on the source.
 ///
 /// Checks:
 /// 1. Package declaration matches `scryer.maintenance.user.<rule_set_id>`.
@@ -1667,7 +1667,7 @@ pub fn validate_managed_rule(
 ///    undefined head, so a rule that defines none would quietly do nothing
 ///    forever; this is the only place that catches it. `match` is an ordinary
 ///    helper name.
-/// 5. Every `input.*` reference resolves in the maintenance catalog.
+/// 5. Every `input.*` reference resolves in the lifecycle catalog.
 /// 6. Every value written for `set_quality_profile`, `add_tags` or
 ///    `remove_tags` is a plain literal the action accepts, within the tag
 ///    count; no action head is written as a function; the source reads no
@@ -1678,11 +1678,11 @@ pub fn validate_managed_rule(
 ///
 /// A rule name that is neither part of the contract nor used anywhere else in
 /// the source is reported in `warnings` and does not make the source invalid.
-pub fn validate_maintenance_rule(
+pub fn validate_lifecycle_rule(
     rego_source: &str,
     rule_set_id: &str,
 ) -> Result<ValidationResult, RulesError> {
-    let expected_pkg = format!("package {MAINTENANCE_USER_PACKAGE_PREFIX}.{rule_set_id}");
+    let expected_pkg = format!("package {LIFECYCLE_USER_PACKAGE_PREFIX}.{rule_set_id}");
     if !rego_source.lines().any(|line| line.trim() == expected_pkg) {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_PACKAGE_REQUIRED,
@@ -1690,9 +1690,9 @@ pub fn validate_maintenance_rule(
         ));
     }
 
-    let mut engine = runtime::configured_engine(&RuntimeLimits::maintenance_defaults());
+    let mut engine = runtime::configured_engine(&RuntimeLimits::lifecycle_defaults());
 
-    let policy_path = maintenance::user_policy_path(rule_set_id);
+    let policy_path = lifecycle::user_policy_path(rule_set_id);
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
         return Ok(ValidationResult::compilation_error(e).with_character_columns(rego_source));
     }
@@ -1701,31 +1701,31 @@ pub fn validate_maintenance_rule(
     let module = module.as_ref();
     // The same host modules the engine loads, so a rule that calls a host
     // helper dry-runs here exactly as it will run.
-    for (path, source) in crate::maintenance_actions::helper_modules(rule_set_id, module) {
+    for (path, source) in crate::lifecycle_actions::helper_modules(rule_set_id, module) {
         if let Err(e) = engine.add_policy(path, source) {
             return Ok(ValidationResult::compilation_error(e));
         }
     }
     if let Err(e) = engine.add_policy(
-        maintenance::decision_wrapper_policy_path(rule_set_id),
-        maintenance::decision_wrapper_source(rule_set_id),
+        lifecycle::decision_wrapper_policy_path(rule_set_id),
+        lifecycle::decision_wrapper_source(rule_set_id),
     ) {
         return Ok(ValidationResult::compilation_error(e));
     }
 
-    if let Some(error) = input_import_error(module, "maintenance") {
+    if let Some(error) = input_import_error(module, "lifecycle") {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_INPUT_IMPORT_UNSUPPORTED,
             error,
         ));
     }
 
-    let input_path_errors = module_input_path_errors(module, InputPathContext::maintenance());
+    let input_path_errors = module_input_path_errors(module, InputPathContext::lifecycle());
     if !input_path_errors.is_empty() {
         return Ok(ValidationResult::from_diagnostics(input_path_errors));
     }
 
-    let scan = crate::maintenance_actions::scan_module(module);
+    let scan = crate::lifecycle_actions::scan_module(module);
     let warnings = scan.warnings.iter().map(action_scan_diagnostic).collect();
     if !scan.errors.is_empty() {
         let errors = scan.errors.iter().map(action_scan_diagnostic).collect();
@@ -1734,17 +1734,17 @@ pub fn validate_maintenance_rule(
     if scan.defined_heads.is_empty() {
         return Ok(ValidationResult::invalid_code(
             crate::diagnostic_codes::RULE_ACTION_REQUIRED,
-            "maintenance rule must define at least one action, for example: unmonitor if { ... }",
+            "lifecycle rule must define at least one action, for example: unmonitor if { ... }",
         )
         .with_warnings(warnings));
     }
 
-    let input_value = serde_json::to_value(maintenance::synthetic_maintenance_input())
+    let input_value = serde_json::to_value(lifecycle::synthetic_lifecycle_input())
         .map_err(RulesError::Serialization)?;
     engine.set_input(input_value.into());
 
-    let result = match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
-        Ok(value) => match maintenance::decode_decision(&value) {
+    let result = match engine.eval_rule(lifecycle::decision_wrapper_rule_path(rule_set_id)) {
+        Ok(value) => match lifecycle::decode_decision(&value) {
             Ok(_) => ValidationResult::valid(),
             Err(e) => ValidationResult::invalid_code(
                 crate::diagnostic_codes::RULE_OUTPUT_INVALID,
@@ -1760,7 +1760,7 @@ pub fn validate_maintenance_rule(
 }
 
 fn action_scan_diagnostic(
-    issue: &crate::maintenance_actions::MaintenanceActionScanIssue,
+    issue: &crate::lifecycle_actions::LifecycleActionScanIssue,
 ) -> ValidationDiagnostic {
     let mut diagnostic = ValidationDiagnostic::new(issue.code, issue.message.clone());
     diagnostic.line = Some(issue.line);
@@ -2414,12 +2414,12 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_input_contract_copies_are_byte_identical() {
+    fn lifecycle_input_contract_copies_are_byte_identical() {
         assert_eq!(
-            include_str!("../maintenance-input-contract.json"),
-            include_str!("../../../apps/scryer-web/lib/contracts/maintenance-input-contract.json"),
-            "crates/scryer-rules/maintenance-input-contract.json and \
-             apps/scryer-web/lib/contracts/maintenance-input-contract.json must stay byte-identical"
+            include_str!("../lifecycle-input-contract.json"),
+            include_str!("../../../apps/scryer-web/lib/contracts/lifecycle-input-contract.json"),
+            "crates/scryer-rules/lifecycle-input-contract.json and \
+             apps/scryer-web/lib/contracts/lifecycle-input-contract.json must stay byte-identical"
         );
     }
 
@@ -2433,31 +2433,31 @@ mod tests {
         );
     }
 
-    fn validate_maintenance_body(id: &str, body: &str) -> ValidationResult {
-        let source = maintenance::rewrite_package_declaration(body, id);
-        validate_maintenance_rule(&source, id).expect("validation should not fail outright")
+    fn validate_lifecycle_body(id: &str, body: &str) -> ValidationResult {
+        let source = lifecycle::rewrite_package_declaration(body, id);
+        validate_lifecycle_rule(&source, id).expect("validation should not fail outright")
     }
 
-    fn maintenance_policy(id: &str, body: &str) -> maintenance::MaintenancePolicy {
-        maintenance::MaintenancePolicy {
+    fn lifecycle_policy(id: &str, body: &str) -> lifecycle::LifecyclePolicy {
+        lifecycle::LifecyclePolicy {
             id: id.to_string(),
             name: format!("rule {id}"),
-            rego_source: maintenance::rewrite_package_declaration(body, id),
+            rego_source: lifecycle::rewrite_package_declaration(body, id),
         }
     }
 
     /// The engine is the second gate: a revision stored before a rule existed
     /// (or one that somehow bypassed validation) must still be refused at load,
     /// so the fact set the engine holds a rule on is never an underestimate.
-    fn maintenance_build_error(id: &str, body: &str) -> String {
-        maintenance::MaintenanceRulesEngine::build(&[maintenance_policy(id, body)])
+    fn lifecycle_build_error(id: &str, body: &str) -> String {
+        lifecycle::LifecycleRulesEngine::build(&[lifecycle_policy(id, body)])
             .err()
             .map(|error| error.to_string())
             .unwrap_or_else(|| panic!("engine build should have refused {id}"))
     }
 
     #[test]
-    fn maintenance_source_and_loaded_module_fact_hooks_agree() {
+    fn lifecycle_source_and_loaded_module_fact_hooks_agree() {
         for (id, body) in [
             ("known_fact", "unmonitor if {\n  input.facts.monitored\n}\n"),
             (
@@ -2465,8 +2465,8 @@ mod tests {
                 "unmonitor if {\n  some fact\n  input.facts[fact]\n}\n",
             ),
         ] {
-            let policy = maintenance_policy(id, body);
-            let path = maintenance::user_policy_path(id);
+            let policy = lifecycle_policy(id, body);
+            let path = lifecycle::user_policy_path(id);
             let module = parse_module(
                 &policy.rego_source,
                 &path,
@@ -2475,10 +2475,10 @@ mod tests {
             .expect("source should parse");
 
             let source_result =
-                <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts(
+                <lifecycle::LifecycleFamily as crate::policy::PolicyFamily>::referenced_facts(
                     &policy, &path,
                 );
-            let module_result = <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts_from_module(
+            let module_result = <lifecycle::LifecycleFamily as crate::policy::PolicyFamily>::referenced_facts_from_module(
                 &policy, &path, &module,
             );
             assert_eq!(source_result, module_result, "{id}");
@@ -2486,8 +2486,8 @@ mod tests {
     }
 
     /// Both gates refuse a source, with the same explanation.
-    fn assert_maintenance_rejected_everywhere(id: &str, body: &str, expected: &str) {
-        let result = validate_maintenance_body(id, body);
+    fn assert_lifecycle_rejected_everywhere(id: &str, body: &str, expected: &str) {
+        let result = validate_lifecycle_body(id, body);
         assert!(!result.valid, "{id} should not validate");
         assert!(
             result.errors.iter().any(|error| error.contains(expected)),
@@ -2495,7 +2495,7 @@ mod tests {
             result.errors
         );
 
-        let build_error = maintenance_build_error(id, body);
+        let build_error = lifecycle_build_error(id, body);
         assert!(
             build_error.contains(expected),
             "{id} build error: {build_error}"
@@ -2503,8 +2503,8 @@ mod tests {
     }
 
     #[test]
-    fn valid_maintenance_rule_passes_validation() {
-        let result = validate_maintenance_body(
+    fn valid_lifecycle_rule_passes_validation() {
+        let result = validate_lifecycle_body(
             "unmonitored_and_stale",
             "unmonitor if {\n  \
                not input.facts.monitored\n  \
@@ -2518,8 +2518,8 @@ mod tests {
     /// The advanced surface stays documented and reachable: envelope fields,
     /// including the per-file detail under `value[]`, still validate.
     #[test]
-    fn a_maintenance_rule_may_read_the_observation_envelope_directly() {
-        let result = validate_maintenance_body(
+    fn a_lifecycle_rule_may_read_the_observation_envelope_directly() {
+        let result = validate_lifecycle_body(
             "envelope_reader",
             "unmonitor if {\n  \
                input.observations.monitored.status == \"known\"\n  \
@@ -2535,13 +2535,13 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_without_an_action_is_rejected() {
+    fn lifecycle_rule_without_an_action_is_rejected() {
         for body in [
             "unknown if {\n  not input.facts.monitored\n}\n",
             // `match` is an ordinary helper now; on its own it decides nothing.
             "match if {\n  not input.facts.monitored\n}\n",
         ] {
-            let result = validate_maintenance_body("no_action_rule", body);
+            let result = validate_lifecycle_body("no_action_rule", body);
             assert!(!result.valid, "{body}");
             assert_eq!(
                 result.diagnostics[0].code,
@@ -2555,8 +2555,8 @@ mod tests {
     /// The referenced-fact set is what makes an unobservable fact hold a rule,
     /// so a fact name the host cannot read off the source is refused outright.
     #[test]
-    fn maintenance_rule_with_dynamic_fact_access_is_rejected() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_with_dynamic_fact_access_is_rejected() {
+        let result = validate_lifecycle_body(
             "dynamic_fact",
             "unmonitor if {\n  some fact\n  input.facts[fact]\n}\n",
         );
@@ -2576,8 +2576,8 @@ mod tests {
     /// false)` reads fact `x` without ever writing the path, so an unknown `x`
     /// would decide as a plain false instead of holding the rule.
     #[test]
-    fn maintenance_rule_reading_the_whole_fact_object_is_rejected() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_reading_the_whole_fact_object_is_rejected() {
+        let result = validate_lifecycle_body(
             "whole_object",
             "unmonitor if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
         );
@@ -2591,7 +2591,7 @@ mod tests {
             result.errors
         );
 
-        let build_error = maintenance_build_error(
+        let build_error = lifecycle_build_error(
             "whole_object",
             "unmonitor if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
         );
@@ -2607,10 +2607,10 @@ mod tests {
     /// would never fire and an unobservable fact would decide as a plain
     /// absence. Both gates — validation and engine build — refuse them.
     #[test]
-    fn maintenance_rule_referencing_the_whole_input_document_is_rejected() {
+    fn lifecycle_rule_referencing_the_whole_input_document_is_rejected() {
         const EXPECTED: &str = "Unsupported reference to the whole input document";
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_alias",
             "unmonitor if {\n  \
                doc := input\n  \
@@ -2619,20 +2619,20 @@ mod tests {
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_object_get",
             "unmonitor if {\n  object.get(input, [\"facts\", \"monitored\"], false)\n}\n",
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_as_function_argument",
             "unmonitor if {\n  watched(input)\n}\n\n\
              watched(doc) if {\n  doc.facts.last_watched_at\n}\n",
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_walk",
             "unmonitor if {\n  \
                some path, value\n  \
@@ -2643,7 +2643,7 @@ mod tests {
             EXPECTED,
         );
 
-        assert_maintenance_rejected_everywhere(
+        assert_lifecycle_rejected_everywhere(
             "input_bare_comparison",
             "unmonitor if {\n  input == {}\n}\n",
             EXPECTED,
@@ -2654,8 +2654,8 @@ mod tests {
     /// override target is a bare `input`, so the rule body underneath it reads
     /// facts that never appear in the referenced-fact set.
     #[test]
-    fn maintenance_rule_overriding_the_whole_input_document_is_rejected() {
-        assert_maintenance_rejected_everywhere(
+    fn lifecycle_rule_overriding_the_whole_input_document_is_rejected() {
+        assert_lifecycle_rejected_everywhere(
             "input_with_override",
             "unmonitor if {\n  \
                inner with input as {\"facts\": {\"monitored\": false}}\n\
@@ -2669,12 +2669,12 @@ mod tests {
     /// rule wrote, not the one Scryer observed, so it is refused at both the
     /// save and the load, by code.
     #[test]
-    fn maintenance_rule_overriding_a_named_fact_is_refused() {
+    fn lifecycle_rule_overriding_a_named_fact_is_refused() {
         let body = "unmonitor if {\n  \
                       inner with input.facts.monitored as false\n\
                     }\n\n\
                     inner if {\n  not input.facts.monitored\n}\n";
-        let result = validate_maintenance_body("named_fact_override", body);
+        let result = validate_lifecycle_body("named_fact_override", body);
         assert!(!result.valid);
         let codes: Vec<&str> = result
             .diagnostics
@@ -2688,14 +2688,14 @@ mod tests {
             result.errors
         );
 
-        let engine = maintenance::MaintenanceRulesEngine::build(&[maintenance_policy(
+        let engine = lifecycle::LifecycleRulesEngine::build(&[lifecycle_policy(
             "named_fact_override",
             body,
         )])
         .expect("a refused rule still loads");
         let evaluation = engine
             .evaluator()
-            .evaluate(&maintenance::synthetic_maintenance_input())
+            .evaluate(&lifecycle::synthetic_lifecycle_input())
             .expect("evaluation runs");
         assert!(evaluation.records.is_empty(), "{:?}", evaluation.records);
         assert_eq!(
@@ -2711,12 +2711,12 @@ mod tests {
     /// The rejection is exactly a *bare* `input`: the walker emits maximal
     /// paths, so an ordinary fact read must stay untouched at both gates.
     #[test]
-    fn maintenance_rule_reading_a_named_fact_is_still_accepted() {
+    fn lifecycle_rule_reading_a_named_fact_is_still_accepted() {
         let body = "unmonitor if {\n  not input.facts.monitored\n}\n";
-        let result = validate_maintenance_body("named_fact_read", body);
+        let result = validate_lifecycle_body("named_fact_read", body);
         assert!(result.valid, "errors: {:?}", result.errors);
 
-        maintenance::MaintenanceRulesEngine::build(&[maintenance_policy("named_fact_read", body)])
+        lifecycle::LifecycleRulesEngine::build(&[lifecycle_policy("named_fact_read", body)])
             .expect("a named fact read should load");
     }
 
@@ -2737,12 +2737,12 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_importing_part_of_input_is_rejected() {
-        let source = maintenance::rewrite_package_declaration(
+    fn lifecycle_rule_importing_part_of_input_is_rejected() {
+        let source = lifecycle::rewrite_package_declaration(
             "import input.facts\n\nunmonitor if {\n  facts.monitored\n}\n",
             "imported_facts",
         );
-        let result = validate_maintenance_rule(&source, "imported_facts").expect("validates");
+        let result = validate_lifecycle_rule(&source, "imported_facts").expect("validates");
         assert!(!result.valid);
         assert!(
             result.errors[0].contains("Unsupported import 'input.facts'"),
@@ -2756,7 +2756,7 @@ mod tests {
     /// template. Pinned here rather than parsed out of the gallery so the two
     /// have to be changed together deliberately.
     #[test]
-    fn every_pinned_maintenance_template_validates() {
+    fn every_pinned_lifecycle_template_validates() {
         let templates: [(&str, &str); 15] = [
             (
                 "dead-wanted",
@@ -2821,16 +2821,16 @@ mod tests {
         ];
 
         for (index, (template_id, rego_source)) in templates.into_iter().enumerate() {
-            let rule_id = format!("maintenance_template_{index}");
-            let rewritten = maintenance::rewrite_package_declaration(rego_source, &rule_id);
-            let result = validate_maintenance_rule(&rewritten, &rule_id).expect("validates");
+            let rule_id = format!("lifecycle_template_{index}");
+            let rewritten = lifecycle::rewrite_package_declaration(rego_source, &rule_id);
+            let result = validate_lifecycle_rule(&rewritten, &rule_id).expect("validates");
             assert!(result.valid, "{template_id}: {:?}", result.errors);
         }
     }
 
     #[test]
-    fn maintenance_rule_with_non_boolean_match_is_rejected() {
-        let result = validate_maintenance_body("numeric_match", "unmonitor := 42\n");
+    fn lifecycle_rule_with_non_boolean_match_is_rejected() {
+        let result = validate_lifecycle_body("numeric_match", "unmonitor := 42\n");
         assert!(!result.valid);
         let codes: Vec<&str> = result
             .diagnostics
@@ -2846,8 +2846,8 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_with_unknown_input_path_is_rejected() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_with_unknown_input_path_is_rejected() {
+        let result = validate_lifecycle_body(
             "watch_count",
             "unmonitor if {\n  input.facts.watch_count == 0\n}\n",
         );
@@ -2859,11 +2859,11 @@ mod tests {
         );
     }
 
-    /// The `input.release.extra.<key>` escape hatch is release-only: maintenance
+    /// The `input.release.extra.<key>` escape hatch is release-only: lifecycle
     /// facts are all catalogued, so an uncatalogued path is always a typo.
     #[test]
-    fn maintenance_rule_cannot_use_release_extra_paths() {
-        let result = validate_maintenance_body(
+    fn lifecycle_rule_cannot_use_release_extra_paths() {
+        let result = validate_lifecycle_body(
             "extra_path",
             "unmonitor if {\n  input.release.extra.anything == \"x\"\n}\n",
         );
@@ -2876,9 +2876,9 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_rule_with_wrong_package_is_rejected() {
-        let source = maintenance::rewrite_package_declaration("unmonitor := true\n", "actual_id");
-        let result = validate_maintenance_rule(&source, "expected_id").unwrap();
+    fn lifecycle_rule_with_wrong_package_is_rejected() {
+        let source = lifecycle::rewrite_package_declaration("unmonitor := true\n", "actual_id");
+        let result = validate_lifecycle_rule(&source, "expected_id").unwrap();
         assert!(!result.valid);
         assert!(result.errors[0].contains("package declaration"));
     }
@@ -3201,7 +3201,7 @@ mod tests {
         }
     }
 
-    /// The engine is the second gate, exactly as it is for maintenance: a stored
+    /// The engine is the second gate, exactly as it is for lifecycle: a stored
     /// revision that somehow bypassed validation must still be refused at load,
     /// so the fact set the engine holds a rule on is never an underestimate.
     fn request_build_error(id: &str, body: &str) -> String {
@@ -3636,32 +3636,32 @@ mod tests {
         );
     }
 
-    /// Each family judges paths against its own catalog: a maintenance fact is
-    /// not a request fact, and neither is a request fact a maintenance one.
+    /// Each family judges paths against its own catalog: a lifecycle fact is
+    /// not a request fact, and neither is a request fact a lifecycle one.
     #[test]
     fn the_three_family_catalogs_do_not_leak_into_each_other() {
-        let request_reading_a_maintenance_fact = validate_request_body(
-            "maintenance_fact",
+        let request_reading_a_lifecycle_fact = validate_request_body(
+            "lifecycle_fact",
             "approve if {\n  input.facts.monitored\n}\n",
         );
-        assert!(!request_reading_a_maintenance_fact.valid);
+        assert!(!request_reading_a_lifecycle_fact.valid);
         assert!(
-            request_reading_a_maintenance_fact.errors[0]
+            request_reading_a_lifecycle_fact.errors[0]
                 .contains("Unknown rule input path 'input.facts.monitored'"),
             "{:?}",
-            request_reading_a_maintenance_fact.errors
+            request_reading_a_lifecycle_fact.errors
         );
 
-        let maintenance_reading_a_request_fact = validate_maintenance_body(
+        let lifecycle_reading_a_request_fact = validate_lifecycle_body(
             "request_fact",
             "unmonitor if {\n  input.facts.certification_rank <= 2\n}\n",
         );
-        assert!(!maintenance_reading_a_request_fact.valid);
+        assert!(!lifecycle_reading_a_request_fact.valid);
         assert!(
-            maintenance_reading_a_request_fact.errors[0]
+            lifecycle_reading_a_request_fact.errors[0]
                 .contains("Unknown rule input path 'input.facts.certification_rank'"),
             "{:?}",
-            maintenance_reading_a_request_fact.errors
+            lifecycle_reading_a_request_fact.errors
         );
     }
 

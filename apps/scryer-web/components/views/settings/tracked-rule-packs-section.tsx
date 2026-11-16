@@ -354,7 +354,7 @@ export function TrackedRulePacksSection({
                           <TableHeader>
                             <TableRow>
                               <TableHead className="w-[28%]">
-                                {t("settings.maintenancePreviewRuleSelect")}
+                                {t("settings.lifecyclePreviewRuleSelect")}
                               </TableHead>
                               <TableHead>
                                 {t("settings.ruleDescription")}

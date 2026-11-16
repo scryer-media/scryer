@@ -24,7 +24,7 @@ use super::*;
 use crate::acquisition::convergence::convergence_scope_key;
 use crate::acquisition::targets::AcquisitionTarget;
 use crate::contracts::{QueueDownloadOutcome, SubmissionConflictPolicy, SubmissionScope};
-use crate::ports::MaintenanceSearchJobRunCreation;
+use crate::ports::LifecycleSearchJobRunCreation;
 
 /// Convergence state of a scope for the UI. Mirrors the GraphQL
 /// `ConvergenceStateValue`; the interface maps this 1:1.
@@ -1041,7 +1041,7 @@ fn acquisition_search_state_for_status(status: JobRunStatus, cancelled: bool) ->
 mod acquisition_search_state_tests {
     use super::*;
     #[test]
-    fn completion_preserves_maintenance_request_metadata() {
+    fn completion_preserves_lifecycle_request_metadata() {
         let original = serde_json::json!({
             "schema_version": 1,
             "maintenance_action_request": {"wanted_kind": "missing", "title_id": "title"},
@@ -1304,26 +1304,26 @@ impl AppUseCase {
     /// interactive search. The accepted receipt and the job row commit together
     /// before this method returns or spawns; an existing receipt deliberately
     /// returns without starting another worker.
-    pub async fn start_maintenance_acquisition_search_job(
+    pub async fn start_lifecycle_acquisition_search_job(
         &self,
         actor: &User,
         request: AcquisitionSearchRequest,
-        receipt: scryer_domain::MaintenanceActionJobReceipt,
-    ) -> AppResult<scryer_domain::MaintenanceActionJobReceipt> {
+        receipt: scryer_domain::LifecycleActionJobReceipt,
+    ) -> AppResult<scryer_domain::LifecycleActionJobReceipt> {
         receipt
             .validate_schema()
             .map_err(|error| AppError::Validation(error.to_string()))?;
         let Some(job_run_id) = receipt.job_run_id.clone() else {
-            return Err(AppError::validation_refused(crate::error_reasons::acquisition::MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID, "maintenance Search dispatch requires a preallocated job run id"));
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID, "lifecycle Search dispatch requires a preallocated job run id"));
         };
-        if receipt.state != scryer_domain::MaintenanceActionJobReceiptState::Accepted {
-            return Err(AppError::validation_refused(crate::error_reasons::acquisition::MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT, "maintenance Search dispatch requires an accepted receipt intent"));
+        if receipt.state != scryer_domain::LifecycleActionJobReceiptState::Accepted {
+            return Err(AppError::validation_refused(crate::error_reasons::acquisition::LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT, "lifecycle Search dispatch requires an accepted receipt intent"));
         }
 
         if let Some(existing) = self
             .services
             .customization
-            .maintenance_evaluation
+            .lifecycle_evaluation
             .list_action_job_receipts(&receipt.key)
             .await?
             .into_iter()
@@ -1332,8 +1332,8 @@ impl AppUseCase {
                     && existing.logical_request_key == receipt.logical_request_key
                     && matches!(
                         existing.state,
-                        scryer_domain::MaintenanceActionJobReceiptState::Accepted
-                            | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                        scryer_domain::LifecycleActionJobReceiptState::Accepted
+                            | scryer_domain::LifecycleActionJobReceiptState::Completed
                     )
             })
         {
@@ -1357,7 +1357,7 @@ impl AppUseCase {
                 if let Some(existing) = self
                     .services
                     .customization
-                    .maintenance_evaluation
+                    .lifecycle_evaluation
                     .list_action_job_receipts(&receipt.key)
                     .await?
                     .into_iter()
@@ -1366,8 +1366,8 @@ impl AppUseCase {
                             && existing.logical_request_key == receipt.logical_request_key
                             && matches!(
                                 existing.state,
-                                scryer_domain::MaintenanceActionJobReceiptState::Accepted
-                                    | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                                scryer_domain::LifecycleActionJobReceiptState::Accepted
+                                    | scryer_domain::LifecycleActionJobReceiptState::Completed
                             )
                     })
                 {
@@ -1439,11 +1439,11 @@ impl AppUseCase {
             .services
             .events
             .job_runs
-            .create_maintenance_search_job_run(&run, &receipt)
+            .create_lifecycle_search_job_run(&run, &receipt)
             .await?
         {
-            MaintenanceSearchJobRunCreation::Existing { receipt } => return Ok(receipt),
-            MaintenanceSearchJobRunCreation::Created { run, receipt } => (*run, receipt),
+            LifecycleSearchJobRunCreation::Existing { receipt } => return Ok(receipt),
+            LifecycleSearchJobRunCreation::Created { run, receipt } => (*run, receipt),
         };
 
         self.runtime
@@ -1487,9 +1487,9 @@ impl AppUseCase {
         Ok(receipt)
     }
 
-    /// Reserve and resume durable maintenance searches before startup marks
+    /// Reserve and resume durable lifecycle searches before startup marks
     /// other abandoned jobs failed. Reuse their receipt and job identities.
-    pub async fn resume_interrupted_maintenance_searches(&self) -> AppResult<Vec<String>> {
+    pub async fn resume_interrupted_lifecycle_searches(&self) -> AppResult<Vec<String>> {
         let runs = self.services.events.job_runs.list_active_job_runs().await?;
         let mut reserved = Vec::new();
         {
@@ -1584,7 +1584,7 @@ impl AppUseCase {
                     let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
                         AppError::validation_refused(crate::error_reasons::acquisition::SEARCH_ACTOR_UNAVAILABLE, "search actor is unavailable")
                     })?;
-                    // A maintenance sequence dispatches its Search step as the
+                    // A lifecycle sequence dispatches its Search step as the
                     // synthetic system actor, which has no persisted user row.
                     // Reconstructing it is what makes those steps recoverable
                     // at all; `UserStore` would answer "no such user" forever.

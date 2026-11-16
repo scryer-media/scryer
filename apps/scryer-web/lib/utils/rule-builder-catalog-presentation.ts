@@ -17,9 +17,9 @@ export const RULE_BUILDER_CATALOGS: Readonly<
   qualityProfiles: {
     placeholderKey: "settings.ruleBuilderQualityProfilePlaceholder",
   },
-  libraries: { placeholderKey: "settings.maintenanceBuilderLibraryPlaceholder" },
+  libraries: { placeholderKey: "settings.lifecycleBuilderLibraryPlaceholder" },
   roots: {
-    placeholderKey: "settings.maintenanceBuilderRootPlaceholder",
+    placeholderKey: "settings.lifecycleBuilderRootPlaceholder",
     display: "path",
   },
   titleTags: {

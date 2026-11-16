@@ -86,7 +86,7 @@ export function canAccessSettingsSection(
     case "delayProfiles":
     case "titleTags":
     case "rules":
-    case "maintenanceRules":
+    case "lifecycleRules":
     case "requestRules":
     case "post-processing":
     case "subtitles":

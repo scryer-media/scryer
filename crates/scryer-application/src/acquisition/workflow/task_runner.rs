@@ -29,10 +29,10 @@ const BACKGROUND_COLD_TARGET_VALUE: f64 = 0.25;
 /// that is spread over several walks.
 pub(crate) const BACKGROUND_TITLE_WALK_QUERY_BUDGET: usize = 120;
 
-/// How far apart two instances' maintenance evaluation passes can drift. Much
+/// How far apart two instances' lifecycle evaluation passes can drift. Much
 /// smaller than the eight-hour cadence on purpose: the jitter is there to keep
 /// a fleet from sweeping in lockstep, not to postpone the first pass.
-const MAINTENANCE_EVALUATION_JITTER_WINDOW: std::time::Duration =
+const LIFECYCLE_EVALUATION_JITTER_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
 /// Same rationale, distinct salt, for the action handler's twelve-hour cadence.
@@ -6640,32 +6640,33 @@ pub async fn start_background_acquisition_poller(
         advertise_acquisition_job_schedule(&app, true, rss_sync_tick).await;
     }
 
-    // Maintenance evaluation (RFC 137 section 10) runs on an eight-hour
+    // Lifecycle evaluation (RFC 137 section 10) runs on an eight-hour
     // cadence, offset by a per-instance jitter so a fleet of instances does not
     // sweep their libraries in lockstep. The jitter window is deliberately much
     // smaller than the cadence: it exists to spread load, not to delay the
     // first pass by most of a working day. The job itself re-reads the instance
     // gate at the start of every run, so an operator arming or disarming
     // evaluation never has to restart Scryer.
-    let maintenance_evaluation_cadence = std::time::Duration::from_secs(
-        crate::jobs::MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS as u64,
+    let lifecycle_evaluation_cadence = std::time::Duration::from_secs(
+        crate::jobs::LIFECYCLE_RULE_EVALUATION_INTERVAL_SECONDS as u64,
     );
-    let maintenance_evaluation_offset = match app.discovery_scheduler_seed().await {
+    let lifecycle_evaluation_offset = match app.discovery_scheduler_seed().await {
         Ok(seed) => crate::scheduler::stable_jitter_offset(
             &seed,
+            // Stable jitter seed, not a name: changing it moves every instance's offset.
             "maintenance_rule_evaluation",
             "global",
-            MAINTENANCE_EVALUATION_JITTER_WINDOW,
+            LIFECYCLE_EVALUATION_JITTER_WINDOW,
         ),
         Err(error) => {
-            warn!(error = %error, "could not resolve the scheduler seed; maintenance evaluation runs unjittered");
+            warn!(error = %error, "could not resolve the scheduler seed; lifecycle evaluation runs unjittered");
             std::time::Duration::ZERO
         }
     };
     app.advertise_job_next_run_at(
-        JobKey::MaintenanceRuleEvaluation,
+        JobKey::LifecycleRuleEvaluation,
         Utc::now()
-            + chrono::Duration::from_std(maintenance_evaluation_offset)
+            + chrono::Duration::from_std(lifecycle_evaluation_offset)
                 .unwrap_or_else(|_| chrono::Duration::zero()),
     )
     .await;
@@ -6760,11 +6761,11 @@ pub async fn start_background_acquisition_poller(
     // directly.
     let mut rss_sync_interval = tokio::time::interval(rss_sync_tick);
     let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_mins(1));
-    let mut maintenance_evaluation_interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + maintenance_evaluation_offset,
-        maintenance_evaluation_cadence,
+    let mut lifecycle_evaluation_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + lifecycle_evaluation_offset,
+        lifecycle_evaluation_cadence,
     );
-    maintenance_evaluation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    lifecycle_evaluation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut lifecycle_action_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + lifecycle_action_offset,
         lifecycle_action_cadence,
@@ -7148,18 +7149,18 @@ pub async fn start_background_acquisition_poller(
                     }
                 }).await;
             }
-            _ = maintenance_evaluation_interval.tick() => {
-                let cadence = maintenance_evaluation_cadence;
+            _ = lifecycle_evaluation_interval.tick() => {
+                let cadence = lifecycle_evaluation_cadence;
                 let next_run_in =
                     chrono::Duration::from_std(cadence).unwrap_or_else(|_| chrono::Duration::hours(8));
-                admit_scheduled_job(&app, &mut supervisor, "maintenance_rule_evaluation", cadence, Some((JobKey::MaintenanceRuleEvaluation, next_run_in)), move |app| async move {
+                admit_scheduled_job(&app, &mut supervisor, "lifecycle_rule_evaluation", cadence, Some((JobKey::LifecycleRuleEvaluation, next_run_in)), move |app| async move {
                     app.advertise_job_next_run_at(
-                        JobKey::MaintenanceRuleEvaluation,
+                        JobKey::LifecycleRuleEvaluation,
                         Utc::now() + next_run_in,
                     ).await;
-                    if let Err(e) = app.run_scheduled_job_now(JobKey::MaintenanceRuleEvaluation, JobTriggerSource::ScheduledInterval).await {
-                        warn!(error = %e, "scheduled maintenance rule evaluation failed");
-                        metrics::counter!("scryer_task_errors_total", "task" => "maintenance_rule_evaluation").increment(1);
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleRuleEvaluation, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "scheduled lifecycle rule evaluation failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_rule_evaluation").increment(1);
                     }
                 }).await;
             }
@@ -7173,7 +7174,7 @@ pub async fn start_background_acquisition_poller(
                         Utc::now() + next_run_in,
                     ).await;
                     if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::ScheduledInterval).await {
-                        warn!(error = %e, "scheduled maintenance action handling failed");
+                        warn!(error = %e, "scheduled lifecycle action handling failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_action_handling").increment(1);
                     }
                 }).await;
@@ -7323,14 +7324,14 @@ mod task_runner_tests {
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let (finish, finish_rx) = tokio::sync::oneshot::channel();
         assert!(
-            tasks.try_spawn("maintenance_rule_evaluation", budget, async move {
+            tasks.try_spawn("lifecycle_rule_evaluation", budget, async move {
                 started.send(()).unwrap();
                 finish_rx.await.unwrap();
             })
         );
         started_rx.await.unwrap();
         assert!(
-            !tasks.try_spawn("maintenance_rule_evaluation", budget, async {
+            !tasks.try_spawn("lifecycle_rule_evaluation", budget, async {
                 panic!("a second tick must not queue another evaluation");
             })
         );
@@ -7340,9 +7341,9 @@ mod task_runner_tests {
         assert!(tasks.tasks.try_join_next().is_none());
         finish.send(()).unwrap();
         let done = tasks.join_next().await.unwrap();
-        assert_eq!(done.name, "maintenance_rule_evaluation");
+        assert_eq!(done.name, "lifecycle_rule_evaluation");
         done.result.unwrap();
-        assert!(tasks.try_spawn("maintenance_rule_evaluation", budget, async {}));
+        assert!(tasks.try_spawn("lifecycle_rule_evaluation", budget, async {}));
         tasks.join_next().await.unwrap().result.unwrap();
         assert!(tasks.is_empty());
     }
@@ -8008,15 +8009,15 @@ mod task_runner_tests {
         let mut tasks = ScheduledTaskSupervisor::<()>::new();
         let budget = scheduled_task_overdue_budget(secs(60));
         assert!(
-            tasks.try_spawn("maintenance_rule_evaluation", budget, async {
+            tasks.try_spawn("lifecycle_rule_evaluation", budget, async {
                 panic!("synthetic evaluation failure");
             })
         );
         let failed = tasks.join_next().await.unwrap();
         // The panic still releases the job's slot under its own name.
-        assert_eq!(failed.name, "maintenance_rule_evaluation");
+        assert_eq!(failed.name, "lifecycle_rule_evaluation");
         assert!(failed.result.unwrap_err().is_panic());
-        assert!(tasks.try_spawn("maintenance_rule_evaluation", budget, async {}));
+        assert!(tasks.try_spawn("lifecycle_rule_evaluation", budget, async {}));
         tasks.join_next().await.unwrap().result.unwrap();
     }
 

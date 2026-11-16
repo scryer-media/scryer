@@ -441,10 +441,10 @@ const en: LocaleDictionary = {
     "At least one indexer config field must be provided.",
   "error.reason.ACQUISITION_MAGNET_REQUIRES_TORRENT_PROTOCOL":
     "A magnet requires the torrent protocol.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
-    "Maintenance Search dispatch requires an accepted receipt intent.",
-  "error.reason.ACQUISITION_MAINTENANCE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
-    "Maintenance Search dispatch requires a preallocated job run id.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_ACCEPTED_RECEIPT_INTENT":
+    "Lifecycle Search dispatch requires an accepted receipt intent.",
+  "error.reason.ACQUISITION_LIFECYCLE_SEARCH_DISPATCH_REQUIRES_PREALLOCATED_JOB_RUN_ID":
+    "Lifecycle Search dispatch requires a preallocated job run id.",
   "error.reason.ACQUISITION_MATCHED_TITLE_NO_LONGER_EXISTS_NOT_FOUND":
     "Matched title was not found.",
   "error.reason.ACQUISITION_MATCHING_EPISODES_PAUSED_ALREADY_DOWNLOADING":
@@ -780,50 +780,50 @@ const en: LocaleDictionary = {
   "error.reason.CATALOG_TVDB_ID_INVALID": "Tvdb id must be numeric.",
   "error.reason.CONFIGURATION_CANDIDATE_EXPECTED_STATES_REQUIRED":
     "A candidate transition must name the states it expects.",
-  "error.reason.CONFIGURATION_MAINTENANCE_ATTEMPT_RESULT_REQUIRED":
-    "A maintenance action step finish must carry an attempt result.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_ALREADY_ACTIVE":
-    "Maintenance rule already has an active candidate for title.",
-  "error.reason.CONFIGURATION_MAINTENANCE_CANDIDATE_PAGE_TOO_LARGE":
-    "Maintenance sequence progress accepts at most 100 candidates per page.",
-  "error.reason.CONFIGURATION_MAINTENANCE_COMPLETION_LIMIT_INVALID":
-    "Invalid maintenance completion limit.",
-  "error.reason.CONFIGURATION_MAINTENANCE_DISPATCH_STATE_INVALID":
-    "A generic maintenance job dispatch must begin in dispatching state.",
-  "error.reason.CONFIGURATION_MAINTENANCE_FAILED_STEP_ID_REQUIRED":
-    "Failed maintenance sequence marker lacks its failed step id.",
-  "error.reason.CONFIGURATION_MAINTENANCE_HELD_RELEASE_INVALID":
-    "Invalid maintenance held-attempt release.",
-  "error.reason.CONFIGURATION_MAINTENANCE_JOB_RUN_ID_REQUIRED":
-    "Accepted maintenance job receipts require a real job run id.",
-  "error.reason.CONFIGURATION_MAINTENANCE_MEMBERSHIP_TERMINAL":
-    "Maintenance sequence membership is terminal until a confirmed no-match.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_EXPECTED_STATES_REQUIRED":
-    "A maintenance job receipt transition must name expected states.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RECEIPT_PAGE_TOO_LARGE":
-    "Maintenance sequence receipt projection accepts at most 700 steps.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RELEASE_REASON_REQUIRED":
-    "Maintenance held-attempt release lacks a reason.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RETRY_ATTEMPT_NOT_ADVANCED":
-    "A retried maintenance action step must advance its attempt.",
-  "error.reason.CONFIGURATION_MAINTENANCE_RULE_HAS_HISTORY":
-    "This maintenance rule has live candidates or action history; disable it instead.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SEQUENCE_IDENTITY_MISMATCH":
-    "Maintenance action step does not match its persisted sequence identity.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_ATTEMPT_INVALID":
-    "A maintenance action step claim must start a non-negative running attempt.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_PREFIX_MISMATCH":
-    "Failed maintenance sequence marker does not preserve its step prefix.",
-  "error.reason.CONFIGURATION_MAINTENANCE_STEP_TARGET_INVALID":
-    "A maintenance action step claim has an invalid target identity.",
-  "error.reason.CONFIGURATION_MAINTENANCE_SUCCESS_EVIDENCE_INCOMPLETE":
-    "Successful maintenance sequence marker lacks complete step evidence.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_EVIDENCE_MISMATCH":
-    "Maintenance terminal marker does not match persisted step evidence.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STATE_MISMATCH":
-    "Maintenance sequence terminal marker and candidate terminal state disagree.",
-  "error.reason.CONFIGURATION_MAINTENANCE_TERMINAL_STEP_IDS_INVALID":
-    "Maintenance sequence terminal marker has invalid expected step ids.",
+  "error.reason.CONFIGURATION_LIFECYCLE_ATTEMPT_RESULT_REQUIRED":
+    "A lifecycle action step finish must carry an attempt result.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_ALREADY_ACTIVE":
+    "Lifecycle rule already has an active candidate for title.",
+  "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
+    "Lifecycle sequence progress accepts at most 100 candidates per page.",
+  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
+    "Invalid lifecycle completion limit.",
+  "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
+    "A generic lifecycle job dispatch must begin in dispatching state.",
+  "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
+    "Failed lifecycle sequence marker lacks its failed step id.",
+  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
+    "Invalid lifecycle held-attempt release.",
+  "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
+    "Accepted lifecycle job receipts require a real job run id.",
+  "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
+    "Lifecycle sequence membership is terminal until a confirmed no-match.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_EXPECTED_STATES_REQUIRED":
+    "A lifecycle job receipt transition must name expected states.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
+    "Lifecycle sequence receipt projection accepts at most 700 steps.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
+    "Lifecycle held-attempt release lacks a reason.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
+    "A retried lifecycle action step must advance its attempt.",
+  "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":
+    "This lifecycle rule has live candidates or action history; disable it instead.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SEQUENCE_IDENTITY_MISMATCH":
+    "Lifecycle action step does not match its persisted sequence identity.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_ATTEMPT_INVALID":
+    "A lifecycle action step claim must start a non-negative running attempt.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_PREFIX_MISMATCH":
+    "Failed lifecycle sequence marker does not preserve its step prefix.",
+  "error.reason.CONFIGURATION_LIFECYCLE_STEP_TARGET_INVALID":
+    "A lifecycle action step claim has an invalid target identity.",
+  "error.reason.CONFIGURATION_LIFECYCLE_SUCCESS_EVIDENCE_INCOMPLETE":
+    "Successful lifecycle sequence marker lacks complete step evidence.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_EVIDENCE_MISMATCH":
+    "Lifecycle terminal marker does not match persisted step evidence.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STATE_MISMATCH":
+    "Lifecycle sequence terminal marker and candidate terminal state disagree.",
+  "error.reason.CONFIGURATION_LIFECYCLE_TERMINAL_STEP_IDS_INVALID":
+    "Lifecycle sequence terminal marker has invalid expected step ids.",
   "error.reason.CONFIGURATION_PLUGIN_NOT_INSTALLED":
     "Plugin is no longer installed.",
   "error.reason.CONFIGURATION_PLUGIN_SETTINGS_PLUGIN_REQUIRED":
@@ -1907,12 +1907,12 @@ const en: LocaleDictionary = {
     "Folder ownership conflicts cannot be bound or adopted.",
   "error.reason.LIBRARY_LINKED_FOLDER_REQUIRES_EXPLICIT_OWNERSHIP_RESOLUTION_BEFORE_SCANNING":
     "Linked folder requires explicit ownership resolution before scanning.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FILE_CHANGED":
-    "Maintenance deletion file changed; re-evaluation required.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_FINGERPRINT_CHANGED":
-    "Maintenance deletion fingerprint changed.",
-  "error.reason.LIBRARY_MAINTENANCE_DELETION_TARGETS_CHANGED":
-    "Maintenance deletion targets changed; re-evaluation required.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FILE_CHANGED":
+    "Lifecycle deletion file changed; re-evaluation required.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_FINGERPRINT_CHANGED":
+    "Lifecycle deletion fingerprint changed.",
+  "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
+    "Lifecycle deletion targets changed; re-evaluation required.",
   "error.reason.LIBRARY_MEDIA_FILE_NOT_FOUND": "Media file was not found.",
   "error.reason.LIBRARY_MEDIA_IDENTITY_CONFLICTS_PROPOSED_TITLE_FOLDER":
     "Media identity conflicts with the proposed title folder.",
@@ -2297,91 +2297,91 @@ const en: LocaleDictionary = {
     "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "The destination did not pass verification.",
-  "error.reason.MAINTENANCE_ACTION_CONFIGURATION_INVALID":
-    "The maintenance action configuration is invalid.",
-  "error.reason.MAINTENANCE_ACTION_INVALID":
-    "Maintenance action is not valid for a title-scoped rule.",
-  "error.reason.MAINTENANCE_ACTION_NOT_STORABLE":
-    "Maintenance action is not storable.",
-  "error.reason.MAINTENANCE_ACTION_UNSUPPORTED":
-    "This maintenance action is not supported for titles.",
-  "error.reason.MAINTENANCE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.LIFECYCLE_ACTION_CONFIGURATION_INVALID":
+    "The lifecycle action configuration is invalid.",
+  "error.reason.LIFECYCLE_ACTION_INVALID":
+    "Lifecycle action is not valid for a title-scoped rule.",
+  "error.reason.LIFECYCLE_ACTION_NOT_STORABLE":
+    "Lifecycle action is not storable.",
+  "error.reason.LIFECYCLE_ACTION_UNSUPPORTED":
+    "This lifecycle action is not supported for titles.",
+  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
     "This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
-  "error.reason.MAINTENANCE_AMBIGUOUS_MAINTENANCE_FILE_COVERAGE":
-    "Ambiguous maintenance file coverage.",
-  "error.reason.MAINTENANCE_ARM_COUNT_MISMATCH":
+  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+    "Ambiguous lifecycle file coverage.",
+  "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "The candidate count changed. Review the current count before arming.",
-  "error.reason.MAINTENANCE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
     "Child deletion requires an episode or season.",
-  "error.reason.MAINTENANCE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
     "This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.",
-  "error.reason.MAINTENANCE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
     "DeleteFiles has an incompatible Unmonitor prerequisite.",
-  "error.reason.MAINTENANCE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
     "DeleteFiles requires an earlier Unmonitor step.",
-  "error.reason.MAINTENANCE_EXCLUSION_NOT_FOUND":
-    "Maintenance exclusion was not found.",
-  "error.reason.MAINTENANCE_FIELD_REQUIRED": "A required field is empty.",
-  "error.reason.MAINTENANCE_FILE_OWNERSHIP_CHANGED":
-    "Maintenance file ownership changed.",
-  "error.reason.MAINTENANCE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
-    "Maintenance file targets changed; another evaluation is required.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_INVALID":
+  "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
+    "Lifecycle exclusion was not found.",
+  "error.reason.LIFECYCLE_FIELD_REQUIRED": "A required field is empty.",
+  "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
+    "Lifecycle file ownership changed.",
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+    "Lifecycle file targets changed; another evaluation is required.",
+  "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Grace period must be zero or more days.",
-  "error.reason.MAINTENANCE_GRACE_PERIOD_OUT_OF_RANGE":
+  "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Grace period must be at most 3650 days (ten years).",
-  "error.reason.MAINTENANCE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
+  "error.reason.LIFECYCLE_MATCHER_READS_STORAGE_FACTS_MUST_SELECT_CONFIGURED_LIBRARY_ROOT":
     "A matcher that reads storage facts must select a configured library root.",
-  "error.reason.MAINTENANCE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
     "Movie titles do not have an episode inventory.",
-  "error.reason.MAINTENANCE_PERSON_TARGETING_PERMISSION_REQUIRED":
+  "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-  "error.reason.MAINTENANCE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
     "Preview accepts at most 50 titles.",
-  "error.reason.MAINTENANCE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
     "Preview requires between one and fifty subjects.",
-  "error.reason.MAINTENANCE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
     "Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_ACTION_NO_TARGET_PROFILE":
     "Quality-profile action has no target profile.",
-  "error.reason.MAINTENANCE_RULE_CHANGED_WHILE_CONFIRMING":
+  "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "The rule changed while confirming; review it again before arming deletion.",
-  "error.reason.MAINTENANCE_RULE_CONFIGURATION_INVALID":
+  "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
     "The rule configuration must be reviewed again before arming deletion; reopen the confirmation.",
-  "error.reason.MAINTENANCE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
-  "error.reason.MAINTENANCE_RULE_FAILED_COMPILE":
-    "The maintenance rule failed to compile.",
-  "error.reason.MAINTENANCE_RULE_SET_NOT_FOUND":
-    "Maintenance rule set was not found.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
+  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE":
+    "The lifecycle rule failed to compile.",
+  "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
+    "Lifecycle rule set was not found.",
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
     "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
     "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.",
-  "error.reason.MAINTENANCE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
     "This rule ships with Scryer and cannot be renamed.",
-  "error.reason.MAINTENANCE_RULE_SOURCE_INVALID":
-    "The maintenance rule source is invalid.",
-  "error.reason.MAINTENANCE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
+    "The lifecycle rule source is invalid.",
+  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
     "This rule's action never changes anything, so it can only run as a dry run.",
-  "error.reason.MAINTENANCE_RULE_VALIDATION_FAILED": "Rule validation failed.",
-  "error.reason.MAINTENANCE_SEQUENCE_ACTIONS_INVALID":
+  "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "Rule validation failed.",
+  "error.reason.LIFECYCLE_SEQUENCE_ACTIONS_INVALID":
     "Sequence actions must use the sequence executor.",
-  "error.reason.MAINTENANCE_SEQUENCE_STEP_PARAMETERS_INVALID":
-    "Maintenance sequence step parameters are invalid.",
-  "error.reason.MAINTENANCE_STORAGE_ROOT_NOT_CONFIGURED":
+  "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
+    "Lifecycle sequence step parameters are invalid.",
+  "error.reason.LIFECYCLE_STORAGE_ROOT_NOT_CONFIGURED":
     "The storage root the rule selects is not configured.",
-  "error.reason.MAINTENANCE_SUBJECT_ID_REQUIRED":
-    "Maintenance subject ID is required.",
-  "error.reason.MAINTENANCE_SUBJECT_KIND_INVALID":
-    "Invalid maintenance subject kind.",
-  "error.reason.MAINTENANCE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
-    "The maintenance subject was not found, or no longer belongs to this title.",
-  "error.reason.MAINTENANCE_TAG_ACTION_NO_TAGS_CONFIGURED":
+  "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED":
+    "Lifecycle subject ID is required.",
+  "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
+    "Invalid lifecycle subject kind.",
+  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+    "The lifecycle subject was not found, or no longer belongs to this title.",
+  "error.reason.LIFECYCLE_TAG_ACTION_NO_TAGS_CONFIGURED":
     "Tag action has no tags configured.",
-  "error.reason.MAINTENANCE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
+  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
     "The target quality profile does not exist.",
-  "error.reason.MAINTENANCE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
-    "Maintenance unmonitoring candidate identity does not match its title.",
+  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+    "Lifecycle unmonitoring candidate identity does not match its title.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
     "The media analysis result is invalid.",
   "error.reason.MEDIA_ARTWORK_WORKER_COUNT_INVALID":
@@ -3930,7 +3930,7 @@ const en: LocaleDictionary = {
   "error.reason.SUBTITLES_TITLE_NOT_FOUND": "Title was not found.",
   "error.reason.TITLE_NOT_FOUND": "The title could not be found.",
   "error.reason.WORKFLOW_ACQUISITION_RECEIPT_REQUIRED":
-    "Maintenance Search requires an accepted receipt for its acquisition job run.",
+    "Lifecycle Search requires an accepted receipt for its acquisition job run.",
   "error.reason.WORKFLOW_CLEANUP_IDENTITY_REQUIRED":
     "Manual cleanup requires title and facet.",
   "error.reason.WORKFLOW_DOWNLOAD_AWAITING_RETRY_RECONCILIATION":
@@ -3987,7 +3987,7 @@ const en: LocaleDictionary = {
   "error.ruleUnreferencedRule":
     "This rule is not an action and nothing else in the source uses it. Check the spelling if it was meant to be an action.",
   "error.ruleMatchRequired":
-    "Define a boolean match rule for this maintenance matcher.",
+    "Define a boolean match rule for this lifecycle matcher.",
   "error.ruleVoteRequired":
     "Define a vote (approve, deny or manual), a value that shapes the approval, or add_tags for this request rule.",
 
@@ -4062,7 +4062,7 @@ const en: LocaleDictionary = {
   "error.reason.INTERFACE_BROWSE_DIRECTORY_UNAVAILABLE":
     "The directory cannot be opened.",
   "error.reason.INTERFACE_RULE_ACTION_INVALID":
-    "The maintenance action definition is invalid.",
+    "The lifecycle action definition is invalid.",
   "error.reason.INTERFACE_REQUEST_RULE_SAMPLE_INVALID":
     "The request rule sample is invalid.",
 
@@ -4213,8 +4213,8 @@ const en: LocaleDictionary = {
     "Choose consistent MFA requirements for this login method.",
   "error.reason.INTERFACE_LOGIN_MFA_REQUIRED":
     "Choose an MFA requirement for Jellyfin login.",
-  "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND":
-    "The maintenance rule could not be found.",
+  "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND":
+    "The lifecycle rule could not be found.",
   "error.reason.INTERFACE_METADATA_DATE_INVALID":
     "Enter a valid metadata date.",
   "error.reason.INTERFACE_METADATA_ID_INVALID":
@@ -4298,7 +4298,7 @@ const en: LocaleDictionary = {
   "error.ruleTargetsPerson":
     "Managing permissions is required to use requester fields in a rule.",
   "error.rulePackUpToDate": "This rule pack is already up to date.",
-  "error.maintenanceArmCountMismatch":
+  "error.lifecycleArmCountMismatch":
     "The candidate count changed. Review and acknowledge the current count again.",
   "error.mfaStepUpRequired":
     "Settings verification expired. Enter an authenticator code to continue.",
@@ -4512,7 +4512,7 @@ const en: LocaleDictionary = {
   "settings.regoHelper.count":
     "Count items in an array, set or object, or characters in a string.",
   "settings.regoHelper.objectGet":
-    "Read an object key, returning the default when absent. Use a named input fact in request and maintenance rules.",
+    "Read an object key, returning the default when absent. Use a named input fact in request and lifecycle rules.",
   "settings.regoHelper.startsWith":
     "Return whether a string begins with a prefix.",
   "settings.regoSnippet.scoreEntry":
@@ -4526,7 +4526,7 @@ const en: LocaleDictionary = {
   "settings.regoSnippet.manualRequest":
     "Require manual review when the recent approval count reaches a threshold.",
   "settings.regoHelper.daysSince":
-    "Whole days between an RFC3339 timestamp and the evaluation time. Maintenance rules only.",
+    "Whole days between an RFC3339 timestamp and the evaluation time. Lifecycle rules only.",
   "settings.regoSnippet.unmonitorTagged":
     "Unmonitor a subject that carries a tag.",
   "settings.regoSnippet.tagAfterDays":
@@ -9534,705 +9534,705 @@ const en: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "Unsupported",
   "appUpgrade.success": "Upgraded to {{version}}",
   "appUpgrade.failed": "Upgrade failed.",
-  // ── Maintenance rules ──
-  "settings.maintenanceRules": "Maintenance Rules",
+  // ── Lifecycle rules ──
+  "settings.lifecycleRules": "Lifecycle Rules",
   "nav.rules": "Rules",
   "settings.rulesScoring": "Scoring Rules",
-  "settings.maintenanceNavRules": "Rules",
-  "settings.maintenanceNavHistory": "History",
-  "settings.maintenanceRuleAction": "Actions",
-  "settings.maintenanceRuleActionHelp":
-    "What this rule would do once maintenance actions are switched on.",
-  "settings.maintenanceRuleActionPlaceholder": "Choose an action",
-  "settings.maintenanceRuleNoActions": "No title-scoped actions are available.",
-  "settings.maintenanceActionSequence": "Action sequence",
-  "settings.maintenanceSequenceObserveOnly": "Dry run only",
-  "settings.maintenanceSequenceHistoryWaiting": "waiting for an earlier step",
-  "settings.maintenanceSequenceHistorySearchRequested": "search requested",
-  "settings.maintenanceSequenceHistorySearchAccepted": "accepted",
-  "settings.maintenanceSequenceHistoryJob": "job {{id}}",
-  "settings.maintenanceSequenceStepUnmonitor": "Unmonitor",
-  "settings.maintenanceSequenceStepDeleteFiles": "Delete files",
-  "settings.maintenanceSequenceStepChangeQualityProfile":
+  "settings.lifecycleNavRules": "Rules",
+  "settings.lifecycleNavHistory": "History",
+  "settings.lifecycleRuleAction": "Actions",
+  "settings.lifecycleRuleActionHelp":
+    "What this rule would do once lifecycle actions are switched on.",
+  "settings.lifecycleRuleActionPlaceholder": "Choose an action",
+  "settings.lifecycleRuleNoActions": "No title-scoped actions are available.",
+  "settings.lifecycleActionSequence": "Action sequence",
+  "settings.lifecycleSequenceObserveOnly": "Dry run only",
+  "settings.lifecycleSequenceHistoryWaiting": "waiting for an earlier step",
+  "settings.lifecycleSequenceHistorySearchRequested": "search requested",
+  "settings.lifecycleSequenceHistorySearchAccepted": "accepted",
+  "settings.lifecycleSequenceHistoryJob": "job {{id}}",
+  "settings.lifecycleSequenceStepUnmonitor": "Unmonitor",
+  "settings.lifecycleSequenceStepDeleteFiles": "Delete files",
+  "settings.lifecycleSequenceStepChangeQualityProfile":
     "Change quality profile",
-  "settings.maintenanceSequenceStepSearch": "Search",
-  "settings.maintenanceSequenceStepAddTags": "Add tags",
-  "settings.maintenanceSequenceStepRemoveTags": "Remove tags",
-  "settings.maintenanceSequenceStepDeleteTitleAndFiles":
+  "settings.lifecycleSequenceStepSearch": "Search",
+  "settings.lifecycleSequenceStepAddTags": "Add tags",
+  "settings.lifecycleSequenceStepRemoveTags": "Remove tags",
+  "settings.lifecycleSequenceStepDeleteTitleAndFiles":
     "Delete title and files",
-  "settings.maintenanceRuleGraceDays": "Grace days",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleRuleGraceDays": "Grace days",
+  "settings.lifecycleRuleGraceDaysHelp":
     "Days after each subject first matches before its action becomes due.",
-  "settings.maintenanceRuleScheduleHelp":
+  "settings.lifecycleRuleScheduleHelp":
     "Each rule runs on its own schedule. A run evaluates the rule, then applies its candidates whose grace period has ended. Changing the schedule keeps the rule's state. Daily, weekly and cron times use the server's local time.",
-  "settings.maintenanceRuleScheduleManualHelp":
+  "settings.lifecycleRuleScheduleManualHelp":
     "This rule never runs on its own. Start it from Runs and history.",
-  "settings.maintenanceRuleLibraries": "Library scope",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "Library scope",
+  "settings.lifecycleRuleLibrariesHelp":
     "Leave every library unchecked to scope the rule to the whole collection.",
-  "settings.maintenanceRuleLibrariesAll": "All libraries",
-  "settings.maintenanceRuleStorageRoot": "Storage root",
-  "settings.maintenanceRuleStorageRootNone": "No storage root selected",
-  "settings.maintenanceRuleStorageRootHelp":
+  "settings.lifecycleRuleLibrariesAll": "All libraries",
+  "settings.lifecycleRuleStorageRoot": "Storage root",
+  "settings.lifecycleRuleStorageRootNone": "No storage root selected",
+  "settings.lifecycleRuleStorageRootHelp":
     "Select a configured root to read its capacity and limit file deletion to files actually on that root.",
-  "settings.maintenanceRuleStorageRootUnmonitorHelp":
+  "settings.lifecycleRuleStorageRootUnmonitorHelp":
     "The selected root limits only file deletion. Unmonitoring still applies to the entire matched subject, so files on other roots are retained but no longer monitored.",
-  "settings.maintenanceRuleStorageRootClear": "Clear storage root",
-  "settings.maintenanceStorageRootFileSummary":
+  "settings.lifecycleRuleStorageRootClear": "Clear storage root",
+  "settings.lifecycleStorageRootFileSummary":
     "Selected root: {{count}} files · {{size}}",
-  "settings.maintenanceRuleCreate": "Create maintenance rule",
-  "settings.maintenanceRuleUpdate": "Update maintenance rule",
-  "settings.maintenanceRuleCopy": "Copy as a new rule",
-  "settings.maintenanceRuleCreateNew": "Create new maintenance rule",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleCreate": "Create lifecycle rule",
+  "settings.lifecycleRuleUpdate": "Update lifecycle rule",
+  "settings.lifecycleRuleCopy": "Copy as a new rule",
+  "settings.lifecycleRuleCreateNew": "Create new lifecycle rule",
+  "settings.lifecycleRuleValidationRequired":
     "Name, matcher source, and an action are required.",
-  "settings.maintenanceRuleConfirmDiscardTitle": "Discard unsaved changes?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "The maintenance rule editor has unsaved changes that will be lost.",
-  "settings.maintenanceRuleDeleting": "Delete the maintenance rule {{name}}?",
-  "settings.noMaintenanceRulesFound": "No maintenance rules yet.",
-  "settings.maintenanceRuleRevision": "Revision",
-  "settings.maintenanceActionDoNothing": "Do nothing",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardTitle": "Discard unsaved changes?",
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "The lifecycle rule editor has unsaved changes that will be lost.",
+  "settings.lifecycleRuleDeleting": "Delete the lifecycle rule {{name}}?",
+  "settings.noLifecycleRulesFound": "No lifecycle rules yet.",
+  "settings.lifecycleRuleRevision": "Revision",
+  "settings.lifecycleActionDoNothing": "Do nothing",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Unmonitor the scope, keep files",
-  "settings.maintenanceActionDeleteTitleAndFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles":
     "Delete the title and its files",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "Unmonitor the title, delete all files",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "Unmonitor the show, delete existing files",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "Unmonitor the scope, delete its files",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "Unmonitor the season, delete its files, then delete the show if it is empty",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "Unmonitor the season, then unmonitor the show if it is empty",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "Change the quality profile and search if it changed",
-  "settings.maintenancePreviewTitle": "Preview",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "Preview",
+  "settings.lifecyclePreviewSubtitle":
     "Run the matcher against titles, seasons, or episodes in its scope. Preview reports what would match and changes nothing.",
-  "settings.maintenancePreviewSource": "Matcher",
-  "settings.maintenancePreviewSourceStored": "Saved rule",
-  "settings.maintenancePreviewSourceDraft": "Editor draft",
-  "settings.maintenancePreviewLibrary": "Library",
-  "settings.maintenancePreviewLibraryPlaceholder": "Select a library",
-  "settings.maintenancePreviewLimit": "Subjects",
-  "settings.maintenancePreviewLimitHelp": "Up to {{max}} subjects per run.",
-  "settings.maintenancePreviewRun": "Run preview",
-  "settings.maintenancePreviewRunning": "Running preview...",
-  "settings.maintenancePreviewNoTitles": "No titles were evaluated.",
-  "settings.maintenancePreviewColOutcome": "Outcome",
-  "settings.maintenancePreviewColReasons": "Reason codes",
-  "settings.maintenancePreviewOutcomeMatch": "MATCH",
-  "settings.maintenancePreviewOutcomeNoMatch": "NO MATCH",
-  "settings.maintenancePreviewOutcomeUnknown": "UNKNOWN",
-  "settings.maintenancePreviewOutcomeError": "ERROR",
-  "settings.maintenancePreviewMeta": "Evaluated {{time}} · matcher {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "Rule",
-  "settings.maintenancePreviewRuleSelectPlaceholder": "Select a saved rule",
-  "settings.maintenanceRuleUpdated": "Maintenance rule updated.",
-  "settings.maintenanceRuleCreated":
-    "Maintenance rule created, and saved disabled.",
-  "settings.maintenanceRuleDeleted": "Maintenance rule {{name}} deleted.",
+  "settings.lifecyclePreviewSource": "Matcher",
+  "settings.lifecyclePreviewSourceStored": "Saved rule",
+  "settings.lifecyclePreviewSourceDraft": "Editor draft",
+  "settings.lifecyclePreviewLibrary": "Library",
+  "settings.lifecyclePreviewLibraryPlaceholder": "Select a library",
+  "settings.lifecyclePreviewLimit": "Subjects",
+  "settings.lifecyclePreviewLimitHelp": "Up to {{max}} subjects per run.",
+  "settings.lifecyclePreviewRun": "Run preview",
+  "settings.lifecyclePreviewRunning": "Running preview...",
+  "settings.lifecyclePreviewNoTitles": "No titles were evaluated.",
+  "settings.lifecyclePreviewColOutcome": "Outcome",
+  "settings.lifecyclePreviewColReasons": "Reason codes",
+  "settings.lifecyclePreviewOutcomeMatch": "MATCH",
+  "settings.lifecyclePreviewOutcomeNoMatch": "NO MATCH",
+  "settings.lifecyclePreviewOutcomeUnknown": "UNKNOWN",
+  "settings.lifecyclePreviewOutcomeError": "ERROR",
+  "settings.lifecyclePreviewMeta": "Evaluated {{time}} · matcher {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "Rule",
+  "settings.lifecyclePreviewRuleSelectPlaceholder": "Select a saved rule",
+  "settings.lifecycleRuleUpdated": "Lifecycle rule updated.",
+  "settings.lifecycleRuleCreated":
+    "Lifecycle rule created, and saved disabled.",
+  "settings.lifecycleRuleDeleted": "Lifecycle rule {{name}} deleted.",
 
-  // ── Maintenance rules — instance status ──
+  // ── Lifecycle rules — instance status ──
 
-  // ── Maintenance rules — instance gates ──
+  // ── Lifecycle rules — instance gates ──
 
-  // ── Maintenance rules — mode and arming ──
-  "settings.maintenanceRuleState": "State",
-  "settings.maintenanceRuleStateHelp":
+  // ── Lifecycle rules — mode and arming ──
+  "settings.lifecycleRuleState": "State",
+  "settings.lifecycleRuleStateHelp":
     "Disabled rules are never evaluated. Dry run records candidates without acting on them. Enabled rules act on their candidates once each grace period elapses.",
-  "settings.maintenanceRuleStateUpdated": "{{name}} updated.",
-  "settings.maintenanceRuleStateDisabled": "Disabled",
-  "settings.maintenanceRuleStateDisabledHelp": "Never evaluated.",
-  "settings.maintenanceRuleStateDryRun": "Dry run",
-  "settings.maintenanceRuleStateDryRunHelp":
+  "settings.lifecycleRuleStateUpdated": "{{name}} updated.",
+  "settings.lifecycleRuleStateDisabled": "Disabled",
+  "settings.lifecycleRuleStateDisabledHelp": "Never evaluated.",
+  "settings.lifecycleRuleStateDryRun": "Dry run",
+  "settings.lifecycleRuleStateDryRunHelp":
     "Records candidates; takes no action.",
-  "settings.maintenanceRuleStateEnabled": "Enabled",
-  "settings.maintenanceRuleStateEnabledHelp":
+  "settings.lifecycleRuleStateEnabled": "Enabled",
+  "settings.lifecycleRuleStateEnabledHelp":
     "Acts on candidates when their grace period elapses.",
-  "settings.maintenanceRuleEditedSinceEnabled":
+  "settings.lifecycleRuleEditedSinceEnabled":
     "Edited since it was enabled. Review the candidates and enable it again.",
-  "settings.maintenanceRuleSystemOwned": "Built in",
+  "settings.lifecycleRuleSystemOwned": "Built in",
   "settings.expiredRequestLeasesHelp":
-    "Deletes a requested title and its files once its request lease has expired and the grace period has passed. Changing the grace period sets the rule to Dry run until you enable it again. Like every maintenance rule, it only runs while Maintenance is on.",
-  "settings.maintenanceSwitchEnabled": "Maintenance",
-  "settings.maintenanceSwitchEnabledHelp":
+    "Deletes a requested title and its files once its request lease has expired and the grace period has passed. Changing the grace period sets the rule to Dry run until you enable it again. Like every lifecycle rule, it only runs while Lifecycle is on.",
+  "settings.lifecycleSwitchEnabled": "Lifecycle",
+  "settings.lifecycleSwitchEnabledHelp":
     "Evaluate rules and show their candidates on this instance.",
-  "settings.maintenanceSwitchActionsPaused": "Pause all actions",
-  "settings.maintenanceSwitchActionsPausedHelp":
+  "settings.lifecycleSwitchActionsPaused": "Pause all actions",
+  "settings.lifecycleSwitchActionsPausedHelp":
     "While paused, Enabled rules keep recording candidates but nothing is unmonitored, changed, or deleted.",
-  "settings.maintenanceSwitchesLocked":
-    "Reading the maintenance switches requires system settings permission. Ask an administrator whether maintenance is on and whether actions are paused.",
-  "settings.maintenanceSwitchesUpdated": "Maintenance settings updated.",
-  "settings.maintenanceUnpauseConfirmTitle": "Resume maintenance actions?",
-  "settings.maintenanceUnpauseConfirmBody":
+  "settings.lifecycleSwitchesLocked":
+    "Reading the lifecycle switches requires system settings permission. Ask an administrator whether lifecycle rules are on and whether actions are paused.",
+  "settings.lifecycleSwitchesUpdated": "Lifecycle settings updated.",
+  "settings.lifecycleUnpauseConfirmTitle": "Resume lifecycle actions?",
+  "settings.lifecycleUnpauseConfirmBody":
     "Enabled rules will act on their candidates as each grace period elapses, including rules that delete files.",
-  "settings.maintenanceUnpauseConfirmAction": "Resume actions",
-  "settings.maintenanceCandidatesEmptyMaintenanceOff":
-    "Maintenance is not switched on for this instance, so no candidates are shown.",
-  "settings.maintenanceCandidatesEmptyAllDisabled":
+  "settings.lifecycleUnpauseConfirmAction": "Resume actions",
+  "settings.lifecycleCandidatesEmptyLifecycleOff":
+    "Lifecycle rules are not switched on for this instance, so no candidates are shown.",
+  "settings.lifecycleCandidatesEmptyAllDisabled":
     "Every rule is Disabled, so nothing is being evaluated. Set a rule to Dry run first.",
-  "settings.maintenanceArmDestructiveIntro":
+  "settings.lifecycleArmDestructiveIntro":
     "{{name}} deletes files. Once enabled it acts on the candidates below as each grace period elapses, unless actions are paused.",
-  "settings.maintenanceArmDestructiveTitle":
+  "settings.lifecycleArmDestructiveTitle":
     "Enable a rule that deletes files?",
-  "settings.maintenanceArmDestructiveLoading":
+  "settings.lifecycleArmDestructiveLoading":
     "Counting the candidates this rule already holds…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "{{count}} candidates could be acted on.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "This rule holds no candidates that could be acted on right now.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "The candidate count changed: this rule now holds {{count}}. Confirm the current count to continue.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "Enable file deletion for {{count}} titles.",
-  "settings.maintenanceArmDestructiveConfirm": "Enable",
+  "settings.lifecycleArmDestructiveConfirm": "Enable",
 
-  // ── Maintenance rules — candidates ──
-  "settings.maintenanceCandidatesTitle": "Leaving soon",
-  "settings.maintenanceCandidatesSubtitle":
+  // ── Lifecycle rules — candidates ──
+  "settings.lifecycleCandidatesTitle": "Leaving soon",
+  "settings.lifecycleCandidatesSubtitle":
     "Titles a rule has matched, soonest due first. Nothing here has been acted on yet.",
-  "settings.maintenanceCandidatesFilterRule": "Rule",
-  "settings.maintenanceCandidatesFilterState": "State",
-  "settings.maintenanceCandidatesFilterLibrary": "Library",
-  "settings.maintenanceCandidatesAllRules": "All rules",
-  "settings.maintenanceCandidatesAllStates": "All states",
-  "settings.maintenanceCandidatesAllLibraries": "All libraries",
-  "settings.maintenanceCandidatesColRule": "Rule",
-  "settings.maintenanceCandidatesColState": "State",
-  "settings.maintenanceCandidatesColFirstMatched": "First matched",
-  "settings.maintenanceCandidatesColDue": "Due",
-  "settings.maintenanceCandidatesHeldSince": "Held since {{time}}",
-  "settings.maintenanceCandidatesEmpty": "No candidates match these filters.",
-  "settings.maintenanceCandidateExclude": "Exclude this title",
-  "settings.maintenanceCandidateStateObserving": "Observing",
-  "settings.maintenanceCandidateStatePendingAction": "Pending action",
-  "settings.maintenanceCandidateStateDue": "Due",
-  "settings.maintenanceCandidateStateExecuting": "Executing",
-  "settings.maintenanceCandidateStateSucceeded": "Succeeded",
-  "settings.maintenanceCandidateStateFailed": "Failed",
-  "settings.maintenanceCandidateStateCanceled": "Canceled",
-  "settings.maintenanceCandidateStateExcluded": "Excluded",
-  "settings.maintenanceCandidateStateBlocked": "Blocked",
-  "settings.maintenanceCountdownDueNow": "Due now",
-  "settings.maintenanceCountdownInMinutes": "in {{count}} min",
-  "settings.maintenanceCountdownInHours": "in {{count}} h",
-  "settings.maintenanceCountdownInDays": "in {{count}} d",
-  "settings.maintenanceCountdownOverdueMinutes": "{{count}} min overdue",
-  "settings.maintenanceCountdownOverdueHours": "{{count}} h overdue",
-  "settings.maintenanceCountdownOverdueDays": "{{count}} d overdue",
+  "settings.lifecycleCandidatesFilterRule": "Rule",
+  "settings.lifecycleCandidatesFilterState": "State",
+  "settings.lifecycleCandidatesFilterLibrary": "Library",
+  "settings.lifecycleCandidatesAllRules": "All rules",
+  "settings.lifecycleCandidatesAllStates": "All states",
+  "settings.lifecycleCandidatesAllLibraries": "All libraries",
+  "settings.lifecycleCandidatesColRule": "Rule",
+  "settings.lifecycleCandidatesColState": "State",
+  "settings.lifecycleCandidatesColFirstMatched": "First matched",
+  "settings.lifecycleCandidatesColDue": "Due",
+  "settings.lifecycleCandidatesHeldSince": "Held since {{time}}",
+  "settings.lifecycleCandidatesEmpty": "No candidates match these filters.",
+  "settings.lifecycleCandidateExclude": "Exclude this title",
+  "settings.lifecycleCandidateStateObserving": "Observing",
+  "settings.lifecycleCandidateStatePendingAction": "Pending action",
+  "settings.lifecycleCandidateStateDue": "Due",
+  "settings.lifecycleCandidateStateExecuting": "Executing",
+  "settings.lifecycleCandidateStateSucceeded": "Succeeded",
+  "settings.lifecycleCandidateStateFailed": "Failed",
+  "settings.lifecycleCandidateStateCanceled": "Canceled",
+  "settings.lifecycleCandidateStateExcluded": "Excluded",
+  "settings.lifecycleCandidateStateBlocked": "Blocked",
+  "settings.lifecycleCountdownDueNow": "Due now",
+  "settings.lifecycleCountdownInMinutes": "in {{count}} min",
+  "settings.lifecycleCountdownInHours": "in {{count}} h",
+  "settings.lifecycleCountdownInDays": "in {{count}} d",
+  "settings.lifecycleCountdownOverdueMinutes": "{{count}} min overdue",
+  "settings.lifecycleCountdownOverdueHours": "{{count}} h overdue",
+  "settings.lifecycleCountdownOverdueDays": "{{count}} d overdue",
 
-  // ── Maintenance rules — runs and history ──
-  "settings.maintenanceRunsTitle": "Runs and history",
-  "settings.maintenanceRunScope": "Scope",
-  "settings.maintenanceRunScopeAll": "Every rule",
-  "settings.maintenanceRunEvaluationNow": "Evaluate now",
-  "settings.maintenanceRunEvaluationRunning": "Evaluating…",
-  "settings.maintenanceRunActionsNow": "Run actions now",
-  "settings.maintenanceRunActionsRunning": "Running actions…",
-  "settings.maintenanceRunActionsNeedsRule":
+  // ── Lifecycle rules — runs and history ──
+  "settings.lifecycleRunsTitle": "Runs and history",
+  "settings.lifecycleRunScope": "Scope",
+  "settings.lifecycleRunScopeAll": "Every rule",
+  "settings.lifecycleRunEvaluationNow": "Evaluate now",
+  "settings.lifecycleRunEvaluationRunning": "Evaluating…",
+  "settings.lifecycleRunActionsNow": "Run actions now",
+  "settings.lifecycleRunActionsRunning": "Running actions…",
+  "settings.lifecycleRunActionsNeedsRule":
     "Choose one rule above to act on it now.",
-  "settings.maintenanceRunActionsHeldHelp":
+  "settings.lifecycleRunActionsHeldHelp":
     "Acting now skips titles a run has held until the rule evaluates again. Each scheduled run evaluates first, so it looks at held titles again.",
-  "error.reason.MAINTENANCE_ACTION_RUN_RULE_REQUIRED":
+  "error.reason.LIFECYCLE_ACTION_RUN_RULE_REQUIRED":
     "Choose the rule to act on. Rules act only for themselves, so acting now needs one rule.",
-  "settings.maintenanceRunStarted": "Run started.",
-  "settings.maintenanceRunNotStarted": "Nothing started: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "Evaluation runs",
-  "settings.maintenanceEvaluationRunsEmpty": "No evaluation runs recorded yet.",
-  "settings.maintenanceActionRunsTitle": "Action runs",
-  "settings.maintenanceActionRunsEmpty": "No action runs recorded yet.",
-  "settings.maintenanceRunColStarted": "Started",
-  "settings.maintenanceRunColStatus": "Status",
-  "settings.maintenanceRunColCounts": "Counts",
-  "settings.maintenanceRunColDuration": "Duration",
-  "settings.maintenanceRunColError": "Error",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleRunStarted": "Run started.",
+  "settings.lifecycleRunNotStarted": "Nothing started: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "Evaluation runs",
+  "settings.lifecycleEvaluationRunsEmpty": "No evaluation runs recorded yet.",
+  "settings.lifecycleActionRunsTitle": "Action runs",
+  "settings.lifecycleActionRunsEmpty": "No action runs recorded yet.",
+  "settings.lifecycleRunColStarted": "Started",
+  "settings.lifecycleRunColStatus": "Status",
+  "settings.lifecycleRunColCounts": "Counts",
+  "settings.lifecycleRunColDuration": "Duration",
+  "settings.lifecycleRunColError": "Error",
+  "settings.lifecycleRunCounts":
     "{{evaluated}} evaluated · {{matched}} matched · {{noMatch}} no match · {{unknown}} unknown · {{errors}} errors",
-  "settings.maintenanceRunDuration": "{{seconds}} s",
-  "settings.maintenanceRunRevision": "rev {{revision}}",
-  "settings.maintenanceRunStatusRunning": "Running",
-  "settings.maintenanceRunStatusSucceeded": "Succeeded",
-  "settings.maintenanceRunStatusFailed": "Failed",
-  "settings.maintenanceRunStatusHeld": "Held",
-  "settings.maintenanceRunStatusAlreadySatisfied": "Already satisfied",
-  "settings.maintenanceRunStatusSkipped": "Skipped",
-  "settings.maintenanceActionRunColAttempt": "Attempt",
-  "settings.maintenanceActionRunColHoldReason": "Hold reason",
+  "settings.lifecycleRunDuration": "{{seconds}} s",
+  "settings.lifecycleRunRevision": "rev {{revision}}",
+  "settings.lifecycleRunStatusRunning": "Running",
+  "settings.lifecycleRunStatusSucceeded": "Succeeded",
+  "settings.lifecycleRunStatusFailed": "Failed",
+  "settings.lifecycleRunStatusHeld": "Held",
+  "settings.lifecycleRunStatusAlreadySatisfied": "Already satisfied",
+  "settings.lifecycleRunStatusSkipped": "Skipped",
+  "settings.lifecycleActionRunColAttempt": "Attempt",
+  "settings.lifecycleActionRunColHoldReason": "Hold reason",
 
-  // ── Maintenance rules — exclusions ──
-  "settings.maintenanceExclusionsTitle": "Exclusions",
-  "settings.maintenanceExclusionsSubtitle":
-    "Titles a maintenance rule must never act on. A global exclusion applies to every rule.",
-  "settings.maintenanceExclusionsEmpty": "No exclusions.",
-  "settings.maintenanceExclusionColScope": "Scope",
-  "settings.maintenanceExclusionColReason": "Reason",
-  "settings.maintenanceExclusionColCreated": "Added",
-  "settings.maintenanceExclusionScopeGlobal": "Every rule",
-  "settings.maintenanceExclusionRemove": "Remove exclusion",
-  "settings.maintenanceExclusionRemoved": "Exclusion for {{title}} removed.",
-  "settings.maintenanceExclusionRemoving":
+  // ── Lifecycle rules — exclusions ──
+  "settings.lifecycleExclusionsTitle": "Exclusions",
+  "settings.lifecycleExclusionsSubtitle":
+    "Titles a lifecycle rule must never act on. A global exclusion applies to every rule.",
+  "settings.lifecycleExclusionsEmpty": "No exclusions.",
+  "settings.lifecycleExclusionColScope": "Scope",
+  "settings.lifecycleExclusionColReason": "Reason",
+  "settings.lifecycleExclusionColCreated": "Added",
+  "settings.lifecycleExclusionScopeGlobal": "Every rule",
+  "settings.lifecycleExclusionRemove": "Remove exclusion",
+  "settings.lifecycleExclusionRemoved": "Exclusion for {{title}} removed.",
+  "settings.lifecycleExclusionRemoving":
     "Remove the exclusion for {{title}}?",
-  "settings.maintenanceExcludeTitle": "Exclude from maintenance",
-  "settings.maintenanceExcludeBody":
+  "settings.lifecycleExcludeTitle": "Exclude from lifecycle rules",
+  "settings.lifecycleExcludeBody":
     "{{title}} will be excluded from the next evaluation onward, and its candidate moves to excluded.",
-  "settings.maintenanceExcludeScope": "Scope",
-  "settings.maintenanceExcludeScopeGlobal": "Every rule",
-  "settings.maintenanceExcludeReason": "Reason",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "Scope",
+  "settings.lifecycleExcludeScopeGlobal": "Every rule",
+  "settings.lifecycleExcludeReason": "Reason",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "Why this title is excluded (optional)",
-  "settings.maintenanceExcludeConfirm": "Exclude",
-  "settings.maintenanceExcluded": "{{title}} excluded from maintenance.",
+  "settings.lifecycleExcludeConfirm": "Exclude",
+  "settings.lifecycleExcluded": "{{title}} excluded from lifecycle rules.",
 
-  // ── Maintenance rules — input reference ──
-  "settings.refMaintTitle": "Maintenance input reference",
-  "settings.refMaintIntro":
-    "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
-  "settings.refMaintOutputTitle": "Rule output",
-  "settings.refMaintOutputIntro":
+  // ── Lifecycle rules — input reference ──
+  "settings.refLifecycleTitle": "Lifecycle input reference",
+  "settings.refLifecycleIntro":
+    "Every lifecycle rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
+  "settings.refLifecycleOutputTitle": "Rule output",
+  "settings.refLifecycleOutputIntro":
     "A rule says what to do by defining actions, plus the optional unknown and reasons. A subject matches when at least one action holds for it. A decision that is not exactly this shape is rejected rather than coerced.",
-  "settings.refMaintOutputUnknown":
+  "settings.refLifecycleOutputUnknown":
     "unknown — boolean. Set it when the rule itself cannot see enough to decide; unknown always beats a match. Facts Scryer could not observe are already handled for you, so this is only for judgements of your own.",
-  "settings.refMaintOutputReasons":
+  "settings.refLifecycleOutputReasons":
     "reasons — a set of short machine codes explaining the decision. They are stored on the candidate and shown in preview.",
-  "settings.refMaintOutputNoPackage":
+  "settings.refLifecycleOutputNoPackage":
     "Do not write a package or import line. Scryer adds both when it stores the rule and strips them back off for the editor.",
-  "settings.refMaintSectionInput": "— The evaluation envelope",
-  "settings.refMaintInputSchemaVersion":
-    "Version of the maintenance input document this rule is authored against",
-  "settings.refMaintInputEvaluationTime":
+  "settings.refLifecycleSectionInput": "— The evaluation envelope",
+  "settings.refLifecycleInputSchemaVersion":
+    "Version of the lifecycle input document this rule is authored against",
+  "settings.refLifecycleInputEvaluationTime":
     "RFC3339 instant captured once per run, so every subject compares against the same clock. Use it for date maths — time.now_ns() exists, but it would make the same subject decide differently on a retry.",
-  "settings.refMaintSectionSubject":
+  "settings.refLifecycleSectionSubject":
     "— The title, season, or episode under evaluation",
-  "settings.maintenanceFileSummary": "{{count}} files · {{size}}",
-  "settings.maintenanceTestTitle": "Choose a title to test",
-  "settings.maintenanceNoSubjects":
+  "settings.lifecycleFileSummary": "{{count}} files · {{size}}",
+  "settings.lifecycleTestTitle": "Choose a title to test",
+  "settings.lifecycleNoSubjects":
     "No subjects in this title for the selected scope.",
-  "settings.maintenancePreviewExcluded": "Excluded from actions",
-  "settings.maintenancePreviewEstimatedDue": "If matched now: {{time}}",
-  "settings.maintenancePreviewDue": "Grace deadline: {{time}}",
-  "settings.maintenancePreviewSubject": "Test subject",
-  "settings.maintenancePreviewSample": "Library sample",
-  "settings.maintenanceRuleScope": "Rule scope",
-  "settings.maintenanceRuleTemplate": "Template",
-  "settings.maintenanceRuleTemplatePlaceholder": "Start from a template",
-  "settings.maintenanceScopeSeason": "Season",
-  "settings.maintenanceScopeEpisode": "Episode",
-  "settings.maintenanceFileDeleted": "Deleted",
-  "settings.maintenanceFilePending": "Pending",
-  "settings.maintenanceFileResults": "File results",
-  "settings.maintenanceFileProgress":
+  "settings.lifecyclePreviewExcluded": "Excluded from actions",
+  "settings.lifecyclePreviewEstimatedDue": "If matched now: {{time}}",
+  "settings.lifecyclePreviewDue": "Grace deadline: {{time}}",
+  "settings.lifecyclePreviewSubject": "Test subject",
+  "settings.lifecyclePreviewSample": "Library sample",
+  "settings.lifecycleRuleScope": "Rule scope",
+  "settings.lifecycleRuleTemplate": "Template",
+  "settings.lifecycleRuleTemplatePlaceholder": "Start from a template",
+  "settings.lifecycleScopeSeason": "Season",
+  "settings.lifecycleScopeEpisode": "Episode",
+  "settings.lifecycleFileDeleted": "Deleted",
+  "settings.lifecycleFilePending": "Pending",
+  "settings.lifecycleFileResults": "File results",
+  "settings.lifecycleFileProgress":
     "{{completed}} deleted · {{remaining}} remaining",
-  "settings.refMaintSubjectId":
+  "settings.refLifecycleSubjectId":
     "Scryer title, collection, or episode ID for the selected scope",
-  "settings.refMaintCollectionId":
+  "settings.refLifecycleCollectionId":
     "Owning season collection ID for season and episode subjects, when known",
-  "settings.refMaintSubjectKind":
+  "settings.refLifecycleSubjectKind":
     "Granularity under evaluation: title, season, or episode",
-  "settings.refMaintSubjectTitleId":
+  "settings.refLifecycleSubjectTitleId":
     "Scryer identifier of the title the subject belongs to",
-  "settings.refMaintSubjectSeasonNumber":
+  "settings.refLifecycleSubjectSeasonNumber":
     "Season number for season and episode subjects, when known",
-  "settings.refMaintSubjectEpisodeId":
+  "settings.refLifecycleSubjectEpisodeId":
     "Episode identifier; present only for episode subjects",
-  "settings.refMaintSubjectFacet":
+  "settings.refLifecycleSubjectFacet":
     "Media facet of the title (movie, series, anime)",
-  "settings.refMaintSubjectName":
+  "settings.refLifecycleSubjectName":
     "Display label of the title, season, or episode",
-  "settings.refMaintSubjectYear": "Release year of the title, when known",
-  "settings.refMaintSectionLibrary": "— The library the subject lives in",
-  "settings.refMaintLibraryId": "Identifier of the library holding the subject",
-  "settings.refMaintLibraryName": "Display name of that library",
-  "settings.refMaintSectionFacts":
+  "settings.refLifecycleSubjectYear": "Release year of the title, when known",
+  "settings.refLifecycleSectionLibrary": "— The library the subject lives in",
+  "settings.refLifecycleLibraryId": "Identifier of the library holding the subject",
+  "settings.refLifecycleLibraryName": "Display name of that library",
+  "settings.refLifecycleSectionFacts":
     "— The fact snapshot; each fact is a plain value, and the key is missing when the fact is absent or could not be observed",
-  "settings.refMaintFactsMonitored": "Whether the subject is monitored",
-  "settings.refMaintFactsTags":
+  "settings.refLifecycleFactsMonitored": "Whether the subject is monitored",
+  "settings.refLifecycleFactsTags":
     "User-defined tags inherited from the owning title, lowercase, from the tag registry an administrator maintains in Settings; reserved scryer: settings entries are excluded",
-  "settings.refMaintFactsQualityProfileId":
+  "settings.refLifecycleFactsQualityProfileId":
     "Quality profile inherited from the owning title",
-  "settings.refMaintFactsAddedAt": "When the subject was added to the library",
-  "settings.refMaintFactsAddedByUserId":
+  "settings.refLifecycleFactsAddedAt": "When the subject was added to the library",
+  "settings.refLifecycleFactsAddedByUserId":
     "Which user added the subject; absent when a scan or discovery created it",
-  "settings.refMaintFactsAddedByUsername":
+  "settings.refLifecycleFactsAddedByUsername":
     "Name of the user who added the subject",
-  "settings.refMaintFactsRequested":
+  "settings.refLifecycleFactsRequested":
     "Whether a media request created the subject",
-  "settings.refMaintFactsRequestedByUserIds":
+  "settings.refLifecycleFactsRequestedByUserIds":
     "Users who requested the subject: the submitter plus any additional requesters",
-  "settings.refMaintFactsRequestedByUsernames": "Names of those requesters",
-  "settings.refMaintFactsFirstImportedAt":
+  "settings.refLifecycleFactsRequestedByUsernames": "Names of those requesters",
+  "settings.refLifecycleFactsFirstImportedAt":
     "When a file was first imported for the subject",
-  "settings.refMaintFactsLastUpgradedAt":
+  "settings.refLifecycleFactsLastUpgradedAt":
     "When the subject last received an upgrade",
-  "settings.refMaintFactsHasFile":
+  "settings.refLifecycleFactsHasFile":
     "Whether the subject has at least one file on disk",
-  "settings.refMaintFactsFileCount": "How many files the subject has on disk",
-  "settings.refMaintFactsTotalFileSizeBytes":
+  "settings.refLifecycleFactsFileCount": "How many files the subject has on disk",
+  "settings.refLifecycleFactsTotalFileSizeBytes":
     "Combined on-disk size of the subject's files",
-  "settings.refMaintFactsFiles":
+  "settings.refLifecycleFactsFiles":
     "The subject's files, with per-file media detail",
-  "settings.refMaintFactsEpisodeCount": "How many episodes the subject covers",
-  "settings.refMaintFactsEpisodeFileCount":
+  "settings.refLifecycleFactsEpisodeCount": "How many episodes the subject covers",
+  "settings.refLifecycleFactsEpisodeFileCount":
     "How many of those episodes have a file",
-  "settings.refMaintFactsMonitoredEpisodeCount":
+  "settings.refLifecycleFactsMonitoredEpisodeCount":
     "How many of those episodes are monitored",
-  "settings.refMaintFactsEpisodePositionByAirDate":
+  "settings.refLifecycleFactsEpisodePositionByAirDate":
     "Episode rank by air date within its show",
-  "settings.refMaintFactsSeasonPositionByAirDate":
+  "settings.refLifecycleFactsSeasonPositionByAirDate":
     "Season rank by newest eligible downloaded episode",
-  "settings.refMaintFactsStorageRootId":
+  "settings.refLifecycleFactsStorageRootId":
     "Configured root selected for storage capacity and file deletion",
-  "settings.refMaintFactsStorageAvailableBytes":
+  "settings.refLifecycleFactsStorageAvailableBytes":
     "Bytes currently available on the selected root",
-  "settings.refMaintFactsStorageTotalBytes":
+  "settings.refLifecycleFactsStorageTotalBytes":
     "Total capacity in bytes of the selected root",
-  "settings.refMaintFactsStorageAvailablePercent":
+  "settings.refLifecycleFactsStorageAvailablePercent":
     "Percentage of the selected root currently available",
-  "settings.refMaintFactsActiveDownloads":
+  "settings.refLifecycleFactsActiveDownloads":
     "Whether the subject has a download in flight",
-  "settings.refMaintFactsWatchedByUserIds":
+  "settings.refLifecycleFactsWatchedByUserIds":
     "Users who watched this episode; for seasons, the same users must have watched every aired episode, including missing files. Future episodes are excluded; unresolved air dates or incomplete signals are unknown. Empty seasons are never completed.",
-  "settings.refMaintFactsLastWatchedAt":
+  "settings.refLifecycleFactsLastWatchedAt":
     "When the subject was last played by anyone",
-  "settings.refMaintFactsWatchedByAnyRequester":
+  "settings.refLifecycleFactsWatchedByAnyRequester":
     "Whether at least one of the subject's requesters has played it",
-  "settings.refMaintFactsWatchedByAllRequesters":
+  "settings.refLifecycleFactsWatchedByAllRequesters":
     "Whether every one of the subject's requesters has played it",
-  "settings.refMaintFactsRequestLeaseState":
+  "settings.refLifecycleFactsRequestLeaseState":
     "Aggregate state of the subject's request leases: none, dormant, active, or expired",
-  "settings.refMaintFactsRequestLeaseExpiresAt":
+  "settings.refLifecycleFactsRequestLeaseExpiresAt":
     "When the last live lease on the subject runs out",
-  "settings.refMaintFactsActiveRetentionClaims":
+  "settings.refLifecycleFactsActiveRetentionClaims":
     "How many request leases still hold the subject",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Whether a list, rather than a person, added the subject to the library",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Whether any enabled list, public or personal, still lists the subject",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Names of the enabled public lists that still list the subject",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Whether every list that ever listed the subject has dropped it",
-  "settings.refMaintFactsListsLeftAt": "When the last list dropped the subject",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLeftAt": "When the last list dropped the subject",
+  "settings.refLifecycleFactsListsLastListName":
     "The public list the subject most recently left",
-  "settings.refMaintFactsListsEnabledIds":
+  "settings.refLifecycleFactsListsEnabledIds":
     "Identifiers of the enabled lists, public or personal, that still list the subject",
-  "settings.refMaintFactsListsPublicCount":
+  "settings.refLifecycleFactsListsPublicCount":
     "How many public lists still list the subject",
-  "settings.refMaintFactsListsPersonalCount":
+  "settings.refLifecycleFactsListsPersonalCount":
     "How many personal lists still list the subject",
-  "settings.refMaintFactsListsFirstSeenAt":
+  "settings.refLifecycleFactsListsFirstSeenAt":
     "When a list that still holds the subject first listed it",
-  "settings.refMaintFactsListsLastSeenAt":
+  "settings.refLifecycleFactsListsLastSeenAt":
     "When a list that still holds the subject last listed it",
-  "settings.refMaintFactsListsDaysOnList":
+  "settings.refLifecycleFactsListsDaysOnList":
     "Whole days since a list that still holds the subject first listed it",
-  "settings.refMaintFactsListsBestRank":
+  "settings.refLifecycleFactsListsBestRank":
     "The best (lowest) rank any list that still holds the subject gives it",
-  "settings.refMaintFactsListsOnLeave":
+  "settings.refLifecycleFactsListsOnLeave":
     "What the enabled lists that hold the subject do when they drop it",
-  "settings.refMaintFactsListsLeftHandled":
+  "settings.refLifecycleFactsListsLeftHandled":
     "Whether every list departure has had its on-leave action applied",
-  "settings.refMaintFactsListsMembershipStates":
+  "settings.refLifecycleFactsListsMembershipStates":
     "States of the subject on the lists that still hold it",
-  "settings.refMaintFactsRequestOrigin":
+  "settings.refLifecycleFactsRequestOrigin":
     "Where the request that created the title came from",
-  "settings.refMaintFactsRequestListName":
+  "settings.refLifecycleFactsRequestListName":
     "The public list that requested the title",
-  "settings.refMaintObsStatus":
+  "settings.refLifecycleObsStatus":
     "known, absent, or unknown. absent means the source answered and there is no value; unknown means Scryer could not find out. Test this before reading value — an unknown fact is never coerced to false, 0, or an empty string.",
-  "settings.refMaintSectionObservations":
+  "settings.refLifecycleSectionObservations":
     "— The same facts as full envelopes, for rules that need to tell absent apart from unknown or to read the reason. Reading a fact here opts that fact out of the automatic hold: you are taking responsibility for the three-valued answer.",
-  "settings.refMaintSectionObsFiles":
+  "settings.refLifecycleSectionObsFiles":
     "— One entry per file in input.observations.files.value",
-  "settings.refMaintObsObservedAt":
+  "settings.refLifecycleObsObservedAt":
     "When the value was observed, if the source recorded a time",
-  "settings.refMaintObsReason":
+  "settings.refLifecycleObsReason":
     "Stable machine code explaining why the fact is unknown, or why an absent fact has no value",
-  "settings.refMaintFactsMonitoredValue": "True when the subject is monitored",
-  "settings.refMaintFactsTagsValue":
+  "settings.refLifecycleFactsMonitoredValue": "True when the subject is monitored",
+  "settings.refLifecycleFactsTagsValue":
     "Lowercase user-defined tag names from the admin tag registry; never reserved scryer: settings entries",
-  "settings.refMaintFactsQualityProfileIdValue":
+  "settings.refLifecycleFactsQualityProfileIdValue":
     "Identifier of the assigned quality profile",
-  "settings.refMaintFactsAddedAtValue":
+  "settings.refLifecycleFactsAddedAtValue":
     "RFC3339 timestamp the subject was added",
-  "settings.refMaintFactsAddedByUserIdValue":
+  "settings.refLifecycleFactsAddedByUserIdValue":
     "Identifier of the user who added the subject; the reason is title_added_by_system when nobody did",
-  "settings.refMaintFactsAddedByUsernameValue":
+  "settings.refLifecycleFactsAddedByUsernameValue":
     "Username of that user; unknown with reason user_not_found when the account is gone",
-  "settings.refMaintFactsRequestedValue":
+  "settings.refLifecycleFactsRequestedValue":
     "True when at least one media request created the subject; a confirmed false otherwise",
-  "settings.refMaintFactsRequestedByUserIdsValue":
+  "settings.refLifecycleFactsRequestedByUserIdsValue":
     "Requester identifiers, deduplicated; an empty list when the subject was not requested",
-  "settings.refMaintFactsRequestedByUsernamesValue":
+  "settings.refLifecycleFactsRequestedByUsernamesValue":
     "Requester usernames; unknown with reason user_not_found when any of those accounts is gone",
-  "settings.refMaintFactsFirstImportedAtValue":
+  "settings.refLifecycleFactsFirstImportedAtValue":
     "RFC3339 timestamp of the first import",
-  "settings.refMaintFactsLastUpgradedAtValue":
+  "settings.refLifecycleFactsLastUpgradedAtValue":
     "RFC3339 timestamp of the last upgrade",
-  "settings.refMaintFactsHasFileValue":
+  "settings.refLifecycleFactsHasFileValue":
     "True when at least one file is on disk",
-  "settings.refMaintFactsFileCountValue": "Number of files on disk",
-  "settings.refMaintFactsTotalFileSizeBytesValue":
+  "settings.refLifecycleFactsFileCountValue": "Number of files on disk",
+  "settings.refLifecycleFactsTotalFileSizeBytesValue":
     "Combined size of those files in bytes",
-  "settings.refMaintFactsFilesValue":
+  "settings.refLifecycleFactsFilesValue":
     "One entry per file; see input.observations.files.value[] below",
-  "settings.refMaintFactsEpisodeCountValue": "Number of episodes in scope",
-  "settings.refMaintFactsEpisodeFileCountValue":
+  "settings.refLifecycleFactsEpisodeCountValue": "Number of episodes in scope",
+  "settings.refLifecycleFactsEpisodeFileCountValue":
     "Number of those episodes that have a file",
-  "settings.refMaintFactsMonitoredEpisodeCountValue":
+  "settings.refLifecycleFactsMonitoredEpisodeCountValue":
     "Number of those episodes that are monitored",
-  "settings.refMaintFactsEpisodePositionByAirDateValue":
+  "settings.refLifecycleFactsEpisodePositionByAirDateValue":
     "Rank 1 is the newest eligible downloaded, aired non-special episode. Equal air dates use season and episode numbers, then stable IDs.",
-  "settings.refMaintFactsSeasonPositionByAirDateValue":
+  "settings.refLifecycleFactsSeasonPositionByAirDateValue":
     "Rank 1 is the season with the newest eligible downloaded, aired non-special episode. Protected files still occupy a rank.",
-  "settings.refMaintFactsStorageRootIdValue":
+  "settings.refLifecycleFactsStorageRootIdValue":
     "Durable configured library-root identifier selected on this revision",
-  "settings.refMaintFactsStorageAvailableBytesValue":
+  "settings.refLifecycleFactsStorageAvailableBytesValue":
     "Bytes available on the selected root. Scheduled runs use the last sample, taken every five minutes; preview and the check just before an action read the root at that moment. Unknown with reason storage_not_sampled before the root's first sample, storage_sample_stale when the last sample is more than ten minutes old, and storage_capacity_unavailable when the root could not be read",
-  "settings.refMaintFactsStorageTotalBytesValue":
+  "settings.refLifecycleFactsStorageTotalBytesValue":
     "Total capacity in bytes of the selected root, from the same reading as storage_available_bytes and unknown for the same reasons",
-  "settings.refMaintFactsStorageAvailablePercentValue":
+  "settings.refLifecycleFactsStorageAvailablePercentValue":
     "Available capacity divided by total capacity, from 0 to 100, from the same reading as storage_available_bytes and unknown for the same reasons",
-  "settings.refMaintFactsActiveDownloadsValue":
+  "settings.refLifecycleFactsActiveDownloadsValue":
     "True when a download for the subject is in flight",
-  "settings.refMaintFactsWatchedByUserIdsValue":
+  "settings.refLifecycleFactsWatchedByUserIdsValue":
     "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. Season completion requires the same person to have watched every aired episode, including missing files. Future episodes are excluded; missing episode history or unresolved air dates are unknown. Watch facts are unknown for title-scoped shows (show_watch_rollup_unavailable), when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), when nobody holds a verified linked media-server account (no_linked_participants), when linked accounts exist but no sync has read them yet (participants_not_yet_swept), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
-  "settings.refMaintFactsLastWatchedAtValue":
+  "settings.refLifecycleFactsLastWatchedAtValue":
     "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing when a play has no recorded time",
-  "settings.refMaintFactsWatchedByAnyRequesterValue":
+  "settings.refLifecycleFactsWatchedByAnyRequesterValue":
     "True when at least one requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
-  "settings.refMaintFactsWatchedByAllRequestersValue":
+  "settings.refLifecycleFactsWatchedByAllRequestersValue":
     "True when every requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account, or requester_not_yet_swept when a requester's linked account has not been read by a sync yet",
-  "settings.refMaintFactsRequestLeaseStateValue":
+  "settings.refLifecycleFactsRequestLeaseStateValue":
     "none when no request lease was ever written for the subject, dormant when a lease is waiting for the first import, active while a lease is running, and expired once every lease has run out. A lease that was released or converted is withdrawn rather than spent, so it does not make the state expired. Expiry is measured against the evaluation time, so a lease reads as expired the moment its window closes.",
-  "settings.refMaintFactsRequestLeaseExpiresAtValue":
+  "settings.refLifecycleFactsRequestLeaseExpiresAtValue":
     "RFC3339 timestamp of the latest expiry among the live leases; absent with reason no_live_lease when nothing is holding the subject",
-  "settings.refMaintFactsActiveRetentionClaimsValue":
+  "settings.refLifecycleFactsActiveRetentionClaimsValue":
     "Count of leases still holding the subject, dormant ones included",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "True when a list sync created the title; unknown with reason list_store_unreadable when the list store could not be read",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "True while at least one enabled list holds the subject",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Public list names only, sorted; a member's personal list is never named",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "True once every list that listed the subject has dropped it; false while one still holds it or when no list ever did",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339 timestamp; absent with reason not_left_every_list while any list still holds the subject",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Name of that public list; absent with reason no_public_list_left when the subject never left a public list",
-  "settings.refMaintFactsListsEnabledIdsValue":
+  "settings.refLifecycleFactsListsEnabledIdsValue":
     "List identifiers, sorted; never a list name",
-  "settings.refMaintFactsListsPublicCountValue":
+  "settings.refLifecycleFactsListsPublicCountValue":
     "Count of public lists, enabled or paused",
-  "settings.refMaintFactsListsPersonalCountValue":
+  "settings.refLifecycleFactsListsPersonalCountValue":
     "Count of personal lists, enabled or paused",
-  "settings.refMaintFactsListsFirstSeenAtValue":
+  "settings.refLifecycleFactsListsFirstSeenAtValue":
     "RFC3339 timestamp; absent with reason not_on_a_list when no list holds the subject",
-  "settings.refMaintFactsListsLastSeenAtValue":
+  "settings.refLifecycleFactsListsLastSeenAtValue":
     "RFC3339 timestamp; absent with reason not_on_a_list when no list holds the subject",
-  "settings.refMaintFactsListsDaysOnListValue":
+  "settings.refLifecycleFactsListsDaysOnListValue":
     "Whole days to the evaluation time; absent with reason not_on_a_list when no list holds the subject",
-  "settings.refMaintFactsListsBestRankValue":
+  "settings.refLifecycleFactsListsBestRankValue":
     "Rank number; absent with reason no_list_rank when no list that holds the subject ranks it",
-  "settings.refMaintFactsListsOnLeaveValue":
+  "settings.refLifecycleFactsListsOnLeaveValue":
     "Sorted values from keep, log, unmonitor and tag",
-  "settings.refMaintFactsListsLeftHandledValue":
+  "settings.refLifecycleFactsListsLeftHandledValue":
     "True once every departure was handled; absent with reason no_list_left when no list dropped the subject",
-  "settings.refMaintFactsListsMembershipStatesValue":
+  "settings.refLifecycleFactsListsMembershipStatesValue":
     "Sorted states such as in_library, added, requested or held",
-  "settings.refMaintFactsRequestOriginValue":
+  "settings.refLifecycleFactsRequestOriginValue":
     "One of manual, public_list or personal_list; absent with reason title_not_requested when no request created the title",
-  "settings.refMaintFactsRequestListNameValue":
+  "settings.refLifecycleFactsRequestListNameValue":
     "Name of that public list; absent with reason no_public_request_list for manual and personal-list requests, because a personal list is never named",
-  "settings.refMaintSectionFiles": "— One entry per file in input.facts.files",
-  "settings.refMaintFileSizeBytes": "Size of the file in bytes",
-  "settings.refMaintFileQuality":
+  "settings.refLifecycleSectionFiles": "— One entry per file in input.facts.files",
+  "settings.refLifecycleFileSizeBytes": "Size of the file in bytes",
+  "settings.refLifecycleFileQuality":
     "Detected quality of the file (for example 2160P, 1080P)",
-  "settings.refMaintFileVideoCodec":
+  "settings.refLifecycleFileVideoCodec":
     "Video codec of the file (for example H.265, H.264)",
-  "settings.refMaintFileIs3d":
+  "settings.refLifecycleFileIs3d":
     "True when media metadata declares 3D video. False means not detected, including files not yet analyzed.",
-  "settings.refMaintFileVideoWidth": "Video width in pixels",
-  "settings.refMaintFileVideoHeight": "Video height in pixels",
-  "settings.refMaintFactsRuntimeMinutes":
+  "settings.refLifecycleFileVideoWidth": "Video width in pixels",
+  "settings.refLifecycleFileVideoHeight": "Video height in pixels",
+  "settings.refLifecycleFactsRuntimeMinutes":
     "Runtime in minutes, as the metadata provider gave it",
-  "settings.refMaintFactsOriginalLanguage": "Original language of the title",
-  "settings.refMaintFactsSeriesStatus":
+  "settings.refLifecycleFactsOriginalLanguage": "Original language of the title",
+  "settings.refLifecycleFactsSeriesStatus":
     "Status of a show as the metadata provider gave it, such as continuing or ended",
-  "settings.refMaintFactsFirstAired": "Date the show first aired (YYYY-MM-DD)",
-  "settings.refMaintFactsNetwork": "Network that airs the show",
-  "settings.refMaintFactsStudio": "Studio that made the title",
-  "settings.refMaintFactsCountry": "Country of origin",
-  "settings.refMaintFactsPopularity":
+  "settings.refLifecycleFactsFirstAired": "Date the show first aired (YYYY-MM-DD)",
+  "settings.refLifecycleFactsNetwork": "Network that airs the show",
+  "settings.refLifecycleFactsStudio": "Studio that made the title",
+  "settings.refLifecycleFactsCountry": "Country of origin",
+  "settings.refLifecycleFactsPopularity":
     "Popularity score from the metadata provider",
-  "settings.refMaintFactsTheatricalReleaseDate":
+  "settings.refLifecycleFactsTheatricalReleaseDate":
     "Theatrical release date of a movie (YYYY-MM-DD)",
-  "settings.refMaintFactsDigitalReleaseDate":
+  "settings.refLifecycleFactsDigitalReleaseDate":
     "Digital release date of a movie (YYYY-MM-DD)",
-  "settings.refMaintFactsPhysicalReleaseDate":
+  "settings.refLifecycleFactsPhysicalReleaseDate":
     "Physical release date of a movie (YYYY-MM-DD)",
-  "settings.refMaintFactsDaysSinceAdded":
+  "settings.refLifecycleFactsDaysSinceAdded":
     "Whole days since the subject was added",
-  "settings.refMaintFactsMaxVideoHeight":
+  "settings.refLifecycleFactsMaxVideoHeight":
     "Tallest video stream among the subject's files, in pixels",
-  "settings.refMaintFactsSeasonCount":
+  "settings.refLifecycleFactsSeasonCount":
     "Number of seasons of the show, specials left out",
-  "settings.refMaintFactsAiredEpisodeCount":
+  "settings.refLifecycleFactsAiredEpisodeCount":
     "Number of regular episodes of the show that have aired",
-  "settings.refMaintFactsUnairedEpisodeCount":
+  "settings.refLifecycleFactsUnairedEpisodeCount":
     "Number of regular episodes of the show that have not aired",
-  "settings.refMaintFactsMissingEpisodeCount":
+  "settings.refLifecycleFactsMissingEpisodeCount":
     "Number of aired, monitored episodes of the show without a file",
-  "settings.refMaintFactsAiredEpisodeFilePercent":
+  "settings.refLifecycleFactsAiredEpisodeFilePercent":
     "Aired episodes with a file, as a percentage of aired episodes",
-  "settings.refMaintFactsLatestSeasonNumber":
+  "settings.refLifecycleFactsLatestSeasonNumber":
     "Number of the show's latest season",
-  "settings.refMaintFactsLatestAiredEpisodeDate":
+  "settings.refLifecycleFactsLatestAiredEpisodeDate":
     "Air date of the show's most recently aired episode (YYYY-MM-DD)",
-  "settings.refMaintFactsNextEpisodeAirDate":
+  "settings.refLifecycleFactsNextEpisodeAirDate":
     "Air date of the show's next scheduled episode (YYYY-MM-DD)",
-  "settings.refMaintFactsGenres":
+  "settings.refLifecycleFactsGenres":
     "Genre names from the title's stored metadata",
-  "settings.refMaintFactsRating": "The title's stored rating summary",
-  "settings.refMaintFactsRatings":
+  "settings.refLifecycleFactsRating": "The title's stored rating summary",
+  "settings.refLifecycleFactsRatings":
     "Every external rating behind the rating summary",
-  "settings.refMaintFactsPlayCountTotal":
+  "settings.refLifecycleFactsPlayCountTotal":
     "Plays of the subject by every account on every enabled media server, summed; it names nobody",
-  "settings.refMaintFactsWatchlistedByUserIds":
+  "settings.refLifecycleFactsWatchlistedByUserIds":
     "Users whose watchlists hold the title",
-  "settings.refMaintFactsWatchlistedByUsernames":
+  "settings.refLifecycleFactsWatchlistedByUsernames":
     "Usernames of the users whose watchlists hold the title",
-  "settings.refMaintFactsWatchlistedByAnyone":
+  "settings.refLifecycleFactsWatchlistedByAnyone":
     "Whether any user's watchlist holds the title",
-  "settings.refMaintFactsWatchlistedByAnyRequester":
+  "settings.refLifecycleFactsWatchlistedByAnyRequester":
     "Whether a watchlist of one of the title's requesters holds it",
-  "settings.refMaintFactsWatchlistAddedAt":
+  "settings.refLifecycleFactsWatchlistAddedAt":
     "When Scryer first saw the title on any watchlist",
-  "settings.refMaintFactsWatchlistOrigins":
+  "settings.refLifecycleFactsWatchlistOrigins":
     "Providers whose watchlists hold the title now",
-  "settings.refMaintFactsFavoritedByUserIds":
+  "settings.refLifecycleFactsFavoritedByUserIds":
     "Users who marked the subject a favorite on Jellyfin or Emby",
-  "settings.refMaintFactsFavoritedByUsernames":
+  "settings.refLifecycleFactsFavoritedByUsernames":
     "Usernames of the users who marked the subject a favorite on Jellyfin or Emby",
-  "settings.refMaintFactsFavoritedByAnyone":
+  "settings.refLifecycleFactsFavoritedByAnyone":
     "Whether any user marked the subject a favorite on Jellyfin or Emby",
-  "settings.refMaintFactsFavoritedByAnyRequester":
+  "settings.refLifecycleFactsFavoritedByAnyRequester":
     "Whether one of the title's requesters marked the subject a favorite on Jellyfin or Emby",
-  "settings.refMaintFileAudioCodec":
+  "settings.refLifecycleFileAudioCodec":
     "Audio codec of the file's main audio stream",
-  "settings.refMaintFileAudioChannels": "Number of audio channels",
-  "settings.refMaintFileAudioBitrateKbps": "Audio bitrate in kbps",
-  "settings.refMaintFileVideoBitrateKbps": "Video bitrate in kbps",
-  "settings.refMaintFileVideoBitDepth": "Video bit depth",
-  "settings.refMaintFileVideoHdrFormat":
+  "settings.refLifecycleFileAudioChannels": "Number of audio channels",
+  "settings.refLifecycleFileAudioBitrateKbps": "Audio bitrate in kbps",
+  "settings.refLifecycleFileVideoBitrateKbps": "Video bitrate in kbps",
+  "settings.refLifecycleFileVideoBitDepth": "Video bit depth",
+  "settings.refLifecycleFileVideoHdrFormat":
     "HDR format of the video, such as HDR10 or Dolby Vision",
-  "settings.refMaintSectionRatings":
+  "settings.refLifecycleSectionRatings":
     "— One entry per external rating in input.facts.ratings",
-  "settings.refMaintSectionObsRatings":
+  "settings.refLifecycleSectionObsRatings":
     "— One entry per external rating in input.observations.ratings.value",
-  "settings.refMaintRatingSource": "Source of the rating",
-  "settings.refMaintRatingValue":
+  "settings.refLifecycleRatingSource": "Source of the rating",
+  "settings.refLifecycleRatingValue":
     "The rating on the source's own scale, when the source gives one",
-  "settings.refMaintRatingNormalized":
+  "settings.refLifecycleRatingNormalized":
     "The rating on Scryer's common scale, comparable across sources",
-  "settings.refMaintRatingVotes":
+  "settings.refLifecycleRatingVotes":
     "Number of votes behind the rating, when the source gives one",
-  "settings.refMaintFactsRuntimeMinutesValue":
+  "settings.refLifecycleFactsRuntimeMinutesValue":
     "Runtime in minutes; absent when the metadata provider gave no value",
-  "settings.refMaintFactsOriginalLanguageValue":
+  "settings.refLifecycleFactsOriginalLanguageValue":
     "Original language; absent when the metadata provider gave no value",
-  "settings.refMaintFactsSeriesStatusValue":
+  "settings.refLifecycleFactsSeriesStatusValue":
     "Show status as the provider gave it; absent when the provider gave no value",
-  "settings.refMaintFactsFirstAiredValue":
+  "settings.refLifecycleFactsFirstAiredValue":
     "First air date (YYYY-MM-DD), a date rather than a timestamp; absent when the provider gave no value",
-  "settings.refMaintFactsNetworkValue":
+  "settings.refLifecycleFactsNetworkValue":
     "Network name; absent when the provider gave no value",
-  "settings.refMaintFactsStudioValue":
+  "settings.refLifecycleFactsStudioValue":
     "Studio name; absent when the provider gave no value",
-  "settings.refMaintFactsCountryValue":
+  "settings.refLifecycleFactsCountryValue":
     "Country of origin; absent when the provider gave no value",
-  "settings.refMaintFactsPopularityValue":
+  "settings.refLifecycleFactsPopularityValue":
     "Popularity score; absent when the provider gave no value",
-  "settings.refMaintFactsTheatricalReleaseDateValue":
+  "settings.refLifecycleFactsTheatricalReleaseDateValue":
     "Theatrical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
-  "settings.refMaintFactsDigitalReleaseDateValue":
+  "settings.refLifecycleFactsDigitalReleaseDateValue":
     "Digital release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
-  "settings.refMaintFactsPhysicalReleaseDateValue":
+  "settings.refLifecycleFactsPhysicalReleaseDateValue":
     "Physical release date (YYYY-MM-DD); absent for a show, or when the provider gave no value",
-  "settings.refMaintFactsDaysSinceAddedValue":
+  "settings.refLifecycleFactsDaysSinceAddedValue":
     "Whole days since the subject was added, counted against the evaluation clock",
-  "settings.refMaintFactsMaxVideoHeightValue":
+  "settings.refLifecycleFactsMaxVideoHeightValue":
     "Height in pixels of the tallest video stream among the files; absent when no file reports one. Unknown with reason not_yet_collected until every file of the title has a completed scan, including a file whose scan failed or needs review",
-  "settings.refMaintFactsSeasonCountValue":
+  "settings.refLifecycleFactsSeasonCountValue":
     "Seasons in the show's whole episode list, specials left out, whatever the subject; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsAiredEpisodeCountValue":
+  "settings.refLifecycleFactsAiredEpisodeCountValue":
     "Regular episodes whose air date is on or before the evaluation day; an episode with no air date counts as not aired. Absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsUnairedEpisodeCountValue":
+  "settings.refLifecycleFactsUnairedEpisodeCountValue":
     "Regular episodes with no air date or one after the evaluation day; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsMissingEpisodeCountValue":
+  "settings.refLifecycleFactsMissingEpisodeCountValue":
     "Regular episodes that have aired, are monitored and have no file; absent for movies, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsAiredEpisodeFilePercentValue":
+  "settings.refLifecycleFactsAiredEpisodeFilePercentValue":
     "Percentage of aired episodes that have a file; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsLatestSeasonNumberValue":
+  "settings.refLifecycleFactsLatestSeasonNumberValue":
     "Highest regular season number; absent for movies or a show with no seasons, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsLatestAiredEpisodeDateValue":
+  "settings.refLifecycleFactsLatestAiredEpisodeDateValue":
     "Air date (YYYY-MM-DD) of the most recently aired regular episode; absent with reason no_aired_episode when nothing has aired, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsNextEpisodeAirDateValue":
+  "settings.refLifecycleFactsNextEpisodeAirDateValue":
     "Earliest air date (YYYY-MM-DD) after the evaluation day; absent with reason no_scheduled_episode when none is scheduled, unknown with reason episode_store_unreadable when the episode store could not be read, and with reason episode_list_empty when the show has no regular episode stored yet",
-  "settings.refMaintFactsGenresValue":
+  "settings.refLifecycleFactsGenresValue":
     "Genre names; unknown with reason metadata_unreadable when the stored metadata could not be read",
-  "settings.refMaintFactsRatingValue":
+  "settings.refLifecycleFactsRatingValue":
     "Rating summary; absent when no source rated the title, unknown with reason metadata_unreadable when the rating store could not be read",
-  "settings.refMaintFactsRatingsValue":
+  "settings.refLifecycleFactsRatingsValue":
     "One entry per external rating; unknown with reason metadata_unreadable when the rating store could not be read",
-  "settings.refMaintFactsPlayCountTotalValue":
+  "settings.refLifecycleFactsPlayCountTotalValue":
     "Plays by every account on every enabled media server, linked to a Scryer user or not, summed. Unknown with reason audience_not_read until every account has been read recently, and with the usual watch-fact reasons whenever watch facts are unknown.",
-  "settings.refMaintFactsWatchlistedByUserIdsValue":
+  "settings.refLifecycleFactsWatchlistedByUserIdsValue":
     "IDs of the users whose watchlists hold the title. A watchlist is a user's own enabled, signed-in Plex, Trakt, TMDb or MDBList watchlist, Simkl or MyAnimeList plan-to-watch list, or AniList planning list. Unknown with reason watchlist_not_synced while any watchlist has never synced, last failed, is switched off, is set not to sync or has lost its account, and with reason watchlist_stale while any has not synced recently.",
-  "settings.refMaintFactsWatchlistedByUsernamesValue":
+  "settings.refLifecycleFactsWatchlistedByUsernamesValue":
     "Usernames of the users whose watchlists hold the title; unknown with reason user_not_found when one of them no longer exists, and with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
-  "settings.refMaintFactsWatchlistedByAnyoneValue":
+  "settings.refLifecycleFactsWatchlistedByAnyoneValue":
     "True when any user's watchlist holds the title; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
-  "settings.refMaintFactsWatchlistedByAnyRequesterValue":
+  "settings.refLifecycleFactsWatchlistedByAnyRequesterValue":
     "True when a requester's watchlist holds the title; absent with reason title_not_requested when nobody requested it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
-  "settings.refMaintFactsWatchlistAddedAtValue":
+  "settings.refLifecycleFactsWatchlistAddedAtValue":
     "RFC3339 timestamp of when Scryer first saw the title on any watchlist; absent with reason not_on_a_watchlist when no watchlist holds it, unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
-  "settings.refMaintFactsWatchlistOriginsValue":
+  "settings.refLifecycleFactsWatchlistOriginsValue":
     "Providers whose watchlists hold the title now; unknown with reason watchlist_not_synced or watchlist_stale while any watchlist has not synced recently",
-  "settings.refMaintFactsFavoritedByUserIdsValue":
+  "settings.refLifecycleFactsFavoritedByUserIdsValue":
     "IDs of the users who marked the subject a favorite on an enabled Jellyfin or Emby server. A title counts every favorite of it; a series or season favorite counts for every season and episode of the series; an episode favorite counts for that episode, its season and the series. Scryer cannot read Plex favorites: unknown with reason favorites_unsupported when every enabled server is Plex, and with reason favorite_member_unobservable while a linked user can only be seen through Plex. Unknown with reason favorites_member_not_read while a linked user's favorites have no recent complete read, and with reason favorites_unreadable when the stored favorites could not be read. After an upgrade the favorite facts stay unknown until the first sweep has read favorites.",
-  "settings.refMaintFactsFavoritedByUsernamesValue":
+  "settings.refLifecycleFactsFavoritedByUsernamesValue":
     "Usernames of the users who marked the subject a favorite, counted as for favorited_by_user_ids; unknown with reason user_not_found when one of them no longer exists, and for the same reasons as favorited_by_user_ids.",
-  "settings.refMaintFactsFavoritedByAnyoneValue":
+  "settings.refLifecycleFactsFavoritedByAnyoneValue":
     "True when a favorite read from Jellyfin or Emby covers the subject, counted as for favorited_by_user_ids, whether or not the account is linked to a Scryer user. False once every account on every enabled Jellyfin and Emby server has had its favorites read in full recently and none covers the subject. Unknown with reason audience_favorites_not_read while some account on such a server has no recent complete read, with reason audience_favorites_unsupported while a Plex server is enabled, since Plex accounts could have favorites Scryer cannot read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
-  "settings.refMaintFactsFavoritedByAnyRequesterValue":
+  "settings.refLifecycleFactsFavoritedByAnyRequesterValue":
     "True when a requester marked the subject a favorite, counted as for favorited_by_user_ids; absent with reason title_not_requested when nobody requested it, unknown with reason requester_not_linked when a requester has no linked media server account, with reason favorites_member_not_read when a requester's favorites have no recent complete read, and with reason favorites_unsupported, favorite_member_unobservable or favorites_unreadable as for favorited_by_user_ids.",
-  "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
-  "settings.refMaintFileSubtitleLanguages":
+  "settings.refLifecycleFileAudioLanguages": "Audio languages present in the file",
+  "settings.refLifecycleFileSubtitleLanguages":
     "Subtitle languages present in the file",
-  "settings.refMaintFileAddedAt": "RFC3339 timestamp the file was added",
-  "settings.refMaintFactsSeriesMovies":
+  "settings.refLifecycleFileAddedAt": "RFC3339 timestamp the file was added",
+  "settings.refLifecycleFactsSeriesMovies":
     "Movies linked into this show's timeline, each with its own tags. Present for shows only: the key is missing entirely for a movie subject, and known-empty for a show with no linked movies. add_tags and remove_tags never write these; they act on the subject title.",
-  "settings.refMaintFactsSeriesMoviesValue":
+  "settings.refLifecycleFactsSeriesMoviesValue":
     "One entry per linked movie; see input.observations.series_movies.value[] below",
-  "settings.refMaintSectionSeriesMovies":
+  "settings.refLifecycleSectionSeriesMovies":
     "— One entry per linked movie in input.facts.series_movies",
-  "settings.refMaintSectionObsSeriesMovies":
+  "settings.refLifecycleSectionObsSeriesMovies":
     "— One entry per linked movie in input.observations.series_movies.value",
-  "settings.refMaintSeriesMovieLinkId": "Identifier of the series-movie link",
-  "settings.refMaintSeriesMovieName": "Title of the linked movie",
-  "settings.refMaintSeriesMovieYear":
+  "settings.refLifecycleSeriesMovieLinkId": "Identifier of the series-movie link",
+  "settings.refLifecycleSeriesMovieName": "Title of the linked movie",
+  "settings.refLifecycleSeriesMovieYear":
     "Release year of the linked movie, when known",
-  "settings.refMaintSeriesMovieMonitored":
+  "settings.refLifecycleSeriesMovieMonitored":
     "Whether acquisition is enabled for this linked movie",
-  "settings.refMaintSeriesMovieHasFile":
+  "settings.refLifecycleSeriesMovieHasFile":
     "Whether this linked movie has a file on disk",
-  "settings.refMaintSeriesMovieTags":
+  "settings.refLifecycleSeriesMovieTags":
     "User-defined tags on this linked movie, from the same registry as title tags. A series movie carries its own tags; it does not inherit the show's.",
   "settings.ruleBuilderTitle": "Rule",
   "settings.ruleBuilderModeLabel": "Editor",
@@ -10248,7 +10248,7 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderIncomplete":
     "Finish the conditions and outcomes before saving.",
   "settings.ruleBuilderConditions": "Conditions",
-  "settings.maintenanceBuilderConditionsHelp":
+  "settings.lifecycleBuilderConditionsHelp":
     "Each condition checks one fact about the subject. Choose whether every condition or any one of them must hold for the actions to apply.",
   "settings.ruleBuilderJoinAll": "All conditions match",
   "settings.ruleBuilderJoinAny": "Any condition matches",
@@ -10258,14 +10258,14 @@ const en: LocaleDictionary = {
   "settings.ruleBuilderOperator": "Comparison",
   "settings.ruleBuilderValue": "Value",
   "settings.ruleBuilderDays": "Days",
-  "settings.maintenanceBuilderActionsHelp":
+  "settings.lifecycleBuilderActionsHelp":
     "Actions run in the order listed. Actions that cannot be combined are disabled once a conflicting one is chosen.",
-  "settings.maintenanceBuilderActionTitleOnly":
+  "settings.lifecycleBuilderActionTitleOnly":
     "Only available for title rules.",
   "settings.ruleBuilderOutputConflict": "Cannot be combined with {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Choose a quality profile",
-  "settings.maintenanceBuilderLibraryPlaceholder": "Choose a library",
-  "settings.maintenanceBuilderRootPlaceholder": "Choose a root folder",
+  "settings.lifecycleBuilderLibraryPlaceholder": "Choose a library",
+  "settings.lifecycleBuilderRootPlaceholder": "Choose a root folder",
   "settings.ruleBuilderTagsPlaceholder": "Choose tags",
   "settings.ruleBuilderNoTags": "No tags have been created yet.",
   "settings.ruleBuilderGeneratedSource": "Generated Rego",
@@ -10356,93 +10356,93 @@ const en: LocaleDictionary = {
   "settings.requestBuilderOriginManual": "Requested by hand",
   "settings.requestBuilderOriginPublicList": "From a public list",
   "settings.requestBuilderOriginPersonalList": "From a personal list",
-  "settings.maintenanceDeclaredActionsTitle": "Declared actions",
-  "settings.maintenanceDeclaredActionsHelp":
+  "settings.lifecycleDeclaredActionsTitle": "Declared actions",
+  "settings.lifecycleDeclaredActionsHelp":
     "The actions this rule's source defines. A matched subject gets only the ones whose conditions hold for it, applied in this order: {{order}}.",
-  "settings.maintenanceDeclaredActionsNone": "No actions",
-  "settings.maintenanceDeclaredActionsUnavailable":
+  "settings.lifecycleDeclaredActionsNone": "No actions",
+  "settings.lifecycleDeclaredActionsUnavailable":
     "Fix the errors to see what this rule does.",
-  "settings.maintenanceDecidedActionsNone": "No actions",
-  "settings.maintenanceRuleWarningsTitle": "Warnings",
-  "settings.maintenanceRuleWarningLocation":
+  "settings.lifecycleDecidedActionsNone": "No actions",
+  "settings.lifecycleRuleWarningsTitle": "Warnings",
+  "settings.lifecycleRuleWarningLocation":
     "Line {{line}}, column {{column}}:",
-  "settings.refMaintOutputFlagHeads":
+  "settings.refLifecycleOutputFlagHeads":
     "Actions without a value (unmonitor, monitor, search, fetch_subtitles, delete_files, delete_title) are booleans: define them with if, and the action applies when the body holds.",
-  "settings.refMaintOutputValueHeads":
+  "settings.refLifecycleOutputValueHeads":
     "Actions with a value (set_quality_profile, add_tags, remove_tags, move_to_library, move_to_root, notify) assign a plain literal with :=. An else chain may choose between literals; a computed value is rejected.",
-  "settings.refMaintOutputHelpers":
+  "settings.refLifecycleOutputHelpers":
     "Any other rule name is a helper of your own. It only has an effect when an action, unknown or reasons uses it.",
-  "settings.refMaintActionsTitle": "Actions",
-  "settings.refMaintActionsOrder":
+  "settings.refLifecycleActionsTitle": "Actions",
+  "settings.refLifecycleActionsOrder":
     "Scryer applies a subject's actions in this order, whatever order the source lists them in: {{order}}.",
-  "settings.refMaintActionsDaysSince":
+  "settings.refLifecycleActionsDaysSince":
     "days_since(timestamp) returns the whole days between an RFC3339 timestamp and the evaluation time, so days_since(input.facts.added_at) > 180 means added more than 180 days ago.",
-  "settings.refMaintActionsNotify":
+  "settings.refLifecycleActionsNotify":
     "notify sends its message once, when the actions are applied. Previews and dry runs never send it.",
-  "settings.refMaintActionsConflicts":
+  "settings.refLifecycleActionsConflicts":
     "Conflicting actions for one subject, such as monitor with unmonitor, or the same tag both added and removed, hold that subject with a reason instead of applying either.",
-  "settings.refMaintTagActionsTitle": "Tag actions",
-  "settings.refMaintTagActionsNote":
+  "settings.refLifecycleTagActionsTitle": "Tag actions",
+  "settings.refLifecycleTagActionsNote":
     "add_tags and remove_tags write user tags on the matched title. Every label has to exist in the tag registry an administrator maintains in Settings, and labels are stored lowercase — a rule naming a tag that was deleted afterwards holds with tag_not_defined instead of writing it.",
-  "settings.refMaintTagOscillationNote":
+  "settings.refLifecycleTagOscillationNote":
     "Two rules that write the opposite patch for the same label on the same title hold both candidates with tag_patch_conflict rather than letting whichever ran last win. A rule that adds a label and another that removes it on a later run is not caught that way: it is an authoring mistake that flips the tag back and forth forever, so scope the two so they cannot both match.",
 
-  "settings.maintenanceTemplateGallery": "Starter templates",
-  "settings.maintenanceTemplateApply": "Use template",
-  "settings.maintenanceTemplateFacetMovie": "Movies",
-  "settings.maintenanceTemplateFacetShow": "Shows",
-  "settings.maintenanceTemplateGraceBadge": "{{count}}-day grace",
-  "settings.maintenanceTemplateNoGraceBadge": "No grace period",
-  "settings.maintenanceTemplateDestructiveBadge": "Deletes files",
-  "settings.maintenanceTemplateNeedsProfileBadge": "Name a target profile",
-  "settings.maintenanceTemplateDeadWantedTitle": "Dead wanted entries",
-  "settings.maintenanceTemplateDeadWantedDescription":
+  "settings.lifecycleTemplateGallery": "Starter templates",
+  "settings.lifecycleTemplateApply": "Use template",
+  "settings.lifecycleTemplateFacetMovie": "Movies",
+  "settings.lifecycleTemplateFacetShow": "Shows",
+  "settings.lifecycleTemplateGraceBadge": "{{count}}-day grace",
+  "settings.lifecycleTemplateNoGraceBadge": "No grace period",
+  "settings.lifecycleTemplateDestructiveBadge": "Deletes files",
+  "settings.lifecycleTemplateNeedsProfileBadge": "Name a target profile",
+  "settings.lifecycleTemplateDeadWantedTitle": "Dead wanted entries",
+  "settings.lifecycleTemplateDeadWantedDescription":
     "Titles you still monitor that no file ever arrived for. Facts are plain values, so a title whose monitoring or file state Scryer cannot see holds instead of matching. After a 30-day grace period the scope is unmonitored and anything already on disk is left alone.",
-  "settings.maintenanceTemplateLibraryAgingTitle": "Library aging",
-  "settings.maintenanceTemplateLibraryAgingDescription":
+  "settings.lifecycleTemplateLibraryAgingTitle": "Library aging",
+  "settings.lifecycleTemplateLibraryAgingDescription":
     'Caution: this template deletes the title and its files. Anything holding a file ages out unless it carries the "keep" tag. A 180-day grace period runs first, and the instance gates plus this rule\'s own arming still have to agree before anything is removed.',
-  "settings.maintenanceTemplateAddedLongAgoTitle": "Added over 180 days ago",
-  "settings.maintenanceTemplateAddedLongAgoDescription":
+  "settings.lifecycleTemplateAddedLongAgoTitle": "Added over 180 days ago",
+  "settings.lifecycleTemplateAddedLongAgoDescription":
     "Real date math: days_since compares the title's added_at with the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
-  "settings.maintenanceTemplateOversizedTitle": "Oversized releases",
-  "settings.maintenanceTemplateOversizedDescription":
+  "settings.lifecycleTemplateOversizedTitle": "Oversized releases",
+  "settings.lifecycleTemplateOversizedDescription":
     'Titles whose files total more than 40 GB. Moves the title onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
-  "settings.maintenanceTemplateFourKPurgeTitle": "4K purge",
-  "settings.maintenanceTemplateFourKPurgeDescription":
+  "settings.lifecycleTemplateFourKPurgeTitle": "4K purge",
+  "settings.lifecycleTemplateFourKPurgeDescription":
     'Any title holding a 2160p file. After a 7-day grace period it moves onto a named quality profile and searches again. Replace the "Compact 1080p" placeholder in the source with one of your profiles before saving.',
-  "settings.maintenanceTemplateRequestedExpiryTitle": "Requested media expiry",
-  "settings.maintenanceTemplateRequestedExpiryDescription":
+  "settings.lifecycleTemplateRequestedExpiryTitle": "Requested media expiry",
+  "settings.lifecycleTemplateRequestedExpiryDescription":
     'Caution: this template deletes the title and its files. Titles that came in from a request age out after 120 days unless they carry the "keep" tag.',
-  "settings.maintenanceTemplateDepartedRequesterTitle": "Departed requester",
-  "settings.maintenanceTemplateDepartedRequesterDescription":
+  "settings.lifecycleTemplateDepartedRequesterTitle": "Departed requester",
+  "settings.lifecycleTemplateDepartedRequesterDescription":
     'Caution: this template deletes the title and its files. It matches titles requested by one named user — edit the "departed-user" placeholder in the matcher to the username you mean before saving, or it will match nothing.',
-  "settings.maintenanceTemplateSystemAddedTitle": "System-added cleanup",
-  "settings.maintenanceTemplateSystemAddedDescription":
+  "settings.lifecycleTemplateSystemAddedTitle": "System-added cleanup",
+  "settings.lifecycleTemplateSystemAddedDescription":
     "Titles a scan discovered rather than a person adding them, and that hold a file. After 60 days the scope is unmonitored and the files stay where they are.",
-  "settings.maintenanceTemplateWatchedRequestedTitle":
+  "settings.lifecycleTemplateWatchedRequestedTitle":
     "Watched by everyone who asked",
-  "settings.maintenanceTemplateWatchedRequestedDescription":
+  "settings.lifecycleTemplateWatchedRequestedDescription":
     "Caution: this template deletes the title and its files. It matches requested movies that every one of their requesters has now played, after a 30-day grace period. Movies only: Scryer records plays per movie and per episode, never per show, so a series holds instead of matching. It also holds whenever a requester has no linked media-server account, or the last signal sync is over 48 hours old — a partial watch picture is not evidence to delete on.",
-  "settings.maintenanceTemplateExpiredLeasesTitle": "Expired request leases",
-  "settings.maintenanceTemplateExpiredLeasesDescription":
+  "settings.lifecycleTemplateExpiredLeasesTitle": "Expired request leases",
+  "settings.lifecycleTemplateExpiredLeasesDescription":
     "Caution: this template deletes the title and its files. It matches titles whose request leases have all run out, after a 7-day grace period. A lease that has not started yet — the title has not been imported — is left alone, and so is a title that never had a lease.",
-  "settings.maintenanceTemplateNoProfileTitle": "No quality profile",
-  "settings.maintenanceTemplateNoProfileDescription":
+  "settings.lifecycleTemplateNoProfileTitle": "No quality profile",
+  "settings.lifecycleTemplateNoProfileDescription":
     "Titles with no quality profile assigned. Adds the needs-review tag so a person can pick a profile; nothing else changes.",
-  "settings.maintenanceTemplateNewestEpisodesTitle":
+  "settings.lifecycleTemplateNewestEpisodesTitle":
     "Keep newest 3 downloaded episodes",
-  "settings.maintenanceTemplateNewestEpisodesDescription":
+  "settings.lifecycleTemplateNewestEpisodesDescription":
     "Caution: this episode-scoped template unmonitors and deletes downloaded episodes ranked older than the newest three by air date. Specials, future episodes, missing files, and unresolved dates receive no rank, so they do not match. Protected episodes still occupy the newest-three slots.",
-  "settings.maintenanceTemplateNewestSeasonsTitle":
+  "settings.lifecycleTemplateNewestSeasonsTitle":
     "Keep newest 2 downloaded seasons",
-  "settings.maintenanceTemplateNewestSeasonsDescription":
+  "settings.lifecycleTemplateNewestSeasonsDescription":
     "Caution: this season-scoped template unmonitors and deletes files from seasons ranked older than the newest two by each season's newest eligible downloaded episode. Specials, future episodes, missing files, and unresolved dates receive no rank; protected seasons still occupy slots.",
-  "settings.maintenanceTemplateLeftEveryListTitle": "Left every list",
-  "settings.maintenanceTemplateLeftEveryListDescription":
+  "settings.lifecycleTemplateLeftEveryListTitle": "Left every list",
+  "settings.lifecycleTemplateLeftEveryListDescription":
     "Titles every list has dropped, public or personal, once each departure has been handled and the last one is more than 30 days old. The scope is unmonitored and the files stay where they are.",
-  "settings.maintenanceTemplateListAddedUnwatchedTitle":
+  "settings.lifecycleTemplateListAddedUnwatchedTitle":
     "Added by a list and never watched",
-  "settings.maintenanceTemplateListAddedUnwatchedDescription":
+  "settings.lifecycleTemplateListAddedUnwatchedDescription":
     "Adds the needs-review tag to titles a list added more than 90 days ago that nobody has played. Holds whenever the watch picture is incomplete. Nothing is deleted.",
 
   // ── Request rules ───────────────────────────────────────────────────
@@ -10594,7 +10594,7 @@ const en: LocaleDictionary = {
   "search.keepForCustom": "A number of days…",
   "search.keepForCustomLabel": "Days to keep",
   "search.keepForHelp":
-    "How long Scryer holds this media for you. When the time is up a maintenance rule may remove it; keeping it forever never expires.",
+    "How long Scryer holds this media for you. When the time is up a lifecycle rule may remove it; keeping it forever never expires.",
 
   "requests.preflightAutoApprove": "This will be approved automatically",
   "requests.preflightManualReview": "This needs approval",
@@ -11642,8 +11642,8 @@ const en: LocaleDictionary = {
     "Renamed to {{label}}. Rewrote {{titles}} titles, {{seriesMovies}} series movies, and {{delayProfiles}} delay profiles.",
   "settings.titleTagRenameWarning":
     "Rule sources are never rewritten, so {{count}} rule references still name the old label {{label}} and will stop matching: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "{{count}} maintenance rule sets",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "{{count}} lifecycle rule sets",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} release rule sets",
   "settings.titleTagReferenceManagedTagFilters":
     "{{count}} managed tag filters",
@@ -11678,19 +11678,19 @@ const en: LocaleDictionary = {
   "title.catalogFilters.needsAttentionHint":
     "Holds a file whose scan failed or that needs review, so something has to be looked at before it is usable.",
 
-  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // Series-movie tags and the lifecycle tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,
   // the same way the WP3 block above does.
   "settings.titleTagSeriesMovieCount": "Series movies",
-  "settings.maintenanceActionAddTags": "Add tags",
-  "settings.maintenanceActionRemoveTags": "Remove tags",
-  "settings.maintenanceRuleTagsHelp":
+  "settings.lifecycleActionAddTags": "Add tags",
+  "settings.lifecycleActionRemoveTags": "Remove tags",
+  "settings.lifecycleRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "Tagged for removal",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Tagged for removal",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "Flag for review",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "Flag for review",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
@@ -12360,93 +12360,93 @@ const en: LocaleDictionary = {
     "Moving the file to its new name failed. The file and its episodes were left as they were.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episode numbering is ambiguous",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "Held: something is playing on a media server.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Held: a media server could not be asked whether something is playing.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Held: the media server shows a play newer than the stored watch history.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Held: the media server's history shows a play by an account the watch history does not count.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Held: the media server could not confirm the watch history before acting.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Held: a connected media server has no matching item for this, so its watch history could not be checked before acting.",
-  "error.reason.MAINTENANCE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
+  "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN":
     "This rule deletes but has no titles-per-run limit, so its actions do not run. It still evaluates and previews; set a limit to let it act.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerFavorite":
+  "settings.lifecycleExecutionReason.watchRecheckNewerFavorite":
     "Held: since favorites were last read, an account on the media server marked this item, or the series or a season of the episodes checked, a favorite.",
-  "settings.maintenanceExecutionReason.ruleNotEligible":
+  "settings.lifecycleExecutionReason.ruleNotEligible":
     "Held: before the action ran, the rule was disabled, set to dry run or disarmed, or its safety gate closed.",
-  "settings.maintenanceExecutionReason.noMatchAtExecution":
+  "settings.lifecycleExecutionReason.noMatchAtExecution":
     "Not acted on: checked again just before acting, the title no longer matches the rule.",
-  "settings.maintenanceExecutionReason.unknownAtExecution":
+  "settings.lifecycleExecutionReason.unknownAtExecution":
     "Held: checked again just before acting, the rule could not decide. It is checked again on the next run.",
-  "settings.maintenanceExecutionReason.activeAcquisition":
+  "settings.lifecycleExecutionReason.activeAcquisition":
     "Held: the title has a grab, download or import in progress.",
-  "settings.maintenanceExecutionReason.acquisitionUnknown":
+  "settings.lifecycleExecutionReason.acquisitionUnknown":
     "Held: Scryer could not tell whether the title has a grab, download or import in progress.",
-  "settings.maintenanceExecutionReason.storageDeletionInProgress":
+  "settings.lifecycleExecutionReason.storageDeletionInProgress":
     "Held: a storage-space cleanup is deleting files. The action waits until it finishes.",
-  "settings.maintenanceExecutionReason.actionNotFullySupported":
+  "settings.lifecycleExecutionReason.actionNotFullySupported":
     "Held: this action cannot run on this subject, such as a whole-title action on a season or an episode.",
-  "settings.maintenanceExecutionReason.titleMissing":
+  "settings.lifecycleExecutionReason.titleMissing":
     "The title is no longer in the library, so nothing was done.",
-  "settings.maintenanceExecutionReason.locationOperationHold":
+  "settings.lifecycleExecutionReason.locationOperationHold":
     "Held: the title's files are being moved or renamed. The action runs once that finishes.",
-  "settings.maintenanceExecutionReason.passActionStepBudget":
+  "settings.lifecycleExecutionReason.passActionStepBudget":
     "Held by an earlier run that had used up its action steps. Runs no longer have that limit; the action runs on the next run.",
-  "settings.maintenanceExecutionReason.passHighRiskStepBudget":
+  "settings.lifecycleExecutionReason.passHighRiskStepBudget":
     "Held: deletions failed repeatedly in this run, so the remaining deletions wait for the next run.",
-  "settings.maintenanceExecutionReason.actionSucceeded":
+  "settings.lifecycleExecutionReason.actionSucceeded":
     "The action completed.",
-  "settings.maintenanceExecutionReason.alreadySatisfied":
+  "settings.lifecycleExecutionReason.alreadySatisfied":
     "Nothing to change: the title was already as the action would leave it.",
-  "settings.maintenanceExecutionReason.retryPending":
+  "settings.lifecycleExecutionReason.retryPending":
     "The action failed for a reason that may pass. It is tried again.",
-  "settings.maintenanceExecutionReason.actionFailed":
+  "settings.lifecycleExecutionReason.actionFailed":
     "The action failed and is not tried again. The action history has the error.",
-  "settings.maintenanceExecutionReason.leaseReclaimed":
+  "settings.lifecycleExecutionReason.leaseReclaimed":
     "The action stopped before it finished, for example when Scryer restarted. It was released to run again.",
-  "settings.maintenanceExecutionReason.ambiguousEpisodeFileCoverage":
+  "settings.lifecycleExecutionReason.ambiguousEpisodeFileCoverage":
     "Held: some files cannot be placed on this season's or episode's episodes, so deleting them is not safe.",
-  "settings.maintenanceExecutionReason.qualityProfileUnresolved":
+  "settings.lifecycleExecutionReason.qualityProfileUnresolved":
     "Held: the quality profile this rule sets no longer names exactly one profile. It was renamed or removed, or two profiles share the name.",
-  "settings.maintenanceExecutionReason.actionsNotRunnable":
+  "settings.lifecycleExecutionReason.actionsNotRunnable":
     "Held: the actions decided for this subject cannot run together, such as adding and removing the same tag.",
-  "settings.maintenanceExecutionReason.actionsChangedAtExecution":
+  "settings.lifecycleExecutionReason.actionsChangedAtExecution":
     "Held: checked again just before acting, the rule now decides different actions. The next evaluation replaces this candidate.",
-  "settings.maintenanceExecutionReason.actionNotDeclared":
+  "settings.lifecycleExecutionReason.actionNotDeclared":
     "Held: this candidate carries an action the rule's current source no longer declares, so it never runs.",
-  "settings.maintenanceExecutionReason.storageRootActionNotAllowed":
+  "settings.lifecycleExecutionReason.storageRootActionNotAllowed":
     "Held: a storage-root rule cannot run one of these actions.",
-  "settings.maintenanceRuleMaxTitlesPerRun": "Titles per run",
-  "settings.maintenanceRuleMaxTitlesPerRunHelp":
+  "settings.lifecycleRuleMaxTitlesPerRun": "Titles per run",
+  "settings.lifecycleRuleMaxTitlesPerRunHelp":
     "The most titles this rule acts on in one run. A rule that deletes files or titles needs this limit.",
-  "settings.maintenanceRuleMaxTitlesPerRunNone": "No limit",
-  "settings.maintenanceRuleLoadRefused":
+  "settings.lifecycleRuleMaxTitlesPerRunNone": "No limit",
+  "settings.lifecycleRuleLoadRefused":
     "This rule cannot run as it is stored.",
-  "settings.maintenanceSequenceStepMonitor": "Monitor",
-  "settings.maintenanceSequenceStepFetchSubtitles": "Fetch subtitles",
-  "settings.maintenanceSequenceStepMoveToLibrary": "Move to library",
-  "settings.maintenanceSequenceStepMoveToRoot": "Move to root folder",
-  "settings.notificationEvent.maintenanceRuleNotified":
-    "Maintenance Rule Notified",
-  "settings.maintenanceExecutionReason.tagNotDefined":
+  "settings.lifecycleSequenceStepMonitor": "Monitor",
+  "settings.lifecycleSequenceStepFetchSubtitles": "Fetch subtitles",
+  "settings.lifecycleSequenceStepMoveToLibrary": "Move to library",
+  "settings.lifecycleSequenceStepMoveToRoot": "Move to root folder",
+  "settings.notificationEvent.lifecycleRuleNotified":
+    "Lifecycle Rule Notified",
+  "settings.lifecycleExecutionReason.tagNotDefined":
     "Held: a tag this rule writes is no longer defined in Settings › Tags.",
-  "settings.maintenanceExecutionReason.tagPatchConflict":
+  "settings.lifecycleExecutionReason.tagPatchConflict":
     "Held: another rule would add a tag this rule removes, or remove one it adds.",
-  "settings.maintenanceExecutionReason.monitoringConflict":
+  "settings.lifecycleExecutionReason.monitoringConflict":
     "Held: another rule recently did the opposite to this title's monitoring.",
-  "settings.maintenanceExecutionReason.actionsConflict":
+  "settings.lifecycleExecutionReason.actionsConflict":
     "Held: the rule decided actions that cannot run together, so nothing was applied.",
-  "settings.maintenanceExecutionReason.moveLibraryUnresolved":
+  "settings.lifecycleExecutionReason.moveLibraryUnresolved":
     "Held: the library this move names no longer matches exactly one library.",
-  "settings.maintenanceExecutionReason.moveLibraryFacetMismatch":
+  "settings.lifecycleExecutionReason.moveLibraryFacetMismatch":
     "Held: the library this move names holds another kind of title.",
-  "settings.maintenanceExecutionReason.moveRootNotInLibrary":
+  "settings.lifecycleExecutionReason.moveRootNotInLibrary":
     "Held: the root folder this move names is not a root of the title's library.",
-  "settings.maintenanceExecutionReason.moveRefused":
+  "settings.lifecycleExecutionReason.moveRefused":
     "Held: the move was refused or its plan went stale. The files stay where they are and the move retries.",
   "error.ruleActionRequired":
     "Define at least one action, such as unmonitor, delete_files or add_tags, so this rule can do something.",
@@ -12467,39 +12467,39 @@ const en: LocaleDictionary = {
   "error.ruleMonitorUnsupported":
     "No library this rule applies to accepts this monitor type.",
   "error.ruleAudioLanguageUnknown": "Scryer does not know this audio language.",
-  "error.maintenanceMaxTitlesPerRunRequiredNamed":
+  "error.lifecycleMaxTitlesPerRunRequiredNamed":
     "Set titles per run. These actions of the rule need it: {{actions}}.",
-  "error.reason.MAINTENANCE_ACTION_HEAD_REQUIRED":
+  "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
     "The rule defines no action, so it could never do anything.",
-  "error.reason.MAINTENANCE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
+  "error.reason.LIFECYCLE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
     "The rule defines an action its scope cannot run.",
-  "error.reason.MAINTENANCE_MOVE_LIBRARY_FACET_MISMATCH":
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
     "The library this move names holds another kind of title than the rule's libraries.",
-  "error.reason.MAINTENANCE_MOVE_LIBRARY_NOT_FOUND":
+  "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
     "The library this move names does not exist.",
-  "error.reason.MAINTENANCE_MOVE_ROOT_NOT_FOUND":
+  "error.reason.LIFECYCLE_MOVE_ROOT_NOT_FOUND":
     "The root folder this move names is not a configured library root.",
-  "error.reason.MAINTENANCE_PREVIEW_NO_DECISION":
+  "error.reason.LIFECYCLE_PREVIEW_NO_DECISION":
     "The rule gave this subject neither a decision nor an error.",
-  "error.reason.MAINTENANCE_QUALITY_PROFILE_NOT_FOUND":
+  "error.reason.LIFECYCLE_QUALITY_PROFILE_NOT_FOUND":
     "The quality profile this rule sets does not exist.",
-  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_INVALID":
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_INVALID":
     "Titles per run must be at least 1.",
-  "error.reason.MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
+  "error.reason.LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED":
     "Set titles per run: this rule can delete.",
-  "error.reason.MAINTENANCE_RULE_REVISION_CONFLICT":
+  "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "Another save changed this rule first. Nothing was saved; reload the rule and try again.",
-  "error.reason.MAINTENANCE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
     "This rule was saved before rules declared their own actions, so it never runs. Replace its source to run it again.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "When anyone with an account on a connected media server last played the subject",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True when any account on an enabled media server has played it, whether or not the account is linked to a Scryer user; for seasons and shows, any aired episode counts. Unknown with reason audience_not_read until a sync in the last 48 hours has read every account on every enabled connection, and with the usual watch-fact reasons whenever watch facts are unknown.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "RFC3339 timestamp of the most recent play by any account; absent with reason never_watched when nobody has played it, and unknown with reason play_time_missing (episode_play_time_missing for seasons and shows) when a play has no recorded time, or audience_not_read when the accounts have not all been read",
-  "settings.maintenancePreviewFacts": "Facts the rule read",
+  "settings.lifecyclePreviewFacts": "Facts the rule read",
   "uiText.tables": "Tables",
   "uiText.table": "Table",
   "uiText.rows": "Rows",
@@ -12965,12 +12965,12 @@ const en: LocaleDictionary = {
   "jobs.builtin.ApplicationUpgrade.name": "Application Upgrade",
   "jobs.builtin.ApplicationUpgrade.description":
     "Download, verify, and apply a signed application upgrade.",
-  "jobs.builtin.MaintenanceRuleEvaluation.name": "Maintenance Rule Evaluation",
-  "jobs.builtin.MaintenanceRuleEvaluation.description":
-    "Start and expire request leases on schedule. Each maintenance rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
-  "jobs.builtin.LifecycleActionHandling.name": "Maintenance Action Handling",
+  "jobs.builtin.LifecycleRuleEvaluation.name": "Lifecycle Rule Evaluation",
+  "jobs.builtin.LifecycleRuleEvaluation.description":
+    "Start and expire request leases on schedule. Each lifecycle rule evaluates on its own schedule; running this now evaluates every enabled rule and never executes an action.",
+  "jobs.builtin.LifecycleActionHandling.name": "Lifecycle Action Handling",
   "jobs.builtin.LifecycleActionHandling.description":
-    "Each maintenance rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule.",
+    "Each lifecycle rule acts on its due candidates right after its own scheduled evaluation, or when that rule is run by hand, behind the instance effect gates and full safety rechecks. This job acts on no rule.",
   "jobs.builtin.MediaServerSignalSync.name": "Media Server Signal Sync",
   "jobs.builtin.MediaServerSignalSync.description":
     "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals.",
@@ -13161,19 +13161,19 @@ const en: LocaleDictionary = {
   "qualityProfile.decisionStepDrag": "Drag to reorder {{value}}",
   "qualityProfile.decisionStepMoveUp": "Move {{value}} up",
   "qualityProfile.decisionStepMoveDown": "Move {{value}} down",
-  "ruleOutput.maintenance.add_tags": "Add tags",
-  "ruleOutput.maintenance.remove_tags": "Remove tags",
-  "ruleOutput.maintenance.set_quality_profile": "Change quality profile",
-  "ruleOutput.maintenance.monitor": "Monitor",
-  "ruleOutput.maintenance.search": "Search",
-  "ruleOutput.maintenance.fetch_subtitles": "Fetch subtitles",
-  "ruleOutput.maintenance.move_to_library": "Move to library",
-  "ruleOutput.maintenance.move_to_root": "Move to root folder",
-  "ruleOutput.maintenance.unmonitor": "Unmonitor",
-  "ruleOutput.maintenance.delete_files": "Delete files",
-  "ruleOutput.maintenance.delete_title": "Delete title and files",
-  "ruleOutput.maintenance.notify": "Notify",
-  "ruleOutput.maintenance.notify.placeholder": "Notification text",
+  "ruleOutput.lifecycle.add_tags": "Add tags",
+  "ruleOutput.lifecycle.remove_tags": "Remove tags",
+  "ruleOutput.lifecycle.set_quality_profile": "Change quality profile",
+  "ruleOutput.lifecycle.monitor": "Monitor",
+  "ruleOutput.lifecycle.search": "Search",
+  "ruleOutput.lifecycle.fetch_subtitles": "Fetch subtitles",
+  "ruleOutput.lifecycle.move_to_library": "Move to library",
+  "ruleOutput.lifecycle.move_to_root": "Move to root folder",
+  "ruleOutput.lifecycle.unmonitor": "Unmonitor",
+  "ruleOutput.lifecycle.delete_files": "Delete files",
+  "ruleOutput.lifecycle.delete_title": "Delete title and files",
+  "ruleOutput.lifecycle.notify": "Notify",
+  "ruleOutput.lifecycle.notify.placeholder": "Notification text",
   "ruleOutput.request.approve": "Approve",
   "ruleOutput.request.deny": "Deny",
   "ruleOutput.request.manual": "Hold for review",

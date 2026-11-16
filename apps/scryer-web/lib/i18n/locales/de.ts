@@ -981,7 +981,7 @@ const de: LocaleDictionary = {
   "settings.featuresHeader": "Funktionen",
   "settings.experimentalFeaturesLabel": "Experimentelle Funktionen aktivieren",
   "settings.experimentalFeaturesHelp":
-    "Zeigt Funktionen, die für alle auf dieser Instanz noch fertiggestellt werden: das Verschieben von Titeln zwischen Bibliotheken und Stammverzeichnissen sowie Wartungsregeln.",
+    "Zeigt Funktionen, die für alle auf dieser Instanz noch fertiggestellt werden: das Verschieben von Titeln zwischen Bibliotheken und Stammverzeichnissen sowie Lebenszyklusregeln.",
   "settings.personalizedDiscoveryLabel": "Personalisierte Entdeckung",
   "settings.personalizedDiscoveryHelp":
     "Sendet eine Zusammenfassung Ihrer Bibliothek an das Metadaten-Gateway, damit die Entdeckung Titel auf Basis Ihres Bestands empfehlen kann. Deaktivieren Sie dies, um die Entdeckung auf öffentliche Feeds zu beschränken.",
@@ -2563,194 +2563,194 @@ const de: LocaleDictionary = {
   "appUpgrade.installationKind.unsupported": "Nicht unterstützt",
   "appUpgrade.success": "Auf {{version}} aktualisiert",
   "appUpgrade.failed": "Aktualisierung fehlgeschlagen.",
-  // ── Maintenance rules ──
-  "settings.maintenanceRules": "Wartungsregeln",
+  // ── Lifecycle rules ──
+  "settings.lifecycleRules": "Lebenszyklusregeln",
   "nav.rules": "Regeln",
   "settings.rulesScoring": "Bewertungsregeln",
-  "settings.maintenanceNavRules": "Regeln",
-  "settings.maintenanceNavHistory": "Verlauf",
-  "settings.maintenanceRuleAction": "Aktion",
-  "settings.maintenanceRuleActionHelp":
-    "Was diese Regel täte, sobald Wartungsaktionen aktiviert sind.",
-  "settings.maintenanceRuleActionPlaceholder": "Aktion wählen",
-  "settings.maintenanceRuleNoActions":
+  "settings.lifecycleNavRules": "Regeln",
+  "settings.lifecycleNavHistory": "Verlauf",
+  "settings.lifecycleRuleAction": "Aktion",
+  "settings.lifecycleRuleActionHelp":
+    "Was diese Regel täte, sobald Lebenszyklusaktionen aktiviert sind.",
+  "settings.lifecycleRuleActionPlaceholder": "Aktion wählen",
+  "settings.lifecycleRuleNoActions":
     "Es sind keine titelbezogenen Aktionen verfügbar.",
-  "settings.maintenanceRuleGraceDays": "Karenztage",
-  "settings.maintenanceRuleGraceDaysHelp":
+  "settings.lifecycleRuleGraceDays": "Karenztage",
+  "settings.lifecycleRuleGraceDaysHelp":
     "Tage nach der ersten Übereinstimmung der Regel, bevor die Aktion ausgeführt würde (es werden noch keine Aktionen ausgeführt).",
-  "settings.maintenanceRuleLibraries": "Bibliotheksbereich",
-  "settings.maintenanceRuleLibrariesHelp":
+  "settings.lifecycleRuleLibraries": "Bibliotheksbereich",
+  "settings.lifecycleRuleLibrariesHelp":
     "Lassen Sie alle Bibliotheken unmarkiert, damit die Regel für die gesamte Sammlung gilt.",
-  "settings.maintenanceRuleLibrariesAll": "Alle Bibliotheken",
-  "settings.maintenanceRuleCreate": "Wartungsregel erstellen",
-  "settings.maintenanceRuleUpdate": "Wartungsregel aktualisieren",
-  "settings.maintenanceRuleCopy": "Als neue Regel kopieren",
-  "settings.maintenanceRuleCreateNew": "Neue Wartungsregel erstellen",
-  "settings.maintenanceRuleValidationRequired":
+  "settings.lifecycleRuleLibrariesAll": "Alle Bibliotheken",
+  "settings.lifecycleRuleCreate": "Lebenszyklusregel erstellen",
+  "settings.lifecycleRuleUpdate": "Lebenszyklusregel aktualisieren",
+  "settings.lifecycleRuleCopy": "Als neue Regel kopieren",
+  "settings.lifecycleRuleCreateNew": "Neue Lebenszyklusregel erstellen",
+  "settings.lifecycleRuleValidationRequired":
     "Name, Matcher-Quelltext und eine Aktion sind erforderlich.",
-  "settings.maintenanceRuleConfirmDiscardTitle":
+  "settings.lifecycleRuleConfirmDiscardTitle":
     "Nicht gespeicherte Änderungen verwerfen?",
-  "settings.maintenanceRuleConfirmDiscardDescription":
-    "Der Wartungsregel-Editor enthält nicht gespeicherte Änderungen, die verloren gehen.",
-  "settings.maintenanceRuleDeleting": "Wartungsregel {{name}} löschen?",
-  "settings.noMaintenanceRulesFound": "Noch keine Wartungsregeln.",
-  "settings.maintenanceRuleRevision": "Revision",
-  "settings.maintenanceRuleRisk": "Risiko",
-  "settings.maintenanceRiskNone": "Kein Risiko",
-  "settings.maintenanceRiskLow": "Geringes Risiko",
-  "settings.maintenanceRiskMedium": "Mittleres Risiko",
-  "settings.maintenanceRiskHigh": "Hohes Risiko",
-  "settings.maintenanceActionDoNothing": "Nichts tun",
-  "settings.maintenanceActionUnmonitorScopeKeepFiles":
+  "settings.lifecycleRuleConfirmDiscardDescription":
+    "Der Lebenszyklusregel-Editor enthält nicht gespeicherte Änderungen, die verloren gehen.",
+  "settings.lifecycleRuleDeleting": "Lebenszyklusregel {{name}} löschen?",
+  "settings.noLifecycleRulesFound": "Noch keine Lebenszyklusregeln.",
+  "settings.lifecycleRuleRevision": "Revision",
+  "settings.lifecycleRuleRisk": "Risiko",
+  "settings.lifecycleRiskNone": "Kein Risiko",
+  "settings.lifecycleRiskLow": "Geringes Risiko",
+  "settings.lifecycleRiskMedium": "Mittleres Risiko",
+  "settings.lifecycleRiskHigh": "Hohes Risiko",
+  "settings.lifecycleActionDoNothing": "Nichts tun",
+  "settings.lifecycleActionUnmonitorScopeKeepFiles":
     "Bereich nicht mehr überwachen, Dateien behalten",
-  "settings.maintenanceActionDeleteTitleAndFiles":
+  "settings.lifecycleActionDeleteTitleAndFiles":
     "Titel und zugehörige Dateien löschen",
-  "settings.maintenanceActionUnmonitorTitleDeleteAllFiles":
+  "settings.lifecycleActionUnmonitorTitleDeleteAllFiles":
     "Titel nicht mehr überwachen, alle Dateien löschen",
-  "settings.maintenanceActionUnmonitorShowDeleteExistingFiles":
+  "settings.lifecycleActionUnmonitorShowDeleteExistingFiles":
     "Serie nicht mehr überwachen, vorhandene Dateien löschen",
-  "settings.maintenanceActionUnmonitorScopeDeleteFiles":
+  "settings.lifecycleActionUnmonitorScopeDeleteFiles":
     "Bereich nicht mehr überwachen, dessen Dateien löschen",
-  "settings.maintenanceActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty":
     "Staffel nicht mehr überwachen, deren Dateien löschen und die Serie löschen, wenn sie leer ist",
-  "settings.maintenanceActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
+  "settings.lifecycleActionUnmonitorSeasonThenUnmonitorShowIfEmpty":
     "Staffel nicht mehr überwachen und die Serie nicht mehr überwachen, wenn sie leer ist",
-  "settings.maintenanceActionChangeQualityProfileAndSearchIfChanged":
+  "settings.lifecycleActionChangeQualityProfileAndSearchIfChanged":
     "Qualitätsprofil ändern und suchen, wenn es sich geändert hat",
-  "settings.maintenancePreviewTitle": "Vorschau",
-  "settings.maintenancePreviewSubtitle":
+  "settings.lifecyclePreviewTitle": "Vorschau",
+  "settings.lifecyclePreviewSubtitle":
     "Führen Sie den Matcher gegen echte Titel aus. Die Vorschau liest nur: Sie meldet, was übereinstimmen würde, und ändert nichts.",
-  "settings.maintenancePreviewSource": "Matcher",
-  "settings.maintenancePreviewSourceStored": "Gespeicherte Regel",
-  "settings.maintenancePreviewSourceDraft": "Editor-Entwurf",
-  "settings.maintenancePreviewLibrary": "Bibliothek",
-  "settings.maintenancePreviewLibraryPlaceholder": "Bibliothek auswählen",
-  "settings.maintenancePreviewLimit": "Titel",
-  "settings.maintenancePreviewLimitHelp": "Bis zu {{max}} Titel pro Durchlauf.",
-  "settings.maintenancePreviewRun": "Vorschau ausführen",
-  "settings.maintenancePreviewRunning": "Vorschau läuft...",
-  "settings.maintenancePreviewNoTitles": "Es wurden keine Titel ausgewertet.",
-  "settings.maintenancePreviewColOutcome": "Ergebnis",
-  "settings.maintenancePreviewColReasons": "Begründungscodes",
-  "settings.maintenancePreviewOutcomeMatch": "TREFFER",
-  "settings.maintenancePreviewOutcomeNoMatch": "KEIN TREFFER",
-  "settings.maintenancePreviewOutcomeUnknown": "UNBEKANNT",
-  "settings.maintenancePreviewOutcomeError": "FEHLER",
-  "settings.maintenancePreviewMeta": "Ausgewertet {{time}} · Matcher {{hash}}",
-  "settings.maintenancePreviewRuleSelect": "Regel",
-  "settings.maintenancePreviewRuleSelectPlaceholder":
+  "settings.lifecyclePreviewSource": "Matcher",
+  "settings.lifecyclePreviewSourceStored": "Gespeicherte Regel",
+  "settings.lifecyclePreviewSourceDraft": "Editor-Entwurf",
+  "settings.lifecyclePreviewLibrary": "Bibliothek",
+  "settings.lifecyclePreviewLibraryPlaceholder": "Bibliothek auswählen",
+  "settings.lifecyclePreviewLimit": "Titel",
+  "settings.lifecyclePreviewLimitHelp": "Bis zu {{max}} Titel pro Durchlauf.",
+  "settings.lifecyclePreviewRun": "Vorschau ausführen",
+  "settings.lifecyclePreviewRunning": "Vorschau läuft...",
+  "settings.lifecyclePreviewNoTitles": "Es wurden keine Titel ausgewertet.",
+  "settings.lifecyclePreviewColOutcome": "Ergebnis",
+  "settings.lifecyclePreviewColReasons": "Begründungscodes",
+  "settings.lifecyclePreviewOutcomeMatch": "TREFFER",
+  "settings.lifecyclePreviewOutcomeNoMatch": "KEIN TREFFER",
+  "settings.lifecyclePreviewOutcomeUnknown": "UNBEKANNT",
+  "settings.lifecyclePreviewOutcomeError": "FEHLER",
+  "settings.lifecyclePreviewMeta": "Ausgewertet {{time}} · Matcher {{hash}}",
+  "settings.lifecyclePreviewRuleSelect": "Regel",
+  "settings.lifecyclePreviewRuleSelectPlaceholder":
     "Gespeicherte Regel auswählen",
-  "settings.maintenanceRuleUpdated": "Wartungsregel aktualisiert.",
-  "settings.maintenanceRuleCreated":
-    "Wartungsregel erstellt und deaktiviert gespeichert.",
-  "settings.maintenanceRuleDeleted": "Wartungsregel {{name}} gelöscht.",
+  "settings.lifecycleRuleUpdated": "Lebenszyklusregel aktualisiert.",
+  "settings.lifecycleRuleCreated":
+    "Lebenszyklusregel erstellt und deaktiviert gespeichert.",
+  "settings.lifecycleRuleDeleted": "Lebenszyklusregel {{name}} gelöscht.",
 
-  // ── Wartungsregeln — Instanzstatus ──
+  // ── Lebenszyklusregeln — Instanzstatus ──
 
-  // ── Wartungsregeln — Instanzschalter ──
+  // ── Lebenszyklusregeln — Instanzschalter ──
 
-  // ── Wartungsregeln — Modus und Scharfschaltung ──
-  "settings.maintenanceArmDestructiveLoading":
+  // ── Lebenszyklusregeln — Modus und Scharfschaltung ──
+  "settings.lifecycleArmDestructiveLoading":
     "Die Kandidaten dieser Regel werden gezählt…",
-  "settings.maintenanceArmDestructiveCount":
+  "settings.lifecycleArmDestructiveCount":
     "Auf {{count}} Kandidaten könnte gewirkt werden.",
-  "settings.maintenanceArmDestructiveNoCandidates":
+  "settings.lifecycleArmDestructiveNoCandidates":
     "Diese Regel hält derzeit keine Kandidaten, auf die gewirkt werden könnte.",
-  "settings.maintenanceArmDestructiveCountChanged":
+  "settings.lifecycleArmDestructiveCountChanged":
     "Die Anzahl hat sich beim Lesen geändert: Diese Regel hält jetzt {{count}}. Prüfen Sie die Zahl und bestätigen Sie erneut.",
-  "settings.maintenanceArmDestructiveAcknowledge":
+  "settings.lifecycleArmDestructiveAcknowledge":
     "Mir ist bewusst, dass diese Regel Dateien von {{count}} Titeln löschen kann.",
 
-  // ── Wartungsregeln — Kandidaten ──
-  "settings.maintenanceCandidatesFilterRule": "Regel",
-  "settings.maintenanceCandidatesFilterState": "Status",
-  "settings.maintenanceCandidatesFilterLibrary": "Bibliothek",
-  "settings.maintenanceCandidatesAllRules": "Alle Regeln",
-  "settings.maintenanceCandidatesAllStates": "Alle Status",
-  "settings.maintenanceCandidatesAllLibraries": "Alle Bibliotheken",
-  "settings.maintenanceCandidatesColRule": "Regel",
-  "settings.maintenanceCandidatesColState": "Status",
-  "settings.maintenanceCandidatesColFirstMatched": "Erster Treffer",
-  "settings.maintenanceCandidatesColDue": "Fällig",
-  "settings.maintenanceCandidatesHeldSince": "Zurückgehalten seit {{time}}",
-  "settings.maintenanceCandidatesEmpty":
+  // ── Lebenszyklusregeln — Kandidaten ──
+  "settings.lifecycleCandidatesFilterRule": "Regel",
+  "settings.lifecycleCandidatesFilterState": "Status",
+  "settings.lifecycleCandidatesFilterLibrary": "Bibliothek",
+  "settings.lifecycleCandidatesAllRules": "Alle Regeln",
+  "settings.lifecycleCandidatesAllStates": "Alle Status",
+  "settings.lifecycleCandidatesAllLibraries": "Alle Bibliotheken",
+  "settings.lifecycleCandidatesColRule": "Regel",
+  "settings.lifecycleCandidatesColState": "Status",
+  "settings.lifecycleCandidatesColFirstMatched": "Erster Treffer",
+  "settings.lifecycleCandidatesColDue": "Fällig",
+  "settings.lifecycleCandidatesHeldSince": "Zurückgehalten seit {{time}}",
+  "settings.lifecycleCandidatesEmpty":
     "Keine Kandidaten passen zu diesen Filtern.",
-  "settings.maintenanceCandidateExclude": "Diesen Titel ausschließen",
-  "settings.maintenanceCandidateStateObserving": "Beobachtend",
-  "settings.maintenanceCandidateStatePendingAction": "Aktion ausstehend",
-  "settings.maintenanceCandidateStateDue": "Fällig",
-  "settings.maintenanceCandidateStateExecuting": "Wird ausgeführt",
-  "settings.maintenanceCandidateStateSucceeded": "Erfolgreich",
-  "settings.maintenanceCandidateStateFailed": "Fehlgeschlagen",
-  "settings.maintenanceCandidateStateCanceled": "Abgebrochen",
-  "settings.maintenanceCandidateStateExcluded": "Ausgeschlossen",
-  "settings.maintenanceCandidateStateBlocked": "Blockiert",
-  "settings.maintenanceCountdownDueNow": "Jetzt fällig",
-  "settings.maintenanceCountdownInMinutes": "in {{count}} Min.",
-  "settings.maintenanceCountdownInHours": "in {{count}} Std.",
-  "settings.maintenanceCountdownInDays": "in {{count}} T.",
-  "settings.maintenanceCountdownOverdueMinutes":
+  "settings.lifecycleCandidateExclude": "Diesen Titel ausschließen",
+  "settings.lifecycleCandidateStateObserving": "Beobachtend",
+  "settings.lifecycleCandidateStatePendingAction": "Aktion ausstehend",
+  "settings.lifecycleCandidateStateDue": "Fällig",
+  "settings.lifecycleCandidateStateExecuting": "Wird ausgeführt",
+  "settings.lifecycleCandidateStateSucceeded": "Erfolgreich",
+  "settings.lifecycleCandidateStateFailed": "Fehlgeschlagen",
+  "settings.lifecycleCandidateStateCanceled": "Abgebrochen",
+  "settings.lifecycleCandidateStateExcluded": "Ausgeschlossen",
+  "settings.lifecycleCandidateStateBlocked": "Blockiert",
+  "settings.lifecycleCountdownDueNow": "Jetzt fällig",
+  "settings.lifecycleCountdownInMinutes": "in {{count}} Min.",
+  "settings.lifecycleCountdownInHours": "in {{count}} Std.",
+  "settings.lifecycleCountdownInDays": "in {{count}} T.",
+  "settings.lifecycleCountdownOverdueMinutes":
     "seit {{count}} Min. überfällig",
-  "settings.maintenanceCountdownOverdueHours": "seit {{count}} Std. überfällig",
-  "settings.maintenanceCountdownOverdueDays": "seit {{count}} T. überfällig",
+  "settings.lifecycleCountdownOverdueHours": "seit {{count}} Std. überfällig",
+  "settings.lifecycleCountdownOverdueDays": "seit {{count}} T. überfällig",
 
-  // ── Wartungsregeln — Läufe und Verlauf ──
-  "settings.maintenanceRunsTitle": "Läufe und Verlauf",
-  "settings.maintenanceRunScope": "Umfang",
-  "settings.maintenanceRunScopeAll": "Alle Regeln",
-  "settings.maintenanceRunEvaluationNow": "Jetzt auswerten",
-  "settings.maintenanceRunEvaluationRunning": "Wird ausgewertet…",
-  "settings.maintenanceRunActionsNow": "Aktionen jetzt ausführen",
-  "settings.maintenanceRunActionsRunning": "Aktionen laufen…",
-  "settings.maintenanceRunStarted": "Lauf gestartet.",
-  "settings.maintenanceRunNotStarted": "Nichts gestartet: {{message}}",
-  "settings.maintenanceEvaluationRunsTitle": "Auswertungsläufe",
-  "settings.maintenanceEvaluationRunsEmpty":
+  // ── Lebenszyklusregeln — Läufe und Verlauf ──
+  "settings.lifecycleRunsTitle": "Läufe und Verlauf",
+  "settings.lifecycleRunScope": "Umfang",
+  "settings.lifecycleRunScopeAll": "Alle Regeln",
+  "settings.lifecycleRunEvaluationNow": "Jetzt auswerten",
+  "settings.lifecycleRunEvaluationRunning": "Wird ausgewertet…",
+  "settings.lifecycleRunActionsNow": "Aktionen jetzt ausführen",
+  "settings.lifecycleRunActionsRunning": "Aktionen laufen…",
+  "settings.lifecycleRunStarted": "Lauf gestartet.",
+  "settings.lifecycleRunNotStarted": "Nichts gestartet: {{message}}",
+  "settings.lifecycleEvaluationRunsTitle": "Auswertungsläufe",
+  "settings.lifecycleEvaluationRunsEmpty":
     "Noch keine Auswertungsläufe aufgezeichnet.",
-  "settings.maintenanceActionRunsTitle": "Aktionsläufe",
-  "settings.maintenanceActionRunsEmpty":
+  "settings.lifecycleActionRunsTitle": "Aktionsläufe",
+  "settings.lifecycleActionRunsEmpty":
     "Noch keine Aktionsläufe aufgezeichnet.",
-  "settings.maintenanceRunColStarted": "Gestartet",
-  "settings.maintenanceRunColStatus": "Status",
-  "settings.maintenanceRunColCounts": "Zählungen",
-  "settings.maintenanceRunColDuration": "Dauer",
-  "settings.maintenanceRunColError": "Fehler",
-  "settings.maintenanceRunCounts":
+  "settings.lifecycleRunColStarted": "Gestartet",
+  "settings.lifecycleRunColStatus": "Status",
+  "settings.lifecycleRunColCounts": "Zählungen",
+  "settings.lifecycleRunColDuration": "Dauer",
+  "settings.lifecycleRunColError": "Fehler",
+  "settings.lifecycleRunCounts":
     "{{evaluated}} ausgewertet · {{matched}} getroffen · {{noMatch}} kein Treffer · {{unknown}} unbekannt · {{errors}} Fehler",
-  "settings.maintenanceRunDuration": "{{seconds}} s",
-  "settings.maintenanceRunRevision": "Rev. {{revision}}",
-  "settings.maintenanceRunStatusRunning": "Läuft",
-  "settings.maintenanceRunStatusSucceeded": "Erfolgreich",
-  "settings.maintenanceRunStatusFailed": "Fehlgeschlagen",
-  "settings.maintenanceRunStatusHeld": "Zurückgehalten",
-  "settings.maintenanceRunStatusAlreadySatisfied": "Bereits erfüllt",
-  "settings.maintenanceRunStatusSkipped": "Übersprungen",
-  "settings.maintenanceActionRunColAttempt": "Versuch",
-  "settings.maintenanceActionRunColHoldReason": "Grund der Zurückhaltung",
+  "settings.lifecycleRunDuration": "{{seconds}} s",
+  "settings.lifecycleRunRevision": "Rev. {{revision}}",
+  "settings.lifecycleRunStatusRunning": "Läuft",
+  "settings.lifecycleRunStatusSucceeded": "Erfolgreich",
+  "settings.lifecycleRunStatusFailed": "Fehlgeschlagen",
+  "settings.lifecycleRunStatusHeld": "Zurückgehalten",
+  "settings.lifecycleRunStatusAlreadySatisfied": "Bereits erfüllt",
+  "settings.lifecycleRunStatusSkipped": "Übersprungen",
+  "settings.lifecycleActionRunColAttempt": "Versuch",
+  "settings.lifecycleActionRunColHoldReason": "Grund der Zurückhaltung",
 
-  // ── Wartungsregeln — Ausschlüsse ──
-  "settings.maintenanceExclusionsTitle": "Ausschlüsse",
-  "settings.maintenanceExclusionsSubtitle":
-    "Titel, auf die eine Wartungsregel niemals wirken darf. Ein globaler Ausschluss gilt für jede Regel.",
-  "settings.maintenanceExclusionsEmpty": "Keine Ausschlüsse.",
-  "settings.maintenanceExclusionColScope": "Umfang",
-  "settings.maintenanceExclusionColReason": "Grund",
-  "settings.maintenanceExclusionColCreated": "Hinzugefügt",
-  "settings.maintenanceExclusionScopeGlobal": "Alle Regeln",
-  "settings.maintenanceExclusionRemove": "Ausschluss entfernen",
-  "settings.maintenanceExclusionRemoved": "Ausschluss für {{title}} entfernt.",
-  "settings.maintenanceExclusionRemoving":
+  // ── Lebenszyklusregeln — Ausschlüsse ──
+  "settings.lifecycleExclusionsTitle": "Ausschlüsse",
+  "settings.lifecycleExclusionsSubtitle":
+    "Titel, auf die eine Lebenszyklusregel niemals wirken darf. Ein globaler Ausschluss gilt für jede Regel.",
+  "settings.lifecycleExclusionsEmpty": "Keine Ausschlüsse.",
+  "settings.lifecycleExclusionColScope": "Umfang",
+  "settings.lifecycleExclusionColReason": "Grund",
+  "settings.lifecycleExclusionColCreated": "Hinzugefügt",
+  "settings.lifecycleExclusionScopeGlobal": "Alle Regeln",
+  "settings.lifecycleExclusionRemove": "Ausschluss entfernen",
+  "settings.lifecycleExclusionRemoved": "Ausschluss für {{title}} entfernt.",
+  "settings.lifecycleExclusionRemoving":
     "Ausschluss für {{title}} entfernen?",
-  "settings.maintenanceExcludeTitle": "Von der Wartung ausschließen",
-  "settings.maintenanceExcludeBody":
+  "settings.lifecycleExcludeTitle": "Von Lebenszyklusregeln ausschließen",
+  "settings.lifecycleExcludeBody":
     "{{title}} wird ab der nächsten Auswertung ausgeschlossen, und der zugehörige Kandidat wechselt auf ausgeschlossen.",
-  "settings.maintenanceExcludeScope": "Umfang",
-  "settings.maintenanceExcludeScopeGlobal": "Alle Regeln",
-  "settings.maintenanceExcludeReason": "Grund",
-  "settings.maintenanceExcludeReasonPlaceholder":
+  "settings.lifecycleExcludeScope": "Umfang",
+  "settings.lifecycleExcludeScopeGlobal": "Alle Regeln",
+  "settings.lifecycleExcludeReason": "Grund",
+  "settings.lifecycleExcludeReasonPlaceholder":
     "Warum dieser Titel ausgeschlossen wird (optional)",
-  "settings.maintenanceExcludeConfirm": "Ausschließen",
-  "settings.maintenanceExcluded": "{{title}} von der Wartung ausgeschlossen.",
+  "settings.lifecycleExcludeConfirm": "Ausschließen",
+  "settings.lifecycleExcluded": "{{title}} von Lebenszyklusregeln ausgeschlossen.",
   "move.dialogTitle": "Titel verschieben",
   "move.destinationLibrary": "Zielbibliothek",
   "move.destinationRoot": "Ziel-Stammverzeichnis",
@@ -3316,7 +3316,7 @@ const de: LocaleDictionary = {
   "search.keepForCustom": "Eine Anzahl Tage…",
   "search.keepForCustomLabel": "Tage der Aufbewahrung",
   "search.keepForHelp":
-    "Wie lange Scryer diese Medien für Sie aufbewahrt. Nach Ablauf kann eine Wartungsregel sie entfernen; „für immer“ läuft nie ab.",
+    "Wie lange Scryer diese Medien für Sie aufbewahrt. Nach Ablauf kann eine Lebenszyklusregel sie entfernen; „für immer“ läuft nie ab.",
   // Title tags: the administrator-defined registry in Settings, the per-title
   // picker, the bulk pickers, and the catalog filter.
   "settings.titleTags": "Tags",
@@ -3354,8 +3354,8 @@ const de: LocaleDictionary = {
     "In {{label}} umbenannt. {{titles}} Titel, {{seriesMovies}} Serienfilme und {{delayProfiles}} Verzögerungsprofile umgeschrieben.",
   "settings.titleTagRenameWarning":
     "Regelquellen werden nie umgeschrieben, daher nennen {{count}} Regelverweise weiterhin die alte Bezeichnung {{label}} und greifen nicht mehr: {{references}}.",
-  "settings.titleTagReferenceMaintenanceRuleSets":
-    "{{count}} Wartungsregelsätze",
+  "settings.titleTagReferenceLifecycleRuleSets":
+    "{{count}} Lebenszyklusregelsätze",
   "settings.titleTagReferenceReleaseRuleSets": "{{count}} Release-Regelsätze",
   "settings.titleTagReferenceManagedTagFilters":
     "{{count}} verwaltete Tag-Filter",
@@ -3374,19 +3374,19 @@ const de: LocaleDictionary = {
   "title.catalogFilters.userTags": "Tags",
   "title.catalogFilters.selectUserTags": "Tags auswählen...",
 
-  // Series-movie tags and the maintenance tag actions (WP4). The long-form
+  // Series-movie tags and the lifecycle tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,
   // the same way the WP3 block above does.
   "settings.titleTagSeriesMovieCount": "Serienfilme",
-  "settings.maintenanceActionAddTags": "Tags hinzufügen",
-  "settings.maintenanceActionRemoveTags": "Tags entfernen",
-  "settings.maintenanceRuleTagsHelp":
+  "settings.lifecycleActionAddTags": "Tags hinzufügen",
+  "settings.lifecycleActionRemoveTags": "Tags entfernen",
+  "settings.lifecycleRuleTagsHelp":
     "The rule writes these tags on every title it matches. Only tags an administrator has defined in Settings > Tags can be picked.",
-  "settings.maintenanceTemplateTaggedForRemovalTitle": "Zum Entfernen markiert",
-  "settings.maintenanceTemplateTaggedForRemovalDescription":
+  "settings.lifecycleTemplateTaggedForRemovalTitle": "Zum Entfernen markiert",
+  "settings.lifecycleTemplateTaggedForRemovalDescription":
     'Caution: this template deletes the title and its files. It matches anything carrying the "remove" tag, after a week\'s grace, so tagging a title by hand is the whole trigger and untagging it inside the week calls the deletion off. Define "remove" in Settings > Tags first.',
-  "settings.maintenanceTemplateFlagForReviewTitle": "Zur Prüfung markieren",
-  "settings.maintenanceTemplateFlagForReviewDescription":
+  "settings.lifecycleTemplateFlagForReviewTitle": "Zur Prüfung markieren",
+  "settings.lifecycleTemplateFlagForReviewDescription":
     "Adds the needs-review tag to anything imported more than a year ago, so a person can decide what to do with it. Nothing is deleted.",
 
   "mediaFile.allInfo": "Info",
@@ -3687,29 +3687,29 @@ const de: LocaleDictionary = {
   "lists.policy.value.auto": "Automatisch freigeben",
   "lists.policy.value.approval": "Freigabe erforderlich",
   "lists.policy.value.none": "Listen nicht erlaubt",
-  "settings.refMaintFactsListsAddedByList":
+  "settings.refLifecycleFactsListsAddedByList":
     "Ob eine Liste und nicht eine Person das Objekt zur Bibliothek hinzugefügt hat",
-  "settings.refMaintFactsListsOnEnabledList":
+  "settings.refLifecycleFactsListsOnEnabledList":
     "Ob eine aktivierte Liste, öffentlich oder persönlich, das Objekt noch enthält",
-  "settings.refMaintFactsListsNames":
+  "settings.refLifecycleFactsListsNames":
     "Namen der aktivierten öffentlichen Listen, die das Objekt noch enthalten",
-  "settings.refMaintFactsListsLeftAll":
+  "settings.refLifecycleFactsListsLeftAll":
     "Ob jede Liste, die das Objekt je enthielt, es entfernt hat",
-  "settings.refMaintFactsListsLeftAt":
+  "settings.refLifecycleFactsListsLeftAt":
     "Wann die letzte Liste das Objekt entfernt hat",
-  "settings.refMaintFactsListsLastListName":
+  "settings.refLifecycleFactsListsLastListName":
     "Die öffentliche Liste, aus der das Objekt zuletzt entfernt wurde",
-  "settings.refMaintFactsListsAddedByListValue":
+  "settings.refLifecycleFactsListsAddedByListValue":
     "Wahr, wenn eine Listensynchronisierung den Titel angelegt hat; unbekannt mit Grund list_store_unreadable, wenn der Listenspeicher nicht lesbar war",
-  "settings.refMaintFactsListsOnEnabledListValue":
+  "settings.refLifecycleFactsListsOnEnabledListValue":
     "Wahr, solange mindestens eine aktivierte Liste das Objekt enthält",
-  "settings.refMaintFactsListsNamesValue":
+  "settings.refLifecycleFactsListsNamesValue":
     "Nur Namen öffentlicher Listen, sortiert; die persönliche Liste eines Mitglieds wird nie genannt",
-  "settings.refMaintFactsListsLeftAllValue":
+  "settings.refLifecycleFactsListsLeftAllValue":
     "Wahr, sobald jede Liste, die das Objekt enthielt, es entfernt hat; falsch, solange eine es noch enthält oder wenn es nie auf einer Liste war",
-  "settings.refMaintFactsListsLeftAtValue":
+  "settings.refLifecycleFactsListsLeftAtValue":
     "RFC3339-Zeitstempel; fehlt mit Grund not_left_every_list, solange eine Liste das Objekt noch enthält",
-  "settings.refMaintFactsListsLastListNameValue":
+  "settings.refLifecycleFactsListsLastListNameValue":
     "Name dieser öffentlichen Liste; fehlt mit Grund no_public_list_left, wenn das Objekt nie eine öffentliche Liste verlassen hat",
   "lists.providerSettings.heading": "Anbietereinstellungen",
   "lists.providerSettings.copy":
@@ -3818,27 +3818,27 @@ const de: LocaleDictionary = {
     "Das Verschieben der Datei unter ihren neuen Namen ist fehlgeschlagen. Datei und Episoden blieben unverändert.",
   "pendingImports.reason.anime_numbering_ambiguous":
     "Episodennummerierung ist mehrdeutig",
-  "settings.maintenanceExecutionReason.playbackHold":
+  "settings.lifecycleExecutionReason.playbackHold":
     "Angehalten: Auf einem Medienserver wird gerade etwas abgespielt.",
-  "settings.maintenanceExecutionReason.playbackUnknown":
+  "settings.lifecycleExecutionReason.playbackUnknown":
     "Angehalten: Ein Medienserver konnte nicht gefragt werden, ob gerade etwas abgespielt wird.",
-  "settings.maintenanceExecutionReason.watchRecheckNewerPlay":
+  "settings.lifecycleExecutionReason.watchRecheckNewerPlay":
     "Angehalten: Der Medienserver zeigt eine Wiedergabe, die neuer ist als der gespeicherte Wiedergabeverlauf.",
-  "settings.maintenanceExecutionReason.watchRecheckUncreditedPlay":
+  "settings.lifecycleExecutionReason.watchRecheckUncreditedPlay":
     "Angehalten: Der Verlauf des Medienservers zeigt eine Wiedergabe durch ein Konto, das der Wiedergabeverlauf nicht berücksichtigt.",
-  "settings.maintenanceExecutionReason.watchRecheckUnavailable":
+  "settings.lifecycleExecutionReason.watchRecheckUnavailable":
     "Angehalten: Der Medienserver konnte den Wiedergabeverlauf vor der Aktion nicht bestätigen.",
-  "settings.maintenanceExecutionReason.watchRecheckUnmapped":
+  "settings.lifecycleExecutionReason.watchRecheckUnmapped":
     "Angehalten: Ein verbundener Medienserver hat kein passendes Element, daher konnte der Wiedergabeverlauf vor der Aktion nicht geprüft werden.",
-  "settings.refMaintFactsWatchedByAnyone":
+  "settings.refLifecycleFactsWatchedByAnyone":
     "Ob irgendjemand mit einem Konto auf einem verbundenen Medienserver den Eintrag abgespielt hat, mit Scryer verknüpft oder nicht; nennt niemanden",
-  "settings.refMaintFactsLastWatchedByAnyoneAt":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAt":
     "Wann irgendjemand mit einem Konto auf einem verbundenen Medienserver den Eintrag zuletzt abgespielt hat",
-  "settings.refMaintFactsWatchedByAnyoneValue":
+  "settings.refLifecycleFactsWatchedByAnyoneValue":
     "True, wenn ein beliebiges Konto auf einem aktivierten Medienserver ihn abgespielt hat, unabhängig davon, ob das Konto mit einem Scryer-Benutzer verknüpft ist; bei Staffeln und Serien zählt jede ausgestrahlte Episode. Unbekannt mit Grund audience_not_read, bis eine Synchronisierung in den letzten 48 Stunden jedes Konto auf jeder aktivierten Verbindung gelesen hat, und mit den üblichen Gründen, wann immer Wiedergabe-Fakten unbekannt sind.",
-  "settings.refMaintFactsLastWatchedByAnyoneAtValue":
+  "settings.refLifecycleFactsLastWatchedByAnyoneAtValue":
     "RFC3339-Zeitstempel der letzten Wiedergabe durch ein beliebiges Konto; fehlt mit Grund never_watched, wenn niemand ihn abgespielt hat, und ist unbekannt mit Grund play_time_missing (episode_play_time_missing bei Staffeln und Serien), wenn eine Wiedergabe keine erfasste Zeit hat, oder audience_not_read, wenn nicht alle Konten gelesen wurden",
-  "settings.maintenancePreviewFacts": "Vom Regelwerk gelesene Fakten",
+  "settings.lifecyclePreviewFacts": "Vom Regelwerk gelesene Fakten",
   "setup.sourceImportProgress": "Quellen werden importiert",
   "setup.sourceImportInvalidRequest":
     "Eine ausgewählte Quelle ist nicht verfügbar. Aktualisieren Sie die Quellensuche und wählen Sie sie erneut aus.",

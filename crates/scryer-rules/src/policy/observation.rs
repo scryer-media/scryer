@@ -3,7 +3,7 @@
 //! Every policy family that carries a fact snapshot uses the same envelope, the
 //! same two input namespaces derived from it, and the same rule for deciding
 //! that a policy must not be consulted at all. None of that is specific to
-//! maintenance — it is specific to *facts Scryer may fail to observe* — so it
+//! lifecycle — it is specific to *facts Scryer may fail to observe* — so it
 //! lives in the core where the next family inherits it rather than re-deriving
 //! a subtly different version of it.
 

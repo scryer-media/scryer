@@ -51,7 +51,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wrapper_source_matches_the_shipped_maintenance_layout() {
+    fn wrapper_source_matches_the_shipped_lifecycle_layout() {
         let source = object_wrapper_source(
             "scryer.maintenance.wrapper",
             "scryer.maintenance.user",

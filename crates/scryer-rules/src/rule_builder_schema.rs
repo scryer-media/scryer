@@ -9,11 +9,11 @@
 
 use serde::Serialize;
 
-use crate::maintenance_actions::{MAX_NOTIFY_LEN, MaintenanceActionHead};
+use crate::lifecycle_actions::{LifecycleActionHead, MAX_NOTIFY_LEN};
 use crate::policy::decode::{MAX_TAG_LEN, MAX_TAGS};
 
-/// The family name of maintenance rules.
-pub const MAINTENANCE_RULE_FAMILY: &str = "maintenance";
+/// The family name of lifecycle rules.
+pub const LIFECYCLE_RULE_FAMILY: &str = "lifecycle";
 /// The family name of scoring rules.
 pub const SCORING_RULE_FAMILY: &str = "scoring";
 /// The family name of request rules.
@@ -21,7 +21,7 @@ pub use crate::request_actions::REQUEST_RULE_FAMILY;
 
 /// Every family [`rule_builder_schema`] serves.
 pub const RULE_BUILDER_FAMILIES: [&str; 3] = [
-    MAINTENANCE_RULE_FAMILY,
+    LIFECYCLE_RULE_FAMILY,
     SCORING_RULE_FAMILY,
     REQUEST_RULE_FAMILY,
 ];
@@ -102,7 +102,7 @@ pub struct RuleBuilderSchema {
 /// does not know. A new family adds its arm here.
 pub fn rule_builder_schema(family: &str) -> Option<RuleBuilderSchema> {
     match family {
-        MAINTENANCE_RULE_FAMILY => Some(maintenance_builder_schema()),
+        LIFECYCLE_RULE_FAMILY => Some(lifecycle_builder_schema()),
         SCORING_RULE_FAMILY => Some(scoring_builder_schema()),
         REQUEST_RULE_FAMILY => Some(crate::request_actions::request_builder_schema()),
         _ => None,
@@ -128,39 +128,39 @@ pub fn scoring_builder_schema() -> RuleBuilderSchema {
 
 const TITLE_VARIANT_ONLY: &[&str] = &["TITLE"];
 
-/// The id a client reads for a maintenance head.
-pub fn maintenance_output_id(head: MaintenanceActionHead) -> &'static str {
+/// The id a client reads for a lifecycle head.
+pub fn lifecycle_output_id(head: LifecycleActionHead) -> &'static str {
     match head {
-        MaintenanceActionHead::Unmonitor => "UNMONITOR",
-        MaintenanceActionHead::DeleteFiles => "DELETE_FILES",
-        MaintenanceActionHead::DeleteTitle => "DELETE_TITLE",
-        MaintenanceActionHead::Search => "SEARCH",
-        MaintenanceActionHead::SetQualityProfile => "SET_QUALITY_PROFILE",
-        MaintenanceActionHead::AddTags => "ADD_TAGS",
-        MaintenanceActionHead::RemoveTags => "REMOVE_TAGS",
-        MaintenanceActionHead::Monitor => "MONITOR",
-        MaintenanceActionHead::FetchSubtitles => "FETCH_SUBTITLES",
-        MaintenanceActionHead::MoveToLibrary => "MOVE_TO_LIBRARY",
-        MaintenanceActionHead::MoveToRoot => "MOVE_TO_ROOT",
-        MaintenanceActionHead::Notify => "NOTIFY",
+        LifecycleActionHead::Unmonitor => "UNMONITOR",
+        LifecycleActionHead::DeleteFiles => "DELETE_FILES",
+        LifecycleActionHead::DeleteTitle => "DELETE_TITLE",
+        LifecycleActionHead::Search => "SEARCH",
+        LifecycleActionHead::SetQualityProfile => "SET_QUALITY_PROFILE",
+        LifecycleActionHead::AddTags => "ADD_TAGS",
+        LifecycleActionHead::RemoveTags => "REMOVE_TAGS",
+        LifecycleActionHead::Monitor => "MONITOR",
+        LifecycleActionHead::FetchSubtitles => "FETCH_SUBTITLES",
+        LifecycleActionHead::MoveToLibrary => "MOVE_TO_LIBRARY",
+        LifecycleActionHead::MoveToRoot => "MOVE_TO_ROOT",
+        LifecycleActionHead::Notify => "NOTIFY",
     }
 }
 
-/// Whether a maintenance head may be used by a rule of a narrower subject
+/// Whether a lifecycle head may be used by a rule of a narrower subject
 /// than a whole title (a season or an episode).
-pub fn maintenance_head_allows_narrow_subjects(head: MaintenanceActionHead) -> bool {
+pub fn lifecycle_head_allows_narrow_subjects(head: LifecycleActionHead) -> bool {
     matches!(
         head,
-        MaintenanceActionHead::Unmonitor
-            | MaintenanceActionHead::DeleteFiles
-            | MaintenanceActionHead::Monitor
-            | MaintenanceActionHead::FetchSubtitles
-            | MaintenanceActionHead::Notify
+        LifecycleActionHead::Unmonitor
+            | LifecycleActionHead::DeleteFiles
+            | LifecycleActionHead::Monitor
+            | LifecycleActionHead::FetchSubtitles
+            | LifecycleActionHead::Notify
     )
 }
 
-fn maintenance_output(head: MaintenanceActionHead) -> RuleBuilderOutputDescriptor {
-    use MaintenanceActionHead as H;
+fn lifecycle_output(head: LifecycleActionHead) -> RuleBuilderOutputDescriptor {
+    use LifecycleActionHead as H;
     let (value_kind, options) = match head {
         H::AddTags | H::RemoveTags => (RuleBuilderValueKind::TextList, Some("titleTags")),
         H::SetQualityProfile => (RuleBuilderValueKind::Choice, Some("qualityProfiles")),
@@ -171,9 +171,9 @@ fn maintenance_output(head: MaintenanceActionHead) -> RuleBuilderOutputDescripto
     };
     let tags = value_kind == RuleBuilderValueKind::TextList;
     RuleBuilderOutputDescriptor {
-        id: maintenance_output_id(head),
+        id: lifecycle_output_id(head),
         head: head.rule_name(),
-        label_key: format!("ruleOutput.maintenance.{}", head.rule_name()),
+        label_key: format!("ruleOutput.lifecycle.{}", head.rule_name()),
         help_key: None,
         value_kind,
         options,
@@ -195,25 +195,25 @@ fn maintenance_output(head: MaintenanceActionHead) -> RuleBuilderOutputDescripto
         },
         per_item: false,
         destructive: head.is_destructive(),
-        variants: (!maintenance_head_allows_narrow_subjects(head)).then_some(TITLE_VARIANT_ONLY),
+        variants: (!lifecycle_head_allows_narrow_subjects(head)).then_some(TITLE_VARIANT_ONLY),
         conflicts_with: head
             .conflicts_with()
             .iter()
-            .map(|other| maintenance_output_id(*other))
+            .map(|other| lifecycle_output_id(*other))
             .collect(),
     }
 }
 
-/// The maintenance rule builder schema, in the order the host applies the
+/// The lifecycle rule builder schema, in the order the host applies the
 /// actions.
-pub fn maintenance_builder_schema() -> RuleBuilderSchema {
+pub fn lifecycle_builder_schema() -> RuleBuilderSchema {
     RuleBuilderSchema {
-        family: MAINTENANCE_RULE_FAMILY,
-        outputs: MaintenanceActionHead::EXECUTION_ORDER
+        family: LIFECYCLE_RULE_FAMILY,
+        outputs: LifecycleActionHead::EXECUTION_ORDER
             .into_iter()
-            .map(maintenance_output)
+            .map(lifecycle_output)
             .collect(),
-        // A maintenance rule must define at least one action; the save
+        // A lifecycle rule must define at least one action; the save
         // refuses one that defines none.
         output_rules: vec![RuleBuilderOutputRule {
             rule: RuleBuilderOutputRuleKind::AtLeastOne,
@@ -226,16 +226,16 @@ pub fn maintenance_builder_schema() -> RuleBuilderSchema {
 mod tests {
     use super::*;
 
-    const MAINTENANCE_FILE: &str = include_str!("../maintenance-builder-schema.json");
+    const LIFECYCLE_FILE: &str = include_str!("../lifecycle-builder-schema.json");
     const SCORING_FILE: &str = include_str!("../scoring-builder-schema.json");
     const REQUEST_FILE: &str = include_str!("../request-builder-schema.json");
 
     #[test]
     fn checked_in_builder_schemas_match_the_tables() {
         assert_eq!(
-            MAINTENANCE_FILE,
-            rule_builder_schema_json(&maintenance_builder_schema()),
-            "regenerate maintenance-builder-schema.json from maintenance_builder_schema()"
+            LIFECYCLE_FILE,
+            rule_builder_schema_json(&lifecycle_builder_schema()),
+            "regenerate lifecycle-builder-schema.json from lifecycle_builder_schema()"
         );
         assert_eq!(
             SCORING_FILE,
@@ -261,14 +261,14 @@ mod tests {
     }
 
     #[test]
-    fn maintenance_outputs_cover_every_head_once_and_name_real_conflicts() {
-        let schema = maintenance_builder_schema();
+    fn lifecycle_outputs_cover_every_head_once_and_name_real_conflicts() {
+        let schema = lifecycle_builder_schema();
         let ids: Vec<_> = schema.outputs.iter().map(|output| output.id).collect();
-        assert_eq!(ids.len(), MaintenanceActionHead::ALL.len());
-        for head in MaintenanceActionHead::ALL {
+        assert_eq!(ids.len(), LifecycleActionHead::ALL.len());
+        for head in LifecycleActionHead::ALL {
             assert_eq!(
                 ids.iter()
-                    .filter(|id| **id == maintenance_output_id(head))
+                    .filter(|id| **id == lifecycle_output_id(head))
                     .count(),
                 1
             );

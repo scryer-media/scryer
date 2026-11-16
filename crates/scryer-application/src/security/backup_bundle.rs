@@ -984,27 +984,27 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "login_verification_challenges",
         classification: BackupTableClassification::Ignore,
     },
-    // Maintenance rules and exclusions are user intent. Evaluation,
+    // Lifecycle rules and exclusions are user intent. Evaluation,
     // candidate, and action rows preserve grace periods and the audit trail,
     // so they cannot be regenerated without changing lifecycle semantics.
     BackupTableCatalogEntry {
-        table: "maintenance_rule_sets",
+        table: "lifecycle_rule_sets",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_set_libraries",
+        table: "lifecycle_rule_set_libraries",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_revisions",
+        table: "lifecycle_rule_revisions",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_rule_exclusions",
+        table: "lifecycle_rule_exclusions",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_evaluation_runs",
+        table: "lifecycle_evaluation_runs",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -1020,22 +1020,22 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     // terminal membership is the once-per-match latch, so every part of this
     // sequence safety state must remain with its candidate history.
     BackupTableCatalogEntry {
-        table: "maintenance_action_steps",
+        table: "lifecycle_action_steps",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_action_step_attempts",
+        table: "lifecycle_action_step_attempts",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_action_job_receipts",
+        table: "lifecycle_action_job_receipts",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "maintenance_sequence_terminal_memberships",
+        table: "lifecycle_sequence_terminal_memberships",
         classification: BackupTableClassification::Export,
     },
-    // Request rules are user intent in exactly the way maintenance rules are,
+    // Request rules are user intent in exactly the way lifecycle rules are,
     // and their revisions are what a stored decision points at: dropping them
     // would leave every trace naming a rule revision that no longer exists.
     BackupTableCatalogEntry {
@@ -1058,7 +1058,7 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     // A lifecycle claim is what holds media against deletion. Losing one on a
-    // restore would silently expose a leased title to the next maintenance
+    // restore would silently expose a leased title to the next lifecycle
     // pass, so it is exported like the candidates and action runs above.
     BackupTableCatalogEntry {
         table: "lifecycle_claims",

@@ -116,7 +116,7 @@ pub struct AppIntegrationServices {
     /// indistinguishable from the admin setting being off.
     pub(crate) srrdb_filename_lookup: RuntimeFeature<Arc<dyn crate::ports::SrrdbFilenameLookup>>,
     /// Live playback observation across the media-server connections above
-    /// (RFC 137 §9.10, WP-G). Read-only; consulted by maintenance safety.
+    /// (RFC 137 §9.10, WP-G). Read-only; consulted by lifecycle safety.
     pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
     /// Per-participant played-item reads from the same connections
     /// (RFC 137 §7.3, WP-M). Provider dispatch lives inside the adapter.
@@ -166,10 +166,10 @@ pub struct AppConfigServices {
 #[derive(Clone)]
 pub struct AppCustomizationServices {
     pub(crate) rule_sets: Arc<dyn RuleSetRepository>,
-    pub(crate) maintenance_rule_sets: Arc<dyn MaintenanceRuleSetRepository>,
-    pub(crate) maintenance_evaluation: Arc<dyn crate::ports::MaintenanceEvaluationRepository>,
+    pub(crate) lifecycle_rule_sets: Arc<dyn LifecycleRuleSetRepository>,
+    pub(crate) lifecycle_evaluation: Arc<dyn crate::ports::LifecycleEvaluationRepository>,
     /// User-authored request rules (spec 0003). Ships dark behind the same
-    /// experimental gate as maintenance.
+    /// experimental gate as lifecycle.
     pub(crate) request_rule_sets: Arc<dyn crate::ports::RequestRuleSetRepository>,
     /// Append-only traces of every request evaluation (spec 0003 FR-016).
     pub(crate) request_rule_decisions: Arc<dyn crate::ports::RequestRuleDecisionRepository>,
@@ -477,11 +477,9 @@ impl AppServices {
             },
             customization: AppCustomizationServices {
                 rule_sets: Arc::new(NullRuleSetRepository),
-                maintenance_rule_sets: Arc::new(
-                    null_repositories::NullMaintenanceRuleSetRepository,
-                ),
-                maintenance_evaluation: Arc::new(
-                    null_repositories::NullMaintenanceEvaluationRepository,
+                lifecycle_rule_sets: Arc::new(null_repositories::NullLifecycleRuleSetRepository),
+                lifecycle_evaluation: Arc::new(
+                    null_repositories::NullLifecycleEvaluationRepository,
                 ),
                 request_rule_sets: Arc::new(null_repositories::NullRequestRuleSetRepository),
                 request_rule_decisions: Arc::new(

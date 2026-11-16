@@ -38,7 +38,7 @@ use crate::jellyfin::JellyfinAuth;
 ///
 /// Deliberately far below [`scryer_outbound_http::STANDARD_HTTP_TIMEOUT`]: this
 /// is a LAN call to a server that answers from memory, and it sits in front of
-/// a maintenance action. A slow server should be reported as unknown quickly,
+/// a lifecycle action. A slow server should be reported as unknown quickly,
 /// not block the sweep for a minute.
 const PLAYBACK_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 

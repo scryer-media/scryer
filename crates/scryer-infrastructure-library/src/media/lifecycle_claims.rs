@@ -1,7 +1,7 @@
 //! Title leases and keep claims (spec 0003 FR-041..FR-044).
 //!
 //! Every state change here is a conditional UPDATE rather than a
-//! read-modify-write: two maintenance passes and the import hook can all touch
+//! read-modify-write: two lifecycle passes and the import hook can all touch
 //! the same claim, and the predicate is what keeps a replayed import from
 //! restarting a window or a release from resurrecting a lapsed hold.
 
@@ -107,7 +107,7 @@ impl LifecycleClaimRepository for LifecycleClaimStore {
         Ok(by_title)
     }
 
-    /// Live and expired retention claims, so the maintenance facts can tell a
+    /// Live and expired retention claims, so the lifecycle facts can tell a
     /// lease that lapsed apart from a title that never had one. Released and
     /// converted rows stay out: they were withdrawn, not spent.
     async fn list_retention_history_for_titles(
@@ -578,7 +578,7 @@ fn row_to_claim(row: &SqlRow) -> AppResult<LifecycleClaim> {
     let kind = LifecycleClaimKind::parse_storage(&kind_raw)
         .ok_or_else(|| AppError::Repository(format!("unknown lifecycle claim kind {kind_raw}")))?;
     // A state this build does not know cannot be assumed inert: reading it as
-    // released would drop a hold. Refusing the row makes the maintenance pass
+    // released would drop a hold. Refusing the row makes the lifecycle pass
     // fail loudly, which is what its unreadable-store hold is for.
     let state_raw = row.text("state")?;
     let state = LifecycleClaimState::parse_storage(&state_raw).ok_or_else(|| {

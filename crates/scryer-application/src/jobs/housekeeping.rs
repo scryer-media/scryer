@@ -944,7 +944,7 @@ impl AppUseCase {
             stale_import_history,
             stale_download_queue_deletes,
             stale_rule_set_history,
-            stale_maintenance_evaluation_runs,
+            stale_lifecycle_evaluation_runs,
             stale_held_action_runs,
         ) = if general_settings.keep_history_forever {
             (0, 0, 0, 0, 0, 0, 0, 0)
@@ -988,7 +988,7 @@ impl AppUseCase {
                 self.services
                     .workflow
                     .housekeeping
-                    .delete_maintenance_evaluation_runs_older_than(history_retention_days)
+                    .delete_lifecycle_evaluation_runs_older_than(history_retention_days)
                     .await?,
                 self.services
                     .workflow
@@ -1027,7 +1027,7 @@ impl AppUseCase {
             + stale_import_history
             + stale_download_queue_deletes
             + stale_rule_set_history
-            + stale_maintenance_evaluation_runs
+            + stale_lifecycle_evaluation_runs
             + stale_held_action_runs
             + stale_list_sync_runs;
 

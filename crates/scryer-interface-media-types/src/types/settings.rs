@@ -849,8 +849,8 @@ pub struct TitleTagRewriteCountsPayload {
     pub series_movies: i32,
     /// Delay profiles whose tag list was rewritten.
     pub delay_profiles: i32,
-    /// Maintenance rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
-    pub maintenance_rule_sets: i32,
+    /// Lifecycle rule sets whose current rule source names the old label; rule sources are never rewritten, so these rules stop matching.
+    pub lifecycle_rule_sets: i32,
     /// Release rule sets whose rule source names the old label; rule sources are never rewritten, so these rules stop matching.
     pub release_rule_sets: i32,
     /// Managed rule sets whose tag filter lists the old label; managed filters belong to their pack and are never rewritten.

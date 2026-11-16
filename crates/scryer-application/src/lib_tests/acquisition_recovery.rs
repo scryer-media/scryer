@@ -16675,7 +16675,7 @@ async fn await_acquisition_search_job(
 }
 
 #[tokio::test]
-async fn accepted_maintenance_searches_recover_once_with_original_job_ids() {
+async fn accepted_lifecycle_searches_recover_once_with_original_job_ids() {
     let harness = bootstrap_media_request_app();
     harness.users.create(harness.manager.clone()).await.unwrap();
     let jobs = Arc::new(RecordingJobRunRepo::default());
@@ -16720,10 +16720,10 @@ async fn accepted_maintenance_searches_recover_once_with_original_job_ids() {
         .clone()
         .lock_owned()
         .await;
-    let reserved = app.resume_interrupted_maintenance_searches().await.unwrap();
+    let reserved = app.resume_interrupted_lifecycle_searches().await.unwrap();
     assert_eq!(reserved.len(), 2);
     assert!(
-        app.resume_interrupted_maintenance_searches()
+        app.resume_interrupted_lifecycle_searches()
             .await
             .unwrap()
             .is_empty()
@@ -16742,18 +16742,18 @@ async fn accepted_maintenance_searches_recover_once_with_original_job_ids() {
         2
     );
     assert!(
-        app.resume_interrupted_maintenance_searches()
+        app.resume_interrupted_lifecycle_searches()
             .await
             .unwrap()
             .is_empty()
     );
 }
 
-/// A maintenance sequence dispatches its Search step as the synthetic system
+/// A lifecycle sequence dispatches its Search step as the synthetic system
 /// actor, which has no persisted user row: recovery has to reconstruct it or
 /// the step is lost with its receipt already marked accepted.
 #[tokio::test]
-async fn a_maintenance_search_dispatched_by_the_system_actor_recovers() {
+async fn a_lifecycle_search_dispatched_by_the_system_actor_recovers() {
     let harness = bootstrap_media_request_app();
     harness.users.create(harness.manager.clone()).await.unwrap();
     let jobs = Arc::new(RecordingJobRunRepo::default());
@@ -16787,7 +16787,7 @@ async fn a_maintenance_search_dispatched_by_the_system_actor_recovers() {
     .await;
 
     assert_eq!(
-        app.resume_interrupted_maintenance_searches().await.unwrap(),
+        app.resume_interrupted_lifecycle_searches().await.unwrap(),
         vec!["recover-system-actor".to_string()]
     );
     let view = await_acquisition_search_job(&app, &harness.manager, "recover-system-actor").await;
@@ -16798,7 +16798,7 @@ async fn a_maintenance_search_dispatched_by_the_system_actor_recovers() {
 }
 
 #[tokio::test]
-async fn recovered_maintenance_search_does_not_resubmit_pending_downloads() {
+async fn recovered_lifecycle_search_does_not_resubmit_pending_downloads() {
     let (app, title, _, downloads) = seed_recent_failed_season_pack_fixture_with_indexer(Arc::new(
         TrackingIndexerClient::default()
             .with_season_pack_titles([
@@ -16846,7 +16846,7 @@ async fn recovered_maintenance_search_does_not_resubmit_pending_downloads() {
     };
     jobs.seed(run.clone()).await;
     assert_eq!(
-        app.resume_interrupted_maintenance_searches().await.unwrap(),
+        app.resume_interrupted_lifecycle_searches().await.unwrap(),
         vec![run.id.clone()]
     );
     let first = await_acquisition_search_job(&app, &actor, &run.id).await;
@@ -16860,7 +16860,7 @@ async fn recovered_maintenance_search_does_not_resubmit_pending_downloads() {
     // Model a restart after durable submission but before the job's terminal write.
     jobs.update_job_run(&run).await.unwrap();
     assert_eq!(
-        app.resume_interrupted_maintenance_searches().await.unwrap(),
+        app.resume_interrupted_lifecycle_searches().await.unwrap(),
         vec![run.id.clone()]
     );
     let second = await_acquisition_search_job(&app, &actor, &run.id).await;
@@ -17011,7 +17011,7 @@ async fn an_operator_automatic_title_search_records_the_operator_on_its_grabs() 
     );
 }
 
-/// Media-request approval and maintenance sequences dispatch their search as
+/// Media-request approval and lifecycle sequences dispatch their search as
 /// the system execution actor, which holds no persisted grants of its own. The
 /// search must still be authorized, run, and grab, and its grabs stay recorded
 /// against the system.
@@ -17987,7 +17987,7 @@ async fn refused_scheduled_ticks_record_no_run_and_no_events() {
         .await
         .expect("an idle RSS tick is not a failure");
 
-    // Maintenance rules act on their own schedules, so the instance-wide
+    // Lifecycle rules act on their own schedules, so the instance-wide
     // action tick never has work of its own.
     app.run_scheduled_job_now(
         JobKey::LifecycleActionHandling,

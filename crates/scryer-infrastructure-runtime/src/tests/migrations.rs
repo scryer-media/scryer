@@ -6764,7 +6764,7 @@ async fn migration_0295_preserves_inherited_movie_availability() {
 }
 
 /// Runs 0304 against a fully migrated schema holding one enabled destructive
-/// maintenance rule, one shadow maintenance rule and one enforcing request
+/// lifecycle rule, one shadow lifecycle rule and one enforcing request
 /// rule, with the experimental-features setting stored as `value_json`, or
 /// absent when `experimental` is `None`. Returns the rule rows afterwards as
 /// `(id, enabled, evaluation_mode, effect_arming, destructive_rearm_required)`
@@ -6787,14 +6787,14 @@ async fn rules_after_0304(
         .expect("relax foreign keys for the seeded rows");
 
     sqlx::query(
-        "INSERT INTO maintenance_rule_sets
+        "INSERT INTO lifecycle_rule_sets
          (id, name, enabled, evaluation_mode, effect_arming, destructive_rearm_required, system_owned)
          VALUES ('rule-armed', 'Synthetic armed rule', 1, 'observe', 'destructive', 0, 1),
                 ('rule-shadow', 'Synthetic shadow rule', 0, 'shadow', 'none', 1, 0)",
     )
     .execute(&mut *conn)
     .await
-    .expect("seed maintenance rules");
+    .expect("seed lifecycle rules");
     sqlx::query(
         "INSERT INTO request_rule_sets (id, name, enabled, evaluation_mode)
          VALUES ('request-enforcing', 'Synthetic request rule', 1, 'enforce')",
@@ -6831,33 +6831,35 @@ async fn rules_after_0304(
     .map(str::trim)
     .filter(|statement| !statement.is_empty())
     {
-        sqlx::query(statement)
+        // 0304 predates the table rename; replay it against the current name.
+        let statement = statement.replace("maintenance_rule_sets", "lifecycle_rule_sets");
+        sqlx::query(sqlx::AssertSqlSafe(statement))
             .execute(&mut *conn)
             .await
             .expect("0304 should apply");
     }
 
-    let maintenance = sqlx::query_as(
+    let lifecycle = sqlx::query_as(
         "SELECT id, enabled, evaluation_mode, effect_arming, destructive_rearm_required
-         FROM maintenance_rule_sets ORDER BY id",
+         FROM lifecycle_rule_sets ORDER BY id",
     )
     .fetch_all(&mut *conn)
     .await
-    .expect("read maintenance rules");
+    .expect("read lifecycle rules");
     let requests =
         sqlx::query_as("SELECT id, enabled, evaluation_mode FROM request_rule_sets ORDER BY id")
             .fetch_all(&mut *conn)
             .await
             .expect("read request rules");
-    (maintenance, requests)
+    (lifecycle, requests)
 }
 
 #[tokio::test]
 async fn migration_0304_disables_every_rule_unless_experimental_features_are_on() {
     for experimental in [None, Some("false"), Some("\"off\"")] {
-        let (maintenance, requests) = rules_after_0304(experimental).await;
+        let (lifecycle, requests) = rules_after_0304(experimental).await;
         assert_eq!(
-            maintenance,
+            lifecycle,
             vec![
                 (
                     "rule-armed".to_string(),
@@ -6887,9 +6889,9 @@ async fn migration_0304_disables_every_rule_unless_experimental_features_are_on(
 #[tokio::test]
 async fn migration_0304_keeps_rule_states_when_experimental_features_are_on() {
     for experimental in [Some("true"), Some("\"true\"")] {
-        let (maintenance, requests) = rules_after_0304(experimental).await;
+        let (lifecycle, requests) = rules_after_0304(experimental).await;
         assert_eq!(
-            maintenance,
+            lifecycle,
             vec![
                 (
                     "rule-armed".to_string(),

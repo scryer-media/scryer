@@ -959,7 +959,7 @@ async fn scoring_builder_model_is_set_kept_and_cleared() {
     );
 
     // A document for another family is refused and nothing changes.
-    let wrong_family = serde_json::json!({"version": 2, "family": "maintenance"});
+    let wrong_family = serde_json::json!({"version": 2, "family": "lifecycle"});
     let refused = app
         .update_rule_set_with_builder_model(
             &user,

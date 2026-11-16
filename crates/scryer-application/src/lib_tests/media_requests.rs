@@ -1938,7 +1938,7 @@ async fn approval_waits_for_destructive_title_ownership() {
             None,
         )
         .await
-        .expect_err("maintenance owns the title");
+        .expect_err("lifecycle owns the title");
     assert!(error.to_string().contains("title is being modified"));
     assert_eq!(
         harness

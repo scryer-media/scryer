@@ -20,7 +20,7 @@ export type LazyRegoEditorProps = Omit<
   "language" | "regoFamily" | "regoTranslate" | "regoHeads"
 > & {
   ruleFamily: RegoFamily;
-  /// The rule's variant (a maintenance rule's scope), which narrows the heads
+  /// The rule's variant (a lifecycle rule's scope), which narrows the heads
   /// offered. Null or absent offers every head.
   ruleVariant?: string | null;
   feedback?: ReactNode;

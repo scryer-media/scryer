@@ -11,7 +11,7 @@ import {
   indexerSettingsTabFromPath,
   INDEXER_SETTINGS_TABS,
   listsSectionFromPath,
-  maintenanceRulesSectionFromPath,
+  lifecycleRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
   BETA_RULES_SECTIONS,
@@ -69,9 +69,9 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/wanted/pending",
     "/automation/acquisition",
     "/automation/rules/scoring",
-    "/automation/rules/maintenance",
-    "/automation/rules/maintenance/candidates",
-    "/automation/rules/maintenance/history",
+    "/automation/rules/lifecycle",
+    "/automation/rules/lifecycle/candidates",
+    "/automation/rules/lifecycle/history",
     "/automation/rules/request",
     "/automation/subtitles",
     "/automation/post-processing",
@@ -142,28 +142,48 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/history", "/activity/history"],
     ["/settings/acquisition", "/automation/acquisition"],
     ["/settings/rules", "/automation/rules/scoring"],
-    ["/settings/maintenance-rules", "/automation/rules/maintenance"],
-    ["/settings/maintenanceRules", "/automation/rules/maintenance"],
+    ["/settings/lifecycle-rules", "/automation/rules/lifecycle"],
+    ["/settings/lifecycleRules", "/automation/rules/lifecycle"],
     ["/settings/request-rules", "/automation/rules/request"],
     ["/settings/requestRules", "/automation/rules/request"],
     // Rules names the page, not a pane, so it lands on the first one.
     ["/automation/rules", "/automation/rules/scoring"],
     ["/automation/rules/scoring-rules", "/automation/rules/scoring"],
-    // Maintenance rules were a page of their own before they became a pane.
-    ["/automation/maintenance-rules", "/automation/rules/maintenance"],
-    ["/automation/maintenanceRules", "/automation/rules/maintenance"],
-    ["/automation/rules/maintenance-rules", "/automation/rules/maintenance"],
-    ["/automation/rules/maintenance/rules", "/automation/rules/maintenance"],
+    // Lifecycle rules were a page of their own before they became a pane.
+    ["/automation/lifecycle-rules", "/automation/rules/lifecycle"],
+    ["/automation/lifecycleRules", "/automation/rules/lifecycle"],
+    ["/automation/rules/lifecycle-rules", "/automation/rules/lifecycle"],
+    ["/automation/rules/lifecycle/rules", "/automation/rules/lifecycle"],
     ["/automation/rules/request-rules", "/automation/rules/request"],
     // Folded panes redirect: exclusions to the candidates, gates to the list.
     [
-      "/automation/rules/maintenance/exclusions",
-      "/automation/rules/maintenance/candidates",
+      "/automation/rules/lifecycle/exclusions",
+      "/automation/rules/lifecycle/candidates",
     ],
-    ["/automation/rules/maintenance/gates", "/automation/rules/maintenance"],
+    ["/automation/rules/lifecycle/gates", "/automation/rules/lifecycle"],
+    [
+      "/automation/rules/lifecycle/runs",
+      "/automation/rules/lifecycle/history",
+    ],
+    // Lifecycle rules were called maintenance rules; every path that named
+    // them by the old name redirects to the lifecycle pane it meant.
+    ["/settings/maintenance-rules", "/automation/rules/lifecycle"],
+    ["/settings/maintenanceRules", "/automation/rules/lifecycle"],
+    ["/automation/maintenance-rules", "/automation/rules/lifecycle"],
+    ["/automation/maintenanceRules", "/automation/rules/lifecycle"],
+    ["/automation/rules/maintenance-rules", "/automation/rules/lifecycle"],
+    ["/automation/rules/maintenance", "/automation/rules/lifecycle"],
+    [
+      "/automation/rules/maintenance/candidates",
+      "/automation/rules/lifecycle/candidates",
+    ],
+    [
+      "/automation/rules/maintenance/history",
+      "/automation/rules/lifecycle/history",
+    ],
     [
       "/automation/rules/maintenance/runs",
-      "/automation/rules/maintenance/history",
+      "/automation/rules/lifecycle/history",
     ],
     ["/settings/subtitles", "/automation/subtitles"],
     ["/settings/post-processing", "/automation/post-processing"],
@@ -329,21 +349,21 @@ test("the rules page carries all three kinds of rule as panes", () => {
     "requestRules",
   );
   for (const path of [
-    "/automation/rules/maintenance",
-    "/automation/rules/maintenance/candidates",
-    "/automation/rules/maintenance/history",
+    "/automation/rules/lifecycle",
+    "/automation/rules/lifecycle/candidates",
+    "/automation/rules/lifecycle/history",
   ]) {
     const route = canonical(path);
     assert.equal(route.canonicalPath, path, path);
-    assert.equal(route.settingsSection, "maintenanceRules", path);
+    assert.equal(route.settingsSection, "lifecycleRules", path);
   }
   assert.deepEqual(resolveAppRoute("/automation/rules/nope"), {
     kind: "not-found",
   });
-  assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/nope"), {
+  assert.deepEqual(resolveAppRoute("/automation/rules/lifecycle/nope"), {
     kind: "not-found",
   });
-  // Scoring and request rules have no second level of panes, and maintenance
+  // Scoring and request rules have no second level of panes, and lifecycle
   // stops at one.
   assert.deepEqual(resolveAppRoute("/automation/rules/scoring/candidates"), {
     kind: "not-found",
@@ -352,7 +372,7 @@ test("the rules page carries all three kinds of rule as panes", () => {
     kind: "not-found",
   });
   assert.deepEqual(
-    resolveAppRoute("/automation/rules/maintenance/history/extra"),
+    resolveAppRoute("/automation/rules/lifecycle/history/extra"),
     {
       kind: "not-found",
     },
@@ -360,7 +380,7 @@ test("the rules page carries all three kinds of rule as panes", () => {
 });
 
 test("rules pane paths round-trip through the section helpers", () => {
-  for (const section of ["scoring", "maintenance", "request"] as const) {
+  for (const section of ["scoring", "lifecycle", "request"] as const) {
     assert.equal(
       rulesSectionFromPath(buildRulesPath(section)),
       section,
@@ -368,23 +388,23 @@ test("rules pane paths round-trip through the section helpers", () => {
     );
   }
   for (const section of ["rules", "candidates", "history"] as const) {
-    const path = buildRulesPath("maintenance", section);
-    assert.equal(maintenanceRulesSectionFromPath(path), section, section);
-    assert.equal(rulesSectionFromPath(path), "maintenance", section);
+    const path = buildRulesPath("lifecycle", section);
+    assert.equal(lifecycleRulesSectionFromPath(path), section, section);
+    assert.equal(rulesSectionFromPath(path), "lifecycle", section);
   }
   // Anything that is not a known pane segment falls back to the default pane.
   assert.equal(rulesSectionFromPath("/automation/rules"), "scoring");
   assert.equal(rulesSectionFromPath("/automation/rules/unknown"), "scoring");
   assert.equal(rulesSectionFromPath("/settings/profile"), "scoring");
   assert.equal(
-    maintenanceRulesSectionFromPath("/automation/rules/maintenance"),
+    lifecycleRulesSectionFromPath("/automation/rules/lifecycle"),
     "rules",
   );
   assert.equal(
-    maintenanceRulesSectionFromPath("/automation/rules/scoring"),
+    lifecycleRulesSectionFromPath("/automation/rules/scoring"),
     "rules",
   );
-  assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
+  assert.equal(lifecycleRulesSectionFromPath("/settings/profile"), "rules");
 });
 
 test("indexer settings always offer the search and client panes", () => {
@@ -397,9 +417,9 @@ test("indexer settings always offer the search and client panes", () => {
   assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
 });
 
-test("every rule kind is offered, with maintenance and request badged beta", () => {
-  assert.deepEqual(RULES_SECTIONS, ["scoring", "maintenance", "request"]);
-  assert.deepEqual([...BETA_RULES_SECTIONS].sort(), ["maintenance", "request"]);
+test("every rule kind is offered, with lifecycle and request badged beta", () => {
+  assert.deepEqual(RULES_SECTIONS, ["scoring", "lifecycle", "request"]);
+  assert.deepEqual([...BETA_RULES_SECTIONS].sort(), ["lifecycle", "request"]);
   assert.equal(BETA_RULES_SECTIONS.has("scoring"), false);
   assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
   assert.equal(buildRulesPath("request"), "/automation/rules/request");

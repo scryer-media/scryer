@@ -2165,10 +2165,10 @@ impl AppUseCase {
                     serde_json::to_string(&CountSummary { count }).ok(),
                 ))
             }
-            JobKey::MaintenanceRuleEvaluation if run.trigger_source != JobTriggerSource::Manual => {
+            JobKey::LifecycleRuleEvaluation if run.trigger_source != JobTriggerSource::Manual => {
                 // Each rule evaluates on its own schedule; the instance-wide
                 // tick keeps only the lease clock.
-                let report = self.run_maintenance_lease_reconciliation_job().await;
+                let report = self.run_lifecycle_lease_reconciliation_job().await;
                 Ok(JobExecutionOutcome::new(
                     Some(format!(
                         "{} request lease(s) expired, {} started; rules run on their own schedules",
@@ -2177,8 +2177,8 @@ impl AppUseCase {
                     serde_json::to_string(&report).ok(),
                 ))
             }
-            JobKey::MaintenanceRuleEvaluation => {
-                let report = self.run_maintenance_rule_evaluation_job().await?;
+            JobKey::LifecycleRuleEvaluation => {
+                let report = self.run_lifecycle_rule_evaluation_job().await?;
                 let summary_json = serde_json::to_string(&report).ok();
                 // Lease bookkeeping runs whether or not the gate is open, so it
                 // is reported on both paths: an operator reading "nothing was
@@ -2190,7 +2190,7 @@ impl AppUseCase {
                 if !report.gate_enabled {
                     return Ok(JobExecutionOutcome::new(
                         Some(format!(
-                            "Maintenance evaluation is disabled by the instance gate; nothing was evaluated ({lease_text})"
+                            "Lifecycle evaluation is disabled by the instance gate; nothing was evaluated ({lease_text})"
                         )),
                         summary_json,
                     ));
@@ -2222,7 +2222,7 @@ impl AppUseCase {
                 if report.rules_considered == 0 {
                     return Ok(JobExecutionOutcome::new(
                         Some(
-                            "Each maintenance rule acts on its own schedule; this job acted on nothing"
+                            "Each lifecycle rule acts on its own schedule; this job acted on nothing"
                                 .to_string(),
                         ),
                         summary_json,
@@ -2231,7 +2231,7 @@ impl AppUseCase {
                 if !report.gates_enabled {
                     return Ok(JobExecutionOutcome::new(
                         Some(
-                            "Both instance effect gates are off; no maintenance actions executed"
+                            "Both instance effect gates are off; no lifecycle actions executed"
                                 .to_string(),
                         ),
                         summary_json,

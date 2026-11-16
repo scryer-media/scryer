@@ -3,7 +3,7 @@
 //! the web generates the same sources from the same models, so a case that
 //! disagrees here means the builder's meaning and the engine's have drifted.
 
-use crate::{maintenance, rewrite_package_declaration, runtime, validation};
+use crate::{lifecycle, rewrite_package_declaration, runtime, validation};
 use regorus::Value as RegoValue;
 use serde_json::Value;
 
@@ -15,9 +15,9 @@ fn fixtures(source: &str) -> Vec<Value> {
         .clone()
 }
 
-fn maintenance_fixtures() -> Vec<Value> {
+fn lifecycle_fixtures() -> Vec<Value> {
     fixtures(include_str!(
-        "../../../apps/scryer-web/lib/contracts/maintenance-builder-fixtures.json"
+        "../../../apps/scryer-web/lib/contracts/lifecycle-builder-fixtures.json"
     ))
 }
 
@@ -52,40 +52,39 @@ fn assert_cases(fixture: &Value, mut engine: regorus::Engine, package: &str) {
 }
 
 #[test]
-fn maintenance_builder_fixtures_validate_and_their_cases_hold_in_the_engine() {
-    let fixtures = maintenance_fixtures();
+fn lifecycle_builder_fixtures_validate_and_their_cases_hold_in_the_engine() {
+    let fixtures = lifecycle_fixtures();
     assert!(!fixtures.is_empty());
     for fixture in &fixtures {
-        assert_eq!(fixture["model"]["family"], "maintenance");
+        assert_eq!(fixture["model"]["family"], "lifecycle");
         let id = "builder_fixture";
-        let source = maintenance::rewrite_package_declaration(
+        let source = lifecycle::rewrite_package_declaration(
             fixture["source"].as_str().expect("fixture source"),
             id,
         );
         // Every source the builder writes saves: its action heads are ones
         // the server knows, with values the save accepts.
         let validation =
-            validation::validate_maintenance_rule(&source, id).expect("validator completes");
+            validation::validate_lifecycle_rule(&source, id).expect("validator completes");
         assert!(
             validation.valid,
             "{}: {:?}",
             fixture["id"], validation.errors
         );
-        let mut engine =
-            runtime::configured_engine(&runtime::RuntimeLimits::maintenance_defaults());
+        let mut engine = runtime::configured_engine(&runtime::RuntimeLimits::lifecycle_defaults());
         engine
             .add_policy(format!("{id}.rego"), source)
             .unwrap_or_else(|error| panic!("{}: {error}", fixture["id"]));
         engine
             .add_policy(
-                crate::maintenance_actions::helper_policy_path(id),
-                crate::maintenance_actions::helper_module_source(id),
+                crate::lifecycle_actions::helper_policy_path(id),
+                crate::lifecycle_actions::helper_module_source(id),
             )
             .expect("helper module loads");
         assert_cases(
             fixture,
             engine,
-            &format!("{}.{id}", maintenance::USER_PACKAGE_PREFIX),
+            &format!("{}.{id}", lifecycle::USER_PACKAGE_PREFIX),
         );
     }
 }

@@ -36,7 +36,7 @@ export type SettingsSection =
   | "titleTags"
   | "acquisition"
   | "rules"
-  | "maintenanceRules"
+  | "lifecycleRules"
   | "requestRules"
   | "plugins"
   | "scripts"
@@ -45,19 +45,19 @@ export type SettingsSection =
   | "post-processing"
   | "subtitles";
 
-/// Panes of the Rules page. Scoring, maintenance and request rules are three
+/// Panes of the Rules page. Scoring, lifecycle and request rules are three
 /// kinds of the same subject, so they share one nav entry and one gutter rather
 /// than sitting beside each other in the sidebar. Each pane keeps its own
 /// `SettingsSection` underneath, so permissions and the settings shell are
 /// untouched.
-export type RulesSection = "scoring" | "maintenance" | "request";
+export type RulesSection = "scoring" | "lifecycle" | "request";
 
-/// Panes of the Maintenance Rules page, reached through a second gutter. The
-/// rule list is the default, so `/automation/rules/maintenance` still means
-/// what a bare maintenance-rules link always meant. Exclusions live with the
+/// Panes of the Lifecycle Rules page, reached through a second gutter. The
+/// rule list is the default, so `/automation/rules/lifecycle` still means
+/// what a bare lifecycle-rules link always meant. Exclusions live with the
 /// gates because both answer "what is this instance allowed to do", not "what
 /// would a rule match".
-export type MaintenanceRulesSection = "rules" | "candidates" | "history";
+export type LifecycleRulesSection = "rules" | "candidates" | "history";
 
 /// Panes of the Indexers settings page. Seeding profiles live here rather than
 /// in their own settings section because a profile is only ever reached

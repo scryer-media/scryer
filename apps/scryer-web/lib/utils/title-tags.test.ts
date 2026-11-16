@@ -180,7 +180,7 @@ test("rename warning is null when nothing was left behind", () => {
 test("rename warning totals every rule reference the rename could not rewrite", () => {
   const warning = titleTagRenameWarning(
     counts({
-      maintenanceRuleSets: 2,
+      lifecycleRuleSets: 2,
       releaseRuleSets: 1,
       managedTagFilters: 3,
     }),
@@ -188,7 +188,7 @@ test("rename warning totals every rule reference the rename could not rewrite", 
   assert.deepEqual(warning, {
     total: 6,
     references: [
-      { kind: "maintenanceRuleSets", count: 2 },
+      { kind: "lifecycleRuleSets", count: 2 },
       { kind: "releaseRuleSets", count: 1 },
       { kind: "managedTagFilters", count: 3 },
     ],
@@ -198,7 +198,7 @@ test("rename warning totals every rule reference the rename could not rewrite", 
 test("rename warning lists only the non-zero reference kinds, in a fixed order", () => {
   const warning = titleTagRenameWarning(
     counts({
-      maintenanceRuleSets: 0,
+      lifecycleRuleSets: 0,
       releaseRuleSets: 4,
       managedTagFilters: 1,
     }),
@@ -214,14 +214,14 @@ test("rename warning lists only the non-zero reference kinds, in a fixed order",
 
 test("rename warning names the old label and the places that still use it", () => {
   const message = formatTitleTagRenameWarning(
-    counts({ maintenanceRuleSets: 2, managedTagFilters: 1 }),
+    counts({ lifecycleRuleSets: 2, managedTagFilters: 1 }),
     "needs review",
     stubTranslate,
   );
   assert.equal(
     message,
     "settings.titleTagRenameWarning(label=needs review|count=3|references=" +
-      "settings.titleTagReferenceMaintenanceRuleSets(count=2), " +
+      "settings.titleTagReferenceLifecycleRuleSets(count=2), " +
       "settings.titleTagReferenceManagedTagFilters(count=1))",
   );
 });
@@ -241,7 +241,7 @@ test("every locale key the rename warning composes exists in English", () => {
   for (const key of [
     "settings.titleTagRenameWarning",
     "settings.titleTagRenameSummary",
-    "settings.titleTagReferenceMaintenanceRuleSets",
+    "settings.titleTagReferenceLifecycleRuleSets",
     "settings.titleTagReferenceReleaseRuleSets",
     "settings.titleTagReferenceManagedTagFilters",
   ]) {

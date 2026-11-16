@@ -1450,7 +1450,7 @@ pub struct TitleTagMembershipCounts {
 /// changing meaning.
 ///
 /// The four reference counts are kept apart rather than summed so the warning
-/// can name what the operator has to go and look at: a maintenance rule, a
+/// can name what the operator has to go and look at: a lifecycle rule, a
 /// release rule, a request rule, or a managed pack's tag filter are four
 /// different places.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1460,7 +1460,7 @@ pub struct TitleTagRewriteCounts {
     /// touched no title can still have touched series movies.
     pub series_movies: u64,
     pub delay_profiles: u64,
-    pub maintenance_rule_sets: u64,
+    pub lifecycle_rule_sets: u64,
     pub release_rule_sets: u64,
     /// Release rule sets whose managed `tag_filter` list carries the label.
     /// A managed pack can appear here and in `release_rule_sets` at once; the

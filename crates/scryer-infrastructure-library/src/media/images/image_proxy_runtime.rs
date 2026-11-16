@@ -2167,7 +2167,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maintenance_reconciles_files_and_evicts_the_least_recently_used_entries() {
+    async fn lifecycle_reconciles_files_and_evicts_the_least_recently_used_entries() {
         let tokens = ["e".repeat(64), "f".repeat(64), "1".repeat(64)];
         let now = Utc::now();
         let entry = |token: &str, age_minutes: i64| ImageProxyCacheEntryRecord {

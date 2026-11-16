@@ -77,7 +77,7 @@ import {
   RequestDeclaredActionsSummary,
   RequestRuleSourceFindings,
   RequestShapingSummary,
-} from "@/components/views/settings/maintenance-action-summary";
+} from "@/components/views/settings/lifecycle-action-summary";
 import type { RuleBuilderModel } from "@/lib/utils/rule-builder";
 import type { RuleEditorMode } from "@/lib/utils/rule-builder-mode";
 import {
@@ -116,7 +116,7 @@ const PREVIEW_MONITOR_TYPES = [
 ];
 
 type SettingsRequestRulesSectionProps = {
-  /// The shipped expired-request-leases maintenance rule, shown first.
+  /// The shipped expired-request-leases lifecycle rule, shown first.
   leaseRuleControl?: React.ReactNode;
   isEditorOpen: boolean;
   editingRuleSetId: string | null;

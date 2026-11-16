@@ -477,7 +477,7 @@ test("behavior helpers require the expected broad code and reason together", () 
         message: "arbitrary",
         extensions: {
           code,
-          reason: "MAINTENANCE_ARM_COUNT_MISMATCH",
+          reason: "LIFECYCLE_ARM_COUNT_MISMATCH",
           currentCount: 12,
         },
       },
@@ -487,7 +487,7 @@ test("behavior helpers require the expected broad code and reason together", () 
     graphQlErrorNumberExtension(
       countError("PLUGIN_FAILED"),
       "VALIDATION_ERROR",
-      "MAINTENANCE_ARM_COUNT_MISMATCH",
+      "LIFECYCLE_ARM_COUNT_MISMATCH",
       "currentCount",
     ),
     null,
@@ -496,7 +496,7 @@ test("behavior helpers require the expected broad code and reason together", () 
     graphQlErrorNumberExtension(
       countError("VALIDATION_ERROR"),
       "VALIDATION_ERROR",
-      "MAINTENANCE_ARM_COUNT_MISMATCH",
+      "LIFECYCLE_ARM_COUNT_MISMATCH",
       "currentCount",
     ),
     12,
@@ -598,7 +598,7 @@ test("a missing per-run maximum names the delete actions that need it", () => {
         message: "server sentence",
         extensions: {
           code: "VALIDATION_ERROR",
-          reason: "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED",
+          reason: "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED",
           destructiveActions,
         },
       },

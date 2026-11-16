@@ -1,6 +1,6 @@
 //! The shared policy core every Rego family in Scryer rides on.
 //!
-//! Release scoring, maintenance matching, and everything that comes after them
+//! Release scoring, lifecycle matching, and everything that comes after them
 //! do the same thing: build a Regorus engine under host limits, add each user
 //! policy plus a generated wrapper that projects its optional heads into one
 //! closed object, serialize an input document once per subject, evaluate each
@@ -157,7 +157,7 @@ pub trait PolicyFamily: Sized + 'static {
     }
 
     /// The Rego head an author writes to hold a subject themselves —
-    /// `unknown if { … }` for maintenance, `manual if { … }` for requests.
+    /// `unknown if { … }` for lifecycle, `manual if { … }` for requests.
     /// `None` for a family with no hold at all.
     fn hold_rule_name() -> Option<&'static str> {
         None

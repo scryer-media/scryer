@@ -4,7 +4,7 @@
 //!
 //! - [`release`] (re-exported at the crate root for compatibility) scores
 //!   indexer release candidates for acquisition.
-//! - [`maintenance`] evaluates existing library media against maintenance
+//! - [`lifecycle`] evaluates existing library media against lifecycle
 //!   rules and returns a match / no-match / unknown decision. It never
 //!   selects or performs an action.
 //! - [`request`] decides a media request at submit time — approve, deny, or
@@ -21,8 +21,8 @@
 
 pub(crate) mod builtins;
 pub mod diagnostic_codes;
-pub mod maintenance;
-pub mod maintenance_actions;
+pub mod lifecycle;
+pub mod lifecycle_actions;
 pub mod policy;
 mod release;
 pub mod request;
@@ -47,7 +47,7 @@ mod builder_fixture_tests;
 mod rego_editor_tests;
 
 #[cfg(test)]
-mod maintenance_action_tests;
+mod lifecycle_action_tests;
 
 #[cfg(test)]
 mod request_action_tests;

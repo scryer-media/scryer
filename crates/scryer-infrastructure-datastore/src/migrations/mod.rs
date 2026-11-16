@@ -50,6 +50,8 @@ mod query_audit_indexes_upgrade_tests;
 pub mod release_url_scrub;
 #[cfg(test)]
 mod remove_user_maintenance_rules_upgrade_tests;
+#[cfg(test)]
+mod rename_maintenance_to_lifecycle_upgrade_tests;
 pub mod repair_root_title_folders;
 #[cfg(test)]
 mod request_rule_actions_upgrade_tests;

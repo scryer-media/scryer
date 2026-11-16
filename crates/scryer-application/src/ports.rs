@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     AnimeNumberingBridge, CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
-    MaintenanceRuleRevision, MaintenanceRuleSet, MonitorSelection, PersistedPluginWasmPayload,
+    LifecycleRuleRevision, LifecycleRuleSet, MonitorSelection, PersistedPluginWasmPayload,
     title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
@@ -1925,7 +1925,7 @@ pub trait TitleRepository: Send + Sync {
     /// Every defined label, ordered, with no membership counts.
     ///
     /// The registry gate runs on every title add, every raw tag write, every
-    /// tag patch, and every maintenance candidate the executor touches. Those
+    /// tag patch, and every lifecycle candidate the executor touches. Those
     /// paths only need to know whether a label exists; the counted list scans
     /// every bag per definition and must not be paid there. Repositories that
     /// keep a real table override this with a plain `SELECT label`.
@@ -3847,7 +3847,7 @@ pub trait MediaRequestRepository: Send + Sync {
     /// calls: the facts document is compared between runs, so an order that
     /// drifted would read as a changed fact.
     ///
-    /// Batched on purpose: maintenance evaluation asks this for a whole chunk
+    /// Batched on purpose: lifecycle evaluation asks this for a whole chunk
     /// of titles at once, and a per-title query would make the pass scale with
     /// the library.
     async fn requester_user_ids_by_title_ids(
@@ -6335,10 +6335,10 @@ pub trait HousekeepingRepository: Send + Sync {
     -> AppResult<u32>;
     async fn delete_rule_set_history_older_than(&self, days: i64) -> AppResult<u32>;
     /// Evaluation runs are display-only history; nothing decides from them.
-    async fn delete_maintenance_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
+    async fn delete_lifecycle_evaluation_runs_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
-    /// Held maintenance action runs that finished more than `days` ago. The
+    /// Held lifecycle action runs that finished more than `days` ago. The
     /// newest run of each candidate generation, every run that is not held,
     /// and every run carrying a scoped-deletion resume journal are kept.
     async fn delete_held_lifecycle_action_runs_older_than(&self, _days: i64) -> AppResult<u32> {
@@ -8230,13 +8230,13 @@ pub trait ImportArtifactRepository: Send + Sync {
 /// receipt is sufficient for the action policy and deliberately does not imply
 /// that historical job metadata remains retained.
 #[derive(Clone, Debug)]
-pub enum MaintenanceSearchJobRunCreation {
+pub enum LifecycleSearchJobRunCreation {
     Created {
         run: Box<JobRunRecord>,
-        receipt: scryer_domain::MaintenanceActionJobReceipt,
+        receipt: scryer_domain::LifecycleActionJobReceipt,
     },
     Existing {
-        receipt: scryer_domain::MaintenanceActionJobReceipt,
+        receipt: scryer_domain::LifecycleActionJobReceipt,
     },
 }
 
@@ -8292,13 +8292,13 @@ pub trait JobRunRepository: Send + Sync {
     /// A duplicate `(step key, dispatch attempt)` returns the original receipt
     /// and must never create or spawn another Search job. Implementations may
     /// retain job history independently; receipt evidence outlives pruning.
-    async fn create_maintenance_search_job_run(
+    async fn create_lifecycle_search_job_run(
         &self,
         _run: &JobRunRecord,
-        _receipt: &scryer_domain::MaintenanceActionJobReceipt,
-    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        _receipt: &scryer_domain::LifecycleActionJobReceipt,
+    ) -> AppResult<LifecycleSearchJobRunCreation> {
         Err(AppError::Repository(
-            "maintenance Search dispatch is not configured".to_string(),
+            "lifecycle Search dispatch is not configured".to_string(),
         ))
     }
 
@@ -11001,27 +11001,27 @@ pub struct RuleSetHistoryChange {
     pub actor_id: Option<String>,
 }
 
-/// Persistence for user-authored maintenance rules (RFC 137 section 11).
+/// Persistence for user-authored lifecycle rules (RFC 137 section 11).
 ///
 /// Rule sets and their matcher revisions are two tables but one unit of change:
 /// a rule set with no revision has no matcher and no action, so
 /// [`Self::create_rule_set`] and [`Self::add_revision`] must each write both
 /// rows in a single transaction.
 #[async_trait]
-pub trait MaintenanceRuleSetRepository: Send + Sync {
-    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>>;
+pub trait LifecycleRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<LifecycleRuleSet>>;
 
-    async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>>;
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<LifecycleRuleSet>>;
 
     /// Insert the rule set and its first revision atomically.
     async fn create_rule_set(
         &self,
-        rule_set: &MaintenanceRuleSet,
-        revision: &MaintenanceRuleRevision,
+        rule_set: &LifecycleRuleSet,
+        revision: &LifecycleRuleRevision,
     ) -> AppResult<()>;
 
     /// Append `revision`, repoint the rule set at it, and reset its
-    /// `effect_arming` to [`scryer_domain::MaintenanceEffectArming::None`] — all
+    /// `effect_arming` to [`scryer_domain::LifecycleEffectArming::None`] — all
     /// three atomically, flagging a rule that was armed as edited since it was
     /// enabled. Existing revisions are never rewritten.
     ///
@@ -11037,7 +11037,7 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// same save.
     async fn add_revision(
         &self,
-        revision: &MaintenanceRuleRevision,
+        revision: &LifecycleRuleRevision,
         max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -11047,7 +11047,7 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// lowered to what the new revision's heads can arm: a revision without a
     /// delete head never stays armed for deletes. The write only applies while
     /// the rule's current revision is the one `revision` follows; otherwise it
-    /// writes nothing and refuses with `MAINTENANCE_RULE_REVISION_CONFLICT`.
+    /// writes nothing and refuses with `LIFECYCLE_RULE_REVISION_CONFLICT`.
     ///
     /// Only for a revision that declares no delete action:
     /// the destructive acknowledgement is bound to the delete heads a matcher
@@ -11062,8 +11062,8 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// [`Self::add_revision`].
     async fn add_revision_keeping_arming(
         &self,
-        revision: &MaintenanceRuleRevision,
-        effect_arming: scryer_domain::MaintenanceEffectArming,
+        revision: &LifecycleRuleRevision,
+        effect_arming: scryer_domain::LifecycleEffectArming,
         max_titles_per_run: Option<Option<u32>>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
@@ -11072,14 +11072,14 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         &self,
         rule_set_id: &str,
         revision_number: i64,
-    ) -> AppResult<Option<MaintenanceRuleRevision>>;
+    ) -> AppResult<Option<LifecycleRuleRevision>>;
 
     /// [`Self::get_revision`] for each `(rule_set_id, revision_number)` key,
     /// in key order. SQL stores override this with one read.
     async fn get_revisions(
         &self,
         keys: &[(String, i64)],
-    ) -> AppResult<Vec<Option<MaintenanceRuleRevision>>> {
+    ) -> AppResult<Vec<Option<LifecycleRuleRevision>>> {
         let mut revisions = Vec::with_capacity(keys.len());
         for (rule_set_id, revision_number) in keys {
             revisions.push(self.get_revision(rule_set_id, *revision_number).await?);
@@ -11088,13 +11088,13 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     }
 
     /// Newest revision first.
-    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
+    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<LifecycleRuleRevision>>;
 
     /// Update the fields that carry no evaluation semantics. Never creates a
     /// revision — the matcher, action, and grace period are untouched.
     ///
     /// `disarm` resets `effect_arming` to
-    /// [`scryer_domain::MaintenanceEffectArming::None`] in the *same* write,
+    /// [`scryer_domain::LifecycleEffectArming::None`] in the *same* write,
     /// with the same edited-since-enabled flag as `add_revision`. The
     /// caller sets it when the library scope actually changed: scope is the
     /// rule's blast radius, so a re-scoped rule is no longer the rule an
@@ -11125,7 +11125,7 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     /// exists, coordinating with concurrent candidate/run insertion.
     async fn delete_rule_set_if_unused(&self, _id: &str) -> AppResult<()> {
         Err(AppError::Repository(
-            "guarded maintenance deletion is not configured".into(),
+            "guarded lifecycle deletion is not configured".into(),
         ))
     }
 
@@ -11138,7 +11138,7 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         Err(AppError::Repository(
-            "maintenance rule maximum is not configured".into(),
+            "lifecycle rule maximum is not configured".into(),
         ))
     }
 
@@ -11149,9 +11149,9 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
     async fn update_rule_set_state(
         &self,
         id: &str,
-        mode: scryer_domain::MaintenanceEvaluationMode,
-        arming: scryer_domain::MaintenanceEffectArming,
-        confirmation: Option<&scryer_domain::MaintenanceRuleArmingConfirmation>,
+        mode: scryer_domain::LifecycleEvaluationMode,
+        arming: scryer_domain::LifecycleEffectArming,
+        confirmation: Option<&scryer_domain::LifecycleRuleArmingConfirmation>,
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 }
@@ -11159,9 +11159,9 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
 /// Which candidates a read should return. Every field narrows; an empty
 /// `states` means every state.
 #[derive(Clone, Debug, Default)]
-pub struct MaintenanceCandidateQuery {
+pub struct LifecycleCandidateQuery {
     pub rule_set_id: Option<String>,
-    pub states: Vec<scryer_domain::MaintenanceCandidateState>,
+    pub states: Vec<scryer_domain::LifecycleCandidateState>,
     pub library_id: Option<String>,
     pub limit: Option<usize>,
 }
@@ -11172,7 +11172,7 @@ pub struct MaintenanceCandidateQuery {
 /// the one-active-candidate-per-(rule, kind, subject) invariant: a create is refused
 /// when an active candidate already exists.
 #[async_trait]
-pub trait MaintenanceCandidateRepository: Send + Sync {
+pub trait LifecycleCandidateRepository: Send + Sync {
     /// The non-terminal candidate for this subject, if any.
     async fn get_active_candidate(
         &self,
@@ -11209,7 +11209,7 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
 
     async fn list_candidates(
         &self,
-        query: &MaintenanceCandidateQuery,
+        query: &LifecycleCandidateQuery,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
     /// Highest match generation ever recorded for this subject, terminal rows
@@ -11268,9 +11268,9 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     async fn transition_candidate_state(
         &self,
         id: &str,
-        state: scryer_domain::MaintenanceCandidateState,
+        state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
-        expected_states: &[scryer_domain::MaintenanceCandidateState],
+        expected_states: &[scryer_domain::LifecycleCandidateState],
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 
@@ -11282,7 +11282,7 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         &self,
         id: &str,
         expected_lease_updated_at: DateTime<Utc>,
-        state: scryer_domain::MaintenanceCandidateState,
+        state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool>;
@@ -11300,7 +11300,7 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
     async fn count_candidates_by_state(
         &self,
         rule_set_id: &str,
-    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>>;
+    ) -> AppResult<Vec<(scryer_domain::LifecycleCandidateState, i64)>>;
 
     /// Candidates of one rule whose materialized `due_at` has passed and whose
     /// state can still reach execution (observing, pending_action, due,
@@ -11329,7 +11329,7 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         due_before: DateTime<Utc>,
         stale_before: DateTime<Utc>,
         held_after: Option<DateTime<Utc>>,
-        after: Option<&MaintenanceDueCursor>,
+        after: Option<&LifecycleDueCursor>,
         limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
@@ -11428,20 +11428,20 @@ pub trait LifecycleActionRunRepository: Send + Sync {
 /// reclaimed only through this operation; callers must never overwrite another
 /// worker's evidence by treating `Busy` as a retryable write failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MaintenanceActionStepClaim {
-    Claimed(scryer_domain::MaintenanceActionStepRun),
+pub enum LifecycleActionStepClaim {
+    Claimed(scryer_domain::LifecycleActionStepRun),
     Busy,
-    Completed(scryer_domain::MaintenanceActionStepRun),
+    Completed(scryer_domain::LifecycleActionStepRun),
 }
 
 /// Where a walk of a rule's due candidates stopped: the last row it read.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaintenanceDueCursor {
+pub struct LifecycleDueCursor {
     pub due_at: DateTime<Utc>,
     pub id: String,
 }
 
-impl MaintenanceDueCursor {
+impl LifecycleDueCursor {
     pub fn after(candidate: &scryer_domain::LifecycleCandidate) -> Self {
         Self {
             due_at: candidate.due_at,
@@ -11452,7 +11452,7 @@ impl MaintenanceDueCursor {
 
 /// One rule having changed one title with one step kind.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MaintenanceStepAct {
+pub struct LifecycleStepAct {
     pub rule_set_id: String,
     pub title_id: String,
     pub step_kind: String,
@@ -11462,7 +11462,7 @@ pub struct MaintenanceStepAct {
 /// supplies only the candidates already on its page; each can contribute at
 /// most seven current step rows.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MaintenanceActionStepCandidateKey {
+pub struct LifecycleActionStepCandidateKey {
     pub candidate_id: String,
     pub match_generation: i64,
     pub revision_number: i64,
@@ -11472,20 +11472,20 @@ pub struct MaintenanceActionStepCandidateKey {
 /// carries its exact request hash and reconciliation evidence so callers can
 /// hold on an unknown state rather than submit blindly.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MaintenanceActionJobReceiptClaim {
-    Claimed(scryer_domain::MaintenanceActionJobReceipt),
-    Existing(scryer_domain::MaintenanceActionJobReceipt),
+pub enum LifecycleActionJobReceiptClaim {
+    Claimed(scryer_domain::LifecycleActionJobReceipt),
+    Existing(scryer_domain::LifecycleActionJobReceipt),
 }
 
 /// Compare-and-set request for durable job reconciliation. Keeping the state
 /// expectation, external identity, and evidence together avoids callers
 /// accidentally advancing a receipt with evidence from a different attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaintenanceActionJobReceiptTransition {
-    pub key: scryer_domain::MaintenanceActionStepKey,
+pub struct LifecycleActionJobReceiptTransition {
+    pub key: scryer_domain::LifecycleActionStepKey,
     pub dispatch_attempt: i64,
-    pub expected_states: Vec<scryer_domain::MaintenanceActionJobReceiptState>,
-    pub next_state: scryer_domain::MaintenanceActionJobReceiptState,
+    pub expected_states: Vec<scryer_domain::LifecycleActionJobReceiptState>,
+    pub next_state: scryer_domain::LifecycleActionJobReceiptState,
     pub job_run_id: Option<String>,
     pub reconciliation_evidence_json: String,
     pub updated_at: DateTime<Utc>,
@@ -11493,29 +11493,29 @@ pub struct MaintenanceActionJobReceiptTransition {
 
 /// Durable v2 step intent, attempt evidence, and external-job receipts.
 #[async_trait]
-pub trait MaintenanceActionStepRepository: Send + Sync {
+pub trait LifecycleActionStepRepository: Send + Sync {
     async fn get_action_step(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-    ) -> AppResult<Option<scryer_domain::MaintenanceActionStepRun>>;
+        key: &scryer_domain::LifecycleActionStepKey,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionStepRun>>;
 
     /// Insert the intent before its mutation or atomically acquire/reclaim its
     /// lease. The supplied evidence is used only for a new row or an eligible
     /// next attempt; an existing running row is never overwritten here.
     async fn claim_action_step(
         &self,
-        step: &scryer_domain::MaintenanceActionStepRun,
+        step: &scryer_domain::LifecycleActionStepRun,
         stale_before: DateTime<Utc>,
         lease_id: &str,
         leased_at: DateTime<Utc>,
-    ) -> AppResult<MaintenanceActionStepClaim>;
+    ) -> AppResult<LifecycleActionStepClaim>;
 
     /// Update only a currently running row owned by `expected_lease_id`. This
     /// is the durable per-file checkpoint path; it cannot change the state or
     /// erase a terminal result.
     async fn checkpoint_action_step(
         &self,
-        step: &scryer_domain::MaintenanceActionStepRun,
+        step: &scryer_domain::LifecycleActionStepRun,
         expected_lease_id: &str,
     ) -> AppResult<bool>;
 
@@ -11523,7 +11523,7 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
     /// corresponding immutable attempt evidence.
     async fn finish_action_step(
         &self,
-        step: &scryer_domain::MaintenanceActionStepRun,
+        step: &scryer_domain::LifecycleActionStepRun,
         expected_lease_id: &str,
     ) -> AppResult<bool>;
 
@@ -11532,19 +11532,19 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
         candidate_id: &str,
         match_generation: i64,
         revision_number: i64,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepRun>>;
 
     /// Bounded page projection. This avoids one query per candidate when a
     /// sequence-aware candidate list renders step progress.
     async fn list_action_steps_for_candidates(
         &self,
-        candidates: &[MaintenanceActionStepCandidateKey],
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+        candidates: &[LifecycleActionStepCandidateKey],
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepRun>>;
 
     async fn list_action_step_attempts(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>>;
+        key: &scryer_domain::LifecycleActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionStepAttempt>>;
 
     /// Across every rule: which rule changed which title with the named step
     /// kinds, by attempts started at or after `since` that succeeded. Each
@@ -11555,38 +11555,38 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
         step_kinds: &[&str],
         since: DateTime<Utc>,
         limit: usize,
-    ) -> AppResult<Vec<MaintenanceStepAct>>;
+    ) -> AppResult<Vec<LifecycleStepAct>>;
 
     async fn get_action_job_receipt(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
+        key: &scryer_domain::LifecycleActionStepKey,
         dispatch_attempt: i64,
-    ) -> AppResult<Option<scryer_domain::MaintenanceActionJobReceipt>>;
+    ) -> AppResult<Option<scryer_domain::LifecycleActionJobReceipt>>;
 
     async fn list_action_job_receipts(
         &self,
-        key: &scryer_domain::MaintenanceActionStepKey,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+        key: &scryer_domain::LifecycleActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionJobReceipt>>;
 
     /// Bounded receipt projection for the already bounded step list. Search
     /// receipt states are therefore available to a candidate page without one
     /// query per sequence step.
     async fn list_action_job_receipts_for_steps(
         &self,
-        steps: &[scryer_domain::MaintenanceActionStepKey],
-    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+        steps: &[scryer_domain::LifecycleActionStepKey],
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionJobReceipt>>;
 
     /// Generic two-phase dispatch support for adapters whose job creation is
     /// external. Search uses `JobRunRepository`'s stronger atomic creation
     /// boundary instead of this method.
     async fn claim_action_job_dispatch(
         &self,
-        receipt: &scryer_domain::MaintenanceActionJobReceipt,
-    ) -> AppResult<MaintenanceActionJobReceiptClaim>;
+        receipt: &scryer_domain::LifecycleActionJobReceipt,
+    ) -> AppResult<LifecycleActionJobReceiptClaim>;
 
     async fn transition_action_job_receipt(
         &self,
-        transition: &MaintenanceActionJobReceiptTransition,
+        transition: &LifecycleActionJobReceiptTransition,
     ) -> AppResult<bool>;
 }
 
@@ -11595,14 +11595,14 @@ pub trait MaintenanceActionStepRepository: Send + Sync {
 /// generation and reset retry limits. Only a confirmed raw no-match releases
 /// it; unknown evaluation never does.
 #[async_trait]
-pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
+pub trait LifecycleSequenceCompletionRepository: Send + Sync {
     async fn get_active_sequence_completion(
         &self,
         rule_set_id: &str,
         revision_number: i64,
         subject_kind: &str,
         subject_id: &str,
-    ) -> AppResult<Option<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+    ) -> AppResult<Option<scryer_domain::LifecycleSequenceTerminalMembership>>;
 
     /// Active markers in stable-ID keyset order for a reconciliation page. This
     /// lets a storage-root pass release a marker only after it has observed an
@@ -11613,7 +11613,7 @@ pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
         revision_number: i64,
         after_id: Option<&str>,
         limit: usize,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleSequenceTerminalMembership>>;
 
     /// Verify the durable per-step evidence and atomically write the terminal
     /// membership marker before moving the candidate to its terminal state.
@@ -11621,10 +11621,10 @@ pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
     /// of a new candidate for the same continuous match.
     async fn finish_sequence_terminal_membership_and_candidate(
         &self,
-        membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
-        expected_candidate_state: scryer_domain::MaintenanceCandidateState,
+        membership: &scryer_domain::LifecycleSequenceTerminalMembership,
+        expected_candidate_state: scryer_domain::LifecycleCandidateState,
         expected_candidate_updated_at: DateTime<Utc>,
-        terminal_candidate_state: scryer_domain::MaintenanceCandidateState,
+        terminal_candidate_state: scryer_domain::LifecycleCandidateState,
         state_reason: &str,
         finished_at: DateTime<Utc>,
     ) -> AppResult<bool>;
@@ -11639,24 +11639,24 @@ pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
     ) -> AppResult<bool>;
 }
 
-/// Subjects a maintenance rule must never act on (RFC 137 section 11).
+/// Subjects a lifecycle rule must never act on (RFC 137 section 11).
 #[async_trait]
-pub trait MaintenanceExclusionRepository: Send + Sync {
+pub trait LifecycleExclusionRepository: Send + Sync {
     /// Every exclusion, newest first, optionally narrowed to the ones that
     /// apply to one rule: its own rows plus every global row.
     async fn list_exclusions(
         &self,
         rule_set_id: Option<&str>,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleRuleExclusion>>;
 
     async fn get_exclusion(
         &self,
         id: &str,
-    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>>;
+    ) -> AppResult<Option<scryer_domain::LifecycleRuleExclusion>>;
 
     async fn create_exclusion(
         &self,
-        exclusion: &scryer_domain::MaintenanceRuleExclusion,
+        exclusion: &scryer_domain::LifecycleRuleExclusion,
     ) -> AppResult<()>;
 
     async fn delete_exclusion(&self, id: &str) -> AppResult<()>;
@@ -11665,18 +11665,18 @@ pub trait MaintenanceExclusionRepository: Send + Sync {
 /// Bounded per-rule records of what one evaluation pass did
 /// (RFC 137 section 11).
 #[async_trait]
-pub trait MaintenanceEvaluationRunRepository: Send + Sync {
+pub trait LifecycleEvaluationRunRepository: Send + Sync {
     /// Insert the run as `running`. Recorded before evaluation so an
     /// interrupted pass leaves evidence rather than nothing.
     async fn start_evaluation_run(
         &self,
-        run: &scryer_domain::MaintenanceEvaluationRun,
+        run: &scryer_domain::LifecycleEvaluationRun,
     ) -> AppResult<()>;
 
     /// Write the terminal status, counts, timing, and error of a started run.
     async fn finish_evaluation_run(
         &self,
-        run: &scryer_domain::MaintenanceEvaluationRun,
+        run: &scryer_domain::LifecycleEvaluationRun,
     ) -> AppResult<()>;
 
     /// Newest first.
@@ -11684,7 +11684,7 @@ pub trait MaintenanceEvaluationRunRepository: Send + Sync {
         &self,
         rule_set_id: Option<&str>,
         limit: Option<usize>,
-    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>>;
+    ) -> AppResult<Vec<scryer_domain::LifecycleEvaluationRun>>;
 
     /// For each named rule: when its latest evaluation started, and whether
     /// it holds an `executing` candidate. Two indexed reads for the whole
@@ -11692,43 +11692,43 @@ pub trait MaintenanceEvaluationRunRepository: Send + Sync {
     async fn rule_schedule_anchors(
         &self,
         rule_set_ids: &[String],
-    ) -> AppResult<std::collections::HashMap<String, MaintenanceRuleScheduleAnchor>>;
+    ) -> AppResult<std::collections::HashMap<String, LifecycleRuleScheduleAnchor>>;
 }
 
 /// What a rule's schedule anchors on when it is (re)scheduled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MaintenanceRuleScheduleAnchor {
+pub struct LifecycleRuleScheduleAnchor {
     pub last_run_at: Option<DateTime<Utc>>,
     pub in_flight: bool,
 }
 
-/// The maintenance evaluation/execution tables land together, are written by
-/// the two maintenance job passes, and cascade from the same rule set, so they
+/// The lifecycle evaluation/execution tables land together, are written by
+/// the two lifecycle job passes, and cascade from the same rule set, so they
 /// are wired as one service slot. The capability traits stay separate so a
 /// caller declares only what it uses.
-pub trait MaintenanceEvaluationRepository:
-    MaintenanceCandidateRepository
-    + MaintenanceExclusionRepository
-    + MaintenanceEvaluationRunRepository
+pub trait LifecycleEvaluationRepository:
+    LifecycleCandidateRepository
+    + LifecycleExclusionRepository
+    + LifecycleEvaluationRunRepository
     + LifecycleActionRunRepository
-    + MaintenanceActionStepRepository
-    + MaintenanceSequenceCompletionRepository
+    + LifecycleActionStepRepository
+    + LifecycleSequenceCompletionRepository
 {
 }
 
-impl<T> MaintenanceEvaluationRepository for T where
-    T: MaintenanceCandidateRepository
-        + MaintenanceExclusionRepository
-        + MaintenanceEvaluationRunRepository
+impl<T> LifecycleEvaluationRepository for T where
+    T: LifecycleCandidateRepository
+        + LifecycleExclusionRepository
+        + LifecycleEvaluationRunRepository
         + LifecycleActionRunRepository
-        + MaintenanceActionStepRepository
-        + MaintenanceSequenceCompletionRepository
+        + LifecycleActionStepRepository
+        + LifecycleSequenceCompletionRepository
 {
 }
 
 /// Persistence for user-authored request rules (spec 0003 section 6).
 ///
-/// Mirrors [`MaintenanceRuleSetRepository`] minus arming: a request rule votes
+/// Mirrors [`LifecycleRuleSetRepository`] minus arming: a request rule votes
 /// and nothing else, so there is no blast radius for an operator to acknowledge
 /// and no disarm to carry in a write. Rule set and revision are still one unit
 /// of change — a rule set with no revision has no matcher — so
@@ -11876,7 +11876,7 @@ pub trait LifecycleClaimRepository: Send + Sync {
     /// Live (dormant or active) claims for each of `title_ids`, keyed by title
     /// id. Titles with no live claim are absent rather than empty.
     ///
-    /// Batched on purpose: the maintenance pass asks this for a whole chunk of
+    /// Batched on purpose: the lifecycle pass asks this for a whole chunk of
     /// titles at once, and a per-title query would make the pass scale with the
     /// library.
     async fn list_live_for_titles(
@@ -11894,7 +11894,7 @@ pub trait LifecycleClaimRepository: Send + Sync {
     /// they were withdrawn rather than spent, so they say nothing about whether
     /// a lease ran out.
     ///
-    /// Batched for the same reason its sibling is: the maintenance pass asks it
+    /// Batched for the same reason its sibling is: the lifecycle pass asks it
     /// once per chunk of titles.
     async fn list_retention_history_for_titles(
         &self,
@@ -14365,9 +14365,9 @@ pub trait SubtitleDownloadRepository: Send + Sync {
     ) -> AppResult<()>;
 }
 
-// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+// ── Lifecycle safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
 //
-// Read-only observation ports the maintenance action executor consults before
+// Read-only observation ports the lifecycle action executor consults before
 // it touches media. Nothing below writes, schedules, or executes anything.
 
 /// What one media-server connection reported when it was asked for its live
@@ -14376,7 +14376,7 @@ pub trait SubtitleDownloadRepository: Send + Sync {
 /// `Unreachable` is a first-class answer rather than an error: one server that
 /// is down, mis-credentialed, or returning garbage must not erase what the
 /// other connections truthfully reported. The fold in
-/// [`crate::maintenance_rules::safety`] is what turns an `Unreachable` into a
+/// [`crate::lifecycle_rules::safety`] is what turns an `Unreachable` into a
 /// fail-closed hold.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackProbeStatus {

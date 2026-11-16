@@ -15,7 +15,7 @@ pub(crate) mod external_identity {
     pub(crate) use scryer_infrastructure_identity::external_identity::*;
 }
 
-/// Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+/// Lifecycle safety: live playback observation (RFC 137 §9.10, WP-G).
 pub(crate) mod media_server_playback {
     pub(crate) use scryer_infrastructure_identity::media_server_playback::*;
 }
@@ -96,8 +96,8 @@ pub(crate) use scryer_infrastructure_acquisition::indexers::{
 };
 pub(crate) use scryer_infrastructure_acquisition::proxy_config_store::ProxyConfigStore;
 pub(crate) use scryer_infrastructure_configuration::customization::{
-    maintenance_evaluation_store::MaintenanceEvaluationStore,
-    maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+    lifecycle_evaluation_store::LifecycleEvaluationStore,
+    lifecycle_rule_set_store::LifecycleRuleSetStore, plugin_store::PluginStore,
     post_processing_script_store::PostProcessingScriptStore,
     request_rule_decision_store::RequestRuleDecisionStore,
     request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,

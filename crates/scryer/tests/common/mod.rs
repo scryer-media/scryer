@@ -40,8 +40,8 @@ use scryer_infrastructure_acquisition::{
 };
 use scryer_infrastructure_configuration::{
     customization::{
-        maintenance_evaluation_store::MaintenanceEvaluationStore,
-        maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+        lifecycle_evaluation_store::LifecycleEvaluationStore,
+        lifecycle_rule_set_store::LifecycleRuleSetStore, plugin_store::PluginStore,
         post_processing_script_store::PostProcessingScriptStore,
         request_rule_decision_store::RequestRuleDecisionStore,
         request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,
@@ -632,9 +632,9 @@ impl HousekeepingRepository for TestLibraryStateStore {
             .await
     }
 
-    async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
+    async fn delete_lifecycle_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
         self.housekeeping
-            .delete_maintenance_evaluation_runs_older_than(days)
+            .delete_lifecycle_evaluation_runs_older_than(days)
             .await
     }
 
@@ -1043,8 +1043,8 @@ impl TestContext {
         let title_image_store = TitleImageStore::new(datastore.clone());
         let image_proxy_store = ImageProxyStore::new(datastore.clone());
         let rule_set_store = RuleSetStore::new(datastore.clone());
-        let maintenance_rule_set_store = MaintenanceRuleSetStore::new(datastore.clone());
-        let maintenance_evaluation_store = MaintenanceEvaluationStore::new(datastore.clone());
+        let lifecycle_rule_set_store = LifecycleRuleSetStore::new(datastore.clone());
+        let lifecycle_evaluation_store = LifecycleEvaluationStore::new(datastore.clone());
         let request_rule_set_store = RequestRuleSetStore::new(datastore.clone());
         let request_rule_decision_store = RequestRuleDecisionStore::new(datastore.clone());
         let lifecycle_claim_store = LifecycleClaimStore::new(datastore.clone());
@@ -1116,8 +1116,8 @@ impl TestContext {
         .with_totp_store(Arc::new(totp_store))
         .with_oauth_store(Arc::new(oauth_store))
         .with_rule_set_store(Arc::new(rule_set_store))
-        .with_maintenance_rule_set_store(Arc::new(maintenance_rule_set_store))
-        .with_maintenance_evaluation_store(Arc::new(maintenance_evaluation_store))
+        .with_lifecycle_rule_set_store(Arc::new(lifecycle_rule_set_store))
+        .with_lifecycle_evaluation_store(Arc::new(lifecycle_evaluation_store))
         .with_request_rule_set_store(Arc::new(request_rule_set_store))
         .with_request_rule_decision_store(Arc::new(request_rule_decision_store))
         .with_lifecycle_claim_store(Arc::new(lifecycle_claim_store))

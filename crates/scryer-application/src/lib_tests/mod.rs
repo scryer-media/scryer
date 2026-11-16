@@ -42,25 +42,25 @@ mod job_run_terminal_write;
 mod landed_bar_memo;
 mod libraries;
 mod library_scan;
+mod lifecycle_action_sequences;
+mod lifecycle_claims;
+mod lifecycle_evaluation;
+mod lifecycle_execution;
+mod lifecycle_rules;
+mod lifecycle_safety;
+mod lifecycle_sequence_deletion;
+mod lifecycle_sequence_execution;
+mod lifecycle_sequence_history;
+mod lifecycle_storage_execution;
+mod lifecycle_title_completion;
+mod lifecycle_watch_facts;
+mod lifecycle_watch_recheck;
 mod list_account_keys;
 mod list_accounts;
 mod list_actions;
 mod list_experimental_gate;
 mod list_provider_settings;
 mod list_user_events;
-mod maintenance_action_sequences;
-mod maintenance_claims;
-mod maintenance_evaluation;
-mod maintenance_execution;
-mod maintenance_rules;
-mod maintenance_safety;
-mod maintenance_sequence_deletion;
-mod maintenance_sequence_execution;
-mod maintenance_sequence_history;
-mod maintenance_storage_execution;
-mod maintenance_title_completion;
-mod maintenance_watch_facts;
-mod maintenance_watch_recheck;
 mod media_analysis;
 mod media_requests;
 mod media_server_signals;
@@ -314,10 +314,10 @@ impl ScopeIndexerCoverageRepository for RecordingScopeIndexerCoverageRepo {
 /// meant, each firing when `match` holds.
 pub(crate) fn legacy_source(
     source: impl AsRef<str>,
-    kind: crate::maintenance_rules::MaintenanceActionKind,
+    kind: crate::lifecycle_rules::LifecycleActionKind,
 ) -> String {
-    use crate::maintenance_rules::MaintenanceActionKind as Kind;
-    use scryer_rules::maintenance_actions::MaintenanceActionHead as Head;
+    use crate::lifecycle_rules::LifecycleActionKind as Kind;
+    use scryer_rules::lifecycle_actions::LifecycleActionHead as Head;
     let heads: &[Head] = match kind {
         Kind::UnmonitorScopeKeepFiles | Kind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
             &[Head::Unmonitor]
@@ -336,12 +336,10 @@ pub(crate) fn legacy_source(
 /// as its name, the way the shared bootstrap names its test profiles.
 pub(crate) fn steps_source(
     source: impl AsRef<str>,
-    steps: &[crate::maintenance_rules::MaintenanceActionStep],
+    steps: &[crate::lifecycle_rules::LifecycleActionStep],
 ) -> String {
-    use crate::maintenance_rules::{
-        MaintenanceActionStepKind as Kind, MaintenanceActionStepParameters,
-    };
-    let mut actions = scryer_rules::maintenance_actions::MaintenanceActions::default();
+    use crate::lifecycle_rules::{LifecycleActionStepKind as Kind, LifecycleActionStepParameters};
+    let mut actions = scryer_rules::lifecycle_actions::LifecycleActions::default();
     for step in steps {
         match step.kind {
             Kind::Unmonitor => actions.unmonitor = true,
@@ -355,7 +353,7 @@ pub(crate) fn steps_source(
                 .remove_tags
                 .extend(step.parameters.tag_labels().iter().cloned()),
             Kind::ChangeQualityProfile => {
-                let MaintenanceActionStepParameters::ChangeQualityProfile {
+                let LifecycleActionStepParameters::ChangeQualityProfile {
                     target_quality_profile_id,
                 } = &step.parameters
                 else {
@@ -367,10 +365,10 @@ pub(crate) fn steps_source(
             Kind::Monitor => actions.monitor = true,
             Kind::FetchSubtitles => actions.fetch_subtitles = true,
             Kind::MoveToLibrary | Kind::MoveToRoot => match &step.parameters {
-                MaintenanceActionStepParameters::Library { library } => {
+                LifecycleActionStepParameters::Library { library } => {
                     actions.move_to_library = Some(library.clone());
                 }
-                MaintenanceActionStepParameters::Root { root } => {
+                LifecycleActionStepParameters::Root { root } => {
                     actions.move_to_root = Some(root.clone());
                 }
                 _ => panic!("move step without a target"),
@@ -384,10 +382,10 @@ pub(crate) fn steps_source(
 /// `match` holds, in the fixed execution order.
 pub(crate) fn append_heads_to_match_source(
     source: &str,
-    heads: &[scryer_rules::maintenance_actions::MaintenanceActionHead],
+    heads: &[scryer_rules::lifecycle_actions::LifecycleActionHead],
 ) -> String {
-    use scryer_rules::maintenance_actions::MaintenanceActionHead as Head;
-    let actions = scryer_rules::maintenance_actions::MaintenanceActions {
+    use scryer_rules::lifecycle_actions::LifecycleActionHead as Head;
+    let actions = scryer_rules::lifecycle_actions::LifecycleActions {
         unmonitor: heads.contains(&Head::Unmonitor),
         delete_files: heads.contains(&Head::DeleteFiles),
         delete_title: heads.contains(&Head::DeleteTitle),
@@ -399,7 +397,7 @@ pub(crate) fn append_heads_to_match_source(
 
 fn append_actions_to_match_source(
     source: &str,
-    actions: &scryer_rules::maintenance_actions::MaintenanceActions,
+    actions: &scryer_rules::lifecycle_actions::LifecycleActions,
 ) -> String {
     fn rego_string(value: &str) -> String {
         serde_json::to_string(value).expect("a string always serializes")

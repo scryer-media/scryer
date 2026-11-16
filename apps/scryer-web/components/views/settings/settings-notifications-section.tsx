@@ -164,7 +164,7 @@ const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
   list_sync_failed: "settings.notificationEvent.listSyncFailed",
   list_unfollowed: "settings.notificationEvent.listUnfollowed",
   maintenance_rule_notified:
-    "settings.notificationEvent.maintenanceRuleNotified",
+    "settings.notificationEvent.lifecycleRuleNotified",
   test: "settings.notificationEvent.test",
 };
 

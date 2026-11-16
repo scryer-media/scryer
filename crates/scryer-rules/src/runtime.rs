@@ -3,7 +3,7 @@
 //! This module owns engine construction, execution limits, host-side input
 //! bounds, package rewriting, and policy content hashing. It understands
 //! serialized input/output and Regorus — never domain contracts. Each policy
-//! family (release scoring, maintenance rules) layers its own input schema,
+//! family (release scoring, lifecycle rules) layers its own input schema,
 //! fixed query entry point, and closed output contract on top.
 
 use core::num::{NonZeroU32, NonZeroUsize};
@@ -52,10 +52,10 @@ impl RuntimeLimits {
         }
     }
 
-    /// Limits for maintenance-rule engines. Tighter evaluation budget because
+    /// Limits for lifecycle-rule engines. Tighter evaluation budget because
     /// scheduled evaluation fans out across many subjects, and a larger input
     /// bound because fact snapshots are richer than release documents.
-    pub fn maintenance_defaults() -> Self {
+    pub fn lifecycle_defaults() -> Self {
         Self {
             max_execution_time: Duration::from_millis(250),
             timer_check_interval: NonZeroU32::new(4096).expect("non-zero"),
@@ -76,9 +76,9 @@ impl RuntimeLimits {
     /// that does exceed it becomes a per-rule error, which arbitrates to manual
     /// review rather than to an approval or a denial.
     ///
-    /// The policy bounds match maintenance (256 KiB, 5 000 lines): these are
+    /// The policy bounds match lifecycle (256 KiB, 5 000 lines): these are
     /// hand-authored matchers of the same shape. The input bound is a quarter of
-    /// maintenance's, because a request document describes one draft request and
+    /// lifecycle's, because a request document describes one draft request and
     /// one title's metadata rather than a whole library subject's file list.
     pub fn request_defaults() -> Self {
         Self {
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn bounded_input_rejects_oversized_documents() {
-        let mut limits = RuntimeLimits::maintenance_defaults();
+        let mut limits = RuntimeLimits::lifecycle_defaults();
         limits.max_input_bytes = 8;
         let err = bounded_input_value(&serde_json::json!({"key": "a long enough value"}), &limits)
             .unwrap_err();
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn configured_engine_rejects_oversized_policies() {
-        let mut limits = RuntimeLimits::maintenance_defaults();
+        let mut limits = RuntimeLimits::lifecycle_defaults();
         limits.max_policy_bytes = NonZeroUsize::new(64).expect("non-zero");
         let mut engine = configured_engine(&limits);
         let big = format!(
@@ -229,10 +229,10 @@ mod tests {
         assert_eq!(release.max_policy_lines.get(), 200_000);
         assert_eq!(release.max_policy_col.get(), 1024);
 
-        let maintenance = RuntimeLimits::maintenance_defaults();
-        assert_eq!(maintenance.max_policy_bytes.get(), 256 * 1024);
-        assert_eq!(maintenance.max_policy_lines.get(), 5_000);
-        assert_eq!(maintenance.max_policy_col.get(), 1024);
+        let lifecycle = RuntimeLimits::lifecycle_defaults();
+        assert_eq!(lifecycle.max_policy_bytes.get(), 256 * 1024);
+        assert_eq!(lifecycle.max_policy_lines.get(), 5_000);
+        assert_eq!(lifecycle.max_policy_col.get(), 1024);
 
         let request = RuntimeLimits::request_defaults();
         assert_eq!(request.max_policy_bytes.get(), 256 * 1024);

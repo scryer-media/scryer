@@ -1,30 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import maintenanceFixtures from "../contracts/maintenance-builder-fixtures.json" with { type: "json" };
+import lifecycleFixtures from "../contracts/lifecycle-builder-fixtures.json" with { type: "json" };
 import requestFixtures from "../contracts/request-builder-fixtures.json" with { type: "json" };
 import scoringFixtures from "../contracts/scoring-builder-fixtures.json" with { type: "json" };
 import type {
-  MaintenanceRuleScope,
-  MaintenanceRuleSetDetail,
-} from "../types/maintenance-rule-sets.ts";
+  LifecycleRuleScope,
+  LifecycleRuleSetDetail,
+} from "../types/lifecycle-rule-sets.ts";
 import type { RequestRuleSetDetail } from "../types/request-rule-sets.ts";
 import type { RuleSetRecord } from "../types/rule-sets.ts";
 import {
-  MAINTENANCE_CONTRACT_SCHEMA,
+  LIFECYCLE_CONTRACT_SCHEMA,
   REQUEST_CONTRACT_SCHEMA,
   SCORING_CONTRACT_SCHEMA,
 } from "./rule-builder-contract-fixture.ts";
 import {
-  MAINTENANCE_STARTER_SOURCE,
-  maintenanceRuleBuilder,
-  copyMaintenanceRuleDraft,
-  createMaintenanceRuleSetInput,
-  initialMaintenanceRuleDraft,
-  maintenanceRuleDraftFromDetail,
-  newMaintenanceRuleBuilderDraft,
-  updateMaintenanceRuleMatcherInput,
-} from "./maintenance-rule-sets.ts";
+  LIFECYCLE_STARTER_SOURCE,
+  lifecycleRuleBuilder,
+  copyLifecycleRuleDraft,
+  createLifecycleRuleSetInput,
+  initialLifecycleRuleDraft,
+  lifecycleRuleDraftFromDetail,
+  newLifecycleRuleBuilderDraft,
+  updateLifecycleRuleMatcherInput,
+} from "./lifecycle-rule-sets.ts";
 import {
   REQUEST_STARTER_SOURCE,
   requestRuleBuilder,
@@ -88,11 +88,11 @@ type Family<D extends RuleBuilderDraft> = {
   updateModel: (draft: D) => unknown;
 };
 
-function maintenanceDetail(
+function lifecycleDetail(
   regoSource: string,
   builderModel: unknown,
-  subjectKind: MaintenanceRuleScope = "TITLE",
-): MaintenanceRuleSetDetail {
+  subjectKind: LifecycleRuleScope = "TITLE",
+): LifecycleRuleSetDetail {
   const declaredActions = {
     heads: [],
     destructive: false,
@@ -143,7 +143,7 @@ function maintenanceDetail(
     },
     declaredActions,
     builderModel,
-  } as MaintenanceRuleSetDetail;
+  } as LifecycleRuleSetDetail;
 }
 
 function scoringRecord(
@@ -183,33 +183,33 @@ function requestDetail(
   } as unknown as RequestRuleSetDetail;
 }
 
-const MAINTENANCE_BUILDER = maintenanceRuleBuilder(MAINTENANCE_CONTRACT_SCHEMA);
+const LIFECYCLE_BUILDER = lifecycleRuleBuilder(LIFECYCLE_CONTRACT_SCHEMA);
 const SCORING_BUILDER = scoringRuleBuilder(SCORING_CONTRACT_SCHEMA);
 const REQUEST_BUILDER = requestRuleBuilder(REQUEST_CONTRACT_SCHEMA);
 
-const maintenance: Family<ReturnType<typeof initialMaintenanceRuleDraft>> = {
-  name: "maintenance",
-  binding: MAINTENANCE_BUILDER,
-  starter: MAINTENANCE_STARTER_SOURCE,
-  fixtures: (maintenanceFixtures as Fixture[]).filter(
+const lifecycle: Family<ReturnType<typeof initialLifecycleRuleDraft>> = {
+  name: "lifecycle",
+  binding: LIFECYCLE_BUILDER,
+  starter: LIFECYCLE_STARTER_SOURCE,
+  fixtures: (lifecycleFixtures as Fixture[]).filter(
     (entry) => entry.scope === "TITLE",
   ),
-  newDraft: () => newMaintenanceRuleBuilderDraft(MAINTENANCE_BUILDER),
-  handWrittenDraft: initialMaintenanceRuleDraft,
+  newDraft: () => newLifecycleRuleBuilderDraft(LIFECYCLE_BUILDER),
+  handWrittenDraft: initialLifecycleRuleDraft,
   fromStored: (source, model) =>
-    maintenanceRuleDraftFromDetail(
-      maintenanceDetail(source, model),
-      MAINTENANCE_BUILDER,
+    lifecycleRuleDraftFromDetail(
+      lifecycleDetail(source, model),
+      LIFECYCLE_BUILDER,
     ),
   copy: (source, model) =>
-    copyMaintenanceRuleDraft(
-      maintenanceDetail(source, model),
-      MAINTENANCE_BUILDER,
+    copyLifecycleRuleDraft(
+      lifecycleDetail(source, model),
+      LIFECYCLE_BUILDER,
     ),
   createModel: (draft) =>
-    createMaintenanceRuleSetInput(draft, MAINTENANCE_BUILDER).builderModel,
+    createLifecycleRuleSetInput(draft, LIFECYCLE_BUILDER).builderModel,
   updateModel: (draft) =>
-    updateMaintenanceRuleMatcherInput("rule-sample", draft, MAINTENANCE_BUILDER)
+    updateLifecycleRuleMatcherInput("rule-sample", draft, LIFECYCLE_BUILDER)
       .builderModel,
 };
 
@@ -433,46 +433,46 @@ function suite<D extends RuleBuilderDraft>(family: Family<D>) {
   });
 }
 
-suite(maintenance);
+suite(lifecycle);
 suite(scoring);
 suite(request);
 
-test("maintenance: a scope change rewrites an attached rule for the new scope", () => {
-  const entry = (maintenanceFixtures as Fixture[]).find(
+test("lifecycle: a scope change rewrites an attached rule for the new scope", () => {
+  const entry = (lifecycleFixtures as Fixture[]).find(
     (candidate) => candidate.id === "title-delete-title",
   );
   assert.ok(entry);
-  const model = modelOf(maintenance, entry);
+  const model = modelOf(lifecycle, entry);
   const attached = withRuleBuilderModel(
-    MAINTENANCE_BUILDER,
-    newMaintenanceRuleBuilderDraft(MAINTENANCE_BUILDER),
+    LIFECYCLE_BUILDER,
+    newLifecycleRuleBuilderDraft(LIFECYCLE_BUILDER),
     model,
   );
   assert.equal(attached.regoSource, entry.source);
 
-  const episode = withRegeneratedRuleSource(MAINTENANCE_BUILDER, {
+  const episode = withRegeneratedRuleSource(LIFECYCLE_BUILDER, {
     ...attached,
     subjectKind: "EPISODE",
   });
   assert.equal(episode.regoSource, "");
   assert.deepEqual(episode.builderModel, model);
   assert.equal(
-    isIncompleteRuleBuilderDraft(MAINTENANCE_BUILDER, episode),
+    isIncompleteRuleBuilderDraft(LIFECYCLE_BUILDER, episode),
     true,
   );
 
   // A rule stored for one scope does not open in the builder under another.
   assert.equal(
-    maintenanceRuleDraftFromDetail(
-      maintenanceDetail(entry.source, entry.model, "EPISODE"),
-      MAINTENANCE_BUILDER,
+    lifecycleRuleDraftFromDetail(
+      lifecycleDetail(entry.source, entry.model, "EPISODE"),
+      LIFECYCLE_BUILDER,
     ).builderModel,
     null,
   );
 
   const detached = { ...attached, builderModel: null };
   assert.equal(
-    withRegeneratedRuleSource(MAINTENANCE_BUILDER, detached),
+    withRegeneratedRuleSource(LIFECYCLE_BUILDER, detached),
     detached,
   );
 });

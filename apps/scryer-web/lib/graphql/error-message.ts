@@ -250,8 +250,8 @@ export const ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
     "error.reason.INTERFACE_LOCATION_TARGET_INVALID",
   INTERFACE_LOGIN_MFA_CONFLICT: "error.reason.INTERFACE_LOGIN_MFA_CONFLICT",
   INTERFACE_LOGIN_MFA_REQUIRED: "error.reason.INTERFACE_LOGIN_MFA_REQUIRED",
-  INTERFACE_MAINTENANCE_RULE_NOT_FOUND:
-    "error.reason.INTERFACE_MAINTENANCE_RULE_NOT_FOUND",
+  INTERFACE_LIFECYCLE_RULE_NOT_FOUND:
+    "error.reason.INTERFACE_LIFECYCLE_RULE_NOT_FOUND",
   INTERFACE_METADATA_DATE_INVALID:
     "error.reason.INTERFACE_METADATA_DATE_INVALID",
   INTERFACE_METADATA_ID_INVALID: "error.reason.INTERFACE_METADATA_ID_INVALID",
@@ -329,7 +329,7 @@ export const ERROR_REASON_KEYS: Readonly<Record<string, string>> = {
   RULE_PACK_UP_TO_DATE: "error.rulePackUpToDate",
   TITLE_NOT_FOUND: "title.notFound",
   RELEASE_TOKEN_EXPIRED: "status.searchResultsExpired",
-  MAINTENANCE_ARM_COUNT_MISMATCH: "error.maintenanceArmCountMismatch",
+  LIFECYCLE_ARM_COUNT_MISMATCH: "error.lifecycleArmCountMismatch",
 };
 const ERROR_CODE_KEYS: Readonly<Record<string, string>> = {
   MFA_STEP_UP_REQUIRED: "error.mfaStepUpRequired",
@@ -575,7 +575,7 @@ export function userFacingGraphQlErrorMessage(
         }
         return translate(key);
       }
-      if (key && reason === "MAINTENANCE_RULE_MAX_TITLES_PER_RUN_REQUIRED") {
+      if (key && reason === "LIFECYCLE_RULE_MAX_TITLES_PER_RUN_REQUIRED") {
         const { destructiveActions } = entry.extensions;
         const actions = Array.isArray(destructiveActions)
           ? destructiveActions.filter(
@@ -587,11 +587,11 @@ export function userFacingGraphQlErrorMessage(
           // The names are the served action heads, which the rule builder
           // already labels; a head the client has no label for stays as sent.
           const labels = actions.map((action) => {
-            const labelKey = `ruleOutput.maintenance.${action}`;
+            const labelKey = `ruleOutput.lifecycle.${action}`;
             const label = translate(labelKey);
             return label === labelKey ? action : label;
           });
-          return translate("error.maintenanceMaxTitlesPerRunRequiredNamed", {
+          return translate("error.lifecycleMaxTitlesPerRunRequiredNamed", {
             actions: labels.join(", "),
           });
         }

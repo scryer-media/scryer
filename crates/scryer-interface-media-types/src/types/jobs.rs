@@ -44,9 +44,9 @@ pub enum JobKeyValue {
     TitleImageCacheRefresh,
     /// Scheduled background AVIF artwork encoding.
     ArtworkEncoding,
-    /// Scheduled maintenance rule evaluation.
-    MaintenanceRuleEvaluation,
-    /// Scheduled maintenance lifecycle action handling.
+    /// Scheduled lifecycle rule evaluation.
+    LifecycleRuleEvaluation,
+    /// Scheduled lifecycle action handling.
     LifecycleActionHandling,
     /// Scheduled media-server watch-signal synchronization.
     MediaServerSignalSync,

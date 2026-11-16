@@ -348,7 +348,7 @@ async fn a_finished_sync_of_a_personal_list_is_told_only_to_its_owner() {
 }
 
 #[tokio::test]
-async fn maintenance_reads_list_facts_for_a_batch_of_titles() {
+async fn lifecycle_reads_list_facts_for_a_batch_of_titles() {
     use crate::lists::test_support::membership;
 
     let harness = bootstrap_media_request_app();
@@ -368,7 +368,7 @@ async fn maintenance_reads_list_facts_for_a_batch_of_titles() {
 
     let facts = harness
         .app
-        .maintenance_list_facts_or_unknown(&titles)
+        .lifecycle_list_facts_or_unknown(&titles)
         .await
         .lists
         .expect("list facts load");
@@ -387,7 +387,7 @@ async fn maintenance_reads_list_facts_for_a_batch_of_titles() {
 }
 
 #[tokio::test]
-async fn maintenance_list_facts_name_the_public_list_a_request_came_from() {
+async fn lifecycle_list_facts_name_the_public_list_a_request_came_from() {
     let harness = bootstrap_media_request_app();
     *harness.lists.subscriptions.lock().unwrap() = vec![subscription("public-list-one")];
     let mut listed = crate::lists::rejection::tests::rejected_request(
@@ -403,7 +403,7 @@ async fn maintenance_list_facts_name_the_public_list_a_request_came_from() {
         make_due_hydration_title("title-beta", MediaFacet::Movie, 9059),
     ];
 
-    let loaded = harness.app.maintenance_list_facts_or_unknown(&titles).await;
+    let loaded = harness.app.lifecycle_list_facts_or_unknown(&titles).await;
 
     let origins = loaded.origins.expect("request origins load");
     assert_eq!(

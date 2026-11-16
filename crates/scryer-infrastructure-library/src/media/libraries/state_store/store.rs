@@ -1951,11 +1951,11 @@ impl HousekeepingRepository for HousekeepingStore {
         .await
     }
 
-    async fn delete_maintenance_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
+    async fn delete_lifecycle_evaluation_runs_older_than(&self, days: i64) -> AppResult<u32> {
         execute_housekeeping_delete_batched(
             &self.datastore,
-            "delete_maintenance_evaluation_runs_older_than",
-            "maintenance_evaluation_runs",
+            "delete_lifecycle_evaluation_runs_older_than",
+            "lifecycle_evaluation_runs",
             "id",
             "started_at < {}",
             vec![housekeeping_cutoff_arg(days)],

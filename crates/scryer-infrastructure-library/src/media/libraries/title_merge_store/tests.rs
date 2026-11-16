@@ -434,7 +434,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     insert_wanted_item(&datastore, "wanted-1", SOURCE, "s-e1", "wanted").await;
     run(
         &datastore,
-        "INSERT INTO maintenance_rule_sets (id, name) VALUES ('rule-1', 'Rule')",
+        "INSERT INTO lifecycle_rule_sets (id, name) VALUES ('rule-1', 'Rule')",
         vec![],
     )
     .await;
@@ -461,7 +461,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_action_steps (candidate_id, match_generation, revision_number, step_id,
+        "INSERT INTO lifecycle_action_steps (candidate_id, match_generation, revision_number, step_id,
                                                 rule_set_id, title_id, subject_kind, subject_id,
                                                 sequence_content_hash, step_kind, state, created_at, updated_at)
          VALUES ('candidate-1', 1, 1, 'step-1', 'rule-1', {}, 'title', {}, 'sequence-hash', 'delete',
@@ -474,7 +474,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_action_step_attempts (id, candidate_id, match_generation, revision_number,
+        "INSERT INTO lifecycle_action_step_attempts (id, candidate_id, match_generation, revision_number,
                                                         step_id, attempt, state, started_at, created_at, updated_at)
          VALUES ('step-attempt-1', 'candidate-1', 1, 1, 'step-1', 1, 'succeeded',
                  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
@@ -483,7 +483,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_action_job_receipts (candidate_id, match_generation, revision_number, step_id,
+        "INSERT INTO lifecycle_action_job_receipts (candidate_id, match_generation, revision_number, step_id,
                                                        dispatch_attempt, schema_version, logical_request_key,
                                                        request_hash, state, created_at, updated_at)
          VALUES ('candidate-1', 1, 1, 'step-1', 1, 1, 'request-1', 'hash-1', 'completed',
@@ -493,7 +493,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_sequence_terminal_memberships
+        "INSERT INTO lifecycle_sequence_terminal_memberships
              (id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id, subject_kind,
               subject_id, match_generation, sequence_content_hash, outcome, created_at)
          VALUES ('terminal-membership-1', 'candidate-1', 'rule-1', 1, 'hash', {}, 'title', {}, 1,
@@ -506,7 +506,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     .await;
     run(
         &datastore,
-        "INSERT INTO maintenance_rule_exclusions (id, title_id, reason)
+        "INSERT INTO lifecycle_rule_exclusions (id, title_id, reason)
          VALUES ('exclusion-1', {}, 'merged source')",
         vec![SqlArg::Text(SOURCE.to_string())],
     )
@@ -558,10 +558,10 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     );
     assert_eq!(outcome.rows_affected.get("retire:titles"), Some(&1));
     for table in [
-        "maintenance_action_step_attempts",
-        "maintenance_action_job_receipts",
-        "maintenance_action_steps",
-        "maintenance_sequence_terminal_memberships",
+        "lifecycle_action_step_attempts",
+        "lifecycle_action_job_receipts",
+        "lifecycle_action_steps",
+        "lifecycle_sequence_terminal_memberships",
         "lifecycle_action_runs",
         "lifecycle_candidates",
     ] {
@@ -603,7 +603,7 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
         ("wanted_items", "title_id"),
         ("lifecycle_candidates", "title_id"),
         ("lifecycle_action_runs", "title_id"),
-        ("maintenance_rule_exclusions", "title_id"),
+        ("lifecycle_rule_exclusions", "title_id"),
         ("media_server_user_media_signals", "scryer_title_id"),
     ] {
         assert_eq!(

@@ -22,14 +22,14 @@ const BULK_DELETE_PREVIEW_CONCURRENCY: usize = 4;
 /// What authorized a file deletion past the large-delete guard (RFC 137 §9.6).
 ///
 /// A human confirms a large delete by typing the confirmation value; a
-/// maintenance policy instead presents a typed authorization naming the arming
+/// lifecycle policy instead presents a typed authorization naming the arming
 /// record. Neither path may weaken the fingerprint check, which both share.
 pub(crate) enum DeleteConfirmationAuthority<'a> {
     Human { typed_confirmation: Option<&'a str> },
     Policy(&'a PolicyDeleteAuthorization),
 }
 
-/// Provenance of a maintenance-policy deletion: the rule, candidate, and
+/// Provenance of a lifecycle-policy deletion: the rule, candidate, and
 /// matcher revision whose arming authorized it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyDeleteAuthorization {
@@ -203,7 +203,7 @@ enum MediaFileDeleteOrigin {
     /// A person previewed and confirmed this file, alone or as part of an
     /// episode selection.
     User,
-    /// A maintenance policy chose the file with nobody confirming it.
+    /// A lifecycle policy chose the file with nobody confirming it.
     Automatic,
 }
 
@@ -722,7 +722,7 @@ impl AppUseCase {
         apply_delete_manifest(&manifest).await
     }
 
-    /// Maintenance-policy variant of [`Self::execute_delete_title_files`]
+    /// Lifecycle-policy variant of [`Self::execute_delete_title_files`]
     /// (RFC 137 section 9.6): the deletion carries a typed authorization naming
     /// the rule, candidate, and revision that authorized it, in place of the
     /// typed confirmation a human would give. Everything else — the fresh
@@ -739,7 +739,7 @@ impl AppUseCase {
             .resolve_title_delete_context(title_id, MissingTitleFolder::Refuse)
             .await?;
         // The owned multi-disc exception is for explicit user deletion only.
-        // Preserve the existing maintenance-policy boundary.
+        // Preserve the existing lifecycle-policy boundary.
         if let UserDeleteContext::Title(title) = &context
             && let Some(folder) = title.folder_path.as_deref()
         {
@@ -812,23 +812,23 @@ impl AppUseCase {
                 .find(|expected| expected.path == entry.path)
             else {
                 return Err(AppError::validation_refused(
-                    crate::error_reasons::library::MAINTENANCE_DELETION_TARGETS_CHANGED,
-                    "maintenance deletion targets changed; re-evaluation required",
+                    crate::error_reasons::library::LIFECYCLE_DELETION_TARGETS_CHANGED,
+                    "lifecycle deletion targets changed; re-evaluation required",
                 ));
             };
             if entry.delete_kind == DeletePathKind::Directory
                 || policy_path_proof(&entry.path).await? != expected.proof
             {
                 return Err(AppError::validation_refused(
-                    crate::error_reasons::library::MAINTENANCE_DELETION_FILE_CHANGED,
-                    "maintenance deletion file changed; re-evaluation required",
+                    crate::error_reasons::library::LIFECYCLE_DELETION_FILE_CHANGED,
+                    "lifecycle deletion file changed; re-evaluation required",
                 ));
             }
         }
         if manifest.entries.len() == plan.paths.len() && manifest.fingerprint != plan.fingerprint {
             return Err(AppError::validation_refused(
-                crate::error_reasons::library::MAINTENANCE_DELETION_FINGERPRINT_CHANGED,
-                "maintenance deletion fingerprint changed",
+                crate::error_reasons::library::LIFECYCLE_DELETION_FINGERPRINT_CHANGED,
+                "lifecycle deletion fingerprint changed",
             ));
         }
         // Rebuild and validate again through the shared confirmation owner.
@@ -1144,7 +1144,7 @@ impl AppUseCase {
                         candidate_id = authorization.candidate_id.as_str(),
                         revision_number = authorization.revision_number,
                         media_count = manifest.media_count,
-                        "maintenance policy authorized a large deletion"
+                        "lifecycle policy authorized a large deletion"
                     );
                 }
             }
@@ -1523,7 +1523,7 @@ pub(crate) const TITLE_FOLDER_UNKNOWN: &str = "title_folder_unknown";
 /// What a title delete does when the title has no recorded folder.
 #[derive(Clone, Copy)]
 enum MissingTitleFolder {
-    /// Refuse, as a maintenance-policy delete always does.
+    /// Refuse, as a lifecycle-policy delete always does.
     Refuse,
     /// Use the folder the title's recorded files imply, without recording it.
     Derive,

@@ -323,17 +323,17 @@ fn parse_supported_title_history_event_types(
 
 const TITLE_CATALOG_PAGE_SIZE: usize = 300;
 const JOB_RUNS_MAX_LIMIT: i32 = 500;
-/// Maintenance candidate and evaluation-run lists, like maintenance action
+/// Lifecycle candidate and evaluation-run lists, like lifecycle action
 /// runs: an omitted or non-positive limit returns 50, and larger requests are
 /// capped at 200.
-const MAINTENANCE_LIST_DEFAULT_LIMIT: i32 = 50;
-const MAINTENANCE_LIST_MAX_LIMIT: i32 = 200;
+const LIFECYCLE_LIST_DEFAULT_LIMIT: i32 = 50;
+const LIFECYCLE_LIST_MAX_LIMIT: i32 = 200;
 
-fn maintenance_list_limit(limit: Option<i32>) -> usize {
+fn lifecycle_list_limit(limit: Option<i32>) -> usize {
     limit
         .filter(|limit| *limit > 0)
-        .unwrap_or(MAINTENANCE_LIST_DEFAULT_LIMIT)
-        .min(MAINTENANCE_LIST_MAX_LIMIT) as usize
+        .unwrap_or(LIFECYCLE_LIST_DEFAULT_LIMIT)
+        .min(LIFECYCLE_LIST_MAX_LIMIT) as usize
 }
 
 fn title_catalog_page_limit(limit: Option<i32>) -> usize {
@@ -352,14 +352,14 @@ fn catalog_bulk_page_limit_preserves_default_and_bounds_explicit_requests() {
 }
 
 #[test]
-fn maintenance_list_limit_defaults_and_caps_like_action_runs() {
-    assert_eq!(maintenance_list_limit(None), 50);
-    assert_eq!(maintenance_list_limit(Some(0)), 50);
-    assert_eq!(maintenance_list_limit(Some(-3)), 50);
+fn lifecycle_list_limit_defaults_and_caps_like_action_runs() {
+    assert_eq!(lifecycle_list_limit(None), 50);
+    assert_eq!(lifecycle_list_limit(Some(0)), 50);
+    assert_eq!(lifecycle_list_limit(Some(-3)), 50);
     // The web asks for 25 runs and 200 candidates.
-    assert_eq!(maintenance_list_limit(Some(25)), 25);
-    assert_eq!(maintenance_list_limit(Some(200)), 200);
-    assert_eq!(maintenance_list_limit(Some(i32::MAX)), 200);
+    assert_eq!(lifecycle_list_limit(Some(25)), 25);
+    assert_eq!(lifecycle_list_limit(Some(200)), 200);
+    assert_eq!(lifecycle_list_limit(Some(i32::MAX)), 200);
 }
 
 fn title_catalog_page_offset(offset: Option<i32>) -> usize {
@@ -4126,7 +4126,7 @@ impl AcquisitionQueries {
         Ok(Some(payload))
     }
 
-    /// What the rule builder offers for one rule family (`maintenance` or
+    /// What the rule builder offers for one rule family (`lifecycle` or
     /// `scoring`): its outputs, how each value is entered and bounded, and
     /// which outputs exclude each other. A family with no schema is refused
     /// with `RULE_BUILDER_FAMILY_UNKNOWN`.
@@ -4141,10 +4141,10 @@ impl AcquisitionQueries {
             .map_err(to_gql_error)
     }
 
-    // ── Maintenance Rule Sets ────────────────────────────────────────────
+    // ── Lifecycle Rule Sets ────────────────────────────────────────────
 
-    /// List maintenance rule sets; requires catalog-settings management permission.
-    async fn maintenance_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<MaintenanceRuleSet>> {
+    /// List lifecycle rule sets; requires catalog-settings management permission.
+    async fn lifecycle_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<LifecycleRuleSet>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
@@ -4152,182 +4152,182 @@ impl AcquisitionQueries {
         // period of the revision in force so a list view never has to fetch
         // each rule set again to render them.
         let details = app
-            .list_maintenance_rule_set_details(&actor)
+            .list_lifecycle_rule_set_details(&actor)
             .await
             .map_err(to_gql_error)?;
         Ok(details
             .iter()
             .map(|detail| {
-                crate::mappers::from_maintenance_rule_set(
+                crate::mappers::from_lifecycle_rule_set(
                     detail,
-                    app.maintenance_rule_next_run_at(&detail.rule_set.id),
+                    app.lifecycle_rule_next_run_at(&detail.rule_set.id),
                 )
             })
             .collect())
     }
 
-    /// Return one maintenance rule set with the revision currently in force, or null when no such rule set exists.
-    async fn maintenance_rule_set(
+    /// Return one lifecycle rule set with the revision currently in force, or null when no such rule set exists.
+    async fn lifecycle_rule_set(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Maintenance rule-set ID to load.")] id: ID,
-    ) -> GqlResult<Option<MaintenanceRuleSetDetail>> {
+        #[graphql(desc = "Lifecycle rule-set ID to load.")] id: ID,
+    ) -> GqlResult<Option<LifecycleRuleSetDetail>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let detail = app
-            .get_maintenance_rule_set(&actor, id.as_ref())
+            .get_lifecycle_rule_set(&actor, id.as_ref())
             .await
             .map_err(to_gql_error)?;
         Ok(detail.map(|detail| {
-            let next_run_at = app.maintenance_rule_next_run_at(&detail.rule_set.id);
-            crate::mappers::from_maintenance_rule_set_detail(detail, next_run_at)
+            let next_run_at = app.lifecycle_rule_next_run_at(&detail.rule_set.id);
+            crate::mappers::from_lifecycle_rule_set_detail(detail, next_run_at)
         }))
     }
 
-    /// List every stored revision of one maintenance rule set, newest first.
-    async fn maintenance_rule_revisions(
+    /// List every stored revision of one lifecycle rule set, newest first.
+    async fn lifecycle_rule_revisions(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Maintenance rule-set ID whose revisions are returned.")] rule_set_id: ID,
-    ) -> GqlResult<Vec<MaintenanceRuleRevision>> {
+        #[graphql(desc = "Lifecycle rule-set ID whose revisions are returned.")] rule_set_id: ID,
+    ) -> GqlResult<Vec<LifecycleRuleRevision>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let revisions = app
-            .list_maintenance_rule_revisions(&actor, rule_set_id.as_ref())
+            .list_lifecycle_rule_revisions(&actor, rule_set_id.as_ref())
             .await
             .map_err(to_gql_error)?;
         Ok(revisions
             .into_iter()
-            .map(crate::mappers::from_maintenance_rule_revision)
+            .map(crate::mappers::from_lifecycle_rule_revision)
             .collect())
     }
 
-    /// List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+    /// List lifecycle candidates the lifecycle evaluator has recorded; requires catalog-settings management permission.
     ///
     /// Candidates are ordered by due time across rules, soonest first, and
-    /// none are returned while maintenance is switched off for the instance.
-    async fn maintenance_candidates(
+    /// none are returned while lifecycle is switched off for the instance.
+    async fn lifecycle_candidates(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Return candidates of this rule set only.")] rule_set_id: Option<ID>,
         #[graphql(desc = "Return candidates in these lifecycle states only.")] states: Option<
-            Vec<MaintenanceCandidateState>,
+            Vec<LifecycleCandidateState>,
         >,
         #[graphql(desc = "Return candidates whose subject belongs to this library only.")]
         library_id: Option<ID>,
 
         #[graphql(desc = "Maximum number of candidates to return; defaults to 50, at most 200.")]
         limit: Option<i32>,
-    ) -> GqlResult<Vec<MaintenanceCandidate>> {
+    ) -> GqlResult<Vec<LifecycleCandidate>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let candidates = app
-            .list_maintenance_candidates(
+            .list_lifecycle_candidates(
                 &actor,
-                scryer_application::maintenance_rules::MaintenanceCandidateFilter {
+                scryer_application::lifecycle_rules::LifecycleCandidateFilter {
                     rule_set_id: rule_set_id.map(String::from),
                     states: states
                         .unwrap_or_default()
                         .into_iter()
-                        .map(crate::mappers::maintenance_candidate_state_into_application)
+                        .map(crate::mappers::lifecycle_candidate_state_into_application)
                         .collect(),
                     library_id: library_id.map(String::from),
 
-                    limit: Some(maintenance_list_limit(limit)),
+                    limit: Some(lifecycle_list_limit(limit)),
                 },
             )
             .await
             .map_err(to_gql_error)?;
         Ok(candidates
             .into_iter()
-            .map(crate::mappers::from_maintenance_candidate)
+            .map(crate::mappers::from_lifecycle_candidate)
             .collect())
     }
 
-    /// List recorded maintenance evaluation runs, newest first.
+    /// List recorded lifecycle evaluation runs, newest first.
     ///
     /// Runs carry counts and timing rather than subjects, so the result-display
     /// gate does not hide them: they are how an operator sees that dark
     /// evaluation is working at all.
-    async fn maintenance_evaluation_runs(
+    async fn lifecycle_evaluation_runs(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Return runs of this rule set only.")] rule_set_id: Option<ID>,
         #[graphql(desc = "Maximum number of runs to return; defaults to 50, at most 200.")]
         limit: Option<i32>,
-    ) -> GqlResult<Vec<MaintenanceEvaluationRun>> {
+    ) -> GqlResult<Vec<LifecycleEvaluationRun>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let runs = app
-            .list_maintenance_evaluation_runs(
+            .list_lifecycle_evaluation_runs(
                 &actor,
                 rule_set_id.as_ref().map(|id| id.as_str()),
-                Some(maintenance_list_limit(limit)),
+                Some(lifecycle_list_limit(limit)),
             )
             .await
             .map_err(to_gql_error)?;
         Ok(runs
             .into_iter()
-            .map(crate::mappers::from_maintenance_evaluation_run)
+            .map(crate::mappers::from_lifecycle_evaluation_run)
             .collect())
     }
 
-    /// Read the two instance-wide maintenance switches; requires system-settings management permission.
-    async fn maintenance_instance_gates(
+    /// Read the two instance-wide lifecycle switches; requires system-settings management permission.
+    async fn lifecycle_instance_gates(
         &self,
         ctx: &Context<'_>,
-    ) -> GqlResult<MaintenanceInstanceGates> {
+    ) -> GqlResult<LifecycleInstanceGates> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let gates = app
-            .maintenance_instance_gates(&actor)
+            .lifecycle_instance_gates(&actor)
             .await
             .map_err(to_gql_error)?;
-        Ok(crate::mappers::from_maintenance_instance_gates(gates))
+        Ok(crate::mappers::from_lifecycle_instance_gates(gates))
     }
 
-    /// List maintenance exclusions, newest first.
+    /// List lifecycle exclusions, newest first.
     ///
     /// Narrowing by rule returns that rule's own exclusions together with every
     /// global one, because both are what actually stop it acting.
-    async fn maintenance_exclusions(
+    async fn lifecycle_exclusions(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Return the exclusions that apply to this rule set.")] rule_set_id: Option<
             ID,
         >,
-    ) -> GqlResult<Vec<MaintenanceExclusion>> {
+    ) -> GqlResult<Vec<LifecycleExclusion>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let exclusions = app
-            .list_maintenance_exclusions(&actor, rule_set_id.as_ref().map(|id| id.as_str()))
+            .list_lifecycle_exclusions(&actor, rule_set_id.as_ref().map(|id| id.as_str()))
             .await
             .map_err(to_gql_error)?;
         Ok(exclusions
             .into_iter()
-            .map(crate::mappers::from_maintenance_exclusion)
+            .map(crate::mappers::from_lifecycle_exclusion)
             .collect())
     }
 
-    /// List recorded maintenance action-handler attempts, newest first.
-    async fn maintenance_action_runs(
+    /// List recorded lifecycle action-handler attempts, newest first.
+    async fn lifecycle_action_runs(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Return only attempts for this rule set.")] rule_set_id: Option<ID>,
         #[graphql(desc = "Return only attempts for this candidate.")] candidate_id: Option<ID>,
         #[graphql(desc = "Maximum rows to return; defaults to fifty.")] limit: Option<i32>,
-    ) -> GqlResult<Vec<MaintenanceActionRun>> {
+    ) -> GqlResult<Vec<LifecycleActionRun>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
         let runs = app
-            .list_maintenance_action_runs(
+            .list_lifecycle_action_runs(
                 &actor,
                 rule_set_id.as_ref().map(|id| id.as_str()),
                 candidate_id.as_ref().map(|id| id.as_str()),
@@ -4337,7 +4337,7 @@ impl AcquisitionQueries {
             .map_err(to_gql_error)?;
         Ok(runs
             .into_iter()
-            .filter_map(crate::mappers::from_maintenance_action_run)
+            .filter_map(crate::mappers::from_lifecycle_action_run)
             .collect())
     }
 

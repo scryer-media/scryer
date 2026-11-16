@@ -28,7 +28,7 @@ export type RuleBuilderBinding<D extends RuleBuilderDraft> = {
   /// Null until the family's outputs are read from the server, and after a
   /// failed read: a draft then can only be edited as Rego.
   schema: RuleBuilderSchema | null;
-  /// The variant a draft is written for, such as a maintenance rule's scope.
+  /// The variant a draft is written for, such as a lifecycle rule's scope.
   variant: (draft: D) => string | null;
   /// Where the Rego editor starts when an untouched builder is left.
   starterSource: string;

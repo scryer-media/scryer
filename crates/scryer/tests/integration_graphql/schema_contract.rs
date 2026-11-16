@@ -621,20 +621,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // existing config option type: OBJECT 318->319, public types 615->616.
     // Account-security reauthentication adds three mutation roots without
     // changing the established factor-mutation payload contracts: mutation 194->197.
-    // The maintenance-rule authoring surface adds four query roots (list, get,
+    // The lifecycle-rule authoring surface adds four query roots (list, get,
     // revisions, action catalog) and six mutation roots (create, matcher edit,
     // metadata edit, delete, validate, preview), with nine payload objects, six
     // inputs, and six enums: query 134->138, mutation 197->203, OBJECT 319->328,
     // INPUT_OBJECT 173->179, ENUM 112->118, public types 616->637.
-    // The maintenance dark evaluator adds four query roots (candidates,
+    // The lifecycle dark evaluator adds four query roots (candidates,
     // evaluation runs, instance gates, exclusions) and five mutation roots
     // (rule mode, instance gates, exclude, remove exclusion, run now), with six
     // payload objects, three inputs, and one candidate-state enum:
     // query 138->142, mutation 203->208, OBJECT 328->334, INPUT_OBJECT
-    // 179->182, ENUM 118->119, public types 637->647. MAINTENANCE_RULE_EVALUATION
+    // 179->182, ENUM 118->119, public types 637->647. LIFECYCLE_RULE_EVALUATION
     // joins the existing job key enum, so it adds no type.
-    // The maintenance action executor adds the maintenanceActionRuns query
-    // root, the setMaintenanceRuleArming and runMaintenanceActionHandlerNow
+    // The lifecycle action executor adds the lifecycleActionRuns query
+    // root, the setMaintenanceRuleArming and runLifecycleActionHandlerNow
     // mutation roots, the action-run payload object, the arming input, and the
     // arming enum: query 142->143, mutation 208->210, OBJECT 334->335,
     // INPUT_OBJECT 182->183, ENUM 119->120, public types 647->650.
@@ -643,11 +643,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // MEDIA_SERVER_SIGNAL_SYNC joins the existing job key enum, so every count
     // below is unchanged.
     //
-    // ── The library-location feature line, merged in beside the maintenance
+    // ── The library-location feature line, merged in beside the lifecycle
     // line above. Its paragraphs below narrate that branch's own history, so
     // their running totals are the location branch's totals; the asserted
     // numbers at the bottom are the union of both branches over the shared
-    // base (query 134 + 9 maintenance + 7 location = 150; mutation 197 + 13 +
+    // base (query 134 + 9 lifecycle + 7 location = 150; mutation 197 + 13 +
     // 5 = 215; OBJECT 319 + 16 + 50 = 385; INPUT_OBJECT 173 + 10 + 10 = 193;
     // ENUM 112 + 8 + 20 = 140; public types 616 + 34 + 80 = 730). ──
     //
@@ -749,8 +749,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // public types 779->780. Root-field, input-object, and enum counts are
     // unchanged.
     // Title-aware rule-editor previews add the `ruleSet` read and tracked rule
-    // packs add `trackedRulePacks`: query 161->163. Schema-2 maintenance
-    // sequences add the `maintenanceActionStepDescriptors` catalog read:
+    // packs add `trackedRulePacks`: query 161->163. Schema-2 lifecycle
+    // sequences add the `lifecycleActionStepDescriptors` catalog read:
     // query 163->164.
     // Live transfer progress (0.20.0) adds four reads: the aggregate
     // `locationTransferSummary`, the paged `locationTransferPage` and
@@ -800,11 +800,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Linking a media server account adds `mediaServerConnectionAccounts`,
     // the accounts a connection offers to link: 201->202.
     assert!(query_field_names.contains(&"mediaServerConnectionAccounts"));
-    // A maintenance rule declares its actions in its own source, so the two
-    // action catalogs `maintenanceActionDescriptors` and
-    // `maintenanceActionStepDescriptors` go: 202->200.
-    assert!(!query_field_names.contains(&"maintenanceActionDescriptors"));
-    assert!(!query_field_names.contains(&"maintenanceActionStepDescriptors"));
+    // A lifecycle rule declares its actions in its own source, so the two
+    // action catalogs `lifecycleActionDescriptors` and
+    // `lifecycleActionStepDescriptors` go: 202->200.
+    assert!(!query_field_names.contains(&"lifecycleActionDescriptors"));
+    assert!(!query_field_names.contains(&"lifecycleActionStepDescriptors"));
     // The rule builder reads its value and output contract per family from
     // `ruleBuilderSchema`: 200->201.
     assert!(query_field_names.contains(&"ruleBuilderSchema"));
@@ -847,7 +847,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `linkListAccountWithKey`: 271->272.
     // Abandoning an account link the member walked away from adds
     // `cancelListAccountLink`: 272->273.
-    // One maintenance rule state mutation replaces the separate mode and
+    // One lifecycle rule state mutation replaces the separate mode and
     // arming mutations, and enabling a request rule replaces its mode setter
     // while the request-rule instance gate setter goes: 275->273.
     // Keeping a title adds `createOperatorKeepClaim`: 273->274.
@@ -998,13 +998,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // INPUT_OBJECT 198->201, public types 738->745. `TitleCatalogFilterInput.tags`
     // and the `updateTitleTags` result are additive on types that already
     // exist, and no enum joins the schema.
-    // Series-movie tags and the maintenance tag actions add one input,
+    // Series-movie tags and the lifecycle tag actions add one input,
     // UpdateSeriesMovieTagsInput: INPUT_OBJECT 201->202, public types 745->746.
     // Everything else in that work is additive on types that already exist -
     // `tags` on the series-movie link payload, the action spec and the action
     // input, `seriesMovieCount` on the tag definition, `seriesMovies` on the
     // rewrite counts, `requiresTags` on the action descriptor - and the two new
-    // action kinds are values inside the existing MaintenanceActionKind enum,
+    // action kinds are values inside the existing LifecycleActionKind enum,
     // so OBJECT and ENUM are unchanged.
     // Request rules add fourteen objects (rule set, revision, detail, delete
     // payload, validation payload, reason, vote, decision, author preview,
@@ -1027,7 +1027,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // and three enums for diagnostics and provenance: public types 794->824.
     // Four mutations list episode targets, inspect diagnostics, select disc
     // titles, and map episodes; query and subscription roots are unchanged.
-    // Schema-2 maintenance sequences add seven objects (the sequence, its
+    // Schema-2 lifecycle sequences add seven objects (the sequence, its
     // steps, descriptors, progress, checkpoints, and job receipts), three
     // input objects, and two enums for step kind and search condition:
     // public types 824->836, OBJECT 444->451, INPUT_OBJECT 218->221, and
@@ -1267,7 +1267,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     }
     assert!(mutation_field_names.contains(&"refreshFileScores"));
     assert!(mutation_field_names.contains(&"cancelFileScoreRefresh"));
-    // The maintenance rule state enum replaces the evaluation mode enum and one
+    // The lifecycle rule state enum replaces the evaluation mode enum and one
     // confirmation input replaces the mode and arming inputs; request rules drop
     // the instance-gate object, its input, and the mode input: public types
     // 971->967, OBJECT 524->523, INPUT_OBJECT 240->237.
@@ -1286,7 +1286,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
     // Structured rule diagnostics share one object across release, request,
-    // and maintenance validation: public types 972->973, OBJECT 526->527.
+    // and lifecycle validation: public types 972->973, OBJECT 526->527.
     assert!(public_type_names.contains(&"RuleValidationDiagnosticPayload"));
     // Background restore adds the attempt it reports, `RestoreJobPayload`:
     // public types 973->974, OBJECT 527->528.
@@ -1453,34 +1453,34 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // The request list's order argument adds MediaRequestOrderValue:
     // public types 1036->1037, ENUM 214->215.
     assert!(public_type_names.contains(&"MediaRequestOrderValue"));
-    // A maintenance rule declares its actions in its own Rego source. The
+    // A lifecycle rule declares its actions in its own Rego source. The
     // stored action spec, both action catalogs and the four action inputs go
-    // (MaintenanceActionSpec, MaintenanceActionDescriptor,
-    // MaintenanceActionStepDescriptor, MaintenanceActionInput,
-    // MaintenanceActionSequenceInput, MaintenanceActionStepInput,
-    // MaintenanceActionStepParametersInput), with the catalog-only enums
-    // MaintenanceActionSubject and MaintenanceRiskClass. The source's
+    // (LifecycleActionSpec, LifecycleActionDescriptor,
+    // LifecycleActionStepDescriptor, LifecycleActionInput,
+    // LifecycleActionSequenceInput, LifecycleActionStepInput,
+    // LifecycleActionStepParametersInput), with the catalog-only enums
+    // LifecycleActionSubject and LifecycleRiskClass. The source's
     // declaration and a title's decided actions arrive as
-    // MaintenanceDeclaredActions, MaintenanceDecidedActions and the
-    // MaintenanceActionHead enum: public types 1037->1031, OBJECT 560->559,
+    // LifecycleDeclaredActions, LifecycleDecidedActions and the
+    // LifecycleActionHead enum: public types 1037->1031, OBJECT 560->559,
     // INPUT_OBJECT 250->246, ENUM 215->214.
     for name in [
-        "MaintenanceDeclaredActions",
-        "MaintenanceDecidedActions",
-        "MaintenanceActionHead",
+        "LifecycleDeclaredActions",
+        "LifecycleDecidedActions",
+        "LifecycleActionHead",
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
     for name in [
-        "MaintenanceActionSpec",
-        "MaintenanceActionDescriptor",
-        "MaintenanceActionStepDescriptor",
-        "MaintenanceActionInput",
-        "MaintenanceActionSequenceInput",
-        "MaintenanceActionStepInput",
-        "MaintenanceActionStepParametersInput",
-        "MaintenanceActionSubject",
-        "MaintenanceRiskClass",
+        "LifecycleActionSpec",
+        "LifecycleActionDescriptor",
+        "LifecycleActionStepDescriptor",
+        "LifecycleActionInput",
+        "LifecycleActionSequenceInput",
+        "LifecycleActionStepInput",
+        "LifecycleActionStepParametersInput",
+        "LifecycleActionSubject",
+        "LifecycleRiskClass",
     ] {
         assert!(
             !public_type_names.contains(&name),
@@ -1561,7 +1561,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
     assert!(query_field_names.contains(&"ruleSet"));
     assert!(query_field_names.contains(&"trackedRulePacks"));
-    assert!(public_type_names.contains(&"MaintenanceActionSequence"));
+    assert!(public_type_names.contains(&"LifecycleActionSequence"));
     assert!(mutation_field_names.contains(&"testRuleSet"));
     assert!(mutation_field_names.contains(&"installTrackedRulePack"));
     assert!(mutation_field_names.contains(&"previewTrackedRulePackUpdate"));
@@ -1696,35 +1696,35 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"TriggerWantedSearchInput"));
     assert!(!public_type_names.contains(&"ResetWantedItemPayload"));
 
-    // The maintenance dark-evaluator contract a later web wave is built
+    // The lifecycle dark-evaluator contract a later web wave is built
     // against; these names are pinned, not incidental.
-    assert!(query_field_names.contains(&"maintenanceCandidates"));
-    assert!(query_field_names.contains(&"maintenanceEvaluationRuns"));
-    assert!(query_field_names.contains(&"maintenanceInstanceGates"));
-    assert!(query_field_names.contains(&"maintenanceExclusions"));
-    assert!(mutation_field_names.contains(&"setMaintenanceRuleState"));
+    assert!(query_field_names.contains(&"lifecycleCandidates"));
+    assert!(query_field_names.contains(&"lifecycleEvaluationRuns"));
+    assert!(query_field_names.contains(&"lifecycleInstanceGates"));
+    assert!(query_field_names.contains(&"lifecycleExclusions"));
+    assert!(mutation_field_names.contains(&"setLifecycleRuleState"));
     assert!(!mutation_field_names.contains(&"setMaintenanceRuleMode"));
-    assert!(mutation_field_names.contains(&"setMaintenanceInstanceGates"));
-    assert!(mutation_field_names.contains(&"excludeMaintenanceSubject"));
-    assert!(mutation_field_names.contains(&"removeMaintenanceExclusion"));
-    assert!(mutation_field_names.contains(&"runMaintenanceEvaluationNow"));
-    assert!(public_type_names.contains(&"MaintenanceCandidate"));
-    assert!(public_type_names.contains(&"MaintenanceCandidateState"));
-    assert!(public_type_names.contains(&"MaintenanceEvaluationRun"));
-    assert!(public_type_names.contains(&"MaintenanceInstanceGates"));
-    assert!(public_type_names.contains(&"MaintenanceExclusion"));
-    assert!(public_type_names.contains(&"DeleteMaintenanceExclusionPayload"));
-    assert!(public_type_names.contains(&"MaintenanceEvaluationTriggerPayload"));
+    assert!(mutation_field_names.contains(&"setLifecycleInstanceGates"));
+    assert!(mutation_field_names.contains(&"excludeLifecycleSubject"));
+    assert!(mutation_field_names.contains(&"removeLifecycleExclusion"));
+    assert!(mutation_field_names.contains(&"runLifecycleEvaluationNow"));
+    assert!(public_type_names.contains(&"LifecycleCandidate"));
+    assert!(public_type_names.contains(&"LifecycleCandidateState"));
+    assert!(public_type_names.contains(&"LifecycleEvaluationRun"));
+    assert!(public_type_names.contains(&"LifecycleInstanceGates"));
+    assert!(public_type_names.contains(&"LifecycleExclusion"));
+    assert!(public_type_names.contains(&"DeleteLifecycleExclusionPayload"));
+    assert!(public_type_names.contains(&"LifecycleEvaluationTriggerPayload"));
 
-    // The maintenance action-executor contract the same web wave binds to.
-    assert!(query_field_names.contains(&"maintenanceActionRuns"));
+    // The lifecycle action-executor contract the same web wave binds to.
+    assert!(query_field_names.contains(&"lifecycleActionRuns"));
     assert!(!mutation_field_names.contains(&"setMaintenanceRuleArming"));
-    assert!(public_type_names.contains(&"MaintenanceRuleState"));
-    assert!(public_type_names.contains(&"MaintenanceRuleArmingConfirmationInput"));
-    assert!(!public_type_names.contains(&"MaintenanceEvaluationMode"));
-    assert!(mutation_field_names.contains(&"runMaintenanceActionHandlerNow"));
-    assert!(public_type_names.contains(&"MaintenanceActionRun"));
-    assert!(public_type_names.contains(&"MaintenanceEffectArming"));
+    assert!(public_type_names.contains(&"LifecycleRuleState"));
+    assert!(public_type_names.contains(&"LifecycleRuleArmingConfirmationInput"));
+    assert!(!public_type_names.contains(&"LifecycleEvaluationMode"));
+    assert!(mutation_field_names.contains(&"runLifecycleActionHandlerNow"));
+    assert!(public_type_names.contains(&"LifecycleActionRun"));
+    assert!(public_type_names.contains(&"LifecycleEffectArming"));
     assert!(!public_type_names.contains(&"SetMaintenanceRuleArmingInput"));
 
     // 0.17.0 API surface trim (root wave): dead root fields and their

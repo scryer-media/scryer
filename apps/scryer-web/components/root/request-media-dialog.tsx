@@ -65,7 +65,7 @@ import {
   sanitizeDigits,
 } from "@/components/ui/input";
 import { LoadingMark } from "@/components/common/loading-mark";
-import { RequestShapingSummary } from "@/components/views/settings/maintenance-action-summary";
+import { RequestShapingSummary } from "@/components/views/settings/lifecycle-action-summary";
 import { InfoHelp } from "@/components/common/info-help";
 
 /// How long the dialog waits after the requester stops changing the request

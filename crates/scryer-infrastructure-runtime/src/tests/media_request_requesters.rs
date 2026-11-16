@@ -1,4 +1,4 @@
-//! Round-trips for the batched requester lookup the maintenance `requested`
+//! Round-trips for the batched requester lookup the lifecycle `requested`
 //! facts read (RFC 137 section 8).
 //!
 //! The invariant under test is that a title is a key in the result exactly when

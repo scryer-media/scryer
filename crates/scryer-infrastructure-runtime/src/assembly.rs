@@ -37,8 +37,8 @@ use crate::{
     DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
     FileSystemStagedNzbStore, HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker,
     IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, LifecycleClaimStore, ListStore, LocationOperationStore,
-    MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore,
+    LibraryScanUnmatchedStore, LifecycleClaimStore, LifecycleEvaluationStore,
+    LifecycleRuleSetStore, ListStore, LocationOperationStore, MediaFileStore, MediaRequestStore,
     MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient, MigrationMode,
     NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
     ProxyConfigStore, QualityProfileStore, ReleaseStore, RequestRuleDecisionStore,
@@ -1227,20 +1227,20 @@ impl DatastoreAssembly {
         }
     }
 
-    /// Built on demand: maintenance rules ship dark, so the store is not part
+    /// Built on demand: lifecycle rules ship dark, so the store is not part
     /// of the per-engine store set every assembly path constructs eagerly.
-    pub fn maintenance_rule_set_store(&self) -> Arc<MaintenanceRuleSetStore> {
-        Arc::new(MaintenanceRuleSetStore::new(self.datastore()))
+    pub fn lifecycle_rule_set_store(&self) -> Arc<LifecycleRuleSetStore> {
+        Arc::new(LifecycleRuleSetStore::new(self.datastore()))
     }
 
     /// Built on demand for the same reason: the evaluator ships behind an
     /// instance gate that defaults off, so its store is not part of the eager
     /// per-engine store set either.
-    pub fn maintenance_evaluation_store(&self) -> Arc<MaintenanceEvaluationStore> {
-        Arc::new(MaintenanceEvaluationStore::new(self.datastore()))
+    pub fn lifecycle_evaluation_store(&self) -> Arc<LifecycleEvaluationStore> {
+        Arc::new(LifecycleEvaluationStore::new(self.datastore()))
     }
 
-    /// Built on demand for the same reason as the maintenance stores: request
+    /// Built on demand for the same reason as the lifecycle stores: request
     /// rules ship dark behind the experimental gate, so nothing constructs the
     /// store eagerly (spec 0003 FR-013).
     pub fn request_rule_set_store(&self) -> Arc<RequestRuleSetStore> {
@@ -1747,7 +1747,7 @@ impl DatastoreAssembly {
                 .with_delay_profiles(self.delay_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
-                // Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+                // Lifecycle safety: live playback observation (RFC 137 §9.10, WP-G).
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
@@ -1779,8 +1779,8 @@ impl DatastoreAssembly {
                 .with_housekeeping(housekeeping_store.clone())
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
-                .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
-                .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
+                .with_lifecycle_rule_set_store(self.lifecycle_rule_set_store())
+                .with_lifecycle_evaluation_store(self.lifecycle_evaluation_store())
                 .with_request_rule_set_store(self.request_rule_set_store())
                 .with_request_rule_decision_store(self.request_rule_decision_store())
                 .with_lifecycle_claim_store(self.lifecycle_claim_store())
@@ -1881,7 +1881,7 @@ impl DatastoreAssembly {
                 .with_delay_profiles(self.delay_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
-                // Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+                // Lifecycle safety: live playback observation (RFC 137 §9.10, WP-G).
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
@@ -1913,8 +1913,8 @@ impl DatastoreAssembly {
                 .with_housekeeping(housekeeping_store.clone())
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
-                .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
-                .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
+                .with_lifecycle_rule_set_store(self.lifecycle_rule_set_store())
+                .with_lifecycle_evaluation_store(self.lifecycle_evaluation_store())
                 .with_request_rule_set_store(self.request_rule_set_store())
                 .with_request_rule_decision_store(self.request_rule_decision_store())
                 .with_lifecycle_claim_store(self.lifecycle_claim_store())
@@ -2060,9 +2060,9 @@ pub fn datastore_file_path(database_url: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_application::maintenance_rules::{
-        MaintenanceActionSequence, MaintenanceActionStep, MaintenanceActionStepKind,
-        MaintenanceActionStepParameters, MaintenanceSearchCondition, MaintenanceSubjectKind,
+    use scryer_application::lifecycle_rules::{
+        LifecycleActionSequence, LifecycleActionStep, LifecycleActionStepKind,
+        LifecycleActionStepParameters, LifecycleSearchCondition, LifecycleSubjectKind,
     };
     use scryer_application::{
         AcquisitionScopeStateRepository, BACKUP_TABLE_CATALOG, BackupBundleExportRequest,
@@ -2585,10 +2585,10 @@ mod tests {
                 "backup must retain monthly usage so restore cannot replenish indexer quotas"
             );
             for table in [
-                "maintenance_action_steps",
-                "maintenance_action_step_attempts",
-                "maintenance_action_job_receipts",
-                "maintenance_sequence_terminal_memberships",
+                "lifecycle_action_steps",
+                "lifecycle_action_step_attempts",
+                "lifecycle_action_job_receipts",
+                "lifecycle_sequence_terminal_memberships",
             ] {
                 assert_eq!(
                     inspected.row_counts.get(table).copied(),
@@ -3064,7 +3064,7 @@ mod tests {
         let now = chrono::Utc::now();
         let sequence = backup_matrix_search_sequence();
         sequence
-            .validate(MaintenanceSubjectKind::Movie)
+            .validate(LifecycleSubjectKind::Movie)
             .map_err(|error| AppError::Validation(error.to_string()))?;
         let action_spec = serde_json::to_string(&sequence)
             .map_err(|error| AppError::Repository(error.to_string()))?;
@@ -3074,7 +3074,7 @@ mod tests {
         let evidence = backup_matrix_sequence_evidence(&sequence, &sequence_hash);
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_rule_sets (
+            "INSERT INTO lifecycle_rule_sets (
                  id, name, enabled, evaluation_mode, effect_arming, created_at, updated_at
              ) VALUES ({}, {}, {}, {}, {}, {}, {})",
             &[
@@ -3090,7 +3090,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_rule_revisions (
+            "INSERT INTO lifecycle_rule_revisions (
                  id, rule_set_id, revision_number, rego_source, action_spec, grace_days,
                  matcher_content_hash, created_at
              ) VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
@@ -3142,7 +3142,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_action_steps (
+            "INSERT INTO lifecycle_action_steps (
                  candidate_id, match_generation, revision_number, step_id, rule_set_id,
                  title_id, subject_kind, subject_id, sequence_content_hash, step_kind,
                  intent_json, before_state_json, target_identity_json, provenance_json, state,
@@ -3173,7 +3173,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_action_step_attempts (
+            "INSERT INTO lifecycle_action_step_attempts (
                  id, candidate_id, match_generation, revision_number, step_id, attempt, state,
                  intent_json, before_state_json, target_identity_json, provenance_json,
                  started_at, finished_at, created_at, updated_at
@@ -3199,7 +3199,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_action_job_receipts (
+            "INSERT INTO lifecycle_action_job_receipts (
                  candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
                  schema_version, logical_request_key, request_hash, job_run_id, state,
                  reconciliation_evidence_json, created_at, updated_at
@@ -3223,7 +3223,7 @@ mod tests {
         .await?;
         SqlRuntime::execute(
             datastore.read_exec(),
-            "INSERT INTO maintenance_sequence_terminal_memberships (
+            "INSERT INTO lifecycle_sequence_terminal_memberships (
                  id, candidate_id, rule_set_id, revision_number, matcher_content_hash, title_id,
                  subject_kind, subject_id, match_generation, sequence_content_hash, outcome,
                  expected_step_ids_json, completed_step_ids_json, created_at
@@ -3249,12 +3249,12 @@ mod tests {
         Ok(())
     }
 
-    fn backup_matrix_search_sequence() -> MaintenanceActionSequence {
-        MaintenanceActionSequence::new(vec![MaintenanceActionStep {
+    fn backup_matrix_search_sequence() -> LifecycleActionSequence {
+        LifecycleActionSequence::new(vec![LifecycleActionStep {
             id: "search".to_string(),
-            kind: MaintenanceActionStepKind::Search,
-            parameters: MaintenanceActionStepParameters::Search {
-                condition: MaintenanceSearchCondition::Unconditional,
+            kind: LifecycleActionStepKind::Search,
+            parameters: LifecycleActionStepParameters::Search {
+                condition: LifecycleSearchCondition::Unconditional,
             },
         }])
     }
@@ -3268,7 +3268,7 @@ mod tests {
     }
 
     fn backup_matrix_sequence_evidence(
-        sequence: &MaintenanceActionSequence,
+        sequence: &LifecycleActionSequence,
         sequence_hash: &str,
     ) -> BackupMatrixSequenceEvidence {
         let step = sequence
@@ -3480,24 +3480,24 @@ mod tests {
                     membership.completed_step_ids_json,
                     membership.released_at
                FROM lifecycle_candidates candidate
-               JOIN maintenance_rule_revisions revision
+               JOIN lifecycle_rule_revisions revision
                  ON revision.rule_set_id = candidate.rule_set_id
                 AND revision.revision_number = candidate.revision_number
-               JOIN maintenance_action_steps step
+               JOIN lifecycle_action_steps step
                  ON step.candidate_id = candidate.id
                 AND step.match_generation = candidate.match_generation
                 AND step.revision_number = candidate.revision_number
-               JOIN maintenance_action_step_attempts attempt
+               JOIN lifecycle_action_step_attempts attempt
                  ON attempt.candidate_id = step.candidate_id
                 AND attempt.match_generation = step.match_generation
                 AND attempt.revision_number = step.revision_number
                 AND attempt.step_id = step.step_id
-               JOIN maintenance_action_job_receipts receipt
+               JOIN lifecycle_action_job_receipts receipt
                  ON receipt.candidate_id = step.candidate_id
                 AND receipt.match_generation = step.match_generation
                 AND receipt.revision_number = step.revision_number
                 AND receipt.step_id = step.step_id
-               JOIN maintenance_sequence_terminal_memberships membership
+               JOIN lifecycle_sequence_terminal_memberships membership
                  ON membership.candidate_id = candidate.id
               WHERE candidate.id = {}",
             &[SqlArg::Text("backup-sequence-candidate".to_string())],

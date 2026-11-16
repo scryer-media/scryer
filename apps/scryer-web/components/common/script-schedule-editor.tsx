@@ -423,7 +423,7 @@ function WeekdayToggles({
 
 /**
  * Edits when something runs on the scheduler: a scheduled script, or a
- * maintenance rule. Controlled: every change reports the whole schedule, with
+ * lifecycle rule. Controlled: every change reports the whole schedule, with
  * only the fields its kind uses. The "run on startup" choice is shown only
  * when its handler is passed.
  */

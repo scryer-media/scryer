@@ -4130,11 +4130,11 @@ export const ruleSetQuery = `query RuleSet($id: ID!) {
   }
 }`;
 
-// ── Maintenance Rules ─────────────────────────────────────────────────
+// ── Lifecycle Rules ─────────────────────────────────────────────────
 
 /// Everything a rule's source declares it can do. Shared by the rule list, the
 /// rule detail and validation, which all render the same summary.
-export const MAINTENANCE_DECLARED_ACTIONS_FIELDS = `
+export const LIFECYCLE_DECLARED_ACTIONS_FIELDS = `
       heads
       destructive
       qualityProfiles
@@ -4145,7 +4145,7 @@ export const MAINTENANCE_DECLARED_ACTIONS_FIELDS = `
       notifications`;
 
 /// What a rule decided for one subject, on preview rows and candidates.
-export const MAINTENANCE_DECIDED_ACTIONS_FIELDS = `
+export const LIFECYCLE_DECIDED_ACTIONS_FIELDS = `
       heads
       qualityProfile
       addTags
@@ -4154,7 +4154,7 @@ export const MAINTENANCE_DECIDED_ACTIONS_FIELDS = `
       root
       notification`;
 
-export const MAINTENANCE_RULE_SET_FIELDS = `
+export const LIFECYCLE_RULE_SET_FIELDS = `
     id
     name
     description
@@ -4166,7 +4166,7 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
     subjectKind
     currentRevisionNumber
     graceDays
-    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
+    declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
     }
     schedule {
       kind
@@ -4181,7 +4181,7 @@ export const MAINTENANCE_RULE_SET_FIELDS = `
     createdAt
     updatedAt`;
 
-const maintenanceRuleRevisionFieldSelection = `
+const lifecycleRuleRevisionFieldSelection = `
     id
     ruleSetId
     revisionNumber
@@ -4192,25 +4192,25 @@ const maintenanceRuleRevisionFieldSelection = `
     createdBy
     createdAt`;
 
-export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
-  maintenanceRuleSets {${MAINTENANCE_RULE_SET_FIELDS}
+export const lifecycleRuleSetsQuery = `query LifecycleRuleSets {
+  lifecycleRuleSets {${LIFECYCLE_RULE_SET_FIELDS}
   }
 }`;
 
 /// Detail payload shared by the rule-set query and every mutation that returns
 /// a rule set with its current revision and declared actions.
-export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
-    ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
+export const LIFECYCLE_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${LIFECYCLE_RULE_SET_FIELDS}
     }
-    revision {${maintenanceRuleRevisionFieldSelection}
+    revision {${lifecycleRuleRevisionFieldSelection}
     }
-    declaredActions {${MAINTENANCE_DECLARED_ACTIONS_FIELDS}
+    declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
     }`;
 
 /// Opening the editor is the one reader of the builder model, so it is
 /// selected here and not on the mutation payloads that share the detail fields.
-export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
-  maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+export const lifecycleRuleSetQuery = `query LifecycleRuleSet($id: ID!) {
+  lifecycleRuleSet(id: $id) {${LIFECYCLE_RULE_SET_DETAIL_FIELDS}
     builderModel
   }
 }`;
@@ -4252,15 +4252,15 @@ export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!)
   }
 }`;
 
-export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
-  maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
+export const lifecycleRuleRevisionsQuery = `query LifecycleRuleRevisions($ruleSetId: ID!) {
+  lifecycleRuleRevisions(ruleSetId: $ruleSetId) {${lifecycleRuleRevisionFieldSelection}
   }
 }`;
 
-/// Candidates, soonest due first. The server returns none while maintenance
+/// Candidates, soonest due first. The server returns none while lifecycle
 /// is switched off for the instance.
-export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetId: ID, $states: [MaintenanceCandidateState!], $libraryId: ID, $limit: Int) {
-  maintenanceCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, limit: $limit) {
+export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: ID, $states: [LifecycleCandidateState!], $libraryId: ID, $limit: Int) {
+  lifecycleCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, limit: $limit) {
     id
     ruleSetId
     ruleName
@@ -4279,7 +4279,7 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
     state
     stateReason
     reasonCodes
-    actions {${MAINTENANCE_DECIDED_ACTIONS_FIELDS}
+    actions {${LIFECYCLE_DECIDED_ACTIONS_FIELDS}
     }
     actionSequence {
       schemaVersion
@@ -4341,8 +4341,8 @@ export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetI
 
 /// What enabling a destructive rule asks the operator to acknowledge: the same
 /// candidates as the table, reduced to the fields the confirmation lists.
-export const maintenanceArmingCandidatesQuery = `query MaintenanceArmingCandidates($ruleSetId: ID, $limit: Int) {
-  maintenanceCandidates(ruleSetId: $ruleSetId, limit: $limit) {
+export const lifecycleArmingCandidatesQuery = `query LifecycleArmingCandidates($ruleSetId: ID, $limit: Int) {
+  lifecycleCandidates(ruleSetId: $ruleSetId, limit: $limit) {
     id
     state
     subjectKind
@@ -4351,8 +4351,8 @@ export const maintenanceArmingCandidatesQuery = `query MaintenanceArmingCandidat
   }
 }`;
 
-export const maintenanceEvaluationRunsQuery = `query MaintenanceEvaluationRuns($ruleSetId: ID, $limit: Int) {
-  maintenanceEvaluationRuns(ruleSetId: $ruleSetId, limit: $limit) {
+export const lifecycleEvaluationRunsQuery = `query LifecycleEvaluationRuns($ruleSetId: ID, $limit: Int) {
+  lifecycleEvaluationRuns(ruleSetId: $ruleSetId, limit: $limit) {
     id
     ruleSetId
     revisionNumber
@@ -4369,8 +4369,8 @@ export const maintenanceEvaluationRunsQuery = `query MaintenanceEvaluationRuns($
   }
 }`;
 
-export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
-  maintenanceActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
+export const lifecycleActionRunsQuery = `query LifecycleActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
+  lifecycleActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
     id
     ruleSetId
     candidateId
@@ -4442,14 +4442,14 @@ export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetI
 /// Reading the gates requires system-settings management. A reader without it
 /// gets a GraphQL error rather than a partial answer, so the caller catches it
 /// and renders the panel read-locked instead of failing the whole section.
-export const maintenanceInstanceGatesQuery = `query MaintenanceInstanceGates {
-  maintenanceInstanceGates {
+export const lifecycleInstanceGatesQuery = `query LifecycleInstanceGates {
+  lifecycleInstanceGates {
     enabled
     actionsPaused
   }
 }`;
 
-export const MAINTENANCE_EXCLUSION_FIELDS = `
+export const LIFECYCLE_EXCLUSION_FIELDS = `
     id
     ruleSetId
     subjectKind
@@ -4461,8 +4461,8 @@ export const MAINTENANCE_EXCLUSION_FIELDS = `
     createdBy
     createdAt`;
 
-export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetId: ID) {
-  maintenanceExclusions(ruleSetId: $ruleSetId) {${MAINTENANCE_EXCLUSION_FIELDS}
+export const lifecycleExclusionsQuery = `query LifecycleExclusions($ruleSetId: ID) {
+  lifecycleExclusions(ruleSetId: $ruleSetId) {${LIFECYCLE_EXCLUSION_FIELDS}
   }
 }`;
 

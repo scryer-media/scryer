@@ -3,7 +3,7 @@
 //!
 //! Every call here needs [`AppPermission::ManageCatalogSettings`]. Authoring or
 //! previewing a matcher that reads `input.requester.*` needs
-//! [`AppPermission::ManagePermissions`] on top, for the reason maintenance's
+//! [`AppPermission::ManagePermissions`] on top, for the reason lifecycle's
 //! person-fact gate gives: writing a rule about *media* is catalog
 //! administration, writing one about a named person is a use of the instance's
 //! identity records.
@@ -41,7 +41,7 @@ use crate::{AppError, AppResult, AppUseCase};
 
 /// Upper bound on a requested lease, in days — ten years.
 ///
-/// The same bound the maintenance grace period uses, and for the same reason:
+/// The same bound the lifecycle grace period uses, and for the same reason:
 /// an approved lease is materialized into `starts_at + Duration::days(n)`, and
 /// `chrono` panics rather than saturating once that addition leaves the
 /// representable range. A nonsense lease would therefore not be a long lease; it
@@ -148,7 +148,7 @@ pub struct RequestRulePreviewResult {
     pub tags: Vec<String>,
     /// The subset of `tags` the title tag registry does not define.
     ///
-    /// A request rule cannot be validated statically the way a maintenance
+    /// A request rule cannot be validated statically the way a lifecycle
     /// action's tag list can — the labels only exist inside the compiled Rego —
     /// so the preview is the one moment an author can be told that a tag they
     /// emit will be dropped at approval until somebody defines it.
@@ -488,7 +488,7 @@ impl AppUseCase {
 
     /// Delete a rule set.
     ///
-    /// Unconditional, unlike a maintenance rule. A maintenance rule's deletion
+    /// Unconditional, unlike a lifecycle rule. A lifecycle rule's deletion
     /// would cascade away the action runs that are the only record of what it
     /// did to someone's library; a request rule executes nothing, and its
     /// decisions live in `request_rule_decisions`, which deliberately has no

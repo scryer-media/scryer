@@ -1293,19 +1293,19 @@ mod tests {
             ),
             (
                 AppError::validation_refused_with_count(
-                    "MAINTENANCE_ARM_COUNT_MISMATCH",
+                    "LIFECYCLE_ARM_COUNT_MISMATCH",
                     "new words",
                     17,
                 ),
                 "VALIDATION_ERROR",
-                "MAINTENANCE_ARM_COUNT_MISMATCH",
+                "LIFECYCLE_ARM_COUNT_MISMATCH",
             ),
         ] {
             assert_eq!(error.reason(), Some(reason));
             let gql = to_gql_error(error);
             assert_eq!(graphql_error_code(&gql), Some(code));
             assert_eq!(graphql_error_extension_string(&gql, "reason"), Some(reason));
-            if reason == "MAINTENANCE_ARM_COUNT_MISMATCH" {
+            if reason == "LIFECYCLE_ARM_COUNT_MISMATCH" {
                 assert!(
                     matches!(gql.extensions.as_ref().and_then(|e| e.get("currentCount")), Some(async_graphql::Value::Number(value)) if value.as_i64() == Some(17))
                 );

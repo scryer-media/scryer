@@ -4296,6 +4296,23 @@ file = "postgres/migrations/0356_media_server_audience_favorites.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 357
+description = "rename maintenance rules to lifecycle rules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0357_rename_maintenance_to_lifecycle.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0357_rename_maintenance_to_lifecycle.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

@@ -81,7 +81,7 @@ const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
     ("release_decisions", "title_id"),
     ("title_search_terms", "title_id"),
     ("title_external_ids", "title_id"),
-    ("maintenance_rule_exclusions", "title_id"),
+    ("lifecycle_rule_exclusions", "title_id"),
     ("media_server_user_media_signals", "scryer_title_id"),
     ("library_scan_unmatched_items", "title_id"),
 ];
@@ -92,14 +92,14 @@ const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
 /// drop — so they are neither counted nor deleted as source records.
 const OPERATION_VERIFICATIONS_TABLE: &str = "location_operation_verifications";
 
-/// Maintenance action evidence belongs to a candidate. Delete its leaf rows
+/// Lifecycle action evidence belongs to a candidate. Delete its leaf rows
 /// before the candidate so the preview and outcome both account for every
 /// retired audit row, instead of hiding them behind the candidate cascade.
 const DROPPED_CANDIDATE_CHILD_TABLES: &[&str] = &[
-    "maintenance_action_step_attempts",
-    "maintenance_action_job_receipts",
-    "maintenance_action_steps",
-    "maintenance_sequence_terminal_memberships",
+    "lifecycle_action_step_attempts",
+    "lifecycle_action_job_receipts",
+    "lifecycle_action_steps",
+    "lifecycle_sequence_terminal_memberships",
     "lifecycle_action_runs",
 ];
 
@@ -957,7 +957,7 @@ fn remap_payload_ids(payload: &mut Value, map: &MergeIdentityMap) -> bool {
 
 /// Retire every source-title record that is deliberately dropped by a merge.
 /// The candidate graph is removed from leaf to root, preserving exact preview
-/// and outcome counts for maintenance action evidence despite its cascades.
+/// and outcome counts for lifecycle action evidence despite its cascades.
 async fn purge_title_dependent_records(
     tx: &mut SqlTx<'_>,
     map: &MergeIdentityMap,

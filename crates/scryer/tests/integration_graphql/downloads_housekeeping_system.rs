@@ -562,7 +562,7 @@ async fn housekeeping_respects_configured_history_retention() {
     .await
     .expect("rule set history should insert");
 
-    seed_maintenance_evaluation_runs(&ctx, &[&stale_at, &fresh_at]).await;
+    seed_lifecycle_evaluation_runs(&ctx, &[&stale_at, &fresh_at]).await;
 
     let update = gql(
         &ctx,
@@ -641,7 +641,7 @@ async fn housekeeping_respects_configured_history_retention() {
             .expect("rule set history count");
     assert_eq!(remaining_rule_set_history, 1);
 
-    assert_eq!(count_maintenance_evaluation_runs(&ctx).await, 1);
+    assert_eq!(count_lifecycle_evaluation_runs(&ctx).await, 1);
 }
 
 #[tokio::test]
@@ -766,7 +766,7 @@ async fn housekeeping_skips_history_retention_when_keep_forever_is_enabled() {
     .await
     .expect("release attempts should insert");
 
-    seed_maintenance_evaluation_runs(&ctx, &[&stale_at]).await;
+    seed_lifecycle_evaluation_runs(&ctx, &[&stale_at]).await;
 
     let update = gql(
         &ctx,
@@ -838,34 +838,32 @@ async fn housekeeping_skips_history_retention_when_keep_forever_is_enabled() {
             .expect("release attempts count");
     assert_eq!(remaining_release_attempts, 1);
 
-    assert_eq!(count_maintenance_evaluation_runs(&ctx).await, 1);
+    assert_eq!(count_lifecycle_evaluation_runs(&ctx).await, 1);
 }
 
-async fn seed_maintenance_evaluation_runs(ctx: &TestContext, started_at: &[&str]) {
-    sqlx::query(
-        "INSERT INTO maintenance_rule_sets (id, name) VALUES ('rule-ashgrove', 'Ashgrove')",
-    )
-    .execute(ctx.db.pool())
-    .await
-    .expect("maintenance rule set should insert");
+async fn seed_lifecycle_evaluation_runs(ctx: &TestContext, started_at: &[&str]) {
+    sqlx::query("INSERT INTO lifecycle_rule_sets (id, name) VALUES ('rule-ashgrove', 'Ashgrove')")
+        .execute(ctx.db.pool())
+        .await
+        .expect("lifecycle rule set should insert");
     for started_at in started_at {
         sqlx::query(
-            "INSERT INTO maintenance_evaluation_runs (id, rule_set_id, revision_number, started_at, status)
+            "INSERT INTO lifecycle_evaluation_runs (id, rule_set_id, revision_number, started_at, status)
              VALUES (?, 'rule-ashgrove', 1, ?, 'succeeded')",
         )
         .bind(Id::new().0)
         .bind(*started_at)
         .execute(ctx.db.pool())
         .await
-        .expect("maintenance evaluation run should insert");
+        .expect("lifecycle evaluation run should insert");
     }
 }
 
-async fn count_maintenance_evaluation_runs(ctx: &TestContext) -> i64 {
-    sqlx::query_scalar("SELECT COUNT(*) FROM maintenance_evaluation_runs")
+async fn count_lifecycle_evaluation_runs(ctx: &TestContext) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM lifecycle_evaluation_runs")
         .fetch_one(ctx.db.pool())
         .await
-        .expect("maintenance evaluation runs count")
+        .expect("lifecycle evaluation runs count")
 }
 
 #[tokio::test]

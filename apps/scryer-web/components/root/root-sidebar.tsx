@@ -146,7 +146,7 @@ function isSettingsNavEntryActive(
   if (entryId === "rules") {
     return (
       settingsSection === "rules" ||
-      settingsSection === "maintenanceRules" ||
+      settingsSection === "lifecycleRules" ||
       settingsSection === "requestRules"
     );
   }
@@ -221,7 +221,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "lists" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
-      // Scoring, maintenance and request rules share this entry; the Rules
+      // Scoring, lifecycle and request rules share this entry; the Rules
       // page's own gutter picks the kind, so the sidebar names the subject once.
       {
         kind: "settings",
@@ -440,8 +440,8 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
-    id: "maintenanceRules",
-    label: (t) => t("settings.maintenanceRules"),
+    id: "lifecycleRules",
+    label: (t) => t("settings.lifecycleRules"),
     icon: Wrench,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },

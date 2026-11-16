@@ -1054,11 +1054,11 @@ async fn an_unmapped_observation_is_retained_with_no_subject() {
         .upsert_signal_sync_state(&state)
         .await
         .unwrap();
-    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    let context = fixture.app.lifecycle_watch_context().await.unwrap();
     assert!(matches!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::SIGNAL_SYNC_INCOMPLETE
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::SIGNAL_SYNC_INCOMPLETE
         )
     ));
 }
@@ -1085,11 +1085,11 @@ async fn a_re_enabled_connection_reports_never_swept_until_it_sweeps_again() {
         matches!(
             fixture
                 .app
-                .maintenance_watch_context()
+                .lifecycle_watch_context()
                 .await
                 .unwrap()
                 .freshness,
-            crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+            crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
         ),
         "a connection that has swept cleanly is the baseline this test moves away from"
     );
@@ -1105,12 +1105,12 @@ async fn a_re_enabled_connection_reports_never_swept_until_it_sweeps_again() {
         .await
         .unwrap();
 
-    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    let context = fixture.app.lifecycle_watch_context().await.unwrap();
     assert!(
         matches!(
             context.freshness,
-            crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-                crate::maintenance_rules::facts::unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED
+            crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+                crate::lifecycle_rules::facts::unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED
             )
         ),
         "a pre-disable success is not evidence that the re-enabled connection has swept: {:?}",
@@ -1183,14 +1183,14 @@ async fn a_link_the_sweep_did_not_read_is_unobserved_whatever_its_timestamp() {
     let mut late = late_link();
     late.verified_at = Some(Utc::now() - chrono::Duration::hours(1));
     let context = gate_app(vec![verified_account(), late], fixture.signals.clone())
-        .maintenance_watch_context()
+        .lifecycle_watch_context()
         .await
         .unwrap();
 
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
         )
     );
     assert!(context.linked_user_ids.contains(PARTICIPANT_SCRYER_ID));
@@ -1216,13 +1216,13 @@ async fn a_read_link_stays_observed_after_a_login_refreshes_it() {
     let mut logged_in = verified_account();
     logged_in.verified_at = Some(Utc::now() + chrono::Duration::hours(1));
     let context = gate_app(vec![logged_in], fixture.signals.clone())
-        .maintenance_watch_context()
+        .lifecycle_watch_context()
         .await
         .unwrap();
 
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
     assert!(context.linked_user_ids.contains(PARTICIPANT_SCRYER_ID));
     assert!(context.unswept_user_ids.is_empty());
@@ -1246,14 +1246,14 @@ async fn a_link_repointed_at_another_server_account_is_unobserved() {
     let mut repointed = verified_account();
     repointed.external_user_id = Some("jf-user-replacement".to_string());
     let context = gate_app(vec![repointed], fixture.signals.clone())
-        .maintenance_watch_context()
+        .lifecycle_watch_context()
         .await
         .unwrap();
 
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
         )
     );
 }
@@ -1281,14 +1281,14 @@ async fn a_clean_sweep_state_without_a_roster_observes_nobody() {
         .unwrap();
 
     let context = gate_app(vec![verified_account()], signals)
-        .maintenance_watch_context()
+        .lifecycle_watch_context()
         .await
         .unwrap();
 
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
         )
     );
     assert!(context.unswept_user_ids.contains(PARTICIPANT_SCRYER_ID));
@@ -1310,24 +1310,24 @@ async fn links_made_after_a_sweep_over_nobody_are_not_yet_swept() {
         .expect("sweep");
 
     let nobody = gate_app(Vec::new(), fixture.signals.clone())
-        .maintenance_watch_context()
+        .lifecycle_watch_context()
         .await
         .unwrap();
     assert_eq!(
         nobody.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::NO_LINKED_PARTICIPANTS
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::NO_LINKED_PARTICIPANTS
         )
     );
 
     let context = gate_app(vec![late_link()], fixture.signals.clone())
-        .maintenance_watch_context()
+        .lifecycle_watch_context()
         .await
         .unwrap();
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::PARTICIPANTS_NOT_YET_SWEPT
         )
     );
 }
@@ -1807,7 +1807,7 @@ fn a_clean_sweep_outside_the_freshness_window_reads_as_stale() {
         signal_count: 1,
         updated_at: now,
     };
-    let window = crate::maintenance_rules::facts::WATCH_SIGNAL_FRESHNESS_HOURS;
+    let window = crate::lifecycle_rules::facts::WATCH_SIGNAL_FRESHNESS_HOURS;
     let status = crate::media_server_signals::MediaServerSignalSyncStatus::at;
     assert!(!status(state(1, true), now).clean_sweep_stale);
     assert!(status(state(window + 1, true), now).clean_sweep_stale);
@@ -2075,14 +2075,14 @@ async fn the_audience_gate_opens_only_when_every_enabled_connection_was_read() {
         .run_media_server_signal_sync_job()
         .await
         .expect("sweep");
-    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    let context = fixture.app.lifecycle_watch_context().await.unwrap();
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
     assert_eq!(
         context.audience,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
 
     fixture
@@ -2090,15 +2090,15 @@ async fn the_audience_gate_opens_only_when_every_enabled_connection_was_read() {
         .clear_audience_read(CONNECTION_ID)
         .await
         .unwrap();
-    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    let context = fixture.app.lifecycle_watch_context().await.unwrap();
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
     assert_eq!(
         context.audience,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::AUDIENCE_NOT_READ
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::AUDIENCE_NOT_READ
         )
     );
 }
@@ -2131,15 +2131,15 @@ async fn a_sweep_with_nobody_linked_still_reads_the_audience() {
     assert_eq!(audience[0].external_account_id, "jf-user-unlinked");
     assert_eq!(audience[0].scryer_title_id.as_deref(), Some("title-movie"));
     assert_eq!(fixture.signals.audience_reads.lock().await.len(), 1);
-    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    let context = fixture.app.lifecycle_watch_context().await.unwrap();
     assert_eq!(
         context.audience,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
     assert_eq!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
-            crate::maintenance_rules::facts::unknown_reason::NO_LINKED_PARTICIPANTS
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Unavailable(
+            crate::lifecycle_rules::facts::unknown_reason::NO_LINKED_PARTICIPANTS
         )
     );
 }
@@ -2182,10 +2182,10 @@ async fn an_audience_marker_that_cannot_be_cleared_fails_the_sweep() {
         state.last_error_code.as_deref(),
         Some(reasons::STORE_FAILED)
     );
-    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    let context = fixture.app.lifecycle_watch_context().await.unwrap();
     assert_ne!(
         context.freshness,
-        crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        crate::lifecycle_rules::facts::WatchSignalFreshness::Fresh
     );
 }
 

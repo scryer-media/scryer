@@ -1332,7 +1332,7 @@ async fn renaming_a_title_tag_follows_pending_requests_and_names_the_request_rul
         "mutation($input: UpdateTitleTagDefinitionInput!) {
             updateTitleTagDefinition(input: $input) {
                 definition { label }
-                counts { titles delayProfiles maintenanceRuleSets requestRuleSets }
+                counts { titles delayProfiles lifecycleRuleSets requestRuleSets }
             }
         }",
         json!({ "input": { "id": definition_id, "label": "family friendly" } }),

@@ -7,8 +7,8 @@ import {
   RULE_BUILDER_CATALOGS,
   ruleBuilderCatalogMisses,
 } from "./rule-builder-catalog-presentation.ts";
-import { MAINTENANCE_SERVED_PAYLOAD } from "./rule-builder-contract-fixture.ts";
-import { MAINTENANCE_RULE_BUILDER_BASE } from "./maintenance-rule-builder-schema.ts";
+import { LIFECYCLE_SERVED_PAYLOAD } from "./rule-builder-contract-fixture.ts";
+import { LIFECYCLE_RULE_BUILDER_BASE } from "./lifecycle-rule-builder-schema.ts";
 import {
   generateRuleSource,
   isRuleBuilderOutputInVariant,
@@ -38,8 +38,8 @@ import {
 const ARCHIVE: RuleBuilderOutputDescriptor = {
   id: "ARCHIVE",
   head: "archive",
-  labelKey: "ruleOutput.maintenance.archive",
-  helpKey: "ruleOutput.maintenance.archive.help",
+  labelKey: "ruleOutput.lifecycle.archive",
+  helpKey: "ruleOutput.lifecycle.archive.help",
   valueKind: "FLAG",
   template: "{head} if {helper}",
   perItem: false,
@@ -51,7 +51,7 @@ const ARCHIVE: RuleBuilderOutputDescriptor = {
 const SET_LABELS: RuleBuilderOutputDescriptor = {
   id: "SET_LABELS",
   head: "set_labels",
-  labelKey: "ruleOutput.maintenance.set_labels",
+  labelKey: "ruleOutput.lifecycle.set_labels",
   helpKey: null,
   valueKind: "TEXT_LIST",
   options: "shelfLabels",
@@ -68,7 +68,7 @@ const SET_LABELS: RuleBuilderOutputDescriptor = {
 const HOLD_FOR: RuleBuilderOutputDescriptor = {
   id: "HOLD_FOR",
   head: "hold_for",
-  labelKey: "ruleOutput.maintenance.hold_for",
+  labelKey: "ruleOutput.lifecycle.hold_for",
   valueKind: "DURATION",
   template: "{head} := {value} if {helper}",
   perItem: false,
@@ -77,11 +77,11 @@ const HOLD_FOR: RuleBuilderOutputDescriptor = {
 };
 
 const PAYLOAD: RuleBuilderSchemaPayload = {
-  ...MAINTENANCE_SERVED_PAYLOAD,
-  outputs: [ARCHIVE, ...MAINTENANCE_SERVED_PAYLOAD.outputs, HOLD_FOR, SET_LABELS],
+  ...LIFECYCLE_SERVED_PAYLOAD,
+  outputs: [ARCHIVE, ...LIFECYCLE_SERVED_PAYLOAD.outputs, HOLD_FOR, SET_LABELS],
 };
 
-const SCHEMA = ruleBuilderSchemaFromPayload(MAINTENANCE_RULE_BUILDER_BASE, PAYLOAD);
+const SCHEMA = ruleBuilderSchemaFromPayload(LIFECYCLE_RULE_BUILDER_BASE, PAYLOAD);
 const DESCRIPTORS = PAYLOAD.outputs;
 
 /// Translates from English, handing a missing key back as the real helper does.
@@ -90,7 +90,7 @@ const t = (key: string) => (en as Record<string, string>)[key] ?? key;
 function model(outputs: RuleBuilderModel["outputs"]): RuleBuilderModel {
   return {
     version: 2,
-    family: "maintenance",
+    family: "lifecycle",
     join: "ALL",
     conditions: [{ field: "input.facts.monitored", operator: "IS_TRUE", value: "" }],
     outputs,
@@ -205,7 +205,7 @@ test("an untranslated output is labelled by its head and has no help", () => {
 test("a summary labels heads from the descriptors, then by head, then by id", () => {
   assert.equal(
     ruleOutputHeadLabel(t, DESCRIPTORS, "DELETE_FILES"),
-    en["ruleOutput.maintenance.delete_files"],
+    en["ruleOutput.lifecycle.delete_files"],
   );
   assert.equal(ruleOutputHeadLabel(t, DESCRIPTORS, "ARCHIVE"), "archive");
   assert.equal(ruleOutputHeadLabel(t, DESCRIPTORS, "SOME_LATER_HEAD"), "SOME_LATER_HEAD");
@@ -271,7 +271,7 @@ test("the editor completes every head its variant offers, with a snippet from it
     },
   );
   const notify = title.find((head) => head.head === "notify");
-  assert.equal(notify?.detail, en["ruleOutput.maintenance.notify"]);
+  assert.equal(notify?.detail, en["ruleOutput.lifecycle.notify"]);
 });
 
 test("a translated head carries its help into completion and hover", () => {
