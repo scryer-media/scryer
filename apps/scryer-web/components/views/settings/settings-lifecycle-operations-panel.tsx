@@ -497,17 +497,6 @@ export function LifecycleCandidatesPanel({
                             })}
                           </span>
                         )}
-                        {candidate.storageRootFileCount !== null &&
-                        candidate.storageRootTotalSizeBytes !== null ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t("settings.lifecycleStorageRootFileSummary", {
-                              count: candidate.storageRootFileCount,
-                              size: formatBytes(
-                                candidate.storageRootTotalSizeBytes,
-                              ),
-                            })}
-                          </span>
-                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
@@ -1062,12 +1051,6 @@ function LifecycleFileResults({ detail }: { detail: string }) {
       <summary className="cursor-pointer text-sm">
         {t("settings.lifecycleFileResults")} ({results.files.length})
       </summary>
-      {results.storageRootId ? (
-        <p className="text-xs text-muted-foreground">
-          {t("settings.lifecycleRuleStorageRoot")}:{" "}
-          <code>{results.storageRootId}</code>
-        </p>
-      ) : null}
       {results.totalSizeBytes != null ? (
         <p className="text-xs text-muted-foreground">
           {t("settings.lifecycleFileSummary", {

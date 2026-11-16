@@ -883,7 +883,9 @@ impl AppUseCase {
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+            .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(
+                &title.id,
+            ))
             .await?;
         let now = chrono::Utc::now();
         let mut claims = Vec::new();
@@ -1011,7 +1013,9 @@ impl AppUseCase {
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+            .list_acquisition_scope_states_for_title_ids_without_decisions(std::slice::from_ref(
+                &title.id,
+            ))
             .await?;
         let now = chrono::Utc::now();
         let mut recent_states = Vec::new();

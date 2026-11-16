@@ -90,10 +90,25 @@ impl JobRunRepository for WorkflowOperationStore {
                     let record = fetch_optional_workflow_operation(SqlExec::Tx(tx), &row.text("run_id")?).await?.ok_or_else(|| AppError::Repository("private job missing".into()))?;
                     return Ok((job_run_record_from_workflow(record)?, false));
                 }
-                let progress = json_arg_for_tx(tx, run.progress_json.as_deref())?;
-                SqlRuntime::execute(SqlExec::Tx(tx),
-                    "INSERT INTO workflow_operations (id, operation_type, status, job_key, trigger_source, actor_user_id, progress_json, started_at, created_at, updated_at) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    &[SqlArg::Text(run.id.clone()), SqlArg::Text(run.operation_type.clone()), SqlArg::Text(run.status.as_str().into()), SqlArg::Text(run.job_key.as_str().into()), SqlArg::Text(run.trigger_source.as_str().into()), SqlArg::OptText(run.actor_user_id.clone()), progress, SqlArg::Timestamp(run.started_at), SqlArg::Timestamp(run.created_at), SqlArg::Timestamp(run.updated_at)]).await?;
+                let progress_json = json_arg_for_tx(tx, run.progress_json.as_deref())?;
+                // A new private job has no outcome yet.
+                let summary_json = json_arg_for_tx(tx, None)?;
+                insert_workflow_operation_tx(tx, WorkflowOperationInsert {
+                    id: run.id.clone(),
+                    operation_type: run.operation_type.clone(),
+                    status: run.status.as_str().into(),
+                    job_key: Some(run.job_key.as_str().into()),
+                    trigger_source: Some(run.trigger_source.as_str().into()),
+                    actor_user_id: run.actor_user_id.clone(),
+                    progress_json,
+                    summary_json,
+                    summary_text: None,
+                    error_text: None,
+                    started_at: SqlArg::Timestamp(run.started_at),
+                    completed_at: SqlArg::OptTimestamp(None),
+                    created_at: SqlArg::Timestamp(run.created_at),
+                    updated_at: SqlArg::Timestamp(run.updated_at),
+                }).await?;
                 Ok((run, true))
             })
         }).await
@@ -229,29 +244,24 @@ impl JobRunRepository for WorkflowOperationStore {
 
                     let progress_json = json_arg_for_tx(tx, run.progress_json.as_deref())?;
                     let summary_json = json_arg_for_tx(tx, run.summary_json.as_deref())?;
-                    SqlRuntime::execute(
-                        SqlExec::Tx(tx),
-                        "INSERT INTO workflow_operations
-                         (id, operation_type, status, job_key, trigger_source, actor_user_id,
-                          progress_json, summary_json, summary_text, error_text, started_at,
-                          completed_at, created_at, updated_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-                        &[
-                            SqlArg::Text(run.id.clone()),
-                            SqlArg::Text(run.operation_type.clone()),
-                            SqlArg::Text(run.status.as_str().to_string()),
-                            SqlArg::Text(run.job_key.as_str().to_string()),
-                            SqlArg::Text(run.trigger_source.as_str().to_string()),
-                            SqlArg::OptText(run.actor_user_id.clone()),
+                    insert_workflow_operation_tx(
+                        tx,
+                        WorkflowOperationInsert {
+                            id: run.id.clone(),
+                            operation_type: run.operation_type.clone(),
+                            status: run.status.as_str().to_string(),
+                            job_key: Some(run.job_key.as_str().to_string()),
+                            trigger_source: Some(run.trigger_source.as_str().to_string()),
+                            actor_user_id: run.actor_user_id.clone(),
                             progress_json,
                             summary_json,
-                            SqlArg::OptText(run.summary_text.clone()),
-                            SqlArg::OptText(run.error_text.clone()),
-                            SqlArg::Timestamp(run.started_at),
-                            SqlArg::OptTimestamp(run.completed_at),
-                            SqlArg::Timestamp(run.created_at),
-                            SqlArg::Timestamp(run.updated_at),
-                        ],
+                            summary_text: run.summary_text.clone(),
+                            error_text: run.error_text.clone(),
+                            started_at: SqlArg::Timestamp(run.started_at),
+                            completed_at: SqlArg::OptTimestamp(run.completed_at),
+                            created_at: SqlArg::Timestamp(run.created_at),
+                            updated_at: SqlArg::Timestamp(run.updated_at),
+                        },
                     )
                     .await?;
                     let run = fetch_optional_workflow_operation(SqlExec::Tx(tx), &run.id)

@@ -97,6 +97,7 @@ struct SequenceStepExecutionContext<'a> {
     evaluator: &'a mut LifecycleRulesEvaluator,
     libraries: &'a HashMap<String, LifecycleLibraryRef>,
     tag_conflicts: &'a Option<std::collections::HashSet<String>>,
+    storage_roots: &'a super::storage::LifecycleStorageRootsOnce,
 }
 
 struct SequenceStepRunContext<'a> {
@@ -116,6 +117,9 @@ pub(super) struct SequenceCandidateExecutionContext<'a> {
     pub(super) evaluator: &'a mut LifecycleRulesEvaluator,
     pub(super) libraries: &'a HashMap<String, LifecycleLibraryRef>,
     pub(super) tag_conflicts: &'a Option<std::collections::HashSet<String>>,
+    /// The configured roots, read once for this candidate however many
+    /// safety checks it runs.
+    pub(super) storage_roots: &'a super::storage::LifecycleStorageRootsOnce,
     pub(super) budget: &'a mut LifecycleSequencePassBudget,
 }
 
@@ -215,6 +219,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
+            storage_roots,
             budget,
         } = context;
         let now = Utc::now();
@@ -277,6 +282,7 @@ impl AppUseCase {
                         evaluator,
                         libraries,
                         tag_conflicts,
+                        storage_roots,
                         budget,
                     },
                 )
@@ -557,6 +563,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
+            storage_roots,
             budget,
         } = context;
         let sequence_hash = sequence
@@ -834,6 +841,7 @@ impl AppUseCase {
                     candidate,
                     libraries,
                     tag_conflicts,
+                    storage_roots,
                 )
                 .await;
             let (title, input) = match decision {
@@ -920,6 +928,7 @@ impl AppUseCase {
                         evaluator,
                         libraries,
                         tag_conflicts,
+                        storage_roots,
                     },
                     step,
                     &mut run,
@@ -934,47 +943,76 @@ impl AppUseCase {
                     .await
                 {
                     Some(_title_guard) => {
+                        // A whole-title delete on a rule that reads storage is
+                        // serialized with every other storage-driven deletion,
+                        // as a storage `delete_files` is: the recheck below then
+                        // reads the space the previous deletion left, and a
+                        // title that no longer matches is kept.
+                        let storage_guard = if step.kind
+                            == LifecycleActionStepKind::DeleteTitleAndFiles
+                            && super::storage::rule_reads_storage(&detail.revision.rego_source)
+                        {
+                            Some(
+                                self.runtime
+                                    .jobs
+                                    .interactive_operation_guards
+                                    .try_acquire("maintenance-storage-deletion")
+                                    .await,
+                            )
+                        } else {
+                            None
+                        };
                         // The initial safety pass makes it safe to claim the
                         // durable step. Recheck while the title-wide mutation
                         // guard is held so a legacy or another v2 operation
                         // cannot change its target between observation and
                         // this adapter call.
-                        match self
-                            .lifecycle_execution_safety_checks(
-                                detail,
-                                sequence,
-                                evaluator,
-                                candidate,
-                                libraries,
-                                tag_conflicts,
-                            )
-                            .await
-                        {
-                            SafetyDecision::Proceed(guarded_title, guarded_input) => {
-                                budget.record_dispatch(step_is_high_risk);
-                                self.execute_sequence_step(
-                                    SequenceStepExecutionContext {
-                                        detail,
-                                        sequence,
-                                        step_index: index,
-                                        completed: &completed,
-                                        candidate,
-                                        title: &guarded_title,
-                                        input: &guarded_input,
-                                        evaluator,
-                                        libraries,
-                                        tag_conflicts,
-                                    },
-                                    step,
-                                    &mut run,
+                        if matches!(storage_guard, Some(None)) {
+                            Ok(SequenceStepResult::Held(
+                                execution_reason::STORAGE_DELETION_IN_PROGRESS,
+                            ))
+                        } else {
+                            match self
+                                .lifecycle_execution_safety_checks(
+                                    detail,
+                                    sequence,
+                                    evaluator,
+                                    candidate,
+                                    libraries,
+                                    tag_conflicts,
+                                    storage_roots,
                                 )
                                 .await
+                            {
+                                SafetyDecision::Proceed(guarded_title, guarded_input) => {
+                                    budget.record_dispatch(step_is_high_risk);
+                                    self.execute_sequence_step(
+                                        SequenceStepExecutionContext {
+                                            detail,
+                                            sequence,
+                                            step_index: index,
+                                            completed: &completed,
+                                            candidate,
+                                            title: &guarded_title,
+                                            input: &guarded_input,
+                                            evaluator,
+                                            libraries,
+                                            tag_conflicts,
+                                            storage_roots,
+                                        },
+                                        step,
+                                        &mut run,
+                                    )
+                                    .await
+                                }
+                                SafetyDecision::Hold(reason) => {
+                                    Ok(SequenceStepResult::Held(reason))
+                                }
+                                SafetyDecision::Cancel(reason) => {
+                                    Ok(SequenceStepResult::Canceled(reason))
+                                }
+                                SafetyDecision::Excluded => Ok(SequenceStepResult::Excluded),
                             }
-                            SafetyDecision::Hold(reason) => Ok(SequenceStepResult::Held(reason)),
-                            SafetyDecision::Cancel(reason) => {
-                                Ok(SequenceStepResult::Canceled(reason))
-                            }
-                            SafetyDecision::Excluded => Ok(SequenceStepResult::Excluded),
                         }
                     }
                     None => Ok(SequenceStepResult::Held(
@@ -1133,6 +1171,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
+            storage_roots,
         } = context;
         match (&step.kind, &step.parameters) {
             (
@@ -1141,16 +1180,17 @@ impl AppUseCase {
                     include_descendants,
                 },
             ) => {
-                let before_monitored = match &input.facts.monitored {
+                let before_monitored = match &input.subject_facts().monitored {
                     scryer_rules::lifecycle::Observation::Known { value, .. } => Some(*value),
                     scryer_rules::lifecycle::Observation::Unknown { .. }
                     | scryer_rules::lifecycle::Observation::Absent { .. } => None,
                 };
-                let before_monitored_episode_count = match &input.facts.monitored_episode_count {
-                    scryer_rules::lifecycle::Observation::Known { value, .. } => Some(*value),
-                    scryer_rules::lifecycle::Observation::Unknown { .. }
-                    | scryer_rules::lifecycle::Observation::Absent { .. } => None,
-                };
+                let before_monitored_episode_count =
+                    match &input.subject_facts().monitored_episode_count {
+                        scryer_rules::lifecycle::Observation::Known { value, .. } => Some(*value),
+                        scryer_rules::lifecycle::Observation::Unknown { .. }
+                        | scryer_rules::lifecycle::Observation::Absent { .. } => None,
+                    };
                 let already_satisfied = self
                     .lifecycle_unmonitoring_is_confirmed(candidate, title, *include_descendants)
                     .await?;
@@ -1394,6 +1434,7 @@ impl AppUseCase {
                         evaluator,
                         libraries,
                         tag_conflicts,
+                        storage_roots,
                     },
                     step,
                     run,
@@ -1401,7 +1442,7 @@ impl AppUseCase {
                 .await
             }
             (LifecycleActionStepKind::Monitor, LifecycleActionStepParameters::None) => {
-                let before_monitored = match &input.facts.monitored {
+                let before_monitored = match &input.subject_facts().monitored {
                     scryer_rules::lifecycle::Observation::Known { value, .. } => Some(*value),
                     scryer_rules::lifecycle::Observation::Unknown { .. }
                     | scryer_rules::lifecycle::Observation::Absent { .. } => None,
@@ -2216,6 +2257,7 @@ impl AppUseCase {
             evaluator,
             libraries,
             tag_conflicts,
+            storage_roots,
             ..
         } = context;
         let Some(unmonitor) = sequence.steps[..step_index]
@@ -2246,11 +2288,7 @@ impl AppUseCase {
         }
 
         let saved_checkpoint = self
-            .lifecycle_deletion_checkpoint_for_step(
-                candidate,
-                detail.revision.storage_root_id.as_deref(),
-                Some(&step.id),
-            )
+            .lifecycle_deletion_checkpoint_for_step(candidate, Some(&step.id))
             .await?;
         let mut deletion_run = if saved_checkpoint.is_some() {
             let saved_run_id = serde_json::from_str::<serde_json::Value>(&run.target_identity_json)
@@ -2350,6 +2388,7 @@ impl AppUseCase {
                 evaluator,
                 libraries,
                 tag_conflicts,
+                storage_roots,
             };
             self.execute_scoped_lifecycle_deletion(
                 &mut context,
@@ -2607,7 +2646,7 @@ fn unmonitor_before_state_matches_input(
     else {
         return false;
     };
-    if !matches!(&input.facts.monitored, Observation::Known { value, .. } if *value == before_monitored)
+    if !matches!(&input.subject_facts().monitored, Observation::Known { value, .. } if *value == before_monitored)
     {
         return false;
     }
@@ -2618,7 +2657,7 @@ fn unmonitor_before_state_matches_input(
         None => true,
         Some(value) => value.as_i64().is_some_and(|count| {
             matches!(
-                &input.facts.monitored_episode_count,
+                &input.subject_facts().monitored_episode_count,
                 Observation::Known { value, .. } if *value == count
             )
         }),

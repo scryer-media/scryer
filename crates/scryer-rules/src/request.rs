@@ -668,6 +668,7 @@ impl PolicyFamily for RequestFamily {
         _rule_id: &str,
         _rule_name: &str,
         _extra: &Self::RuleExtra,
+        _ctx: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         decode_decision(value)
     }

@@ -324,26 +324,6 @@ impl LifecycleActionSequence {
         Ok(())
     }
 
-    /// Storage-root sequences are deliberately limited to the filesystem-safe
-    /// subset. This is a second validation pass because ordinary title rules
-    /// are allowed to combine catalog and acquisition primitives.
-    pub fn validate_for_storage_root(
-        &self,
-        subject: LifecycleSubjectKind,
-    ) -> Result<(), LifecycleActionSequenceError> {
-        self.validate(subject)?;
-        if let Some(step) = self
-            .steps
-            .iter()
-            .find(|step| !step.descriptor().storage_root_allowed)
-        {
-            return Err(LifecycleActionSequenceError::UnsupportedStorageRootStep {
-                kind: step.kind,
-            });
-        }
-        Ok(())
-    }
-
     /// Whether a Search is the preset form that depends on the immediately
     /// preceding profile mutation. A standalone Search is unconditional.
     pub fn search_condition(&self, step_index: usize) -> Option<LifecycleSearchCondition> {
@@ -384,7 +364,6 @@ pub struct LifecycleActionStepDescriptor {
     pub requires: &'static [LifecycleActionStepRequirement],
     pub terminal: bool,
     pub completion_policy: LifecycleActionCompletionPolicy,
-    pub storage_root_allowed: bool,
 }
 
 impl LifecycleActionStepDescriptor {
@@ -415,7 +394,6 @@ const UNMONITOR: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: true,
 };
 const DELETE_FILES: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "delete_files",
@@ -428,7 +406,6 @@ const DELETE_FILES: LifecycleActionStepDescriptor = LifecycleActionStepDescripto
     requires: DELETE_FILES_REQUIREMENT,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: true,
 };
 const CHANGE_QUALITY_PROFILE: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "change_quality_profile",
@@ -441,7 +418,6 @@ const CHANGE_QUALITY_PROFILE: LifecycleActionStepDescriptor = LifecycleActionSte
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: false,
 };
 const SEARCH: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "search",
@@ -454,7 +430,6 @@ const SEARCH: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Accepted,
-    storage_root_allowed: false,
 };
 const ADD_TAGS: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "add_tags",
@@ -467,7 +442,6 @@ const ADD_TAGS: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: false,
 };
 const REMOVE_TAGS: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "remove_tags",
@@ -480,7 +454,6 @@ const REMOVE_TAGS: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: false,
 };
 const DELETE_TITLE_AND_FILES: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "delete_title_and_files",
@@ -493,7 +466,6 @@ const DELETE_TITLE_AND_FILES: LifecycleActionStepDescriptor = LifecycleActionSte
     requires: NO_REQUIREMENTS,
     terminal: true,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: false,
 };
 
 const MONITOR: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
@@ -507,7 +479,6 @@ const MONITOR: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Completed,
-    storage_root_allowed: false,
 };
 const FETCH_SUBTITLES: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "fetch_subtitles",
@@ -520,7 +491,6 @@ const FETCH_SUBTITLES: LifecycleActionStepDescriptor = LifecycleActionStepDescri
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Accepted,
-    storage_root_allowed: false,
 };
 const MOVE_TO_LIBRARY: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "move_to_library",
@@ -533,7 +503,6 @@ const MOVE_TO_LIBRARY: LifecycleActionStepDescriptor = LifecycleActionStepDescri
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Accepted,
-    storage_root_allowed: false,
 };
 const MOVE_TO_ROOT: LifecycleActionStepDescriptor = LifecycleActionStepDescriptor {
     id: "move_to_root",
@@ -546,7 +515,6 @@ const MOVE_TO_ROOT: LifecycleActionStepDescriptor = LifecycleActionStepDescripto
     requires: NO_REQUIREMENTS,
     terminal: false,
     completion_policy: LifecycleActionCompletionPolicy::Accepted,
-    storage_root_allowed: false,
 };
 
 const ACTION_SEQUENCE_CATALOG: &[LifecycleActionStepDescriptor] = &[
@@ -764,9 +732,6 @@ pub enum LifecycleActionSequenceError {
     #[error("tag '{label}' is both added and removed by the same sequence")]
     OpposingTagOperations { label: String },
 
-    #[error("lifecycle action step '{kind:?}' is not allowed on a storage-root rule")]
-    UnsupportedStorageRootStep { kind: LifecycleActionStepKind },
-
     #[error("target quality profile id must not be empty")]
     EmptyQualityProfileTarget,
 
@@ -947,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn sequence_hash_is_order_bound_and_storage_scope_is_closed() {
+    fn sequence_hash_is_order_bound() {
         let unmonitor = step(
             "unmonitor",
             LifecycleActionStepKind::Unmonitor,
@@ -965,11 +930,6 @@ mod tests {
         assert_ne!(
             forward.content_hash().unwrap(),
             reverse.content_hash().unwrap()
-        );
-        assert!(
-            forward
-                .validate_for_storage_root(LifecycleSubjectKind::Show)
-                .is_ok()
         );
     }
 
@@ -1127,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn moves_are_whole_title_steps_with_a_named_target_and_never_storage_root_steps() {
+    fn moves_are_whole_title_steps_with_a_named_target() {
         let to_library = |library: &str| {
             LifecycleActionSequence::new(vec![step(
                 "move_to_library",
@@ -1149,10 +1109,6 @@ mod tests {
         assert!(matches!(
             to_library("Fixture Archive").validate(LifecycleSubjectKind::Episode),
             Err(LifecycleActionSequenceError::UnsupportedSubject { .. })
-        ));
-        assert!(matches!(
-            to_library("Fixture Archive").validate_for_storage_root(LifecycleSubjectKind::Movie),
-            Err(LifecycleActionSequenceError::UnsupportedStorageRootStep { .. })
         ));
         let mismatched = LifecycleActionSequence::new(vec![step(
             "move_to_root",

@@ -90,7 +90,6 @@ const detail: LifecycleRuleSetDetail = {
     editedSinceEnabled: false,
     systemOwned: false,
     libraryIds: ["lib-movies", "lib-series"],
-    subjectKind: "TITLE",
     currentRevisionNumber: 3,
     graceDays: 30,
     maxTitlesPerRun: null,
@@ -114,7 +113,6 @@ const detail: LifecycleRuleSetDetail = {
     regoSource:
       'set_quality_profile := "Compact 1080p" if input.facts.has_file\n\nsearch if input.facts.has_file\n',
     graceDays: 14,
-    storageRootId: null,
     matcherContentHash: "blake3:abcdef",
     createdBy: "operator",
     createdAt: "2026-01-02T00:00:00Z",
@@ -197,7 +195,6 @@ test("matcher and metadata updates split along the API's versioned and unversion
     "id",
     "maxTitlesPerRun",
     "regoSource",
-    "storageRootId",
   ]);
   assert.deepEqual(Object.keys(metadata).sort(), [
     "description",
@@ -389,30 +386,17 @@ test("an update sends only the halves the editor changed", () => {
   assert.equal(both.metadata?.name, "Renamed");
 });
 
-test("a selected root follows create, update, and inline preview inputs", () => {
-  const draft = {
-    ...lifecycleRuleDraftFromDetail(detail, lifecycle),
-    storageRootId: "root-a",
-  };
-
-  assert.equal(
-    createLifecycleRuleSetInput(draft, lifecycle).storageRootId,
-    "root-a",
-  );
-  assert.equal(
-    updateLifecycleRuleMatcherInput("rule-1", draft, lifecycle)
-      .storageRootId,
-    "root-a",
-  );
-  assert.equal(lifecyclePreviewInput({ draft }).storageRootId, "root-a");
-  assert.equal(
-    updateLifecycleRuleMatcherInput(
-      "rule-1",
-      lifecycleRuleDraftFromDetail(detail, lifecycle),
-      lifecycle,
-    ).storageRootId,
-    null,
-  );
+test("no input names a scope or a storage root: heads say where an action acts", () => {
+  const draft = copyLifecycleRuleDraft(detail, lifecycle);
+  const inputs = [
+    createLifecycleRuleSetInput(draft, lifecycle),
+    updateLifecycleRuleMatcherInput("rule-1", draft, lifecycle),
+    lifecyclePreviewInput({ draft, libraryId: "series" }),
+  ];
+  for (const input of inputs) {
+    assert.equal(Object.hasOwn(input, "subjectKind"), false);
+    assert.equal(Object.hasOwn(input, "storageRootId"), false);
+  }
 });
 
 test("the preview limit stays inside the API's cap", () => {
@@ -551,7 +535,12 @@ test("every served action head has a translated label and only deletions are des
     assert.equal(descriptor.head, descriptor.id.toLowerCase());
     assert.equal(
       descriptor.destructive,
-      descriptor.id === "DELETE_FILES" || descriptor.id === "DELETE_TITLE",
+      [
+        "DELETE_FILES",
+        "DELETE_TITLE",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
+      ].includes(descriptor.id),
       descriptor.id,
     );
   }
@@ -998,30 +987,6 @@ test("every contract title and description key resolves in the default locale", 
   }
 
   assert.deepEqual(missing, []);
-});
-
-test("scope is copied, sent on create and preview, and immutable on matcher updates", () => {
-  const scoped: LifecycleRuleSetDetail = {
-    ...detail,
-    ruleSet: { ...detail.ruleSet, subjectKind: "EPISODE" },
-  };
-  const draft = copyLifecycleRuleDraft(scoped, lifecycle);
-  assert.equal(draft.subjectKind, "EPISODE");
-  assert.equal(
-    createLifecycleRuleSetInput(draft, lifecycle).subjectKind,
-    "EPISODE",
-  );
-  assert.equal(
-    lifecyclePreviewInput({ draft, libraryId: "series" }).subjectKind,
-    "EPISODE",
-  );
-  assert.equal(
-    Object.hasOwn(
-      updateLifecycleRuleMatcherInput("rule", draft, lifecycle),
-      "subjectKind",
-    ),
-    false,
-  );
 });
 
 test("exact subject preview retains its owning title and the draft library scope", () => {

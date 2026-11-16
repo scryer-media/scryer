@@ -106,7 +106,6 @@ const FAMILIES: Family[] = [
     draft: (template) => ({
       ...initialLifecycleRuleDraft(),
       regoSource: template.regoSource,
-      subjectKind: template.subjectKind ?? "TITLE",
     }),
     advanced: [
       // Reads each file's height through `some file in input.facts.files`.
@@ -284,7 +283,6 @@ function pickTemplate(id: string, schemaInHand: boolean) {
     draft: {
       ...initialLifecycleRuleDraft(),
       regoSource: template.regoSource,
-      subjectKind: template.subjectKind ?? "TITLE",
     },
     model: (schema) => ruleTemplateBuilderModel(schema, id),
     open: (draft) => {

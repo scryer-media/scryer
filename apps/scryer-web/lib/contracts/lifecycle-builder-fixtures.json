@@ -1,7 +1,6 @@
 [
   {
     "id": "all-bool-and-days",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -27,7 +26,27 @@
         "NOTIFY": "Removed an old title",
         "DELETE_FILES": true,
         "UNMONITOR": true
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "UNMONITOR",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "DELETE_FILES",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "NOTIFY",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored == true\n\tdays_since(input.facts.added_at) > 90\n\tinput.facts.has_file == false\n}\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n\nnotify := \"Removed an old title\" if rule_applies\n",
     "cases": [
@@ -78,7 +97,6 @@
   },
   {
     "id": "any-string-lists",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -113,7 +131,21 @@
           "sample-review",
           "sample-stale"
         ]
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "ADD_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "REMOVE_TAGS",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\t\"sample-keep\" in input.facts.tags\n}\n\nrule_applies if {\n\tis_array(input.facts.tags)\n\tnot \"sample-archive\" in input.facts.tags\n}\n\nrule_applies if {\n\tcount(input.facts.lists_names) == 0\n}\n\nrule_applies if {\n\tcount(input.facts.requested_by_usernames) > 0\n}\n\nadd_tags := [\"sample-review\", \"sample-stale\"] if rule_applies\n\nremove_tags := [\"sample-fresh\"] if rule_applies\n",
     "cases": [
@@ -192,7 +224,6 @@
   },
   {
     "id": "all-number-comparisons",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -214,7 +245,7 @@
           "value": "1073741824"
         },
         {
-          "field": "input.facts.storage_available_percent",
+          "field": "input.facts.popularity",
           "operator": "GREATER_OR_EQUAL",
           "value": "1.5"
         },
@@ -234,7 +265,7 @@
           "value": ""
         },
         {
-          "field": "input.facts.storage_total_bytes",
+          "field": "input.facts.runtime_minutes",
           "operator": "HAS_VALUE",
           "value": ""
         }
@@ -243,9 +274,29 @@
         "FETCH_SUBTITLES": true,
         "SEARCH": true,
         "SET_QUALITY_PROFILE": "Sample Profile"
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "SET_QUALITY_PROFILE",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "SEARCH",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "FETCH_SUBTITLES",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.file_count == 0\n\tis_number(input.facts.episode_count)\n\tinput.facts.episode_count != 3\n\tis_number(input.facts.total_file_size_bytes)\n\tinput.facts.total_file_size_bytes > 1073741824\n\tis_number(input.facts.storage_available_percent)\n\tinput.facts.storage_available_percent >= 1.5\n\tis_number(input.facts.lists_best_rank)\n\tinput.facts.lists_best_rank < -2\n\tis_number(input.facts.lists_days_on_list)\n\tinput.facts.lists_days_on_list <= 10\n\tnot input.facts.active_retention_claims != null\n\tinput.facts.storage_total_bytes != null\n}\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n",
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.file_count == 0\n\tis_number(input.facts.episode_count)\n\tinput.facts.episode_count != 3\n\tis_number(input.facts.total_file_size_bytes)\n\tinput.facts.total_file_size_bytes > 1073741824\n\tis_number(input.facts.popularity)\n\tinput.facts.popularity >= 1.5\n\tis_number(input.facts.lists_best_rank)\n\tinput.facts.lists_best_rank < -2\n\tis_number(input.facts.lists_days_on_list)\n\tinput.facts.lists_days_on_list <= 10\n\tnot input.facts.active_retention_claims != null\n\tinput.facts.runtime_minutes != null\n}\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n",
     "cases": [
       {
         "input": {
@@ -254,10 +305,10 @@
             "file_count": 0,
             "episode_count": 4,
             "total_file_size_bytes": 2147483648,
-            "storage_available_percent": 1.5,
+            "popularity": 1.5,
             "lists_best_rank": -3,
             "lists_days_on_list": 10,
-            "storage_total_bytes": 1000
+            "runtime_minutes": 1000
           }
         },
         "expected": true
@@ -268,10 +319,10 @@
           "facts": {
             "file_count": 0,
             "total_file_size_bytes": 2147483648,
-            "storage_available_percent": 1.5,
+            "popularity": 1.5,
             "lists_best_rank": -3,
             "lists_days_on_list": 10,
-            "storage_total_bytes": 1000
+            "runtime_minutes": 1000
           }
         },
         "expected": false
@@ -283,10 +334,10 @@
             "file_count": 0,
             "episode_count": 3,
             "total_file_size_bytes": 2147483648,
-            "storage_available_percent": 1.5,
+            "popularity": 1.5,
             "lists_best_rank": -3,
             "lists_days_on_list": 10,
-            "storage_total_bytes": 1000
+            "runtime_minutes": 1000
           }
         },
         "expected": false
@@ -298,10 +349,10 @@
             "file_count": 0,
             "episode_count": 4,
             "total_file_size_bytes": 2147483648,
-            "storage_available_percent": 1.5,
+            "popularity": 1.5,
             "lists_best_rank": -3,
             "lists_days_on_list": 10,
-            "storage_total_bytes": 1000,
+            "runtime_minutes": 1000,
             "active_retention_claims": 2
           }
         },
@@ -314,7 +365,7 @@
             "file_count": 0,
             "episode_count": 4,
             "total_file_size_bytes": 2147483648,
-            "storage_available_percent": 1.5,
+            "popularity": 1.5,
             "lists_best_rank": -3,
             "lists_days_on_list": 10
           }
@@ -325,7 +376,6 @@
   },
   {
     "id": "all-strings-and-timestamps",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -370,7 +420,21 @@
       "outputs": {
         "SEARCH": true,
         "MONITOR": true
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "MONITOR",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "SEARCH",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.request_origin == \"list\"\n\tis_string(input.facts.added_by_username)\n\tinput.facts.added_by_username != \"sample-user\"\n\tinput.facts.request_list_name != null\n\tnot input.facts.quality_profile_id != null\n\tdays_since(input.facts.last_watched_at) >= 0\n\tdays_since(input.facts.last_watched_at) < 30\n\tinput.facts.lists_left_at != null\n\tnot input.facts.first_imported_at != null\n}\n\nmonitor if rule_applies\n\nsearch if rule_applies\n",
     "cases": [
@@ -455,7 +519,6 @@
   },
   {
     "id": "title-move-to-library",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -469,7 +532,15 @@
       ],
       "outputs": {
         "MOVE_TO_LIBRARY": "Sample Library"
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "MOVE_TO_LIBRARY",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.lists_left_all == true\n}\n\nmove_to_library := \"Sample Library\" if rule_applies\n",
     "cases": [
@@ -501,7 +572,6 @@
   },
   {
     "id": "title-move-to-root",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -513,7 +583,7 @@
           "value": ""
         },
         {
-          "field": "input.facts.storage_root_id",
+          "field": "input.facts.network",
           "operator": "EQUALS",
           "value": "sample-root"
         }
@@ -521,16 +591,30 @@
       "outputs": {
         "MOVE_TO_ROOT": "/data/sample root",
         "UNMONITOR": true
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "MOVE_TO_ROOT",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "UNMONITOR",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.watched_by_anyone == true\n}\n\nrule_applies if {\n\tinput.facts.storage_root_id == \"sample-root\"\n}\n\nmove_to_root := \"/data/sample root\" if rule_applies\n\nunmonitor if rule_applies\n",
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.watched_by_anyone == true\n}\n\nrule_applies if {\n\tinput.facts.network == \"sample-root\"\n}\n\nmove_to_root := \"/data/sample root\" if rule_applies\n\nunmonitor if rule_applies\n",
     "cases": [
       {
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "watched_by_anyone": false,
-            "storage_root_id": "sample-root"
+            "network": "sample-root"
           }
         },
         "expected": true
@@ -540,7 +624,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "watched_by_anyone": true,
-            "storage_root_id": "sample-other-root"
+            "network": "sample-other-root"
           }
         },
         "expected": true
@@ -550,7 +634,7 @@
           "evaluation_time": "2026-01-31T00:00:00Z",
           "facts": {
             "watched_by_anyone": false,
-            "storage_root_id": "sample-other-root"
+            "network": "sample-other-root"
           }
         },
         "expected": false
@@ -565,7 +649,6 @@
   },
   {
     "id": "title-delete-title",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -580,7 +663,21 @@
       "outputs": {
         "DELETE_TITLE": true,
         "UNMONITOR": true
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "UNMONITOR",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "DELETE_TITLE",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tdays_since(input.facts.request_lease_expires_at) > 0\n}\n\nunmonitor if rule_applies\n\ndelete_title if rule_applies\n",
     "cases": [
@@ -621,7 +718,6 @@
   },
   {
     "id": "escaping",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -644,7 +740,21 @@
           "sample.tag one",
           "sample-tag_2"
         ]
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "ADD_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "NOTIFY",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.added_by_username == \"sample \\\"quoted\\\" \\\\ user\"\n\t\"Ünïcødé 標籤 😀\" in input.facts.tags\n}\n\nadd_tags := [\"sample.tag one\", \"sample-tag_2\"] if rule_applies\n\nnotify := \"Say \\\"hi\\\" to C:\\\\sample\\\\path\" if rule_applies\n",
     "cases": [
@@ -687,65 +797,7 @@
     ]
   },
   {
-    "id": "episode-scope",
-    "scope": "EPISODE",
-    "model": {
-      "version": 2,
-      "family": "lifecycle",
-      "join": "ALL",
-      "conditions": [
-        {
-          "field": "input.facts.monitored",
-          "operator": "IS_TRUE",
-          "value": ""
-        },
-        {
-          "field": "input.facts.episode_position_by_air_date",
-          "operator": "LESS_OR_EQUAL",
-          "value": "2"
-        }
-      ],
-      "outputs": {
-        "DELETE_FILES": true,
-        "UNMONITOR": true
-      }
-    },
-    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored == true\n\tis_number(input.facts.episode_position_by_air_date)\n\tinput.facts.episode_position_by_air_date <= 2\n}\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n",
-    "cases": [
-      {
-        "input": {
-          "evaluation_time": "2026-01-31T00:00:00Z",
-          "facts": {
-            "monitored": true,
-            "episode_position_by_air_date": 2
-          }
-        },
-        "expected": true
-      },
-      {
-        "input": {
-          "evaluation_time": "2026-01-31T00:00:00Z",
-          "facts": {
-            "monitored": true,
-            "episode_position_by_air_date": 3
-          }
-        },
-        "expected": false
-      },
-      {
-        "input": {
-          "evaluation_time": "2026-01-31T00:00:00Z",
-          "facts": {
-            "monitored": true
-          }
-        },
-        "expected": false
-      }
-    ]
-  },
-  {
     "id": "every-title-action-in-order",
-    "scope": "TITLE",
     "model": {
       "version": 2,
       "family": "lifecycle",
@@ -770,7 +822,57 @@
         "ADD_TAGS": [
           "sample-new"
         ]
-      }
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "ADD_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "REMOVE_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "SET_QUALITY_PROFILE",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "SEARCH",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "FETCH_SUBTITLES",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "UNMONITOR",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "DELETE_FILES",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "TITLE",
+          "output": "NOTIFY",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
     },
     "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.requested == false\n}\n\nadd_tags := [\"sample-new\"] if rule_applies\n\nremove_tags := [\"sample-old\"] if rule_applies\n\nset_quality_profile := \"Sample Profile\" if rule_applies\n\nsearch if rule_applies\n\nfetch_subtitles if rule_applies\n\nunmonitor if rule_applies\n\ndelete_files if rule_applies\n\nnotify := \"Sample notice\" if rule_applies\n",
     "cases": [
@@ -795,6 +897,342 @@
       {
         "input": {
           "evaluation_time": "2026-01-31T00:00:00Z"
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "season-and-episode-removal",
+    "model": {
+      "version": 2,
+      "family": "lifecycle",
+      "join": "ALL",
+      "conditions": [
+        {
+          "field": "input.facts.monitored",
+          "operator": "IS_TRUE",
+          "value": ""
+        }
+      ],
+      "outputs": {
+        "ADD_TAGS": [
+          "Reviewed"
+        ],
+        "UNMONITOR_SEASON": true,
+        "DELETE_SEASON_FILES": true,
+        "NOTIFY_SEASON": "Season removed",
+        "DELETE_EPISODE_FILES": true,
+        "UNMONITOR_EPISODE": true,
+        "NOTIFY_EPISODE": "Episode removed"
+      },
+      "actions": [
+        {
+          "subject": "TITLE",
+          "output": "ADD_TAGS",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "SEASON",
+          "output": "UNMONITOR_SEASON",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "SEASON",
+          "output": "DELETE_SEASON_FILES",
+          "join": "ALL",
+          "conditions": [
+            {
+              "field": "input.season.facts.season_position_by_air_date",
+              "operator": "GREATER_THAN",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "subject": "SEASON",
+          "output": "NOTIFY_SEASON",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "EPISODE",
+          "output": "DELETE_EPISODE_FILES",
+          "join": "ANY",
+          "conditions": [
+            {
+              "field": "input.episode.facts.episode_position_by_air_date",
+              "operator": "GREATER_THAN",
+              "value": "3"
+            },
+            {
+              "field": "input.episode.facts.monitored",
+              "operator": "IS_FALSE",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "subject": "EPISODE",
+          "output": "UNMONITOR_EPISODE",
+          "join": "ALL",
+          "conditions": []
+        },
+        {
+          "subject": "EPISODE",
+          "output": "NOTIFY_EPISODE",
+          "join": "ALL",
+          "conditions": []
+        }
+      ]
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies if {\n\tinput.facts.monitored == true\n}\n\nrule_applies_3 if {\n\trule_applies\n\tis_number(input.season.facts.season_position_by_air_date)\n\tinput.season.facts.season_position_by_air_date > 2\n}\n\nrule_applies_5 if {\n\trule_applies\n\tis_number(input.episode.facts.episode_position_by_air_date)\n\tinput.episode.facts.episode_position_by_air_date > 3\n}\n\nrule_applies_5 if {\n\trule_applies\n\tinput.episode.facts.monitored == false\n}\n\nadd_tags := [\"Reviewed\"] if rule_applies\n\nunmonitor_season if rule_applies\n\nunmonitor_episode if rule_applies\n\ndelete_season_files if rule_applies_3\n\ndelete_episode_files if rule_applies_5\n\nnotify_season := \"Season removed\" if rule_applies\n\nnotify_episode := \"Episode removed\" if rule_applies\n",
+    "cases": [
+      {
+        "rule": "rule_applies",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          }
+        },
+        "expected": true
+      },
+      {
+        "rule": "rule_applies",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": false
+          }
+        },
+        "expected": false
+      },
+      {
+        "rule": "rule_applies_3",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "season": {
+            "facts": {
+              "season_position_by_air_date": 3
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "rule": "rule_applies_3",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "season": {
+            "facts": {
+              "season_position_by_air_date": 2
+            }
+          }
+        },
+        "expected": false
+      },
+      {
+        "rule": "rule_applies_3",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": false
+          },
+          "season": {
+            "facts": {
+              "season_position_by_air_date": 3
+            }
+          }
+        },
+        "expected": false
+      },
+      {
+        "rule": "rule_applies_5",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "episode": {
+            "facts": {
+              "episode_position_by_air_date": 1,
+              "monitored": false
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "rule": "rule_applies_5",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "episode": {
+            "facts": {
+              "episode_position_by_air_date": 4,
+              "monitored": true
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "rule": "rule_applies_5",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "episode": {
+            "facts": {
+              "episode_position_by_air_date": 2,
+              "monitored": true
+            }
+          }
+        },
+        "expected": false
+      }
+    ]
+  },
+  {
+    "id": "season-and-episode-monitoring",
+    "model": {
+      "version": 2,
+      "family": "lifecycle",
+      "join": "ALL",
+      "conditions": [],
+      "outputs": {
+        "MONITOR_SEASON": true,
+        "FETCH_SEASON_SUBTITLES": true,
+        "MONITOR_EPISODE": true,
+        "FETCH_EPISODE_SUBTITLES": true
+      },
+      "actions": [
+        {
+          "subject": "SEASON",
+          "output": "MONITOR_SEASON",
+          "join": "ALL",
+          "conditions": [
+            {
+              "field": "input.season.facts.monitored",
+              "operator": "IS_FALSE",
+              "value": ""
+            },
+            {
+              "field": "input.facts.monitored",
+              "operator": "IS_TRUE",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "subject": "SEASON",
+          "output": "FETCH_SEASON_SUBTITLES",
+          "join": "ALL",
+          "conditions": [
+            {
+              "field": "input.season.facts.monitored",
+              "operator": "IS_TRUE",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "subject": "EPISODE",
+          "output": "MONITOR_EPISODE",
+          "join": "ALL",
+          "conditions": [
+            {
+              "field": "input.episode.facts.monitored",
+              "operator": "IS_FALSE",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "subject": "EPISODE",
+          "output": "FETCH_EPISODE_SUBTITLES",
+          "join": "ALL",
+          "conditions": [
+            {
+              "field": "input.episode.facts.monitored",
+              "operator": "IS_TRUE",
+              "value": ""
+            }
+          ]
+        }
+      ]
+    },
+    "source": "package rules\nimport rego.v1\n\nrule_applies_1 if {\n\tinput.season.facts.monitored == false\n\tinput.facts.monitored == true\n}\n\nrule_applies_2 if {\n\tinput.season.facts.monitored == true\n}\n\nrule_applies_3 if {\n\tinput.episode.facts.monitored == false\n}\n\nrule_applies_4 if {\n\tinput.episode.facts.monitored == true\n}\n\nmonitor_season if rule_applies_1\n\nmonitor_episode if rule_applies_3\n\nfetch_season_subtitles if rule_applies_2\n\nfetch_episode_subtitles if rule_applies_4\n",
+    "cases": [
+      {
+        "rule": "rule_applies_1",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "season": {
+            "facts": {
+              "monitored": false
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "rule": "rule_applies_1",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": false
+          },
+          "season": {
+            "facts": {
+              "monitored": false
+            }
+          }
+        },
+        "expected": false
+      },
+      {
+        "rule": "rule_applies_3",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "episode": {
+            "facts": {
+              "monitored": false
+            }
+          }
+        },
+        "expected": true
+      },
+      {
+        "rule": "rule_applies_4",
+        "input": {
+          "evaluation_time": "2026-01-31T00:00:00Z",
+          "facts": {
+            "monitored": true
+          },
+          "episode": {
+            "facts": {
+              "monitored": false
+            }
+          }
         },
         "expected": false
       }

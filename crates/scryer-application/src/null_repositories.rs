@@ -905,10 +905,6 @@ impl DownloadQueueCommandRepository for NullDownloadQueueCommandRepository {
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
         Ok(vec![])
     }
-
-    async fn prune_terminal_delete_commands_older_than(&self, _: i64) -> AppResult<u32> {
-        Ok(0)
-    }
 }
 
 #[derive(Default)]
@@ -1529,6 +1525,13 @@ impl AcquisitionScopeStateRepository for NullAcquisitionScopeStateRepository {
         &self,
         _title_id: &str,
         _episode_id: Option<&str>,
+    ) -> AppResult<Option<AcquisitionScopeState>> {
+        Ok(None)
+    }
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        _title_id: &str,
+        _scope: crate::AcquisitionScopeKey<'_>,
     ) -> AppResult<Option<AcquisitionScopeState>> {
         Ok(None)
     }

@@ -107,7 +107,14 @@ fn every_action_head_decodes_to_its_declared_type() {
     );
     assert!(!actions.is_empty());
     assert!(actions.defines_destructive_action());
-    assert_eq!(actions.heads(), LifecycleActionHead::ALL.to_vec());
+    // A title decides through its bare heads only.
+    assert_eq!(
+        actions.heads(),
+        LifecycleActionHead::ALL
+            .into_iter()
+            .filter(|head| head.level() == crate::lifecycle::LifecycleSubjectKind::Title)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -142,7 +149,11 @@ fn undefined_heads_decode_to_no_actions() {
         .join(", ");
     let value = regorus::Value::from_json_str(&format!("{{{defaults}}}")).expect("json");
 
-    let actions = &crate::lifecycle_actions::decode_actions(&value).expect("decodes");
+    let actions = &crate::lifecycle_actions::decode_actions(
+        &value,
+        crate::lifecycle::LifecycleSubjectKind::Title,
+    )
+    .expect("decodes");
     assert_eq!(actions, &LifecycleActions::default());
     assert!(actions.is_empty());
     assert!(!actions.defines_destructive_action());
@@ -278,6 +289,74 @@ fn conflicting_heads_are_reported_as_a_pair() {
         "unmonitor := true\ndelete_files := true\n",
     ] {
         assert_eq!(decided(body).conflict(), None, "{body}");
+    }
+}
+
+/// Monitoring at one level conflicts with unmonitoring or deleting at any
+/// level, and a move conflicts with every delete, whichever head is named
+/// first. Deletes never conflict with each other or with unmonitoring, so a
+/// rule may still define any mix of them.
+#[test]
+fn conflicts_reach_across_levels_in_both_orders_and_deletes_combine_freely() {
+    use LifecycleActionHead as H;
+    let monitors = [H::Monitor, H::MonitorSeason, H::MonitorEpisode];
+    let unmonitors = [H::Unmonitor, H::UnmonitorSeason, H::UnmonitorEpisode];
+    let deletes = [
+        H::DeleteFiles,
+        H::DeleteTitle,
+        H::DeleteSeasonFiles,
+        H::DeleteEpisodeFiles,
+    ];
+    let mut refused = vec![(H::MoveToLibrary, H::MoveToRoot)];
+    for monitor in monitors {
+        for other in unmonitors.iter().chain(&deletes) {
+            refused.push((monitor, *other));
+        }
+    }
+    for mover in [H::MoveToLibrary, H::MoveToRoot] {
+        for delete in deletes {
+            refused.push((mover, delete));
+        }
+    }
+    for (a, b) in &refused {
+        assert!(a.conflicts(*b), "{a:?} with {b:?}");
+        assert!(b.conflicts(*a), "{b:?} with {a:?}");
+    }
+    for a in H::ALL {
+        for b in H::ALL {
+            let listed = refused.contains(&(a, b)) || refused.contains(&(b, a));
+            assert_eq!(a.conflicts(b), listed, "{a:?} with {b:?}");
+        }
+    }
+
+    // Each pair is listed once, on the head the host applies first.
+    let position = |head| H::EXECUTION_ORDER.iter().position(|h| *h == head);
+    for head in H::ALL {
+        for other in head.conflicts_with() {
+            assert!(
+                position(head) < position(*other),
+                "{head:?} lists {other:?}"
+            );
+        }
+    }
+
+    for (a, b) in [
+        (H::DeleteFiles, H::DeleteTitle),
+        (H::DeleteFiles, H::DeleteSeasonFiles),
+        (H::DeleteTitle, H::DeleteEpisodeFiles),
+        (H::DeleteSeasonFiles, H::DeleteEpisodeFiles),
+        (H::Unmonitor, H::DeleteSeasonFiles),
+        (H::UnmonitorSeason, H::DeleteEpisodeFiles),
+        (H::UnmonitorEpisode, H::DeleteTitle),
+    ] {
+        assert!(!a.conflicts(b), "{a:?} with {b:?}");
+        for body in [
+            format!("{} := true\n{} := true\n", a.rule_name(), b.rule_name()),
+            format!("{} := true\n{} := true\n", b.rule_name(), a.rule_name()),
+        ] {
+            let validation = validate(&body);
+            assert!(validation.valid, "{body}: {:?}", validation.errors);
+        }
     }
 }
 
@@ -1323,4 +1402,252 @@ fn positions_count_characters_on_tab_indented_and_non_ascii_lines() {
         column <= text.len() + 1,
         "{column} is past line {line}: {text:?}"
     );
+}
+
+// ── Levels ──────────────────────────────────────────────────────────────────
+
+/// The synthetic input as evaluated at one level: the title alone, or the
+/// title with one season or one episode beside it.
+fn input_at(level: crate::lifecycle::LifecycleSubjectKind) -> LifecycleInput {
+    use crate::lifecycle::LifecycleSubjectKind as Level;
+    let mut input = synthetic_lifecycle_input();
+    input.subject.kind = level;
+    if level != Level::Season {
+        input.season = None;
+    }
+    if level != Level::Episode {
+        input.episode = None;
+    }
+    input
+}
+
+#[test]
+fn each_season_and_episode_head_decides_only_at_its_own_level() {
+    use crate::lifecycle::LifecycleSubjectKind as Level;
+    let narrow: Vec<_> = LifecycleActionHead::ALL
+        .into_iter()
+        .filter(|head| head.level() != Level::Title)
+        .collect();
+    assert_eq!(narrow.len(), 10);
+    for head in narrow {
+        let section = match head.level() {
+            Level::Season => "season",
+            _ => "episode",
+        };
+        let value = if head.carries_string() {
+            " := \"Fixture note\""
+        } else {
+            ""
+        };
+        let body = format!(
+            "{}{value} if input.{section}.facts.has_file\n",
+            head.rule_name()
+        );
+        assert!(
+            validate(&body).valid,
+            "{body}: {:?}",
+            validate(&body).errors
+        );
+        for level in [Level::Title, Level::Season, Level::Episode] {
+            let result = evaluate_against(&body, input_at(level));
+            let actions = actions_of(&result);
+            if level == head.level() {
+                assert_eq!(actions.heads(), vec![head.base()], "{head:?} at {level:?}");
+                assert_eq!(result.records[0].decision.outcome, LifecycleOutcome::Match);
+            } else {
+                assert!(actions.is_empty(), "{head:?} decided at {level:?}");
+                assert_eq!(
+                    result.records[0].decision.outcome,
+                    LifecycleOutcome::NoMatch,
+                    "{head:?} at {level:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_title_head_never_decides_for_a_season_or_an_episode() {
+    use crate::lifecycle::LifecycleSubjectKind as Level;
+    let body = "delete_files if input.facts.has_file\n";
+    assert_eq!(
+        actions_of(&evaluate_against(body, input_at(Level::Title))).heads(),
+        vec![LifecycleActionHead::DeleteFiles]
+    );
+    for level in [Level::Season, Level::Episode] {
+        assert!(actions_of(&evaluate_against(body, input_at(level))).is_empty());
+    }
+}
+
+#[test]
+fn the_levels_a_rule_acts_at_come_from_the_heads_it_defines() {
+    use crate::lifecycle::LifecycleSubjectKind as Level;
+    let levels = |body: &str| {
+        scan_lifecycle_action_heads(&source(body), "fixture_rule")
+            .expect("parses")
+            .levels()
+    };
+    assert_eq!(
+        levels(
+            "unmonitor if input.facts.has_file\nadd_tags := [\"stale\"] if input.facts.has_file\n"
+        ),
+        [Level::Title].into()
+    );
+    assert_eq!(
+        levels(
+            "add_tags := [\"stale\"] if input.facts.has_file\n\
+             delete_season_files if input.season.facts.has_file\n"
+        ),
+        [Level::Title, Level::Season].into()
+    );
+    assert_eq!(
+        levels("notify_episode := \"Fixture\" if input.episode.facts.has_file\n"),
+        [Level::Episode].into()
+    );
+}
+
+#[test]
+fn a_mixed_level_rule_decides_each_level_through_its_own_heads() {
+    use crate::lifecycle::LifecycleSubjectKind as Level;
+    let body = "add_tags := [\"stale\"] if input.facts.has_file\n\
+                unmonitor_season if input.season.facts.has_file\n\
+                delete_episode_files if input.episode.facts.has_file\n";
+    assert!(validate(body).valid, "{:?}", validate(body).errors);
+    let title = evaluate_against(body, input_at(Level::Title));
+    assert_eq!(
+        actions_of(&title).heads(),
+        vec![LifecycleActionHead::AddTags]
+    );
+    let season = evaluate_against(body, input_at(Level::Season));
+    assert_eq!(
+        actions_of(&season).heads(),
+        vec![LifecycleActionHead::Unmonitor]
+    );
+    let episode = evaluate_against(body, input_at(Level::Episode));
+    assert_eq!(
+        actions_of(&episode).heads(),
+        vec![LifecycleActionHead::DeleteFiles]
+    );
+}
+
+#[test]
+fn a_head_reading_another_levels_section_is_refused() {
+    for body in [
+        // A negated read of a missing section is true, so these would fire on
+        // every title.
+        "delete_title if { not input.season.facts.has_file }\n",
+        "delete_files if { not input.episode.facts.has_file }\n",
+        // Through a helper too.
+        "season_empty if { not input.season.facts.has_file }\n\
+         delete_files if season_empty\n",
+        "delete_season_files if { not input.episode.facts.has_file }\n",
+        "unmonitor_episode if { input.season.facts.has_file }\n",
+    ] {
+        let result = validate(body);
+        assert!(!result.valid, "{body}");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code == diagnostic_codes::RULE_ACTION_READS_OTHER_LEVEL),
+            "{body}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            LifecycleRulesEngine::build(&[policy("fixture_rule", body)])
+                .expect("builds")
+                .evaluator()
+                .evaluate(&synthetic_lifecycle_input())
+                .expect("evaluates")
+                .errors
+                .iter()
+                .any(|error| error.code == diagnostic_codes::RULE_ACTION_READS_OTHER_LEVEL),
+            "a stored source with the same read never decides: {body}"
+        );
+    }
+    // A narrow head may read the title's facts beside its own.
+    assert!(
+        validate("delete_season_files if {\n  input.facts.has_file\n  not input.season.facts.monitored\n}\n")
+            .valid
+    );
+}
+
+#[test]
+fn a_nested_section_is_read_by_name_only() {
+    for (body, code) in [
+        (
+            "unmonitor_season if { x := \"has_file\"; input.season.facts[x] }\n",
+            diagnostic_codes::RULE_DYNAMIC_INPUT_PATH,
+        ),
+        (
+            "unmonitor_season if { count(input.season) > 0 }\n",
+            diagnostic_codes::RULE_UNKNOWN_INPUT_PATH,
+        ),
+        (
+            "unmonitor_season if { count(input.season.facts) > 0 }\n",
+            diagnostic_codes::RULE_UNKNOWN_INPUT_PATH,
+        ),
+        (
+            "unmonitor_season if { input.season.facts.not_a_fact }\n",
+            diagnostic_codes::RULE_UNKNOWN_INPUT_PATH,
+        ),
+    ] {
+        let result = validate(body);
+        assert!(!result.valid, "{body}");
+        assert!(
+            result.diagnostics.iter().any(|d| d.code == code),
+            "{body}: {:?}",
+            result.diagnostics
+        );
+    }
+    assert!(
+        validate("unmonitor_season if input.season.observations.has_file.status == \"known\"\n")
+            .valid
+    );
+    assert!(
+        validate(
+            "notify_episode := \"Fixture\" if input.episode.facts.files[_].quality == \"2160P\"\n"
+        )
+        .valid
+    );
+}
+
+#[test]
+fn an_unknown_season_fact_holds_only_the_season_it_belongs_to() {
+    use crate::lifecycle::LifecycleSubjectKind as Level;
+    let body = "unmonitor_season if input.season.facts.watched_by_anyone == false\n";
+    let mut season = input_at(Level::Season);
+    if let Some(doc) = season.season.as_mut() {
+        doc.facts.watched_by_anyone = Observation::unknown("fixture_unread");
+    }
+    let held = evaluate_against(body, season);
+    assert_eq!(held.records[0].decision.outcome, LifecycleOutcome::Unknown);
+    assert_eq!(
+        held.records[0].decision.reason_codes,
+        vec!["fixture_unread".to_string()]
+    );
+
+    // The title's own copy of the fact being unknown does not hold a rule that
+    // reads only the season's.
+    let mut title_unknown = input_at(Level::Season);
+    title_unknown.facts.watched_by_anyone = Observation::unknown("fixture_unread");
+    if let Some(doc) = title_unknown.season.as_mut() {
+        doc.facts.watched_by_anyone = Observation::known(false);
+    }
+    let decided = evaluate_against(body, title_unknown);
+    assert_eq!(decided.records[0].decision.outcome, LifecycleOutcome::Match);
+}
+
+#[test]
+fn storage_roots_are_read_entry_by_entry() {
+    let body = "notify := \"Low space\" if {\n  some root in input.facts.storage_roots\n  root.available_percent < 30\n}\n";
+    assert!(validate(body).valid, "{:?}", validate(body).errors);
+    assert_eq!(
+        actions_of(&evaluate(body)).notify.as_deref(),
+        Some("Low space")
+    );
+    let mut unknown = synthetic_lifecycle_input();
+    unknown.facts.storage_roots = Observation::unknown("storage_not_sampled");
+    let held = evaluate_against(body, unknown);
+    assert_eq!(held.records[0].decision.outcome, LifecycleOutcome::Unknown);
 }

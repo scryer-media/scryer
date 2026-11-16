@@ -3,7 +3,7 @@ pub mod media;
 pub use media::*;
 
 pub(crate) mod queries {
-    pub(crate) use crate::media::search::{title_search, wanted};
+    pub(crate) use crate::media::search::title_search;
     pub(crate) use crate::media::titles::db as title;
     pub(crate) use scryer_infrastructure_sql::{common, runtime as sql_runtime};
 }

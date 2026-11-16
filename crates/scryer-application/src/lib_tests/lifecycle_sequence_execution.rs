@@ -7,7 +7,7 @@
 
 use crate::lib_tests::lifecycle_execution::{execution_app, seed_title};
 use crate::lib_tests::lifecycle_sequence_deletion::{
-    add_catalog_movie_file_without_physical_path, selected_root_sequence_deletion_draft,
+    add_catalog_movie_file_without_physical_path, storage_sequence_deletion_draft,
 };
 use crate::lib_tests::lifecycle_title_completion::{TitleFixture, title_fixture};
 use crate::lifecycle_rules::sequence_execution::{
@@ -26,7 +26,7 @@ use crate::ports::{
 use chrono::{Duration, Utc};
 use scryer_domain::{
     LifecycleActionStepKey, LifecycleActionStepRun, LifecycleActionStepState,
-    LifecycleCandidateState, LifecycleEffectArming, LifecycleRuleSubjectKind, MediaFacet,
+    LifecycleCandidateState, LifecycleEffectArming, MediaFacet,
 };
 use std::collections::HashMap;
 
@@ -41,12 +41,10 @@ pub(super) fn with_matcher(draft: &mut LifecycleRuleDraft, matcher: &str) {
 pub(super) fn sequence_draft(steps: Vec<LifecycleActionStep>) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: LifecycleRuleSubjectKind::Title,
         name: "Sequence executor regression".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::steps_source(ALWAYS_MATCHER, &steps),
         grace_days: 0,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -1512,7 +1510,7 @@ async fn high_risk_sequence_failures_trip_the_per_pass_breaker_before_a_fourth_d
         )
         .await;
     }
-    let draft = selected_root_sequence_deletion_draft(&fixture).await;
+    let draft = storage_sequence_deletion_draft();
     sample_fixture_root(&fixture);
     let (rule_set_id, candidates) = arm_and_evaluate_all(&fixture.execution, draft).await;
     assert_eq!(candidates.len(), 4, "{candidates:?}");
@@ -1994,69 +1992,13 @@ async fn a_decision_naming_an_undeclared_head_is_held() {
     );
 }
 
-/// A revision limited to a storage root may only run steps that can act on
-/// one root. A stored revision that pairs a root with a whole-title delete is
-/// held at execution, before anything changes.
-#[tokio::test]
-async fn a_storage_root_revision_with_a_whole_title_step_is_held() {
-    let fixture = execution_app(None);
-    let title = seed_title(&fixture.app, &fixture.user, "Root and title", false).await;
-    let (rule_set_id, candidate) = arm_and_evaluate(
-        &fixture,
-        sequence_draft(vec![LifecycleActionStep {
-            id: "delete_title".to_string(),
-            kind: LifecycleActionStepKind::DeleteTitleAndFiles,
-            parameters: LifecycleActionStepParameters::None,
-        }]),
-    )
-    .await;
-    let stored = fixture
-        .rules
-        .get_revision(&rule_set_id, candidate.revision_number)
-        .await
-        .expect("read revision")
-        .expect("revision exists");
-    fixture
-        .rules
-        .replace_revision_in_place(scryer_domain::LifecycleRuleRevision {
-            storage_root_id: Some("forged-root".to_string()),
-            ..stored
-        })
-        .await;
-    fixture.evaluation.end_every_grace().await;
-
-    let report = fixture
-        .app
-        .run_every_rule_action_pass_for_tests()
-        .await
-        .expect("action pass");
-    assert_eq!(report.executed, 0, "{report:?}");
-    let held = &fixture.evaluation.all_candidates().await[0];
-    assert_eq!(held.state, LifecycleCandidateState::Blocked, "{held:?}");
-    assert_eq!(
-        held.state_reason,
-        crate::lifecycle_rules::execution_reason::STORAGE_ROOT_ACTION_NOT_ALLOWED
-    );
-    assert!(
-        fixture
-            .app
-            .get_title(&fixture.user, &title.id)
-            .await
-            .expect("read title")
-            .is_some(),
-        "the title is not deleted"
-    );
-}
-
 fn decision_change_draft(rego_source: &str, grace_days: i64) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: LifecycleRuleSubjectKind::Title,
         name: "Decision change regression".to_string(),
         description: String::new(),
         rego_source: rego_source.to_string(),
         grace_days,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -2168,7 +2110,7 @@ async fn a_recreated_candidate_keeps_the_failed_delete_attempts_it_carries() {
         &folder,
     )
     .await;
-    let mut draft = selected_root_sequence_deletion_draft(&fixture).await;
+    let mut draft = storage_sequence_deletion_draft();
     draft.rego_source = "match := true\n\nunmonitor if {\n\tinput.facts.monitored\n}\n\n\
                          delete_files if {\n\tmatch\n}\n"
         .to_string();
@@ -2375,7 +2317,6 @@ async fn a_monitor_rule_monitors_the_title_and_notifies_once() {
 fn self_retiring_draft(action_head: &str, message: &str) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: LifecycleRuleSubjectKind::Title,
         name: "Sequence executor regression".to_string(),
         description: String::new(),
         rego_source: format!(
@@ -2383,7 +2324,6 @@ fn self_retiring_draft(action_head: &str, message: &str) -> LifecycleRuleDraft {
             serde_json::to_string(message).expect("a string always serializes")
         ),
         grace_days: 0,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }

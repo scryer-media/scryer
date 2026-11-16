@@ -16,7 +16,7 @@ use tracing::warn;
 
 use super::PolicyFamily;
 use super::PolicyRecord;
-use super::observation::{held_reason_codes, unobservable_facts};
+use super::observation::{held_reason_codes, unobservable_facts_in};
 use super::telemetry::{PolicyObserver, PolicyTimer};
 use crate::RulesError;
 use crate::runtime::{self, RuntimeLimits};
@@ -353,7 +353,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
             serde_json::to_value(input)?
         };
         let unobservable = if F::TRACKS_REFERENCED_FACTS {
-            unobservable_facts(&document)
+            unobservable_facts_in(&document, F::NESTED_FACT_SECTIONS)
         } else {
             BTreeMap::new()
         };
@@ -415,7 +415,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                     || value.as_object().is_ok_and(|object| object.is_empty())
             });
             match result {
-                Ok(value) => match F::decode(&value, &rule.id, &rule.name, &rule.extra) {
+                Ok(value) => match F::decode(&value, &rule.id, &rule.name, &rule.extra, ctx) {
                     Ok(decision) => match F::post_decode(&decision, &rule.extra) {
                         Ok(()) => outcome.records.push(EvalRecord {
                             rule_set_id: rule.id.clone(),

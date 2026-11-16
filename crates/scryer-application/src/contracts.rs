@@ -1082,6 +1082,39 @@ pub struct AcquisitionScopeCoordinates {
     pub series_movie_link_id: Option<String>,
 }
 
+/// One scope under a title, as the acquisition state row for it is keyed.
+/// Each arm matches at most one row of the title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcquisitionScopeKey<'a> {
+    Episode(&'a str),
+    /// The collection's own row. Episode rows carry their collection id too,
+    /// so they never match this arm.
+    Collection(&'a str),
+    SeriesMovieLink(&'a str),
+    /// The title's own row: no episode, collection or series-movie link.
+    Title,
+}
+
+impl AcquisitionScopeKey<'_> {
+    /// Whether `state` is this scope's row, given it belongs to the title.
+    pub fn matches(&self, state: &AcquisitionScopeState) -> bool {
+        match *self {
+            Self::Episode(episode_id) => state.episode_id.as_deref() == Some(episode_id),
+            Self::Collection(collection_id) => {
+                state.episode_id.is_none() && state.collection_id.as_deref() == Some(collection_id)
+            }
+            Self::SeriesMovieLink(link_id) => {
+                state.series_movie_link_id.as_deref() == Some(link_id)
+            }
+            Self::Title => {
+                state.episode_id.is_none()
+                    && state.collection_id.is_none()
+                    && state.series_movie_link_id.is_none()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseDecisionsQuery {
     pub wanted_item_id: Option<String>,

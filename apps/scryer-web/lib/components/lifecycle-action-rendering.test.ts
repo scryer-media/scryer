@@ -128,8 +128,6 @@ function candidate(
   return {
     fileCount: 1,
     totalSizeBytes: 1024,
-    storageRootFileCount: null,
-    storageRootTotalSizeBytes: null,
     subjectLabel: "Synthetic Movie (2001)",
     subjectKind: "TITLE",
     subjectId: "title-1",

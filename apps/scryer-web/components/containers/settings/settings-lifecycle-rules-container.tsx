@@ -26,7 +26,6 @@ import {
 import {
   SettingsLifecycleRulesSection,
   type LifecycleLibraryOption,
-  type LifecycleStorageRootOption,
 } from "@/components/views/settings/settings-lifecycle-rules-section";
 import { useRuleBuilderEditor } from "@/lib/hooks/use-rule-builder-editor";
 import {
@@ -133,9 +132,8 @@ export function SettingsLifecycleRulesContainer({
     LifecycleRuleSetRecord[]
   >([]);
   const [libraries, setLibraries] = useState<LifecycleLibraryOption[]>([]);
-  const [storageRoots, setStorageRoots] = useState<
-    LifecycleStorageRootOption[]
-  >([]);
+  /// Configured root paths, offered by the builder's root picker.
+  const [rootPaths, setRootPaths] = useState<string[]>([]);
 
   const [mutatingRuleSetId, setMutatingRuleSetId] = useState<string | null>(
     null,
@@ -237,9 +235,9 @@ export function SettingsLifecycleRulesContainer({
   const staticBuilderOptions = useMemo(
     () => ({
       libraries: libraries.map((library) => library.name),
-      roots: [...new Set(storageRoots.map((root) => root.path))],
+      roots: [...new Set(rootPaths)],
     }),
-    [libraries, storageRoots],
+    [libraries, rootPaths],
   );
   const builderOptionLoaders = useMemo(
     () => ({
@@ -377,7 +375,6 @@ export function SettingsLifecycleRulesContainer({
           name: template.name,
           description: t(template.descriptionKey),
           regoSource: template.regoSource,
-          subjectKind: template.subjectKind ?? "TITLE",
           graceDays: template.graceDays,
           maxTitlesPerRun: template.maxTitlesPerRun ?? null,
         },
@@ -474,18 +471,10 @@ export function SettingsLifecycleRulesContainer({
             name: library.name,
           })),
         );
-        setStorageRoots(
+        setRootPaths(
           catalogLibraries.flatMap(
-            (library: {
-              id: string;
-              name: string;
-              roots?: { id: string; path: string }[];
-            }) =>
-              (library.roots ?? []).map((root) => ({
-                id: root.id,
-                path: root.path,
-                libraryName: library.name,
-              })),
+            (library: { roots?: { path: string }[] }) =>
+              (library.roots ?? []).map((root) => root.path),
           ),
         );
       }
@@ -820,7 +809,12 @@ export function SettingsLifecycleRulesContainer({
               ruleSetId: previewSource === "stored" ? previewRuleSetId : null,
               draft: previewSource === "draft" ? ruleSetDraft : undefined,
               titleIds: subject ? [subject.titleId] : undefined,
-              subjectIds: subject ? [subject.subjectId] : undefined,
+              // A whole-title pick evaluates every level of the rule; a
+              // season or episode picked from the results narrows to it.
+              subjectIds:
+                subject && subject.subjectId !== subject.titleId
+                  ? [subject.subjectId]
+                  : undefined,
               libraryId: previewLibraryId,
               limit: previewLimit,
             }),
@@ -1111,7 +1105,6 @@ export function SettingsLifecycleRulesContainer({
         applyTemplate={requestApplyTemplate}
         ruleSetRecords={ruleSetRecords}
         libraries={libraries}
-        storageRoots={storageRoots}
         editorMode={builderEditor.mode}
         setEditorMode={builderEditor.setMode}
         editRegoSource={builderEditor.editSource}

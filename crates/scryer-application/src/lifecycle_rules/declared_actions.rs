@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use scryer_rules::lifecycle_actions::{LifecycleActionHead, LifecycleActionScan, LifecycleActions};
 use serde::{Deserialize, Serialize};
 
-use scryer_domain::LifecycleRuleSubjectKind;
+use scryer_rules::lifecycle::LifecycleSubjectKind as ScryerSubjectKind;
 
 use super::LifecycleSubjectKind;
 use super::action_sequence::{
@@ -144,31 +144,24 @@ impl LifecycleDeclaredActions {
         self.heads.contains(&head)
     }
 
+    /// Whether the source defines the head that applies `base`'s action at
+    /// `level`. Decided actions name title heads; the level they were decided
+    /// at is the subject's.
+    pub fn defines_at(&self, base: LifecycleActionHead, level: ScryerSubjectKind) -> bool {
+        base.at_level(level).is_some_and(|head| self.defines(head))
+    }
+
+    /// The levels the source acts at, read off the heads it defines.
+    pub fn levels(&self) -> std::collections::BTreeSet<ScryerSubjectKind> {
+        self.heads.iter().map(|head| head.level()).collect()
+    }
+
     /// Whether any defined head is a reversible action of its own. The
     /// unmonitor a delete head implies is part of that delete and rides the
     /// destructive gate, the way the single delete actions always did.
     pub fn defines_reversible_action(&self) -> bool {
         self.heads.iter().any(|head| !head.is_destructive())
     }
-}
-
-/// Whether a rule of this scope can run this head. Storage-root rules act
-/// only on monitoring and files. Seasons and episodes may also be monitored,
-/// have subtitles fetched, and notify; everything else is a whole-title
-/// operation.
-pub fn head_supported_for_scope(
-    head: LifecycleActionHead,
-    scope: LifecycleRuleSubjectKind,
-    storage_root_selected: bool,
-) -> bool {
-    if storage_root_selected {
-        return matches!(
-            head,
-            LifecycleActionHead::Unmonitor | LifecycleActionHead::DeleteFiles
-        );
-    }
-    scope == LifecycleRuleSubjectKind::Title
-        || scryer_rules::rule_builder_schema::lifecycle_head_allows_narrow_subjects(head)
 }
 
 /// The heads one evaluation decided, in execution order, as shown to the
@@ -644,41 +637,26 @@ mod tests {
     }
 
     #[test]
-    fn narrow_scopes_run_only_monitoring_subtitle_notify_and_file_heads() {
-        for scope in [
-            LifecycleRuleSubjectKind::Season,
-            LifecycleRuleSubjectKind::Episode,
-        ] {
-            for head in LifecycleActionHead::ALL {
-                assert_eq!(
-                    head_supported_for_scope(head, scope, false),
-                    matches!(
-                        head,
-                        LifecycleActionHead::Unmonitor
-                            | LifecycleActionHead::DeleteFiles
-                            | LifecycleActionHead::Monitor
-                            | LifecycleActionHead::FetchSubtitles
-                            | LifecycleActionHead::Notify
-                    ),
-                    "{scope:?} {head:?}"
-                );
-            }
-        }
-        for head in LifecycleActionHead::ALL {
-            assert!(head_supported_for_scope(
-                head,
-                LifecycleRuleSubjectKind::Title,
-                false
-            ));
-            assert_eq!(
-                head_supported_for_scope(head, LifecycleRuleSubjectKind::Title, true),
-                matches!(
-                    head,
-                    LifecycleActionHead::Unmonitor | LifecycleActionHead::DeleteFiles
-                ),
-                "storage root {head:?}"
-            );
-        }
+    fn a_decided_action_is_defined_only_at_the_level_its_head_acts_at() {
+        let scan = scryer_rules::lifecycle_actions::scan_lifecycle_action_heads(
+            "package scryer.maintenance.user.fixture_rule\nimport rego.v1\n\
+             unmonitor if input.facts.monitored\n\
+             delete_season_files if input.season.facts.has_file\n",
+            "fixture_rule",
+        )
+        .expect("parses");
+        let declared = LifecycleDeclaredActions::from_scan(&scan);
+        assert_eq!(
+            declared.levels().into_iter().collect::<Vec<_>>(),
+            vec![ScryerSubjectKind::Title, ScryerSubjectKind::Season]
+        );
+        assert!(declared.defines_at(LifecycleActionHead::Unmonitor, ScryerSubjectKind::Title));
+        assert!(!declared.defines_at(LifecycleActionHead::Unmonitor, ScryerSubjectKind::Season));
+        assert!(declared.defines_at(LifecycleActionHead::DeleteFiles, ScryerSubjectKind::Season));
+        assert!(!declared.defines_at(LifecycleActionHead::DeleteFiles, ScryerSubjectKind::Title));
+        assert!(!declared.defines_at(LifecycleActionHead::DeleteFiles, ScryerSubjectKind::Episode));
+        // A title-only action has no season head at all.
+        assert!(!declared.defines_at(LifecycleActionHead::Search, ScryerSubjectKind::Season));
     }
 
     #[test]

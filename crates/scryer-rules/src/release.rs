@@ -512,6 +512,7 @@ impl PolicyFamily for ReleaseFamily {
         rule_id: &str,
         rule_name: &str,
         extra: &Self::RuleExtra,
+        _facet: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
         Ok(UserRulesEvaluator::extract_entries(
             value,

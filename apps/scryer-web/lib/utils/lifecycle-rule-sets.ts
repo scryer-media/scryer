@@ -122,12 +122,10 @@ export function defaultLifecycleRuleSchedule(): ScriptSchedule {
 /// editor are.
 export function initialLifecycleRuleDraft(): LifecycleRuleSetDraft {
   return {
-    subjectKind: "TITLE",
     name: "",
     description: "",
     regoSource: LIFECYCLE_STARTER_SOURCE,
     graceDays: 0,
-    storageRootId: "",
     libraryIds: [],
     schedule: defaultLifecycleRuleSchedule(),
     maxTitlesPerRun: null,
@@ -138,14 +136,15 @@ export function initialLifecycleRuleDraft(): LifecycleRuleSetDraft {
 export type LifecycleRuleBuilderBinding =
   RuleBuilderBinding<LifecycleRuleSetDraft>;
 
-/// How lifecycle drafts meet the simple builder: a rule is written for its
-/// scope. `schema` is null until the served outputs are read.
+/// How lifecycle drafts meet the simple builder. A rule has no variant: each
+/// action names the subject it acts on. `schema` is null until the served
+/// outputs are read.
 export function lifecycleRuleBuilder(
   schema: RuleBuilderSchema | null,
 ): LifecycleRuleBuilderBinding {
   return {
     schema,
-    variant: (draft) => draft.subjectKind,
+    variant: () => null,
     starterSource: LIFECYCLE_STARTER_SOURCE,
   };
 }
@@ -165,12 +164,10 @@ export function lifecycleRuleDraftFromDetail(
   binding: LifecycleRuleBuilderBinding,
 ): LifecycleRuleSetDraft {
   return {
-    subjectKind: detail.ruleSet.subjectKind,
     name: detail.ruleSet.name,
     description: detail.ruleSet.description ?? "",
     regoSource: detail.revision.regoSource,
     graceDays: detail.revision.graceDays,
-    storageRootId: detail.revision.storageRootId ?? "",
     libraryIds: [...detail.ruleSet.libraryIds],
     schedule:
       normalizeScriptSchedule(detail.ruleSet.schedule) ??
@@ -179,7 +176,7 @@ export function lifecycleRuleDraftFromDetail(
     builderModel: attachedRuleBuilderModel(
       binding.schema,
       detail.builderModel,
-      detail.ruleSet.subjectKind,
+      null,
       detail.revision.regoSource,
     ),
   };
@@ -201,12 +198,10 @@ export function createLifecycleRuleSetInput(
   binding: LifecycleRuleBuilderBinding,
 ) {
   return {
-    subjectKind: draft.subjectKind,
     name: draft.name.trim(),
     description: draft.description.trim() || undefined,
     regoSource: draft.regoSource,
     graceDays: draft.graceDays,
-    storageRootId: draft.storageRootId || undefined,
     libraryIds: draft.libraryIds.length > 0 ? [...draft.libraryIds] : undefined,
     schedule: toScriptScheduleInput(draft.schedule),
     maxTitlesPerRun: draft.maxTitlesPerRun ?? undefined,
@@ -225,9 +220,6 @@ function lifecycleRuleMatcherRevision(
     id,
     regoSource: draft.regoSource,
     graceDays: draft.graceDays,
-    // Always send the explicit editor value. Old clients omit this field and
-    // preserve a root they cannot render; this client may intentionally clear it.
-    storageRootId: draft.storageRootId || null,
     // Null clears a stored model, so a hand-edited rule stops claiming one.
     // Without a schema nothing could be checked, so the field is left out:
     // the server then keeps the stored model only while the source is
@@ -327,11 +319,9 @@ export function lifecyclePreviewInput({
     ? { ruleSetId }
     : draft
       ? {
-          subjectKind: draft.subjectKind,
           libraryIds: [...draft.libraryIds],
           regoSource: draft.regoSource,
           graceDays: draft.graceDays,
-          storageRootId: draft.storageRootId || undefined,
         }
       : {};
   const subjects =

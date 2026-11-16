@@ -693,7 +693,7 @@ impl AppUseCase {
             .services
             .workflow
             .acquisition_scope_states
-            .list_acquisition_scope_states_for_title_ids(&title_ids)
+            .list_acquisition_scope_states_for_title_ids_without_decisions(&title_ids)
             .await?;
         if items.is_empty() {
             return Ok(if fallback_wanted_item_id.is_empty() {

@@ -584,15 +584,14 @@ impl RecheckFixture {
                 &self.user,
                 LifecycleRuleDraft {
                     max_titles_per_run: Some(100),
-                    subject_kind: scope,
                     name: "Watched subjects".to_string(),
                     description: String::new(),
-                    rego_source: crate::lib_tests::legacy_source(
+                    rego_source: crate::lib_tests::legacy_source_at(
                         matcher,
                         crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
+                        scope,
                     ),
                     grace_days: 0,
-                    storage_root_id: None,
                     library_ids: Vec::new(),
                 },
             )

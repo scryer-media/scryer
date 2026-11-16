@@ -50,32 +50,52 @@ struct RuleInputCatalog {
 struct FamilyContract {
     json: &'static str,
     name: &'static str,
+    /// Input sections that each repeat the family's `facts` and
+    /// `observations` for a narrower subject. The contract documents those
+    /// two namespaces once; the catalog repeats them under each section.
+    nested_fact_sections: &'static [&'static str],
     catalog: OnceLock<RuleInputCatalog>,
 }
 
 impl FamilyContract {
     const fn new(json: &'static str, name: &'static str) -> Self {
+        Self::with_nested_fact_sections(json, name, &[])
+    }
+
+    const fn with_nested_fact_sections(
+        json: &'static str,
+        name: &'static str,
+        nested_fact_sections: &'static [&'static str],
+    ) -> Self {
         Self {
             json,
             name,
+            nested_fact_sections,
             catalog: OnceLock::new(),
         }
     }
 
     fn catalog(&'static self) -> &'static RuleInputCatalog {
         self.catalog
-            .get_or_init(|| build_input_catalog(self.json, self.name))
+            .get_or_init(|| build_input_catalog(self.json, self.name, self.nested_fact_sections))
     }
 }
+
+/// The lifecycle input sections that carry one season's or one episode's
+/// facts beside the title's: `input.season.facts.<name>` and
+/// `input.episode.observations.<name>` read like their `input.facts` and
+/// `input.observations` counterparts.
+pub const LIFECYCLE_NESTED_FACT_SECTIONS: &[&str] = &["season", "episode"];
 
 static RELEASE_CONTRACT: FamilyContract = FamilyContract::new(
     include_str!("../rule-input-contract.json"),
     "rule-input-contract.json",
 );
 
-static LIFECYCLE_CONTRACT: FamilyContract = FamilyContract::new(
+static LIFECYCLE_CONTRACT: FamilyContract = FamilyContract::with_nested_fact_sections(
     include_str!("../lifecycle-input-contract.json"),
     "lifecycle-input-contract.json",
+    LIFECYCLE_NESTED_FACT_SECTIONS,
 );
 
 static REQUEST_CONTRACT: FamilyContract = FamilyContract::new(
@@ -108,6 +128,8 @@ struct InputPathContext {
     /// must name its fact with a literal, because the engine reads that set to
     /// decide whether the subject is even knowable enough to consult the rule.
     static_facts_only: bool,
+    /// Sections that hold a narrower subject's facts, read like `input.facts`.
+    nested_fact_sections: &'static [&'static str],
     /// The family's own source bounds. Static analysis parses exactly what the
     /// family's engine would load, so a rule the engine accepts is never
     /// refused here for its size.
@@ -121,6 +143,7 @@ impl InputPathContext {
             catalog: RELEASE_CONTRACT.catalog(),
             allow_release_extra: true,
             static_facts_only: false,
+            nested_fact_sections: &[],
             limits: RuntimeLimits::release_defaults(),
         }
     }
@@ -131,6 +154,7 @@ impl InputPathContext {
             catalog: LIFECYCLE_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
+            nested_fact_sections: LIFECYCLE_NESTED_FACT_SECTIONS,
             limits: RuntimeLimits::lifecycle_defaults(),
         }
     }
@@ -141,6 +165,7 @@ impl InputPathContext {
             catalog: REQUEST_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
+            nested_fact_sections: &[],
             limits: RuntimeLimits::request_defaults(),
         }
     }
@@ -325,20 +350,44 @@ impl InputReferencePath {
             .any(|component| matches!(component, InputPathComponent::Dynamic))
     }
 
-    /// The fact this path reads, when it reads one by name.
-    ///
-    /// `input.facts.tags[0]` and `input.facts.files[_].quality` both name
-    /// `tags` / `files`; `input.facts` on its own names nothing.
-    fn fact_name(&self) -> Option<&str> {
+    /// Where a fact namespace's fact names start in this path, and the
+    /// nested section it belongs to: `input.facts.<name>` starts at 2 with no
+    /// section, `input.season.facts.<name>` at 3 in `season`.
+    fn fact_namespace<'a>(&self, nested: &[&'a str]) -> Option<(usize, Option<&'a str>)> {
         match self.components.as_slice() {
             [
                 InputPathComponent::Field(input),
                 InputPathComponent::Field(facts),
-                InputPathComponent::Field(name),
                 ..,
-            ] if input == "input" && facts == "facts" => Some(name.as_str()),
+            ] if input == "input" && facts == "facts" => Some((2, None)),
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(section),
+                InputPathComponent::Field(facts),
+                ..,
+            ] if input == "input" && facts == "facts" => nested
+                .iter()
+                .find(|nested| **nested == section.as_str())
+                .map(|nested| (3, Some(*nested))),
             _ => None,
         }
+    }
+
+    /// The fact this path reads, when it reads one by name.
+    ///
+    /// `input.facts.tags[0]` and `input.facts.files[_].quality` both name
+    /// `tags` / `files`; `input.facts` on its own names nothing. A nested
+    /// section's fact is qualified by its section: `input.season.facts.tags`
+    /// names `season.tags`.
+    fn fact_name(&self, nested: &[&str]) -> Option<String> {
+        let (start, section) = self.fact_namespace(nested)?;
+        let InputPathComponent::Field(name) = self.components.get(start)? else {
+            return None;
+        };
+        Some(match section {
+            Some(section) => format!("{section}.{name}"),
+            None => name.clone(),
+        })
     }
 
     /// The person-targeted path this reference reads, when it reads one.
@@ -372,33 +421,32 @@ impl InputReferencePath {
     }
 
     /// True when the path selects a fact with something other than a literal
-    /// name — `input.facts[key]`, `input.facts[_]`, `input.facts[i]`.
-    fn selects_fact_dynamically(&self) -> bool {
-        matches!(
-            self.components.as_slice(),
-            [
-                InputPathComponent::Field(input),
-                InputPathComponent::Field(facts),
-                selector,
-                ..,
-            ] if input == "input"
-                && facts == "facts"
-                && !matches!(selector, InputPathComponent::Field(_))
-        )
+    /// name — `input.facts[key]`, `input.facts[_]`, `input.facts[i]`, and the
+    /// same under a nested section.
+    fn selects_fact_dynamically(&self, nested: &[&str]) -> bool {
+        self.fact_namespace(nested).is_some_and(|(start, _)| {
+            self.components
+                .get(start)
+                .is_some_and(|selector| !matches!(selector, InputPathComponent::Field(_)))
+        })
     }
 
     /// True when the path reads the whole `input.facts` object without naming
     /// a fact — e.g. `object.get(input.facts, "x", false)` or
     /// `count(input.facts)`. Such a read reaches facts the referenced-fact set
     /// never sees, so an unknown fact would be read as absent instead of
-    /// holding the rule.
-    fn reads_facts_object_wholesale(&self) -> bool {
+    /// holding the rule. A nested section read whole (`input.season`) carries
+    /// its facts with it, so it counts too.
+    fn reads_facts_object_wholesale(&self, nested: &[&str]) -> bool {
+        if let Some((start, _)) = self.fact_namespace(nested) {
+            return self.components.len() == start;
+        }
         matches!(
             self.components.as_slice(),
             [
                 InputPathComponent::Field(input),
-                InputPathComponent::Field(facts),
-            ] if input == "input" && facts == "facts"
+                InputPathComponent::Field(section),
+            ] if input == "input" && nested.contains(&section.as_str())
         )
     }
 
@@ -415,7 +463,11 @@ impl InputReferencePath {
     }
 }
 
-fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCatalog {
+fn build_input_catalog(
+    contract_json: &str,
+    contract_name: &str,
+    nested_fact_sections: &[&str],
+) -> RuleInputCatalog {
     let contract: RuleInputContract = serde_json::from_str(contract_json)
         .unwrap_or_else(|e| panic!("{contract_name} should be valid: {e}"));
 
@@ -441,6 +493,25 @@ fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCat
                 array_container_paths.insert(field_path.clone());
                 known_paths.insert(format!("{field_path}[]"));
             }
+        }
+    }
+
+    // Each nested section repeats both fact namespaces under its own name.
+    for section in nested_fact_sections {
+        for set in [&mut known_paths, &mut array_container_paths] {
+            let nested: Vec<String> = set
+                .iter()
+                .filter_map(|path| {
+                    ["input.facts", "input.observations"]
+                        .iter()
+                        .find_map(|namespace| {
+                            let rest = path.strip_prefix(namespace)?;
+                            (rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
+                                .then(|| format!("input.{section}.{}{rest}", &namespace[6..]))
+                        })
+                })
+                .collect();
+            set.extend(nested);
         }
     }
 
@@ -1016,14 +1087,15 @@ fn module_referenced_facts(
         // Mirrored here, not only in validation: a stored revision that
         // predates (or somehow bypassed) validation must still never load with
         // an underestimated fact set.
-        if path.selects_fact_dynamically() {
+        let nested = ctx.nested_fact_sections;
+        if path.selects_fact_dynamically(nested) {
             error = Some(dynamic_fact_access_message(&path.display));
-        } else if path.reads_facts_object_wholesale() {
+        } else if path.reads_facts_object_wholesale(nested) {
             error = Some(whole_facts_object_message(&path.display));
         } else if path.references_input_wholesale() {
             error = Some(whole_input_document_message(&path.display));
-        } else if let Some(name) = path.fact_name() {
-            facts.insert(name.to_string());
+        } else if let Some(name) = path.fact_name(nested) {
+            facts.insert(name);
         }
     });
     match error {
@@ -1088,12 +1160,25 @@ fn module_fact_references(
 /// reads. It fails for exactly the sources the engine would refuse to load, so
 /// a caller that cannot get an answer here must reject the rule rather than
 /// assume it reads nothing.
+///
+/// A season or episode fact is listed both qualified (`season.tags`) and by
+/// its bare name (`tags`): a season's facts are the same facts as a title's,
+/// so a caller asking whether a rule reads a fact by name, such as a watch
+/// fact or a person fact, is answered for every level the rule reads it at.
 pub fn lifecycle_referenced_facts(
     rego_source: &str,
     rule_set_id: &str,
 ) -> Result<BTreeSet<String>, RulesError> {
-    lifecycle_fact_references(rego_source, &lifecycle::user_policy_path(rule_set_id))
-        .map_err(RulesError::Compilation)
+    let qualified =
+        lifecycle_fact_references(rego_source, &lifecycle::user_policy_path(rule_set_id))
+            .map_err(RulesError::Compilation)?;
+    let bare: Vec<String> = qualified
+        .iter()
+        .filter_map(|fact| fact.split_once('.').map(|(_, name)| name.to_string()))
+        .collect();
+    let mut facts = qualified;
+    facts.extend(bare);
+    Ok(facts)
 }
 
 /// Facts a request rule reads, plus the parse work needed to find them.
@@ -1199,6 +1284,28 @@ fn input_import_error(module: &Module, family: &str) -> Option<String> {
 }
 
 /// Leading name of a rule head reference, e.g. `match` for `match["x"]`.
+/// The top-level input sections one lifecycle rule reads: `facts`,
+/// `season`, `episode`, `subject` and so on.
+pub(crate) fn rule_input_sections(rule: &Rule) -> BTreeSet<String> {
+    let mut sections = BTreeSet::new();
+    visit_rule(
+        rule,
+        &mut |path: &InputReferencePath| {
+            if let [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(section),
+                ..,
+            ] = path.components.as_slice()
+                && input == "input"
+            {
+                sections.insert(section.clone());
+            }
+        },
+        InputPathContext::lifecycle(),
+    );
+    sections
+}
+
 pub(crate) fn rule_head_name(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::Var { span, .. } => Some(span.text()),
@@ -1448,11 +1555,11 @@ fn validate_input_reference_path(
     // Fact names must be literal: the engine derives the set of facts a rule
     // depends on from these paths, and a computed name would leave that set
     // silently incomplete.
-    if ctx.static_facts_only && path.selects_fact_dynamically() {
+    if ctx.static_facts_only && path.selects_fact_dynamically(ctx.nested_fact_sections) {
         return Some(dynamic_fact_access_message(&path.display));
     }
 
-    if ctx.static_facts_only && path.reads_facts_object_wholesale() {
+    if ctx.static_facts_only && path.reads_facts_object_wholesale(ctx.nested_fact_sections) {
         return Some(whole_facts_object_message(&path.display));
     }
 
@@ -1744,8 +1851,14 @@ pub fn validate_lifecycle_rule(
     engine.set_input(input_value.into());
 
     let result = match engine.eval_rule(lifecycle::decision_wrapper_rule_path(rule_set_id)) {
-        Ok(value) => match lifecycle::decode_decision(&value) {
-            Ok(_) => ValidationResult::valid(),
+        // Decoded at every level the rule acts at, so a season or episode
+        // head of the wrong type is refused as a title head would be.
+        Ok(value) => match scan
+            .levels()
+            .into_iter()
+            .try_for_each(|level| lifecycle::decode_decision(&value, level).map(|_| ()))
+        {
+            Ok(()) => ValidationResult::valid(),
             Err(e) => ValidationResult::invalid_code(
                 crate::diagnostic_codes::RULE_OUTPUT_INVALID,
                 format!("output error: {e}"),

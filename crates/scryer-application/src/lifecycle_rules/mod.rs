@@ -52,7 +52,7 @@ pub use action_sequence::{
 pub use declared_actions::{
     LIFECYCLE_DECLARED_ACTIONS_SCHEMA_VERSION, LifecycleDeclaredActions,
     build_declared_action_sequence, decided_actions_from_json, decided_actions_to_json,
-    decided_heads_in_execution_order, head_supported_for_scope,
+    decided_heads_in_execution_order,
 };
 pub use evaluation::{
     LIFECYCLE_EVALUATION_TITLE_CHUNK, LifecycleCandidateFilter, LifecycleCandidateView,

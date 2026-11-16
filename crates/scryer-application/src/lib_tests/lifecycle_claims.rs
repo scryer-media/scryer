@@ -114,12 +114,10 @@ impl ClaimFixture {
 fn draft(rego_source: &str, kind: LifecycleActionKind) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
         name: "Lease rule".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::legacy_source(rego_source, kind),
         grace_days: 0,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -507,13 +505,11 @@ async fn preview_reads_the_same_claim_facts_as_the_pass() {
             LifecyclePreviewRequest {
                 matcher: LifecyclePreviewMatcher::Inline {
                     library_ids: vec![],
-                    subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
                     rego_source: crate::lib_tests::legacy_source(
                         EXPIRED_LEASE_MATCHER,
                         crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
                     ),
                     grace_days: 0,
-                    storage_root_id: None,
                 },
                 selection: LifecyclePreviewSelection::Titles(vec![
                     spared.id.clone(),
@@ -717,10 +713,6 @@ async fn the_shipped_rule_is_created_once_and_starts_disabled() {
         "ships acting on ten a run"
     );
     assert_eq!(
-        rule.subject_kind,
-        scryer_domain::LifecycleRuleSubjectKind::Title
-    );
-    assert_eq!(
         crate::lifecycle_rules::lifecycle_rule_state(&detail),
         LifecycleRuleState::Disabled
     );
@@ -784,7 +776,6 @@ async fn the_shipped_rule_keeps_its_matcher_and_name_but_not_its_grace_or_scope(
     let matcher = |rego_source: &str, grace_days| crate::lifecycle_rules::LifecycleMatcherDraft {
         rego_source: rego_source.to_string(),
         grace_days,
-        storage_root_id: None,
         max_titles_per_run: None,
     };
     let refused = |result: AppResult<_>| {

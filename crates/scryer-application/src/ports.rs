@@ -9489,8 +9489,6 @@ pub trait DownloadQueueCommandRepository: Send + Sync {
         sources: &[(Option<String>, String, String, bool)],
         completed_only: bool,
     ) -> AppResult<Vec<crate::DownloadQueueCommandRecord>>;
-
-    async fn prune_terminal_delete_commands_older_than(&self, days: i64) -> AppResult<u32>;
 }
 
 #[derive(Debug, Clone)]
@@ -10514,6 +10512,14 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
         episode_id: Option<&str>,
     ) -> AppResult<Option<AcquisitionScopeState>>;
 
+    /// The one acquisition state row for `scope` under `title_id`, read by the
+    /// scope's own key. Returns the same projection as the list read.
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<AcquisitionScopeState>>;
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()>;
 
     async fn delete_acquisition_scope_states_for_collection(
@@ -10634,6 +10640,23 @@ pub trait AcquisitionScopeStateRepository: Send + Sync {
                 })
                 .await?,
             );
+        }
+        Ok(states)
+    }
+
+    /// The same rows, in the same order, as
+    /// [`Self::list_acquisition_scope_states_for_title_ids`], with
+    /// `latest_release_decision` left empty. For callers that never read the
+    /// decision; SQL stores skip its join and blob.
+    async fn list_acquisition_scope_states_for_title_ids_without_decisions(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<Vec<AcquisitionScopeState>> {
+        let mut states = self
+            .list_acquisition_scope_states_for_title_ids(title_ids)
+            .await?;
+        for state in &mut states {
+            state.latest_release_decision = None;
         }
         Ok(states)
     }

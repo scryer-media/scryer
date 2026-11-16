@@ -41,6 +41,16 @@ impl StoreDatastore {
         Self::Sqlite { pool, writer_gate }
     }
 
+    /// See [`timestamp_text_arg`].
+    pub fn timestamp_text_arg(&self, value: &str) -> AppResult<SqlArg> {
+        timestamp_text_arg(matches!(self, Self::Postgres { .. }), value)
+    }
+
+    /// See [`opt_timestamp_text_arg`].
+    pub fn opt_timestamp_text_arg(&self, value: Option<&str>) -> AppResult<SqlArg> {
+        opt_timestamp_text_arg(matches!(self, Self::Postgres { .. }), value)
+    }
+
     /// Read-only executor. On sqlite it bypasses the writer gate and busy
     /// retries, so writes must go through `SqlRuntime::execute_write`,
     /// `run_in_transaction`, or `run_serialized_sqlite` instead.
@@ -139,6 +149,41 @@ pub enum SqlRow {
 pub enum SqlTx<'db> {
     Sqlite(Transaction<'db, Sqlite>),
     Postgres(Transaction<'db, Postgres>),
+}
+
+impl SqlTx<'_> {
+    /// See [`timestamp_text_arg`].
+    pub fn timestamp_text_arg(&self, value: &str) -> AppResult<SqlArg> {
+        timestamp_text_arg(matches!(self, Self::Postgres(_)), value)
+    }
+
+    /// See [`opt_timestamp_text_arg`].
+    pub fn opt_timestamp_text_arg(&self, value: Option<&str>) -> AppResult<SqlArg> {
+        opt_timestamp_text_arg(matches!(self, Self::Postgres(_)), value)
+    }
+}
+
+/// A timestamp the caller holds as text, bound for one engine. SQLite stores
+/// the text as given; Postgres parses it into a timestamptz and refuses text
+/// that is not a timestamp.
+fn timestamp_text_arg(postgres: bool, value: &str) -> AppResult<SqlArg> {
+    if postgres {
+        parse_utc_datetime(value).map(SqlArg::Timestamp)
+    } else {
+        Ok(SqlArg::Text(value.to_string()))
+    }
+}
+
+/// [`timestamp_text_arg`] for a timestamp that may be absent.
+fn opt_timestamp_text_arg(postgres: bool, value: Option<&str>) -> AppResult<SqlArg> {
+    if postgres {
+        value
+            .map(parse_utc_datetime)
+            .transpose()
+            .map(SqlArg::OptTimestamp)
+    } else {
+        Ok(SqlArg::OptText(value.map(str::to_string)))
+    }
 }
 
 pub struct SqlRuntime;
@@ -552,6 +597,61 @@ impl SqlRow {
                 }
             }
             SqlRow::Postgres(row) => row.try_get(column).map_err(repo_err),
+        }
+    }
+
+    /// A timestamp column as text: SQLite's stored text as written, and a
+    /// Postgres timestamptz as RFC 3339.
+    pub fn timestamp_text(&self, column: &str) -> AppResult<String> {
+        match self {
+            SqlRow::Sqlite(row) => row.try_get(column).map_err(repo_err),
+            SqlRow::Postgres(row) => row
+                .try_get::<DateTime<Utc>, _>(column)
+                .map(|value| value.to_rfc3339())
+                .map_err(repo_err),
+        }
+    }
+
+    /// [`Self::timestamp_text`] for a nullable column. SQLite's dynamic typing
+    /// may hand back an integer, which reads as its text.
+    pub fn opt_timestamp_text(&self, column: &str) -> AppResult<Option<String>> {
+        match self {
+            SqlRow::Sqlite(row) => opt_text_from_sqlite_row(row, column),
+            SqlRow::Postgres(row) => row
+                .try_get::<Option<DateTime<Utc>>, _>(column)
+                .map(|value| value.map(|value| value.to_rfc3339()))
+                .map_err(repo_err),
+        }
+    }
+
+    /// A timestamp column where SQLite text that is not RFC 3339 reads as now,
+    /// so a row carrying a `strftime(...)` column default verbatim stays
+    /// readable instead of failing the whole listing.
+    pub fn timestamp_or_now(&self, column: &str) -> AppResult<DateTime<Utc>> {
+        match self {
+            SqlRow::Sqlite(row) => {
+                let raw: String = row.try_get(column).map_err(repo_err)?;
+                Ok(DateTime::parse_from_rfc3339(&raw)
+                    .map(|value| value.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()))
+            }
+            SqlRow::Postgres(_) => self.timestamp(column),
+        }
+    }
+
+    /// A nullable timestamp column where SQLite text that is not RFC 3339
+    /// reads as absent.
+    pub fn opt_timestamp_or_none(&self, column: &str) -> AppResult<Option<DateTime<Utc>>> {
+        match self {
+            SqlRow::Sqlite(row) => {
+                let raw: Option<String> = row.try_get(column).map_err(repo_err)?;
+                Ok(raw.and_then(|value| {
+                    DateTime::parse_from_rfc3339(&value)
+                        .map(|value| value.with_timezone(&Utc))
+                        .ok()
+                }))
+            }
+            SqlRow::Postgres(_) => self.opt_timestamp(column),
         }
     }
 

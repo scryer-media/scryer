@@ -1,22 +1,20 @@
-//! Configured-root storage facts and manifest filtering for lifecycle.
+//! Storage facts for lifecycle: the configured roots a subject's files are on,
+//! with each root's capacity.
 //!
-//! A storage matcher is about one configured root, never an inferred title
-//! destination or a parent mount. This module therefore resolves the root by
-//! its durable id, probes that exact path, and filters actual media file paths
-//! with the same boundary-aware root predicate used by library workflows.
+//! Membership is read from the file paths already in hand against the
+//! configured roots, with the same boundary-aware root predicate the library
+//! workflows use. It makes no filesystem call. Capacity comes only from the
+//! storage capacity owner, read once per root per pass.
 
 use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::path::Path;
 #[cfg(test)]
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use scryer_domain::LibraryRoot;
-use scryer_rules::lifecycle::{LifecycleInput, Observation};
+use scryer_rules::lifecycle::{LifecycleFactsDoc, LifecycleStorageRootDoc, Observation};
 
 use crate::catalog_workflow::library_path_is_under_root;
-use crate::library::user_delete::PolicyMediaFileDeletePlan;
 use crate::{AppResult, AppUseCase};
 
 const ROOT_STAT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -77,6 +75,17 @@ pub(crate) const STORAGE_ROOT_UNAVAILABLE: &str = "storage_root_unavailable";
 pub(crate) const STORAGE_CAPACITY_UNAVAILABLE: &str =
     crate::storage_capacity::reason::STORAGE_CAPACITY_UNAVAILABLE;
 
+/// The fact a rule reads storage through, at any level.
+const STORAGE_ROOTS_FACT: &str = "storage_roots";
+
+/// Whether a rule's source reads storage facts. A rule that does decides on a
+/// moving condition, so its deletions are serialized and rechecked per file.
+/// Any mention counts, including one in a comment: reading too much into a
+/// rule only adds safety checks.
+pub(crate) fn rule_reads_storage(rego_source: &str) -> bool {
+    rego_source.contains(STORAGE_ROOTS_FACT)
+}
+
 /// How a pass reads a root's free space.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LifecycleStorageRead {
@@ -90,275 +99,140 @@ pub(crate) enum LifecycleStorageRead {
     Sampled(chrono::DateTime<chrono::Utc>),
 }
 
-/// A configured root proven from the current library configuration.
+/// A configured root as the current library configuration states it.
 #[derive(Clone, Debug)]
 pub(crate) struct LifecycleStorageRoot {
     pub id: String,
     pub path: String,
 }
 
-/// Exact root-filtered file totals for preview and deletion evidence.
+/// The configured roots one pass reads storage facts against. `None` when
+/// the library configuration could not be read: every storage fact is then
+/// unknown for the pass.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct LifecycleRootFileSummary {
-    pub file_count: Option<i64>,
-    pub total_size_bytes: Option<i64>,
+pub(crate) struct LifecycleStorageRoots {
+    roots: Option<Vec<LifecycleStorageRoot>>,
 }
 
-/// One evaluation pass samples a root once. The cache belongs to the caller,
-/// never the application instance, so preview and execution always take a new
-/// measurement while scheduled evaluation avoids inconsistent per-subject
-/// readings and unbounded filesystem probes.
-#[derive(Clone, Debug)]
-pub(crate) struct LifecycleStorageFactSnapshot {
-    storage_root_id: Observation<String>,
-    storage_available_bytes: Observation<i64>,
-    storage_total_bytes: Observation<i64>,
-    storage_available_percent: Observation<f64>,
+impl LifecycleStorageRoots {
+    /// Roots for a pass that could not read its configuration.
+    pub(crate) fn unavailable() -> Self {
+        Self { roots: None }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_roots(roots: Vec<LifecycleStorageRoot>) -> Self {
+        Self { roots: Some(roots) }
+    }
+
+    /// The configured root a path is under. A path under nested roots
+    /// belongs to the innermost one, which is the one the file is filed in.
+    fn root_of(&self, path: &str) -> Option<&LifecycleStorageRoot> {
+        self.roots
+            .as_deref()?
+            .iter()
+            .filter(|root| library_path_is_under_root(path, &root.path))
+            .max_by_key(|root| root.path.len())
+    }
 }
 
-pub(crate) type LifecycleStorageFactCache = HashMap<String, LifecycleStorageFactSnapshot>;
+/// The configured roots read at most once for one unit of work, such as a
+/// candidate's execution with every safety check its steps and files run. A
+/// failed read is not kept: the next check reads again.
+pub(crate) type LifecycleStorageRootsOnce = tokio::sync::OnceCell<LifecycleStorageRoots>;
 
-/// The roots one preview or rule pass has resolved, by id, so the library
-/// configuration is read once per root rather than once per subject. A root
-/// that does not resolve is remembered as `None`; a failed read is not
-/// remembered.
-pub(crate) type LifecycleStorageRootMemo = HashMap<String, Option<LifecycleStorageRoot>>;
+/// Capacity figures one pass has read, by root id, so a root is read once
+/// per pass however many subjects have files on it. A failed read is
+/// remembered for the pass too: the root stays unknown throughout it rather
+/// than flickering between subjects.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LifecycleStorageCapacityMemo {
+    figures: HashMap<String, Result<(i64, i64), &'static str>>,
+}
+
+/// The configured roots `files` are on, in configuration order, each once.
+/// A file under no configured root adds none. `None` when the roots could not
+/// be read.
+fn roots_of_files<'a>(
+    roots: &'a LifecycleStorageRoots,
+    files: &[crate::types::TitleMediaFile],
+) -> Option<Vec<&'a LifecycleStorageRoot>> {
+    let configured = roots.roots.as_deref()?;
+    let mut on: Vec<&LifecycleStorageRoot> = Vec::new();
+    for file in files {
+        if let Some(root) = roots.root_of(&file.file_path)
+            && !on.iter().any(|seen| seen.id == root.id)
+        {
+            on.push(root);
+        }
+    }
+    on.sort_by_key(|root| {
+        configured
+            .iter()
+            .position(|candidate| candidate.id == root.id)
+            .unwrap_or(usize::MAX)
+    });
+    Some(on)
+}
 
 impl AppUseCase {
-    /// Resolve a root from its immutable configuration ID. A missing or invalid
-    /// root is an unknown observation rather than a fallback to any related
-    /// title root; fallback would silently widen a destructive rule.
-    pub(crate) async fn lifecycle_storage_root(
-        &self,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<Option<LifecycleStorageRoot>> {
-        let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
-        else {
-            return Ok(None);
-        };
+    /// The configured roots, read once for a pass.
+    pub(crate) async fn lifecycle_storage_roots_context(&self) -> AppResult<LifecycleStorageRoots> {
         let libraries = self.services.catalog.libraries.list(None).await?;
-        Ok(libraries
-            .into_iter()
-            .flat_map(|library| library.roots)
-            .find(|root| root.id == storage_root_id)
-            .and_then(storage_root_from_library_root))
-    }
-
-    /// Immutable evidence for the configured root as it exists *now*. The
-    /// checkpoint records it so a root id retargeted to another path or volume
-    /// cannot resume a deletion journal made for the old location.
-    pub(crate) async fn lifecycle_storage_root_identity(
-        &self,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<Option<String>> {
-        let Some(root) = self.lifecycle_storage_root(storage_root_id).await? else {
-            return Ok(None);
-        };
-        let path = root.path;
-        Ok(tokio::time::timeout(
-            ROOT_STAT_TIMEOUT,
-            tokio::task::spawn_blocking(move || physical_root_identity(&path)),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten())
-    }
-
-    /// Confirm that the selected root still has a usable capacity observation.
-    /// Root membership alone is insufficient to release a storage sequence
-    /// membership: an unavailable capacity probe is an unknown evaluation fact.
-    pub(crate) async fn lifecycle_storage_capacity_is_available(
-        &self,
-        storage_root_id: Option<&str>,
-        read: LifecycleStorageRead,
-    ) -> AppResult<bool> {
-        let Some(root) = self.lifecycle_storage_root(storage_root_id).await? else {
-            return Ok(false);
-        };
-        Ok(self
-            .lifecycle_storage_capacity(root.path, read)
-            .await
-            .is_ok())
-    }
-
-    /// Populate only the root-scoped facts. Callers deliberately build all
-    /// ordinary subject facts first, because root selection neither changes
-    /// title ownership nor changes the normal file facts a rule can inspect.
-    pub(crate) async fn populate_lifecycle_storage_facts(
-        &self,
-        input: &mut LifecycleInput,
-        storage_root_id: Option<&str>,
-        read: LifecycleStorageRead,
-    ) -> AppResult<()> {
-        let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
-        else {
-            return Ok(());
-        };
-        let Some(root) = self.lifecycle_storage_root(Some(storage_root_id)).await? else {
-            set_storage_unknown(input, STORAGE_ROOT_UNAVAILABLE);
-            return Ok(());
-        };
-
-        input.facts.storage_root_id = Observation::known(root.id.clone());
-        let capacity = self
-            .lifecycle_storage_capacity(root.path.clone(), read)
-            .await;
-        let (available, total) = match capacity {
-            Ok(figures) => figures,
-            Err(reason) => {
-                input.facts.storage_available_bytes = Observation::unknown(reason);
-                input.facts.storage_total_bytes = Observation::unknown(reason);
-                input.facts.storage_available_percent = Observation::unknown(reason);
-                return Ok(());
-            }
-        };
-        input.facts.storage_available_bytes = Observation::known(available);
-        input.facts.storage_total_bytes = Observation::known(total);
-        input.facts.storage_available_percent =
-            Observation::known((available as f64 * 100.0) / total as f64);
-        Ok(())
-    }
-
-    /// Scheduled evaluation's bounded batch variant. A root id is the cache
-    /// key even when its configuration cannot currently be resolved, so an
-    /// unavailable root remains consistently unknown throughout the pass.
-    pub(crate) async fn populate_lifecycle_storage_facts_from_cache(
-        &self,
-        input: &mut LifecycleInput,
-        storage_root_id: Option<&str>,
-        cache: &mut LifecycleStorageFactCache,
-        read: LifecycleStorageRead,
-    ) -> AppResult<()> {
-        let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
-        else {
-            return Ok(());
-        };
-        if let Some(snapshot) = cache.get(storage_root_id) {
-            apply_storage_snapshot(input, snapshot);
-            return Ok(());
-        }
-        self.populate_lifecycle_storage_facts(input, Some(storage_root_id), read)
-            .await?;
-        cache.insert(storage_root_id.to_string(), storage_snapshot(input));
-        Ok(())
-    }
-
-    /// Count only files whose actual current location is under the selected
-    /// root. `None` totals mean the root cannot be resolved, never that it has
-    /// zero files.
-    pub(crate) async fn lifecycle_root_file_summary(
-        &self,
-        files: &[crate::types::TitleMediaFile],
-        storage_root_id: Option<&str>,
-    ) -> AppResult<LifecycleRootFileSummary> {
-        let Some(root) = self.lifecycle_storage_root(storage_root_id).await? else {
-            return Ok(LifecycleRootFileSummary::default());
-        };
-        Ok(lifecycle_root_file_summary_on(files, &root).await)
-    }
-
-    /// [`Self::lifecycle_root_file_summary`] resolving each root once per
-    /// `memo`. The summary is the same; only the repeated configuration read
-    /// goes.
-    pub(crate) async fn lifecycle_root_file_summary_memo(
-        &self,
-        files: &[crate::types::TitleMediaFile],
-        storage_root_id: Option<&str>,
-        memo: &mut LifecycleStorageRootMemo,
-    ) -> AppResult<LifecycleRootFileSummary> {
-        let Some(storage_root_id) = storage_root_id.map(str::trim).filter(|id| !id.is_empty())
-        else {
-            return Ok(LifecycleRootFileSummary::default());
-        };
-        let root = match memo.get(storage_root_id) {
-            Some(root) => root.clone(),
-            None => {
-                let root = self.lifecycle_storage_root(Some(storage_root_id)).await?;
-                memo.insert(storage_root_id.to_string(), root.clone());
-                root
-            }
-        };
-        let Some(root) = root else {
-            return Ok(LifecycleRootFileSummary::default());
-        };
-        Ok(lifecycle_root_file_summary_on(files, &root).await)
-    }
-
-    /// Filter a previously-authorized candidate manifest to an exact root.
-    /// Callers must still fingerprint each retained file immediately before
-    /// deletion; this only keeps a storage rule from authorizing another root.
-    pub(crate) async fn lifecycle_files_on_root(
-        &self,
-        files: Vec<crate::types::TitleMediaFile>,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<Option<Vec<crate::types::TitleMediaFile>>> {
-        let Some(root) = self.lifecycle_storage_root(storage_root_id).await? else {
-            return Ok(None);
-        };
-        Ok(root_filtered_files(&files, &root).await)
-    }
-
-    /// A policy media-file delete can include tracked sidecars on roots other
-    /// than its primary media path. Storage pressure owns only the selected
-    /// root, so all persisted plan paths must be physically proven there both
-    /// when the journal is made and immediately before the shared deleter runs.
-    /// `None` means that the proof was unavailable; callers must hold.
-    pub(crate) async fn lifecycle_policy_plan_on_root(
-        &self,
-        plan: &PolicyMediaFileDeletePlan,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<Option<bool>> {
-        let Some(root) = self.lifecycle_storage_root(storage_root_id).await? else {
-            return Ok(None);
-        };
-        let Some(paths) = plan.path_strings() else {
-            return Ok(None);
-        };
-        Ok(root_path_membership(&paths, &root)
-            .await
-            .map(|membership| membership.into_iter().all(|on_root| on_root)))
-    }
-
-    /// Resume-only proof for a journal whose exact, previously authorized
-    /// paths may already have been unlinked when a process crashed before the
-    /// catalog cleanup/checkpoint update. Existing paths must still be on the
-    /// selected root; a path which is conclusively absent is safe only because
-    /// it is named in the persisted policy manifest and the caller separately
-    /// verifies the saved root identity.
-    pub(crate) async fn lifecycle_policy_plan_on_root_or_absent(
-        &self,
-        plan: &PolicyMediaFileDeletePlan,
-        storage_root_id: Option<&str>,
-    ) -> AppResult<Option<bool>> {
-        let Some(root) = self.lifecycle_storage_root(storage_root_id).await? else {
-            return Ok(None);
-        };
-        let Some(paths) = plan.path_strings() else {
-            return Ok(None);
-        };
-        Ok(root_path_membership_or_absent(&paths, &root)
-            .await
-            .map(|membership| {
-                membership
+        Ok(LifecycleStorageRoots {
+            roots: Some(
+                libraries
                     .into_iter()
-                    .all(|on_root_or_absent| on_root_or_absent)
-            }))
+                    .flat_map(|library| library.roots)
+                    .filter_map(storage_root_from_library_root)
+                    .collect(),
+            ),
+        })
     }
-}
 
-/// [`AppUseCase::lifecycle_root_file_summary`] for a root the caller has
-/// already resolved.
-pub(crate) async fn lifecycle_root_file_summary_on(
-    files: &[crate::types::TitleMediaFile],
-    root: &LifecycleStorageRoot,
-) -> LifecycleRootFileSummary {
-    let Some(matching) = root_filtered_files(files, root).await else {
-        return LifecycleRootFileSummary::default();
-    };
-    LifecycleRootFileSummary {
-        file_count: Some(matching.len() as i64),
-        total_size_bytes: Some(matching.iter().map(|file| file.size_bytes).sum()),
+    /// Set `storage_roots` from `files`: one entry per configured root they
+    /// are on, with its capacity. Known and empty when no file is under a
+    /// configured root. Unknown when the roots could not be read, or when any
+    /// root the files are on has no usable capacity figure.
+    pub(crate) async fn populate_lifecycle_storage_roots(
+        &self,
+        facts: &mut LifecycleFactsDoc,
+        files: &[crate::types::TitleMediaFile],
+        roots: &LifecycleStorageRoots,
+        memo: &mut LifecycleStorageCapacityMemo,
+        read: LifecycleStorageRead,
+    ) {
+        let Some(on) = roots_of_files(roots, files) else {
+            facts.storage_roots = Observation::unknown(STORAGE_ROOT_UNAVAILABLE);
+            return;
+        };
+        let mut docs = Vec::with_capacity(on.len());
+        for root in on {
+            let figures = match memo.figures.get(&root.id) {
+                Some(figures) => *figures,
+                None => {
+                    let figures = self
+                        .lifecycle_storage_capacity(root.path.clone(), read)
+                        .await;
+                    memo.figures.insert(root.id.clone(), figures);
+                    figures
+                }
+            };
+            match figures {
+                Ok((available, total)) => docs.push(LifecycleStorageRootDoc {
+                    root_id: root.id.clone(),
+                    path: root.path.clone(),
+                    available_bytes: available,
+                    total_bytes: total,
+                    available_percent: (available as f64 * 100.0) / total as f64,
+                }),
+                Err(reason) => {
+                    facts.storage_roots = Observation::unknown(reason);
+                    return;
+                }
+            }
+        }
+        facts.storage_roots = Observation::known(docs);
     }
 }
 
@@ -432,223 +306,101 @@ impl AppUseCase {
     }
 }
 
-/// Resolve physical ownership in one bounded blocking task. `None` means that
-/// the root or one candidate path could not be proved, and callers must hold
-/// rather than reinterpret uncertainty as an empty root-local manifest.
-async fn root_filtered_files(
-    files: &[crate::types::TitleMediaFile],
-    root: &LifecycleStorageRoot,
-) -> Option<Vec<crate::types::TitleMediaFile>> {
-    let paths: Vec<String> = files.iter().map(|file| file.file_path.clone()).collect();
-    let membership = root_path_membership(&paths, root).await?;
-    Some(
-        files
-            .iter()
-            .zip(membership)
-            .filter(|(_, on_root)| *on_root)
-            .map(|(file, _)| file.clone())
-            .collect(),
-    )
-}
-
-async fn root_path_membership(paths: &[String], root: &LifecycleStorageRoot) -> Option<Vec<bool>> {
-    let root_path = root.path.clone();
-    let paths = paths.to_vec();
-    tokio::time::timeout(
-        ROOT_STAT_TIMEOUT,
-        tokio::task::spawn_blocking(move || physical_root_membership(&root_path, &paths)),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)?
-}
-
-async fn root_path_membership_or_absent(
-    paths: &[String],
-    root: &LifecycleStorageRoot,
-) -> Option<Vec<bool>> {
-    let root_path = root.path.clone();
-    let paths = paths.to_vec();
-    tokio::time::timeout(
-        ROOT_STAT_TIMEOUT,
-        tokio::task::spawn_blocking(move || physical_root_membership_or_absent(&root_path, &paths)),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)?
-}
-
-fn physical_root_membership(root: &str, paths: &[String]) -> Option<Vec<bool>> {
-    // A configured root and a catalog file can each be symlinks. The manifest
-    // is authorized for the physical location, not merely a lexical prefix:
-    // `/media/root/escape -> /other` must never become root-local deletion.
-    let root_path = std::fs::canonicalize(root).ok()?;
-    let root_path = root_path.to_str()?;
-    paths
-        .iter()
-        .map(|path| {
-            if path.trim().is_empty() || !Path::new(path).is_absolute() {
-                return None;
-            }
-            let file_path = std::fs::canonicalize(path).ok()?;
-            let file_path = file_path.to_str()?;
-            if !library_path_is_under_root(file_path, root_path) {
-                return Some(false);
-            }
-            paths_share_filesystem(root_path, file_path)
-        })
-        .collect()
-}
-
-/// This is intentionally distinct from [`physical_root_membership`]. General
-/// candidate filtering treats a missing catalog path as unknown. Only a
-/// checkpoint's immutable, exact policy paths can use an absent path as proof
-/// of completed on-disk work after the root identity has been checked.
-fn physical_root_membership_or_absent(root: &str, paths: &[String]) -> Option<Vec<bool>> {
-    let root_path = std::fs::canonicalize(root).ok()?;
-    let root_path = root_path.to_str()?;
-    paths
-        .iter()
-        .map(|path| {
-            if path.trim().is_empty() || !Path::new(path).is_absolute() {
-                return None;
-            }
-            match std::fs::symlink_metadata(path) {
-                Err(error) if error.kind() == ErrorKind::NotFound => Some(true),
-                Err(_) => None,
-                Ok(_) => {
-                    let file_path = std::fs::canonicalize(path).ok()?;
-                    let file_path = file_path.to_str()?;
-                    if !library_path_is_under_root(file_path, root_path) {
-                        return Some(false);
-                    }
-                    paths_share_filesystem(root_path, file_path)
-                }
-            }
-        })
-        .collect()
-}
-
-fn physical_root_identity(root: &str) -> Option<String> {
-    let canonical = std::fs::canonicalize(root).ok()?;
-    let canonical = canonical.to_str()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = std::fs::metadata(canonical).ok()?;
-        Some(format!("{canonical}:device={}", metadata.dev()))
-    }
-    #[cfg(windows)]
-    {
-        Some(format!("{canonical}:volume={}", volume_path(canonical)?))
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        None
-    }
-}
-
-#[cfg(unix)]
-fn paths_share_filesystem(root: &str, file: &str) -> Option<bool> {
-    use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(root), std::fs::metadata(file)) {
-        (Ok(root), Ok(file)) => Some(root.dev() == file.dev()),
-        _ => None,
-    }
-}
-
-#[cfg(windows)]
-fn paths_share_filesystem(root: &str, file: &str) -> Option<bool> {
-    // `GetVolumePathNameW` resolves mounted folders as well as drive letters,
-    // so files below a nested volume do not claim capacity from the configured
-    // root's filesystem.
-    let (root, file) = volume_path(root).zip(volume_path(file))?;
-    Some(root.eq_ignore_ascii_case(&file))
-}
-
-#[cfg(windows)]
-fn volume_path(path: &str) -> Option<String> {
-    use std::iter;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
-
-    let input: Vec<u16> = std::ffi::OsStr::new(path)
-        .encode_wide()
-        .chain(iter::once(0))
-        .collect();
-    let mut output = vec![0_u16; 32_768];
-    let ok =
-        unsafe { GetVolumePathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32) };
-    if ok == 0 {
-        return None;
-    }
-    let end = output.iter().position(|&value| value == 0)?;
-    String::from_utf16(&output[..end]).ok()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn paths_share_filesystem(_root: &str, _file: &str) -> Option<bool> {
-    // Unknown platform identity is not a reason to widen a destructive
-    // manifest. A supported platform needs an explicit identity probe first.
-    None
-}
-
-fn set_storage_unknown(input: &mut LifecycleInput, reason: &'static str) {
-    input.facts.storage_root_id = Observation::unknown(reason);
-    input.facts.storage_available_bytes = Observation::unknown(reason);
-    input.facts.storage_total_bytes = Observation::unknown(reason);
-    input.facts.storage_available_percent = Observation::unknown(reason);
-}
-
-fn storage_snapshot(input: &LifecycleInput) -> LifecycleStorageFactSnapshot {
-    LifecycleStorageFactSnapshot {
-        storage_root_id: input.facts.storage_root_id.clone(),
-        storage_available_bytes: input.facts.storage_available_bytes.clone(),
-        storage_total_bytes: input.facts.storage_total_bytes.clone(),
-        storage_available_percent: input.facts.storage_available_percent.clone(),
-    }
-}
-
-fn apply_storage_snapshot(input: &mut LifecycleInput, snapshot: &LifecycleStorageFactSnapshot) {
-    input.facts.storage_root_id = snapshot.storage_root_id.clone();
-    input.facts.storage_available_bytes = snapshot.storage_available_bytes.clone();
-    input.facts.storage_total_bytes = snapshot.storage_total_bytes.clone();
-    input.facts.storage_available_percent = snapshot.storage_available_percent.clone();
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{physical_root_membership, storage_capacity_values};
+    use super::{
+        LifecycleStorageRoot, LifecycleStorageRoots, roots_of_files, rule_reads_storage,
+        storage_capacity_values,
+    };
+
+    fn file(path: &str) -> crate::types::TitleMediaFile {
+        crate::types::TitleMediaFile {
+            file_path: path.to_string(),
+            ..crate::types::TitleMediaFile::default()
+        }
+    }
+
+    fn roots() -> LifecycleStorageRoots {
+        LifecycleStorageRoots::from_roots(vec![
+            LifecycleStorageRoot {
+                id: "root-fixture-a".into(),
+                path: "/fixture/a".into(),
+            },
+            LifecycleStorageRoot {
+                id: "root-fixture-b".into(),
+                path: "/fixture/b".into(),
+            },
+            LifecycleStorageRoot {
+                id: "root-fixture-b-nested".into(),
+                path: "/fixture/b/nested".into(),
+            },
+        ])
+    }
+
+    fn ids(files: &[crate::types::TitleMediaFile]) -> Option<Vec<String>> {
+        let roots = roots();
+        roots_of_files(&roots, files).map(|on| on.into_iter().map(|root| root.id.clone()).collect())
+    }
 
     #[test]
-    fn physical_membership_rejects_outside_and_missing_paths_without_emptying_the_result() {
-        let workspace = tempfile::tempdir().expect("temp directory");
-        let root = workspace.path().join("root");
-        let outside = workspace.path().join("outside");
-        std::fs::create_dir_all(&root).expect("root directory");
-        std::fs::create_dir_all(&outside).expect("outside directory");
-        let inside_file = root.join("inside.mkv");
-        let outside_file = outside.join("outside.mkv");
-        std::fs::write(&inside_file, b"inside").expect("inside file");
-        std::fs::write(&outside_file, b"outside").expect("outside file");
-
-        let membership = physical_root_membership(
-            root.to_str().expect("root utf8"),
-            &[
-                inside_file.to_string_lossy().to_string(),
-                outside_file.to_string_lossy().to_string(),
-            ],
-        );
-        assert_eq!(membership, Some(vec![true, false]));
-
+    fn files_on_two_roots_name_each_root_once_in_configuration_order() {
         assert_eq!(
-            physical_root_membership(
-                root.to_str().expect("root utf8"),
-                &[root.join("gone.mkv").to_string_lossy().to_string()],
-            ),
-            None,
-            "unreadable media is unknown, never an empty root manifest"
+            ids(&[
+                file("/fixture/b/Show Fixture/S01E01.mkv"),
+                file("/fixture/a/Show Fixture/S01E02.mkv"),
+                file("/fixture/b/Show Fixture/S01E03.mkv"),
+            ]),
+            Some(vec![
+                "root-fixture-a".to_string(),
+                "root-fixture-b".to_string()
+            ])
         );
+    }
+
+    #[test]
+    fn membership_is_lexical_on_path_boundaries_and_takes_the_innermost_root() {
+        // A sibling directory sharing a root's prefix is not under the root.
+        assert_eq!(
+            ids(&[file("/fixture/ab/Show Fixture/S01E01.mkv")]),
+            Some(vec![])
+        );
+        assert_eq!(
+            ids(&[file("/fixture/b/nested/Show Fixture/S01E01.mkv")]),
+            Some(vec!["root-fixture-b-nested".to_string()])
+        );
+        assert!(
+            roots_of_files(
+                &LifecycleStorageRoots::unavailable(),
+                &[file("/fixture/a/x.mkv")]
+            )
+            .is_none(),
+            "unreadable roots are unknown, never no roots"
+        );
+    }
+
+    #[test]
+    fn a_file_under_no_configured_root_is_left_out_and_the_rest_stay_known() {
+        for stray in [
+            "/fixture/ab/Show Fixture/S01E01.mkv",
+            "/elsewhere/Show Fixture/S01E01.mkv",
+        ] {
+            assert_eq!(
+                ids(&[file("/fixture/a/Show Fixture/S01E02.mkv"), file(stray)]),
+                Some(vec!["root-fixture-a".to_string()]),
+                "{stray} adds no root and does not make the list unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rule_reads_storage_when_it_names_the_storage_fact_at_any_level() {
+        assert!(rule_reads_storage(
+            "x if { some r in input.facts.storage_roots }"
+        ));
+        assert!(rule_reads_storage(
+            "delete_season_files if { some r in input.season.facts.storage_roots }"
+        ));
+        assert!(!rule_reads_storage("unmonitor if input.facts.has_file"));
     }
 
     #[test]
@@ -666,29 +418,5 @@ mod tests {
             .map(storage_capacity_values)
             .collect::<Vec<_>>();
         assert_eq!(sequence, vec![Some((100, 1_000)), None, Some((700, 1_000))]);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn physical_membership_rejects_a_symlink_escape() {
-        use std::os::unix::fs::symlink;
-
-        let workspace = tempfile::tempdir().expect("temp directory");
-        let root = workspace.path().join("root");
-        let outside = workspace.path().join("outside");
-        std::fs::create_dir_all(&root).expect("root directory");
-        std::fs::create_dir_all(&outside).expect("outside directory");
-        let outside_file = outside.join("outside.mkv");
-        std::fs::write(&outside_file, b"outside").expect("outside file");
-        let escaped = root.join("escaped.mkv");
-        symlink(&outside_file, &escaped).expect("symlink");
-
-        assert_eq!(
-            physical_root_membership(
-                root.to_str().expect("root utf8"),
-                &[escaped.to_string_lossy().to_string()],
-            ),
-            Some(vec![false])
-        );
     }
 }

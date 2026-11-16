@@ -84,6 +84,73 @@
       ]
     },
     {
+      "titleKey": "settings.refLifecycleSectionSeason",
+      "path": "input.season",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refLifecycleSeasonId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refLifecycleCollectionId"
+        },
+        {
+          "field": "season_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSubjectSeasonNumber"
+        },
+        {
+          "field": "facts",
+          "type": "object",
+          "descKey": "settings.refLifecycleSeasonFacts"
+        },
+        {
+          "field": "observations",
+          "type": "object",
+          "descKey": "settings.refLifecycleSeasonObservations"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refLifecycleSectionEpisode",
+      "path": "input.episode",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refLifecycleEpisodeId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refLifecycleCollectionId"
+        },
+        {
+          "field": "season_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleSubjectSeasonNumber"
+        },
+        {
+          "field": "episode_number",
+          "type": "number?",
+          "descKey": "settings.refLifecycleEpisodeNumber"
+        },
+        {
+          "field": "facts",
+          "type": "object",
+          "descKey": "settings.refLifecycleEpisodeFacts"
+        },
+        {
+          "field": "observations",
+          "type": "object",
+          "descKey": "settings.refLifecycleEpisodeObservations"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refLifecycleSectionFacts",
       "path": "input.facts",
       "fields": [
@@ -333,24 +400,9 @@
           "descKey": "settings.refLifecycleFactsSeriesMovies"
         },
         {
-          "field": "storage_root_id",
-          "type": "string",
-          "descKey": "settings.refLifecycleFactsStorageRootId"
-        },
-        {
-          "field": "storage_available_bytes",
-          "type": "number",
-          "descKey": "settings.refLifecycleFactsStorageAvailableBytes"
-        },
-        {
-          "field": "storage_total_bytes",
-          "type": "number",
-          "descKey": "settings.refLifecycleFactsStorageTotalBytes"
-        },
-        {
-          "field": "storage_available_percent",
-          "type": "number",
-          "descKey": "settings.refLifecycleFactsStorageAvailablePercent"
+          "field": "storage_roots",
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsStorageRoots"
         },
         {
           "field": "runtime_minutes",
@@ -673,6 +725,37 @@
       ]
     },
     {
+      "titleKey": "settings.refLifecycleSectionStorageRoots",
+      "path": "input.facts.storage_roots[]",
+      "fields": [
+        {
+          "field": "root_id",
+          "type": "string",
+          "descKey": "settings.refLifecycleStorageRootId"
+        },
+        {
+          "field": "path",
+          "type": "string",
+          "descKey": "settings.refLifecycleStorageRootPath"
+        },
+        {
+          "field": "available_bytes",
+          "type": "number",
+          "descKey": "settings.refLifecycleStorageRootAvailableBytes"
+        },
+        {
+          "field": "total_bytes",
+          "type": "number",
+          "descKey": "settings.refLifecycleStorageRootTotalBytes"
+        },
+        {
+          "field": "available_percent",
+          "type": "number",
+          "descKey": "settings.refLifecycleStorageRootAvailablePercent"
+        }
+      ]
+    },
+    {
       "titleKey": "settings.refLifecycleSectionObservations",
       "path": "input.observations",
       "fields": [
@@ -922,24 +1005,9 @@
           "descKey": "settings.refLifecycleFactsSeriesMovies"
         },
         {
-          "field": "storage_root_id",
+          "field": "storage_roots",
           "type": "object",
-          "descKey": "settings.refLifecycleFactsStorageRootId"
-        },
-        {
-          "field": "storage_available_bytes",
-          "type": "object",
-          "descKey": "settings.refLifecycleFactsStorageAvailableBytes"
-        },
-        {
-          "field": "storage_total_bytes",
-          "type": "object",
-          "descKey": "settings.refLifecycleFactsStorageTotalBytes"
-        },
-        {
-          "field": "storage_available_percent",
-          "type": "object",
-          "descKey": "settings.refLifecycleFactsStorageAvailablePercent"
+          "descKey": "settings.refLifecycleFactsStorageRoots"
         },
         {
           "field": "runtime_minutes",
@@ -2393,8 +2461,8 @@
       ]
     },
     {
-      "titleKey": "settings.refLifecycleFactsStorageRootId",
-      "path": "input.observations.storage_root_id",
+      "titleKey": "settings.refLifecycleFactsStorageRoots",
+      "path": "input.observations.storage_roots",
       "fields": [
         {
           "field": "status",
@@ -2403,86 +2471,8 @@
         },
         {
           "field": "value",
-          "type": "string",
-          "descKey": "settings.refLifecycleFactsStorageRootIdValue"
-        },
-        {
-          "field": "observed_at",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsObservedAt"
-        },
-        {
-          "field": "reason",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsReason"
-        }
-      ]
-    },
-    {
-      "titleKey": "settings.refLifecycleFactsStorageAvailableBytes",
-      "path": "input.observations.storage_available_bytes",
-      "fields": [
-        {
-          "field": "status",
-          "type": "string",
-          "descKey": "settings.refLifecycleObsStatus"
-        },
-        {
-          "field": "value",
-          "type": "number",
-          "descKey": "settings.refLifecycleFactsStorageAvailableBytesValue"
-        },
-        {
-          "field": "observed_at",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsObservedAt"
-        },
-        {
-          "field": "reason",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsReason"
-        }
-      ]
-    },
-    {
-      "titleKey": "settings.refLifecycleFactsStorageTotalBytes",
-      "path": "input.observations.storage_total_bytes",
-      "fields": [
-        {
-          "field": "status",
-          "type": "string",
-          "descKey": "settings.refLifecycleObsStatus"
-        },
-        {
-          "field": "value",
-          "type": "number",
-          "descKey": "settings.refLifecycleFactsStorageTotalBytesValue"
-        },
-        {
-          "field": "observed_at",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsObservedAt"
-        },
-        {
-          "field": "reason",
-          "type": "string?",
-          "descKey": "settings.refLifecycleObsReason"
-        }
-      ]
-    },
-    {
-      "titleKey": "settings.refLifecycleFactsStorageAvailablePercent",
-      "path": "input.observations.storage_available_percent",
-      "fields": [
-        {
-          "field": "status",
-          "type": "string",
-          "descKey": "settings.refLifecycleObsStatus"
-        },
-        {
-          "field": "value",
-          "type": "number",
-          "descKey": "settings.refLifecycleFactsStorageAvailablePercentValue"
+          "type": "object[]",
+          "descKey": "settings.refLifecycleFactsStorageRootsValue"
         },
         {
           "field": "observed_at",

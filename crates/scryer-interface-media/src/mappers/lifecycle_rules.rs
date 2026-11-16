@@ -211,7 +211,6 @@ pub fn from_lifecycle_rule_set(
         edited_since_enabled: rule_set.destructive_rearm_required,
         system_owned: rule_set.system_owned,
         library_ids: rule_set.library_ids.clone(),
-        subject_kind: lifecycle_rule_subject_kind_value(rule_set.subject_kind),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),
         grace_days: to_graphql_int(detail.revision.grace_days),
         declared_actions: from_lifecycle_declared_actions(&detail.declared_actions),
@@ -238,7 +237,6 @@ pub fn from_lifecycle_rule_revision(
         revision_number: to_graphql_int(revision.revision_number),
         rego_source: scryer_rules::strip_editor_source(&revision.rego_source),
         grace_days: to_graphql_int(revision.grace_days),
-        storage_root_id: revision.storage_root_id,
         matcher_content_hash: revision.matcher_content_hash,
         created_by: revision.created_by.map(ID::from),
         created_at: revision.created_at,
@@ -335,6 +333,16 @@ pub fn lifecycle_action_head_value(head: AppActionHead) -> LifecycleActionHead {
         AppActionHead::MoveToLibrary => LifecycleActionHead::MoveToLibrary,
         AppActionHead::MoveToRoot => LifecycleActionHead::MoveToRoot,
         AppActionHead::Notify => LifecycleActionHead::Notify,
+        AppActionHead::MonitorSeason => LifecycleActionHead::MonitorSeason,
+        AppActionHead::UnmonitorSeason => LifecycleActionHead::UnmonitorSeason,
+        AppActionHead::DeleteSeasonFiles => LifecycleActionHead::DeleteSeasonFiles,
+        AppActionHead::FetchSeasonSubtitles => LifecycleActionHead::FetchSeasonSubtitles,
+        AppActionHead::NotifySeason => LifecycleActionHead::NotifySeason,
+        AppActionHead::MonitorEpisode => LifecycleActionHead::MonitorEpisode,
+        AppActionHead::UnmonitorEpisode => LifecycleActionHead::UnmonitorEpisode,
+        AppActionHead::DeleteEpisodeFiles => LifecycleActionHead::DeleteEpisodeFiles,
+        AppActionHead::FetchEpisodeSubtitles => LifecycleActionHead::FetchEpisodeSubtitles,
+        AppActionHead::NotifyEpisode => LifecycleActionHead::NotifyEpisode,
     }
 }
 
@@ -403,8 +411,6 @@ pub fn from_lifecycle_preview_result(result: AppPreviewResult) -> LifecyclePrevi
                 subject_label: title.subject_label,
                 file_count: to_graphql_int(title.file_count),
                 total_size_bytes: title.total_size_bytes,
-                storage_root_file_count: title.storage_root_file_count.map(to_graphql_int),
-                storage_root_total_size_bytes: title.storage_root_total_size_bytes,
                 title_id: ID::from(title.title_id),
                 title_name: title.title_name,
                 facet: title.facet.as_str().to_string(),
@@ -469,8 +475,6 @@ pub fn from_lifecycle_candidate(
         subject_label,
         file_count,
         total_size_bytes,
-        storage_root_file_count,
-        storage_root_total_size_bytes,
         candidate,
         rule_name,
         title_name,
@@ -484,8 +488,6 @@ pub fn from_lifecycle_candidate(
     LifecycleCandidate {
         file_count: file_count.map(to_graphql_int),
         total_size_bytes,
-        storage_root_file_count: storage_root_file_count.map(to_graphql_int),
-        storage_root_total_size_bytes,
         subject_label,
         subject_kind: candidate.subject_kind,
         subject_id: ID::from(candidate.subject_id),
@@ -781,8 +783,6 @@ mod tests {
             subject_label: "Example".into(),
             file_count: Some(1),
             total_size_bytes: Some(42),
-            storage_root_file_count: Some(1),
-            storage_root_total_size_bytes: Some(42),
             candidate: candidate.clone(),
             rule_name: "Rule".into(),
             title_name: "Example".into(),
@@ -794,8 +794,6 @@ mod tests {
         };
         let projected = from_lifecycle_candidate(sequence_view);
         assert_eq!(projected.action_kind, LifecycleActionKind::ActionSequence);
-        assert_eq!(projected.storage_root_file_count, Some(1));
-        assert_eq!(projected.storage_root_total_size_bytes, Some(42));
         assert!(projected.action_sequence.is_some());
         assert!(projected.sequence_steps.is_empty());
 
@@ -807,8 +805,6 @@ mod tests {
             subject_label: "Example".into(),
             file_count: None,
             total_size_bytes: None,
-            storage_root_file_count: None,
-            storage_root_total_size_bytes: None,
             rule_name: "Rule".into(),
             title_name: "Example".into(),
             action_sequence: None,
@@ -816,8 +812,6 @@ mod tests {
         };
         let legacy = from_lifecycle_candidate(legacy_view);
         assert_eq!(legacy.action_kind, LifecycleActionKind::DoNothing);
-        assert_eq!(legacy.storage_root_file_count, None);
-        assert_eq!(legacy.storage_root_total_size_bytes, None);
         assert!(legacy.action_sequence.is_none());
         assert!(legacy.sequence_steps.is_empty());
     }

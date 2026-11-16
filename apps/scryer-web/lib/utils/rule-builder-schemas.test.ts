@@ -25,19 +25,24 @@ import {
   generateRuleSource,
   parseRuleBuilderModel,
   ruleBuilderFields,
+  ruleBuilderSubjectFields,
   type RuleBuilderModel,
   type RuleBuilderSchema,
   type RuleBuilderSchemaPayload,
 } from "./rule-builder.ts";
 
-/// A fixture's `cases` say whether `rule_applies` holds for an input. They are
-/// checked by evaluating the pinned source; this build has no Rego engine, so
-/// here only their shape is held.
-type FixtureCase = { input: Record<string, unknown>; expected: boolean };
+/// A fixture's `cases` say whether `rule_applies`, or the helper a case names
+/// in `rule`, holds for an input. They are checked by evaluating the pinned
+/// source; this build has no Rego engine, so here only their shape is held.
+type FixtureCase = {
+  input: Record<string, unknown>;
+  expected: boolean;
+  rule?: string;
+};
 
 type Fixture = {
   id: string;
-  scope: string | null;
+  scope?: string | null;
   model: unknown;
   source: string;
   cases: FixtureCase[];
@@ -56,7 +61,7 @@ const FAMILIES: Family[] = [
     name: "lifecycle",
     schema: LIFECYCLE_CONTRACT_SCHEMA,
     fixtures: lifecycleFixtures as Fixture[],
-    variants: ["TITLE", "SEASON", "EPISODE"],
+    variants: [null],
   },
   {
     name: "scoring",
@@ -84,7 +89,11 @@ for (const family of FAMILIES) {
   test(`every ${family.name} fixture generates exactly its pinned source`, () => {
     assert.ok(family.fixtures.length > 0);
     for (const entry of family.fixtures) {
-      const result = generateRuleSource(family.schema, parsed(family, entry), entry.scope);
+      const result = generateRuleSource(
+        family.schema,
+        parsed(family, entry),
+        entry.scope ?? null,
+      );
       assert.deepEqual(result, { ok: true, source: entry.source }, entry.id);
       assert.ok(entry.source.startsWith(family.schema.preamble), entry.id);
       assert.equal(entry.source.endsWith("\n\n"), false, entry.id);
@@ -95,8 +104,9 @@ for (const family of FAMILIES) {
   test(`${family.name} fixtures cover every comparison, every output and both joins`, () => {
     const offered = new Map<string, string>();
     for (const variant of family.variants)
-      for (const field of ruleBuilderFields(family.schema, variant))
-        offered.set(field.path, field.kind);
+      for (const subject of family.schema.subjects ?? [null])
+        for (const field of ruleBuilderSubjectFields(family.schema, variant, subject))
+          offered.set(field.path, field.kind);
     const expected = new Set<string>();
     for (const kind of new Set(offered.values()))
       for (const operator of family.schema.kinds[kind].operators)
@@ -109,7 +119,8 @@ for (const family of FAMILIES) {
       const model = parsed(family, entry);
       joins.add(model.join);
       for (const id of Object.keys(model.outputs)) outputs.add(id);
-      for (const condition of model.conditions) {
+      const rowConditions = (model.actions ?? []).flatMap((row) => row.conditions);
+      for (const condition of [...model.conditions, ...rowConditions]) {
         const kind = offered.get(condition.field);
         assert.ok(kind, `${entry.id}: ${condition.field}`);
         covered.add(`${kind}:${condition.operator}`);
@@ -137,7 +148,13 @@ for (const family of FAMILIES) {
       assert.ok(entry.cases.some((entry) => entry.expected === true), entry.id);
       assert.ok(entry.cases.some((entry) => entry.expected === false), entry.id);
       for (const entryCase of entry.cases) {
-        assert.deepEqual(Object.keys(entryCase).sort(), ["expected", "input"], entry.id);
+        assert.deepEqual(
+          Object.keys(entryCase).filter((key) => key !== "rule").sort(),
+          ["expected", "input"],
+          entry.id,
+        );
+        if (entryCase.rule !== undefined)
+          assert.match(entryCase.rule, /^rule_applies(_\d+)?$/, entry.id);
         assert.equal(typeof entryCase.expected, "boolean", entry.id);
         assert.equal(typeof entryCase.input, "object", entry.id);
         // `days_since` reads the clock from the input.
@@ -354,7 +371,7 @@ test("lifecycle conditions offer every fact except object lists", () => {
   );
   assert.ok(section);
   const offered = new Map(
-    ruleBuilderFields(LIFECYCLE_CONTRACT_SCHEMA, "TITLE").map((field) => [
+    ruleBuilderFields(LIFECYCLE_CONTRACT_SCHEMA, null).map((field) => [
       field.label,
       field.kind,
     ]),

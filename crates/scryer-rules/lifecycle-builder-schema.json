@@ -1,5 +1,50 @@
 {
   "family": "lifecycle",
+  "subjects": [
+    {
+      "id": "TITLE",
+      "labelKey": "ruleSubject.lifecycle.title",
+      "inputPath": null,
+      "outputs": [
+        "ADD_TAGS",
+        "REMOVE_TAGS",
+        "SET_QUALITY_PROFILE",
+        "MONITOR",
+        "SEARCH",
+        "FETCH_SUBTITLES",
+        "MOVE_TO_LIBRARY",
+        "MOVE_TO_ROOT",
+        "UNMONITOR",
+        "DELETE_FILES",
+        "DELETE_TITLE",
+        "NOTIFY"
+      ]
+    },
+    {
+      "id": "SEASON",
+      "labelKey": "ruleSubject.lifecycle.season",
+      "inputPath": "input.season",
+      "outputs": [
+        "MONITOR_SEASON",
+        "FETCH_SEASON_SUBTITLES",
+        "UNMONITOR_SEASON",
+        "DELETE_SEASON_FILES",
+        "NOTIFY_SEASON"
+      ]
+    },
+    {
+      "id": "EPISODE",
+      "labelKey": "ruleSubject.lifecycle.episode",
+      "inputPath": "input.episode",
+      "outputs": [
+        "MONITOR_EPISODE",
+        "FETCH_EPISODE_SUBTITLES",
+        "UNMONITOR_EPISODE",
+        "DELETE_EPISODE_FILES",
+        "NOTIFY_EPISODE"
+      ]
+    }
+  ],
   "outputs": [
     {
       "id": "ADD_TAGS",
@@ -16,9 +61,7 @@
       "template": "{head} := [{items}] if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": []
     },
     {
@@ -36,9 +79,7 @@
       "template": "{head} := [{items}] if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": []
     },
     {
@@ -56,9 +97,7 @@
       "template": "{head} := {value} if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": []
     },
     {
@@ -79,7 +118,65 @@
       "variants": null,
       "conflictsWith": [
         "UNMONITOR",
+        "UNMONITOR_SEASON",
+        "UNMONITOR_EPISODE",
         "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
+        "DELETE_TITLE"
+      ]
+    },
+    {
+      "id": "MONITOR_SEASON",
+      "head": "monitor_season",
+      "labelKey": "ruleOutput.lifecycle.monitor_season",
+      "actionLabelKey": "ruleOutput.lifecycle.monitor",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": [
+        "UNMONITOR",
+        "UNMONITOR_SEASON",
+        "UNMONITOR_EPISODE",
+        "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
+        "DELETE_TITLE"
+      ]
+    },
+    {
+      "id": "MONITOR_EPISODE",
+      "head": "monitor_episode",
+      "labelKey": "ruleOutput.lifecycle.monitor_episode",
+      "actionLabelKey": "ruleOutput.lifecycle.monitor",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": [
+        "UNMONITOR",
+        "UNMONITOR_SEASON",
+        "UNMONITOR_EPISODE",
+        "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
         "DELETE_TITLE"
       ]
     },
@@ -98,15 +195,51 @@
       "template": "{head} if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": []
     },
     {
       "id": "FETCH_SUBTITLES",
       "head": "fetch_subtitles",
       "labelKey": "ruleOutput.lifecycle.fetch_subtitles",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "FETCH_SEASON_SUBTITLES",
+      "head": "fetch_season_subtitles",
+      "labelKey": "ruleOutput.lifecycle.fetch_season_subtitles",
+      "actionLabelKey": "ruleOutput.lifecycle.fetch_subtitles",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "FETCH_EPISODE_SUBTITLES",
+      "head": "fetch_episode_subtitles",
+      "labelKey": "ruleOutput.lifecycle.fetch_episode_subtitles",
+      "actionLabelKey": "ruleOutput.lifecycle.fetch_subtitles",
       "helpKey": null,
       "valueKind": "FLAG",
       "options": null,
@@ -136,12 +269,12 @@
       "template": "{head} := {value} if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": [
         "MOVE_TO_ROOT",
         "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
         "DELETE_TITLE"
       ]
     },
@@ -160,11 +293,11 @@
       "template": "{head} := {value} if {helper}",
       "perItem": false,
       "destructive": false,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": [
         "DELETE_FILES",
+        "DELETE_SEASON_FILES",
+        "DELETE_EPISODE_FILES",
         "DELETE_TITLE"
       ]
     },
@@ -172,6 +305,44 @@
       "id": "UNMONITOR",
       "head": "unmonitor",
       "labelKey": "ruleOutput.lifecycle.unmonitor",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "UNMONITOR_SEASON",
+      "head": "unmonitor_season",
+      "labelKey": "ruleOutput.lifecycle.unmonitor_season",
+      "actionLabelKey": "ruleOutput.lifecycle.unmonitor",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "UNMONITOR_EPISODE",
+      "head": "unmonitor_episode",
+      "labelKey": "ruleOutput.lifecycle.unmonitor_episode",
+      "actionLabelKey": "ruleOutput.lifecycle.unmonitor",
       "helpKey": null,
       "valueKind": "FLAG",
       "options": null,
@@ -205,6 +376,44 @@
       "conflictsWith": []
     },
     {
+      "id": "DELETE_SEASON_FILES",
+      "head": "delete_season_files",
+      "labelKey": "ruleOutput.lifecycle.delete_season_files",
+      "actionLabelKey": "ruleOutput.lifecycle.delete_files",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": true,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "DELETE_EPISODE_FILES",
+      "head": "delete_episode_files",
+      "labelKey": "ruleOutput.lifecycle.delete_episode_files",
+      "actionLabelKey": "ruleOutput.lifecycle.delete_files",
+      "helpKey": null,
+      "valueKind": "FLAG",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": null,
+      "pattern": null,
+      "template": "{head} if {helper}",
+      "perItem": false,
+      "destructive": true,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
       "id": "DELETE_TITLE",
       "head": "delete_title",
       "labelKey": "ruleOutput.lifecycle.delete_title",
@@ -219,15 +428,51 @@
       "template": "{head} if {helper}",
       "perItem": false,
       "destructive": true,
-      "variants": [
-        "TITLE"
-      ],
+      "variants": null,
       "conflictsWith": []
     },
     {
       "id": "NOTIFY",
       "head": "notify",
       "labelKey": "ruleOutput.lifecycle.notify",
+      "helpKey": null,
+      "valueKind": "TEXT",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": 500,
+      "pattern": null,
+      "template": "{head} := {value} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "NOTIFY_SEASON",
+      "head": "notify_season",
+      "labelKey": "ruleOutput.lifecycle.notify_season",
+      "actionLabelKey": "ruleOutput.lifecycle.notify",
+      "helpKey": null,
+      "valueKind": "TEXT",
+      "options": null,
+      "min": null,
+      "max": null,
+      "maxItems": null,
+      "maxBytes": 500,
+      "pattern": null,
+      "template": "{head} := {value} if {helper}",
+      "perItem": false,
+      "destructive": false,
+      "variants": null,
+      "conflictsWith": []
+    },
+    {
+      "id": "NOTIFY_EPISODE",
+      "head": "notify_episode",
+      "labelKey": "ruleOutput.lifecycle.notify_episode",
+      "actionLabelKey": "ruleOutput.lifecycle.notify",
       "helpKey": null,
       "valueKind": "TEXT",
       "options": null,

@@ -6,7 +6,6 @@ use scryer_application::{
 use scryer_domain::MediaFacet;
 
 use crate::media::id_list_statements::{id_list_statements, max_binds};
-use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
 use crate::storage::sql::json::{canonical_json_arg, json_text_or};
 
@@ -47,8 +46,8 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
             canonical_json_arg(&item.search_attempts)?,
             SqlArg::Text(item.status.as_str().to_string()),
             SqlArg::OptI64(item.size_bytes),
-            timestamp_arg_for_datastore(&self.datastore, &item.created_at)?,
-            timestamp_arg_for_datastore(&self.datastore, &item.updated_at)?,
+            self.datastore.timestamp_text_arg(&item.created_at)?,
+            self.datastore.timestamp_text_arg(&item.updated_at)?,
         ];
 
         execute_write(
@@ -369,10 +368,7 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
         const ROWS_PER_STATEMENT: usize = 1_000;
         let mut bound = Vec::with_capacity(rows.len());
         for (id, updated_at) in rows {
-            bound.push((
-                id.clone(),
-                timestamp_arg_for_datastore(&self.datastore, updated_at)?,
-            ));
+            bound.push((id.clone(), self.datastore.timestamp_text_arg(updated_at)?));
         }
         SqlRuntime::run_in_transaction(
             &self.datastore,
@@ -587,23 +583,9 @@ fn row_to_library_scan_unmatched_item(row: &SqlRow) -> AppResult<LibraryScanUnma
         error_message: row.opt_text("error_message")?,
         search_attempts,
         size_bytes: row.opt_i64("size_bytes")?,
-        created_at: timestamp_text(row, "created_at")?,
-        updated_at: timestamp_text(row, "updated_at")?,
+        created_at: row.timestamp_text("created_at")?,
+        updated_at: row.timestamp_text("updated_at")?,
     })
-}
-
-fn timestamp_arg_for_datastore(datastore: &StoreDatastore, value: &str) -> AppResult<SqlArg> {
-    match datastore {
-        StoreDatastore::Sqlite { .. } => Ok(SqlArg::Text(value.to_string())),
-        StoreDatastore::Postgres { .. } => parse_utc_datetime(value).map(SqlArg::Timestamp),
-    }
-}
-
-fn timestamp_text(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(_) => row.text(column),
-        SqlRow::Postgres(_) => row.timestamp(column).map(|value| value.to_rfc3339()),
-    }
 }
 
 async fn execute_write(

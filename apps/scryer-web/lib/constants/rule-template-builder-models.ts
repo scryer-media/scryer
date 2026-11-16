@@ -46,7 +46,26 @@ const family =
   ): RuleBuilderModel =>
     model(name, conditions, outputs);
 
-const titles = family("lifecycle");
+/// A lifecycle template's model: shared conditions, then one action row per
+/// output, all on `subject`, each with `rowConditions` of its own.
+const lifecycle = (
+  conditions: Parameters<typeof model>[1],
+  outputs: RuleBuilderModel["outputs"],
+  subject = "TITLE",
+  rowConditions: Parameters<typeof model>[1] = [],
+): RuleBuilderModel => ({
+  ...model("lifecycle", conditions, outputs),
+  actions: Object.keys(outputs).map((output) => ({
+    subject,
+    output,
+    join: "ALL",
+    conditions: model("lifecycle", rowConditions, {}).conditions,
+  })),
+});
+const titles = (
+  conditions: Parameters<typeof model>[1],
+  outputs: RuleBuilderModel["outputs"],
+) => lifecycle(conditions, outputs);
 const request = family("request");
 const scoring = family("scoring");
 
@@ -115,13 +134,17 @@ export const RULE_TEMPLATE_BUILDER_MODELS: Readonly<
       [[facts("quality_profile_id"), "HAS_NO_VALUE"]],
       { ADD_TAGS: ["needs-review"] },
     ),
-    "keep-newest-three-downloaded-episodes": titles(
-      [[facts("episode_position_by_air_date"), "GREATER_THAN", "3"]],
-      { DELETE_FILES: true },
+    "keep-newest-three-downloaded-episodes": lifecycle(
+      [],
+      { DELETE_EPISODE_FILES: true },
+      "EPISODE",
+      [["input.episode.facts.episode_position_by_air_date", "GREATER_THAN", "3"]],
     ),
-    "keep-newest-two-downloaded-seasons": titles(
-      [[facts("season_position_by_air_date"), "GREATER_THAN", "2"]],
-      { DELETE_FILES: true },
+    "keep-newest-two-downloaded-seasons": lifecycle(
+      [],
+      { DELETE_SEASON_FILES: true },
+      "SEASON",
+      [["input.season.facts.season_position_by_air_date", "GREATER_THAN", "2"]],
     ),
     "left-every-public-list": titles(
       [

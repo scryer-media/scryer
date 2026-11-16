@@ -1,5 +1,7 @@
 //! The simple builder's shared fixtures, evaluated by the engine that runs
-//! saved rules. Each case states whether `rule_applies` holds for its input;
+//! saved rules. Each case states whether its rule holds for its input: the
+//! case's `rule` when it names one (a row's own helper, such as
+//! `rule_applies_2`), otherwise `rule_applies`;
 //! the web generates the same sources from the same models, so a case that
 //! disagrees here means the builder's meaning and the engine's have drifted.
 
@@ -27,8 +29,8 @@ fn scoring_fixtures() -> Vec<Value> {
     ))
 }
 
-/// Evaluate `rule_applies` for every case of one fixture. An undefined result
-/// is `false`, exactly as an unmet condition is for a saved rule.
+/// Evaluate each case's rule for every case of one fixture. An undefined
+/// result is `false`, exactly as an unmet condition is for a saved rule.
 fn assert_cases(fixture: &Value, mut engine: regorus::Engine, package: &str) {
     let id = fixture["id"].as_str().expect("fixture id");
     let cases = fixture["cases"].as_array().expect("fixture cases");
@@ -38,14 +40,15 @@ fn assert_cases(fixture: &Value, mut engine: regorus::Engine, package: &str) {
     );
     for (index, case) in cases.iter().enumerate() {
         engine.set_input(RegoValue::from(case["input"].clone()));
+        let rule = case["rule"].as_str().unwrap_or("rule_applies");
         let applies = engine
-            .eval_rule(format!("data.{package}.rule_applies"))
+            .eval_rule(format!("data.{package}.{rule}"))
             .unwrap_or_else(|error| panic!("{id} case {index}: {error}"));
         let expected = case["expected"].as_bool().expect("case expectation");
         assert_eq!(
             applies == RegoValue::from(true),
             expected,
-            "{id} case {index}: rule_applies for {}",
+            "{id} case {index}: {rule} for {}",
             case["input"]
         );
     }

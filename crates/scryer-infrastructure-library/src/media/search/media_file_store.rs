@@ -19,7 +19,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::media::id_list_statements::{id_list_statements, max_binds};
-use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
 };
@@ -119,7 +118,7 @@ fn media_file_insert_args(
         SqlArg::OptText(input.scoring_log.clone()),
         SqlArg::OptText(input.indexer_source.clone()),
         SqlArg::OptText(input.grabbed_release_title.clone()),
-        opt_timestamp_arg_for_datastore(datastore, input.grabbed_at.as_deref())?,
+        datastore.opt_timestamp_text_arg(input.grabbed_at.as_deref())?,
         SqlArg::OptText(input.edition.clone()),
         SqlArg::OptText(input.original_file_path.clone()),
         SqlArg::OptText(input.release_hash.clone()),
@@ -1314,7 +1313,7 @@ impl MediaFileRepository for MediaFileStore {
                     "media_files.series_movie_link_ids_json",
                 ),
                 quality_label: row.opt_text("quality_id")?,
-                created_at: timestamp_text(row, "created_at")?,
+                created_at: row.timestamp_text("created_at")?,
             })
         })
         .collect()
@@ -1782,7 +1781,7 @@ impl MediaFileRepository for MediaFileStore {
                     season_number: row.opt_text("season_number")?,
                     episode_number: row.opt_text("episode_number")?,
                     air_date: row.opt_text("air_date")?,
-                    title_created_at: timestamp_text(row, "title_created_at")?,
+                    title_created_at: row.timestamp_text("title_created_at")?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -1822,7 +1821,7 @@ impl MediaFileRepository for MediaFileStore {
                         .opt_text("movie_release_dates_json")?
                         .map(|value| serde_json::from_str(&value).map_err(repo_err))
                         .transpose()?,
-                    created_at: timestamp_text(row, "created_at")?,
+                    created_at: row.timestamp_text("created_at")?,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
@@ -1865,7 +1864,7 @@ impl MediaFileRepository for MediaFileStore {
                         title_facet: row.text("facet")?,
                         continuity_status: row.opt_text("continuity_status")?,
                         movie_digital_release_date: row.opt_text("movie_digital_release_date")?,
-                        link_created_at: timestamp_text(row, "link_created_at")?,
+                        link_created_at: row.timestamp_text("link_created_at")?,
                     })
                 })
                 .collect::<AppResult<Vec<_>>>()?;
@@ -3004,7 +3003,8 @@ impl MediaFileRepository for MediaFileStore {
                 SqlArg::OptText(snapshot.release_group.clone()),
                 SqlArg::OptText(snapshot.indexer_source.clone()),
                 SqlArg::OptText(snapshot.grabbed_release_title.clone()),
-                opt_timestamp_arg_for_datastore(&self.datastore, snapshot.grabbed_at.as_deref())?,
+                self.datastore
+                    .opt_timestamp_text_arg(snapshot.grabbed_at.as_deref())?,
                 SqlArg::OptText(snapshot.edition.clone()),
                 SqlArg::OptText(snapshot.release_hash.clone()),
                 SqlArg::OptText(snapshot.release_listing_json.clone()),
@@ -3589,7 +3589,7 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         content_hashes: row_to_persisted_content_hashes(row)?,
         quality_label: row.opt_text("quality_id")?,
         scan_status: row.text("scan_status")?,
-        created_at: timestamp_text(row, "created_at")?,
+        created_at: row.timestamp_text("created_at")?,
         video_codec: parse_stored_video_codec(row.opt_text("video_codec")?)?,
         video_width: row.opt_i32("video_width")?,
         video_height: row.opt_i32("video_height")?,
@@ -3626,7 +3626,7 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         scoring_log: row.opt_text("scoring_log")?,
         indexer_source: row.opt_text("indexer_source")?,
         grabbed_release_title: row.opt_text("grabbed_release_title")?,
-        grabbed_at: opt_timestamp_text(row, "grabbed_at")?,
+        grabbed_at: row.opt_timestamp_text("grabbed_at")?,
         edition: row.opt_text("edition")?,
         original_file_path: row.opt_text("original_file_path")?,
         release_hash: row.opt_text("release_hash")?,
@@ -3764,35 +3764,6 @@ fn analysis_array_field<T: DeserializeOwned>(analysis: &JsonValue, field: &str) 
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
-}
-
-fn opt_timestamp_arg_for_datastore(
-    datastore: &StoreDatastore,
-    value: Option<&str>,
-) -> AppResult<SqlArg> {
-    match datastore {
-        StoreDatastore::Sqlite { .. } => Ok(SqlArg::OptText(value.map(str::to_string))),
-        StoreDatastore::Postgres { .. } => value
-            .map(parse_utc_datetime)
-            .transpose()
-            .map(SqlArg::OptTimestamp),
-    }
-}
-
-fn timestamp_text(row: &SqlRow, column: &str) -> AppResult<String> {
-    match row {
-        SqlRow::Sqlite(_) => row.text(column),
-        SqlRow::Postgres(_) => row.timestamp(column).map(|value| value.to_rfc3339()),
-    }
-}
-
-fn opt_timestamp_text(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
-    match row {
-        SqlRow::Sqlite(_) => row.opt_text(column),
-        SqlRow::Postgres(_) => row
-            .opt_timestamp(column)
-            .map(|value| value.map(|value| value.to_rfc3339())),
-    }
 }
 
 async fn execute_write(

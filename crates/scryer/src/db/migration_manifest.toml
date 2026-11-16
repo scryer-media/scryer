@@ -4330,6 +4330,23 @@ file = "postgres/migrations/0358_rename_maintenance_to_lifecycle.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 359
+description = "lifecycle rule targets"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0359_lifecycle_rule_targets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0359_lifecycle_rule_targets.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 341
 file = "baselines/0341_baseline.sql"

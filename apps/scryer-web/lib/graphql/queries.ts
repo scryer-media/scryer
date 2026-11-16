@@ -4165,7 +4165,6 @@ export const LIFECYCLE_RULE_SET_FIELDS = `
     editedSinceEnabled
     systemOwned
     libraryIds
-    subjectKind
     currentRevisionNumber
     graceDays
     declaredActions {${LIFECYCLE_DECLARED_ACTIONS_FIELDS}
@@ -4189,7 +4188,6 @@ const lifecycleRuleRevisionFieldSelection = `
     revisionNumber
     regoSource
     graceDays
-    storageRootId
     matcherContentHash
     createdBy
     createdAt`;
@@ -4246,10 +4244,17 @@ export const ruleBuilderSchemaQuery = `query RuleBuilderSchema($family: String!)
       destructive
       variants
       conflictsWith
+      actionLabelKey
     }
     outputRules {
       rule
       of
+    }
+    subjects {
+      id
+      labelKey
+      inputPath
+      outputs
     }
   }
 }`;
@@ -4268,8 +4273,6 @@ export const lifecycleCandidatesQuery = `query LifecycleCandidates($ruleSetId: I
     ruleName
       fileCount
       totalSizeBytes
-      storageRootFileCount
-      storageRootTotalSizeBytes
     revisionNumber
     subjectKind
     subjectId

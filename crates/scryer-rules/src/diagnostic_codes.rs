@@ -65,8 +65,14 @@ pub const RULE_QUALITY_PROFILE_AMBIGUOUS: &str = "RULE_QUALITY_PROFILE_AMBIGUOUS
 pub const RULE_MONITOR_UNSUPPORTED: &str = "RULE_MONITOR_UNSUPPORTED";
 /// An audio language head names a language Scryer does not know.
 pub const RULE_AUDIO_LANGUAGE_UNKNOWN: &str = "RULE_AUDIO_LANGUAGE_UNKNOWN";
+/// A lifecycle action head reads a level of the input it does not act on: a
+/// title head reads `input.season` or `input.episode`, a season head reads
+/// `input.episode`, or an episode head reads `input.season`. Those sections
+/// are missing at the head's level, so a negated read would always hold.
+pub const RULE_ACTION_READS_OTHER_LEVEL: &str = "RULE_ACTION_READS_OTHER_LEVEL";
 /// All supported diagnostic codes.
 pub const ALL: &[&str] = &[
+    RULE_ACTION_READS_OTHER_LEVEL,
     RULE_HEAD_DEFINED_AS_FUNCTION,
     RULE_HEAD_NAME_RETIRED,
     RULE_QUALITY_PROFILE_UNKNOWN,
