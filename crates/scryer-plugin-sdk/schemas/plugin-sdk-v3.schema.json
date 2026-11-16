@@ -1948,7 +1948,7 @@
         "list_title_left",
         "list_sync_failed",
         "list_unfollowed",
-        "maintenance_rule_notified",
+        "lifecycle_rule_notified",
         "test"
       ]
     },

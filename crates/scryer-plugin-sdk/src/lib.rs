@@ -1706,7 +1706,7 @@ pub enum NotificationEventType {
     ListTitleLeft,
     ListSyncFailed,
     ListUnfollowed,
-    MaintenanceRuleNotified,
+    LifecycleRuleNotified,
     Test,
 }
 
@@ -1742,7 +1742,7 @@ impl NotificationEventType {
             Self::ListTitleLeft => "list_title_left",
             Self::ListSyncFailed => "list_sync_failed",
             Self::ListUnfollowed => "list_unfollowed",
-            Self::MaintenanceRuleNotified => "maintenance_rule_notified",
+            Self::LifecycleRuleNotified => "lifecycle_rule_notified",
             Self::Test => "test",
         }
     }

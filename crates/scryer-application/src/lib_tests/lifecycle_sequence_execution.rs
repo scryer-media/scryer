@@ -2233,7 +2233,7 @@ fn with_notify(mut draft: LifecycleRuleDraft, message: &str) -> LifecycleRuleDra
     draft
 }
 
-/// The `maintenance_rule_notified` events stored so far.
+/// The `lifecycle_rule_notified` events stored so far.
 async fn notified_events(
     events: &crate::lib_tests::MockDomainEventRepo,
 ) -> Vec<scryer_domain::LifecycleRuleNotifiedEventData> {

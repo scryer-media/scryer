@@ -4362,8 +4362,6 @@ pub enum DomainEventType {
     ListUnfollowed,
     ListSyncFinished,
     ListSubscriptionChanged,
-    // Stored and plugin-wire text predates the lifecycle name; keep it.
-    #[serde(rename = "maintenance_rule_notified")]
     LifecycleRuleNotified,
 }
 
@@ -4430,7 +4428,7 @@ impl DomainEventType {
             Self::ListUnfollowed => "list_unfollowed",
             Self::ListSyncFinished => "list_sync_finished",
             Self::ListSubscriptionChanged => "list_subscription_changed",
-            Self::LifecycleRuleNotified => "maintenance_rule_notified",
+            Self::LifecycleRuleNotified => "lifecycle_rule_notified",
         }
     }
 
@@ -4496,7 +4494,7 @@ impl DomainEventType {
             "list_unfollowed" => Some(Self::ListUnfollowed),
             "list_sync_finished" => Some(Self::ListSyncFinished),
             "list_subscription_changed" => Some(Self::ListSubscriptionChanged),
-            "maintenance_rule_notified" => Some(Self::LifecycleRuleNotified),
+            "lifecycle_rule_notified" => Some(Self::LifecycleRuleNotified),
             _ => None,
         }
     }
@@ -5465,9 +5463,6 @@ pub enum DomainEventPayload {
     ListUnfollowed(ListUnfollowedEventData),
     ListSyncFinished(ListSyncFinishedEventData),
     ListSubscriptionChanged(ListSubscriptionChangedEventData),
-    // Stored payloads and plugin subscriptions carry this tag; it predates the
-    // lifecycle name and must not change.
-    #[serde(rename = "maintenance_rule_notified")]
     LifecycleRuleNotified(LifecycleRuleNotifiedEventData),
 }
 
@@ -8299,8 +8294,6 @@ pub enum NotificationEventType {
     ListTitleLeft,
     ListSyncFailed,
     ListUnfollowed,
-    // Stored and plugin-wire text predates the lifecycle name; keep it.
-    #[serde(rename = "maintenance_rule_notified")]
     LifecycleRuleNotified,
     Test,
 }
@@ -8337,7 +8330,7 @@ impl NotificationEventType {
             Self::ListTitleLeft => "list_title_left",
             Self::ListSyncFailed => "list_sync_failed",
             Self::ListUnfollowed => "list_unfollowed",
-            Self::LifecycleRuleNotified => "maintenance_rule_notified",
+            Self::LifecycleRuleNotified => "lifecycle_rule_notified",
             Self::Test => "test",
         }
     }
@@ -8409,7 +8402,7 @@ impl NotificationEventType {
             "list_title_left" => Some(Self::ListTitleLeft),
             "list_sync_failed" => Some(Self::ListSyncFailed),
             "list_unfollowed" => Some(Self::ListUnfollowed),
-            "maintenance_rule_notified" => Some(Self::LifecycleRuleNotified),
+            "lifecycle_rule_notified" => Some(Self::LifecycleRuleNotified),
             "test" => Some(Self::Test),
             "release_grabbed" => Some(Self::Grab),
             "download_failed" => Some(Self::Download),
