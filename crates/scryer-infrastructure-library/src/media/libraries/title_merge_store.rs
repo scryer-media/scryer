@@ -40,7 +40,7 @@ use crate::media::monitor_selections::{
 use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use scryer_infrastructure_sql::domain_event_payload::{
-    decode_domain_event_payload, encode_domain_event_payload,
+    DomainEventPayloadEncoder, decode_domain_event_payload,
 };
 
 /// Operation states a location operation can no longer be resumed from, so an
@@ -1033,6 +1033,9 @@ async fn carry_history(
     )
     .await?;
 
+    // One zstd context for the run: each payload still encodes to exactly the
+    // bytes `encode_domain_event_payload` produces for it alone.
+    let mut encoder = DomainEventPayloadEncoder::new();
     let mut rewrites = Vec::new();
     for row in &rows {
         let Some(mut payload) = decode_payload(row)? else {
@@ -1041,7 +1044,7 @@ async fn carry_history(
         if !remap_payload_ids(&mut payload, map) {
             continue;
         }
-        let encoded = encode_domain_event_payload(&payload).map_err(|error| {
+        let encoded = encoder.encode(&payload).map_err(|error| {
             AppError::Repository(format!(
                 "failed to re-encode domain event {}: {error}",
                 row.text("event_id").unwrap_or_default()

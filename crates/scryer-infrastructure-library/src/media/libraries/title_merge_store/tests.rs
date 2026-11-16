@@ -8,6 +8,7 @@ use super::*;
 use scryer_application::location::merge::engine::plan_merge;
 use scryer_application::location::merge::map::MergeBlockReason;
 use scryer_application::location::merge::roles::RoleChangeReason;
+use scryer_infrastructure_sql::domain_event_payload::encode_domain_event_payload;
 use sqlx::sqlite::SqlitePoolOptions;
 
 mod bridge_cache;
@@ -1608,4 +1609,60 @@ async fn a_merge_deletes_the_candidates_of_the_selections_it_retires() {
         1,
         "the surviving title's selection keeps its candidates"
     );
+}
+
+async fn stored_payload(datastore: &StoreDatastore, event_id: &str) -> Vec<u8> {
+    SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT payload_json FROM domain_events WHERE event_id = {}",
+        &[SqlArg::Text(event_id.to_string())],
+    )
+    .await
+    .expect("the event query should run")
+    .expect("the event row")
+    .opt_bytes("payload_json")
+    .expect("a payload column")
+    .expect("a payload")
+}
+
+#[tokio::test]
+async fn rewritten_history_payloads_store_the_bytes_a_lone_encode_produces() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    let events: [(&str, &[&str]); 4] = [
+        ("event-a", &["s-e1"]),
+        ("event-b", &["s-e2", "s-e1"]),
+        ("event-c", &["s-e1", "s-e2"]),
+        ("event-d", &["s-e2"]),
+    ];
+    let mut expected = Vec::new();
+    for (event_id, episode_ids) in events {
+        insert_release_grabbed_event(&datastore, event_id, SOURCE, episode_ids).await;
+        // The old path: remap the stored payload and encode it on its own.
+        let mut payload = decode_domain_event_payload(&stored_payload(&datastore, event_id).await)
+            .expect("the seeded payload decodes");
+        let remapped: Vec<Value> = episode_ids
+            .iter()
+            .map(|id| Value::String(id.replacen("s-", "d-", 1)))
+            .collect();
+        payload["data"]["episode_ids"] = Value::Array(remapped);
+        expected.push((
+            event_id,
+            encode_domain_event_payload(&payload).expect("the payload encodes"),
+        ));
+    }
+
+    let plan = plan_for(&store).await;
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+    assert_eq!(outcome.domain_event_payloads_rewritten, 4);
+    for (event_id, bytes) in expected {
+        assert_eq!(
+            stored_payload(&datastore, event_id).await,
+            bytes,
+            "{event_id} stores exactly what a lone encode of its remapped payload produces"
+        );
+    }
 }
