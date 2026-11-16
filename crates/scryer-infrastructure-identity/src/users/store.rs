@@ -15,6 +15,9 @@ use scryer_domain::{
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
+/// `monitor_selections.owner_kind` for a media request's selection.
+const MONITOR_SELECTION_OWNER_MEDIA_REQUEST: &str = "media_request";
+
 #[derive(Clone)]
 pub struct UserStore {
     datastore: StoreDatastore,
@@ -513,6 +516,22 @@ impl UserRepository for UserStore {
         SqlRuntime::run_in_transaction(&self.datastore, "delete_user", move |tx| {
             let id = id.clone();
             Box::pin(async move {
+                // The user's media requests go with the user by cascade, but
+                // their monitor selections have no foreign key to the request,
+                // so they are cleared first: exactly the rows of the requests
+                // the cascade is about to remove.
+                tx.execute(
+                    "DELETE FROM monitor_selections
+                      WHERE owner_kind = {}
+                        AND owner_id IN (
+                            SELECT id FROM media_requests WHERE created_by_user_id = {}
+                        )",
+                    &[
+                        SqlArg::Text(MONITOR_SELECTION_OWNER_MEDIA_REQUEST.to_string()),
+                        SqlArg::Text(id.clone()),
+                    ],
+                )
+                .await?;
                 let rows = tx
                     .execute(
                         "DELETE FROM users WHERE id = {}",
@@ -2072,6 +2091,35 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create user_ui_tours table");
+        // Only the columns the user delete reads: a request's owner, and the
+        // owner-keyed selection rows that have no foreign key to it.
+        sqlx::query(
+            "CREATE TABLE media_requests (
+                id TEXT PRIMARY KEY NOT NULL,
+                created_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create media_requests table");
+        sqlx::query(
+            "CREATE TABLE monitor_selections (
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                entry_kind TEXT NOT NULL,
+                entry_key TEXT NOT NULL,
+                label TEXT,
+                external_ids_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (owner_kind, owner_id, entry_kind, entry_key),
+                CHECK (owner_kind IN ('title', 'media_request')),
+                CHECK (entry_kind IN ('season', 'series_movie'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create monitor_selections table");
         sqlx::query(
             "CREATE UNIQUE INDEX idx_user_external_accounts_provider_identity
                ON user_external_accounts(provider, connection_id, external_user_id)",
@@ -3508,5 +3556,61 @@ mod tests {
             .await
             .expect("list accounts");
         assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_user_clears_the_monitor_selections_of_their_media_requests() {
+        let store = test_store().await;
+        UserRepository::create(&store, test_user("user_a"))
+            .await
+            .expect("create user a");
+        UserRepository::create(&store, test_user("user_b"))
+            .await
+            .expect("create user b");
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("SQLite fixture required")
+        };
+        sqlx::raw_sql(
+            "INSERT INTO media_requests (id, created_by_user_id) VALUES
+                 ('request-a1', 'user_a'), ('request-a2', 'user_a'), ('request-b1', 'user_b');
+             INSERT INTO monitor_selections (owner_kind, owner_id, entry_kind, entry_key,
+                                             created_at, updated_at) VALUES
+                 ('media_request', 'request-a1', 'season', '1', 'now', 'now'),
+                 ('media_request', 'request-a1', 'season', '2', 'now', 'now'),
+                 ('media_request', 'request-a2', 'season', '1', 'now', 'now'),
+                 ('media_request', 'request-b1', 'season', '1', 'now', 'now'),
+                 ('title', 'request-a1', 'season', '1', 'now', 'now'),
+                 ('title', 'title-1', 'season', '1', 'now', 'now');",
+        )
+        .execute(pool)
+        .await
+        .expect("seed requests and selections");
+
+        UserRepository::delete(&store, "user_a")
+            .await
+            .expect("delete user");
+
+        let remaining: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT owner_kind, owner_id, entry_key FROM monitor_selections
+              ORDER BY owner_kind, owner_id, entry_key",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("list selections");
+        assert_eq!(
+            remaining,
+            vec![
+                ("media_request".into(), "request-b1".into(), "1".into()),
+                // A title-owned row is never a request's, even when its owner
+                // id happens to match one.
+                ("title".into(), "request-a1".into(), "1".into()),
+                ("title".into(), "title-1".into(), "1".into()),
+            ]
+        );
+        let requests: Vec<String> = sqlx::query_scalar("SELECT id FROM media_requests ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("list requests");
+        assert_eq!(requests, vec!["request-b1".to_string()]);
     }
 }

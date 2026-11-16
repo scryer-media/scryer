@@ -8,6 +8,7 @@ use super::*;
 use scryer_application::location::merge::engine::plan_merge;
 use scryer_application::location::merge::map::MergeBlockReason;
 use scryer_application::location::merge::roles::RoleChangeReason;
+use scryer_infrastructure_sql::domain_event_payload::encode_domain_event_payload;
 use sqlx::sqlite::SqlitePoolOptions;
 
 mod bridge_cache;
@@ -1390,4 +1391,167 @@ async fn a_merge_clears_the_retired_titles_monitor_selections_and_keeps_the_surv
         monitor_selection_seasons(&datastore, "media_request", "request-destination").await,
         vec!["2".to_string()],
     );
+}
+
+fn retired_record_total(outcome: &MergeOutcome) -> i64 {
+    let total: u64 = outcome
+        .rows_affected
+        .iter()
+        .filter(|(key, _)| key.starts_with("retire:") && key.as_str() != "retire:titles")
+        .map(|(_, rows)| *rows)
+        .sum();
+    i64::try_from(total).expect("a small count")
+}
+
+async fn insert_consumed_manual_import_selection(
+    datastore: &StoreDatastore,
+    id: &str,
+    title_id: &str,
+    candidate_paths: &[&str],
+) {
+    run(
+        datastore,
+        "INSERT INTO manual_import_selections (id, actor_user_id, title_id, source_system,
+                                               source_ref, consumed_at, created_at, updated_at)
+         VALUES ({}, 'actor-under-test', {}, 'system-under-test', {}, '2026-01-02T00:00:00Z',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(format!("ref-{id}")),
+        ],
+    )
+    .await;
+    for path in candidate_paths {
+        run(
+            datastore,
+            "INSERT INTO manual_import_selection_candidates (id, selection_id, canonical_path,
+                                                             created_at)
+             VALUES ({}, {}, {}, '2026-01-01T00:00:00Z')",
+            vec![
+                SqlArg::Text(format!("{id}-{path}")),
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(path.to_string()),
+            ],
+        )
+        .await;
+    }
+}
+
+async fn selection_candidate_count(datastore: &StoreDatastore, selection_id: &str) -> i64 {
+    scalar(
+        datastore,
+        "SELECT COUNT(*) AS row_count FROM manual_import_selection_candidates
+          WHERE selection_id = {}",
+        vec![SqlArg::Text(selection_id.to_string())],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_merge_deletes_the_candidates_of_the_selections_it_retires() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    insert_consumed_manual_import_selection(
+        &datastore,
+        "selection-source",
+        SOURCE,
+        &["/incoming/a.mkv", "/incoming/b.mkv"],
+    )
+    .await;
+    insert_consumed_manual_import_selection(
+        &datastore,
+        "selection-destination",
+        DESTINATION,
+        &["/incoming/c.mkv"],
+    )
+    .await;
+
+    let plan = plan_for(&store).await;
+    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("retire:manual_import_selection_candidates"),
+        Some(&2)
+    );
+    assert_eq!(
+        outcome.rows_affected.get("retire:manual_import_selections"),
+        Some(&1)
+    );
+    assert_eq!(
+        plan.summary.source_records_dropped,
+        retired_record_total(&outcome),
+        "the preview counts the candidates the merge removes"
+    );
+    assert_eq!(
+        selection_candidate_count(&datastore, "selection-source").await,
+        0
+    );
+    assert_eq!(
+        selection_candidate_count(&datastore, "selection-destination").await,
+        1,
+        "the surviving title's selection keeps its candidates"
+    );
+}
+
+async fn stored_payload(datastore: &StoreDatastore, event_id: &str) -> Vec<u8> {
+    SqlRuntime::fetch_optional(
+        datastore.read_exec(),
+        "SELECT payload_json FROM domain_events WHERE event_id = {}",
+        &[SqlArg::Text(event_id.to_string())],
+    )
+    .await
+    .expect("the event query should run")
+    .expect("the event row")
+    .opt_bytes("payload_json")
+    .expect("a payload column")
+    .expect("a payload")
+}
+
+#[tokio::test]
+async fn rewritten_history_payloads_store_the_bytes_a_lone_encode_produces() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    let events: [(&str, &[&str]); 4] = [
+        ("event-a", &["s-e1"]),
+        ("event-b", &["s-e2", "s-e1"]),
+        ("event-c", &["s-e1", "s-e2"]),
+        ("event-d", &["s-e2"]),
+    ];
+    let mut expected = Vec::new();
+    for (event_id, episode_ids) in events {
+        insert_release_grabbed_event(&datastore, event_id, SOURCE, episode_ids).await;
+        // The old path: remap the stored payload and encode it on its own.
+        let mut payload = decode_domain_event_payload(&stored_payload(&datastore, event_id).await)
+            .expect("the seeded payload decodes");
+        let remapped: Vec<Value> = episode_ids
+            .iter()
+            .map(|id| Value::String(id.replacen("s-", "d-", 1)))
+            .collect();
+        payload["data"]["episode_ids"] = Value::Array(remapped);
+        expected.push((
+            event_id,
+            encode_domain_event_payload(&payload).expect("the payload encodes"),
+        ));
+    }
+
+    let plan = plan_for(&store).await;
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+    assert_eq!(outcome.domain_event_payloads_rewritten, 4);
+    for (event_id, bytes) in expected {
+        assert_eq!(
+            stored_payload(&datastore, event_id).await,
+            bytes,
+            "{event_id} stores exactly what a lone encode of its remapped payload produces"
+        );
+    }
 }

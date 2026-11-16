@@ -3649,41 +3649,42 @@ async fn mark_wanted_completed_for_series_movie_link(
     series_movie_link_id: &str,
     landed_import: bool,
 ) {
+    // The link's own row, whatever its status, completed the way an episode's
+    // row is: a landed import clears the in-flight grab, anything else keeps it.
     match app
         .services
         .workflow
         .acquisition_scope_states
-        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
-            statuses: vec!["wanted".into()],
-            media_types: vec!["series_movie".into()],
-            title_id: Some(title_id.to_string()),
-            limit: 100,
-            ..AcquisitionScopeStatesQuery::default()
-        })
+        .get_acquisition_scope_state_for_scope(
+            title_id,
+            crate::AcquisitionScopeKey::SeriesMovieLink(series_movie_link_id),
+        )
         .await
     {
-        Ok(items) => {
-            for item in items {
-                if item.series_movie_link_id.as_deref() == Some(series_movie_link_id) {
-                    let now = Utc::now().to_rfc3339();
-                    let _ = app
-                        .services
-                        .workflow
-                        .acquisition_scope_states
-                        .transition_acquisition_scope_to_completed(
-                            &AcquisitionScopeCompleteTransition {
-                                id: item.id.clone(),
-                                last_search_at: Some(now),
-                                grabbed_release: if landed_import {
-                                    None
-                                } else {
-                                    item.grabbed_release.clone()
-                                },
-                            },
-                        )
-                        .await;
-                    return;
-                }
+        Ok(None) => {}
+        Ok(Some(item)) => {
+            let now = Utc::now().to_rfc3339();
+            if let Err(err) = app
+                .services
+                .workflow
+                .acquisition_scope_states
+                .transition_acquisition_scope_to_completed(&AcquisitionScopeCompleteTransition {
+                    id: item.id,
+                    last_search_at: Some(now),
+                    grabbed_release: if landed_import {
+                        None
+                    } else {
+                        item.grabbed_release
+                    },
+                })
+                .await
+            {
+                tracing::warn!(
+                    error = %err,
+                    title_id = title_id,
+                    series_movie_link_id = series_movie_link_id,
+                    "failed to mark wanted item completed for series movie"
+                );
             }
         }
         Err(err) => {
@@ -3694,6 +3695,137 @@ async fn mark_wanted_completed_for_series_movie_link(
                 "failed to look up wanted item for series movie"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod series_movie_link_completion_tests {
+    use super::*;
+    use crate::{AcquisitionScopeKey, AcquisitionScopeState, AcquisitionScopeStatus};
+
+    const TITLE_ID: &str = "title-under-test";
+    const LINK_ID: &str = "link-under-test";
+    const RELEASE: &str = "Synthetic.Feature.2024.1080p-GROUP";
+
+    fn link_scope(
+        id: &str,
+        link_id: &str,
+        status: AcquisitionScopeStatus,
+        grabbed_release: Option<&str>,
+    ) -> AcquisitionScopeState {
+        let now = Utc::now().to_rfc3339();
+        AcquisitionScopeState {
+            id: id.to_string(),
+            title_id: TITLE_ID.to_string(),
+            title_name: None,
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: Some(link_id.to_string()),
+            season_number: None,
+            episode_number: None,
+            media_type: "series_movie".to_string(),
+            last_search_at: None,
+            status,
+            grabbed_release: grabbed_release.map(str::to_string),
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    /// An app whose scope ledger holds a `grabbed` row for the link and more
+    /// than a hundred other wanted link rows on the same title.
+    async fn app_with_grabbed_link_scope() -> AppUseCase {
+        let (mut app, _user) = crate::lib_tests::bootstrap();
+        let scopes = crate::lib_tests::in_memory_acquisition_scope_states();
+        app.services.workflow.acquisition_scope_states = scopes.clone();
+        for index in 0..150 {
+            scopes
+                .upsert_acquisition_scope_state(&link_scope(
+                    &format!("other-scope-{index:03}"),
+                    &format!("other-link-{index:03}"),
+                    AcquisitionScopeStatus::Wanted,
+                    None,
+                ))
+                .await
+                .expect("seed another link scope");
+        }
+        scopes
+            .upsert_acquisition_scope_state(&link_scope(
+                "scope-under-test",
+                LINK_ID,
+                AcquisitionScopeStatus::Grabbed,
+                Some(RELEASE),
+            ))
+            .await
+            .expect("seed the grabbed link scope");
+        app
+    }
+
+    async fn scope_for_link(app: &AppUseCase, link_id: &str) -> AcquisitionScopeState {
+        app.services
+            .workflow
+            .acquisition_scope_states
+            .get_acquisition_scope_state_for_scope(
+                TITLE_ID,
+                AcquisitionScopeKey::SeriesMovieLink(link_id),
+            )
+            .await
+            .expect("read the link scope")
+            .expect("the link scope exists")
+    }
+
+    #[tokio::test]
+    async fn a_landed_import_completes_a_grabbed_link_scope_and_clears_its_grab() {
+        let app = app_with_grabbed_link_scope().await;
+
+        mark_wanted_completed_for_series_movie_link(&app, TITLE_ID, LINK_ID, true).await;
+
+        let scope = scope_for_link(&app, LINK_ID).await;
+        assert_eq!(scope.status, AcquisitionScopeStatus::Completed);
+        assert_eq!(scope.grabbed_release, None);
+        assert!(scope.last_search_at.is_some());
+        for index in [0, 99, 100, 149] {
+            assert_eq!(
+                scope_for_link(&app, &format!("other-link-{index:03}"))
+                    .await
+                    .status,
+                AcquisitionScopeStatus::Wanted,
+                "another link's scope is untouched"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_manual_completion_completes_a_grabbed_link_scope_and_keeps_its_grab() {
+        let app = app_with_grabbed_link_scope().await;
+
+        mark_wanted_completed_for_series_movie_link(&app, TITLE_ID, LINK_ID, false).await;
+
+        let scope = scope_for_link(&app, LINK_ID).await;
+        assert_eq!(scope.status, AcquisitionScopeStatus::Completed);
+        assert_eq!(scope.grabbed_release.as_deref(), Some(RELEASE));
+    }
+
+    #[tokio::test]
+    async fn a_link_without_a_scope_row_gets_none() {
+        let app = app_with_grabbed_link_scope().await;
+
+        mark_wanted_completed_for_series_movie_link(&app, TITLE_ID, "link-without-row", true)
+            .await;
+
+        assert_eq!(
+            scope_for_link(&app, LINK_ID).await.status,
+            AcquisitionScopeStatus::Grabbed,
+            "completing a link with no row leaves every other row alone"
+        );
     }
 }
 
