@@ -126,7 +126,7 @@ async fn seed(pool: &sqlx::SqlitePool) {
 }
 
 /// The table that holds `table`'s rows in this catalog. Lifecycle rule sets
-/// are `maintenance_rule_sets` until 0357 renames them.
+/// are `maintenance_rule_sets` until 0358 renames them.
 async fn current_table_name(pool: &sqlx::SqlitePool, table: &str) -> String {
     let Some(rest) = table.strip_prefix("lifecycle_rule_") else {
         return table.to_string();

@@ -34,6 +34,31 @@ fn title_scope_from_facet(facet: MediaFacetValue) -> ContentScopeValue {
     }
 }
 
+/// A title's stored content ratings, through the request's loader when there is one, so
+/// sibling fields and titles in a list share one read.
+async fn title_content_ratings(
+    ctx: &Context<'_>,
+    title_id: &str,
+) -> GqlResult<Vec<scryer_application::ContentRating>> {
+    if let Some(loaders) = loaders_from_ctx(ctx) {
+        return Ok(loaders
+            .content_ratings
+            .load_one(title_id.to_string())
+            .await?
+            .unwrap_or_default());
+    }
+    let app = app_from_ctx(ctx)?;
+    let actor = actor_from_ctx(ctx)?;
+    Ok(app
+        .list_title_content_ratings(&actor, &[title_id.to_string()])
+        .await
+        .map_err(to_gql_error)?
+        .into_iter()
+        .next()
+        .map(|(_, ratings)| ratings)
+        .unwrap_or_default())
+}
+
 /// Whether the caller holds privileged access to `library_id`. Nested fields
 /// that expose acquisition state answer empty or null without it, so pages a
 /// viewer can open keep loading.
@@ -566,6 +591,24 @@ impl TitlePayload {
                 .map_err(to_gql_error)
         })
         .await
+    }
+
+    /// Content ratings from the title's last metadata refresh, one entry per
+    /// country in the provider's order. Empty until the title is refreshed.
+    async fn content_ratings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<DiscoveryContentRatingPayload>> {
+        let ratings = title_content_ratings(ctx, self.id.as_ref()).await?;
+        Ok(crate::mappers::content_rating_payloads(&ratings))
+    }
+
+    /// US certification label, such as `PG-13`, or null when the title has
+    /// none. It is chosen the way the `certification_label` request rule fact
+    /// chooses it, from the ratings stored at the last metadata refresh.
+    async fn certification_label(&self, ctx: &Context<'_>) -> GqlResult<Option<String>> {
+        let ratings = title_content_ratings(ctx, self.id.as_ref()).await?;
+        Ok(scryer_application::request_rules::content_ratings_us_certification_label(&ratings))
     }
 
     /// Public lists this title is on or has left, lists it is still on

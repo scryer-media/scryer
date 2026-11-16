@@ -8,13 +8,13 @@
 use sqlx::SqlitePool;
 
 const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0357_rename_maintenance_to_lifecycle.sql");
+    include_str!("../../../scryer/src/db/migrations/0358_rename_maintenance_to_lifecycle.sql");
 const POSTGRES: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0357_rename_maintenance_to_lifecycle.sql"
+    "../../../scryer/src/db/postgres/migrations/0358_rename_maintenance_to_lifecycle.sql"
 );
 
 /// Version the catalog is replayed to before the rename is applied.
-const PRE_UPGRADE_VERSION: i64 = 356;
+const PRE_UPGRADE_VERSION: i64 = 357;
 
 const RULE: &str = "rule-emberfall";
 const CANDIDATE: &str = "rule-emberfall-candidate";

@@ -4298,18 +4298,35 @@ scope = "all"
 
 [[migration]]
 version = 357
-description = "rename maintenance rules to lifecycle rules"
+description = "title content ratings"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0357_rename_maintenance_to_lifecycle.sql"
+file = "migrations/0357_title_content_ratings.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0357_rename_maintenance_to_lifecycle.sql"
+file = "postgres/migrations/0357_title_content_ratings.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 358
+description = "rename maintenance rules to lifecycle rules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0358_rename_maintenance_to_lifecycle.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0358_rename_maintenance_to_lifecycle.sql"
 engine = "postgres"
 scope = "all"
 
