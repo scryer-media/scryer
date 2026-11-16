@@ -14,6 +14,12 @@
 //! Instance-per-request: one `process` call per invocation, then the whole
 //! `Store` is dropped, which is also what keeps a member credential carried in
 //! a request from outliving the call that needed it.
+//!
+//! The metadata-provider world imports the same two interfaces with the same
+//! authority, so its host binds them to this file's generated interface
+//! modules and stores a [`ListComponentCtx`] tagged
+//! [`ProviderComponentFamily::Metadata`]. The import implementations below are
+//! therefore the only copy for both worlds.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,7 +41,7 @@ use crate::wasmtime_host::family_component_host::{
 use crate::wasmtime_host::sandbox::{self, HostLimits, PreparedComponentSandbox};
 use crate::wasmtime_host::{engine, error, family_component_host, module_cache};
 
-mod contract {
+pub(super) mod contract {
     wasmtime::component::bindgen!({
         world: "scryer:lists/list-provider@1.0.0",
         // Same layout rule as every family world: one canonical copy of each
@@ -62,8 +68,17 @@ pub(crate) fn validate_list_component(wasm: &[u8]) -> Result<(), String> {
     ListComponentRuntime::new(engine::shared_async_engine(), wasm).map(|_| ())
 }
 
-/// Store data for one list component invocation.
+/// Which world a [`ListComponentCtx`] serves. It only selects the `tracing`
+/// target, which has to be a literal at each callsite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProviderComponentFamily {
+    List,
+    Metadata,
+}
+
+/// Store data for one list (or metadata) component invocation.
 pub(crate) struct ListComponentCtx {
+    family: ProviderComponentFamily,
     table: ResourceTable,
     wasi: WasiCtx,
     limits: HostLimits,
@@ -72,6 +87,35 @@ pub(crate) struct ListComponentCtx {
     /// deadline is reported on the same timebase.
     clock_origin: Instant,
     deadline: Instant,
+}
+
+impl ListComponentCtx {
+    pub(super) fn new(
+        family: ProviderComponentFamily,
+        wasi: WasiCtx,
+        command_host: CommandHost,
+        memory_max_bytes: Option<usize>,
+        timeout: Duration,
+    ) -> Self {
+        let clock_origin = Instant::now();
+        Self {
+            family,
+            table: ResourceTable::new(),
+            wasi,
+            limits: HostLimits::new(memory_max_bytes),
+            command_host,
+            clock_origin,
+            deadline: clock_origin + timeout,
+        }
+    }
+
+    pub(super) fn limits_mut(&mut self) -> &mut HostLimits {
+        &mut self.limits
+    }
+
+    pub(super) fn memory_denied(&self) -> bool {
+        self.limits.memory_denied
+    }
 }
 
 impl WasiView for ListComponentCtx {
@@ -88,22 +132,36 @@ impl ServicesHost for ListComponentCtx {
         match family_component_host::dispatch_host_call(&self.command_host, request).await {
             Ok(response) => Ok(response),
             Err(HostCallError::Service { failure, error }) => {
-                tracing::debug!(
-                    target: "scryer_plugins::list",
-                    error = error.as_str(),
-                    "list component host-call failed",
-                );
+                match self.family {
+                    ProviderComponentFamily::List => tracing::debug!(
+                        target: "scryer_plugins::list",
+                        error = error.as_str(),
+                        "list component host-call failed",
+                    ),
+                    ProviderComponentFamily::Metadata => tracing::debug!(
+                        target: "scryer_plugins::metadata",
+                        error = error.as_str(),
+                        "metadata component host-call failed",
+                    ),
+                }
                 Err(match failure {
                     HostCallFailure::InvalidRequest => HostError::InvalidRequest,
                     HostCallFailure::Failed => HostError::Failed,
                 })
             }
             Err(HostCallError::Task(error)) => {
-                tracing::debug!(
-                    target: "scryer_plugins::list",
-                    error = %error,
-                    "list component host-call task failed",
-                );
+                match self.family {
+                    ProviderComponentFamily::List => tracing::debug!(
+                        target: "scryer_plugins::list",
+                        error = %error,
+                        "list component host-call task failed",
+                    ),
+                    ProviderComponentFamily::Metadata => tracing::debug!(
+                        target: "scryer_plugins::metadata",
+                        error = %error,
+                        "metadata component host-call task failed",
+                    ),
+                }
                 Err(HostError::Failed)
             }
         }
@@ -140,8 +198,8 @@ impl runtime_host::Host for ListComponentCtx {
         self.command_host.config_get(&key)
     }
 
-    /// List providers carry no provider profile; `none` means "use your
-    /// defaults" to shared engine code.
+    /// List and metadata providers carry no provider profile; `none` means
+    /// "use your defaults" to shared engine code.
     async fn provider_profile(&mut self) -> Option<Vec<u8>> {
         None
     }
@@ -162,12 +220,37 @@ impl runtime_host::Host for ListComponentCtx {
     async fn log(&mut self, level: runtime_host::LogLevel, message: String) {
         use runtime_host::LogLevel;
 
-        match level {
-            LogLevel::Trace => tracing::trace!(target: "scryer_plugins::list", "{message}"),
-            LogLevel::Debug => tracing::debug!(target: "scryer_plugins::list", "{message}"),
-            LogLevel::Info => tracing::info!(target: "scryer_plugins::list", "{message}"),
-            LogLevel::Warn => tracing::warn!(target: "scryer_plugins::list", "{message}"),
-            LogLevel::Error => tracing::error!(target: "scryer_plugins::list", "{message}"),
+        match (self.family, level) {
+            (ProviderComponentFamily::List, LogLevel::Trace) => {
+                tracing::trace!(target: "scryer_plugins::list", "{message}")
+            }
+            (ProviderComponentFamily::List, LogLevel::Debug) => {
+                tracing::debug!(target: "scryer_plugins::list", "{message}")
+            }
+            (ProviderComponentFamily::List, LogLevel::Info) => {
+                tracing::info!(target: "scryer_plugins::list", "{message}")
+            }
+            (ProviderComponentFamily::List, LogLevel::Warn) => {
+                tracing::warn!(target: "scryer_plugins::list", "{message}")
+            }
+            (ProviderComponentFamily::List, LogLevel::Error) => {
+                tracing::error!(target: "scryer_plugins::list", "{message}")
+            }
+            (ProviderComponentFamily::Metadata, LogLevel::Trace) => {
+                tracing::trace!(target: "scryer_plugins::metadata", "{message}")
+            }
+            (ProviderComponentFamily::Metadata, LogLevel::Debug) => {
+                tracing::debug!(target: "scryer_plugins::metadata", "{message}")
+            }
+            (ProviderComponentFamily::Metadata, LogLevel::Info) => {
+                tracing::info!(target: "scryer_plugins::metadata", "{message}")
+            }
+            (ProviderComponentFamily::Metadata, LogLevel::Warn) => {
+                tracing::warn!(target: "scryer_plugins::metadata", "{message}")
+            }
+            (ProviderComponentFamily::Metadata, LogLevel::Error) => {
+                tracing::error!(target: "scryer_plugins::metadata", "{message}")
+            }
         }
     }
 }
@@ -274,17 +357,15 @@ impl ListComponentRuntime {
         memory_max_bytes: Option<usize>,
         timeout: Duration,
     ) -> Result<(Store<ListComponentCtx>, contract::ListProvider), wasmtime::Error> {
-        let clock_origin = Instant::now();
         let mut store = Store::new(
             self.component.engine(),
-            ListComponentCtx {
-                table: ResourceTable::new(),
+            ListComponentCtx::new(
+                ProviderComponentFamily::List,
                 wasi,
-                limits: HostLimits::new(memory_max_bytes),
                 command_host,
-                clock_origin,
-                deadline: clock_origin + timeout,
-            },
+                memory_max_bytes,
+                timeout,
+            ),
         );
         store.limiter(|ctx: &mut ListComponentCtx| &mut ctx.limits);
         store.set_epoch_deadline(engine::deadline_ticks(timeout));

@@ -1,12 +1,12 @@
 //! WASI Preview 2 host for metadata-provider components.
 //!
-//! A copy of the list-provider host for `scryer:metadata/metadata-provider`:
-//! the same imports (`scryer:host/services@1.0.0` and
-//! `scryer:runtime/host@1.0.0`), a synchronous `describe` and an `async`
-//! `process`. Host calls and typed `http` go through
-//! [`family_component_host::dispatch_host_call`] into the plugin's own
-//! [`CommandHost`], so allowed-host enforcement, the response cap, the proxy
-//! policy and the per-invocation deadline apply once.
+//! `scryer:metadata/metadata-provider` imports the same two interfaces as the
+//! list world (`scryer:host/services@1.0.0` and `scryer:runtime/host@1.0.0`)
+//! with the same authority, so this host binds them to the list host's
+//! generated interface modules and stores a [`ListComponentCtx`] tagged
+//! [`ProviderComponentFamily::Metadata`]. The import implementations live once,
+//! in `list_component_host`; this file holds only what differs by world: the
+//! generated world binding, `describe` and the `process` driver.
 //!
 //! Instance-per-request: one `process` call per invocation, then the whole
 //! `Store` is dropped.
@@ -17,19 +17,17 @@ use std::time::{Duration, Instant};
 use scryer_application::{AppError, AppResult};
 use scryer_plugin_sdk::PluginDescriptor;
 use scryer_plugin_sdk::command::{PluginCommandRequest, PluginCommandResponse};
-use scryer_plugin_sdk::host::PluginHttpRequest as SdkPluginHttpRequest;
 use tracing::Instrument;
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::WasiCtx;
 
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::wasmtime_host::command_host::CommandHost;
-use crate::wasmtime_host::family_component_host::{
-    DESCRIBE_TIMEOUT, HostCallError, HostCallFailure, stderr_suffix, tail_of,
-};
-use crate::wasmtime_host::sandbox::{self, HostLimits, PreparedComponentSandbox};
-use crate::wasmtime_host::{engine, error, family_component_host, module_cache};
+use crate::wasmtime_host::family_component_host::{DESCRIBE_TIMEOUT, stderr_suffix, tail_of};
+use crate::wasmtime_host::list_component_host::{ListComponentCtx, ProviderComponentFamily};
+use crate::wasmtime_host::sandbox::{self, PreparedComponentSandbox};
+use crate::wasmtime_host::{engine, error, module_cache};
 
 mod contract {
     wasmtime::component::bindgen!({
@@ -39,12 +37,18 @@ mod contract {
         path: ["wit/host-v1.0.0", "wit/runtime-v1.0.0", "wit/metadata-v1.0.0"],
         imports: { default: async },
         exports: { default: async },
+        // The shared imports reuse the list world's generated modules, so the
+        // list host's implementations answer them for this world too.
+        with: {
+            "scryer:host/services@1.0.0":
+                crate::wasmtime_host::list_component_host::contract::scryer::host::services,
+            "scryer:runtime/host@1.0.0":
+                crate::wasmtime_host::list_component_host::contract::scryer::runtime::host,
+        },
     });
 }
 
 use self::contract::InvocationError;
-use self::contract::scryer::host::services::{Host as ServicesHost, HostError};
-use self::contract::scryer::runtime::host as runtime_host;
 
 /// Identifying context for one metadata component invocation.
 pub(crate) struct MetadataComponentInvocation<'a> {
@@ -58,181 +62,10 @@ pub(crate) fn validate_metadata_component(wasm: &[u8]) -> Result<(), String> {
     MetadataComponentRuntime::new(engine::shared_async_engine(), wasm).map(|_| ())
 }
 
-/// Store data for one metadata component invocation.
-pub(crate) struct MetadataComponentCtx {
-    table: ResourceTable,
-    wasi: WasiCtx,
-    limits: HostLimits,
-    command_host: CommandHost,
-    /// Zero of the monotonic clock reported to the guest; the invocation
-    /// deadline is reported on the same timebase.
-    clock_origin: Instant,
-    deadline: Instant,
-}
-
-impl WasiView for MetadataComponentCtx {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.wasi,
-            table: &mut self.table,
-        }
-    }
-}
-
-impl ServicesHost for MetadataComponentCtx {
-    async fn host_call(&mut self, request: Vec<u8>) -> Result<Vec<u8>, HostError> {
-        match family_component_host::dispatch_host_call(&self.command_host, request).await {
-            Ok(response) => Ok(response),
-            Err(HostCallError::Service { failure, error }) => {
-                tracing::debug!(
-                    target: "scryer_plugins::metadata",
-                    error = error.as_str(),
-                    "metadata component host-call failed",
-                );
-                Err(match failure {
-                    HostCallFailure::InvalidRequest => HostError::InvalidRequest,
-                    HostCallFailure::Failed => HostError::Failed,
-                })
-            }
-            Err(HostCallError::Task(error)) => {
-                tracing::debug!(
-                    target: "scryer_plugins::metadata",
-                    error = %error,
-                    "metadata component host-call task failed",
-                );
-                Err(HostError::Failed)
-            }
-        }
-    }
-}
-
-impl runtime_host::Host for MetadataComponentCtx {
-    async fn monotonic_now_ms(&mut self) -> u64 {
-        self.clock_origin
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX)
-    }
-
-    async fn operation_deadline_monotonic_ms(&mut self) -> u64 {
-        self.deadline
-            .saturating_duration_since(self.clock_origin)
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX)
-    }
-
-    async fn wall_now_ms(&mut self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX)
-    }
-
-    async fn config_get(&mut self, key: String) -> Option<String> {
-        self.command_host.config_get(&key)
-    }
-
-    /// Metadata providers carry no provider profile; `none` means "use your
-    /// defaults" to shared engine code.
-    async fn provider_profile(&mut self) -> Option<Vec<u8>> {
-        None
-    }
-
-    async fn state_get(&mut self, key: String) -> Option<Vec<u8>> {
-        self.command_host.state_get(&key)
-    }
-
-    async fn state_cas(
-        &mut self,
-        key: String,
-        expected: Option<Vec<u8>>,
-        replacement: Option<Vec<u8>>,
-    ) -> bool {
-        self.command_host.state_cas(key, expected, replacement)
-    }
-
-    async fn log(&mut self, level: runtime_host::LogLevel, message: String) {
-        use runtime_host::LogLevel;
-
-        match level {
-            LogLevel::Trace => tracing::trace!(target: "scryer_plugins::metadata", "{message}"),
-            LogLevel::Debug => tracing::debug!(target: "scryer_plugins::metadata", "{message}"),
-            LogLevel::Info => tracing::info!(target: "scryer_plugins::metadata", "{message}"),
-            LogLevel::Warn => tracing::warn!(target: "scryer_plugins::metadata", "{message}"),
-            LogLevel::Error => tracing::error!(target: "scryer_plugins::metadata", "{message}"),
-        }
-    }
-}
-
-impl runtime_host::HostWithStore<MetadataComponentCtx> for HasSelf<MetadataComponentCtx> {
-    /// One HTTP request through the same service layer the encoded door uses.
-    async fn http(
-        accessor: &wasmtime::component::Accessor<MetadataComponentCtx, Self>,
-        request: runtime_host::HttpRequest,
-    ) -> Result<runtime_host::HttpResponse, runtime_host::TransportError> {
-        use runtime_host::{Header, HttpResponse};
-
-        let command_host = accessor.with(|mut access| access.get().command_host.clone());
-        let response = family_component_host::dispatch_http_request(
-            &command_host,
-            SdkPluginHttpRequest {
-                url: request.url,
-                method: Some(request.method),
-                headers: request
-                    .headers
-                    .into_iter()
-                    .map(|header| (header.name, header.value))
-                    .collect(),
-                body: request.body,
-            },
-        )
-        .await
-        .map_err(http_transport_error)?;
-        Ok(HttpResponse {
-            status: response.status,
-            headers: response
-                .headers
-                .into_iter()
-                .map(|(name, value)| Header { name, value })
-                .collect(),
-            body: response.body,
-        })
-    }
-
-    /// A sleep that cannot outlive the invocation.
-    async fn sleep(
-        accessor: &wasmtime::component::Accessor<MetadataComponentCtx, Self>,
-        duration_ms: u64,
-    ) {
-        let deadline = accessor.with(|mut access| access.get().deadline);
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        tokio::time::sleep(Duration::from_millis(duration_ms).min(remaining)).await;
-    }
-}
-
-/// Map the host-owned HTTP failure fact into this world's generated enum.
-fn http_transport_error(
-    kind: crate::plugin_http_host::HostHttpErrorKind,
-) -> runtime_host::TransportError {
-    use crate::plugin_http_host::HostHttpErrorKind;
-    use runtime_host::TransportError;
-    match kind {
-        HostHttpErrorKind::ForbiddenOrigin => TransportError::ForbiddenOrigin,
-        HostHttpErrorKind::InvalidRequest => TransportError::InvalidRequest,
-        HostHttpErrorKind::Timeout => TransportError::Timeout,
-        HostHttpErrorKind::ResponseTooLarge => TransportError::ResponseTooLarge,
-        HostHttpErrorKind::Transport => TransportError::Transport,
-    }
-}
-
 /// A compiled metadata component plus its pre-instantiated world binding.
 pub(crate) struct MetadataComponentRuntime {
     component: Arc<Component>,
-    instance_pre: contract::MetadataProviderPre<MetadataComponentCtx>,
+    instance_pre: contract::MetadataProviderPre<ListComponentCtx>,
 }
 
 impl MetadataComponentRuntime {
@@ -246,10 +79,10 @@ impl MetadataComponentRuntime {
         let mut linker = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|error| format!("failed to register WASI Preview 2: {error}"))?;
-        contract::MetadataProvider::add_to_linker::<
-            MetadataComponentCtx,
-            HasSelf<MetadataComponentCtx>,
-        >(&mut linker, |ctx| ctx)
+        contract::MetadataProvider::add_to_linker::<ListComponentCtx, HasSelf<ListComponentCtx>>(
+            &mut linker,
+            |ctx| ctx,
+        )
         .map_err(|error| format!("failed to register metadata component host: {error:#}"))?;
         let pre = linker
             .instantiate_pre(&component)
@@ -271,20 +104,18 @@ impl MetadataComponentRuntime {
         command_host: CommandHost,
         memory_max_bytes: Option<usize>,
         timeout: Duration,
-    ) -> Result<(Store<MetadataComponentCtx>, contract::MetadataProvider), wasmtime::Error> {
-        let clock_origin = Instant::now();
+    ) -> Result<(Store<ListComponentCtx>, contract::MetadataProvider), wasmtime::Error> {
         let mut store = Store::new(
             self.component.engine(),
-            MetadataComponentCtx {
-                table: ResourceTable::new(),
+            ListComponentCtx::new(
+                ProviderComponentFamily::Metadata,
                 wasi,
-                limits: HostLimits::new(memory_max_bytes),
                 command_host,
-                clock_origin,
-                deadline: clock_origin + timeout,
-            },
+                memory_max_bytes,
+                timeout,
+            ),
         );
-        store.limiter(|ctx: &mut MetadataComponentCtx| &mut ctx.limits);
+        store.limiter(|ctx: &mut ListComponentCtx| ctx.limits_mut());
         store.set_epoch_deadline(engine::deadline_ticks(timeout));
         let plugin = self.instance_pre.instantiate_async(&mut store).await?;
         Ok((store, plugin))
@@ -321,7 +152,7 @@ async fn describe_async(wasm: &[u8]) -> Result<PluginDescriptor, String> {
             format!("failed to instantiate metadata component for describe: {error:#}")
         })?;
     let descriptor_json = plugin.call_describe(&mut store).await.map_err(|error| {
-        let denied = store.data().limits.memory_denied;
+        let denied = store.data().memory_denied();
         let failure = error::classify_error(&error, denied);
         let stderr_tail = tail_of(&stderr);
         format!(
@@ -430,7 +261,7 @@ async fn instrumented_metadata_component(
         .await
         .and_then(|inner| inner)
         .map(|result| result.map_err(invocation_error_label));
-    let denied = store.data().limits.memory_denied;
+    let denied = store.data().memory_denied();
     let stderr_tail = tail_of(&stderr);
 
     // Guest stderr can echo request material, so it only ever reaches trace.
@@ -569,3 +400,6 @@ fn finish_error(
         },
     )
 }
+
+#[cfg(test)]
+mod tests;
