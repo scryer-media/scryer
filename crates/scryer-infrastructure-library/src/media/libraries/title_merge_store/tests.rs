@@ -1512,3 +1512,100 @@ async fn a_carried_files_subtitles_move_with_it_and_the_rest_retire() {
         "a subtitle row whose file is not carried retires with the source"
     );
 }
+
+async fn insert_consumed_manual_import_selection(
+    datastore: &StoreDatastore,
+    id: &str,
+    title_id: &str,
+    candidate_paths: &[&str],
+) {
+    run(
+        datastore,
+        "INSERT INTO manual_import_selections (id, actor_user_id, title_id, source_system,
+                                               source_ref, consumed_at, created_at, updated_at)
+         VALUES ({}, 'actor-under-test', {}, 'system-under-test', {}, '2026-01-02T00:00:00Z',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(format!("ref-{id}")),
+        ],
+    )
+    .await;
+    for path in candidate_paths {
+        run(
+            datastore,
+            "INSERT INTO manual_import_selection_candidates (id, selection_id, canonical_path,
+                                                             created_at)
+             VALUES ({}, {}, {}, '2026-01-01T00:00:00Z')",
+            vec![
+                SqlArg::Text(format!("{id}-{path}")),
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(path.to_string()),
+            ],
+        )
+        .await;
+    }
+}
+
+async fn selection_candidate_count(datastore: &StoreDatastore, selection_id: &str) -> i64 {
+    scalar(
+        datastore,
+        "SELECT COUNT(*) AS row_count FROM manual_import_selection_candidates
+          WHERE selection_id = {}",
+        vec![SqlArg::Text(selection_id.to_string())],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_merge_deletes_the_candidates_of_the_selections_it_retires() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    insert_consumed_manual_import_selection(
+        &datastore,
+        "selection-source",
+        SOURCE,
+        &["/incoming/a.mkv", "/incoming/b.mkv"],
+    )
+    .await;
+    insert_consumed_manual_import_selection(
+        &datastore,
+        "selection-destination",
+        DESTINATION,
+        &["/incoming/c.mkv"],
+    )
+    .await;
+
+    let plan = plan_for(&store).await;
+    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("retire:manual_import_selection_candidates"),
+        Some(&2)
+    );
+    assert_eq!(
+        outcome.rows_affected.get("retire:manual_import_selections"),
+        Some(&1)
+    );
+    assert_eq!(
+        plan.summary.source_records_dropped,
+        retired_record_total(&outcome),
+        "the preview counts the candidates the merge removes"
+    );
+    assert_eq!(
+        selection_candidate_count(&datastore, "selection-source").await,
+        0
+    );
+    assert_eq!(
+        selection_candidate_count(&datastore, "selection-destination").await,
+        1,
+        "the surviving title's selection keeps its candidates"
+    );
+}

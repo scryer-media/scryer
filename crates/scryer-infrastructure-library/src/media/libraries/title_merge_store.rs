@@ -113,6 +113,11 @@ const SUBTITLE_FILE_ON_ITS_TITLE: &str = "EXISTS (
      WHERE file.id = subtitle_downloads.media_file_id
        AND file.title_id = subtitle_downloads.title_id)";
 
+/// The candidates of the source's manual-import selections. The table has no
+/// foreign key to its selection, so the merge deletes them with the
+/// selections, as every other selection delete does.
+const MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE: &str = "manual_import_selection_candidates";
+
 /// Lifecycle action evidence belongs to a candidate. Delete its leaf rows
 /// before the candidate so the preview and outcome both account for every
 /// retired audit row, instead of hiding them behind the candidate cascade.
@@ -188,6 +193,8 @@ impl TitleMergeRepository for TitleMergeStore {
                 count_rows(exec(), table, column, source_title_id).await?
             };
         }
+        dropped_record_count +=
+            count_manual_import_selection_candidates(exec(), source_title_id).await?;
         dropped_record_count +=
             count_rows(exec(), "lifecycle_candidates", "title_id", source_title_id).await?;
         for table in DROPPED_CANDIDATE_CHILD_TABLES {
@@ -641,6 +648,29 @@ async fn count_uncarried_subtitle_rows(
     )
     .await?
     .ok_or_else(|| AppError::Repository(format!("missing count for {SUBTITLE_DOWNLOADS_TABLE}")))?;
+    row.i64("row_count")
+}
+
+async fn count_manual_import_selection_candidates(
+    exec: SqlExec<'_, '_>,
+    source_title_id: &str,
+) -> AppResult<i64> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        &format!(
+            "SELECT COUNT(*) AS row_count FROM {MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}
+              WHERE selection_id IN (
+                  SELECT id FROM manual_import_selections WHERE title_id = {{}}
+              )"
+        ),
+        &[SqlArg::Text(source_title_id.to_string())],
+    )
+    .await?
+    .ok_or_else(|| {
+        AppError::Repository(format!(
+            "missing count for {MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}"
+        ))
+    })?;
     row.i64("row_count")
 }
 
@@ -1098,6 +1128,24 @@ async fn purge_title_dependent_records(
     let removed =
         delete_monitor_selections_for_requests_created_title_tx(tx, &map.source_title_id).await?;
     record(outcome, "retire:monitor_selections_media_request", removed);
+    // The source's manual-import selections retire below, and their candidates
+    // have no foreign key to go with them.
+    let removed = tx
+        .execute(
+            &format!(
+                "DELETE FROM {MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}
+                  WHERE selection_id IN (
+                      SELECT id FROM manual_import_selections WHERE title_id = {{}}
+                  )"
+            ),
+            &[SqlArg::Text(map.source_title_id.clone())],
+        )
+        .await?;
+    record(
+        outcome,
+        &format!("retire:{MANUAL_IMPORT_SELECTION_CANDIDATES_TABLE}"),
+        removed,
+    );
     for (table, column) in DROPPED_TITLE_TABLES {
         let removed = if *table == OPERATION_VERIFICATIONS_TABLE {
             // The merging operation's own proofs stay: its cleanup step, which
