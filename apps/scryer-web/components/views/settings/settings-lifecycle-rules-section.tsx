@@ -1101,7 +1101,7 @@ export function SettingsLifecycleRulesSection({
                     {ruleSetRecords.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={9}
+                          colSpan={7}
                           className="text-muted-foreground"
                         >
                           {t("settings.noLifecycleRulesFound")}
