@@ -128,13 +128,13 @@ test("moving a row keeps an action the new subject has and clears one it lacks",
     outputs: {},
     actions: [],
   };
-  model = addRuleBuilderAction(SCHEMA, model);
+  model = addRuleBuilderAction(model);
   model = setRuleBuilderActionOutput(SCHEMA, model, 0, "UNMONITOR");
-  model = addRuleBuilderAction(SCHEMA, model);
+  model = addRuleBuilderAction(model);
   model = setRuleBuilderActionOutput(SCHEMA, model, 1, "ADD_TAGS");
 
   const moved = setRuleBuilderActionSubject(SCHEMA, model, 0, "SEASON");
-  assert.deepEqual(ruleBuilderActionRows(SCHEMA, moved)[0], {
+  assert.deepEqual(ruleBuilderActionRows(moved)[0], {
     subject: "SEASON",
     output: "UNMONITOR_SEASON",
     join: "ALL",
@@ -143,10 +143,10 @@ test("moving a row keeps an action the new subject has and clears one it lacks",
   assert.equal(Object.hasOwn(moved.outputs, "UNMONITOR"), false);
   assert.equal(moved.outputs.UNMONITOR_SEASON, true);
   // The other row is untouched.
-  assert.deepEqual(ruleBuilderActionRows(SCHEMA, moved)[1], ruleBuilderActionRows(SCHEMA, model)[1]);
+  assert.deepEqual(ruleBuilderActionRows(moved)[1], ruleBuilderActionRows(model)[1]);
 
   const cleared = setRuleBuilderActionSubject(SCHEMA, moved, 1, "EPISODE");
-  assert.deepEqual(ruleBuilderActionRows(SCHEMA, cleared)[1], {
+  assert.deepEqual(ruleBuilderActionRows(cleared)[1], {
     subject: "EPISODE",
     output: "",
     join: "ALL",
@@ -161,7 +161,7 @@ test("moving a row keeps an action the new subject has and clears one it lacks",
 
 test("a condition the new subject cannot read is reported against its row, not dropped", () => {
   const moved = setRuleBuilderActionSubject(SCHEMA, mixed(), 1, "EPISODE");
-  const row = ruleBuilderActionRows(SCHEMA, moved)[1]!;
+  const row = ruleBuilderActionRows(moved)[1]!;
   assert.equal(row.output, "DELETE_EPISODE_FILES");
   assert.deepEqual(row.conditions, [SEASON_UNMONITORED]);
   assert.deepEqual(

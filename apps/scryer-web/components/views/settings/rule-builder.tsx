@@ -654,7 +654,7 @@ function ActionRow({
   const t = useTranslate();
   const prefix = schema.idPrefix;
   const subject = ruleBuilderRowSubject(schema, row);
-  const rows = ruleBuilderActionRows(schema, model);
+  const rows = ruleBuilderActionRows(model);
   const taken = new Set(
     rows.filter((_, at) => at !== index).map((other) => other.output),
   );
@@ -706,7 +706,7 @@ function ActionRow({
           label={t("label.remove")}
           tone="delete"
           disabled={readOnly}
-          onClick={() => onChange(removeRuleBuilderAction(schema, model, index))}
+          onClick={() => onChange(removeRuleBuilderAction(model, index))}
         >
           <Trash2 className="h-4 w-4" />
         </IconButton>
@@ -738,7 +738,7 @@ function ActionRow({
         readOnly={readOnly}
         label={t("settings.ruleBuilderActionConditions")}
         onChange={(change) =>
-          onChange(setRuleBuilderActionConditions(schema, model, index, change))
+          onChange(setRuleBuilderActionConditions(model, index, change))
         }
       />
       <ProblemText
@@ -820,7 +820,7 @@ export function RuleBuilder({
         </Label>
         {hasSubjects ? (
           <div className="space-y-2">
-            {ruleBuilderActionRows(schema, model).map((row, index) => (
+            {ruleBuilderActionRows(model).map((row, index) => (
               <ActionRow
                 key={index}
                 schema={schema}
@@ -842,7 +842,7 @@ export function RuleBuilder({
               size="sm"
               variant="secondary"
               disabled={readOnly}
-              onClick={() => onChange(addRuleBuilderAction(schema, model))}
+              onClick={() => onChange(addRuleBuilderAction(model))}
             >
               <Plus className="mr-1 h-4 w-4" />
               {t("settings.ruleBuilderAddAction")}

@@ -786,14 +786,10 @@ const en: LocaleDictionary = {
     "Lifecycle rule already has an active candidate for title.",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "Lifecycle sequence progress accepts at most 100 candidates per page.",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "Invalid lifecycle completion limit.",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "A generic lifecycle job dispatch must begin in dispatching state.",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "Failed lifecycle sequence marker lacks its failed step id.",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "Invalid lifecycle held-attempt release.",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "Accepted lifecycle job receipts require a real job run id.",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -802,8 +798,6 @@ const en: LocaleDictionary = {
     "A lifecycle job receipt transition must name expected states.",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "Lifecycle sequence receipt projection accepts at most 700 steps.",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "Lifecycle held-attempt release lacks a reason.",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "A retried lifecycle action step must advance its attempt.",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":

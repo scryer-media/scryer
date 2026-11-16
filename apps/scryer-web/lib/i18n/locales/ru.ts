@@ -7643,14 +7643,10 @@ const ru: LocaleDictionary = {
     "У правила жизненного цикла уже есть активный кандидат для этого тайтла.",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "Для хода последовательности жизненного цикла допускается не более 100 кандидатов на страницу.",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "Недопустимый лимит завершения жизненного цикла.",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "Отправка универсального задания жизненного цикла должна начинаться в состоянии dispatching.",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "В маркере сбоя последовательности жизненного цикла отсутствует идентификатор неудавшегося шага.",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "Недопустимое освобождение удерживаемой попытки жизненного цикла.",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "Для принятых подтверждений заданий жизненного цикла требуется действительный идентификатор запуска задания.",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -7659,8 +7655,6 @@ const ru: LocaleDictionary = {
     "При переходе подтверждения задания жизненного цикла необходимо указать ожидаемые состояния.",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "Проекция подтверждений последовательности жизненного цикла допускает не более 700 шагов.",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "Для освобождения удерживаемой попытки жизненного цикла не указана причина.",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "При повторном выполнении шага действия жизненного цикла необходимо увеличить номер попытки.",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":

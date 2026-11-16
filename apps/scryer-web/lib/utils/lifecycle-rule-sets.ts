@@ -37,6 +37,9 @@ export const LIFECYCLE_STARTER_SOURCE = `# Lifecycle rule. Defining a rule named
 # action: unmonitor, monitor, search, fetch_subtitles, delete_files and
 # delete_title take \`if { ... }\`; set_quality_profile, move_to_library,
 # move_to_root and notify take a string, add_tags and remove_tags a list.
+# On a series, monitor_season, unmonitor_season, delete_season_files,
+# fetch_season_subtitles and notify_season act on the season at
+# \`input.season\`; the _episode heads act on the episode at \`input.episode\`.
 # Any other rule name is your own helper. \`reasons\` explains the choice.
 #
 # Facts are plain values: \`input.facts.monitored\` is the boolean itself. A
@@ -375,8 +378,8 @@ export function previewOutcomeBadgeTone(
   }
 }
 
-/// Action kinds and step kinds only label candidates and action runs recorded
-/// before rules declared their actions in source.
+/// Labels for the action kind and the sequence step kinds that candidates and
+/// action runs carry.
 const ACTION_KIND_LABEL_KEYS: Record<LifecycleActionKind, string> = {
   DO_NOTHING: "settings.lifecycleActionDoNothing",
   UNMONITOR_SCOPE_KEEP_FILES:

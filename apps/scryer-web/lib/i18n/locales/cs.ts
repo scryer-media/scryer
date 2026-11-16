@@ -7701,14 +7701,10 @@ const cs: LocaleDictionary = {
     "Pravidlo životního cyklu už má pro tento titul aktivního kandidáta.",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "Průběh sekvence životního cyklu přijímá nejvýše 100 kandidátů na stránku.",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "Neplatný limit dokončení životního cyklu.",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "Obecné odeslání úlohy životního cyklu musí začít ve stavu odesílání.",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "Značce neúspěšné sekvence životního cyklu chybí ID neúspěšného kroku.",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "Neplatné uvolnění pozdrženého pokusu životního cyklu.",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "Přijatá potvrzení úloh životního cyklu vyžadují skutečné ID běhu úlohy.",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -7717,8 +7713,6 @@ const cs: LocaleDictionary = {
     "Přechod potvrzení úlohy životního cyklu musí uvést očekávané stavy.",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "Projekce potvrzení sekvence životního cyklu přijímá nejvýše 700 kroků.",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "Uvolnění pozdrženého pokusu životního cyklu nemá důvod.",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "Opakovaný krok akce životního cyklu musí posunout svůj pokus.",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":

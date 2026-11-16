@@ -62,8 +62,6 @@ const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
   scoring: "scoring",
   "scoring-rules": "scoring",
   lifecycle: "lifecycle",
-  "lifecycle-rules": "lifecycle",
-  lifecyclerules: "lifecycle",
   // Lifecycle rules were called maintenance rules; links that still name
   // them redirect to the lifecycle pane.
   maintenance: "lifecycle",
@@ -491,12 +489,10 @@ const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   "post-procesing": "post-processing",
 };
 
-/// Segments that used to name a rules page of their own. Lifecycle rules are
-/// a pane of the Rules page now, so these redirect rather than resolve. The
-/// maintenance spellings are from before lifecycle rules were renamed.
+/// Segments that named the maintenance rules page, from before lifecycle
+/// rules were renamed and became a pane of the Rules page. They redirect
+/// rather than resolve.
 const MOVED_LIFECYCLE_RULES_SEGMENTS = new Set([
-  "lifecycle-rules",
-  "lifecyclerules",
   "maintenance-rules",
   "maintenancerules",
 ]);
@@ -505,8 +501,6 @@ const MOVED_LIFECYCLE_RULES_SEGMENTS = new Set([
 /// sections of their own before the two kinds of rule shared a page.
 const MOVED_SETTINGS_RULES_BY_SEGMENT: Record<string, RulesSection> = {
   rules: "scoring",
-  "lifecycle-rules": "lifecycle",
-  lifecyclerules: "lifecycle",
   // Lifecycle rules were called maintenance rules before.
   "maintenance-rules": "lifecycle",
   maintenancerules: "lifecycle",

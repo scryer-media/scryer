@@ -659,25 +659,11 @@ function blankCondition(condition: RuleBuilderCondition): boolean {
   return !condition.field && !condition.operator && !condition.value;
 }
 
-/// The model's action rows. A model stored before rows existed reads as one
-/// row per chosen output, on the subject that offers it, with no conditions
-/// of its own.
+/// The model's action rows; a family without subjects has none.
 export function ruleBuilderActionRows(
-  schema: RuleBuilderSchema,
   model: RuleBuilderModel,
 ): RuleBuilderActionRow[] {
-  if (model.actions) return model.actions;
-  return ruleBuilderChosenOutputs(schema, model.outputs).map((output) => {
-    const subject = schema.subjects?.find((entry) =>
-      entry.outputs.includes(output.id),
-    );
-    return {
-      ...(subject ? { subject: subject.id } : {}),
-      output: output.id,
-      join: "ALL",
-      conditions: [],
-    };
-  });
+  return model.actions ?? [];
 }
 
 /// The outputs record that matches `rows`: each row's value under its
@@ -703,23 +689,21 @@ function withRows(
 
 /// Add an unfinished row on the default subject.
 export function addRuleBuilderAction(
-  schema: RuleBuilderSchema,
   model: RuleBuilderModel,
 ): RuleBuilderModel {
   return withRows(model, [
-    ...ruleBuilderActionRows(schema, model),
+    ...ruleBuilderActionRows(model),
     { output: "", join: "ALL", conditions: [] },
   ]);
 }
 
 export function removeRuleBuilderAction(
-  schema: RuleBuilderSchema,
   model: RuleBuilderModel,
   index: number,
 ): RuleBuilderModel {
   return withRows(
     model,
-    ruleBuilderActionRows(schema, model).filter((_, at) => at !== index),
+    ruleBuilderActionRows(model).filter((_, at) => at !== index),
   );
 }
 
@@ -731,7 +715,7 @@ export function setRuleBuilderActionOutput(
   index: number,
   outputId: string,
 ): RuleBuilderModel {
-  const rows = ruleBuilderActionRows(schema, model);
+  const rows = ruleBuilderActionRows(model);
   const output = schema.outputs.find((entry) => entry.id === outputId);
   const values = { ...model.outputs };
   const previous = rows[index]?.output;
@@ -749,14 +733,13 @@ export function setRuleBuilderActionOutput(
 
 /// Change one row's conditions or their join.
 export function setRuleBuilderActionConditions(
-  schema: RuleBuilderSchema,
   model: RuleBuilderModel,
   index: number,
   change: Partial<Pick<RuleBuilderActionRow, "join" | "conditions">>,
 ): RuleBuilderModel {
   return withRows(
     model,
-    ruleBuilderActionRows(schema, model).map((row, at) =>
+    ruleBuilderActionRows(model).map((row, at) =>
       at === index ? { ...row, ...change } : row,
     ),
   );
@@ -772,7 +755,7 @@ export function setRuleBuilderActionSubject(
   index: number,
   subjectId: string,
 ): RuleBuilderModel {
-  const rows = ruleBuilderActionRows(schema, model);
+  const rows = ruleBuilderActionRows(model);
   const row = rows[index];
   const subject = schema.subjects?.find((entry) => entry.id === subjectId);
   if (!row || !subject) return model;
@@ -1348,7 +1331,7 @@ function generateRowSource(
   });
   const shared = model.conditions.length > 0;
 
-  const rows = ruleBuilderActionRows(schema, model);
+  const rows = ruleBuilderActionRows(model);
   const known = new Set(schema.outputs.map((output) => output.id));
   const rowOf = new Map<string, number>();
   const helperOf = new Map<string, string>();
@@ -1610,9 +1593,6 @@ export function parseRuleBuilderModel(
   };
   if (!schema.subjects || schema.subjects.length === 0) {
     return value.actions === undefined ? model : null;
-  }
-  if (value.actions === undefined) {
-    return { ...model, actions: ruleBuilderActionRows(schema, model) };
   }
   if (!Array.isArray(value.actions)) return null;
   const actions: RuleBuilderActionRow[] = [];

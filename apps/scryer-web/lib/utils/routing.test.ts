@@ -142,17 +142,11 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/history", "/activity/history"],
     ["/settings/acquisition", "/automation/acquisition"],
     ["/settings/rules", "/automation/rules/scoring"],
-    ["/settings/lifecycle-rules", "/automation/rules/lifecycle"],
-    ["/settings/lifecycleRules", "/automation/rules/lifecycle"],
     ["/settings/request-rules", "/automation/rules/request"],
     ["/settings/requestRules", "/automation/rules/request"],
     // Rules names the page, not a pane, so it lands on the first one.
     ["/automation/rules", "/automation/rules/scoring"],
     ["/automation/rules/scoring-rules", "/automation/rules/scoring"],
-    // Lifecycle rules were a page of their own before they became a pane.
-    ["/automation/lifecycle-rules", "/automation/rules/lifecycle"],
-    ["/automation/lifecycleRules", "/automation/rules/lifecycle"],
-    ["/automation/rules/lifecycle-rules", "/automation/rules/lifecycle"],
     ["/automation/rules/lifecycle/rules", "/automation/rules/lifecycle"],
     ["/automation/rules/request-rules", "/automation/rules/request"],
     // Folded panes redirect: exclusions to the candidates, gates to the list.

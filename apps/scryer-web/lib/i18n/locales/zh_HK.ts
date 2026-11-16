@@ -6206,14 +6206,10 @@ const zh_HK: LocaleDictionary = {
     "生命週期規則已有此作品的有效候選項目。",
   "error.reason.CONFIGURATION_LIFECYCLE_CANDIDATE_PAGE_TOO_LARGE":
     "生命週期序列進度每頁最多接受 100 個候選項目。",
-  "error.reason.CONFIGURATION_LIFECYCLE_COMPLETION_LIMIT_INVALID":
-    "生命週期完成上限無效。",
   "error.reason.CONFIGURATION_LIFECYCLE_DISPATCH_STATE_INVALID":
     "一般生命週期工作派送必須從派送中狀態開始。",
   "error.reason.CONFIGURATION_LIFECYCLE_FAILED_STEP_ID_REQUIRED":
     "失敗的生命週期序列標記缺少失敗步驟 ID。",
-  "error.reason.CONFIGURATION_LIFECYCLE_HELD_RELEASE_INVALID":
-    "生命週期暫緩嘗試的釋放無效。",
   "error.reason.CONFIGURATION_LIFECYCLE_JOB_RUN_ID_REQUIRED":
     "已接受的生命週期工作回執需要實際的工作執行 ID。",
   "error.reason.CONFIGURATION_LIFECYCLE_MEMBERSHIP_TERMINAL":
@@ -6222,8 +6218,6 @@ const zh_HK: LocaleDictionary = {
     "生命週期工作回執的狀態轉換必須指明預期狀態。",
   "error.reason.CONFIGURATION_LIFECYCLE_RECEIPT_PAGE_TOO_LARGE":
     "生命週期序列回執投影最多接受 700 個步驟。",
-  "error.reason.CONFIGURATION_LIFECYCLE_RELEASE_REASON_REQUIRED":
-    "生命週期暫緩嘗試的釋放缺少原因。",
   "error.reason.CONFIGURATION_LIFECYCLE_RETRY_ATTEMPT_NOT_ADVANCED":
     "重試的生命週期動作步驟必須推進其嘗試次數。",
   "error.reason.CONFIGURATION_LIFECYCLE_RULE_HAS_HISTORY":

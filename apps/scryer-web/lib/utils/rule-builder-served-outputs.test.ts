@@ -101,6 +101,7 @@ function model(outputs: RuleBuilderModel["outputs"]): RuleBuilderModel {
     join: "ALL",
     conditions: [{ field: "input.facts.monitored", operator: "IS_TRUE", value: "" }],
     outputs,
+    actions: Object.keys(outputs).map((output) => ({ output, join: "ALL", conditions: [] })),
   };
 }
 

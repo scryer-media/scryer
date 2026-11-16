@@ -44,8 +44,9 @@ export type LifecycleDecidedActions = {
   notification: string | null;
 };
 
-/// Action kinds recorded on candidates and action runs written before rules
-/// declared their actions in source. Kept so history stays readable.
+/// The action kind on a candidate or action run. The server records
+/// ACTION_SEQUENCE for every one and puts the steps on its sequence; the other
+/// values mirror the rest of the server enum.
 export type LifecycleActionKind =
   | "ACTION_SEQUENCE"
   | "DO_NOTHING"
