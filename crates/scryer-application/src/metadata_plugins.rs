@@ -10,7 +10,8 @@
 //! `AppResult` fails when the host could not complete the exchange, and the
 //! inner `PluginResult` carries a failure the provider classified itself.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use scryer_plugin_sdk::{
@@ -89,20 +90,126 @@ pub struct PluginMetadataMatch {
     pub title: MetadataPluginTitle,
 }
 
-/// Ask each installed provider for `imdb_id` and return the first answer.
+/// How long a provider's definitive "no title under this id" is trusted before
+/// the id is asked again.
+const UNKNOWN_ID_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Most remembered "no title under this id" answers across all providers.
+const UNKNOWN_ID_CAPACITY: usize = 4096;
+
+/// The host's memory of which plugin calls would be wasted.
+///
+/// It remembers only two definitive facts: a provider answered that it has no
+/// title under an id, and a provider refused with a `retry_after`. An error, a
+/// timeout or a refusal without `retry_after` is never remembered, so the next
+/// lookup asks again. Both facts expire; the unknown-id memo is bounded and
+/// sheds the entry closest to expiry when full.
+struct LookupGuard {
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    state: Mutex<LookupGuardState>,
+}
+
+#[derive(Default)]
+struct LookupGuardState {
+    /// `(provider type, normalized IMDb id)` to the instant the answer expires.
+    unknown: HashMap<(String, String), Instant>,
+    /// Provider type to the instant its `retry_after` passes.
+    retry_after: HashMap<String, Instant>,
+}
+
+impl LookupGuard {
+    fn new(now: Arc<dyn Fn() -> Instant + Send + Sync>) -> Self {
+        Self {
+            now,
+            state: Mutex::new(LookupGuardState::default()),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, LookupGuardState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether `provider` may be asked for `imdb_id` now.
+    fn may_ask(&self, provider: &str, imdb_id: &str) -> bool {
+        let now = (self.now)();
+        let mut state = self.state();
+        if let Some(until) = state.retry_after.get(provider).copied() {
+            if now < until {
+                return false;
+            }
+            state.retry_after.remove(provider);
+        }
+        let key = (provider.to_string(), imdb_id.to_string());
+        match state.unknown.get(&key).copied() {
+            Some(expires) if now < expires => false,
+            Some(_) => {
+                state.unknown.remove(&key);
+                true
+            }
+            None => true,
+        }
+    }
+
+    fn remember_unknown(&self, provider: &str, imdb_id: &str) {
+        let now = (self.now)();
+        let mut state = self.state();
+        if state.unknown.len() >= UNKNOWN_ID_CAPACITY {
+            state.unknown.retain(|_, expires| now < *expires);
+        }
+        if state.unknown.len() >= UNKNOWN_ID_CAPACITY
+            && let Some(oldest) = state
+                .unknown
+                .iter()
+                .min_by_key(|(_, expires)| **expires)
+                .map(|(key, _)| key.clone())
+        {
+            state.unknown.remove(&oldest);
+        }
+        state.unknown.insert(
+            (provider.to_string(), imdb_id.to_string()),
+            now + UNKNOWN_ID_TTL,
+        );
+    }
+
+    fn hold_until_retry_after(&self, provider: &str, retry_after_seconds: i64) {
+        let Ok(seconds) = u64::try_from(retry_after_seconds) else {
+            return;
+        };
+        if seconds == 0 {
+            return;
+        }
+        let until = (self.now)() + Duration::from_secs(seconds);
+        let mut state = self.state();
+        let entry = state
+            .retry_after
+            .entry(provider.to_string())
+            .or_insert(until);
+        *entry = (*entry).max(until);
+    }
+}
+
+/// Ask each provider in `clients` for `imdb_id` and return the first answer.
 /// Providers that fail are logged and skipped; the scan or search that asked
-/// carries on as if they had no answer.
-pub async fn lookup_by_imdb_id(
-    provider: &dyn MetadataPluginProvider,
+/// carries on as if they had no answer. `guard` skips providers whose answer
+/// is already known to be empty or that asked not to be called yet.
+async fn lookup_by_imdb_id(
+    clients: &[Arc<dyn MetadataProviderClient>],
+    guard: &LookupGuard,
     imdb_id: &str,
 ) -> Option<PluginMetadataMatch> {
     let imdb_id = scryer_plugin_sdk::normalize_imdb_id(imdb_id)?;
-    for client in provider.clients() {
+    for client in clients {
         let descriptor = client.descriptor();
         let Some(metadata) = descriptor.metadata_provider() else {
             continue;
         };
         if !metadata.coverage.is_empty() && !metadata.coverage.contains(&MetadataMediaKind::Movie) {
+            continue;
+        }
+        let provider_type = descriptor.provider_type();
+        if !guard.may_ask(provider_type, &imdb_id) {
             continue;
         }
         match client.lookup(MetadataMediaKind::Movie, &imdb_id).await {
@@ -112,20 +219,26 @@ pub async fn lookup_by_imdb_id(
                     .filter(|title| title.imdb_id.eq_ignore_ascii_case(&imdb_id))
                 {
                     return Some(PluginMetadataMatch {
-                        provider_type: descriptor.provider_type().to_string(),
+                        provider_type: provider_type.to_string(),
                         provider_name: metadata.display_name.clone(),
                         title,
                     });
                 }
+                guard.remember_unknown(provider_type, &imdb_id);
             }
-            Ok(PluginResult::Err(error)) => tracing::warn!(
-                provider = descriptor.provider_type(),
-                imdb_id = imdb_id.as_str(),
-                error = ?error,
-                "metadata provider plugin refused a lookup"
-            ),
+            Ok(PluginResult::Err(error)) => {
+                if let Some(seconds) = error.retry_after_seconds {
+                    guard.hold_until_retry_after(provider_type, seconds);
+                }
+                tracing::warn!(
+                    provider = provider_type,
+                    imdb_id = imdb_id.as_str(),
+                    error = ?error,
+                    "metadata provider plugin refused a lookup"
+                );
+            }
             Err(error) => tracing::warn!(
-                provider = descriptor.provider_type(),
+                provider = provider_type,
                 imdb_id = imdb_id.as_str(),
                 error = %error,
                 "metadata provider plugin lookup failed"
@@ -162,18 +275,42 @@ const MOVIE_KIND: &str = "movie";
 ///
 /// Each call asks the plugins once per distinct IMDb id, however many queries
 /// or refs carry it.
+///
+/// A provider's definitive "no title under this id" is remembered for a while
+/// and a provider's `retry_after` is honoured, so a scan that meets the same
+/// unknown id again does not spend another plugin call on it.
 pub struct PluginFallbackMetadataGateway {
     inner: Arc<dyn MetadataGateway>,
     plugins: Arc<dyn MetadataPluginProvider>,
+    guard: LookupGuard,
 }
 
 impl PluginFallbackMetadataGateway {
     pub fn new(inner: Arc<dyn MetadataGateway>, plugins: Arc<dyn MetadataPluginProvider>) -> Self {
-        Self { inner, plugins }
+        Self::with_clock(inner, plugins, Arc::new(Instant::now))
+    }
+
+    fn with_clock(
+        inner: Arc<dyn MetadataGateway>,
+        plugins: Arc<dyn MetadataPluginProvider>,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            inner,
+            plugins,
+            guard: LookupGuard::new(now),
+        }
+    }
+
+    /// Whether any metadata provider is installed. Without one, every call
+    /// goes straight to the gateway.
+    fn has_plugins(&self) -> bool {
+        !self.plugins.clients().is_empty()
     }
 
     async fn plugin_title(&self, imdb_id: &str) -> Option<PluginMetadataMatch> {
-        lookup_by_imdb_id(self.plugins.as_ref(), imdb_id).await
+        let clients = self.plugins.clients();
+        lookup_by_imdb_id(&clients, &self.guard, imdb_id).await
     }
 
     /// The plugins' titles for each distinct normalized IMDb id among
@@ -535,13 +672,16 @@ impl MetadataGateway for PluginFallbackMetadataGateway {
         language: &str,
         create_missing: bool,
     ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
+        if !kind.eq_ignore_ascii_case(MOVIE_KIND) || !self.has_plugins() {
+            return self
+                .inner
+                .search_titles_batch(queries, kind, language, create_missing)
+                .await;
+        }
         let mut results = self
             .inner
             .search_titles_batch(queries, kind, language, create_missing)
             .await?;
-        if !kind.eq_ignore_ascii_case(MOVIE_KIND) {
-            return Ok(results);
-        }
         let unanswered = queries
             .iter()
             .filter(|query| !results.get(*query).is_some_and(|items| !items.is_empty()))
@@ -575,16 +715,15 @@ impl MetadataGateway for PluginFallbackMetadataGateway {
         language: &str,
         year: Option<i32>,
     ) -> AppResult<Vec<RichMetadataSearchItem>> {
+        let imdb_id = scryer_plugin_sdk::normalize_imdb_id(query)
+            .filter(|_| kind.eq_ignore_ascii_case(MOVIE_KIND) && self.has_plugins());
         let results = self
             .inner
             .search_titles(query, kind, limit, language, year)
             .await?;
-        let Some(imdb_id) = scryer_plugin_sdk::normalize_imdb_id(query) else {
+        let Some(imdb_id) = imdb_id else {
             return Ok(results);
         };
-        if !kind.eq_ignore_ascii_case(MOVIE_KIND) {
-            return Ok(results);
-        }
         // SMG knows the id: its answer stands.
         if results.iter().any(|item| {
             item.imdb_id
@@ -609,6 +748,9 @@ impl MetadataGateway for PluginFallbackMetadataGateway {
         refs: &[MovieTitleRef],
         language: &str,
     ) -> AppResult<MovieTitleBulkResult> {
+        if !self.has_plugins() {
+            return self.inner.get_movie_titles(refs, language).await;
+        }
         let result = self.inner.get_movie_titles(refs, language).await?;
         Ok(self.fill_missing_movies(refs, result).await)
     }
@@ -619,6 +761,12 @@ impl MetadataGateway for PluginFallbackMetadataGateway {
         language: &str,
         release_market: &str,
     ) -> AppResult<MovieTitleBulkResult> {
+        if !self.has_plugins() {
+            return self
+                .inner
+                .get_movie_titles_for_release_market(refs, language, release_market)
+                .await;
+        }
         let result = self
             .inner
             .get_movie_titles_for_release_market(refs, language, release_market)
@@ -639,8 +787,13 @@ mod tests {
     use super::*;
     use crate::MovieMetadata;
 
-    const KNOWN: &str = "tt0111161";
-    const FAN_EDIT: &str = "tt18183916";
+    const KNOWN: &str = "tt0000042";
+    const FAN_EDIT: &str = "tt90000001";
+    /// An id the plugin answers with a host-level failure.
+    const BROKEN: &str = "tt90000002";
+    /// An id the plugin refuses with a `retry_after`.
+    const THROTTLED: &str = "tt90000003";
+    const RETRY_AFTER_SECONDS: i64 = 60;
 
     fn plugin_title(imdb_id: &str) -> MetadataPluginTitle {
         MetadataPluginTitle {
@@ -673,9 +826,21 @@ mod tests {
             imdb_id: &str,
         ) -> AppResult<PluginResult<MetadataPluginLookupResponse>> {
             self.lookups.fetch_add(1, Ordering::SeqCst);
-            Ok(PluginResult::Ok(MetadataPluginLookupResponse {
-                title: (imdb_id == FAN_EDIT).then(|| plugin_title(imdb_id)),
-            }))
+            match imdb_id {
+                BROKEN => Err(crate::AppError::Repository(
+                    "fixture plugin timed out".to_string(),
+                )),
+                THROTTLED => Ok(PluginResult::Err(scryer_plugin_sdk::PluginError {
+                    code: scryer_plugin_sdk::PluginErrorCode::RateLimited,
+                    public_message: "fixture plugin is out of requests".to_string(),
+                    debug_message: None,
+                    retry_after_seconds: Some(RETRY_AFTER_SECONDS),
+                    details: None,
+                })),
+                _ => Ok(PluginResult::Ok(MetadataPluginLookupResponse {
+                    title: (imdb_id == FAN_EDIT).then(|| plugin_title(imdb_id)),
+                })),
+            }
         }
 
         async fn search(
@@ -701,17 +866,17 @@ mod tests {
         fn clients(&self) -> Vec<Arc<dyn MetadataProviderClient>> {
             vec![Arc::new(FakeClient {
                 descriptor: PluginDescriptor {
-                    id: "omdb".to_string(),
-                    name: "OMDb".to_string(),
+                    id: "fixture-metadata".to_string(),
+                    name: "Fixture Metadata".to_string(),
                     version: "0.1.0".to_string(),
                     sdk_version: "0.1.0".to_string(),
                     sdk_constraint: String::new(),
                     socket_permissions: Vec::new(),
                     settings: Vec::new(),
                     provider: ProviderDescriptor::MetadataProvider(MetadataProviderDescriptor {
-                        provider_type: "omdb".to_string(),
+                        provider_type: "fixture-metadata".to_string(),
                         provider_aliases: Vec::new(),
-                        display_name: "OMDb".to_string(),
+                        display_name: "Fixture Metadata".to_string(),
                         summary: None,
                         coverage: vec![MetadataMediaKind::Movie],
                         capabilities: MetadataProviderCapabilities::default(),
@@ -896,6 +1061,164 @@ mod tests {
         (gateway, lookups)
     }
 
+    /// A gateway whose clock only moves when the test moves it.
+    fn gateway_with_clock() -> (
+        PluginFallbackMetadataGateway,
+        Arc<AtomicUsize>,
+        Arc<Mutex<Instant>>,
+    ) {
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let clock = Arc::new(Mutex::new(Instant::now()));
+        let now = {
+            let clock = clock.clone();
+            Arc::new(move || *clock.lock().unwrap()) as Arc<dyn Fn() -> Instant + Send + Sync>
+        };
+        let gateway = PluginFallbackMetadataGateway::with_clock(
+            Arc::new(FakeSmg::default()),
+            Arc::new(FakeProvider {
+                lookups: lookups.clone(),
+            }),
+            now,
+        );
+        (gateway, lookups, clock)
+    }
+
+    fn advance(clock: &Mutex<Instant>, by: Duration) {
+        let mut now = clock.lock().unwrap();
+        *now += by;
+    }
+
+    async fn scan_lookup(gateway: &PluginFallbackMetadataGateway, imdb_id: &str) -> bool {
+        let query = query(Some(imdb_id));
+        let results = gateway
+            .search_titles_batch(std::slice::from_ref(&query), MOVIE_KIND, "eng", true)
+            .await
+            .unwrap();
+        results.get(&query).is_some_and(|items| !items.is_empty())
+    }
+
+    #[tokio::test]
+    async fn an_unknown_id_is_not_asked_again_until_its_answer_expires() {
+        let (gateway, lookups, clock) = gateway_with_clock();
+        let unknown = "tt90000009";
+        assert!(!scan_lookup(&gateway, unknown).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+
+        // Another scan, a by-ref refresh and a Search & Match query for the
+        // same id inside the window make no plugin call.
+        assert!(!scan_lookup(&gateway, unknown).await);
+        gateway
+            .get_movie_titles(
+                &[MovieTitleRef {
+                    imdb_id: Some(unknown.to_string()),
+                    ..MovieTitleRef::default()
+                }],
+                "eng",
+            )
+            .await
+            .unwrap();
+        gateway
+            .search_titles(unknown, MOVIE_KIND, 20, "eng", None)
+            .await
+            .unwrap();
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+
+        // A known id is still asked.
+        assert!(scan_lookup(&gateway, FAN_EDIT).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 2);
+
+        advance(&clock, UNKNOWN_ID_TTL);
+        assert!(!scan_lookup(&gateway, unknown).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_is_not_remembered() {
+        let (gateway, lookups, _clock) = gateway_with_clock();
+        assert!(!scan_lookup(&gateway, BROKEN).await);
+        assert!(!scan_lookup(&gateway, BROKEN).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_with_retry_after_holds_the_plugin_until_it_passes() {
+        let (gateway, lookups, clock) = gateway_with_clock();
+        assert!(!scan_lookup(&gateway, THROTTLED).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+
+        // The hold covers the provider, not just the id it refused.
+        assert!(!scan_lookup(&gateway, THROTTLED).await);
+        assert!(!scan_lookup(&gateway, FAN_EDIT).await);
+        advance(
+            &clock,
+            Duration::from_secs(RETRY_AFTER_SECONDS as u64) - Duration::from_millis(1),
+        );
+        assert!(!scan_lookup(&gateway, FAN_EDIT).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+
+        advance(&clock, Duration::from_millis(1));
+        assert!(scan_lookup(&gateway, FAN_EDIT).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 2);
+        // A refusal is not an answer: the refused id is asked again too.
+        assert!(!scan_lookup(&gateway, THROTTLED).await);
+        assert_eq!(lookups.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn the_unknown_id_memo_stays_bounded() {
+        let clock = Arc::new(Mutex::new(Instant::now()));
+        let guard = LookupGuard::new({
+            let clock = clock.clone();
+            Arc::new(move || *clock.lock().unwrap())
+        });
+        for index in 0..UNKNOWN_ID_CAPACITY + 10 {
+            guard.remember_unknown("fixture-metadata", &format!("tt{index:08}"));
+            advance(&clock, Duration::from_millis(1));
+        }
+        assert_eq!(guard.state().unknown.len(), UNKNOWN_ID_CAPACITY);
+        // The entries closest to expiry were shed first.
+        assert!(guard.may_ask("fixture-metadata", "tt00000000"));
+        assert!(!guard.may_ask(
+            "fixture-metadata",
+            &format!("tt{:08}", UNKNOWN_ID_CAPACITY + 9)
+        ));
+    }
+
+    /// A provider set with no metadata plugin installed.
+    struct EmptyProvider;
+
+    impl MetadataPluginProvider for EmptyProvider {
+        fn clients(&self) -> Vec<Arc<dyn MetadataProviderClient>> {
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn without_plugins_every_call_is_the_gateway_s_answer() {
+        let gateway = PluginFallbackMetadataGateway::new(
+            Arc::new(FakeSmg::default()),
+            Arc::new(EmptyProvider),
+        );
+        let fan_edit = query(Some(FAN_EDIT));
+        let results = gateway
+            .search_titles_batch(std::slice::from_ref(&fan_edit), MOVIE_KIND, "eng", true)
+            .await
+            .unwrap();
+        assert!(results[&fan_edit].is_empty());
+        let rich = gateway
+            .search_titles(FAN_EDIT, MOVIE_KIND, 20, "eng", None)
+            .await
+            .unwrap();
+        assert_eq!(rich.len(), 1);
+        assert_eq!(rich[0].name, "Noise");
+        let refs = [MovieTitleRef {
+            imdb_id: Some(FAN_EDIT.to_string()),
+            ..MovieTitleRef::default()
+        }];
+        let result = gateway.get_movie_titles(&refs, "eng").await.unwrap();
+        assert_eq!(result.missing_ref_indexes, vec![0]);
+    }
+
     fn query(imdb_id: Option<&str>) -> MetadataSearchQuery {
         MetadataSearchQuery {
             query: "Some Film".to_string(),
@@ -927,7 +1250,7 @@ mod tests {
         let hit = &results[&fan_edit];
         assert_eq!(hit.len(), 1);
         assert!(hit[0].auto_match_safe);
-        assert_eq!(hit[0].primary_source.as_deref(), Some("omdb"));
+        assert_eq!(hit[0].primary_source.as_deref(), Some("fixture-metadata"));
         assert_eq!(hit[0].external_ids, vec![imdb_external_id(FAN_EDIT)]);
         assert!(results[&unanchored].is_empty());
         // Only the IMDb-anchored query SMG missed reached the plugin.
@@ -1040,7 +1363,7 @@ mod tests {
         assert_eq!(result.by_ref_index[&0].name, "Known");
         let filled = &result.by_ref_index[&1];
         assert_eq!(filled.name, "The Fan Edit");
-        assert_eq!(filled.primary_source, "omdb");
+        assert_eq!(filled.primary_source, "fixture-metadata");
         assert_eq!(filled.imdb_id, FAN_EDIT);
         assert_eq!(filled.runtime_minutes, 201);
         assert_eq!(filled.ratings.external_ratings[0].score, Some(82.0));
