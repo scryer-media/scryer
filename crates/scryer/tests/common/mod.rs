@@ -213,6 +213,16 @@ impl AcquisitionScopeStateRepository for TestLibraryStateStore {
             .await
     }
 
+    async fn get_acquisition_scope_state_for_scope(
+        &self,
+        title_id: &str,
+        scope: scryer_application::AcquisitionScopeKey<'_>,
+    ) -> AppResult<Option<scryer_application::AcquisitionScopeState>> {
+        self.wanted
+            .get_acquisition_scope_state_for_scope(title_id, scope)
+            .await
+    }
+
     async fn delete_acquisition_scope_states_for_title(&self, title_id: &str) -> AppResult<()> {
         self.wanted
             .delete_acquisition_scope_states_for_title(title_id)
