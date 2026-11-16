@@ -635,6 +635,116 @@ async fn activation_without_a_duration_or_a_stored_expiry_never_expires() {
     assert_eq!(claim.expires_at, None);
 }
 
+/// Activate one dormant claim whose stored expiry is already past, then run
+/// the next pass. The claim activates with that stored date and the pass
+/// expires it.
+async fn assert_a_past_stored_expiry_is_kept_and_expires(duration_days: Option<i64>) {
+    let fixture = claims_app();
+    let title = seed_title(&fixture.app, &fixture.user, "Synthetic Lapsed Keep").await;
+    let started_at = Utc::now();
+    let stored_expiry = started_at - chrono::Duration::days(2);
+    fixture
+        .claims
+        .seed(LifecycleClaim {
+            duration_days,
+            expires_at: Some(stored_expiry),
+            ..lease("claim-1", &title.id, LifecycleClaimState::Dormant)
+        })
+        .await;
+    fixture
+        .app
+        .activate_dormant_claims_for_title(&title.id, started_at)
+        .await
+        .expect("activate");
+    let activated = fixture.only_claim().await;
+    assert_eq!(activated.state, LifecycleClaimState::Active);
+    assert_eq!(activated.starts_at, Some(started_at));
+    assert_eq!(activated.expires_at, Some(stored_expiry));
+
+    let report = fixture.evaluate().await;
+    assert_eq!(report.leases_expired, 1, "{report:?}");
+    let expired = fixture.only_claim().await;
+    assert_eq!(expired.state, LifecycleClaimState::Expired);
+    assert_eq!(expired.expires_at, Some(stored_expiry));
+}
+
+#[tokio::test]
+async fn activation_without_a_duration_keeps_a_past_stored_expiry_and_the_next_pass_expires_it() {
+    assert_a_past_stored_expiry_is_kept_and_expires(None).await;
+}
+
+#[tokio::test]
+async fn activation_with_a_zero_duration_keeps_a_past_stored_expiry_and_the_next_pass_expires_it()
+{
+    assert_a_past_stored_expiry_is_kept_and_expires(Some(0)).await;
+}
+
+/// The dormant sweep starts the clock at the title's first import, and a
+/// stored expiry already past at that instant is kept and expired by the
+/// pass after.
+#[tokio::test]
+async fn the_sweep_keeps_a_past_stored_expiry_at_the_backdated_import_and_then_expires_it() {
+    let fixture = claims_app();
+    let title = seed_title(&fixture.app, &fixture.user, "Synthetic Swept Keep").await;
+    let first_imported_at = seed_media_file(&fixture.media_files, &title.id).await;
+    let stored_expiry = first_imported_at - chrono::Duration::days(2);
+    fixture
+        .claims
+        .seed(LifecycleClaim {
+            duration_days: None,
+            expires_at: Some(stored_expiry),
+            ..lease("claim-1", &title.id, LifecycleClaimState::Dormant)
+        })
+        .await;
+
+    let report = fixture.evaluate().await;
+    assert_eq!(report.leases_activated, 1, "{report:?}");
+    assert_eq!(report.leases_expired, 0, "{report:?}");
+    let activated = fixture.only_claim().await;
+    assert_eq!(activated.state, LifecycleClaimState::Active);
+    assert_eq!(
+        activated.starts_at.map(|value| value.timestamp()),
+        Some(first_imported_at.timestamp()),
+        "the clock is backdated to the import"
+    );
+    assert_eq!(activated.expires_at, Some(stored_expiry));
+
+    let report = fixture.evaluate().await;
+    assert_eq!(report.leases_expired, 1, "{report:?}");
+    assert_eq!(
+        fixture.only_claim().await.state,
+        LifecycleClaimState::Expired
+    );
+}
+
+/// No duration and no stored expiry: activated with no end, and later passes
+/// never expire it.
+#[tokio::test]
+async fn a_claim_without_a_duration_or_a_stored_expiry_survives_later_passes() {
+    let fixture = claims_app();
+    let title = seed_title(&fixture.app, &fixture.user, "Synthetic Open Keep").await;
+    fixture
+        .claims
+        .seed(LifecycleClaim {
+            duration_days: None,
+            expires_at: None,
+            ..lease("claim-1", &title.id, LifecycleClaimState::Dormant)
+        })
+        .await;
+    fixture
+        .app
+        .activate_dormant_claims_for_title(&title.id, Utc::now())
+        .await
+        .expect("activate");
+    for _ in 0..2 {
+        let report = fixture.evaluate().await;
+        assert_eq!(report.leases_expired, 0, "{report:?}");
+    }
+    let claim = fixture.only_claim().await;
+    assert_eq!(claim.state, LifecycleClaimState::Active);
+    assert_eq!(claim.expires_at, None);
+}
+
 /// The safety net: an import that happened while the hook was missing or
 /// failing still starts the clock, and it starts it at the import.
 #[tokio::test]

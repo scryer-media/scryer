@@ -36,12 +36,12 @@ pub const CLAIM_RELEASE_TITLE_DELETED: &str = "title_deleted";
 impl AppUseCase {
     /// Start every dormant claim on a title, at `now`.
     ///
-    /// Called from the import path when a title's import completes. A retention
-    /// claim's window is `duration_days` from this instant; a keep claim has no
-    /// expiry at all. (A keep is created active by the approval, so finding a
-    /// dormant one here means an older or partial write — it is activated with
-    /// no expiry rather than left stuck, because a keep with an unstarted clock
-    /// would hold the title forever without ever reading as active.)
+    /// Called from the import path when a title's import completes. A claim
+    /// with a positive `duration_days` closes at the later of its stored
+    /// expiry and `duration_days` from this instant. A claim without one keeps
+    /// its stored expiry as it is, including one already past, which the next
+    /// pass then expires. A claim with neither a duration nor a stored expiry
+    /// never closes.
     ///
     /// The repository's `activate` is conditional on the claim still being
     /// dormant, so a replayed import cannot restart a window the requester has
