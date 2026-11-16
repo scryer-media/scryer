@@ -30,26 +30,28 @@ use scryer_interface_core::{
 };
 use scryer_interface_media::mappers;
 use scryer_interface_media::mappers::{
-    catalog_discovery_query_from_input, discovery_home_filter_options_query_from_input,
-    discovery_home_query_from_input, discovery_item_detail_query_from_input,
-    discovery_items_query_from_input, discovery_neighbors_query_from_input,
-    from_active_import_stream, from_activity_event, from_application_upgrade_status,
-    from_backup_info, from_catalog_discovery, from_change_title_folder_preview, from_collection,
-    from_dashboard_activity_stats, from_delete_episode_files_preview, from_delete_preview,
-    from_delete_titles_preview, from_discovery_home, from_discovery_home_cards,
-    from_discovery_home_filter_options, from_discovery_item, from_discovery_items_result,
-    from_discovery_neighbors, from_domain_event, from_download_queue_item, from_episode,
-    from_external_import_monitor_warmup_progress, from_job_definition, from_job_run, from_library,
-    from_library_graph, from_library_scan_session, from_library_settings, from_linked_account,
-    from_location_operation, from_location_operation_asset_listing, from_location_retry_selection,
-    from_media_rename_plan, from_media_request, from_media_request_counts,
-    from_pending_import_connection, from_pending_import_counts, from_pending_release,
-    from_provider_type, from_root_move_preview, from_root_scope_preview, from_runtime_path_style,
-    from_smg_scryer_update_notice, from_smg_version_compatibility_notice, from_storage_root_usage,
-    from_system_health, from_title, from_title_acquisition_diagnostics, from_title_history_page,
-    from_title_release_blocklist_entry, from_user_with_auth_factor_status, from_wanted_item,
-    from_wanted_scope_view, library_graph_query_from_input, location_destination_into_application,
-    location_execution_mode_into_application, root_scope_destination,
+    ExplanationSelection, catalog_discovery_query_from_input,
+    discovery_home_filter_options_query_from_input, discovery_home_query_from_input,
+    discovery_item_detail_query_from_input, discovery_items_query_from_input,
+    discovery_neighbors_query_from_input, from_active_import_stream, from_activity_event,
+    from_application_upgrade_status, from_backup_info, from_catalog_discovery,
+    from_change_title_folder_preview, from_collection, from_dashboard_activity_stats,
+    from_delete_episode_files_preview, from_delete_preview, from_delete_titles_preview,
+    from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
+    from_discovery_item, from_discovery_items_result, from_discovery_neighbors, from_domain_event,
+    from_download_queue_item, from_episode, from_external_import_monitor_warmup_progress,
+    from_job_definition, from_job_run, from_library, from_library_graph, from_library_scan_session,
+    from_library_settings, from_linked_account, from_location_operation,
+    from_location_operation_asset_listing, from_location_retry_selection, from_media_rename_plan,
+    from_media_request, from_media_request_counts, from_pending_import_connection,
+    from_pending_import_counts, from_pending_release, from_provider_type, from_root_move_preview,
+    from_root_scope_preview, from_runtime_path_style, from_smg_scryer_update_notice,
+    from_smg_version_compatibility_notice, from_storage_root_usage, from_system_health, from_title,
+    from_title_acquisition_diagnostics_selecting, from_title_history_page,
+    from_title_release_blocklist_entry, from_user_with_auth_factor_status,
+    from_wanted_item_selecting, from_wanted_scope_view_selecting, library_graph_query_from_input,
+    location_destination_into_application, location_execution_mode_into_application,
+    root_scope_destination,
 };
 use scryer_interface_media::types::*;
 
@@ -2372,11 +2374,12 @@ impl CatalogQueries {
     ) -> GqlResult<Option<WantedItemPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let selection = ExplanationSelection::of(ctx.look_ahead().field("latestReleaseDecision"));
         let item = app
             .get_wanted_item(&actor, id.as_ref())
             .await
             .map_err(to_gql_error)?
-            .map(from_wanted_item)
+            .map(|item| from_wanted_item_selecting(item, selection))
             .transpose()
             .map_err(to_gql_error)?;
         Ok(item)
@@ -4004,9 +4007,14 @@ impl AcquisitionQueries {
             )
             .await
             .map_err(to_gql_error)?;
+        let selection = ExplanationSelection::of(
+            ctx.look_ahead()
+                .field("items")
+                .field("latestReleaseDecision"),
+        );
         let items = views
             .into_iter()
-            .map(from_wanted_scope_view)
+            .map(|view| from_wanted_scope_view_selecting(view, selection))
             .collect::<scryer_application::AppResult<Vec<_>>>()
             .map_err(to_gql_error)?;
         let has_more = offset.saturating_add(items.len() as i64) < total;
@@ -4066,7 +4074,11 @@ impl AcquisitionQueries {
             .title_acquisition_diagnostics(&actor, title_id.as_ref())
             .await
             .map_err(to_gql_error)?;
-        Ok(from_title_acquisition_diagnostics(diagnostics).map_err(to_gql_error)?)
+        let selection = ExplanationSelection::of(ctx.look_ahead().field("recentDecisions"));
+        Ok(
+            from_title_acquisition_diagnostics_selecting(diagnostics, selection)
+                .map_err(to_gql_error)?,
+        )
     }
 
     /// Return progress for an interactive acquisition-search job, or null when no such job exists.

@@ -2134,6 +2134,87 @@ async fn graphql_wanted_latest_decision_explanation_follows_the_selection() {
         json!({ "auto_decision": { "decided_by": "quality_tier" } })
     );
 
+    // The top-level wanted item, wanted list and title diagnostics read the
+    // same selection from their own fields. The film is released, so the
+    // Missing list derives it.
+    let release_dates = scryer_domain::MovieReleaseDates {
+        market: "US".to_string(),
+        fetched: true,
+        theatrical_dates: vec!["2020-01-01".to_string()],
+        digital_dates: vec!["2020-04-01".to_string()],
+        physical_dates: vec![],
+        ..Default::default()
+    };
+    sqlx::query(
+        "UPDATE titles
+            SET min_availability = 'released', movie_release_dates_json = ?
+          WHERE id = ?",
+    )
+    .bind(serde_json::to_string(&release_dates).expect("serialize release dates"))
+    .bind(&title.id)
+    .execute(ctx.db.pool())
+    .await
+    .expect("mark the film released");
+    let body = gql(
+        &ctx,
+        r#"
+        query TopLevelLatestDecision($titleId: ID!, $wantedItemId: ID!, $titleSearch: String) {
+          explainedItem: wantedItem(id: $wantedItemId) {
+            latestReleaseDecision { id ...Explained }
+          }
+          leanItem: wantedItem(id: $wantedItemId) {
+            latestReleaseDecision { decisionCode }
+          }
+          explainedList: wantedItems(wantedKind: MISSING, titleSearch: $titleSearch) {
+            items {
+              latestReleaseDecision { ... on ReleaseDecisionPayload { explanationJson step: decidedBy } }
+            }
+          }
+          leanList: wantedItems(wantedKind: MISSING, titleSearch: $titleSearch) {
+            items { latestReleaseDecision { decisionCode } }
+          }
+          explainedDiagnostics: titleAcquisitionDiagnostics(titleId: $titleId) {
+            recentDecisions { id ...Explained }
+          }
+          leanDiagnostics: titleAcquisitionDiagnostics(titleId: $titleId) {
+            recentDecisions { decisionCode }
+          }
+        }
+
+        fragment Explained on ReleaseDecisionPayload {
+          explanationJson
+          decidedBy
+        }
+        "#,
+        json!({
+            "titleId": title.id,
+            "wantedItemId": wanted_item.id,
+            "titleSearch": title.name,
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let data = &body["data"];
+    let explanation = json!({ "auto_decision": { "decided_by": "quality_tier" } });
+    for explained in [
+        &data["explainedItem"]["latestReleaseDecision"],
+        &data["explainedDiagnostics"]["recentDecisions"][0],
+    ] {
+        assert_eq!(explained["id"], decision.id);
+        assert_eq!(explained["explanationJson"], explanation);
+        assert_eq!(explained["decidedBy"], "QUALITY_TIER");
+    }
+    let listed = &data["explainedList"]["items"][0]["latestReleaseDecision"];
+    assert_eq!(listed["explanationJson"], explanation);
+    assert_eq!(listed["step"], "QUALITY_TIER");
+    for lean in [
+        &data["leanItem"]["latestReleaseDecision"],
+        &data["leanList"]["items"][0]["latestReleaseDecision"],
+        &data["leanDiagnostics"]["recentDecisions"][0],
+    ] {
+        assert_eq!(lean, &json!({ "decisionCode": "rejected" }));
+    }
+
     // A caller that reads no total gets the same page, uncounted.
     let admin = scryer_domain::User::new_admin("admin");
     let query = scryer_application::AcquisitionScopeStatesQuery {
