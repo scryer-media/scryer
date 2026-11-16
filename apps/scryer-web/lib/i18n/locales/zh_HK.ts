@@ -6441,8 +6441,6 @@ const zh_HK: LocaleDictionary = {
     '此規則不能以 "with" 取代 {{path}}。其決定必須基於 Scryer 實際觀察到的內容。',
   "error.ruleHeadDefinedAsFunction":
     "{{path}} 對 Scryer 有特定意義，不能寫成函式。請改寫為規則。",
-  "error.ruleHeadNameRetired":
-    "請求規則不再讀取 {{path}}。請改用 add_tags 為作品加上標籤。",
   "error.ruleQualityProfileUnknown":
     "沒有品質設定檔使用此名稱，因此規則無法套用。",
   "error.ruleQualityProfileAmbiguous":

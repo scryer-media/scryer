@@ -4389,11 +4389,10 @@ impl AcquisitionQueries {
 
         let look_ahead = ctx.look_ahead();
         let with_builder_model = look_ahead.field("builderModel").exists();
-        let with_declared_actions = look_ahead.field("declaredActions").exists()
-            || look_ahead
-                .field("ruleSet")
-                .field("declaredActions")
-                .exists();
+        let with_declared_actions = look_ahead
+            .field("ruleSet")
+            .field("declaredActions")
+            .exists();
         let Some(detail) = app
             .get_request_rule_set(&actor, id.as_ref(), with_builder_model)
             .await
@@ -4483,7 +4482,7 @@ impl AcquisitionQueries {
             .collect())
     }
 
-    /// The request family's Rules Context Reference: every fact a request matcher may read.
+    /// The request family's Rules Context Reference: every fact a request rule may read.
     async fn request_rule_input_reference(
         &self,
         ctx: &Context<'_>,

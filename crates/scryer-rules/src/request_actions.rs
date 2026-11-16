@@ -50,10 +50,6 @@ pub const AUDIO_LANGUAGE_PATTERN: &str = "[A-Za-z_-]+";
 /// The longest notification text a rule may write, in bytes.
 pub const MAX_NOTIFY_LEN: usize = 500;
 
-/// The rule name a request rule used to tag a title with. It is refused: a
-/// request rule tags a title through `add_tags`.
-pub const RETIRED_TAGS_RULE_NAME: &str = "tags";
-
 /// The rule family the builder schema describes.
 pub const REQUEST_RULE_FAMILY: &str = "request";
 /// The helper rule the builder's templates refer to.
@@ -392,19 +388,20 @@ impl RequestHeadSpec {
 }
 
 impl RequestActionHead {
-    /// Every head, in the order the wrapper projects them.
-    pub const ALL: [Self; 10] = [
-        Self::Approve,
-        Self::Deny,
-        Self::Manual,
-        Self::SetQualityProfile,
-        Self::SetLeaseDays,
-        Self::SetMonitor,
-        Self::SetRequiredAudioLanguages,
-        Self::SetPreferredAudioLanguages,
-        Self::AddTags,
-        Self::Notify,
-    ];
+    /// Every head, in the order the wrapper projects them: the entries of
+    /// [`REQUEST_HEADS`] before `reasons`.
+    pub const ALL: [Self; REQUEST_HEADS.len() - 1] = {
+        let mut all = [Self::Approve; REQUEST_HEADS.len() - 1];
+        let mut index = 0;
+        while index < all.len() {
+            all[index] = match REQUEST_HEADS[index].action {
+                Some(head) => head,
+                None => panic!("only the last request head may lack an action"),
+            };
+            index += 1;
+        }
+        all
+    };
 
     pub const fn spec(self) -> &'static RequestHeadSpec {
         &REQUEST_HEADS[self as usize]
@@ -687,10 +684,11 @@ fn check_language(language: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A literal reason code is at most [`MAX_REASON_CODE_LEN`] bytes of UTF-8.
 fn check_reason_code(reason: &str) -> Result<(), String> {
     if reason.len() > MAX_REASON_CODE_LEN {
         return Err(format!(
-            "reason code is {} characters, at most {MAX_REASON_CODE_LEN} are allowed",
+            "reason code is {} bytes, at most {MAX_REASON_CODE_LEN} are allowed",
             reason.len()
         ));
     }
@@ -935,18 +933,6 @@ pub(crate) fn scan_request_module(module: &Module) -> RequestActionScan {
         }
         let is_function = is_function_rule(rule);
 
-        if name == RETIRED_TAGS_RULE_NAME {
-            scan.errors.push(issue(
-                diagnostic_codes::RULE_HEAD_NAME_RETIRED,
-                name,
-                format!(
-                    "a request rule tags a title with add_tags, for example: {}",
-                    RequestActionHead::AddTags.spec().example()
-                ),
-                at,
-            ));
-            continue;
-        }
         let Some(spec) = head_spec(name) else {
             continue;
         };
@@ -978,10 +964,7 @@ pub(crate) fn scan_request_module(module: &Module) -> RequestActionScan {
 
     let referenced = referenced_names(module);
     for (name, at) in defined {
-        if head_spec(&name).is_some()
-            || name == RETIRED_TAGS_RULE_NAME
-            || referenced.contains(&name)
-        {
+        if head_spec(&name).is_some() || referenced.contains(&name) {
             continue;
         }
         scan.warnings.push(issue(

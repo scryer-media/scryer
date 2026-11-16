@@ -1,5 +1,4 @@
-//! Request rules end to end: authoring, arbitration, and the request flow
-//! (spec 0003 FR-010…FR-016, FR-020, FR-021, FR-040, FR-041, FR-050).
+//! Request rules end to end: authoring, arbitration, and the request flow.
 //!
 //! The arbitration half is pure and table-driven. The flow half runs real
 //! submissions through `bootstrap_media_request_app` with the in-memory rule,
@@ -704,7 +703,7 @@ async fn deleting_a_rule_set_keeps_the_decisions_it_made() {
         .await
         .expect("delete should succeed");
 
-    // The trace outlives the rule (FR-016) and the engine no longer holds it.
+    // The trace outlives the rule and the engine no longer holds it.
     assert_eq!(harness.request_rule_decisions.recorded().await.len(), 1);
     assert!(harness.app.request_rules_engine_snapshot().is_empty());
 }
@@ -1049,7 +1048,7 @@ async fn a_held_rule_never_approves() {
     assert_eq!(
         requests[0].status,
         MediaRequestStatus::Pending,
-        "an unobservable fact must never read as an approval (FR-012)"
+        "an unobservable fact must never read as an approval"
     );
     drop(requests);
     assert!(harness.titles.store.lock().await.is_empty());
@@ -3021,6 +3020,123 @@ async fn an_automatic_approval_applies_the_shaped_monitor_and_audio_languages() 
                 .map(|shaped| shaped.rule_set_name.as_str()),
             Some("Quiet English"),
             "{head:?}"
+        );
+    }
+}
+
+/// An approver's tag list is held to the same shape a rule's tags are: each
+/// condition refuses with its own reason, and the sentence names the tag.
+#[test]
+fn an_approver_tag_list_is_checked_like_a_rule_tag() {
+    use crate::error_reasons::request_rules::{
+        REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED, TAG_CHARACTERS_MOST_ALLOWED,
+        TAG_CONTAINS_UNSUPPORTED_CHARACTER, TAG_REQUIRED, TAG_USES_RESERVED_PREFIX,
+    };
+    use crate::request_rules::validate_tag_list;
+    use scryer_rules::policy::{MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX};
+
+    fn refusal(tags: &[&str]) -> (&'static str, String) {
+        let error = validate_tag_list(tags.iter().map(|tag| tag.to_string()).collect())
+            .expect_err("refused");
+        match error {
+            AppError::ValidationRefused {
+                reason,
+                message,
+                facts,
+                diagnostics,
+            } => {
+                assert!(facts.is_empty(), "{tags:?}");
+                assert!(diagnostics.is_empty(), "{tags:?}");
+                (reason, message)
+            }
+            other => panic!("{tags:?}: {other:?}"),
+        }
+    }
+    fn accepted(tags: &[&str]) -> Vec<String> {
+        validate_tag_list(tags.iter().map(|tag| tag.to_string()).collect()).expect("accepted")
+    }
+
+    let longest = "a".repeat(MAX_TAG_LEN);
+    let too_long = "a".repeat(MAX_TAG_LEN + 1);
+    // Two bytes each: within the length in characters, past it in bytes.
+    let wide = "é".repeat(MAX_TAG_LEN / 2 + 1);
+    let reserved = format!("{RESERVED_TAG_PREFIX}family");
+
+    assert_eq!(accepted(&[]), Vec::<String>::new());
+    assert_eq!(
+        accepted(&[" family ", "a.b_c d-E9", "family", longest.as_str()]),
+        vec![
+            "family".to_string(),
+            "a.b_c d-E9".to_string(),
+            longest.clone()
+        ]
+    );
+    let most: Vec<String> = (0..MAX_TAGS).map(|i| format!("t{i}")).collect();
+    let most: Vec<&str> = most.iter().map(String::as_str).collect();
+    assert_eq!(accepted(&most).len(), MAX_TAGS);
+
+    let too_many: Vec<String> = (0..=MAX_TAGS).map(|i| format!("t{i}")).collect();
+    let too_many: Vec<&str> = too_many.iter().map(String::as_str).collect();
+    assert_eq!(
+        refusal(&too_many),
+        (
+            REQUEST_MAY_CARRY_MOST_TAGS_SUPPLIED,
+            format!(
+                "a request may carry at most {MAX_TAGS} tags, {} were supplied",
+                MAX_TAGS + 1
+            )
+        )
+    );
+    for empty in ["", "   ", "\t"] {
+        assert_eq!(
+            refusal(&["ok", empty]),
+            (TAG_REQUIRED, "tag must not be empty".to_string()),
+            "{empty:?}"
+        );
+    }
+    assert_eq!(
+        refusal(&[too_long.as_str()]),
+        (
+            TAG_CHARACTERS_MOST_ALLOWED,
+            format!(
+                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+                MAX_TAG_LEN + 1
+            )
+        )
+    );
+    assert_eq!(
+        refusal(&[wide.as_str()]),
+        (
+            TAG_CHARACTERS_MOST_ALLOWED,
+            format!(
+                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+                wide.len()
+            )
+        )
+    );
+    assert_eq!(
+        refusal(&[reserved.as_str()]),
+        (
+            TAG_USES_RESERVED_PREFIX,
+            format!("tag '{reserved}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix")
+        )
+    );
+    for (tag, bad) in [
+        ("fam/ily", '/'),
+        ("café", 'é'),
+        ("a:b", ':'),
+        ("a\tb", '\t'),
+    ] {
+        assert_eq!(
+            refusal(&[tag]),
+            (
+                TAG_CONTAINS_UNSUPPORTED_CHARACTER,
+                format!(
+                    "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, \
+                     '.', '_', '-', or spaces"
+                )
+            ),
+            "{tag:?}"
         );
     }
 }

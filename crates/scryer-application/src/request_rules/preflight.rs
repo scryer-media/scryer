@@ -1,5 +1,4 @@
-//! Pre-flight: tell a requester what will happen before they submit
-//! (spec 0003 FR-020, FR-021).
+//! Pre-flight: tell a requester what will happen before they submit.
 //!
 //! The dialog calls this as the requester changes library, profile, monitor, or
 //! lease. It runs the *same* enrichment and the *same* evaluation the submit
@@ -100,7 +99,7 @@ impl AppUseCase {
             )?;
 
         // The same read-through cache the submit uses, so the two share one SMG
-        // call and therefore one set of facts (FR-021).
+        // call and therefore one set of facts.
         let enrichment = self.enrich_request_draft(&input.facet, external_ids).await;
         let external_ids = enrichment.external_ids.clone();
 

@@ -405,9 +405,9 @@ pub struct MediaRequest {
     /// Rule sets that voted for the effective outcome.
     pub decided_by_rule_set_ids: Vec<String>,
     /// Tags the rules emitted, and the labels a list request's route applies,
-    /// merged onto the created title at approval (spec 0003 FR-050).
+    /// merged onto the created title at approval.
     pub policy_tags: Vec<String>,
-    /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
+    /// Versioned metadata snapshot captured at submit.
     /// A raw JSON string here: the typed snapshot lives in the application
     /// layer, so the domain carries the bytes and nothing interprets them.
     pub metadata_snapshot_json: String,
@@ -6808,11 +6808,10 @@ pub struct RequestRuleRevision {
     pub created_at: DateTime<Utc>,
 }
 
-/// What a request evaluation concluded (spec 0003 FR-010, FR-011).
+/// What a request evaluation concluded.
 ///
-/// [`Self::ManualReview`] is the default because every failure path — engine
-/// error, timeout, unknown fact, no matching rule — lands there: a decision this
-/// build cannot interpret must never read back as an approval or a denial.
+/// [`Self::ManualReview`] is the default so that an outcome this build cannot
+/// interpret never reads back as an approval or a denial.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestDecisionOutcome {
@@ -6841,7 +6840,8 @@ impl RequestDecisionOutcome {
     }
 }
 
-/// The durable trace of one request evaluation (spec 0003 FR-016).
+/// The durable trace of one request evaluation. It outlives the rules that
+/// made it.
 ///
 /// `policy_outcome` (what the rules said) and `effective_outcome` (what the
 /// instance acted on) are separate columns because a fallback can make them

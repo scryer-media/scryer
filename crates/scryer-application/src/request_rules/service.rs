@@ -1,8 +1,7 @@
-//! Authoring, previewing, and enabling request rule sets (spec 0003 FR-010,
-//! FR-013, FR-014, FR-015).
+//! Authoring, previewing, and enabling request rule sets.
 //!
 //! Every call here needs [`AppPermission::ManageCatalogSettings`]. Authoring or
-//! previewing a matcher that reads `input.requester.*` needs
+//! previewing a rule that reads `input.requester.*` needs
 //! [`AppPermission::ManagePermissions`] on top, for the reason lifecycle's
 //! person-fact gate gives: writing a rule about *media* is catalog
 //! administration, writing one about a named person is a use of the instance's
@@ -20,7 +19,7 @@ use scryer_rules::diagnostic_codes::{
     RULE_AUDIO_LANGUAGE_UNKNOWN, RULE_MONITOR_UNSUPPORTED, RULE_QUALITY_PROFILE_AMBIGUOUS,
     RULE_QUALITY_PROFILE_UNKNOWN,
 };
-use scryer_rules::policy::{MAX_TAG_LEN, MAX_TAGS, RESERVED_TAG_PREFIX};
+use scryer_rules::policy::{MAX_TAGS, TagProblem, tag_problem};
 use scryer_rules::request::{
     RequestPolicy, RequestRulesEngine, RequestVote, rewrite_package_declaration,
 };
@@ -50,7 +49,7 @@ pub const REQUEST_MAX_LEASE_DAYS: i64 = 3650;
 
 // ── Request models ──────────────────────────────────────────────────────────
 
-/// A new rule set plus its first matcher revision.
+/// A new rule set plus the source of its first revision.
 #[derive(Clone, Debug)]
 pub struct RequestRuleDraft {
     pub name: String,
@@ -63,7 +62,7 @@ pub struct RequestRuleDraft {
     pub builder_model: Option<serde_json::Value>,
 }
 
-/// Which matcher a preview should run.
+/// Which rule source a preview should run.
 #[derive(Clone, Debug)]
 pub enum RequestRulePreviewMatcher {
     /// The current revision of a stored rule set.
@@ -86,8 +85,7 @@ pub struct RequestRuleSample {
     pub quality_profile_id: Option<String>,
     pub monitor_type: Option<String>,
     /// `Some(None)` is an explicit "forever"; `None` means the sample did not
-    /// say, which is also treated as forever. The double option exists so a
-    /// client can distinguish the two even though they behave alike today.
+    /// say. The preview evaluates both as a request for forever.
     pub lease_days: Option<Option<i64>>,
     /// `None` leaves it to the library; an empty list asks for no requirement.
     pub required_audio_languages: Option<Vec<String>>,
@@ -131,7 +129,7 @@ pub struct RequestRuleValidation {
     pub declared_actions: Option<RequestDeclaredActions>,
 }
 
-/// What one matcher did to one sample.
+/// What one rule did to one sample.
 #[derive(Clone, Debug)]
 pub struct RequestRulePreviewResult {
     /// The stored rule set's id, or the throwaway id an inline draft compiled
@@ -336,7 +334,7 @@ impl AppUseCase {
     }
 
     /// Appends revision N+1. Revision N is left exactly as written, so a
-    /// decision recorded against it stays attributable (FR-016).
+    /// decision recorded against it stays attributable.
     ///
     /// `builder_model` is `Some(Some(doc))` to replace the stored builder
     /// document and `Some(None)` to clear it. `None` keeps the stored document
@@ -402,7 +400,7 @@ impl AppUseCase {
         })
     }
 
-    /// Renames and re-scopes without touching the matcher, so no revision is
+    /// Renames and re-scopes without touching the source, so no revision is
     /// created. The engine still rebuilds: library scope is part of what the
     /// cache holds.
     pub async fn update_request_rule_metadata(
@@ -492,7 +490,7 @@ impl AppUseCase {
     /// would cascade away the action runs that are the only record of what it
     /// did to someone's library; a request rule executes nothing, and its
     /// decisions live in `request_rule_decisions`, which deliberately has no
-    /// foreign key to the rule (FR-016). The trace outlives the rule, so there
+    /// foreign key to the rule. The trace outlives the rule, so there
     /// is nothing to protect by refusing.
     pub async fn delete_request_rule_set(&self, actor: &User, rule_set_id: &str) -> AppResult<()> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
@@ -549,7 +547,7 @@ impl AppUseCase {
         })
     }
 
-    /// Run one matcher against one hypothetical request. Nothing is written.
+    /// Run one rule against one hypothetical request. Nothing is written.
     pub async fn preview_request_rule(
         &self,
         actor: &User,
@@ -741,8 +739,8 @@ impl AppUseCase {
         })
     }
 
-    /// Gate authoring — or previewing — a matcher that reads the requester
-    /// document (FR-014).
+    /// Gate authoring — or previewing — a rule that reads the requester
+    /// document.
     ///
     /// Catalog-settings management is enough to write a rule about *media*.
     /// Writing one about *people* — who is asking, what they hold, which
@@ -971,7 +969,7 @@ impl AppUseCase {
 
 // ── Validation helpers ──────────────────────────────────────────────────────
 
-/// A matcher that passed every authoring-time check, ready to persist.
+/// A rule source that passed every authoring-time check, ready to persist.
 pub(crate) struct PreparedMatcher {
     pub(crate) rego_source: String,
     pub(crate) content_hash: String,
@@ -1119,11 +1117,11 @@ fn preview_sample_title(facet: &MediaFacet) -> String {
 /// Validate a tag list a *human* supplied — an approver's override of the
 /// policy's tags.
 ///
-/// The bounds are the policy family's own ([`MAX_TAGS`], [`MAX_TAG_LEN`],
-/// [`RESERVED_TAG_PREFIX`], the same charset), because a tag an approver types
-/// and a tag a rule emits end up in the same column on the same title, and a
-/// rule may not mint one an approver could not. `decode_tags` itself cannot be
-/// reused: it takes a Rego value.
+/// The bounds are the policy family's own ([`MAX_TAGS`] and [`tag_problem`]),
+/// because a tag an approver types and a tag a rule emits end up in the same
+/// column on the same title, and a rule may not mint one an approver could
+/// not. Each tag is trimmed first, and each problem refuses with its own
+/// reason.
 pub fn validate_tag_list(tags: Vec<String>) -> AppResult<Vec<String>> {
     if tags.len() > MAX_TAGS {
         return Err(AppError::validation_refused(
@@ -1137,38 +1135,15 @@ pub fn validate_tag_list(tags: Vec<String>) -> AppResult<Vec<String>> {
     let mut validated: Vec<String> = Vec::with_capacity(tags.len());
     for tag in tags {
         let tag = tag.trim().to_string();
-        if tag.is_empty() {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::request_rules::TAG_REQUIRED,
-                "tag must not be empty".to_string(),
-            ));
-        }
-        if tag.len() > MAX_TAG_LEN {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::request_rules::TAG_CHARACTERS_MOST_ALLOWED,
-                format!(
-                    "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
-                    tag.len()
-                ),
-            ));
-        }
-        if tag.starts_with(RESERVED_TAG_PREFIX) {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::request_rules::TAG_USES_RESERVED_PREFIX,
-                format!("tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix"),
-            ));
-        }
-        if let Some(bad) = tag
-            .chars()
-            .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-')))
-        {
-            return Err(AppError::validation_refused(
-                crate::error_reasons::request_rules::TAG_CONTAINS_UNSUPPORTED_CHARACTER,
-                format!(
-                    "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, '.', \
-                 '_', '-', or spaces"
-                ),
-            ));
+        if let Some(problem) = tag_problem(&tag) {
+            use crate::error_reasons::request_rules as reasons;
+            let reason = match problem {
+                TagProblem::Empty => reasons::TAG_REQUIRED,
+                TagProblem::TooLong => reasons::TAG_CHARACTERS_MOST_ALLOWED,
+                TagProblem::ReservedPrefix => reasons::TAG_USES_RESERVED_PREFIX,
+                TagProblem::UnsupportedCharacter(_) => reasons::TAG_CONTAINS_UNSUPPORTED_CHARACTER,
+            };
+            return Err(AppError::validation_refused(reason, problem.message(&tag)));
         }
         if !validated.contains(&tag) {
             validated.push(tag);

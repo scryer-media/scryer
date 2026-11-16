@@ -1,4 +1,4 @@
-//! Arbitration across request-rule votes (spec 0003 FR-011, plan §3.3).
+//! Arbitration across request-rule votes.
 //!
 //! Pure: votes and errors in, one verdict out. No repository, no clock, no
 //! permission lookup beyond the single boolean the caller resolved — which is
@@ -9,14 +9,14 @@
 //! — an author-declared `manual`, a rule the host held because a fact was
 //! unobservable, a rule that errored or timed out — collapses to manual review,
 //! and it collapses **above** approve, so no amount of approving rules can
-//! out-vote one rule that could not be evaluated (FR-012). Only when nothing
+//! out-vote one rule that could not be evaluated. Only when nothing
 //! denied and nothing was uncertain does an approve vote, or the library's
 //! existing Auto-Approve permission, decide.
 //!
 //! Tags are collected from every rule that actually ran, whatever it voted: "this
 //! is a kids' film" is true whether or not the rule had an opinion about
 //! approving it. Whether they are *applied* is the caller's decision — a denied
-//! request keeps its tags in the trace only (FR-050).
+//! request keeps its tags in the trace only.
 
 use std::collections::BTreeMap;
 
@@ -275,7 +275,7 @@ pub const fn legacy_outcome(permission_grants_auto_approve: bool) -> RequestDeci
     }
 }
 
-/// Arbitrate one request's votes (spec 0003 FR-011).
+/// Arbitrate one request's votes.
 ///
 /// | condition | outcome | deciders | fallback |
 /// |---|---|---|---|
@@ -293,8 +293,15 @@ pub fn arbitrate(
     errors: &[ScopedError],
     permission_grants_auto_approve: bool,
 ) -> Arbitration {
-    let mut arbitration = arbitrate_votes(votes, errors, permission_grants_auto_approve);
-    arbitration.shaping = collect_shaping(votes);
+    let verdict = arbitrate_votes(votes, errors, permission_grants_auto_approve);
+    let mut arbitration = Arbitration {
+        policy_outcome: verdict.policy_outcome,
+        fallback_reason: verdict.fallback_reason,
+        deciding_rule_set_ids: verdict.deciding_rule_set_ids,
+        tags: collect_tags(votes),
+        reasons: verdict.reasons,
+        shaping: collect_shaping(votes),
+    };
     if arbitration.policy_outcome == RequestDecisionOutcome::AutoApprove
         && !arbitration.shaping.conflicts.is_empty()
     {
@@ -311,24 +318,28 @@ pub fn arbitrate(
     arbitration
 }
 
+/// The verdict the votes alone reach, before tags and shaping are collected.
+struct Verdict {
+    policy_outcome: RequestDecisionOutcome,
+    fallback_reason: Option<&'static str>,
+    deciding_rule_set_ids: Vec<String>,
+    reasons: Vec<ArbitrationReason>,
+}
+
 fn arbitrate_votes(
     votes: &[ScopedVote],
     errors: &[ScopedError],
     permission_grants_auto_approve: bool,
-) -> Arbitration {
-    let tags = collect_tags(votes);
-
+) -> Verdict {
     let denials: Vec<&ScopedVote> = votes
         .iter()
         .filter(|vote| vote.decision.vote == RequestVote::Deny)
         .collect();
     if !denials.is_empty() {
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::Deny,
             fallback_reason: None,
             deciding_rule_set_ids: rule_set_ids(&denials),
-            tags,
-            shaping: ArbitratedShaping::default(),
             reasons: reasons_from(&denials),
         };
     }
@@ -357,12 +368,10 @@ fn arbitrate_votes(
                 deciding.push(error.rule_set_id.clone());
             }
         }
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::ManualReview,
             fallback_reason: Some(fallback_reason),
             deciding_rule_set_ids: deciding,
-            tags,
-            shaping: ArbitratedShaping::default(),
             reasons: reasons_from(&manuals),
         };
     }
@@ -372,33 +381,27 @@ fn arbitrate_votes(
         .filter(|vote| vote.decision.vote == RequestVote::Approve)
         .collect();
     if !approvals.is_empty() {
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::AutoApprove,
             fallback_reason: None,
             deciding_rule_set_ids: rule_set_ids(&approvals),
-            tags,
-            shaping: ArbitratedShaping::default(),
             reasons: reasons_from(&approvals),
         };
     }
 
     if permission_grants_auto_approve {
-        return Arbitration {
+        return Verdict {
             policy_outcome: RequestDecisionOutcome::AutoApprove,
             fallback_reason: Some(FALLBACK_LIBRARY_PERMISSION),
             deciding_rule_set_ids: vec![LIBRARY_PERMISSION_DECIDER.to_string()],
-            tags,
-            shaping: ArbitratedShaping::default(),
             reasons: Vec::new(),
         };
     }
 
-    Arbitration {
+    Verdict {
         policy_outcome: RequestDecisionOutcome::ManualReview,
         fallback_reason: Some(FALLBACK_NO_RULE_MATCHED),
         deciding_rule_set_ids: Vec::new(),
-        tags,
-        shaping: ArbitratedShaping::default(),
         reasons: Vec::new(),
     }
 }

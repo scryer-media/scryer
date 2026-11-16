@@ -124,17 +124,21 @@ fn reported_columns_are_character_offsets_after_a_tab() {
 // ── request heads ──
 
 #[test]
-fn the_retired_tags_head_is_refused() {
+fn a_tags_rule_is_an_unreferenced_helper_like_any_other_name() {
     let result = validate("approve := true\ntags contains \"family\"\n");
-    assert!(!result.valid);
+    assert!(result.valid, "{:?}", result.diagnostics);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert_eq!(
-        codes(&result),
-        vec![diagnostic_codes::RULE_HEAD_NAME_RETIRED]
+        result.warnings.iter().map(|w| w.code).collect::<Vec<_>>(),
+        vec![diagnostic_codes::RULE_UNREFERENCED_RULE]
     );
     assert_eq!(
-        (result.diagnostics[0].line, result.diagnostics[0].column),
+        (result.warnings[0].line, result.warnings[0].column),
         (Some(4), Some(1))
     );
+
+    let decision = decide("approve := true\ntags contains \"family\"\n");
+    assert_eq!(decision.shaping, RequestShaping::default());
 }
 
 #[test]
@@ -345,6 +349,33 @@ fn a_held_rule_carries_no_shaping() {
 }
 
 // ── The head table ──────────────────────────────────────────────────────────
+
+/// The wrapper projects heads in this order, and stored shaping and the
+/// GraphQL enum follow it.
+#[test]
+fn the_heads_keep_their_order() {
+    use crate::request_actions::REQUEST_HEADS;
+    use RequestActionHead::*;
+    assert_eq!(
+        RequestActionHead::ALL,
+        [
+            Approve,
+            Deny,
+            Manual,
+            SetQualityProfile,
+            SetLeaseDays,
+            SetMonitor,
+            SetRequiredAudioLanguages,
+            SetPreferredAudioLanguages,
+            AddTags,
+            Notify,
+        ]
+    );
+    assert_eq!(
+        REQUEST_HEADS.last().map(|spec| spec.rule_name),
+        Some("reasons")
+    );
+}
 
 #[test]
 fn every_head_is_the_table_entry_at_its_index() {

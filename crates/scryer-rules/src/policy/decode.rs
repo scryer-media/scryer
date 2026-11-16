@@ -104,30 +104,59 @@ pub(crate) fn decode_tag_list(value: &Value, field: &str) -> Result<Vec<String>,
 /// Whether one tag has the shape a policy is allowed to emit. Shared by the
 /// runtime decoder and the static check of literal tags in a rule's source.
 pub fn check_tag(tag: &str) -> Result<(), String> {
+    match tag_problem(tag) {
+        Some(problem) => Err(problem.message(tag)),
+        None => Ok(()),
+    }
+}
+
+/// Why a tag does not have the shape a policy is allowed to emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagProblem {
+    /// The tag is empty.
+    Empty,
+    /// The tag is longer than [`MAX_TAG_LEN`] bytes.
+    TooLong,
+    /// The tag starts with [`RESERVED_TAG_PREFIX`].
+    ReservedPrefix,
+    /// The tag holds a character outside [`TAG_PATTERN`].
+    UnsupportedCharacter(char),
+}
+
+impl TagProblem {
+    /// The sentence that explains this problem with `tag`.
+    pub fn message(self, tag: &str) -> String {
+        match self {
+            Self::Empty => "tag must not be empty".to_string(),
+            Self::TooLong => format!(
+                "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
+                tag.len()
+            ),
+            Self::ReservedPrefix => {
+                format!("tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix")
+            }
+            Self::UnsupportedCharacter(bad) => format!(
+                "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, \
+                 '.', '_', '-', or spaces"
+            ),
+        }
+    }
+}
+
+/// The first problem [`check_tag`] finds with `tag`, if any.
+pub fn tag_problem(tag: &str) -> Option<TagProblem> {
     if tag.is_empty() {
-        return Err("tag must not be empty".to_string());
+        return Some(TagProblem::Empty);
     }
     if tag.len() > MAX_TAG_LEN {
-        return Err(format!(
-            "tag is {} characters, at most {MAX_TAG_LEN} are allowed",
-            tag.len()
-        ));
+        return Some(TagProblem::TooLong);
     }
     if tag.starts_with(RESERVED_TAG_PREFIX) {
-        return Err(format!(
-            "tag '{tag}' uses the reserved '{RESERVED_TAG_PREFIX}' prefix"
-        ));
+        return Some(TagProblem::ReservedPrefix);
     }
-    if let Some(bad) = tag
-        .chars()
+    tag.chars()
         .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-')))
-    {
-        return Err(format!(
-            "tag '{tag}' contains unsupported character '{bad}'; use letters, digits, \
-             '.', '_', '-', or spaces"
-        ));
-    }
-    Ok(())
+        .map(TagProblem::UnsupportedCharacter)
 }
 
 #[cfg(test)]

@@ -101,7 +101,6 @@ export type RequestRuleRevision = {
 export type RequestRuleSetDetail = {
   ruleSet: RequestRuleSetRecord;
   revision: RequestRuleRevision;
-  declaredActions?: RequestDeclaredActions;
   /// The stored builder document, read only by the single-rule query. Opaque
   /// until `parseRuleBuilderModel` reads it.
   builderModel?: unknown;
@@ -185,8 +184,8 @@ export type RequestPreflightResult = {
   evaluationMode: RequestEvaluationMode;
   /// Why the verdict fell back to needing approval, when it did. It names the
   /// shape of the fallback (`rule_manual`, `held`, `error`, `no_rule_matched`,
-  /// `shaping_conflict`) and never a rule, so it is safe on the requester's
-  /// surface.
+  /// `library_permission`, `shaping_conflict`, `shaping_invalid`) and never a
+  /// rule, so it is safe on the requester's surface.
   fallbackReason: string | null;
   shaping: RequestShaping | null;
 };

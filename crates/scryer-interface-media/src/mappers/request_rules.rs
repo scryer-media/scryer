@@ -1,10 +1,10 @@
-//! Projections for the request-rule surface (spec 0003 §7).
+//! Projections for the request-rule surface.
 //!
 //! Three of these are load-bearing rather than mechanical:
 //!
 //! - [`from_request_rule_decision`] takes a `redacted` flag and, when it is set,
 //!   returns the trace **without its votes**. That is the same rule the
-//!   pre-flight enforces by having no vote field at all (FR-020), applied to a
+//!   pre-flight enforces by having no vote field at all, applied to a
 //!   stored decision read back by the person it was about. `reasons` survives
 //!   the redaction, because a requester who is told "denied" and nothing else
 //!   has been told nothing.
@@ -186,8 +186,7 @@ pub fn from_request_declared_actions(
 }
 
 /// `with_declared_actions` is the caller's look-ahead: the scan parses the
-/// source, so it runs only when a selection asks for it. The one scan feeds
-/// both the detail and its rule set.
+/// source, so it runs only when a selection asks for the rule set's.
 pub fn from_request_rule_set_detail(
     detail: AppRuleSetDetail,
     decision_count: u64,
@@ -198,9 +197,8 @@ pub fn from_request_rule_set_detail(
         .flatten()
         .map(from_request_declared_actions);
     RequestRuleSetDetail {
-        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions.clone()),
+        rule_set: from_request_rule_set(&detail.rule_set, decision_count, declared_actions),
         revision: from_request_rule_revision(detail.revision),
-        declared_actions,
         builder_model: detail.builder_model.map(async_graphql::Json),
     }
 }
@@ -652,7 +650,7 @@ pub(crate) fn project_media_request_policy(
 /// The one conversion from the submit input to the application's draft.
 ///
 /// The pre-flight query and the submit mutation both go through this, which is
-/// what makes FR-021 — identical drafts yield identical decisions — a property
+/// what makes "identical drafts yield identical decisions" a property
 /// of the code: the two cannot disagree about what a draft *is*.
 pub fn submit_media_request_input_into_application(
     input: SubmitMediaRequestInput,
@@ -784,7 +782,7 @@ mod tests {
          "content_hash":"h","mode":"enforce","vote":"deny","held":false,
          "reason_codes":["policy_denied"],"tags":["kids"]},
         {"rule_set_id":"b","rule_set_name":"Quota","revision_number":1,
-         "content_hash":"h","mode":"shadow","held":false,
+         "content_hash":"h","mode":"enforce","held":false,
          "reason_codes":[],"tags":[],"error":"policy evaluation exceeded its time budget"}
     ]"#;
 

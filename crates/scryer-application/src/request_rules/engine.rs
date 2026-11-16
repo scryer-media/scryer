@@ -1,4 +1,4 @@
-//! The cached request-rules engine and its rebuild (spec 0003 FR-013).
+//! The cached request-rules engine and its rebuild.
 //!
 //! Compiling Rego is expensive and a request is decided while its requester
 //! waits, so the engine is built once and swapped, exactly as the release
@@ -156,20 +156,26 @@ impl AppUseCase {
             .list_rule_sets()
             .await?;
 
+        let rule_sets: Vec<_> = rule_sets
+            .into_iter()
+            .filter(|rule_set| rule_set.evaluation_mode != RequestRuleEvaluationMode::Disabled)
+            .collect();
+        let revision_keys: Vec<(String, i64)> = rule_sets
+            .iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set.current_revision_number))
+            .collect();
+        let revisions = self
+            .services
+            .customization
+            .request_rule_sets
+            .get_revisions(&revision_keys)
+            .await?;
+
         let mut policies: Vec<RequestPolicy> = Vec::new();
         let mut scopes: HashMap<String, RequestRuleScope> = HashMap::new();
         let mut load_errors = HashMap::new();
-        for rule_set in rule_sets
-            .into_iter()
-            .filter(|rule_set| rule_set.evaluation_mode != RequestRuleEvaluationMode::Disabled)
-        {
-            let Some(revision) = self
-                .services
-                .customization
-                .request_rule_sets
-                .get_revision(&rule_set.id, rule_set.current_revision_number)
-                .await?
-            else {
+        for (rule_set, revision) in rule_sets.into_iter().zip(revisions) {
+            let Some(revision) = revision else {
                 tracing::warn!(
                     rule_set_id = rule_set.id.as_str(),
                     revision_number = rule_set.current_revision_number,

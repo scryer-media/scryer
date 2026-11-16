@@ -6937,8 +6937,6 @@ const ru: LocaleDictionary = {
     'Это правило не может заменить {{path}} через "with". Его решение должно опираться на то, что наблюдал Scryer.',
   "error.ruleHeadDefinedAsFunction":
     "{{path}} имеет значение для Scryer и не может быть функцией. Запишите его как правило.",
-  "error.ruleHeadNameRetired":
-    "Правила запросов больше не читают {{path}}. Помечайте тайтл через add_tags.",
   "error.ruleQualityProfileUnknown":
     "Профиля качества с таким именем нет, поэтому правило не может его применить.",
   "error.ruleQualityProfileAmbiguous":

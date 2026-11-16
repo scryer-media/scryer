@@ -1,10 +1,11 @@
-//! Request rules (spec 0003, RFC 137 §4.3 "Future request rules").
+//! Request rules: rules that vote on media requests and shape what an
+//! approval writes.
 //!
 //! Everything between "a rule exists in the database" and "a request was
 //! approved, denied, or left for a human, with a trace, tags, and a lease
 //! claim".
 //!
-//! [`service`] is authoring: rule sets and immutable matcher revisions can be
+//! [`service`] is authoring: rule sets and immutable source revisions can be
 //! created, edited, previewed against a real requester and title, enabled, and
 //! deleted. A rule set is either disabled or enabled; there is no
 //! instance-wide switch above it.
@@ -24,11 +25,11 @@
 //!
 //! 1. **Uncertainty never approves.** A held rule, an errored rule, an
 //!    unobservable fact, an unreachable metadata gateway — all of them arbitrate
-//!    to manual review, above approve ([`arbitration`], FR-012).
+//!    to manual review, above approve ([`arbitration`]).
 //! 2. **Nothing fails the requester.** Every failure inside this module degrades
 //!    to the behaviour Scryer had before rules existed ([`evaluation`]).
 //! 3. **Every evaluation is explainable.** Preview, enabled rules, and the
-//!    error fallback all record what they concluded and why (FR-016).
+//!    error fallback all record what they concluded and why.
 
 pub mod arbitration;
 pub mod engine;

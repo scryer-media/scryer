@@ -74,6 +74,10 @@ async fn normalized_library_scopes_preserve_intent_and_enforce_integrity() {
         "SELECT library_id FROM request_rule_set_libraries WHERE rule_set_id = 'scoped' ORDER BY position"
     ).fetch_all(pool).await.unwrap();
     assert_eq!(stored, expected);
+    let positions: Vec<i64> = sqlx::query_scalar(
+        "SELECT position FROM request_rule_set_libraries WHERE rule_set_id = 'scoped' ORDER BY position"
+    ).fetch_all(pool).await.unwrap();
+    assert_eq!(positions, vec![0, 1], "a skipped duplicate leaves no gap");
     assert!(sqlx::query(
         "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position) VALUES ('scoped', 'library-1', 9)"
     ).execute(pool).await.is_err(), "duplicate associations must be rejected");

@@ -374,21 +374,28 @@ async fn replace_library_scope(
         &[SqlArg::Text(rule_set_id.to_string())],
     )
     .await?;
+    // A library named twice keeps its first place. Positions only order the
+    // scope, so they count the kept libraries without gaps.
     let mut seen = std::collections::HashSet::new();
-    for (position, library_id) in library_ids.iter().enumerate() {
-        if !seen.insert(library_id) {
-            continue;
-        }
-        tx.execute(
-            "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position)
-             VALUES ({}, {}, {})",
-            &[
+    let rows: Vec<Vec<SqlArg>> = library_ids
+        .iter()
+        .filter(|library_id| seen.insert(library_id.as_str()))
+        .enumerate()
+        .map(|(position, library_id)| {
+            vec![
                 SqlArg::Text(rule_set_id.to_string()),
                 SqlArg::Text(library_id.clone()),
                 SqlArg::I64(position as i64),
-            ],
-        )
-        .await?;
-    }
+            ]
+        })
+        .collect();
+    SqlRuntime::execute_batch_insert(
+        tx,
+        "INSERT INTO request_rule_set_libraries (rule_set_id, library_id, position)",
+        3,
+        rows,
+        "",
+    )
+    .await?;
     Ok(())
 }

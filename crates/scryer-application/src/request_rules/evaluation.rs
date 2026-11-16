@@ -1,9 +1,9 @@
-//! Evaluating one request draft, and recording why (spec 0003 FR-011…FR-016).
+//! Evaluating one request draft, and recording why.
 //!
 //! This is the only path that turns rules into a verdict. Submit, edit, and
 //! pre-flight all come through here with different [`RequestEvaluationPurpose`]s
-//! and identical everything else, which is what makes FR-021 — "identical drafts
-//! yield identical decisions" — a property of the code rather than a promise.
+//! and identical everything else, which is what makes "identical drafts yield
+//! identical decisions" a property of the code rather than a promise.
 //!
 //! # Nothing here may fail the caller
 //!
@@ -35,7 +35,7 @@ use scryer_rules::request_actions::{RequestActionHead, RequestHeadValue, Request
 ///
 /// Pre-flight evaluates a draft that has no request row and may never get one,
 /// so its trace cannot carry a real request id — but it must still be
-/// inspectable (FR-016, FR-020). The prefix keeps it in the same append-only
+/// inspectable. The prefix keeps it in the same append-only
 /// table without any reader mistaking it for a decision about a submitted
 /// request.
 pub const PREFLIGHT_REQUEST_ID_PREFIX: &str = "preflight:";
@@ -61,7 +61,7 @@ impl RequestEvaluationPurpose {
 }
 
 /// One reason, as it is safe to show a requester: a stable code and the name of
-/// the rule that produced it. Rule bodies never leave this layer (FR-020).
+/// the rule that produced it. Rule bodies never leave this layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestDecisionReason {
     pub code: String,
@@ -84,7 +84,7 @@ pub struct RequestEvaluation {
     /// title tag registry defines. Filtering happens once, here, so the pending
     /// row, the pre-flight banner, the resolution event and the approval all
     /// read the same list and none of them can promise a label that will be
-    /// dropped later (FR-050).
+    /// dropped later.
     pub tags: Vec<String>,
     /// Every tag the rules emitted, defined or not.
     ///
@@ -154,7 +154,7 @@ impl RequestEvaluation {
 /// vote, and rendering that as an abstain would tell an approver the rule looked
 /// and had no opinion. `mode` rides along so the trace can be
 /// read without joining back to the rule sets, which may have been edited or
-/// deleted since (FR-016 — the trace outlives the rule).
+/// deleted since: the trace outlives the rule.
 #[derive(Clone, Debug, Serialize)]
 pub struct RecordedVote {
     pub rule_set_id: String,
@@ -226,7 +226,7 @@ impl AppUseCase {
     /// Evaluate a draft and record the trace.
     ///
     /// The caller passes the *enrichment's* snapshot rather than a request row,
-    /// so pre-flight and submit share one metadata read (FR-021) — the caller
+    /// so pre-flight and submit share one metadata read — the caller
     /// obtained it through `enrich_request_draft`, which is cached.
     pub(crate) async fn evaluate_request_draft(
         &self,
@@ -621,8 +621,9 @@ impl AppUseCase {
         }
     }
 
-    /// The path taken when the facts or the engine failed: today's behaviour,
-    /// with the trace saying policy never got to speak.
+    /// The path taken when the facts or the engine failed: the library's
+    /// Auto-Approve permission decides, as it does when no rule applies, and
+    /// the trace says policy never got to speak.
     async fn record_error_fallback(
         &self,
         purpose: &RequestEvaluationPurpose,
@@ -632,7 +633,7 @@ impl AppUseCase {
         let mut evaluation =
             RequestEvaluation::legacy(permission, metadata_partial, Some(FALLBACK_ERROR));
         // The policy reached no verdict at all, and an unevaluable policy is
-        // never an approval (FR-012).
+        // never an approval.
         evaluation.policy_outcome = RequestDecisionOutcome::ManualReview;
         evaluation.evaluation_mode = RequestRuleEvaluationMode::Enforce;
         evaluation.decision_id = self
