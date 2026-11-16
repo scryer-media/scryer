@@ -28,6 +28,7 @@ use scryer_domain::Title;
 use tracing::{info, warn};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::disk::{Disk, EntryKind};
 use crate::library::rename::{build_title_folder_tokens, sanitize_filesystem_component};
 use crate::stored_paths::{
     folder_paths_match, is_escaped_stored_path, path_identity_key, path_to_stored_string,
@@ -382,13 +383,10 @@ fn on_the_same_filesystem(left: &std::fs::Metadata, right: &std::fs::Metadata) -
 
 /// The ordinary directories directly inside `root`.
 fn child_directories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut directories = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            directories.push(entry.path());
-        }
-    }
+    let mut directories: Vec<PathBuf> = (Disk::process().list_blocking(root)?.into_iter())
+        .filter(|entry| entry.reading.is(EntryKind::Directory))
+        .map(|entry| entry.path)
+        .collect();
     directories.sort();
     Ok(directories)
 }
@@ -408,6 +406,8 @@ fn is_season_folder_name(name: &str) -> bool {
 
 /// The season folders inside `directory`, when it holds nothing but empty
 /// season folders. `Err` carries why it is something else.
+// disk-guard: a deletion guard that reads raw device numbers and Windows reparse attributes.
+#[allow(clippy::disallowed_methods)]
 fn empty_season_folders(directory: &Path) -> std::io::Result<Result<Vec<PathBuf>, &'static str>> {
     let own = std::fs::symlink_metadata(directory)?;
     if !is_plain_directory(&own) {
@@ -440,6 +440,8 @@ fn empty_season_folders(directory: &Path) -> std::io::Result<Result<Vec<PathBuf>
 }
 
 /// Whether two existing paths are one directory, however each is spelled.
+// disk-guard: a deletion guard that reads raw device numbers and Windows reparse attributes.
+#[allow(clippy::disallowed_methods)]
 fn same_directory(left: &Path, right: &Path) -> std::io::Result<bool> {
     #[cfg(unix)]
     {
@@ -455,6 +457,8 @@ fn same_directory(left: &Path, right: &Path) -> std::io::Result<bool> {
 /// Why `directory` is not a duplicate of the folders its titles record:
 /// every one of those must be on disk as an ordinary directory, and be a
 /// different directory.
+// disk-guard: a deletion guard that reads raw device numbers and Windows reparse attributes.
+#[allow(clippy::disallowed_methods)]
 fn reason_it_is_not_a_duplicate(
     directory: &Path,
     recorded_folders: &[PathBuf],
@@ -484,6 +488,8 @@ fn reason_it_is_not_a_duplicate(
 
 /// Remove `directory` when it holds nothing but empty season folders and the
 /// folders in `recorded_folders` are all on disk elsewhere.
+// disk-guard: a deletion guard that reads raw device numbers and Windows reparse attributes.
+#[allow(clippy::disallowed_methods)]
 fn remove_leftover_folder(
     root: &Path,
     directory: &Path,

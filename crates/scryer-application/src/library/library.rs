@@ -1984,6 +1984,9 @@ impl AppUseCase {
     /// which is how a facet nobody uses looks: its default path was never
     /// created. Any other unreadable root, or a library with several roots, is
     /// `None`, so the job runs and reports the problem.
+    // disk-guard: a root under a regular file (NotADirectory) counts as
+    // missing here, and owner readings report that case only as unreachable.
+    #[allow(clippy::disallowed_methods)]
     pub(crate) async fn sole_missing_library_root(
         &self,
         facet: &MediaFacet,
@@ -2026,6 +2029,9 @@ impl AppUseCase {
         clippy::too_many_arguments,
         reason = "library scan sessions carry explicit runtime, permission, and cancellation context"
     )]
+    // disk-guard: an unreadable root is reported with the system's own error
+    // text, which owner readings do not carry.
+    #[allow(clippy::disallowed_methods)]
     async fn execute_started_library_scan_session(
         &self,
         actor: &User,

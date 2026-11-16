@@ -1,8 +1,10 @@
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 
 use super::*;
+use crate::disk::{Disk, EntryKind, Listed, PathReading};
 #[cfg(test)]
 use crate::library_filename_parser::library_title_walk;
 #[cfg(test)]
@@ -196,6 +198,8 @@ fn boundary_stamp(meta: &std::fs::Metadata) -> Option<BoundaryStamp> {
 /// `Err` when `target` cannot be stamped: a link, a missing directory, or any
 /// failure other than a missing sidecar.
 #[cfg(unix)]
+// disk-guard: boundary stamps keep the raw device, inode and ctime; owner readings do not.
+#[allow(clippy::disallowed_methods)]
 async fn lstat_boundary_stamp(
     folder: &Path,
     target: &Path,
@@ -315,6 +319,8 @@ enum ListedSidecarStamp {
 
 /// Reads a sidecar the directory listing showed as a regular file with one
 /// open and the metadata of the open handle, without a separate path probe.
+// disk-guard: one no-follow open serves both the read and the stamp from the handle.
+#[allow(clippy::disallowed_methods)]
 async fn read_listed_sidecar(
     folder: &Path,
     path: &Path,
@@ -800,6 +806,8 @@ enum BoundaryChild {
 }
 
 impl BoundaryEntries {
+    // disk-guard: the boundary walk reads each entry's type only when it reaches it.
+    #[allow(clippy::disallowed_methods)]
     async fn next_entry(
         &mut self,
     ) -> std::io::Result<Option<(PathBuf, std::io::Result<std::fs::FileType>)>> {
@@ -901,6 +909,8 @@ thread_local! {
     static BOUNDARY_ALL_TITLES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// disk-guard: the boundary walk reads each entry's type only when it reaches it.
+#[allow(clippy::disallowed_methods)]
 async fn boundary_entry_file_type(
     entry: &tokio::fs::DirEntry,
 ) -> std::io::Result<std::fs::FileType> {
@@ -914,6 +924,8 @@ async fn boundary_entry_file_type(
     entry.file_type().await
 }
 
+// disk-guard: the size limit is checked again on the opened handle.
+#[allow(clippy::disallowed_methods)]
 pub(crate) async fn read_discovery_nfo(path: &Path) -> std::io::Result<Option<String>> {
     use tokio::io::AsyncReadExt;
     const MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -1014,6 +1026,8 @@ impl BoundaryFrame {
     /// costliest step of a walk, and a frame's ids come from the cheap id
     /// scan either way.
     #[allow(clippy::too_many_arguments)]
+    // disk-guard: the boundary walk reads each entry's type only when it reaches it.
+    #[allow(clippy::disallowed_methods)]
     async fn open(
         path: PathBuf,
         depth: usize,
@@ -1237,6 +1251,8 @@ pub(crate) fn stream_title_folder_boundaries(
     receiver
 }
 
+// disk-guard: a folder that cannot be resolved is reported with the system's error text.
+#[allow(clippy::disallowed_methods)]
 async fn discover_title_folder_boundaries(
     root: PathBuf,
     policy: TitleFolderBoundaryPolicy,
@@ -1548,26 +1564,36 @@ async fn directory_has_episode_layout(
     if episode_folders.is_empty() {
         return Ok(false);
     }
-    let mut entries = tokio::fs::read_dir(path)
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?
-    {
-        if entry
-            .file_type()
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
-            .is_dir()
-            && episode_folders.matches(&entry.file_name().to_string_lossy())
-            && directory_has_direct_media(&entry.path()).await?
+    let (entries, end) = listed_kinds(path).await?;
+    for (child, kind) in entries {
+        if kind == EntryKind::Directory
+            && episode_folders.matches(&child.file_name().unwrap_or_default().to_string_lossy())
+            && directory_has_direct_media(&child).await?
         {
             return Ok(true);
         }
     }
-    Ok(false)
+    end.map(|()| false)
+}
+
+/// The entries of `dir` with their kinds, in listing order, up to the first
+/// entry whose listing or kind could not be read. That failure comes back
+/// beside them, for the caller to raise once the entries before it are done.
+async fn listed_kinds(dir: &Path) -> AppResult<(Vec<(PathBuf, EntryKind)>, AppResult<()>)> {
+    let disk = Disk::process();
+    let visited = disk.visit(dir, (Vec::new(), Ok(())), |(kinds, end), entry| {
+        match entry.and_then(|entry| Ok((entry.kind()?, entry))) {
+            Ok((kind, entry)) => kinds.push((entry.into_path(), kind)),
+            Err(error) => {
+                *end = Err(AppError::Repository(error.to_string()));
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    visited
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 const MAX_TITLE_PART_NESTING: usize = 4;
@@ -1590,20 +1616,9 @@ async fn inspect_title_boundary_children(
         has_media: directory_has_direct_media(path).await?,
         has_child_titles: false,
     };
-    let mut entries = tokio::fs::read_dir(path)
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?
-    {
-        let child = entry.path();
-        if !entry
-            .file_type()
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?
-            .is_dir()
+    let (entries, end) = listed_kinds(path).await?;
+    for (child, kind) in entries {
+        if kind != EntryKind::Directory
             || should_skip_library_top_level_entry(&child, true)
             || child
                 .file_name()
@@ -1640,7 +1655,7 @@ async fn inspect_title_boundary_children(
             content.has_child_titles = true;
         }
     }
-    Ok(content)
+    end.map(|()| content)
 }
 
 pub(crate) async fn ensure_existing_title_boundary(
@@ -1899,19 +1914,11 @@ pub(crate) async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf
 }
 
 pub(crate) async fn count_series_loose_root_files(root: &Path) -> AppResult<usize> {
-    let mut entries = tokio::fs::read_dir(root).await.map_err(|error| {
-        AppError::Repository(format!("failed to read {}: {error}", root.display()))
-    })?;
     let mut count = 0usize;
-
-    while let Some(entry) = entries.next_entry().await.map_err(|error| {
-        AppError::Repository(format!("failed to read {}: {error}", root.display()))
-    })? {
-        let path = entry.path();
-        let file_type = entry.file_type().await.map_err(|error| {
-            AppError::Repository(format!("failed to inspect {}: {error}", path.display()))
-        })?;
-        if !file_type.is_file()
+    let (entries, end) = listed_kinds(root).await?;
+    end?;
+    for (path, kind) in entries {
+        if kind != EntryKind::File
             || should_skip_library_top_level_entry(&path, false)
             || path
                 .file_name()
@@ -2139,14 +2146,15 @@ fn is_allowed_video_path(path: &Path) -> bool {
 }
 
 pub(crate) fn matching_movie_nfo_path(path: &Path) -> Option<String> {
+    let is_file = |path: &Path| Disk::process().follow_blocking(path).is(EntryKind::File);
     let same_stem = path.with_extension("nfo");
-    if same_stem.is_file() {
+    if is_file(&same_stem) {
         return Some(path_to_stored_string(&same_stem));
     }
 
     let parent = path.parent()?;
     let movie_nfo = parent.join("movie.nfo");
-    if movie_nfo.is_file() {
+    if is_file(&movie_nfo) {
         return Some(path_to_stored_string(&movie_nfo));
     }
 
@@ -2155,21 +2163,13 @@ pub(crate) fn matching_movie_nfo_path(path: &Path) -> Option<String> {
 
 pub(crate) async fn matching_movie_nfo_path_async(path: &Path) -> Option<String> {
     let same_stem = path.with_extension("nfo");
-    if tokio::fs::metadata(&same_stem)
-        .await
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
+    if Disk::process().follow(&same_stem).await.is(EntryKind::File) {
         return Some(path_to_stored_string(&same_stem));
     }
 
     let parent = path.parent()?;
     let movie_nfo = parent.join("movie.nfo");
-    if tokio::fs::metadata(&movie_nfo)
-        .await
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
+    if Disk::process().follow(&movie_nfo).await.is(EntryKind::File) {
         return Some(path_to_stored_string(&movie_nfo));
     }
 
@@ -2324,52 +2324,50 @@ where
 }
 
 fn compute_library_probe_signature_blocking(path: PathBuf) -> AppResult<(String, String)> {
-    let metadata = std::fs::metadata(&path).map_err(|error| {
-        AppError::Repository(format!("failed to inspect {}: {error}", path.display()))
-    })?;
+    let disk = Disk::process();
+    let reading = disk.follow_blocking(&path);
+    if reading.exists() != Some(true) {
+        return Err(AppError::Repository(format!(
+            "failed to inspect {}: {}",
+            path.display(),
+            reading.absence()
+        )));
+    }
 
-    if metadata.is_dir() {
+    if reading.is(EntryKind::Directory) {
         let mut markers = Vec::new();
-        let entries = std::fs::read_dir(&path).map_err(|error| {
-            AppError::Repository(format!("failed to read {}: {error}", path.display()))
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to read entry in {}: {error}",
-                    path.display()
-                ))
-            })?;
-            let child_path = entry.path();
-            let file_type = entry.file_type().map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to inspect filesystem entry {}: {error}",
-                    child_path.display()
-                ))
-            })?;
-
-            let (kind, child_metadata) = if file_type.is_dir() {
-                ("dir", std::fs::metadata(&child_path).ok())
-            } else if file_type.is_file() {
-                ("file", std::fs::metadata(&child_path).ok())
-            } else if file_type.is_symlink() {
-                match std::fs::metadata(&child_path) {
-                    Ok(metadata) if metadata.is_dir() => ("dir", Some(metadata)),
-                    Ok(metadata) if metadata.is_file() => ("file", Some(metadata)),
-                    _ => continue,
+        let entries =
+            (disk.list_blocking(&path)).map_err(|error| AppError::Repository(error.to_string()))?;
+        for Listed {
+            path: child_path,
+            reading: listed,
+        } in entries
+        {
+            let followed = match listed.kind() {
+                Some(EntryKind::Other) => continue,
+                Some(_) => disk.follow_blocking(&child_path),
+                None => {
+                    return Err(AppError::Repository(format!(
+                        "failed to inspect filesystem entry {}",
+                        child_path.display()
+                    )));
                 }
-            } else {
-                continue;
+            };
+            let shown = match listed.kind() {
+                Some(EntryKind::Symlink) => followed.kind(),
+                kind => kind,
+            };
+            let kind = match shown {
+                Some(EntryKind::Directory) => "dir",
+                Some(EntryKind::File) => "file",
+                _ => continue,
             };
 
             if should_skip_library_top_level_entry(&child_path, kind == "dir") {
                 continue;
             }
 
-            let marker = child_metadata
-                .as_ref()
-                .map(metadata_probe_marker)
-                .unwrap_or_else(|| "unknown".to_string());
+            let marker = probe_marker(followed);
             let name = child_path
                 .file_name()
                 .map(|value| value.to_string_lossy().into_owned())
@@ -2383,22 +2381,24 @@ fn compute_library_probe_signature_blocking(path: PathBuf) -> AppResult<(String,
             blake3_identity_hex(HashDomain::LibraryProbe, payload),
         ))
     } else {
-        let payload = metadata_probe_marker(&metadata);
         Ok((
             LIBRARY_PROBE_SIGNATURE_FILE_SCHEME.to_string(),
-            blake3_identity_hex(HashDomain::LibraryProbe, payload),
+            blake3_identity_hex(HashDomain::LibraryProbe, probe_marker(reading)),
         ))
     }
 }
 
-fn metadata_probe_marker(metadata: &std::fs::Metadata) -> String {
-    let modified = metadata
+/// `modified|len` from a reading that found the path, else `unknown`.
+fn probe_marker(reading: PathReading) -> String {
+    let (Some(true), Some(len)) = (reading.exists(), reading.size()) else {
+        return "unknown".to_string();
+    };
+    let modified = reading
         .modified()
-        .ok()
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
         .map(|value| format!("{}:{}", value.as_secs(), value.subsec_nanos()))
         .unwrap_or_else(|| "unknown".to_string());
-    format!("{modified}|{}", metadata.len())
+    format!("{modified}|{len}")
 }
 
 #[cfg(test)]

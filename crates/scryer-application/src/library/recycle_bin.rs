@@ -1,8 +1,25 @@
+use crate::disk::reason::{DISK_MOVE_NEEDS_COPY, DISK_PATH_MISSING};
+use crate::disk::{
+    Access, Disk, DiskError, EntryKind, Parents, PathReading, Removal, Remove, Replace, Visited,
+};
 use crate::location::model::VerificationDepth;
 use crate::location::verify::{
     CopyProgress, DestinationClaim, VerifiedCopier, VerifiedCopyRequest, hash_existing_file,
 };
 use crate::{AppError, AppResult};
+
+fn repository(error: DiskError) -> AppError {
+    AppError::Repository(error.to_string())
+}
+
+fn unreadable(path: &Path, reading: PathReading) -> AppError {
+    AppError::Repository(format!("{}: {}", path.display(), reading.absence()))
+}
+
+/// The kind `reading` shows at `path`; an error when it shows none.
+fn known_kind(path: &Path, reading: PathReading) -> AppResult<EntryKind> {
+    reading.kind().ok_or_else(|| unreadable(path, reading))
+}
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -254,13 +271,11 @@ async fn payload_is_manifest(entry: &Path, payload: &Path) -> AppResult<bool> {
     if payload == metadata {
         return Ok(true);
     }
-    match tokio::fs::canonicalize(payload).await {
-        Ok(payload) => Ok(payload
-            == tokio::fs::canonicalize(metadata)
-                .await
-                .map_err(|error| AppError::Repository(error.to_string()))?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(AppError::Repository(error.to_string())),
+    let disk = Disk::process();
+    match disk.canonicalize(payload).await {
+        Ok(payload) => Ok(payload == disk.canonicalize(metadata).await.map_err(repository)?),
+        Err(error) if error.reason() == DISK_PATH_MISSING => Ok(false),
+        Err(error) => Err(repository(error)),
     }
 }
 
@@ -271,16 +286,12 @@ async fn inspect_payload_location(entry: &Path, payload: &Path) -> AppResult<()>
             "The recycle payload path changed; its files were preserved",
         )
     };
-    let metadata = tokio::fs::symlink_metadata(entry)
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    let disk = Disk::process();
+    if !known_kind(entry, disk.fresh(entry).await)?.eq(&EntryKind::Directory) {
         return Err(invalid());
     }
     let relative = payload.strip_prefix(entry).map_err(|_| invalid())?;
-    let canonical_entry = tokio::fs::canonicalize(entry)
-        .await
-        .map_err(|error| AppError::Repository(error.to_string()))?;
+    let canonical_entry = disk.canonicalize(entry).await.map_err(repository)?;
     crate::location::title_folder_recovery::inspect_path(&canonical_entry.join(relative), true)
         .await
 }
@@ -294,11 +305,11 @@ pub(crate) async fn recycled_payload_path(
     let original = manifest.original_path_buf();
     let mapped = entry.join(payload_relative_path(&original));
     inspect_payload_location(entry, &mapped).await?;
-    match tokio::fs::symlink_metadata(&mapped).await {
-        Ok(_) if !payload_is_manifest(entry, &mapped).await? => return Ok(mapped),
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(AppError::Repository(error.to_string())),
+    let reading = Disk::process().fresh(&mapped).await;
+    match reading.exists() {
+        Some(true) if !payload_is_manifest(entry, &mapped).await? => return Ok(mapped),
+        Some(_) => {}
+        None => return Err(unreadable(&mapped, reading)),
     }
     let legacy = entry.join(
         original
@@ -315,7 +326,7 @@ pub(crate) async fn recycled_payload_path(
             .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
     );
     inspect_payload_location(entry, &separated).await?;
-    if tokio::fs::symlink_metadata(&separated).await.is_ok()
+    if Disk::process().fresh(&separated).await.exists() == Some(true)
         && !payload_is_manifest(entry, &separated).await?
     {
         return Ok(separated);
@@ -324,6 +335,18 @@ pub(crate) async fn recycled_payload_path(
         crate::error_reasons::library::REGULAR_FILE_REQUIRED,
         "The recycled payload is unavailable; entry metadata was preserved",
     ))
+}
+
+/// The entries of the recycle root that `keep` accepts, kinds unread unless
+/// `keep` reads them.
+async fn recycle_root_entries(
+    config: &RecycleBinConfig,
+    keep: fn(&Visited) -> bool,
+) -> AppResult<Vec<PathBuf>> {
+    let entries = Disk::process().entries(&config.base_path, keep).await;
+    let entries = entries
+        .map_err(|error| AppError::Repository(format!("failed to read recycle bin: {error}")))?;
+    Ok(entries.into_iter().map(Visited::into_path).collect())
 }
 
 fn sentinel_path(config: &RecycleBinConfig) -> PathBuf {
@@ -369,12 +392,16 @@ fn generated_entry_id(entry_id: &str) -> bool {
 fn cleanup_ready(config: &RecycleBinConfig) -> bool {
     config.enabled
         && config.cleanup_enabled
-        && config.base_path.exists()
-        && sentinel_path(config).exists()
+        && Disk::process().follow_blocking(&config.base_path).exists() == Some(true)
+        && Disk::process()
+            .follow_blocking(&sentinel_path(config))
+            .exists()
+            == Some(true)
 }
 
 async fn ensure_recycle_root(config: &RecycleBinConfig) -> AppResult<()> {
-    tokio::fs::create_dir_all(&config.base_path)
+    let disk = Disk::process();
+    disk.create_dir(&config.base_path, Parents::Create)
         .await
         .map_err(|e| {
             AppError::Repository(format!(
@@ -385,8 +412,9 @@ async fn ensure_recycle_root(config: &RecycleBinConfig) -> AppResult<()> {
         })?;
 
     let sentinel = sentinel_path(config);
-    if !sentinel.exists() {
-        tokio::fs::write(&sentinel, RECYCLE_MANIFEST_SCHEMA.as_bytes())
+    if disk.follow(&sentinel).await.exists() != Some(true) {
+        let schema = RECYCLE_MANIFEST_SCHEMA.as_bytes().to_vec();
+        disk.write(&sentinel, schema, Replace::Allowed, Access::Default)
             .await
             .map_err(|e| {
                 AppError::Repository(format!(
@@ -416,12 +444,12 @@ fn trusted_committed_entry(
         .and_then(|name| name.to_str())
         .ok_or_else(|| "recycle entry has no valid directory name".to_string())?;
     validate_recycle_entry_id(entry_name).map_err(|error| error.to_string())?;
-    let entry_metadata = std::fs::symlink_metadata(entry_dir)
+    let entry_kind = known_kind(entry_dir, Disk::process().fresh_blocking(entry_dir))
         .map_err(|error| format!("failed to stat recycle entry directory: {error}"))?;
-    if entry_metadata.file_type().is_symlink() {
+    if entry_kind == EntryKind::Symlink {
         return Err("recycle entry directory is a symlink".to_string());
     }
-    if !entry_metadata.is_dir() {
+    if entry_kind != EntryKind::Directory {
         return Err("recycle entry is not a directory".to_string());
     }
     if !generated_entry_id(entry_name) {
@@ -481,23 +509,12 @@ async fn read_manifest(entry_dir: &Path) -> AppResult<Option<RecycleManifest>> {
     // so the common case costs one call. Any other failure falls back to the
     // existence check, which still decides "no manifest" (for example a
     // directory that cannot be searched) exactly as before.
-    let manifest_bytes = match tokio::fs::read(&path).await {
+    let disk = Disk::process();
+    let manifest_bytes = match disk.read(&path).await {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            let exists_path = path.clone();
-            let exists = tokio::task::spawn_blocking(move || exists_path.exists())
-                .await
-                .unwrap_or(true);
-            if !exists {
-                return Ok(None);
-            }
-            return Err(AppError::Repository(format!(
-                "failed to read recycle manifest {}: {}",
-                path.display(),
-                error
-            )));
-        }
+        Err(error) if error.reason() == DISK_PATH_MISSING => return Ok(None),
+        Err(_) if disk.follow(&path).await.exists() != Some(true) => return Ok(None),
+        Err(error) => return Err(repository(error)),
     };
     let manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
         AppError::Repository(format!(
@@ -514,15 +531,11 @@ async fn write_manifest(entry_dir: &Path, manifest: &RecycleManifest) -> AppResu
     let manifest_json = serde_json::to_string_pretty(manifest).map_err(|e| {
         AppError::Repository(format!("failed to serialize recycle manifest: {}", e))
     })?;
-    tokio::fs::write(&path, manifest_json.as_bytes())
-        .await
-        .map_err(|e| {
-            AppError::Repository(format!(
-                "failed to write recycle manifest {}: {}",
-                path.display(),
-                e
-            ))
-        })
+    let bytes = manifest_json.into_bytes();
+    (Disk::process()
+        .write(&path, bytes, Replace::Allowed, Access::Default)
+        .await)
+        .map_err(repository)
 }
 
 /// Move a file to the recycle bin instead of deleting it.
@@ -618,9 +631,8 @@ pub(crate) async fn finish_conflict_recycle(
         return Err(invalid());
     }
     let partial = crate::location::verify::partial_destination_path(&payload);
-    match tokio::fs::symlink_metadata(&partial).await {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        _ => return Err(invalid()),
+    if Disk::process().fresh(&partial).await.exists() != Some(false) {
+        return Err(invalid());
     }
     if manifest.status.as_deref() == Some(RECYCLE_STATUS_CONFLICT_PENDING) {
         manifest.status = Some(RECYCLE_STATUS_COMMITTED.to_owned());
@@ -715,16 +727,17 @@ pub(crate) async fn renew_conflict_recycle(
         return prepare_conflict_recycle(config, source, manifest).await;
     }
     let partial = crate::location::verify::partial_destination_path(&payload);
-    match tokio::fs::symlink_metadata(&partial).await {
-        Ok(_) => {
+    let reading = Disk::process().fresh(&partial).await;
+    match reading.exists() {
+        Some(true) => {
             // A suffix and a pending entry do not prove ownership of these
             // bytes. Preserve the abandoned entry and reserve another entry;
             // the caller journals this replacement before executing it.
             manifest.recycled_at = Utc::now().to_rfc3339();
             prepare_conflict_recycle(config, source, manifest).await
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(prepared.clone()),
-        Err(error) => Err(AppError::Repository(error.to_string())),
+        Some(false) => Ok(prepared.clone()),
+        None => Err(unreadable(&partial, reading)),
     }
 }
 
@@ -746,19 +759,19 @@ pub(crate) async fn execute_conflict_recycle(
         return Err(invalid());
     }
     let partial = crate::location::verify::partial_destination_path(&payload);
-    match tokio::fs::symlink_metadata(&partial).await {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        _ => return Err(invalid()),
+    if Disk::process().fresh(&partial).await.exists() != Some(false) {
+        return Err(invalid());
     }
     if crate::location::resolution::file_version(source).await? != expected_source_version {
         return Err(invalid());
     }
-    match tokio::fs::symlink_metadata(&payload).await {
-        Ok(metadata) => {
+    let reading = Disk::process().fresh(&payload).await;
+    match reading.exists() {
+        Some(true) => {
             // A cross-volume copy can have been published before its selected
             // source pathname was retired. Resume only the reserved, complete
             // historical copy; a partial or replaced payload is preserved.
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
+            if !reading.is(EntryKind::File) {
                 return Err(invalid());
             }
             crate::location::title_folder_recovery::inspect_path(&payload, false).await?;
@@ -771,14 +784,14 @@ pub(crate) async fn execute_conflict_recycle(
             {
                 return Err(invalid());
             }
-            tokio::fs::remove_file(source)
-                .await
-                .map_err(|error| AppError::Repository(error.to_string()))?;
+            let removal = Disk::process().remove(source, Remove::File).await;
+            if removal.map_err(repository)? == Removal::AlreadyAbsent {
+                let gone = format!("{} was already gone", source.display());
+                return Err(AppError::Repository(gone));
+            }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            recycle_source_to_destination(source.to_owned(), payload).await?;
-        }
-        Err(error) => return Err(AppError::Repository(error.to_string())),
+        Some(false) => recycle_source_to_destination(source.to_owned(), payload).await?,
+        None => return Err(unreadable(&payload, reading)),
     }
     finish_conflict_recycle(config, prepared).await
 }
@@ -983,23 +996,24 @@ async fn recycle_file_inner(
     commit_after_move: bool,
     prepare_only: bool,
 ) -> AppResult<Option<RecycleResult>> {
-    let source_metadata = match tokio::fs::symlink_metadata(source_path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
+    let source_reading = Disk::process().fresh(source_path).await;
+    match source_reading.exists() {
+        Some(true) => {}
+        Some(false) => return Ok(None),
+        None => {
             return Err(AppError::Repository(format!(
                 "failed to stat source file {} before recycle/delete: {}",
                 source_path.display(),
-                error
+                source_reading.absence()
             )));
         }
-    };
+    }
 
     // Refuse to act on a path outside the configured media roots. This guards both
     // the permanent-delete branch (recycle disabled) and the recycle move against a
     // stale/corrupt/out-of-root source path.
     ensure_source_within_roots(config, source_path)?;
-    if source_metadata.file_type().is_symlink() {
+    if source_reading.is(EntryKind::Symlink) {
         return Err(AppError::validation_refused(
             crate::error_reasons::library::SYMLINK_REFUSED,
             format!(
@@ -1008,7 +1022,7 @@ async fn recycle_file_inner(
             ),
         ));
     }
-    if !source_metadata.is_file() {
+    if !source_reading.is(EntryKind::File) {
         return Err(AppError::validation_refused(
             crate::error_reasons::library::REGULAR_FILE_REQUIRED,
             format!(
@@ -1045,13 +1059,16 @@ async fn recycle_file_inner(
     let recycle_dir = config.base_path.join(&dir_name);
 
     ensure_recycle_root(config).await?;
-    tokio::fs::create_dir(&recycle_dir).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to create recycle directory {}: {}",
-            recycle_dir.display(),
-            e
-        ))
-    })?;
+    let disk = Disk::process();
+    disk.create_dir(&recycle_dir, Parents::MustExist)
+        .await
+        .map_err(|e| {
+            AppError::Repository(format!(
+                "failed to create recycle directory {}: {}",
+                recycle_dir.display(),
+                e
+            ))
+        })?;
 
     manifest.schema = Some(RECYCLE_MANIFEST_SCHEMA.to_string());
     manifest.entry_id = Some(dir_name.clone());
@@ -1083,9 +1100,10 @@ async fn recycle_file_inner(
         );
     }
     if recycled_path.parent() != Some(recycle_dir.as_path()) {
-        tokio::fs::create_dir(recycled_path.parent().expect("nested payload parent"))
+        let parent = recycled_path.parent().expect("nested payload parent");
+        disk.create_dir(parent, Parents::MustExist)
             .await
-            .map_err(|error| AppError::Repository(error.to_string()))?;
+            .map_err(repository)?;
     }
 
     if prepare_only {
@@ -1134,9 +1152,9 @@ async fn recycle_source_to_destination(
     source_path: PathBuf,
     recycled_path: PathBuf,
 ) -> AppResult<()> {
-    match tokio::fs::rename(&source_path, &recycled_path).await {
-        Ok(()) => return Ok(()),
-        Err(error) if crate::fs_safety::is_cross_device_error(&error) => {
+    match (Disk::process().move_replacing(&source_path, &recycled_path)).await {
+        Ok(_) => return Ok(()),
+        Err(error) if error.reason() == DISK_MOVE_NEEDS_COPY => {
             info!(
                 source = %source_path.display(),
                 recycled = %recycled_path.display(),
@@ -1385,6 +1403,9 @@ async fn copy_recycled_to_claimed_destination(
     .await
 }
 
+// disk-guard: a hard link that fails for any reason but an existing name falls back to an
+// exclusive claim and a verified copy; the owner's link does not report that split.
+#[allow(clippy::disallowed_methods)]
 async fn restore_without_overwrite(
     recycled_path: &Path,
     original_path: &Path,
@@ -1497,6 +1518,9 @@ pub(crate) async fn restore_recycled_file_exact(
 ///
 /// Callers that need to perform fallible work between exposing the restored file
 /// and removing its recycle entry can use this to retain a rollback source.
+// disk-guard: a hard link that fails for any reason but an existing name falls back to an
+// exclusive claim and a verified copy; the owner's link does not report that split.
+#[allow(clippy::disallowed_methods)]
 pub(crate) async fn link_recycled_file_to_exact_destination(
     recycled_path: &Path,
     destination: &Path,
@@ -1568,16 +1592,11 @@ async fn restore_over_by_verified_copy(
     original_path: &Path,
     progress: CopyProgress,
 ) -> AppResult<()> {
-    let claim = match tokio::fs::symlink_metadata(original_path).await {
-        Ok(_) => DestinationClaim::AlreadyHeld,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DestinationClaim::ClaimHere,
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to inspect restore destination {}: {}",
-                original_path.display(),
-                error
-            )));
-        }
+    let reading = Disk::process().fresh(original_path).await;
+    let claim = match reading.exists() {
+        Some(true) => DestinationClaim::AlreadyHeld,
+        Some(false) => DestinationClaim::ClaimHere,
+        None => return Err(unreadable(original_path, reading)),
     };
     quick_verified_copy(recycled_path, original_path, claim, progress).await?;
     let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
@@ -1598,13 +1617,16 @@ async fn restore_from_recycle_inner(
 
     // Ensure parent directory exists
     if let Some(parent) = original_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            AppError::Repository(format!(
-                "failed to create parent directory {}: {}",
-                parent.display(),
-                e
-            ))
-        })?;
+        Disk::process()
+            .create_dir(parent, Parents::Create)
+            .await
+            .map_err(|e| {
+                AppError::Repository(format!(
+                    "failed to create parent directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
     }
 
     if !overwrite {
@@ -1617,9 +1639,12 @@ async fn restore_from_recycle_inner(
         return Ok(destination);
     }
 
-    match tokio::fs::rename(recycled_path, original_path).await {
-        Ok(()) => {}
-        Err(error) if crate::fs_safety::is_cross_device_error(&error) => {
+    match Disk::process()
+        .move_replacing(recycled_path, original_path)
+        .await
+    {
+        Ok(_) => {}
+        Err(error) if error.reason() == DISK_MOVE_NEEDS_COPY => {
             restore_over_by_verified_copy(recycled_path, original_path, CopyProgress::none())
                 .await?;
         }
@@ -1644,23 +1669,18 @@ async fn restore_from_recycle_inner(
 pub(crate) async fn ensure_recycled_restore_source_is_regular(
     recycled_path: &Path,
 ) -> AppResult<()> {
-    let metadata = match tokio::fs::symlink_metadata(recycled_path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    let reading = Disk::process().fresh(recycled_path).await;
+    match reading.exists() {
+        Some(true) => {}
+        Some(false) => {
             return Err(AppError::Repository(format!(
                 "recycled file not found: {}",
                 recycled_path.display()
             )));
         }
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to stat recycled file {} before restore: {}",
-                recycled_path.display(),
-                error
-            )));
-        }
-    };
-    if metadata.file_type().is_symlink() {
+        None => return Err(unreadable(recycled_path, reading)),
+    }
+    if reading.is(EntryKind::Symlink) {
         return Err(AppError::validation_refused(
             crate::error_reasons::library::SYMLINK_REFUSED,
             format!(
@@ -1669,7 +1689,7 @@ pub(crate) async fn ensure_recycled_restore_source_is_regular(
             ),
         ));
     }
-    if !metadata.is_file() {
+    if !reading.is(EntryKind::File) {
         return Err(AppError::validation_refused(
             crate::error_reasons::library::REGULAR_FILE_REQUIRED,
             format!(
@@ -1690,7 +1710,7 @@ pub async fn commit_recycle_entry(
         return Ok(());
     };
 
-    if !replacement_path.exists() {
+    if Disk::process().follow(replacement_path).await.exists() != Some(true) {
         return Err(AppError::Repository(format!(
             "refusing to commit recycle entry {} because replacement file does not exist: {}",
             result.entry_id,
@@ -1752,26 +1772,22 @@ async fn inspect_entry_dir(
     config: &RecycleBinConfig,
     entry_dir: PathBuf,
 ) -> (Option<Option<String>>, Option<CommittedRecycleEntry>) {
-    let metadata = match std::fs::symlink_metadata(&entry_dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (None, None),
-        Err(error) => {
-            warn!(
-                path = %entry_dir.display(),
-                error = %error,
-                "failed to inspect recycle entry path, skipping"
-            );
-            return (None, None);
-        }
-    };
-    if metadata.file_type().is_symlink() {
+    let reading = Disk::process().fresh(&entry_dir).await;
+    if reading.exists().is_none() {
+        warn!(
+            path = %entry_dir.display(),
+            reason = ?reading.unknown_reason(),
+            "failed to inspect recycle entry path, skipping"
+        );
+    }
+    if reading.is(EntryKind::Symlink) {
         warn!(
             path = %entry_dir.display(),
             "skipping symlinked recycle entry"
         );
         return (None, None);
     }
-    if !metadata.is_dir() {
+    if !reading.is(EntryKind::Directory) {
         return (None, None);
     }
     let Some(parent) = entry_dir.parent() else {
@@ -1859,26 +1875,14 @@ pub(crate) async fn list_committed_entries_for_title(
         .entry(normalize_path(&config.base_path))
         .or_default();
     let mut results = Vec::new();
-    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to read recycle bin directory {}: {}",
-            config.base_path.display(),
-            e
-        ))
-    })?;
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
-    {
-        let name = entry.file_name();
+    for entry in recycle_root_entries(config, |_| true).await? {
+        let name = entry.file_name().unwrap_or_default().to_os_string();
         if let Some(owner) = known.get(&name)
             && owner.as_deref() != Some(title_id)
         {
             continue;
         }
-        let (owner, committed) = inspect_entry_dir(config, entry.path()).await;
+        let (owner, committed) = inspect_entry_dir(config, entry).await;
         match owner {
             Some(owner) => {
                 known.insert(name, owner);
@@ -1963,20 +1967,8 @@ pub(crate) async fn list_committed_entries_reporting_withheld(
     test_bin_calls::record(test_bin_calls::LIST, &config.base_path);
     let mut results = Vec::new();
     let mut withheld = Vec::new();
-    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to read recycle bin directory {}: {}",
-            config.base_path.display(),
-            e
-        ))
-    })?;
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
-    {
-        match inspect_entry_dir(config, entry.path()).await {
+    for entry in recycle_root_entries(config, |_| true).await? {
+        match inspect_entry_dir(config, entry).await {
             (_, Some(committed)) => results.push(committed),
             (Some(Some(title_id)), None) => withheld.push(title_id),
             _ => {}
@@ -2032,26 +2024,8 @@ pub(crate) async fn reconcile_stale_pending_entries(config: &RecycleBinConfig) -
 
     let cutoff = Utc::now() - chrono::Duration::hours(STALE_PENDING_RECYCLE_ENTRY_GRACE_HOURS);
     let mut reconciled = 0u32;
-    let mut entries = tokio::fs::read_dir(&config.base_path).await.map_err(|e| {
-        AppError::Repository(format!(
-            "failed to read recycle bin directory {}: {}",
-            config.base_path.display(),
-            e
-        ))
-    })?;
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| AppError::Repository(format!("failed to read recycle bin entry: {}", e)))?
-    {
-        let entry_dir = entry.path();
-        let Ok(file_type) = entry.file_type().await else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
+    let directories = |entry: &Visited| entry.kind().is_ok_and(|kind| kind == EntryKind::Directory);
+    for entry_dir in recycle_root_entries(config, directories).await? {
         let mut manifest = match read_manifest(&entry_dir).await {
             Ok(Some(manifest)) => manifest,
             Ok(None) => continue,
@@ -2385,6 +2359,9 @@ pub(crate) async fn relocate_recycle_entries(
     report
 }
 
+// disk-guard: entries listed before a failed listing step are still relocated, and owner
+// listings fail whole.
+#[allow(clippy::disallowed_methods)]
 async fn relocate_plan(
     plan: &RecycleRelocationPlan,
     ops: RelocationOps,
@@ -2514,14 +2491,13 @@ async fn recognized_entry(entry_dir: &Path) -> Option<(String, RecycleManifest)>
     if validate_recycle_entry_id(&entry_id).is_err() || !generated_entry_id(&entry_id) {
         return None;
     }
-    let metadata = tokio::fs::symlink_metadata(entry_dir).await.ok()?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return None;
-    }
-    let manifest_metadata = tokio::fs::symlink_metadata(manifest_path(entry_dir))
-        .await
-        .ok()?;
-    if manifest_metadata.file_type().is_symlink() || !manifest_metadata.is_file() {
+    let disk = Disk::process();
+    if !disk.fresh(entry_dir).await.is(EntryKind::Directory)
+        || !disk
+            .fresh(manifest_path(entry_dir))
+            .await
+            .is(EntryKind::File)
+    {
         return None;
     }
     let manifest = read_manifest(entry_dir).await.ok()??;
@@ -2591,13 +2567,14 @@ async fn relocate_entry(
     manifest: &RecycleManifest,
     ops: &RelocationOps,
 ) -> Result<RelocatedEntry, String> {
-    match tokio::fs::symlink_metadata(dest).await {
-        Ok(_) => return Err(relocation_collision(dest)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
+    let reading = Disk::process().fresh(dest).await;
+    match reading.exists() {
+        Some(true) => return Err(relocation_collision(dest)),
+        Some(false) => {}
+        None => {
             return Err(format!(
-                "could not check the destination {}: {error}",
-                dest.display()
+                "could not check the destination {}",
+                unreadable(dest, reading)
             ));
         }
     }
@@ -2648,6 +2625,9 @@ fn relocation_collision(dest: &Path) -> String {
 /// Copy `entry_dir` to a new `dest` and prove every file arrived intact. On
 /// failure the partial copy this call created is removed; the source is never
 /// touched.
+// disk-guard: a failed copy is removed with std's tree removal, which reads no extra
+// metadata per entry.
+#[allow(clippy::disallowed_methods)]
 async fn copy_and_verify_entry(
     entry_dir: &Path,
     dest: &Path,
@@ -2704,30 +2684,26 @@ fn collect_entry_tree(entry_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), 
     let mut pending = vec![PathBuf::new()];
     while let Some(relative) = pending.pop() {
         let absolute = entry_dir.join(&relative);
-        let entries = std::fs::read_dir(&absolute)
-            .map_err(|error| format!("could not read {}: {error}", absolute.display()))?;
-        for entry in entries {
-            let entry =
-                entry.map_err(|error| format!("could not read {}: {error}", absolute.display()))?;
-            let child = relative.join(entry.file_name());
-            let file_type = entry.file_type().map_err(|error| {
-                format!("could not inspect {}: {error}", entry.path().display())
-            })?;
-            if file_type.is_symlink() {
-                return Err(format!(
-                    "the entry contains a symbolic link at {}",
-                    entry.path().display()
-                ));
-            } else if file_type.is_dir() {
-                dirs.push(child.clone());
-                pending.push(child);
-            } else if file_type.is_file() {
-                files.push(child);
-            } else {
-                return Err(format!(
-                    "the entry contains something that is not a regular file at {}",
-                    entry.path().display()
-                ));
+        let entries = Disk::process().list_blocking(&absolute);
+        for entry in entries.map_err(|error| format!("could not read: {error}"))? {
+            let child = relative.join(entry.path.file_name().unwrap_or_default());
+            match entry.reading.kind() {
+                Some(EntryKind::Symlink) => {
+                    let at = entry.path.display();
+                    return Err(format!("the entry contains a symbolic link at {at}"));
+                }
+                Some(EntryKind::Directory) => {
+                    dirs.push(child.clone());
+                    pending.push(child);
+                }
+                Some(EntryKind::File) => files.push(child),
+                Some(EntryKind::Other) => {
+                    return Err(format!(
+                        "the entry contains something that is not a regular file at {}",
+                        entry.path.display()
+                    ));
+                }
+                None => return Err(format!("could not inspect {}", entry.path.display())),
             }
         }
     }
@@ -2748,9 +2724,10 @@ async fn copy_entry_tree(
 ) -> Result<(), String> {
     for dir in dirs {
         let target = dest.join(dir);
-        tokio::fs::create_dir(&target)
-            .await
-            .map_err(|error| format!("could not create {}: {error}", target.display()))?;
+        (Disk::process()
+            .create_dir(&target, Parents::MustExist)
+            .await)
+            .map_err(|error| format!("could not create: {error}"))?;
     }
     for file in files {
         let source = entry_dir.join(file);
@@ -2808,8 +2785,7 @@ async fn verify_entry_copy(
         ));
     }
 
-    let manifest_bytes = tokio::fs::read(manifest_path(dest))
-        .await
+    let manifest_bytes = (Disk::process().read(manifest_path(dest)).await)
         .map_err(|error| format!("could not read the copied manifest: {error}"))?;
     let copied_manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("the copied manifest could not be parsed: {error}"))?;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::disk::{Disk, EntryKind, PathReading};
 use crate::stored_paths::path_to_stored_string;
 use crate::stored_paths::stored_path_to_path_buf;
 // Media here means a standalone library file, as library scans catalog it: a
@@ -9,7 +10,6 @@ use scryer_domain::{
     is_subtitle_file,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -64,10 +64,10 @@ impl PolicyMediaFileDeletePlan {
             return Ok(None);
         }
         for entry in &self.paths {
-            match tokio::fs::symlink_metadata(&entry.path).await {
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Ok(_) => return Ok(Some(false)),
-                Err(_) => return Ok(None),
+            match Disk::process().fresh(&entry.path).await.exists() {
+                Some(false) => {}
+                Some(true) => return Ok(Some(false)),
+                None => return Ok(None),
             }
         }
         Ok(Some(true))
@@ -80,6 +80,8 @@ struct PolicyDeletePathProof {
     proof: String,
 }
 
+// disk-guard: the deletion proof holds the raw device and inode numbers.
+#[allow(clippy::disallowed_methods)]
 async fn policy_path_proof(path: &Path) -> AppResult<String> {
     let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
         AppError::Repository(format!(
@@ -744,7 +746,7 @@ impl AppUseCase {
             && let Some(folder) = title.folder_path.as_deref()
         {
             let path = stored_path_to_path_buf(folder);
-            if path.is_dir() {
+            if Disk::process().follow(&path).await.is(EntryKind::Directory) {
                 let patterns =
                     crate::library_discovery::episode_folder_patterns(self, &title.facet).await?;
                 crate::library_discovery::ensure_existing_title_boundary(&path, &patterns)
@@ -1032,7 +1034,7 @@ impl AppUseCase {
         if let Some(title) = title {
             if let Some(folder) = title.folder_path.as_deref() {
                 let path = stored_path_to_path_buf(folder);
-                if path.is_dir() {
+                if Disk::process().follow(&path).await.is(EntryKind::Directory) {
                     let patterns =
                         crate::library_discovery::episode_folder_patterns(self, &title.facet)
                             .await?;
@@ -1726,29 +1728,29 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
         }
     }
 
-    match std::fs::symlink_metadata(&normalized_folder) {
-        Ok(metadata) => {
-            let file_type = metadata.file_type();
-            if file_type.is_symlink() {
-                return Err(AppError::validation_refused(
-                    crate::title_delete::FOLDER_IS_SYMLINK,
-                    format!(
-                        "refusing to delete title folder {} because it is a symlink",
-                        normalized_folder.display()
-                    ),
-                ));
-            }
-            if !metadata.is_dir() {
-                return Err(AppError::validation_refused(
-                    crate::title_delete::FOLDER_NOT_DIRECTORY,
-                    format!(
-                        "refusing to delete title folder {} because it is not a directory",
-                        normalized_folder.display()
-                    ),
-                ));
-            }
+    let disk = Disk::process();
+    let reading = disk.fresh_blocking(&normalized_folder);
+    match reading.kind() {
+        Some(EntryKind::Directory) => {}
+        Some(EntryKind::Symlink) => {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_IS_SYMLINK,
+                format!(
+                    "refusing to delete title folder {} because it is a symlink",
+                    normalized_folder.display()
+                ),
+            ));
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => {
+        Some(_) => {
+            return Err(AppError::validation_refused(
+                crate::title_delete::FOLDER_NOT_DIRECTORY,
+                format!(
+                    "refusing to delete title folder {} because it is not a directory",
+                    normalized_folder.display()
+                ),
+            ));
+        }
+        None if reading.exists() == Some(false) => {
             return Ok(finalize_manifest(
                 "title",
                 &title_id,
@@ -1756,9 +1758,9 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
                 Vec::new(),
             ));
         }
-        Err(error) => {
+        None => {
             return Err(AppError::Repository(format!(
-                "failed to inspect title folder {}: {error}",
+                "failed to inspect title folder {}: it could not be read",
                 normalized_folder.display()
             )));
         }
@@ -1788,9 +1790,10 @@ fn build_title_delete_manifest(context: TitleDeleteContext) -> AppResult<UserDel
     }
     let has_recorded_media = recorded_paths.iter().any(|path| {
         let path = stored_path_to_path_buf(path);
-        path.is_file()
+        disk.follow_blocking(&path).is(EntryKind::File)
             && path.starts_with(&normalized_folder)
-            && std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved_folder))
+            && (disk.canonicalize_blocking(&path))
+                .is_ok_and(|path| path.starts_with(&resolved_folder))
     });
     if !has_recorded_media {
         return Err(AppError::validation_refused(
@@ -2049,44 +2052,30 @@ fn walk_directory_entries(
     file_entries: &mut Vec<DeleteManifestEntry>,
     directory_entries: &mut Vec<DeleteManifestEntry>,
 ) -> AppResult<()> {
-    let mut child_paths = Vec::new();
-    let read_dir = std::fs::read_dir(directory).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to read directory {}: {error}",
-            directory.display()
-        ))
-    })?;
-
-    for entry in read_dir {
-        let entry = entry.map_err(|error| {
-            AppError::Repository(format!(
-                "failed to read directory entry in {}: {error}",
-                directory.display()
-            ))
-        })?;
-        child_paths.push(entry.path());
-    }
+    let disk = Disk::process();
+    // Names only: each child is probed once below.
+    let mut child_paths: Vec<PathBuf> = (disk.entries_blocking(directory, |_| true))
+        .map_err(|error| AppError::Repository(error.to_string()))?
+        .into_iter()
+        .map(crate::disk::Visited::into_path)
+        .collect();
     child_paths.sort();
 
     for path in child_paths {
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to inspect filesystem entry {}: {error}",
-                path.display()
-            ))
-        })?;
-        let file_type = metadata.file_type();
-        if file_type.is_symlink() {
-            file_entries.push(DeleteManifestEntry {
-                path,
-                delete_kind: DeletePathKind::Symlink,
-                preview_category: Some(DeletePreviewCategory::Other),
-            });
-            continue;
-        }
-        if metadata.is_dir() {
-            walk_directory_entries(&path, file_entries, directory_entries)?;
-            continue;
+        match known_kind(&path, disk.fresh_blocking(&path))? {
+            EntryKind::Symlink => {
+                file_entries.push(DeleteManifestEntry {
+                    path,
+                    delete_kind: DeletePathKind::Symlink,
+                    preview_category: Some(DeletePreviewCategory::Other),
+                });
+                continue;
+            }
+            EntryKind::Directory => {
+                walk_directory_entries(&path, file_entries, directory_entries)?;
+                continue;
+            }
+            EntryKind::File | EntryKind::Other => {}
         }
 
         file_entries.push(DeleteManifestEntry {
@@ -2108,18 +2097,12 @@ fn walk_directory_entries(
 fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<DeleteManifestEntry>> {
     let mut entries = Vec::new();
     for path in paths {
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "failed to inspect filesystem entry {}: {error}",
-                    path.display()
-                )));
-            }
-        };
-        let file_type = metadata.file_type();
-        if metadata.is_dir() {
+        let reading = Disk::process().fresh_blocking(&path);
+        if reading.exists() == Some(false) {
+            continue;
+        }
+        let kind = known_kind(&path, reading)?;
+        if kind == EntryKind::Directory {
             return Err(AppError::validation_refused(
                 crate::error_reasons::library::DELETE_TARGET_NOT_FILE,
                 format!(
@@ -2130,12 +2113,12 @@ fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<Dele
         }
         entries.push(DeleteManifestEntry {
             path: path.clone(),
-            delete_kind: if file_type.is_symlink() {
+            delete_kind: if kind == EntryKind::Symlink {
                 DeletePathKind::Symlink
             } else {
                 DeletePathKind::File
             },
-            preview_category: Some(if file_type.is_symlink() {
+            preview_category: Some(if kind == EntryKind::Symlink {
                 DeletePreviewCategory::Other
             } else {
                 classify_path_for_preview(&path)
@@ -2143,6 +2126,17 @@ fn collect_leaf_manifest_entries(paths: BTreeSet<PathBuf>) -> AppResult<Vec<Dele
         });
     }
     Ok(entries)
+}
+
+/// The kind `reading` shows at `path`; an error when it shows none.
+fn known_kind(path: &Path, reading: PathReading) -> AppResult<EntryKind> {
+    reading.kind().ok_or_else(|| {
+        AppError::Repository(format!(
+            "failed to inspect filesystem entry {}: {}",
+            path.display(),
+            reading.absence()
+        ))
+    })
 }
 
 fn classify_path_for_preview(path: &Path) -> DeletePreviewCategory {

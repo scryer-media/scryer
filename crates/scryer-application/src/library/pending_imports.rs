@@ -8,6 +8,7 @@ use chrono::Utc;
 use tracing::warn;
 
 use super::*;
+use crate::disk::{Disk, EntryKind};
 use crate::library::library::{
     PlannedTitleScanFile, PlannedTitleScanRecord, ScannedEpisodeCompletions,
     file_source_snapshot_from_path, finalize_title_scan_file,
@@ -111,7 +112,10 @@ fn build_pending_import_search_attempt(
 
 fn pending_import_movie_entry_path(item: &LibraryScanUnmatchedItem) -> PathBuf {
     let item_path = stored_path_to_path_buf(item.item_path.trim());
-    if item_path.is_file() {
+    if Disk::process()
+        .follow_blocking(&item_path)
+        .is(EntryKind::File)
+    {
         return item_path.parent().unwrap_or(&item_path).to_path_buf();
     }
 
@@ -176,13 +180,14 @@ async fn build_pending_import_library_file(
     }
 
     let path = stored_path_to_path_buf(item_path);
-    let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
-        AppError::validation_refused(
+    let reading = Disk::process().follow(&path).await;
+    if reading.exists() != Some(true) {
+        return Err(AppError::validation_refused(
             crate::error_reasons::library::PENDING_IMPORT_FILE_UNAVAILABLE,
-            format!("pending import file is unavailable: {error}"),
-        )
-    })?;
-    if !metadata.is_file() {
+            format!("pending import file is unavailable: {}", path.display()),
+        ));
+    }
+    if !reading.is(EntryKind::File) {
         return Err(AppError::validation_refused(
             crate::error_reasons::library::PENDING_IMPORT_PATH_NOT_FILE,
             "pending import path is not a file",
@@ -202,7 +207,7 @@ async fn build_pending_import_library_file(
         path: path_to_stored_string(&path).trim().to_string(),
         display_name,
         nfo_path: None,
-        size_bytes: Some(metadata.len() as i64),
+        size_bytes: reading.size().map(|len| len as i64),
         source_signature_scheme: None,
         source_signature_value: None,
     })
@@ -216,9 +221,10 @@ async fn pending_import_path_is_directory(item: &LibraryScanUnmatchedItem) -> bo
     if item_path.is_empty() {
         return false;
     }
-    tokio::fs::metadata(stored_path_to_path_buf(item_path))
+    Disk::process()
+        .follow(stored_path_to_path_buf(item_path))
         .await
-        .is_ok_and(|metadata| metadata.is_dir())
+        .is(EntryKind::Directory)
 }
 
 async fn list_pending_import_title_episodes(
@@ -1041,15 +1047,20 @@ impl AppUseCase {
         if item.facet == MediaFacet::Movie {
             let mut title = title.clone();
             let item_path = stored_path_to_path_buf(item.item_path.trim());
-            let metadata = tokio::fs::metadata(&item_path).await.map_err(|error| {
-                AppError::validation_refused(
+            let reading = Disk::process().follow(&item_path).await;
+            if reading.exists() != Some(true) {
+                return Err(AppError::validation_refused(
                     crate::error_reasons::library::PENDING_IMPORT_PATH_UNAVAILABLE,
-                    format!("pending import path is unavailable: {error}"),
-                )
-            })?;
-            let discovered_files = if metadata.is_file() {
+                    format!(
+                        "pending import path is unavailable: {}",
+                        item_path.display()
+                    ),
+                ));
+            }
+            let is_dir = reading.is(EntryKind::Directory);
+            let discovered_files = if reading.is(EntryKind::File) {
                 vec![build_pending_import_library_file(item).await?]
-            } else if metadata.is_dir() {
+            } else if is_dir {
                 self.services
                     .library
                     .library_scanner
@@ -1065,7 +1076,7 @@ impl AppUseCase {
                 return Err(AppError::validation_refused(crate::error_reasons::library::PENDING_IMPORT_DIRECTORY_CONTAINS_NO_FILES_ATTACH, "pending import directory contains no files to attach"));
             }
             let entry_path = pending_import_movie_entry_path(item);
-            if metadata.is_dir()
+            if is_dir
                 || (entry_path != item_path
                     && entry_path != stored_path_to_path_buf(item.scan_root.trim()))
             {
