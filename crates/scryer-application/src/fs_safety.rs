@@ -58,7 +58,7 @@ pub(crate) fn ensure_root_available(root: &Path) -> AppResult<()> {
         ),
         None => (
             reasons::CONFIGURED_MEDIA_ROOT_UNAVAILABLE,
-            format!("is unavailable: {}", reading.absence()),
+            format!("is unavailable: {}", reading.describe_absence()),
         ),
     };
     Err(AppError::validation_refused(
@@ -332,16 +332,7 @@ pub async fn move_file_exclusive(
             StagedHolds::OnlyCopy,
         ),
         Err(error) if needs_copy(&error) => {
-            match copy_into_destination(&disk, source, &staged, options).await {
-                Ok(()) => match remove_copied_source(&disk, source).await {
-                    Ok(()) => (
-                        promote_staged_file(&staged, dest).await,
-                        StagedHolds::OnlyCopy,
-                    ),
-                    Err(error) => (Err(error), StagedHolds::Copy { proven: true }),
-                },
-                Err(error) => (Err(error), StagedHolds::Copy { proven: false }),
-            }
+            return copy_through_staging(&disk, source, &staged, dest, options).await;
         }
         Err(error) => (Err(error.into()), StagedHolds::EmptyClaim),
     };
@@ -349,6 +340,29 @@ pub async fn move_file_exclusive(
         roll_back_staged_file(&disk, source, &staged, held).await;
     }
     outcome
+}
+
+/// Moves `source` to another device through `staged`, which the caller has
+/// claimed: copy into it and prove the copy, promote it onto `dest` without
+/// replacing, and only then unlink the source. Nothing is under the real name
+/// while the copy is unproven, and a failure before the unlink leaves the
+/// source as it was.
+async fn copy_through_staging(
+    disk: &Disk,
+    source: &Path,
+    staged: &Path,
+    dest: &Path,
+    options: MoveOptions,
+) -> io::Result<()> {
+    let (error, proven) = match copy_into_destination(disk, source, staged, options).await {
+        Ok(()) => match promote_staged_file(staged, dest).await {
+            Ok(()) => return unlink_moved_source(disk, source, dest).await,
+            Err(error) => (error, true),
+        },
+        Err(error) => (error, false),
+    };
+    roll_back_staged_file(disk, source, staged, StagedHolds::Copy { proven }).await;
+    Err(error)
 }
 
 /// What the staging name holds when a move through it fails.
@@ -359,7 +373,7 @@ enum StagedHolds {
     /// A copy of a source that may still exist, `proven` once it was written
     /// and verified in full.
     Copy { proven: bool },
-    /// The source itself, renamed there or copied and then unlinked.
+    /// The source itself, renamed there.
     OnlyCopy,
 }
 
@@ -371,16 +385,30 @@ enum StagedHolds {
 /// source still exists, and `RollbackMove` moves the file back when it does
 /// not. Leaving a stray file behind is always preferable to losing one.
 async fn roll_back_staged_file(disk: &Disk, source: &Path, staged: &Path, held: StagedHolds) {
-    let proven = match held {
-        // Nothing of the source reached the claim, so only the claim goes.
-        StagedHolds::EmptyClaim => {
+    let reading = disk.uncached(staged).await;
+    let held = match held {
+        // Only the empty claim this move created is removed. Anything else
+        // there may be the source, moved by a rename that reported failure,
+        // so it is treated as the only copy.
+        StagedHolds::EmptyClaim if reading.is(EntryKind::File) && reading.size() == Some(0) => {
             let _ = disk.remove(staged, Remove::File).await;
             return;
         }
-        StagedHolds::Copy { proven } => proven,
-        StagedHolds::OnlyCopy => true,
+        StagedHolds::EmptyClaim if reading.exists() == Some(false) => return,
+        StagedHolds::EmptyClaim => StagedHolds::OnlyCopy,
+        held => held,
     };
-    if disk.uncached(staged).await.exists() != Some(true) {
+    let proven = match held {
+        StagedHolds::Copy { proven } => proven,
+        _ => true,
+    };
+    if reading.exists() != Some(true) {
+        tracing::error!(
+            staged = %staged.display(),
+            source = %source.display(),
+            state = reading.describe_absence(),
+            "the staged file of a failed move does not read as present; nothing was rolled back"
+        );
         return;
     }
 
@@ -499,7 +527,7 @@ async fn transfer_across_devices(
         };
         return Err(io::Error::new(
             kind,
-            format!("{} is {}", source.display(), reading.absence()),
+            format!("{}: {}", source.display(), reading.describe_absence()),
         ));
     };
     // A symlinked media file is a pointer, not the payload: copying it would
@@ -519,7 +547,9 @@ async fn transfer_across_devices(
     }
 
     if !options.overwrite {
-        claim(disk, dest).await?;
+        let staged = crate::disk::staging_path_for(dest);
+        claim(disk, &staged).await?;
+        return copy_through_staging(disk, source, &staged, dest, options).await;
     }
     if let Err(error) = copy_into_destination(disk, source, dest, options).await {
         let _ = disk.remove(dest, Remove::File).await;
@@ -583,9 +613,10 @@ async fn copy_into_destination(
 
 /// Unlinks the source of a copy that is written, synced and proven. The copy
 /// is then the file, so a source already gone is a finished move, and a
-/// failure here never costs the copy.
+/// failure here never costs the copy. A Windows read-only attribute that
+/// refuses the unlink is cleared, and restored if the unlink still fails.
 async fn remove_copied_source(disk: &Disk, source: &Path) -> io::Result<()> {
-    disk.remove(source, Remove::File).await?;
+    disk.remove(source, Remove::FileEvenReadOnly).await?;
     Ok(())
 }
 
@@ -613,10 +644,25 @@ async fn verify_copy_with_retry(source: &Path, dest: &Path) -> io::Result<()> {
 
 /// `Some` when the platform answered with an exclusive rename, `None` when the
 /// caller should claim the destination instead.
+///
+/// On Windows a refusal that is neither a collision nor a move to another
+/// volume also answers `None`, so the caller takes the fallback Windows used
+/// before it had this rename, rather than failing where that fallback worked.
 pub(crate) async fn exclusive_rename(source: &Path, dest: &Path) -> Option<Result<(), DiskError>> {
     match Disk::process().rename_no_replace(source, dest).await {
         Ok(true) => Some(Ok(())),
         Ok(false) => None,
+        Err(error)
+            if cfg!(windows)
+                && !matches!(
+                    error.reason(),
+                    reason::DISK_DESTINATION_EXISTS
+                        | reason::DISK_DIRECTORY_NOT_EMPTY
+                        | reason::DISK_MOVE_NEEDS_COPY
+                ) =>
+        {
+            None
+        }
         Err(error) => Some(Err(error)),
     }
 }
@@ -925,6 +971,99 @@ mod move_tests {
         assert_eq!(std::fs::read(&staged).expect("staged"), b"half");
     }
 
+    /// A claim that holds data is not the empty file the move created: it may
+    /// be the source, moved by a rename that reported failure. It goes back
+    /// to the source's name, never over a file there, and is never removed.
+    #[tokio::test]
+    async fn a_claim_that_holds_data_is_put_back_not_removed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let staged = dir.path().join(".scryer-move.partial");
+        write(&staged, b"the-only-copy");
+
+        roll_back_staged_file(&Disk::process(), &source, &staged, StagedHolds::EmptyClaim).await;
+        assert_eq!(std::fs::read(&source).expect("source"), b"the-only-copy");
+        assert!(!staged.exists());
+
+        write(&staged, b"another-only-copy");
+        roll_back_staged_file(&Disk::process(), &source, &staged, StagedHolds::EmptyClaim).await;
+        assert_eq!(std::fs::read(&source).expect("source"), b"the-only-copy");
+        assert_eq!(
+            std::fs::read(&staged).expect("staged"),
+            b"another-only-copy"
+        );
+    }
+
+    /// A cross-device copy is written under the staging name, so nothing is
+    /// under the real name while it is unproven, and a destination that
+    /// appears meanwhile is neither replaced nor costs the source.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cross_device_copy_never_shows_an_unproven_file_or_replaces_a_newcomer() {
+        use std::io::Write;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A pipe as the source holds the copy open until the test lets it end.
+        let source = dir.path().join("source.mkv");
+        let source_c = std::ffi::CString::new(source.as_os_str().as_bytes()).expect("path");
+        // SAFETY: the path is NUL-terminated and outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(source_c.as_ptr(), 0o600) }, 0);
+        let dest = dir.path().join("dest.mkv");
+        let names = || {
+            let mut names = std::fs::read_dir(dir.path())
+                .expect("list")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .into_string()
+                        .expect("name")
+                })
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+
+        let mover = tokio::spawn({
+            let (source, dest) = (source.clone(), dest.clone());
+            async move {
+                transfer_across_devices(
+                    &Disk::process(),
+                    &source,
+                    &dest,
+                    MoveOptions {
+                        verify_cross_device: false,
+                        ..MoveOptions::default()
+                    },
+                )
+                .await
+            }
+        });
+        // Opening the pipe for writing returns once the copy has opened it.
+        let mut writer = tokio::task::spawn_blocking({
+            let source = source.clone();
+            move || std::fs::OpenOptions::new().write(true).open(source)
+        })
+        .await
+        .expect("join")
+        .expect("open the pipe");
+        writer.write_all(b"payload").expect("feed the copy");
+
+        // Only the source and the staged copy: nothing under the real name.
+        let mid_copy = names();
+        assert_eq!(mid_copy.len(), 2, "{mid_copy:?}");
+        assert!(mid_copy[0].starts_with(".scryer-") && mid_copy[0].ends_with(".partial"));
+        assert_eq!(mid_copy[1], "source.mkv");
+        write(&dest, b"newcomer");
+        drop(writer);
+
+        let error = mover.await.expect("join").expect_err("the newcomer wins");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"newcomer");
+        // The source is untouched and the staged copy is taken back.
+        assert_eq!(names(), ["dest.mkv", "source.mkv"]);
+    }
+
     /// On a case-sensitive volume two names that differ only in case are two
     /// files, so the case-only path must refuse rather than replace. Runs only
     /// where the temporary directory is case-sensitive.
@@ -967,6 +1106,11 @@ mod move_tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            // SAFETY: geteuid has no preconditions.
+            if unsafe { libc::geteuid() } == 0 {
+                // Root unlinks anywhere, so the locked folder would refuse nothing.
+                return;
+            }
             let held = dir.path().join("held");
             std::fs::create_dir(&held).expect("source folder");
             let source = held.join("source.mkv");
@@ -994,12 +1138,64 @@ mod move_tests {
         }
     }
 
+    /// A source whose own permissions forbid writing it is unlinked after its
+    /// copy is proven, as an unlink has always done on Unix, where only the
+    /// folder decides.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cross_device_move_unlinks_a_source_without_write_permission() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("dest.mkv");
+        write(&source, b"payload");
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444))
+            .expect("make the source unwritable");
+
+        transfer_across_devices(&Disk::process(), &source, &dest, MoveOptions::default())
+            .await
+            .expect("the move succeeds");
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+    }
+
+    /// On Windows a read-only source refuses the unlink until its attribute
+    /// is cleared, which a cross-device move does once the copy is in place.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_windows_cross_device_move_unlinks_a_read_only_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("dest.mkv");
+        write(&source, b"payload");
+        let mut permissions = std::fs::metadata(&source).expect("source").permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&source, permissions).expect("mark read-only");
+
+        transfer_across_devices(&Disk::process(), &source, &dest, MoveOptions::default())
+            .await
+            .expect("the move succeeds");
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&dest).expect("dest"), b"payload");
+        let mut permissions = std::fs::metadata(&dest).expect("dest").permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&dest, permissions).expect("clear read-only");
+    }
+
     /// A source that cannot be read might still be there or might not, so the
     /// staged file is neither removed nor moved over it.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_rollback_that_cannot_read_the_source_leaves_the_staged_file() {
         use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root reads anywhere, so the locked folder would hide nothing.
+            return;
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let held = dir.path().join("held");
         std::fs::create_dir(&held).expect("source folder");

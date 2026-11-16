@@ -151,7 +151,7 @@ impl PathReading {
                 reason::DISK_PERMISSION_DENIED => "permission denied",
                 reason::DISK_PATH_MISSING => "missing",
                 reason::DISK_PATH_UNREACHABLE => "the path could not be read",
-                reason::DISK_WRONG_KIND => "the path holds the wrong kind of entry",
+                reason::DISK_WRONG_KIND => "a parent component is not a directory",
                 reason::DISK_LINK_NOT_FOLLOWED => "a link that is not followed",
                 _ => "the read failed",
             },

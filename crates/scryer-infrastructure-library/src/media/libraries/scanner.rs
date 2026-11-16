@@ -323,8 +323,9 @@ fn scan_directory_with_metrics_blocking(
     })
 }
 
-// disk-guard: the source signature is built from the raw metadata's
-// modification time, which a disk reading does not carry.
+// disk-guard: the source signature is the raw modification time, as seconds
+// and nanoseconds on Unix or the FILETIME on Windows, which only the raw
+// metadata gives in that form.
 #[allow(clippy::disallowed_methods)]
 fn collect_directory_files_with_source_snapshot(
     allowed_extensions: &HashSet<String>,

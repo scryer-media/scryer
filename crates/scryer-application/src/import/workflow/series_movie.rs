@@ -462,10 +462,14 @@ async fn relocate_titleless_archive_workspace_for_title(
         Err(error) => {
             crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
             use crate::disk::reason;
-            if matches!(
-                error.reason(),
-                reason::DISK_MOVE_NEEDS_COPY | reason::DISK_DESTINATION_EXISTS
-            ) {
+            // Windows extracts under the title on any refusal, as it did
+            // before it had this rename.
+            if cfg!(windows)
+                || matches!(
+                    error.reason(),
+                    reason::DISK_MOVE_NEEDS_COPY | reason::DISK_DESTINATION_EXISTS
+                )
+            {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
             let error = std::io::Error::from(error);
