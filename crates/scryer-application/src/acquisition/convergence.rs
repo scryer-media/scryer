@@ -789,7 +789,10 @@ pub(crate) struct ScopeConvergence {
 /// are then skipped as covered. The required audio languages and the routed
 /// indexer set are the same for every stage that shares their inputs, so they
 /// are read once per walk. The quality profile is deliberately *not* memoized:
-/// it is resolved per stage through the same helper the grab path uses.
+/// it is resolved per stage through the same helper the grab path uses. Only
+/// its pack thresholds are kept, for the pack gates that run before or without
+/// a convergence: every memoized convergence records them, so a gate after one
+/// reads nothing, and a gate before any reads the profile once.
 ///
 /// Like [`crate::acquisition::title_reads::TitleCatalogReads`], nothing is kept
 /// past the walk, so the freshness bound is the walk's own length, and failed
@@ -811,6 +814,42 @@ pub(crate) struct ConvergenceInputMemo {
         std::sync::Mutex<Option<std::collections::HashMap<String, Vec<ScopeCoverageRow>>>>,
     indexer_configs:
         std::sync::Mutex<Option<std::sync::Arc<std::collections::HashMap<String, IndexerConfig>>>>,
+    pack_thresholds: std::sync::Mutex<
+        std::collections::HashMap<QualityProfileContextKey, AcquisitionThresholds>,
+    >,
+}
+
+/// Every title field the quality profile lookup reads
+/// (`resolve_quality_profile_for_title_with_category`), with the category the
+/// lookup resolves, so two stages share an answer only when the lookup would
+/// give them the same profile.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct QualityProfileContextKey {
+    title_id: String,
+    library_id: String,
+    tags: Vec<String>,
+    imdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    category: String,
+}
+
+impl QualityProfileContextKey {
+    fn for_lookup(title: &Title, category_hint: Option<&str>) -> Self {
+        Self {
+            title_id: title.id.clone(),
+            library_id: title.library_id.clone(),
+            tags: title.tags.clone(),
+            imdb_id: title.imdb_id.clone(),
+            tvdb_id: crate::acquisition_search_queries::tvdb_id_from_external_ids(
+                &title.external_ids,
+            ),
+            category: crate::acquisition_decision_helpers::upgrade_context_category(
+                title,
+                category_hint,
+            )
+            .to_string(),
+        }
+    }
 }
 
 /// The routing inputs a walk's routed-indexer answer depends on.
@@ -1072,6 +1111,12 @@ impl AppUseCase {
                 return None;
             }
         };
+        if let Some(memo) = memo {
+            memo_lock(&memo.pack_thresholds).insert(
+                QualityProfileContextKey::for_lookup(title, Some(subject.category.as_str())),
+                AcquisitionThresholds::for_profile(&profile.criteria),
+            );
+        }
         let required_audio_languages = match self
             .required_audio_languages_for_convergence(title, memo)
             .await
@@ -1124,6 +1169,28 @@ impl AppUseCase {
                 .criteria
                 .min_missing_percent_for_series_pack_or_default(),
         })
+    }
+
+    /// The pack thresholds of the quality profile that governs `title` under
+    /// `category_hint`, read at most once per walk. A memoized convergence
+    /// resolved earlier in the walk for the same lookup has already recorded
+    /// them. Failed reads are not memoized.
+    pub(crate) async fn pack_thresholds_for_walk(
+        &self,
+        title: &Title,
+        category_hint: Option<&str>,
+        memo: &ConvergenceInputMemo,
+    ) -> AppResult<AcquisitionThresholds> {
+        let key = QualityProfileContextKey::for_lookup(title, category_hint);
+        if let Some(hit) = memo_lock(&memo.pack_thresholds).get(&key) {
+            return Ok(hit.clone());
+        }
+        let profile = self
+            .resolve_quality_profile_for_title_with_category(title, category_hint)
+            .await?;
+        let thresholds = AcquisitionThresholds::for_profile(&profile.criteria);
+        memo_lock(&memo.pack_thresholds).insert(key, thresholds.clone());
+        Ok(thresholds)
     }
 
     /// `resolve_required_audio_languages_for_title`, answered from the walk's

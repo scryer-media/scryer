@@ -5536,6 +5536,385 @@ async fn one_missing_episode_does_not_trigger_the_series_pack_title_lane() {
     );
 }
 
+/// Makes the built-in default profile, with the given pack thresholds, the
+/// global profile. `None` leaves a threshold unset, so its default applies.
+async fn use_pack_threshold_profile(
+    app: &mut AppUseCase,
+    min_missing_episodes_for_pack: Option<u32>,
+    min_missing_percent_for_series_pack: Option<u32>,
+) {
+    let mut profile = crate::builtin_default_quality_profile();
+    profile.criteria.min_missing_episodes_for_pack = min_missing_episodes_for_pack;
+    profile.criteria.min_missing_percent_for_series_pack = min_missing_percent_for_series_pack;
+    let profiles = Arc::new(StoredQualityProfileRepo::default());
+    profiles.set_profiles(vec![profile.clone()]).await;
+    app.services.config.quality_profiles = profiles;
+    app.services
+        .config
+        .settings
+        .upsert_setting_json(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            None,
+            serde_json::to_string(&profile.id).unwrap(),
+            "test",
+            None,
+        )
+        .await
+        .expect("select the pack threshold profile");
+}
+
+/// Gives each listed episode a primary file, so it is owned.
+async fn own_episodes<'a>(
+    app: &AppUseCase,
+    title: &Title,
+    episodes: impl IntoIterator<Item = &'a (u32, String)>,
+) {
+    for (index, (season, episode_id)) in episodes.into_iter().enumerate() {
+        let file_id = app
+            .services
+            .library
+            .media_files
+            .insert_media_file(&crate::InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/library/Series Pack Scope/S{season:02}E{index:02}.mkv"),
+                size_bytes: 1_000_000,
+                role: crate::MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .expect("seed owned episode file");
+        app.services
+            .library
+            .media_files
+            .link_file_to_episode(&file_id, episode_id)
+            .await
+            .expect("link owned episode file");
+        app.services
+            .library
+            .media_files
+            .set_media_file_roles_for_episode(&title.id, episode_id, &file_id, &[])
+            .await
+            .expect("make the file the episode's primary");
+    }
+}
+
+/// One season of five episodes with three owned: two missing, 40% of the
+/// season. A complete-series pack is offered for the title lane.
+async fn two_of_five_missing_fixture() -> (
+    AppUseCase,
+    Title,
+    Arc<TrackingIndexerClient>,
+    Vec<(u32, String)>,
+) {
+    let indexer_client = Arc::new(TrackingIndexerClient::default().with_title_pack_titles([
+        "Series.Pack.Scope.Complete.Series.1080p.WEB-DL-PACK".to_string(),
+    ]));
+    let (app, title, indexer_client, episode_ids) = seed_series_scope_fixture(
+        indexer_client,
+        &[1],
+        Arc::new(StubDownloadClient::default().with_unique_job_ids()),
+        1,
+        5,
+    )
+    .await;
+    own_episodes(&app, &title, episode_ids.iter().take(3)).await;
+    (app, title, indexer_client, episode_ids)
+}
+
+fn bare_title_query_count(searches: &[RecordedIndexerSearch]) -> usize {
+    searches
+        .iter()
+        .filter(|search| search.season.is_none() && search.episode.is_none())
+        .count()
+}
+
+#[tokio::test]
+async fn the_series_pack_title_lane_runs_at_the_default_thresholds() {
+    let (app, _, indexer_client, _) = two_of_five_missing_fixture().await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        bare_title_query_count(&searches),
+        1,
+        "two missing at 40% clear the defaults of two and 30%: {searches:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_series_pack_title_lane_follows_the_profile_episode_minimum() {
+    let (mut app, _, indexer_client, _) = two_of_five_missing_fixture().await;
+    use_pack_threshold_profile(&mut app, Some(3), None).await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        bare_title_query_count(&searches),
+        0,
+        "two missing is below a minimum of three: {searches:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_series_pack_title_lane_follows_the_profile_percent() {
+    let (mut app, _, indexer_client, _) = two_of_five_missing_fixture().await;
+    use_pack_threshold_profile(&mut app, None, Some(50)).await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        bare_title_query_count(&searches),
+        0,
+        "40% missing does not exceed a 50% threshold: {searches:?}"
+    );
+
+    let (mut app, _, indexer_client, _) = two_of_five_missing_fixture().await;
+    use_pack_threshold_profile(&mut app, None, Some(39)).await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        bare_title_query_count(&searches),
+        1,
+        "40% missing exceeds a 39% threshold: {searches:?}"
+    );
+}
+
+/// Judges a parked complete-series pack against the two-of-five fixture under
+/// the given missing-share threshold.
+async fn judge_parked_series_pack(
+    min_missing_percent_for_series_pack: Option<u32>,
+) -> crate::acquisition::pending::PendingJudgement {
+    let (mut app, title, _, episode_ids) = two_of_five_missing_fixture().await;
+    use_pack_threshold_profile(&mut app, None, min_missing_percent_for_series_pack).await;
+    let (_, missing_episode_id) = episode_ids.last().expect("a missing episode exists");
+    let wanted = app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .get_acquisition_scope_state_for_title(&title.id, Some(missing_episode_id))
+        .await
+        .expect("load the missing episode's scope")
+        .expect("the missing episode's scope exists");
+    let parked = series_pack_anchor_standby(
+        &title,
+        &wanted.id,
+        "Series.Pack.Scope.Complete.Series.1080p.WEB-DL-PACK",
+    );
+    app.judge_pending_release(
+        &wanted,
+        &parked,
+        &Utc::now(),
+        crate::acquisition::pending::PendingGrabTrigger::Automatic,
+    )
+    .await
+    .expect("judgement resolves")
+}
+
+fn is_rejected(judgement: &crate::acquisition::pending::PendingJudgement) -> bool {
+    matches!(
+        judgement,
+        crate::acquisition::pending::PendingJudgement::Decided(
+            crate::acquisition::pending::PendingGrabOutcome::Rejected,
+        )
+    )
+}
+
+#[tokio::test]
+async fn a_parked_series_pack_follows_the_profile_percent() {
+    assert!(
+        !is_rejected(&judge_parked_series_pack(None).await),
+        "40% missing exceeds the default 30%"
+    );
+    assert!(
+        is_rejected(&judge_parked_series_pack(Some(50)).await),
+        "40% missing does not exceed a 50% threshold"
+    );
+    assert!(
+        !is_rejected(&judge_parked_series_pack(Some(39)).await),
+        "40% missing exceeds a 39% threshold"
+    );
+}
+
+fn season_pack_query_count(searches: &[RecordedIndexerSearch], season: u32) -> usize {
+    searches
+        .iter()
+        .filter(|search| search.season == Some(season) && search.episode.is_none())
+        .count()
+}
+
+fn episode_query_count(searches: &[RecordedIndexerSearch], season: u32) -> usize {
+    searches
+        .iter()
+        .filter(|search| search.season == Some(season) && search.episode.is_some())
+        .count()
+}
+
+#[tokio::test]
+async fn two_due_episodes_take_the_season_pack_lane_at_the_default_minimum() {
+    let (app, _, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        season_pack_query_count(&searches, 7),
+        1,
+        "two due episodes meet the default minimum of two: {searches:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_minimum_of_three_keeps_two_due_episodes_on_episode_search() {
+    let (mut app, _, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+    use_pack_threshold_profile(&mut app, Some(3), None).await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        season_pack_query_count(&searches, 7),
+        0,
+        "two due episodes are below a minimum of three: {searches:?}"
+    );
+    assert!(
+        episode_query_count(&searches, 7) > 0,
+        "the due episodes are searched one by one: {searches:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_minimum_of_three_takes_the_season_pack_lane_at_three_due_episodes() {
+    let (mut app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+    let season_id = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .expect("list season episodes")
+        .into_iter()
+        .find_map(|episode| episode.collection_id)
+        .expect("the season exists");
+    let third = app
+        .services
+        .catalog
+        .shows
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_id: Some(season_id),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("25".to_string()),
+            season_number: Some("7".to_string()),
+            episode_label: Some("S07E25".to_string()),
+            title: Some("S07E25".to_string()),
+            air_date: Some("2024-01-01".to_string()),
+            duration_seconds: Some(1_440),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            contiguous_absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            tmdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create the third episode");
+    app.services
+        .workflow
+        .acquisition_scope_states
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some(third.id.clone()),
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: Some("7".to_string()),
+            episode_number: None,
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        })
+        .await
+        .expect("seed the third due episode");
+    use_pack_threshold_profile(&mut app, Some(3), None).await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        season_pack_query_count(&searches, 7),
+        1,
+        "three due episodes meet a minimum of three: {searches:?}"
+    );
+}
+
+/// One season holding one aired, wanted episode.
+async fn one_due_episode_fixture() -> (AppUseCase, Arc<TrackingIndexerClient>) {
+    let (app, _, indexer_client, _) = seed_series_scope_fixture(
+        Arc::new(TrackingIndexerClient::default()),
+        &[1],
+        Arc::new(StubDownloadClient::default().with_unique_job_ids()),
+        1,
+        1,
+    )
+    .await;
+    (app, indexer_client)
+}
+
+#[tokio::test]
+async fn one_due_episode_stays_on_episode_search_at_the_default_minimum() {
+    let (app, indexer_client) = one_due_episode_fixture().await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        season_pack_query_count(&searches, 1),
+        0,
+        "one due episode is below the default minimum of two: {searches:?}"
+    );
+    assert!(episode_query_count(&searches, 1) > 0, "{searches:?}");
+}
+
+#[tokio::test]
+async fn a_minimum_of_one_lets_one_due_episode_reach_the_season_pack_lane() {
+    let (mut app, indexer_client) = one_due_episode_fixture().await;
+    use_pack_threshold_profile(&mut app, Some(1), None).await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    let searches = indexer_client.searches.lock().await.clone();
+    assert_eq!(
+        season_pack_query_count(&searches, 1),
+        1,
+        "one due episode meets a minimum of one: {searches:?}"
+    );
+}
+
 #[tokio::test]
 async fn title_search_success_does_not_converge_an_episode_when_scoped_queries_fail() {
     let indexer_client = Arc::new(

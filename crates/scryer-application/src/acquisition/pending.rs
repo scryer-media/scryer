@@ -1408,6 +1408,26 @@ impl AppUseCase {
             }
             Err(_) => Vec::new(),
         };
+        let cutoff_scope = self.cutoff_scope_for(&pending_scope).await;
+        // A resolution failure defers rather than errors: the callers expire
+        // parked releases on Err, and a possibly transient settings problem
+        // must not permanently burn delayed or standby candidates. The profile
+        // is resolved before the series-pack check so that check reads its
+        // missing-share threshold from the same profile the grab scores under.
+        let upgrade_context = match self
+            .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
+            .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = title.id.as_str(),
+                    "pending release: failed to resolve quality profile; keeping release pending"
+                );
+                return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
+            }
+        };
         if is_series_pack && trigger != PendingGrabTrigger::StandbyOperator {
             let mut owned_episode_ids = existing_files
                 .iter()
@@ -1469,29 +1489,13 @@ impl AppUseCase {
                 &pending_parsed,
                 &catalog_episodes,
                 &owned_episode_ids,
-                crate::quality_profile::DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
+                upgrade_context
+                    .thresholds
+                    .min_missing_percent_for_series_pack,
             ) {
                 return Ok(PendingJudgement::Decided(PendingGrabOutcome::Rejected));
             }
         }
-        let cutoff_scope = self.cutoff_scope_for(&pending_scope).await;
-        // A resolution failure defers rather than errors: the callers expire
-        // parked releases on Err, and a possibly transient settings problem
-        // must not permanently burn delayed or standby candidates.
-        let upgrade_context = match self
-            .resolve_upgrade_context_for_scope(&title, None, &existing_files, &cutoff_scope)
-            .await
-        {
-            Ok(context) => context,
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    title_id = title.id.as_str(),
-                    "pending release: failed to resolve quality profile; keeping release pending"
-                );
-                return Ok(PendingJudgement::Decided(PendingGrabOutcome::Deferred));
-            }
-        };
 
         // A delayed release faces the same gate as an immediate one, against what
         // is on disk now rather than what the ledger remembered when it was

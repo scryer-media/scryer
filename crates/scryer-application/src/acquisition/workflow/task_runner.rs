@@ -2213,6 +2213,7 @@ async fn try_series_pack_for_title(
     cycle: &BackgroundAcquisitionCycleCoordinator,
     session: &mut TitleWalkSession,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    convergence_inputs: &crate::acquisition::convergence::ConvergenceInputMemo,
 ) -> AppResult<Option<Vec<String>>> {
     let Some(proposal) = plan_series_pack_for_title(
         app,
@@ -2228,6 +2229,7 @@ async fn try_series_pack_for_title(
         claimed_episode_ids,
         session,
         reads,
+        convergence_inputs,
     )
     .await?
     else {
@@ -2282,6 +2284,7 @@ async fn plan_series_pack_for_title(
     claimed_episode_ids: &HashSet<String>,
     session: &mut TitleWalkSession,
     reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    convergence_inputs: &crate::acquisition::convergence::ConvergenceInputMemo,
 ) -> AppResult<Option<GrabProposal>> {
     let mut title_subject = app
         .resolve_release_search_subject_for_title(search_title)
@@ -2322,15 +2325,37 @@ async fn plan_series_pack_for_title(
     );
     let eligible_collection_ids =
         crate::acquisition_coverage::eligible_series_pack_collection_ids(&episodes);
-    if eligible_collection_ids.is_empty()
-        || crate::acquisition_coverage::eligible_missing_series_pack_episode_count(
-            &episodes,
-            &owned_episode_ids,
-        ) < 2
+    let missing_count = crate::acquisition_coverage::eligible_missing_series_pack_episode_count(
+        &episodes,
+        &owned_episode_ids,
+    );
+    // Nothing missing fails every minimum, so it never pays the profile read.
+    if eligible_collection_ids.is_empty() || missing_count == 0 {
+        return Ok(None);
+    }
+    let pack_thresholds = match app
+        .pack_thresholds_for_walk(
+            search_title,
+            Some(title_subject.category.as_str()),
+            convergence_inputs,
+        )
+        .await
+    {
+        Ok(thresholds) => thresholds,
+        Err(error) => {
+            warn!(
+                title_id = title.id.as_str(),
+                error = %error,
+                "series-pack search: failed to resolve quality profile"
+            );
+            return Ok(None);
+        }
+    };
+    if missing_count < pack_thresholds.min_missing_episodes_for_pack as usize
         || !crate::acquisition_coverage::title_series_pack_missing_ratio_qualifies(
             &episodes,
             &owned_episode_ids,
-            crate::quality_profile::DEFAULT_MIN_MISSING_PERCENT_FOR_SERIES_PACK,
+            pack_thresholds.min_missing_percent_for_series_pack,
         )
     {
         return Ok(None);
@@ -4294,6 +4319,7 @@ async fn process_single_target(
             cycle,
             session,
             &context.reads,
+            &context.convergence_inputs,
         )
         .await
         {
@@ -4449,11 +4475,32 @@ async fn process_single_target(
     {
         let season_key = (title.id.clone(), season_num);
 
-        // Only attempt a season pack search when >= 2 episodes from this season
-        // are due this cycle (mirrors Sonarr: count > 1 missing → SeasonSearchCriteria).
+        // Only attempt a season pack search when at least the quality profile's
+        // pack minimum of this season's episodes are due this cycle (default 2,
+        // mirroring Sonarr: count > 1 missing → SeasonSearchCriteria).
         let due_count = season_due_counts.get(&season_key).copied().unwrap_or(0);
+        let season_pack_due = due_count > 0
+            && match app
+                .pack_thresholds_for_walk(
+                    &search_title,
+                    Some(pending_subject.for_convergence().category.as_str()),
+                    &context.convergence_inputs,
+                )
+                .await
+            {
+                Ok(thresholds) => due_count >= thresholds.min_missing_episodes_for_pack as usize,
+                Err(error) => {
+                    warn!(
+                        title_id = title.id.as_str(),
+                        season = season_num,
+                        error = %error,
+                        "season-pack search: failed to resolve quality profile; searching episodes"
+                    );
+                    false
+                }
+            };
 
-        if due_count >= 2 && cycle.begin_season_pack(&season_key) {
+        if season_pack_due && cycle.begin_season_pack(&season_key) {
             let recent_failed_seasons =
                 load_recent_failed_season_pack_seasons_for_title(app, &title.id, now).await;
 
