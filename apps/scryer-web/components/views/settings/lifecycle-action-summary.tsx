@@ -191,6 +191,7 @@ function RuleSourceFindings({
   order,
   warnings,
   checked,
+  showDeclared,
 }: {
   vocabulary: SourceFindingsVocabulary;
   source: string;
@@ -200,31 +201,35 @@ function RuleSourceFindings({
   order: string;
   warnings: readonly RuleValidationDiagnostic[];
   checked: boolean;
+  /// False in Advanced, where the Rego itself says what the rule does.
+  showDeclared: boolean;
 }) {
   const t = useTranslate();
-  if (!checked) return null;
+  if (!checked || (!showDeclared && warnings.length === 0)) return null;
   const prefix = vocabulary.idPrefix;
   return (
     <div
       id={`${prefix}-source-findings`}
       className="space-y-2 rounded border border-border bg-muted/30 px-3 py-2"
     >
-      <div className="space-y-1">
-        <p className="text-xs font-medium">
-          <HelpLabel
-            label={t(vocabulary.titleKey)}
-            help={t(vocabulary.helpKey, { order })}
-          />
-        </p>
-        {declared ?? (
-          <p
-            id={`${prefix}-declared-actions-unavailable`}
-            className="text-xs text-muted-foreground"
-          >
-            {t(vocabulary.unavailableKey)}
+      {showDeclared ? (
+        <div className="space-y-1">
+          <p className="text-xs font-medium">
+            <HelpLabel
+              label={t(vocabulary.titleKey)}
+              help={t(vocabulary.helpKey, { order })}
+            />
           </p>
-        )}
-      </div>
+          {declared ?? (
+            <p
+              id={`${prefix}-declared-actions-unavailable`}
+              className="text-xs text-muted-foreground"
+            >
+              {t(vocabulary.unavailableKey)}
+            </p>
+          )}
+        </div>
+      ) : null}
       {warnings.length > 0 ? (
         <div className="space-y-1">
           <p className="text-xs font-medium text-[var(--scry-warning-text)]">
@@ -270,6 +275,7 @@ export function LifecycleRuleSourceFindings({
   declared,
   warnings,
   checked,
+  showDeclared = true,
 }: {
   source: string;
   /// Null when the source could not be parsed, undefined before validation.
@@ -277,6 +283,8 @@ export function LifecycleRuleSourceFindings({
   warnings: readonly RuleValidationDiagnostic[];
   /// Validation has answered for the current source.
   checked: boolean;
+  /// False while the editor shows the Rego rather than the builder.
+  showDeclared?: boolean;
 }) {
   const descriptors = useRuleOutputDescriptors("lifecycle");
   return (
@@ -301,6 +309,7 @@ export function LifecycleRuleSourceFindings({
       order={ruleOutputHeadNames(descriptors)}
       warnings={warnings}
       checked={checked}
+      showDeclared={showDeclared}
     />
   );
 }
@@ -364,11 +373,14 @@ export function RequestRuleSourceFindings({
   declared,
   warnings,
   checked,
+  showDeclared = true,
 }: {
   source: string;
   declared: RequestDeclaredActions | null | undefined;
   warnings: readonly RuleValidationDiagnostic[];
   checked: boolean;
+  /// False while the editor shows the Rego rather than the builder.
+  showDeclared?: boolean;
 }) {
   const descriptors = useRuleOutputDescriptors("request");
   return (
@@ -393,6 +405,7 @@ export function RequestRuleSourceFindings({
       order={ruleOutputHeadNames(descriptors)}
       warnings={warnings}
       checked={checked}
+      showDeclared={showDeclared}
     />
   );
 }

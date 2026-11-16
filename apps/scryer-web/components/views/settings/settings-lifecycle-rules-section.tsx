@@ -1321,6 +1321,12 @@ export function SettingsLifecycleRulesSection({
                       }
                       declared={validationResult?.declaredActions}
                       warnings={validationResult?.warnings ?? []}
+                      showDeclared={
+                        editorMode === "simple" &&
+                        ruleSetDraft.builderModel !== null &&
+                        builderSchema !== null &&
+                        !editingSystemOwned
+                      }
                     />
 
                     <label className="block md:max-w-[50%]">
