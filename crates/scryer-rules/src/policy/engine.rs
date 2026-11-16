@@ -38,6 +38,8 @@ pub struct RuleHandle<X> {
     pub load_refusal: Option<PolicyRefusal>,
     /// Per-family rule metadata (facets, origin, …).
     pub extra: X,
+    /// The family's wrapper rule path for this policy, built once at load.
+    pub(crate) wrapper_path: String,
 }
 
 /// A family's reason not to evaluate a loaded policy.
@@ -200,6 +202,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 referenced_facts,
                 load_refusal,
                 extra: F::rule_extra(policy),
+                wrapper_path: F::wrapper_rule_path(policy.id()),
             });
             timer.finish("ok");
         }
@@ -406,7 +409,7 @@ impl<F: PolicyFamily> PolicyEvaluator<F> {
                 *seen = true;
             }
             let errors_before = outcome.errors.len();
-            let result = self.engine.eval_rule(F::wrapper_rule_path(&rule.id));
+            let result = self.engine.eval_rule(rule.wrapper_path.clone());
             let no_match = result.as_ref().is_ok_and(|value| {
                 *value == regorus::Value::Undefined
                     || value.as_object().is_ok_and(|object| object.is_empty())

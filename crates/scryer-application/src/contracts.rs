@@ -1088,6 +1088,8 @@ pub struct ReleaseDecisionsQuery {
     pub title_id: Option<String>,
     pub limit: i64,
     pub offset: i64,
+    /// The caller reads no total, so it is not counted and comes back as 0.
+    pub skip_total: bool,
 }
 
 /// Ordering for a paged pending-releases read. Preserves the historic per-call

@@ -750,6 +750,7 @@ impl AppUseCase {
                     title_id: None,
                     limit: RECENT_RELEASE_DECISIONS,
                     offset: 0,
+                    skip_total: false,
                 },
             )
             .await

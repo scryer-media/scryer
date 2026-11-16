@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -16,7 +16,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 use crate::backup_import_normalization::{
-    ImportColumnKind, ImportColumnRule, normalize_import_object_for_target,
+    ImportColumnKind, ImportColumnRule, InsertStatements, RestoreRowReader,
     strip_nonportable_backup_fields, validate_restore_manifest_table_set,
 };
 
@@ -612,84 +612,63 @@ async fn import_table_part(
     part_path: &Path,
 ) -> AppResult<()> {
     let target_columns = table_columns(conn, table).await?;
-
-    let file = File::open(part_path).map_err(|error| {
-        AppError::validation_refused(
-            crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
-            format!("backup table payload missing for {table}: {error}"),
-        )
-    })?;
-    let reader = BufReader::new(scryer_application::RestoreReader::new(file));
+    let mut rows = RestoreRowReader::open(table, part_path, target_columns.clone()).await?;
     let progress = scryer_application::current_restore_deadline();
+    let mut statements = InsertStatements::new();
+    let mut present = Vec::with_capacity(target_columns.len());
 
-    for (line_number, line) in reader.lines().enumerate() {
-        let line = line.map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_UNREADABLE,
-                format!("failed to read backup row {table}:{line_number}: {error}"),
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
+    loop {
+        let batch = rows.next_batch().await?;
+        if batch.is_empty() {
+            return Ok(());
         }
-        let value: JsonValue = serde_json::from_str(&line).map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_INVALID,
-                format!("invalid backup row for {table}:{line_number}: {error}"),
-            )
-        })?;
-        let mut object = value.as_object().cloned().ok_or_else(|| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_NOT_OBJECT,
-                format!("backup row for {table}:{line_number} is not an object"),
-            )
-        })?;
-        normalize_import_object_for_target(
-            table,
-            &mut object,
-            chrono::Utc::now(),
-            &target_columns,
-            line_number,
-        )?;
+        for row in batch {
+            let (line_number, mut object) = row?;
+            present.clear();
+            present.extend(
+                target_columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, column)| object.contains_key(column.name.as_str()))
+                    .map(|(index, _)| index),
+            );
+            if present.is_empty() {
+                continue;
+            }
 
-        let columns = target_columns
-            .iter()
-            .filter(|column| object.contains_key(column.name.as_str()))
-            .collect::<Vec<_>>();
-        if columns.is_empty() {
-            continue;
-        }
+            let insert_sql = statements.get(&present, || {
+                format!(
+                    "INSERT INTO {} ({}) VALUES ({})",
+                    quote_identifier(table),
+                    present
+                        .iter()
+                        .map(|&index| quote_identifier(&target_columns[index].name))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    std::iter::repeat_n("?", present.len())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            });
 
-        let insert_sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            quote_identifier(table),
-            columns
-                .iter()
-                .map(|column| quote_identifier(&column.name))
-                .collect::<Vec<_>>()
-                .join(", "),
-            std::iter::repeat_n("?", columns.len())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(&*insert_sql));
-        for column in &columns {
-            let value = object.get(&column.name).unwrap_or(&JsonValue::Null);
-            query = bind_json_value(query, value)?;
-        }
-        query.execute(&mut **conn).await.map_err(|error| {
-            AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_ROW_IMPORT_FAILED,
-                format!("failed to import backup row for {table}:{line_number}: {error}"),
-            )
-        })?;
-        if let Some(progress) = &progress {
-            progress.imported_row();
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(insert_sql));
+            for &index in &present {
+                let value = object
+                    .remove(&target_columns[index].name)
+                    .unwrap_or(JsonValue::Null);
+                query = bind_json_value(query, value)?;
+            }
+            query.execute(&mut **conn).await.map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_BACKUP_ROW_IMPORT_FAILED,
+                    format!("failed to import backup row for {table}:{line_number}: {error}"),
+                )
+            })?;
+            if let Some(progress) = &progress {
+                progress.imported_row();
+            }
         }
     }
-
-    Ok(())
 }
 
 async fn table_columns(
@@ -809,11 +788,11 @@ fn format_foreign_key_violations(violations: &[SqliteForeignKeyViolation]) -> St
 
 fn bind_json_value<'q>(
     query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
-    value: &JsonValue,
+    value: JsonValue,
 ) -> AppResult<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>> {
     Ok(match value {
         JsonValue::Null => query.bind(None::<String>),
-        JsonValue::Bool(value) => query.bind(if *value { 1_i64 } else { 0_i64 }),
+        JsonValue::Bool(value) => query.bind(if value { 1_i64 } else { 0_i64 }),
         JsonValue::Number(value) => {
             if let Some(value) = value.as_i64() {
                 query.bind(value)
@@ -834,8 +813,8 @@ fn bind_json_value<'q>(
                 ));
             }
         }
-        JsonValue::String(value) => query.bind(value.clone()),
-        JsonValue::Object(object)
+        JsonValue::String(value) => query.bind(value),
+        JsonValue::Object(ref object)
             if object.get(BLOB_MARKER_TYPE).and_then(JsonValue::as_str) == Some("blob") =>
         {
             let encoded = object
@@ -913,6 +892,136 @@ mod tests {
         assert_eq!(count, 2);
         drop(connection);
         pool.close().await;
+    }
+
+    const ROUND_TRIP_TABLE: &str = "CREATE TABLE restore_round_trip (
+        id TEXT PRIMARY KEY,
+        label TEXT,
+        amount INTEGER,
+        ratio REAL,
+        payload BLOB,
+        note TEXT DEFAULT 'synthetic-default',
+        flag INTEGER NOT NULL DEFAULT 0
+    )";
+
+    async fn round_trip_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(ROUND_TRIP_TABLE).execute(&pool).await.unwrap();
+        pool
+    }
+
+    async fn round_trip_rows(connection: &mut sqlx::SqliteConnection) -> Vec<JsonValue> {
+        sqlx::query("SELECT * FROM restore_round_trip ORDER BY id")
+            .fetch_all(connection)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| super::encode_row(row).unwrap())
+            .collect()
+    }
+
+    /// Exporting a table and importing the part into an empty copy gives
+    /// back every row and value, across several read batches and with rows
+    /// that leave different columns to their defaults.
+    #[tokio::test]
+    async fn exported_rows_restore_unchanged_across_read_batches() {
+        let source = round_trip_pool().await;
+        for index in 0..600_i64 {
+            let mut query = sqlx::query(if index % 3 == 0 {
+                "INSERT INTO restore_round_trip (id, label, amount, ratio, payload) VALUES (?, ?, ?, ?, ?)"
+            } else {
+                "INSERT INTO restore_round_trip (id, label, amount, ratio, payload, note, flag) VALUES (?, ?, ?, ?, ?, ?, 1)"
+            })
+            .bind(format!("synthetic-{index:04}"))
+            .bind((index % 5 != 0).then(|| format!("Synthetic \"label\" é {index}\t\\")))
+            .bind(match index % 4 {
+                0 => None,
+                1 => Some(i64::MAX - index),
+                2 => Some(-index),
+                _ => Some(0),
+            })
+            .bind((index % 7 != 0).then_some(index as f64 / 3.0 - 50.0))
+            .bind(match index % 6 {
+                0 => None,
+                1 => Some(Vec::new()),
+                _ => Some((0..(index % 200) as u8).collect::<Vec<u8>>()),
+            });
+            if index % 3 != 0 {
+                query = query.bind(if index % 2 == 0 { "" } else { "synthetic note" });
+            }
+            query.execute(&source).await.unwrap();
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut source_connection = source.acquire().await.unwrap();
+        let (exported, _) = super::export_table_part(
+            &mut source_connection,
+            "restore_round_trip",
+            directory.path(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exported, 600);
+        let expected = round_trip_rows(&mut source_connection).await;
+
+        let target = round_trip_pool().await;
+        let mut target_connection = target.acquire().await.unwrap();
+        let part = directory
+            .path()
+            .join(scryer_application::backup_table_part_filename(
+                "restore_round_trip",
+            ));
+        super::import_table_part(&mut target_connection, "restore_round_trip", &part)
+            .await
+            .unwrap();
+        assert_eq!(round_trip_rows(&mut target_connection).await, expected);
+    }
+
+    /// A bad line stops the restore with the line's reason and number, after
+    /// every row before it, and none after it, has been written.
+    #[tokio::test]
+    async fn a_bad_row_stops_the_restore_after_the_rows_before_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let part = directory.path().join("rows.jsonl");
+        let mut lines = Vec::new();
+        for index in 0..400 {
+            if index == 10 {
+                lines.push(String::new());
+            }
+            if index == 300 {
+                lines.push("{\"id\": ".to_string());
+            }
+            lines.push(if index % 2 == 0 {
+                format!("{{\"id\":\"synthetic-{index:04}\",\"amount\":{index}}}")
+            } else {
+                format!("{{\"id\":\"synthetic-{index:04}\",\"flag\":1,\"note\":null}}")
+            });
+        }
+        std::fs::write(&part, lines.join("\n")).unwrap();
+        let pool = round_trip_pool().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let error = super::import_table_part(&mut connection, "restore_round_trip", &part)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.validation_reason(),
+            Some(crate::error_reasons::DATASTORE_BACKUP_ROW_INVALID)
+        );
+        // Line 301 of the file, counting the blank line, is the bad one.
+        assert!(
+            error
+                .to_string()
+                .contains("invalid backup row for restore_round_trip:301:"),
+            "{error}"
+        );
+        let rows = round_trip_rows(&mut connection).await;
+        assert_eq!(rows.len(), 300);
+        assert_eq!(rows[1]["note"], JsonValue::Null);
+        assert_eq!(rows[0]["note"], JsonValue::from("synthetic-default"));
+        assert_eq!(rows[299]["id"], JsonValue::from("synthetic-0299"));
     }
 
     /// Migrate a throwaway SQLite database to head and hand back its pool.

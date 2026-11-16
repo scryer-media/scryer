@@ -1598,7 +1598,11 @@ async fn assert_decision_batch_matches_per_row(prefix: &str, fail_title: Option<
     }
     let decisions = decision_batch_fixture();
 
-    let batch = decision_batch_results(batch_store.insert_release_decisions(&decisions).await);
+    let batch = decision_batch_results(
+        batch_store
+            .insert_release_decisions(decisions.clone())
+            .await,
+    );
     let mut per_row = Vec::new();
     for decision in &decisions {
         per_row.push(row_store.insert_release_decision(decision).await);
@@ -1684,7 +1688,11 @@ async fn release_decision_batch_with_explanations_matches_per_row_across_chunks(
         })
         .collect::<Vec<_>>();
 
-    let batch = decision_batch_results(batch_store.insert_release_decisions(&decisions).await);
+    let batch = decision_batch_results(
+        batch_store
+            .insert_release_decisions(decisions.clone())
+            .await,
+    );
     let mut per_row = Vec::new();
     for decision in &decisions {
         per_row.push(row_store.insert_release_decision(decision).await);

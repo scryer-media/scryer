@@ -16,8 +16,7 @@ use scryer_domain::{
     NewDomainEvent, TitleHistoryEventType,
 };
 use scryer_infrastructure_sql::domain_event_payload::{
-    decode_domain_event_payload, derive_domain_event_projections,
-    encode_domain_event_payload_with_stored_json,
+    DomainEventPayloadEncoder, decode_domain_event_payload, derive_domain_event_projections,
 };
 use serde_json::Value as JsonValue;
 use sqlx::{Row, types::Json};
@@ -84,11 +83,8 @@ async fn append_domain_events_with_replay(
     // Serializing and compressing payloads is the expensive part of an
     // append, so it happens before the writer gate is taken. The transaction
     // only binds the prepared values, and a busy retry reuses them.
-    let prepared: std::sync::Arc<[PreparedDomainEvent]> = events
-        .iter()
-        .map(prepare_domain_event)
-        .collect::<AppResult<Vec<_>>>()?
-        .into();
+    let prepared: std::sync::Arc<[PreparedDomainEvent]> =
+        prepare_domain_events(events).await?.into();
     SqlRuntime::run_in_transaction(datastore, "append_domain_events", move |tx| {
         let prepared = std::sync::Arc::clone(&prepared);
         Box::pin(async move {
@@ -143,11 +139,66 @@ pub struct PreparedDomainEvent {
     stored_payload: scryer_domain::DomainEventPayload,
 }
 
+/// Batches up to this size are prepared on the calling task. Nearly every
+/// append carries one event, and a hand-off to the blocking pool costs more
+/// than serializing and compressing a few small payloads.
+const DOMAIN_EVENT_PREPARE_INLINE_MAX: usize = 16;
+
+/// Events prepared per blocking call for a larger batch. Bounding the call
+/// keeps one batch from holding a blocking thread for its whole length.
+const DOMAIN_EVENT_PREPARE_CHUNK: usize = 256;
+
+/// Prepares every event, in order, with one zstd context per run. The first
+/// event that cannot be prepared fails the batch, as it always has.
+async fn prepare_domain_events(events: Vec<NewDomainEvent>) -> AppResult<Vec<PreparedDomainEvent>> {
+    if events.len() <= DOMAIN_EVENT_PREPARE_INLINE_MAX {
+        let mut encoder = DomainEventPayloadEncoder::new();
+        return events
+            .iter()
+            .map(|event| prepare_domain_event_with(event, &mut encoder))
+            .collect();
+    }
+    let mut prepared = Vec::with_capacity(events.len());
+    let mut remaining = events.into_iter();
+    loop {
+        let chunk = remaining
+            .by_ref()
+            .take(DOMAIN_EVENT_PREPARE_CHUNK)
+            .collect::<Vec<_>>();
+        if chunk.is_empty() {
+            return Ok(prepared);
+        }
+        let chunk_prepared = tokio::task::spawn_blocking(move || {
+            let mut encoder = DomainEventPayloadEncoder::new();
+            chunk
+                .iter()
+                .map(|event| prepare_domain_event_with(event, &mut encoder))
+                .collect::<AppResult<Vec<_>>>()
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("domain event preparation task failed: {error}"))
+        })??;
+        prepared.extend(chunk_prepared);
+    }
+}
+
 pub fn prepare_domain_event(event: &NewDomainEvent) -> AppResult<PreparedDomainEvent> {
+    prepare_domain_event_with(event, &mut DomainEventPayloadEncoder::new())
+}
+
+/// The payload is serialized to a value once; its compact bytes are written
+/// once and compressed through `encoder`, and the stored payload is read back
+/// from that same value whenever a parse of the bytes would read it unchanged.
+fn prepare_domain_event_with(
+    event: &NewDomainEvent,
+    encoder: &mut DomainEventPayloadEncoder,
+) -> AppResult<PreparedDomainEvent> {
     let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
     let event_type = event.payload.event_type().as_str();
-    let (encoded_payload, stored_json) = encode_domain_event_payload_with_stored_json(&payload)
-        .map_err(|error| {
+    let projections = derive_domain_event_projections(event_type, &payload);
+    let (encoded_payload, stored_json) =
+        encoder.encode_with_stored_json(payload).map_err(|error| {
             AppError::Repository(format!(
                 "failed to encode domain event {} ({event_type}): {error}",
                 event.event_id
@@ -159,7 +210,6 @@ pub fn prepare_domain_event(event: &NewDomainEvent) -> AppResult<PreparedDomainE
             event.event_id
         ))
     })?;
-    let projections = derive_domain_event_projections(event_type, &payload);
     Ok(PreparedDomainEvent {
         event_id: event.event_id.clone(),
         insert_args: vec![

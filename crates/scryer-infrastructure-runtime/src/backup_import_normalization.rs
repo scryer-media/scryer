@@ -4,9 +4,11 @@ use scryer_application::{AppError, AppResult, restore_resets_hydration_derived_s
 use scryer_domain::MediaFacet;
 use scryer_infrastructure_library::media::libraries::state_store::encode_release_decision_explanation;
 use scryer_infrastructure_sql::domain_event_payload::{
-    derive_domain_event_projections, encode_domain_event_payload,
+    DomainEventPayloadEncoder, derive_domain_event_projections,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
+use std::io::{BufRead as _, BufReader};
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportColumnKind {
@@ -41,8 +43,28 @@ pub fn normalize_import_object_for_target(
     columns: &[ImportColumnRule],
     line_number: usize,
 ) -> AppResult<()> {
+    normalize_import_object_with(
+        table,
+        object,
+        now,
+        columns,
+        line_number,
+        &mut DomainEventPayloadEncoder::new(),
+    )
+}
+
+/// [`normalize_import_object_for_target`] with an encoder that the rows of
+/// one table part share.
+fn normalize_import_object_with(
+    table: &str,
+    object: &mut JsonMap<String, JsonValue>,
+    now: DateTime<Utc>,
+    columns: &[ImportColumnRule],
+    line_number: usize,
+    encoder: &mut DomainEventPayloadEncoder,
+) -> AppResult<()> {
     strip_nonportable_backup_fields(table, object);
-    normalize_import_object(table, object, now)?;
+    normalize_import_object(table, object, now, encoder)?;
     if table == "titles"
         && columns
             .iter()
@@ -87,27 +109,34 @@ fn normalize_import_object(
     table: &str,
     object: &mut JsonMap<String, JsonValue>,
     now: DateTime<Utc>,
+    encoder: &mut DomainEventPayloadEncoder,
 ) -> AppResult<()> {
     match table {
         "settings_definitions" => normalize_settings_definition_import_object(object, now),
         "settings_values" => normalize_settings_value_import_object(object, now),
         "titles" => normalize_title_import_object(object, now),
-        "domain_events" => normalize_domain_event_import_object(object)?,
+        "domain_events" => normalize_domain_event_import_object(object, encoder)?,
         "release_decisions" => normalize_release_decision_import_object(object)?,
         _ => {}
     }
     Ok(())
 }
 
-fn normalize_domain_event_import_object(object: &mut JsonMap<String, JsonValue>) -> AppResult<()> {
-    let Some(payload) = object.get("payload_json").cloned() else {
+fn normalize_domain_event_import_object(
+    object: &mut JsonMap<String, JsonValue>,
+    encoder: &mut DomainEventPayloadEncoder,
+) -> AppResult<()> {
+    // The payload is taken rather than copied; every path below either
+    // fails the restore or writes the field again in place.
+    let Some(payload) = object
+        .get_mut("payload_json")
+        .filter(|payload| !is_blob_marker(payload))
+        .map(std::mem::take)
+    else {
         return Ok(());
     };
-    if is_blob_marker(&payload) {
-        return Ok(());
-    }
     let payload = legacy_json_value(payload, "domain_events.payload_json")?;
-    let encoded = encode_domain_event_payload(&payload).map_err(|error| {
+    let encoded = encoder.encode(&payload).map_err(|error| {
         AppError::validation_refused(
             crate::error_reasons::DATASTORE_RESTORED_EVENT_INVALID,
             format!("failed to encode restored domain event payload: {error}"),
@@ -156,12 +185,14 @@ fn normalize_domain_event_import_object(object: &mut JsonMap<String, JsonValue>)
 fn normalize_release_decision_import_object(
     object: &mut JsonMap<String, JsonValue>,
 ) -> AppResult<()> {
-    let Some(explanation) = object.get("explanation_json").cloned() else {
+    // Taken rather than copied; both outcomes below write the field again.
+    let Some(explanation) = object
+        .get_mut("explanation_json")
+        .filter(|explanation| !explanation.is_null() && !is_blob_marker(explanation))
+        .map(std::mem::take)
+    else {
         return Ok(());
     };
-    if explanation.is_null() || is_blob_marker(&explanation) {
-        return Ok(());
-    }
     let decision_id = object
         .get("id")
         .and_then(JsonValue::as_str)
@@ -249,36 +280,36 @@ fn normalize_column_value(
     column: &ImportColumnRule,
     line_number: usize,
 ) -> AppResult<()> {
-    let Some(value) = object.get(&column.name).cloned() else {
+    let Some(value) = object.get(&column.name) else {
         return Ok(());
     };
+    let blank_text = matches!(value, JsonValue::String(text) if text.trim().is_empty());
+    let is_null = value.is_null();
 
-    if let JsonValue::String(text) = &value {
-        if text.trim().is_empty() && column.nullable_foreign_key {
+    if blank_text && column.nullable_foreign_key {
+        object.insert(column.name.clone(), JsonValue::Null);
+        return Ok(());
+    }
+
+    if blank_text && matches!(column.kind, ImportColumnKind::TimestampLike) {
+        if column.nullable {
             object.insert(column.name.clone(), JsonValue::Null);
             return Ok(());
         }
-
-        if text.trim().is_empty() && matches!(column.kind, ImportColumnKind::TimestampLike) {
-            if column.nullable {
-                object.insert(column.name.clone(), JsonValue::Null);
-                return Ok(());
-            }
-            if column.has_default {
-                object.remove(&column.name);
-                return Ok(());
-            }
-            return Err(AppError::validation_refused(
-                crate::error_reasons::DATASTORE_BACKUP_TIMESTAMP_BLANK,
-                format!(
-                    "backup row for {table}:{line_number} contains a blank required timestamp column `{}`",
-                    column.name
-                ),
-            ));
+        if column.has_default {
+            object.remove(&column.name);
+            return Ok(());
         }
+        return Err(AppError::validation_refused(
+            crate::error_reasons::DATASTORE_BACKUP_TIMESTAMP_BLANK,
+            format!(
+                "backup row for {table}:{line_number} contains a blank required timestamp column `{}`",
+                column.name
+            ),
+        ));
     }
 
-    if matches!(value, JsonValue::Null) {
+    if is_null {
         if !column.nullable && column.has_default {
             object.remove(&column.name);
         } else if !column.nullable {
@@ -521,6 +552,164 @@ fn missing_or_blank(value: Option<&JsonValue>) -> bool {
     }
 }
 
+/// Rows read from a backup table part per trip off the async runtime.
+const RESTORE_ROW_BATCH: usize = 256;
+
+/// A row of a backup table part, read, parsed and normalized for the target
+/// schema, with the line it came from; or the error that ends the part.
+pub(crate) type RestoreRow = AppResult<(usize, JsonMap<String, JsonValue>)>;
+
+type RestoreLines = std::iter::Enumerate<
+    std::io::Lines<BufReader<scryer_application::RestoreReader<std::fs::File>>>,
+>;
+
+/// Reads a backup table part in bounded batches on the blocking pool, so the
+/// file reads, JSON parsing and payload encoding stay off the async runtime.
+/// Rows come back in file order, and reading stops at the first error, which
+/// is the last item of its batch: a caller that inserts each row before
+/// looking at the next sees the same rows and the same error as reading line
+/// by line.
+pub(crate) struct RestoreRowReader {
+    state: Option<RestoreRowReaderState>,
+}
+
+struct RestoreRowReaderState {
+    lines: RestoreLines,
+    table: String,
+    columns: Vec<ImportColumnRule>,
+    encoder: DomainEventPayloadEncoder,
+}
+
+impl RestoreRowReader {
+    /// Opens `part_path`. The restore deadline is captured here, on the
+    /// task that runs the restore, as reading line by line did.
+    pub(crate) async fn open(
+        table: &str,
+        part_path: &Path,
+        columns: Vec<ImportColumnRule>,
+    ) -> AppResult<Self> {
+        let path = part_path.to_path_buf();
+        let file = tokio::task::spawn_blocking(move || std::fs::File::open(path))
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("backup table part open task failed: {error}"))
+            })?
+            .map_err(|error| {
+                AppError::validation_refused(
+                    crate::error_reasons::DATASTORE_BACKUP_TABLE_MISSING,
+                    format!("backup table payload missing for {table}: {error}"),
+                )
+            })?;
+        let lines = BufReader::new(scryer_application::RestoreReader::new(file))
+            .lines()
+            .enumerate();
+        Ok(Self {
+            state: Some(RestoreRowReaderState {
+                lines,
+                table: table.to_owned(),
+                columns,
+                encoder: DomainEventPayloadEncoder::new(),
+            }),
+        })
+    }
+
+    /// The next rows in file order; empty once the part is exhausted.
+    pub(crate) async fn next_batch(&mut self) -> AppResult<Vec<RestoreRow>> {
+        let Some(mut state) = self.state.take() else {
+            return Ok(Vec::new());
+        };
+        let (state, rows, more) = tokio::task::spawn_blocking(move || {
+            let (rows, more) = state.read_batch();
+            (state, rows, more)
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("backup table part read task failed: {error}"))
+        })?;
+        if more {
+            self.state = Some(state);
+        }
+        Ok(rows)
+    }
+}
+
+impl RestoreRowReaderState {
+    /// Up to [`RESTORE_ROW_BATCH`] rows, and whether more may follow.
+    fn read_batch(&mut self) -> (Vec<RestoreRow>, bool) {
+        let table = self.table.as_str();
+        let mut rows = Vec::with_capacity(RESTORE_ROW_BATCH);
+        while rows.len() < RESTORE_ROW_BATCH {
+            let Some((line_number, line)) = self.lines.next() else {
+                return (rows, false);
+            };
+            let row = (|| {
+                let line = line.map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::DATASTORE_BACKUP_ROW_UNREADABLE,
+                        format!("failed to read backup row {table}:{line_number}: {error}"),
+                    )
+                })?;
+                if line.trim().is_empty() {
+                    return Ok(None);
+                }
+                let value: JsonValue = serde_json::from_str(&line).map_err(|error| {
+                    AppError::validation_refused(
+                        crate::error_reasons::DATASTORE_BACKUP_ROW_INVALID,
+                        format!("invalid backup row for {table}:{line_number}: {error}"),
+                    )
+                })?;
+                let JsonValue::Object(mut object) = value else {
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::DATASTORE_BACKUP_ROW_NOT_OBJECT,
+                        format!("backup row for {table}:{line_number} is not an object"),
+                    ));
+                };
+                normalize_import_object_with(
+                    table,
+                    &mut object,
+                    Utc::now(),
+                    &self.columns,
+                    line_number,
+                    &mut self.encoder,
+                )?;
+                Ok(Some(object))
+            })();
+            match row {
+                Ok(None) => {}
+                Ok(Some(object)) => rows.push(Ok((line_number, object))),
+                Err(error) => {
+                    rows.push(Err(error));
+                    return (rows, false);
+                }
+            }
+        }
+        (rows, true)
+    }
+}
+
+/// The INSERT statement for each set of present columns, built once per set
+/// rather than once per row.
+pub(crate) struct InsertStatements {
+    statements: std::collections::HashMap<Vec<usize>, String>,
+}
+
+impl InsertStatements {
+    pub(crate) fn new() -> Self {
+        Self {
+            statements: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The statement for the target columns at `present`, built by `build`
+    /// the first time that set is seen.
+    pub(crate) fn get(&mut self, present: &[usize], build: impl FnOnce() -> String) -> &str {
+        if !self.statements.contains_key(present) {
+            self.statements.insert(present.to_vec(), build());
+        }
+        &self.statements[present]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -530,10 +719,10 @@ mod tests {
     use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
     use super::{
-        ImportColumnKind, ImportColumnRule, normalize_domain_event_import_object,
-        normalize_import_object_for_target, normalize_release_decision_import_object,
-        normalize_title_import_object, strip_nonportable_backup_fields,
-        validate_restore_manifest_table_set,
+        DomainEventPayloadEncoder, ImportColumnKind, ImportColumnRule,
+        normalize_domain_event_import_object, normalize_import_object_for_target,
+        normalize_release_decision_import_object, normalize_title_import_object,
+        strip_nonportable_backup_fields, validate_restore_manifest_table_set,
     };
 
     #[test]
@@ -1117,7 +1306,8 @@ mod tests {
             ),
         ]);
 
-        normalize_domain_event_import_object(&mut object).unwrap();
+        normalize_domain_event_import_object(&mut object, &mut DomainEventPayloadEncoder::new())
+            .unwrap();
 
         assert_eq!(
             object.get("import_status"),
@@ -1201,7 +1391,13 @@ mod tests {
             ),
         ]);
 
-        assert!(normalize_domain_event_import_object(&mut object).is_err());
+        assert!(
+            normalize_domain_event_import_object(
+                &mut object,
+                &mut DomainEventPayloadEncoder::new()
+            )
+            .is_err()
+        );
     }
 
     fn blob_marker_bytes(value: &JsonValue) -> Vec<u8> {

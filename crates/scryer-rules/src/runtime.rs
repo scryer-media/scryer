@@ -120,14 +120,33 @@ pub(crate) fn bounded_input_document<T: Serialize + ?Sized>(
     input: &T,
     limits: &RuntimeLimits,
 ) -> Result<serde_json::Value, RulesError> {
-    let bytes = serde_json::to_vec(input)?;
-    if bytes.len() > limits.max_input_bytes {
+    // The size is that of the serialized text, counted without keeping it.
+    // The document is then built straight from the input: for the bounded
+    // families' inputs, which hold no `f32` and no raw JSON, that is the value
+    // reading the text back would give.
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, input)?;
+    if counter.0 > limits.max_input_bytes {
         return Err(RulesError::InputTooLarge {
-            size: bytes.len(),
+            size: counter.0,
             limit: limits.max_input_bytes,
         });
     }
-    Ok(serde_json::from_slice(&bytes)?)
+    Ok(serde_json::to_value(input)?)
+}
+
+/// Counts the bytes written to it and keeps none.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Serialize an input document straight into the engine's value type, enforcing
@@ -208,6 +227,64 @@ mod tests {
         let err = bounded_input_value(&serde_json::json!({"key": "a long enough value"}), &limits)
             .unwrap_err();
         assert!(matches!(err, RulesError::InputTooLarge { .. }), "{err:?}");
+    }
+
+    /// What the bound did before: keep the serialized text, measure it, and
+    /// read it back.
+    fn reparsed_bounded_document<T: Serialize + ?Sized>(
+        input: &T,
+        limits: &RuntimeLimits,
+    ) -> Result<serde_json::Value, RulesError> {
+        let bytes = serde_json::to_vec(input)?;
+        if bytes.len() > limits.max_input_bytes {
+            return Err(RulesError::InputTooLarge {
+                size: bytes.len(),
+                limit: limits.max_input_bytes,
+            });
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    fn assert_bounds_as_before<T: Serialize + ?Sized>(input: &T) {
+        let size = serde_json::to_vec(input).unwrap().len();
+        let mut limits = RuntimeLimits::lifecycle_defaults();
+        for limit in [size.saturating_sub(1), size, size + 1] {
+            limits.max_input_bytes = limit;
+            match (
+                bounded_input_document(input, &limits),
+                reparsed_bounded_document(input, &limits),
+            ) {
+                (Ok(built), Ok(reparsed)) => {
+                    assert_eq!(built, reparsed);
+                    assert_eq!(
+                        serde_json::to_vec(&built).unwrap(),
+                        serde_json::to_vec(&reparsed).unwrap()
+                    );
+                }
+                (
+                    Err(RulesError::InputTooLarge { size, limit }),
+                    Err(RulesError::InputTooLarge {
+                        size: old_size,
+                        limit: old_limit,
+                    }),
+                ) => assert_eq!((size, limit), (old_size, old_limit)),
+                (built, reparsed) => panic!("bounded {built:?}, before {reparsed:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_documents_match_reading_the_text_back() {
+        assert_bounds_as_before(&crate::lifecycle::synthetic_lifecycle_input());
+        assert_bounds_as_before(&crate::request::synthetic_request_input());
+        assert_bounds_as_before(&serde_json::json!({
+            "text": "Synthetic \"quoted\" \\ é \u{1} \u{1F600}",
+            "numbers": [0, -1, i64::MIN, u64::MAX, 0.1, -0.0, 1e300, 5e-324, f64::NAN],
+            "nested": {"z": null, "a": [true, false, {}], "m": {"1": 2}},
+        }));
+        let map: std::collections::BTreeMap<i64, Option<String>> =
+            [(3, None), (-7, Some("synthetic".to_owned()))].into();
+        assert_bounds_as_before(&map);
     }
 
     #[test]
