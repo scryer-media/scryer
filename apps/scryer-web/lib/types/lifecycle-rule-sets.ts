@@ -11,9 +11,6 @@ export type LifecycleRuleState = "DISABLED" | "DRY_RUN" | "ENABLED";
 /// files or titles, so enabling such a rule needs a confirmation.
 export type LifecycleEffectArming = "NONE" | "REVERSIBLE" | "DESTRUCTIVE";
 
-/// Rule scope is distinct from an action's movie/show/season/episode vocabulary.
-export type LifecycleRuleScope = "TITLE" | "SEASON" | "EPISODE";
-
 /// An action a rule declares by defining a rule of that name in its source,
 /// as the API names it (`DELETE_FILES`). Any other rule name in the source is
 /// the author's own helper. The heads a build knows come from the served

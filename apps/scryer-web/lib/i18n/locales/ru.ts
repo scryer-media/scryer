@@ -12435,8 +12435,6 @@ const ru: LocaleDictionary = {
     "Тайтлы, соответствующие правилу, начиная с ближайшего срока. Действия ни над одним из них ещё не выполнялись.",
   "settings.lifecycleFileSummary": "Файлов: {{count}} · {{size}}",
   "settings.lifecycleTestTitle": "Выберите тайтл для проверки",
-  "settings.lifecycleNoSubjects":
-    "В этом тайтле нет объектов для выбранной области действия.",
   "settings.lifecyclePreviewExcluded": "Исключено из действий",
   "settings.lifecyclePreviewEstimatedDue": "При совпадении сейчас: {{time}}",
   "settings.lifecyclePreviewDue": "Окончание отсрочки: {{time}}",
@@ -12444,8 +12442,6 @@ const ru: LocaleDictionary = {
   "settings.lifecyclePreviewSample": "Выборка из медиатеки",
   "settings.lifecycleRuleTemplate": "Шаблон",
   "settings.lifecycleRuleTemplatePlaceholder": "Начать с шаблона",
-  "settings.lifecycleScopeSeason": "Сезон",
-  "settings.lifecycleScopeEpisode": "Эпизод",
   "settings.lifecycleFileDeleted": "Удалён",
   "settings.lifecycleFilePending": "Ожидает",
   "settings.lifecycleFileResults": "Результаты обработки файлов",

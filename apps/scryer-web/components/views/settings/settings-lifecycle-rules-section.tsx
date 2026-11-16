@@ -511,17 +511,14 @@ function LifecyclePreviewPanel({
   const [selectedSubject, setSelectedSubject] = React.useState<
     LifecycleTestSubject | undefined
   >();
-  const [targetPending, setTargetPending] = React.useState(false);
   const [manualTarget, setManualTarget] = React.useState(false);
   React.useEffect(() => {
     setSelectedSubject(undefined);
-    setTargetPending(false);
     setManualTarget(false);
   }, [previewSource, previewRuleSetId, previewLibraryId, draftName]);
   const canPreviewDraft = isEditorOpen;
   const canRun =
     !previewing &&
-    !targetPending &&
     Boolean(previewLibraryId || selectedSubject) &&
     (previewSource === "draft" ? canPreviewDraft : Boolean(previewRuleSetId));
 
@@ -631,11 +628,9 @@ function LifecyclePreviewPanel({
 
         <LifecycleSubjectPicker
           key={`${previewSource}:${previewRuleSetId}:${previewLibraryId}:${draftName}`}
-          scope="TITLE"
-          onChange={(subject, pending, active) => {
+          onChange={(subject) => {
             setSelectedSubject(subject);
-            setTargetPending(pending);
-            setManualTarget(active);
+            setManualTarget(Boolean(subject));
           }}
         />
         {!manualTarget && previewResult?.titles.length ? (

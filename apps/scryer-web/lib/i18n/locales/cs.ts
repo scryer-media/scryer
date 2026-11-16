@@ -5124,8 +5124,6 @@ const cs: LocaleDictionary = {
     "— Titul, řada nebo epizoda ve vyhodnocení",
   "settings.lifecycleFileSummary": "Soubory: {{count}} · {{size}}",
   "settings.lifecycleTestTitle": "Vyberte titul k otestování",
-  "settings.lifecycleNoSubjects":
-    "Pro vybraný rozsah nejsou v tomto titulu žádné subjekty.",
   "settings.lifecyclePreviewExcluded": "Vyloučeno z akcí",
   "settings.lifecyclePreviewEstimatedDue": "Při shodě nyní: {{time}}",
   "settings.lifecyclePreviewDue": "Konec ochranné doby: {{time}}",
@@ -5133,8 +5131,6 @@ const cs: LocaleDictionary = {
   "settings.lifecyclePreviewSample": "Vzorek knihovny",
   "settings.lifecycleRuleTemplate": "Šablona",
   "settings.lifecycleRuleTemplatePlaceholder": "Začít od šablony",
-  "settings.lifecycleScopeSeason": "Řada",
-  "settings.lifecycleScopeEpisode": "Epizoda",
   "settings.lifecycleFileDeleted": "Smazáno",
   "settings.lifecycleFilePending": "Čeká",
   "settings.lifecycleFileResults": "Výsledky souborů",

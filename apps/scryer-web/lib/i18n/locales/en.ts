@@ -9782,8 +9782,6 @@ const en: LocaleDictionary = {
     "— The title, season, or episode under evaluation",
   "settings.lifecycleFileSummary": "{{count}} files · {{size}}",
   "settings.lifecycleTestTitle": "Choose a title to test",
-  "settings.lifecycleNoSubjects":
-    "No subjects in this title for the selected scope.",
   "settings.lifecyclePreviewExcluded": "Excluded from actions",
   "settings.lifecyclePreviewEstimatedDue": "If matched now: {{time}}",
   "settings.lifecyclePreviewDue": "Grace deadline: {{time}}",
@@ -9791,8 +9789,6 @@ const en: LocaleDictionary = {
   "settings.lifecyclePreviewSample": "Library sample",
   "settings.lifecycleRuleTemplate": "Template",
   "settings.lifecycleRuleTemplatePlaceholder": "Start from a template",
-  "settings.lifecycleScopeSeason": "Season",
-  "settings.lifecycleScopeEpisode": "Episode",
   "settings.lifecycleFileDeleted": "Deleted",
   "settings.lifecycleFilePending": "Pending",
   "settings.lifecycleFileResults": "File results",

@@ -1,110 +1,17 @@
-import { userFacingGraphQlErrorMessage } from "../../lib/graphql/error-message.ts";
 import * as React from "react";
-import { useClient } from "urql";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
-import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
-import { episodeTitleOrTba } from "@/lib/utils/episode-title";
-import {
-  ruleSetTestTitleCollectionsQuery,
-  seriesCollectionEpisodesQuery,
-} from "@/lib/graphql/queries";
 import type { TitleRecord } from "@/lib/types";
-import type {
-  LifecycleRuleScope,
-  LifecycleTestSubject,
-} from "@/lib/types/lifecycle-rule-sets";
+import type { LifecycleTestSubject } from "@/lib/types/lifecycle-rule-sets";
 
-type CollectionOption = {
-  id: string;
-  label: string | null;
-  collectionIndex: string;
-  collectionType: string;
-};
-type EpisodeOption = {
-  id: string;
-  title: string | null;
-  episodeNumber: string | null;
-  absoluteNumber: string | null;
-};
-
-/** Choose catalog identities; preview resolves their ownership again. */
+/** Choose a title to preview; preview resolves its ownership again. */
 export function LifecycleSubjectPicker({
-  scope,
   onChange,
 }: {
-  scope: LifecycleRuleScope;
-  onChange: (
-    subject: LifecycleTestSubject | undefined,
-    pending: boolean,
-    active: boolean,
-  ) => void;
+  onChange: (subject: LifecycleTestSubject | undefined) => void;
 }) {
   const t = useTranslate();
-  const client = useClient();
   const [title, setTitle] = React.useState<TitleRecord | null>(null);
-  const [collections, setCollections] = React.useState<CollectionOption[]>([]);
-  const [collectionId, setCollectionId] = React.useState("");
-  const [episodes, setEpisodes] = React.useState<EpisodeOption[]>([]);
-  const [episodeId, setEpisodeId] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  React.useEffect(() => {
-    if (!title || scope === "TITLE") return;
-    let cancelled = false;
-    setLoading(true);
-    void client
-      .query(ruleSetTestTitleCollectionsQuery, { id: title.id })
-      .toPromise()
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          setError(
-            userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
-          );
-          return;
-        }
-        setCollections(
-          ((data?.title?.collections ?? []) as CollectionOption[]).filter(
-            (collection) =>
-              scope === "EPISODE" ||
-              ["season", "specials"].includes(
-                collection.collectionType.toLowerCase(),
-              ),
-          ),
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, title, scope, t]);
-  React.useEffect(() => {
-    if (!collectionId || scope !== "EPISODE") return;
-    let cancelled = false;
-    setLoading(true);
-    void client
-      .query(seriesCollectionEpisodesQuery, { id: collectionId })
-      .toPromise()
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          setError(
-            userFacingGraphQlErrorMessage(error, t("status.apiError"), t),
-          );
-          return;
-        }
-        setEpisodes(data?.collectionById?.episodes ?? []);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, collectionId, scope, t]);
   return (
     <div className="grid gap-3 md:grid-cols-3">
       <TitleAutocompletePicker
@@ -114,78 +21,9 @@ export function LifecycleSubjectPicker({
         placeholder={t("settings.lifecycleTestTitle")}
         onSelectedTitleChange={(next) => {
           setTitle(next);
-          setCollectionId("");
-          setEpisodeId("");
-          setCollections([]);
-          setEpisodes([]);
-          setError(null);
-          onChange(
-            next && scope === "TITLE"
-              ? { titleId: next.id, subjectId: next.id }
-              : undefined,
-            Boolean(next && scope !== "TITLE"),
-            Boolean(next),
-          );
+          onChange(next ? { titleId: next.id, subjectId: next.id } : undefined);
         }}
       />
-      {title && scope !== "TITLE" && (
-        <SingleSelectField
-          id="settings-lifecycle-test-season"
-          label={t("settings.lifecycleScopeSeason")}
-          value={collectionId}
-          disabled={loading}
-          options={collections.map((collection) => ({
-            value: collection.id,
-            label:
-              collection.label ??
-              `${t("settings.lifecycleScopeSeason")} ${collection.collectionIndex}`,
-          }))}
-          onValueChange={(id) => {
-            setCollectionId(id);
-            setEpisodeId("");
-            setEpisodes([]);
-            setError(null);
-            onChange(
-              scope === "SEASON"
-                ? { titleId: title.id, subjectId: id }
-                : undefined,
-              scope === "EPISODE",
-              true,
-            );
-          }}
-        />
-      )}
-      {title && collectionId && scope === "EPISODE" && (
-        <SingleSelectField
-          id="settings-lifecycle-test-episode"
-          label={t("settings.lifecycleScopeEpisode")}
-          value={episodeId}
-          disabled={loading}
-          options={episodes.map((episode) => ({
-            value: episode.id,
-            label: `${episode.episodeNumber ?? episode.absoluteNumber ?? "?"} · ${episodeTitleOrTba(episode.title, t)}`,
-          }))}
-          onValueChange={(id) => {
-            setEpisodeId(id);
-            onChange({ titleId: title.id, subjectId: id }, false, true);
-          }}
-        />
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      {title &&
-        scope !== "TITLE" &&
-        !loading &&
-        !error &&
-        (collections.length === 0 ||
-          (scope === "EPISODE" && collectionId && episodes.length === 0)) && (
-          <p className="text-sm text-muted-foreground">
-            {t("settings.lifecycleNoSubjects")}
-          </p>
-        )}
     </div>
   );
 }
