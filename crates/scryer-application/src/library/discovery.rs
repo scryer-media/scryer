@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
 
 use super::*;
-use crate::disk::{Disk, EntryKind, Listed, PathReading};
+use crate::disk::{Disk, DiskError, EntryKind, Listed, PathReading, Visited};
 #[cfg(test)]
 use crate::library_filename_parser::library_title_walk;
 #[cfg(test)]
@@ -1564,16 +1564,27 @@ async fn directory_has_episode_layout(
     if episode_folders.is_empty() {
         return Ok(false);
     }
-    let (entries, end) = listed_kinds(path).await?;
-    for (child, kind) in entries {
-        if kind == EntryKind::Directory
-            && episode_folders.matches(&child.file_name().unwrap_or_default().to_string_lossy())
-            && directory_has_direct_media(&child).await?
-        {
-            return Ok(true);
+    let EpisodeFolderBoundaryPolicy::Configured(patterns) = episode_folders;
+    let patterns = patterns.to_vec();
+    // Each season folder is checked as the listing reaches it, so the walk
+    // stops at the first one holding media.
+    let disk = Disk::process();
+    let found = disk.visit(path, Ok(false), move |found, entry| {
+        let policy = EpisodeFolderBoundaryPolicy::Configured(&patterns);
+        *found = entry.and_then(|entry| {
+            Ok(entry.kind()? == EntryKind::Directory
+                && policy.matches(&entry.name().to_string_lossy())
+                && loose_root_files_blocking(&Disk::process(), entry.path())? > 0)
+        });
+        match found {
+            Ok(false) => ControlFlow::Continue(()),
+            _ => ControlFlow::Break(()),
         }
-    }
-    end.map(|()| false)
+    });
+    found
+        .await
+        .and_then(|found| found)
+        .map_err(|error| AppError::Repository(error.to_string()))
 }
 
 /// The entries of `dir` with their kinds, in listing order, up to the first
@@ -1914,25 +1925,42 @@ pub(crate) async fn list_child_directories(root: &Path) -> AppResult<Vec<PathBuf
 }
 
 pub(crate) async fn count_series_loose_root_files(root: &Path) -> AppResult<usize> {
-    let mut count = 0usize;
-    let (entries, end) = listed_kinds(root).await?;
-    end?;
-    for (path, kind) in entries {
-        if kind != EntryKind::File
-            || should_skip_library_top_level_entry(&path, false)
-            || path
+    Disk::process()
+        .visit(root, Ok(0), count_loose_root_file)
+        .await
+        .and_then(|count| count)
+        .map_err(|error| AppError::Repository(error.to_string()))
+}
+
+/// [`count_series_loose_root_files`] on a blocking thread.
+fn loose_root_files_blocking(disk: &Disk, root: &Path) -> Result<usize, DiskError> {
+    let mut count = Ok(0);
+    disk.visit_blocking(root, |entry| count_loose_root_file(&mut count, entry))?;
+    count
+}
+
+/// Count `entry` when it is a loose video file; an entry whose listing or
+/// kind could not be read replaces the count with its error and stops.
+fn count_loose_root_file(
+    count: &mut Result<usize, DiskError>,
+    entry: Result<Visited, DiskError>,
+) -> ControlFlow<()> {
+    let counts = entry.and_then(|entry| {
+        let path = entry.path();
+        Ok(entry.kind()? == EntryKind::File
+            && !should_skip_library_top_level_entry(path, false)
+            && !path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .is_some_and(is_ignored_media_extra_file_name)
-            || !is_allowed_video_path(&path)
-        {
-            continue;
-        }
-
-        count = count.saturating_add(1);
+            && is_allowed_video_path(path))
+    });
+    let total = std::mem::replace(count, Ok(0));
+    *count = total.and_then(|total| Ok(total + usize::from(counts?)));
+    match count {
+        Ok(_) => ControlFlow::Continue(()),
+        Err(_) => ControlFlow::Break(()),
     }
-
-    Ok(count)
 }
 
 #[cfg(test)]

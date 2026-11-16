@@ -1275,13 +1275,20 @@ pub(crate) async fn write_nfo_if_absent(path: &Path, content: &str) -> NfoWriteO
         tracing::warn!(error = %error, path = %path.display(), "failed to write NFO sidecar");
         return NfoWriteOutcome::Failed;
     }
-    publish_staged(&disk, &staged, path, content).await
+    let published = disk.link(&staged, path, Link::Hard).await;
+    publish_staged(&disk, published, &staged, path, content).await
 }
 
-/// Link the staged content to `path`, never replacing a file there, and drop
-/// the staging file whatever the outcome.
-async fn publish_staged(disk: &Disk, staged: &Path, path: &Path, content: &str) -> NfoWriteOutcome {
-    let published = disk.link(staged, path, Link::Hard).await;
+/// Finish publishing the staged content to `path` after its hard link came
+/// back as `published`, never replacing a file there, and drop the staging
+/// file whatever the outcome.
+async fn publish_staged(
+    disk: &Disk,
+    published: Result<LinkOutcome, DiskError>,
+    staged: &Path,
+    path: &Path,
+    content: &str,
+) -> NfoWriteOutcome {
     let _ = disk.remove(staged, Remove::File).await;
     let written = match published {
         Ok(LinkOutcome::Linked) => Ok(()),
@@ -3234,11 +3241,88 @@ Pattern: Bonus/Bonus {sp,1-3,+4}.mp4
         write_new(&disk, &staged, ours, true).await.unwrap();
         stdfs::write(&path, existing).unwrap();
 
-        let outcome = publish_staged(&disk, &staged, &path, ours).await;
+        let published = disk.link(&staged, &path, Link::Hard).await;
+        let outcome = publish_staged(&disk, published, &staged, &path, ours).await;
 
         assert_eq!(outcome, NfoWriteOutcome::SkippedExisting);
         assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
         assert!(!staged.exists(), "the staging file outlived the publish");
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = stdfs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Stage `ours` beside `path` and settle a publish whose link came back
+    /// as `published`.
+    async fn settle_staged(
+        path: &Path,
+        ours: &str,
+        published: Result<LinkOutcome, DiskError>,
+    ) -> NfoWriteOutcome {
+        let disk = Disk::process();
+        let staged = crate::disk::staging_path_for(path);
+        write_new(&disk, &staged, ours, true).await.unwrap();
+        let outcome = publish_staged(&disk, published, &staged, path, ours).await;
+        assert!(!staged.exists(), "the staging file outlived the publish");
+        outcome
+    }
+
+    #[tokio::test]
+    async fn without_hard_links_the_sidecar_is_written_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Invented Show - S01E01.nfo");
+        let ours = "<episodedetails><title>Ours</title></episodedetails>\n";
+
+        let outcome = settle_staged(&path, ours, Ok(LinkOutcome::NotPossible)).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::Written);
+        assert_eq!(stdfs::read_to_string(&path).unwrap(), ours);
+        assert_eq!(names_in(dir.path()), ["Invented Show - S01E01.nfo"]);
+    }
+
+    #[tokio::test]
+    async fn without_hard_links_a_file_that_appeared_after_the_check_keeps_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Invented Show - S01E01.nfo");
+        let existing = "<episodedetails><title>Someone else's</title></episodedetails>\n";
+        stdfs::write(&path, existing).unwrap();
+
+        let outcome =
+            settle_staged(&path, "<episodedetails/>\n", Ok(LinkOutcome::NotPossible)).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::SkippedExisting);
+        assert_eq!(stdfs::read_to_string(&path).unwrap(), existing);
+        assert_eq!(names_in(dir.path()), ["Invented Show - S01E01.nfo"]);
+    }
+
+    /// A link that failed outright falls back to writing in place; when that
+    /// fails too, nothing is left behind, neither the sidecar nor the stage.
+    #[tokio::test]
+    async fn a_failed_publish_leaves_no_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        stdfs::write(dir.path().join("invented-neighbour.nfo"), "kept").unwrap();
+        // A name no filesystem accepts makes the in-place write fail.
+        let path = dir.path().join(format!("{}.nfo", "n".repeat(300)));
+        let refused = DiskError::new(
+            DiskVerb::Link,
+            &path,
+            std::io::ErrorKind::PermissionDenied.into(),
+        );
+
+        let outcome = settle_staged(&path, "<episodedetails/>\n", Err(refused)).await;
+
+        assert_eq!(outcome, NfoWriteOutcome::Failed);
+        assert_eq!(names_in(dir.path()), ["invented-neighbour.nfo"]);
+        assert_eq!(
+            stdfs::read_to_string(dir.path().join("invented-neighbour.nfo")).unwrap(),
+            "kept"
+        );
     }
 
     #[tokio::test]

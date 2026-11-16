@@ -12,7 +12,6 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -112,6 +111,9 @@ impl RawVisit for std::fs::DirEntry {
     }
 }
 
+/// The entries of an open directory, read one at a time.
+pub(crate) type DirEntries = Box<dyn Iterator<Item = io::Result<Box<dyn RawVisit>>> + Send>;
+
 /// Whether a written file reached stable storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncOutcome {
@@ -194,13 +196,9 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// Does not follow links.
     fn lstat(&self, path: &Path) -> io::Result<RawStat>;
     fn list(&self, path: &Path) -> io::Result<Vec<RawEntry>>;
-    /// Each entry of a directory in listing order until `each` stops, an
-    /// entry the listing failed on passed as its error.
-    fn visit(
-        &self,
-        path: &Path,
-        each: &mut dyn FnMut(io::Result<Box<dyn RawVisit>>) -> ControlFlow<()>,
-    ) -> io::Result<()>;
+    /// Opens a directory. Its entries are read in listing order as the
+    /// iterator is driven, an entry the listing failed on as its error.
+    fn open_dir(&self, path: &Path) -> io::Result<DirEntries>;
     /// Whether a directory holds any entry, reading at most one.
     fn has_entries(&self, path: &Path) -> io::Result<bool>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
@@ -341,17 +339,11 @@ impl DiskBackend for SystemBackend {
         Ok(entries)
     }
 
-    fn visit(
-        &self,
-        path: &Path,
-        each: &mut dyn FnMut(io::Result<Box<dyn RawVisit>>) -> ControlFlow<()>,
-    ) -> io::Result<()> {
-        for entry in std::fs::read_dir(path)? {
-            if each(entry.map(|entry| Box::new(entry) as Box<dyn RawVisit>)).is_break() {
-                break;
-            }
-        }
-        Ok(())
+    fn open_dir(&self, path: &Path) -> io::Result<DirEntries> {
+        let entries = std::fs::read_dir(path)?;
+        Ok(Box::new(entries.map(|entry| {
+            entry.map(|entry| Box::new(entry) as Box<dyn RawVisit>)
+        })))
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {

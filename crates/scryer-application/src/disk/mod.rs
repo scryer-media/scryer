@@ -456,6 +456,20 @@ impl Visited {
     }
 }
 
+/// Pass each entry of the open directory `dir` to `each` until it stops.
+fn walk(
+    dir: &Path,
+    mut entries: backend::DirEntries,
+    mut each: impl FnMut(Result<Visited, DiskError>) -> ControlFlow<()>,
+) {
+    let visited = |raw: Box<dyn backend::RawVisit>| Visited {
+        path: dir.join(raw.name()),
+        raw,
+    };
+    let failed = |error| DiskError::new(DiskVerb::List, dir, error);
+    let _ = entries.try_for_each(|entry| each(entry.map(visited).map_err(failed)));
+}
+
 /// Keep `entry` in `kept` when `keep` accepts it; an entry the listing failed
 /// on replaces `kept` with its error and stops.
 fn gather(
@@ -572,6 +586,12 @@ impl Disk {
         let reading = self.lstat(path);
         self.inner.cache.store(&key, reading, epoch);
         reading
+    }
+
+    /// [`Self::fresh_blocking`] that always asks the disk, for a fact another
+    /// name of the same file can change: its link count.
+    pub fn uncached_blocking(&self, path: &Path) -> PathReading {
+        self.lstat(path)
     }
 
     /// [`Self::fresh_blocking`] off the async runtime, bounded by the root's
@@ -713,21 +733,21 @@ impl Disk {
     pub fn visit_blocking(
         &self,
         dir: &Path,
-        mut each: impl FnMut(Result<Visited, DiskError>) -> ControlFlow<()>,
+        each: impl FnMut(Result<Visited, DiskError>) -> ControlFlow<()>,
     ) -> Result<(), DiskError> {
-        let failed = |error| DiskError::new(DiskVerb::List, dir, error);
-        self.call("visit", || {
-            (self.inner.backend).visit(dir, &mut |entry| {
-                each(entry.map_err(failed).map(|raw| Visited {
-                    path: dir.join(raw.name()),
-                    raw,
-                }))
-            })
-        })
-        .map_err(failed)
+        walk(dir, self.open_dir_blocking(dir)?, each);
+        Ok(())
+    }
+
+    fn open_dir_blocking(&self, dir: &Path) -> Result<backend::DirEntries, DiskError> {
+        self.call("visit", || self.inner.backend.open_dir(dir))
+            .map_err(|error| DiskError::new(DiskVerb::List, dir, error))
     }
 
     /// [`Self::visit_blocking`] off the runtime, `each` folding into `state`.
+    /// Under a configured root only opening the directory is bounded, as
+    /// [`Self::read`] bounds only the open: a long walk neither fails nor
+    /// marks the root as stuck.
     pub async fn visit<T: Send + 'static>(
         &self,
         dir: impl Into<PathBuf>,
@@ -736,8 +756,13 @@ impl Disk {
     ) -> Result<T, DiskError> {
         let dir = dir.into();
         let timeout = self.traits(&dir).probe_timeout;
-        self.run(DiskVerb::List, dir, timeout, move |disk, dir| {
-            disk.visit_blocking(dir, |entry| each(&mut state, entry))?;
+        let entries = self
+            .run(DiskVerb::List, dir.clone(), timeout, |disk, dir| {
+                disk.open_dir_blocking(dir)
+            })
+            .await?;
+        self.run(DiskVerb::List, dir, None, move |_, dir| {
+            walk(dir, entries, |entry| each(&mut state, entry));
             Ok(state)
         })
         .await
@@ -1171,6 +1196,12 @@ impl Disk {
         // and kept; only a regular file is emptied and reused.
         let open = Open::create_or_keep().without_following_links();
         let mut file = backend.open(staged, open.with_access(access))?;
+        // The open refuses links; FILE_ATTRIBUTE_REPARSE_POINT refuses any
+        // other reparse point.
+        #[cfg(windows)]
+        if std::os::windows::fs::MetadataExt::file_attributes(&file.metadata()?) & 0x400 != 0 {
+            return Err(backend::Refused::Link.into());
+        }
         if matches!(access, Access::OwnerOnly) {
             backend.restrict_handle_to_owner(&file, OwnerOnly::File)?;
         }

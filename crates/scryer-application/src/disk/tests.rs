@@ -204,23 +204,16 @@ impl DiskBackend for Scripted {
             .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
     /// An entry scripted with an empty name is one the listing fails on.
-    fn visit(
-        &self,
-        path: &Path,
-        each: &mut dyn FnMut(io::Result<Box<dyn RawVisit>>) -> std::ops::ControlFlow<()>,
-    ) -> io::Result<()> {
+    fn open_dir(&self, path: &Path) -> io::Result<super::backend::DirEntries> {
         self.record("visit", path)?;
         let listing = self.listings.lock().unwrap().get(path).cloned();
-        for entry in listing.ok_or(io::ErrorKind::NotFound)? {
-            let entry = match entry.name.is_empty() {
+        let listing = listing.ok_or(io::ErrorKind::NotFound)?;
+        Ok(Box::new(listing.into_iter().map(
+            |entry| match entry.name.is_empty() {
                 true => Err(io::ErrorKind::InvalidData.into()),
                 false => Ok(Box::new(entry) as Box<dyn RawVisit>),
-            };
-            if each(entry).is_break() {
-                break;
-            }
-        }
-        Ok(())
+            },
+        )))
     }
     fn has_entries(&self, path: &Path) -> io::Result<bool> {
         self.record("has_entries", path)?;
@@ -2160,6 +2153,28 @@ fn a_reading_carries_the_link_count() {
     );
 }
 
+#[test]
+fn an_uncached_read_sees_a_link_count_another_name_lowered() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let survivor = p("/srv/fixture-media/a.mkv");
+    let linked = |links| Ok(RawStat { links, ..file(5) });
+    backend.stat_is("/srv/fixture-media/a.mkv", linked(Some(2)));
+    assert_eq!(disk.uncached_blocking(&survivor).link_count(), Some(2));
+    assert_eq!(disk.fresh_blocking(&survivor).link_count(), Some(2));
+
+    let sibling = p("/srv/fixture-media/b.mkv");
+    assert_eq!(
+        disk.remove_blocking(&sibling, Remove::File).unwrap(),
+        Removal::Removed
+    );
+    backend.stat_is("/srv/fixture-media/a.mkv", linked(Some(1)));
+
+    assert_eq!(disk.fresh_blocking(&survivor).link_count(), Some(2));
+    assert_eq!(disk.uncached_blocking(&survivor).link_count(), Some(1));
+    assert_eq!(backend.calls_of("lstat"), 3);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reads_under_a_stuck_root_are_refused_but_writes_go_out() {
     let clock = ManualClock::at(at(0));
@@ -2396,6 +2411,56 @@ async fn a_visit_reads_names_first_stops_when_asked_and_passes_a_bad_entry_on() 
         missing.err().map(|error| error.reason()),
         Some(reason::DISK_PATH_MISSING)
     );
+}
+
+// The paused clock never moves while blocking work runs, and is moved past
+// the bound by hand while the walk is held.
+#[tokio::test(start_paused = true)]
+async fn under_a_root_only_opening_a_visit_is_bounded_not_walking_it() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let bound = std::time::Duration::from_secs(60);
+    disk.set_probe_timeout_for_test(bound);
+    let show = "/srv/fixture-media/Invented Show";
+    backend.lists(
+        show,
+        &[
+            ("a.mkv", Some(EntryKind::File)),
+            ("b.mkv", Some(EntryKind::File)),
+        ],
+    );
+    backend.stat_is("/srv/fixture-media/other.nfo", Ok(file(5)));
+    let (release, gate) = mpsc::channel::<()>();
+    let (entered_tx, entered) = mpsc::channel();
+
+    let walking = {
+        let disk = disk.clone();
+        tokio::spawn(async move {
+            disk.visit(show, Vec::new(), move |names, entry| {
+                if names.is_empty() {
+                    entered_tx.send(()).unwrap();
+                    gate.recv().unwrap();
+                }
+                names.push(entry.unwrap().name().to_string_lossy().into_owned());
+                ControlFlow::Continue(())
+            })
+            .await
+        })
+    };
+    tokio::task::spawn_blocking(move || entered.recv().expect("walk entered"))
+        .await
+        .unwrap();
+    tokio::time::advance(bound * 2).await;
+    let learned = read(&disk.inner.volumes).learned(&p(show)).unwrap();
+    assert!(learned.is_clear(), "a slow walk marks nothing stuck");
+    assert_eq!(
+        disk.fresh("/srv/fixture-media/other.nfo").await.exists(),
+        Some(true)
+    );
+    release.send(()).unwrap();
+    assert_eq!(walking.await.unwrap().unwrap(), ["a.mkv", "b.mkv"]);
+    assert!(learned.is_clear());
+    assert_eq!(backend.calls_of("visit"), 1);
 }
 
 mod system {

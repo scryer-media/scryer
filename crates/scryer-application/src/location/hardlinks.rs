@@ -86,7 +86,7 @@ impl HardlinkFact {
 /// still stat'ed — so a missing or unreadable path is still an error — but the
 /// count comes back as [`LinkCount::Unsupported`].
 pub fn link_count(path: &Path) -> AppResult<LinkCount> {
-    let reading = Disk::process().fresh_blocking(path);
+    let reading = Disk::process().uncached_blocking(path);
     if reading.exists() != Some(true) {
         return Err(unreadable_for_hardlinks(path, reading));
     }
@@ -116,7 +116,7 @@ pub fn hardlink_fact(path: &Path) -> AppResult<HardlinkFact> {
 /// Read the link count and size of `path` (blocking), returning `Ok(None)` when
 /// the path no longer exists.
 pub fn hardlink_fact_optional(path: &Path) -> AppResult<Option<HardlinkFact>> {
-    let reading = Disk::process().fresh_blocking(path);
+    let reading = Disk::process().uncached_blocking(path);
     match reading.exists() {
         Some(true) => Ok(Some(HardlinkFact {
             path: path.display().to_string(),
