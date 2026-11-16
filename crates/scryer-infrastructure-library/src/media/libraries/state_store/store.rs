@@ -1086,19 +1086,15 @@ impl AcquisitionScopeStateRepository for WantedStore {
                 let grabbed_release = release.clone();
                 Box::pin(async move {
                     for item in items.iter() {
-                        let id = match fetch_seed_target_tx(tx, item).await? {
-                            Some(existing) => existing.id,
-                            None => execute_wanted_upsert_tx(tx, &datastore, item).await?,
-                        };
-                        let last_search_at = match SqlRuntime::fetch_optional(
-                            SqlExec::Tx(tx),
-                            "SELECT last_search_at FROM wanted_items WHERE id = {}",
-                            &[SqlArg::Text(id.clone())],
-                        )
-                        .await?
-                        {
-                            Some(row) => row.opt_timestamp_text("last_search_at")?,
-                            None => None,
+                        // The search time kept is the one already in hand: the
+                        // existing row's, read in this transaction, or the one a
+                        // new row was just written with.
+                        let (id, last_search_at) = match fetch_seed_target_tx(tx, item).await? {
+                            Some(existing) => (existing.id, existing.last_search_at),
+                            None => (
+                                execute_wanted_upsert_tx(tx, &datastore, item).await?,
+                                item.last_search_at.clone(),
+                            ),
                         };
                         let now = Utc::now().to_rfc3339();
                         SqlRuntime::execute(
