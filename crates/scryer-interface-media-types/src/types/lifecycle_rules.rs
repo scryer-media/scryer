@@ -141,6 +141,26 @@ pub enum LifecycleActionHead {
     Notify,
     /// `fetch_subtitles`: search for subtitles.
     FetchSubtitles,
+    /// `monitor_season`: monitor one season.
+    MonitorSeason,
+    /// `unmonitor_season`: stop monitoring one season and its episodes.
+    UnmonitorSeason,
+    /// `delete_season_files`: unmonitor one season, then delete its files.
+    DeleteSeasonFiles,
+    /// `fetch_season_subtitles`: search for one season's subtitles.
+    FetchSeasonSubtitles,
+    /// `notify_season`: send a notification naming the rule and the season.
+    NotifySeason,
+    /// `monitor_episode`: monitor one episode.
+    MonitorEpisode,
+    /// `unmonitor_episode`: stop monitoring one episode.
+    UnmonitorEpisode,
+    /// `delete_episode_files`: unmonitor one episode, then delete its files.
+    DeleteEpisodeFiles,
+    /// `fetch_episode_subtitles`: search for one episode's subtitles.
+    FetchEpisodeSubtitles,
+    /// `notify_episode`: send a notification naming the rule and the episode.
+    NotifyEpisode,
 }
 
 /// What a matcher decided for one subject.
@@ -182,8 +202,6 @@ pub struct LifecycleRuleSet {
     pub system_owned: bool,
     /// Libraries the rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
-    /// Granularity the rule is scoped to.
-    pub subject_kind: LifecycleRuleSubjectKind,
     /// Revision number of the matcher currently in force.
     pub current_revision_number: i32,
     /// Grace period of the revision currently in force, in days.
@@ -228,9 +246,6 @@ pub struct LifecycleRuleRevision {
     pub rego_source: String,
     /// Days a subject must match continuously before the action becomes due.
     pub grace_days: i32,
-    /// Configured library root whose capacity and owned files this revision
-    /// uses, or null when it is not storage-scoped.
-    pub storage_root_id: Option<String>,
     /// Hash of the exact stored source, used to attribute a decision to the
     /// revision that produced it.
     pub matcher_content_hash: String,
@@ -417,12 +432,6 @@ pub struct LifecyclePreviewTitle {
     pub file_count: i32,
     /// Combined size in bytes of this subject's current files.
     pub total_size_bytes: i64,
-    /// Number of files eligible for deletion on the selected storage root, or
-    /// null when this matcher does not select a resolvable root.
-    pub storage_root_file_count: Option<i32>,
-    /// Combined bytes eligible for deletion on the selected storage root, or
-    /// null when this matcher does not select a resolvable root.
-    pub storage_root_total_size_bytes: Option<i64>,
     /// Subject scope: title, season, or episode.
     pub subject_kind: String,
     /// Scryer title, collection, or episode ID for the selected scope.
@@ -481,14 +490,6 @@ pub struct LifecycleCandidate {
     pub file_count: Option<i32>,
     /// Current subject file size in bytes, or null if the subject is unavailable.
     pub total_size_bytes: Option<i64>,
-    /// Number of unambiguously owned current subject files on the root selected
-    /// by this candidate's pinned revision, or null when no root is selected or
-    /// exact root ownership cannot be established.
-    pub storage_root_file_count: Option<i32>,
-    /// Total bytes of unambiguously owned current subject files on the root
-    /// selected by this candidate's pinned revision. It is null under the same
-    /// conditions as `storageRootFileCount`.
-    pub storage_root_total_size_bytes: Option<i64>,
     /// Exact subject display label, falling back to its ID if unavailable.
     pub subject_label: String,
     /// Subject scope: title, season, or episode.
@@ -739,8 +740,6 @@ pub struct LifecycleEvaluationTriggerPayload {
 /// Creates a lifecycle rule set together with its first matcher revision.
 #[derive(InputObject)]
 pub struct CreateLifecycleRuleSetInput {
-    /// Defaults to title scope when omitted.
-    pub subject_kind: Option<LifecycleRuleSubjectKind>,
     /// Rule-set name.
     pub name: String,
     /// Optional description.
@@ -753,9 +752,6 @@ pub struct CreateLifecycleRuleSetInput {
     pub grace_days: Option<i32>,
     /// Libraries to confine the rule to. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
-    /// Configured library root whose capacity and owned files this revision
-    /// uses. Required when the matcher reads a storage fact.
-    pub storage_root_id: Option<String>,
     /// The simple builder's document for the source, or omitted for a rule
     /// written by hand.
     pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
@@ -777,9 +773,6 @@ pub struct UpdateLifecycleRuleMatcherInput {
     /// Days a subject must match continuously before the action becomes due;
     /// defaults to zero.
     pub grace_days: Option<i32>,
-    /// Configured library root. Omission preserves the current root, null
-    /// clears it, and a value replaces it.
-    pub storage_root_id: MaybeUndefined<ID>,
     /// The simple builder's document. Omit to keep the current revision's
     /// document, pass null to clear it, or pass a document to replace it.
     pub builder_model: MaybeUndefined<Json<serde_json::Value>>,
@@ -868,17 +861,12 @@ pub struct ValidateLifecycleRuleInput {
 pub struct PreviewLifecycleRuleInput {
     /// Selected libraries for an unsaved matcher; empty means all libraries.
     pub library_ids: Option<Vec<String>>,
-    /// Defaults to title scope when omitted.
-    pub subject_kind: Option<LifecycleRuleSubjectKind>,
     /// Stored rule set to preview at its current revision.
     pub rule_set_id: Option<ID>,
     /// Unsaved matcher source to preview, as written in the editor.
     pub rego_source: Option<String>,
     /// Grace period for the unsaved draft; defaults to zero.
     pub grace_days: Option<i32>,
-    /// Configured library root for an unsaved matcher. Required when its
-    /// matcher reads a storage fact.
-    pub storage_root_id: Option<String>,
     /// Optional exact subjects, requiring their owning `titleIds`.
     pub subject_ids: Option<Vec<ID>>,
     /// Evaluate exactly these titles.

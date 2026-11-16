@@ -7,9 +7,10 @@ import {
 } from "./rule-builder.ts";
 
 /// Lifecycle rules: conditions read `input.facts`, where a fact with nothing
-/// to report is missing rather than null. Rules are scoped to titles, seasons
-/// or episodes, and that scope is the builder variant. The actions come from
-/// the server, in the order it applies them.
+/// to report is missing rather than null. Each action acts on the title, a
+/// season or an episode, the subject the server lists it under; a season or
+/// episode action may also read that subject's own facts. The actions come
+/// from the server, in the order it applies them.
 export const LIFECYCLE_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
   family: "lifecycle",
   idPrefix: "settings-lifecycle-builder",
@@ -49,6 +50,5 @@ export const LIFECYCLE_RULE_BUILDER_BASE: RuleBuilderBaseSchema = {
     outputs: "label.actions",
     outputsHelp: "settings.lifecycleBuilderActionsHelp",
     conditionsHelp: "settings.lifecycleBuilderConditionsHelp",
-    outputNotInVariant: "settings.lifecycleBuilderActionTitleOnly",
   },
 };

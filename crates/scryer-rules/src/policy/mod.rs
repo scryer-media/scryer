@@ -41,6 +41,7 @@ pub use engine::{
 };
 pub use observation::{
     Observation, SerializedFacts, held_reason_codes, serialize_fact_namespaces, unobservable_facts,
+    unobservable_facts_in,
 };
 
 /// The stored shape of one policy, whatever else a family hangs off it.
@@ -69,6 +70,11 @@ pub trait PolicyFamily: Sized + 'static {
     /// Whether the host resolves each policy's `input.facts.*` references at
     /// build time and holds a policy whose facts it could not observe.
     const TRACKS_REFERENCED_FACTS: bool = false;
+
+    /// Input sections that each carry their own `observations` for a
+    /// narrower subject. Their unobservable facts are qualified by section
+    /// (`season.monitored`), matching the referenced-fact names.
+    const NESTED_FACT_SECTIONS: &'static [&'static str] = &[];
     /// Whether the serialized input document is checked against
     /// [`RuntimeLimits::max_input_bytes`] before it reaches the engine.
     ///
@@ -181,6 +187,7 @@ pub trait PolicyFamily: Sized + 'static {
         rule_id: &str,
         rule_name: &str,
         extra: &Self::RuleExtra,
+        ctx: &Self::EvalContext,
     ) -> Result<Self::Decision, String>;
 
     /// Family checks on a decoded decision — a managed pack's score bounds,

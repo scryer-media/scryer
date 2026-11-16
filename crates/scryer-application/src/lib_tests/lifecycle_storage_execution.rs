@@ -14,7 +14,8 @@ use crate::lifecycle_rules::{LifecycleCandidateFilter, LifecycleRuleDraft};
 use crate::ports::SubtitleDownloadRepository;
 use scryer_domain::{
     ExternalSubtitleSourceKind, LifecycleActionRunStatus, LifecycleActionStepState,
-    LifecycleEffectArming, LifecycleRuleSubjectKind, SubtitleBlocklistEntry, SubtitleDownload,
+    LifecycleCandidateState, LifecycleEffectArming, LifecycleRuleSubjectKind,
+    SubtitleBlocklistEntry, SubtitleDownload,
 };
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -180,28 +181,6 @@ fn scripted(
     scripted_capacity_probe(phases.into_iter().flatten())
 }
 
-async fn selected_root_id(fixture: &TitleFixture) -> String {
-    selected_root_id_at(fixture, &fixture.root).await
-}
-
-async fn selected_root_id_at(fixture: &TitleFixture, path: &Path) -> String {
-    let root_path = path.to_string_lossy().to_string();
-    fixture
-        .execution
-        .app
-        .services
-        .catalog
-        .libraries
-        .list(None)
-        .await
-        .expect("list configured libraries")
-        .into_iter()
-        .flat_map(|library| library.roots)
-        .find(|root| root.path == root_path)
-        .expect("fixture root is configured")
-        .id
-}
-
 async fn add_movie_file(fixture: &TitleFixture, relative_path: &str) -> (PathBuf, String) {
     let path = fixture.root.join(relative_path);
     let file_id = add_movie_file_at(fixture, &path).await;
@@ -209,11 +188,15 @@ async fn add_movie_file(fixture: &TitleFixture, relative_path: &str) -> (PathBuf
 }
 
 async fn add_movie_file_at(fixture: &TitleFixture, path: &Path) -> String {
+    add_title_file_at(fixture, &fixture.title.id, path).await
+}
+
+async fn add_title_file_at(fixture: &TitleFixture, title_id: &str, path: &Path) -> String {
     std::fs::create_dir_all(path.parent().expect("media parent")).expect("create media parent");
     std::fs::write(path, b"video").expect("write media file");
     super::lifecycle_title_completion::record_fixture_title_folder(
         &fixture.execution.app,
-        &fixture.title.id,
+        title_id,
         path.parent().unwrap(),
     )
     .await;
@@ -224,7 +207,7 @@ async fn add_movie_file_at(fixture: &TitleFixture, path: &Path) -> String {
         .library
         .media_files
         .insert_media_file(&InsertMediaFileInput {
-            title_id: fixture.title.id.clone(),
+            title_id: title_id.to_string(),
             file_path: path.to_string_lossy().to_string(),
             size_bytes: 5,
             role: MediaFileRole::Primary,
@@ -234,17 +217,21 @@ async fn add_movie_file_at(fixture: &TitleFixture, path: &Path) -> String {
         .expect("insert movie file")
 }
 
-async fn arm_storage_title_deletion(fixture: &TitleFixture, storage_root_id: String) -> String {
-    let matcher = format!(
-        "match if {{ input.subject.title_id == {:?}; input.facts.storage_available_bytes < 200 }}",
+/// A matcher for the fixture title that holds while any root its files are
+/// on has under 200 bytes free.
+fn low_space_matcher(fixture: &TitleFixture, extra: &str) -> String {
+    format!(
+        "match if {{ input.subject.title_id == {:?};{extra} some root in input.facts.storage_roots; root.available_bytes < 200 }}",
         fixture.title.id
-    );
-    arm_storage_title_deletion_with_matcher(fixture, storage_root_id, matcher).await
+    )
+}
+
+async fn arm_storage_title_deletion(fixture: &TitleFixture) -> String {
+    arm_storage_title_deletion_with_matcher(fixture, low_space_matcher(fixture, "")).await
 }
 
 async fn arm_storage_title_deletion_with_matcher(
     fixture: &TitleFixture,
-    storage_root_id: String,
     matcher: String,
 ) -> String {
     let created = fixture
@@ -254,7 +241,6 @@ async fn arm_storage_title_deletion_with_matcher(
             &fixture.execution.user,
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
-                subject_kind: LifecycleRuleSubjectKind::Title,
                 name: "Storage pressure".into(),
                 description: String::new(),
                 rego_source: crate::lib_tests::legacy_source(
@@ -262,7 +248,6 @@ async fn arm_storage_title_deletion_with_matcher(
                     crate::lifecycle_rules::LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
                 ),
                 grace_days: 0,
-                storage_root_id: Some(storage_root_id),
                 library_ids: vec![],
             },
         )
@@ -306,22 +291,15 @@ async fn arm_storage_title_deletion_with_matcher(
 }
 
 #[tokio::test]
-async fn candidate_view_reports_exact_selected_root_file_totals() {
-    let _probe =
-        install_lifecycle_storage_capacity_probe_for_test(scripted_capacity_probe([Some(
-            capacity(100),
-        )]))
-        .await;
+async fn candidate_view_reports_every_owned_file_across_roots() {
     let fixture = title_fixture("Candidate Root Summary", MediaFacet::Movie).await;
+    let root_b = second_movie_root(&fixture).await;
+    let (probe, _reads) = two_root_probe(&root_b, Some(150));
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
     add_movie_file(&fixture, "Selected/movie.mkv").await;
-    let outside_root = fixture
-        .root
-        .parent()
-        .expect("fixture root parent")
-        .join("unselected/movie.mkv");
-    add_movie_file_at(&fixture, &outside_root).await;
+    add_movie_file_at(&fixture, &root_b.join("Selected/movie.mkv")).await;
 
-    let rule_set_id = arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    let rule_set_id = arm_storage_title_deletion(&fixture).await;
     let candidate = fixture
         .execution
         .app
@@ -340,8 +318,6 @@ async fn candidate_view_reports_exact_selected_root_file_totals() {
 
     assert_eq!(candidate.file_count, Some(2));
     assert_eq!(candidate.total_size_bytes, Some(10));
-    assert_eq!(candidate.storage_root_file_count, Some(1));
-    assert_eq!(candidate.storage_root_total_size_bytes, Some(5));
 }
 
 #[tokio::test]
@@ -407,14 +383,12 @@ async fn candidate_listing_subjects_match_evaluation_subjects_and_evaluation_sti
             .map(|subject| {
                 (
                     subject.id,
-                    subject.kind,
                     subject.label,
                     subject
                         .files
                         .into_iter()
                         .map(|file| file.id)
                         .collect::<Vec<_>>(),
-                    subject.ambiguous_files,
                 )
             })
             .collect();
@@ -426,14 +400,12 @@ async fn candidate_listing_subjects_match_evaluation_subjects_and_evaluation_sti
             .map(|subject| {
                 (
                     subject.id,
-                    subject.kind,
                     subject.label,
                     subject
                         .files
                         .into_iter()
                         .map(|file| file.id)
                         .collect::<Vec<_>>(),
-                    subject.ambiguous_files,
                 )
             })
             .collect();
@@ -525,15 +497,13 @@ async fn evaluation_pass_probes_each_file_once_and_sees_what_a_fresh_load_sees()
     assert_ne!(fresh_after, later_rule);
 }
 
-/// The batched page read builds the same inventory, probes the same files
-/// and proves the same owned files as loading each title on its own, over
+/// The batched page read builds the same inventory and probes the same files
+/// as loading each title on its own, over
 /// several shows, a movie and a show with no episodes.
 #[tokio::test]
 async fn a_page_of_inventories_read_together_matches_loading_each_title() {
     use crate::lib_tests::lifecycle_title_completion::{add_episode_file, season_and_episode};
-    use crate::lifecycle_rules::subjects::{
-        LifecyclePassFilePresence, lifecycle_title_owned_files_in_hand,
-    };
+    use crate::lifecycle_rules::subjects::LifecyclePassFilePresence;
 
     let fixture = title_fixture("Quillmarsh", MediaFacet::Series).await;
     let (_, first) = season_and_episode(&fixture, 1, 1, "2024-01-01").await;
@@ -700,44 +670,6 @@ async fn a_page_of_inventories_read_together_matches_loading_each_title() {
     shows.sort();
     assert_eq!(keys, shows);
 
-    // Owned files proven from rows in hand match the per-title read, for the
-    // movie, the shows and the show with no episodes.
-    let page_files = app
-        .services
-        .library
-        .media_files
-        .list_media_files_for_titles(&titles.iter().map(|t| t.id.clone()).collect::<Vec<_>>())
-        .await
-        .expect("page files");
-    for title in &titles {
-        let files: Vec<_> = page_files
-            .iter()
-            .filter(|file| file.title_id == title.id)
-            .cloned()
-            .collect();
-        let in_hand = lifecycle_title_owned_files_in_hand(
-            title,
-            &files,
-            batched.get(&title.id).map(|inventory| inventory.as_ref()),
-        )
-        .expect("owned files in hand");
-        let read = app
-            .lifecycle_title_deletion_files(title)
-            .await
-            .expect("owned files read");
-        let ids = |files: &[crate::types::TitleMediaFile]| {
-            files
-                .iter()
-                .map(|file| (file.id.clone(), file.file_path.clone(), file.size_bytes))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(ids(&in_hand), ids(&read), "{} owned files", title.name);
-    }
-    assert!(
-        lifecycle_title_owned_files_in_hand(&titles[0], &[], None).is_none(),
-        "a show without its inventory falls back to the read"
-    );
-
     // The evaluation pass's form: one probe per file, as the per-title loads
     // would make, and the same inventories.
     let mut batched_presence = LifecyclePassFilePresence::default();
@@ -775,7 +707,7 @@ async fn storage_recovery_stops_before_the_next_file() {
     let (first, _) = add_movie_file(&fixture, "Pressure/first.mkv").await;
     let (second, _) = add_movie_file(&fixture, "Pressure/second.mkv").await;
 
-    arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    arm_storage_title_deletion(&fixture).await;
     let report = fixture
         .execution
         .app
@@ -813,7 +745,7 @@ async fn unknown_storage_capacity_holds_without_consuming_an_attempt_then_resume
     let fixture = title_fixture("Recoverable Unknown", MediaFacet::Movie).await;
     let (first_path, first_id) = add_movie_file(&fixture, "Recoverable/first.mkv").await;
     let (second_path, second_id) = add_movie_file(&fixture, "Recoverable/second.mkv").await;
-    let rule_set_id = arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    let rule_set_id = arm_storage_title_deletion(&fixture).await;
 
     let held = fixture
         .execution
@@ -937,7 +869,7 @@ async fn storage_retry_reconciles_a_journaled_path_missing_before_catalog_cleanu
     .await;
     let fixture = title_fixture("Interrupted Cleanup", MediaFacet::Movie).await;
     let (media_path, media_file_id) = add_movie_file(&fixture, "Interrupted/movie.mkv").await;
-    arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    arm_storage_title_deletion(&fixture).await;
 
     let held = fixture
         .execution
@@ -1028,7 +960,7 @@ async fn a_file_replaced_after_its_deletion_was_planned_is_preserved_on_retry() 
     .await;
     let fixture = title_fixture("Replaced Plan", MediaFacet::Movie).await;
     let (media_path, media_file_id) = add_movie_file(&fixture, "Replaced/movie.mkv").await;
-    arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    arm_storage_title_deletion(&fixture).await;
 
     let held = fixture
         .execution
@@ -1091,21 +1023,20 @@ async fn a_file_replaced_after_its_deletion_was_planned_is_preserved_on_retry() 
     );
 }
 
-#[tokio::test]
-async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_roots() {
-    let _probe = install_lifecycle_storage_capacity_probe_for_test(scripted([
-        low_readings_before_first_unlink(),
-        vec![None],
-        low_readings_before_resumed_unlink(),
-        vec![Some(capacity(100))],
-    ]))
-    .await;
-    let fixture = title_fixture("Two Roots", MediaFacet::Movie).await;
+/// Configure the fixture's movie library with its own root and a second one
+/// beside it, returning the second.
+async fn second_movie_root(fixture: &TitleFixture) -> PathBuf {
     let root_b = fixture
         .root
         .parent()
         .expect("fixture root parent")
         .join("root-b");
+    configure_second_movie_root(fixture, root_b).await
+}
+
+/// Configure `root_b` as the movie library's second root, beside the
+/// fixture's own.
+async fn configure_second_movie_root(fixture: &TitleFixture, root_b: PathBuf) -> PathBuf {
     std::fs::create_dir_all(&root_b).expect("create second configured root");
     update_default_library_roots(
         &fixture.execution.app,
@@ -1118,71 +1049,529 @@ async fn selected_root_journal_resumes_while_retaining_owned_files_on_other_root
     )
     .await
     .expect("configure both movie roots");
+    root_b
+}
+
+/// A probe that answers 100 bytes free for the fixture root and 250 for the
+/// second root, or nothing for it, and counts the reads of each path.
+fn two_root_probe(
+    root_b: &Path,
+    root_b_figure: Option<u64>,
+) -> (TestCapacityProbe, Arc<StdMutex<HashMap<String, usize>>>) {
+    let reads = Arc::new(StdMutex::new(HashMap::<String, usize>::new()));
+    let counted = reads.clone();
+    let root_b = root_b.to_string_lossy().into_owned();
+    (
+        Arc::new(move |path: &str| {
+            *counted
+                .lock()
+                .expect("probe reads lock")
+                .entry(path.to_string())
+                .or_default() += 1;
+            if path == root_b {
+                root_b_figure.map(capacity)
+            } else {
+                Some(capacity(100))
+            }
+        }),
+        reads,
+    )
+}
+
+/// Evaluate a dry-run rule over the fixture title and return its active
+/// candidate count.
+async fn evaluate_dry_run(fixture: &TitleFixture, matcher: String) -> usize {
+    let app = &fixture.execution.app;
+    let created = app
+        .create_lifecycle_rule_set(
+            &fixture.execution.user,
+            LifecycleRuleDraft {
+                max_titles_per_run: Some(100),
+                name: "Two root facts".into(),
+                description: String::new(),
+                rego_source: crate::lib_tests::legacy_source(
+                    matcher,
+                    crate::lifecycle_rules::LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
+                ),
+                grace_days: 0,
+                library_ids: vec![],
+            },
+        )
+        .await
+        .expect("create storage rule");
+    super::lifecycle_rules::set_rule_state(
+        app,
+        &fixture.execution.user,
+        &created.rule_set.id,
+        scryer_domain::LifecycleRuleState::DryRun,
+        None,
+    )
+    .await;
+    super::lifecycle_rules::open_lifecycle_gates(app, false, true).await;
+    app.run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("evaluate storage rule");
+    fixture
+        .execution
+        .evaluation
+        .all_candidates()
+        .await
+        .into_iter()
+        .filter(|candidate| {
+            candidate.rule_set_id == created.rule_set.id && !candidate.state.is_terminal()
+        })
+        .count()
+}
+
+/// The storage facts list each configured root the subject's files are on,
+/// once, with that root's own figures; each root is read once in the pass
+/// however many of the subject's files are on it.
+#[tokio::test]
+async fn storage_facts_list_each_root_the_files_are_on_with_its_own_figures() {
+    let fixture = title_fixture("Two Root Facts", MediaFacet::Movie).await;
+    let root_b = second_movie_root(&fixture).await;
+    let (probe, reads) = two_root_probe(&root_b, Some(250));
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
+    add_movie_file(&fixture, "Facts/first.mkv").await;
+    add_movie_file(&fixture, "Facts/second.mkv").await;
+    add_movie_file_at(&fixture, &root_b.join("Facts/third.mkv")).await;
+
+    let matcher = format!(
+        "match if {{ input.subject.title_id == {title:?}; count(input.facts.storage_roots) == 2; \
+         some a in input.facts.storage_roots; a.path == {root_a:?}; a.available_bytes == 100; \
+         a.total_bytes == 1000; a.available_percent == 10; \
+         some b in input.facts.storage_roots; b.path == {root_b:?}; b.available_bytes == 250; \
+         a.root_id != b.root_id }}",
+        title = fixture.title.id,
+        root_a = fixture.root.to_string_lossy(),
+        root_b = root_b.to_string_lossy(),
+    );
+    assert_eq!(evaluate_dry_run(&fixture, matcher).await, 1);
+    let reads = reads.lock().expect("probe reads lock").clone();
+    let root_a_key = fixture.root.to_string_lossy().into_owned();
+    let root_b_key = root_b.to_string_lossy().into_owned();
+    assert_eq!(reads.get(&root_a_key), Some(&1), "{reads:?}");
+    assert_eq!(reads.get(&root_b_key), Some(&1), "{reads:?}");
+}
+
+/// A root with no usable figure makes the whole storage fact unknown, so a
+/// rule that reads it holds instead of matching on the other root alone.
+#[tokio::test]
+async fn an_unavailable_root_makes_the_storage_facts_unknown_and_holds() {
+    let fixture = title_fixture("Two Root Unknown", MediaFacet::Movie).await;
+    let root_b = second_movie_root(&fixture).await;
+    let (probe, _reads) = two_root_probe(&root_b, None);
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
+    add_movie_file(&fixture, "Unknown/first.mkv").await;
+    add_movie_file_at(&fixture, &root_b.join("Unknown/second.mkv")).await;
+
+    assert_eq!(
+        evaluate_dry_run(&fixture, low_space_matcher(&fixture, "")).await,
+        0,
+        "an unknown root never matches"
+    );
+}
+
+/// A file under no configured root adds no root and leaves the fact known:
+/// the rule decides on the roots the subject's other files are on.
+#[tokio::test]
+async fn a_file_under_no_configured_root_is_left_out_and_the_rule_still_decides() {
+    let fixture = title_fixture("Unrooted File", MediaFacet::Movie).await;
+    let (probe, reads) = two_root_probe(Path::new("/no-second-root"), None);
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
+    add_movie_file(&fixture, "Unrooted/first.mkv").await;
+    let outside_root = fixture
+        .root
+        .parent()
+        .expect("fixture root parent")
+        .join("unconfigured/Unrooted/second.mkv");
+    add_movie_file_at(&fixture, &outside_root).await;
+
+    let matcher = format!(
+        "match if {{ input.subject.title_id == {title:?}; count(input.facts.storage_roots) == 1; \
+         some root in input.facts.storage_roots; root.path == {root_a:?}; root.available_bytes < 200 }}",
+        title = fixture.title.id,
+        root_a = fixture.root.to_string_lossy(),
+    );
+    assert_eq!(evaluate_dry_run(&fixture, matcher).await, 1);
+    let reads = reads.lock().expect("probe reads lock").clone();
+    assert_eq!(
+        reads.get(&fixture.root.to_string_lossy().into_owned()),
+        Some(&1),
+        "{reads:?}"
+    );
+    assert_eq!(
+        reads.len(),
+        1,
+        "only the configured root is read: {reads:?}"
+    );
+}
+
+/// Deletion does not narrow to a root: a storage rule's delete takes in the
+/// subject's files on every configured root they are on. The title owns one
+/// folder on the first root; its file on the second root lies outside that
+/// folder, so its deletion cannot be planned and fails. The owned file is
+/// still deleted, and every file beside them the title does not own is kept.
+#[tokio::test]
+async fn a_storage_delete_reaches_both_roots_and_every_ownership_check_still_holds() {
+    let fixture = title_fixture("Two Root Delete", MediaFacet::Movie).await;
+    let root_b = second_movie_root(&fixture).await;
+    let (probe, reads) = two_root_probe(&root_b, Some(150));
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
     let (root_a_path, root_a_file_id) = add_movie_file(&fixture, "Two Roots/root-a.mkv").await;
     let root_b_path = root_b.join("Two Roots/root-b.mkv");
     let root_b_file_id = add_movie_file_at(&fixture, &root_b_path).await;
-    arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    let strays = [
+        fixture.root.join("Two Roots/unowned.mkv"),
+        root_b.join("Two Roots/unowned.mkv"),
+        fixture.root.join("Neighbour/neighbour.mkv"),
+    ];
+    for stray in &strays {
+        std::fs::create_dir_all(stray.parent().expect("stray parent")).expect("stray parent");
+        std::fs::write(stray, b"not the title's").expect("write unowned file");
+    }
+    arm_storage_title_deletion(&fixture).await;
 
-    let held = fixture
+    let report = fixture
         .execution
         .app
         .run_every_rule_action_pass_for_tests()
         .await
-        .expect("hold selected-root journal before unlink");
-    assert_eq!(held.held, 1);
-    let held_runs =
-        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
-    let held_detail: serde_json::Value =
-        serde_json::from_str(&held_runs[0].detail).expect("parse selected-root journal");
-    let journal_file_ids = held_detail["files"]
-        .as_array()
-        .expect("journal files")
-        .iter()
-        .filter_map(|file| file["file_id"].as_str())
-        .collect::<HashSet<_>>();
-    assert_eq!(journal_file_ids, HashSet::from([root_a_file_id.as_str()]));
-    assert!(root_a_path.exists());
-    assert!(root_b_path.exists());
-
-    fixture
-        .execution
-        .app
-        .run_lifecycle_rule_evaluation_job()
-        .await
-        .expect("re-evaluate selected-root journal");
-    let resumed = fixture
-        .execution
-        .app
-        .run_every_rule_action_pass_for_tests()
-        .await
-        .expect("resume selected-root journal");
-    assert_eq!(resumed.executed, 1);
-    assert!(!root_a_path.exists());
-    assert!(root_b_path.exists(), "owned root-b file stays retained");
+        .expect("run the two-root deletion");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert_eq!(report.failed, 1, "{report:?}");
     assert!(
-        fixture
-            .execution
-            .app
-            .services
-            .library
-            .media_files
+        reads
+            .lock()
+            .expect("probe reads lock")
+            .contains_key::<str>(&root_b.to_string_lossy()),
+        "the second root's own figure was read"
+    );
+    let runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].status, LifecycleActionRunStatus::Failed, "{runs:?}");
+    let detail: serde_json::Value =
+        serde_json::from_str(&runs[0].detail).expect("parse deletion journal");
+    let files = detail["files"].as_array().expect("journal files");
+    let saved = |file_id: &str| {
+        files
+            .iter()
+            .find(|file| file["file_id"].as_str() == Some(file_id))
+            .cloned()
+            .unwrap_or_else(|| panic!("{file_id} is journaled: {detail}"))
+    };
+    // The second root's file was taken into the manifest, not left out.
+    assert_eq!(files.len(), 2, "{detail}");
+    assert_eq!(saved(&root_a_file_id)["completed"], true, "{detail}");
+    assert_eq!(saved(&root_b_file_id)["completed"], false, "{detail}");
+    assert!(saved(&root_b_file_id)["error"].is_string(), "{detail}");
+
+    let media_files = &fixture.execution.app.services.library.media_files;
+    assert!(!root_a_path.exists(), "the owned file is deleted");
+    assert!(
+        media_files
             .get_media_file_by_id(&root_a_file_id)
             .await
-            .expect("read root-a row")
+            .expect("read deleted row")
             .is_none()
     );
     assert!(
-        fixture
-            .execution
-            .app
-            .services
-            .library
-            .media_files
+        root_b_path.exists(),
+        "the file outside the title folder is kept"
+    );
+    assert!(
+        media_files
             .get_media_file_by_id(&root_b_file_id)
             .await
-            .expect("read retained root-b row")
-            .is_some(),
-        "retained root-b ownership does not block root-a recovery"
+            .expect("read kept row")
+            .is_some()
+    );
+    for stray in &strays {
+        assert!(stray.exists(), "{} is kept", stray.display());
+    }
+}
+
+/// A title folder that holds a configured root is a library root, not a
+/// title folder, so neither file under it can be planned: both are journaled
+/// with their error, the run fails, and neither file nor row is removed.
+#[tokio::test]
+async fn a_title_folder_holding_a_second_root_deletes_nothing() {
+    let fixture = title_fixture("Nested Root Delete", MediaFacet::Movie).await;
+    let (root_a_path, root_a_file_id) = add_movie_file(&fixture, "Nested Roots/root-a.mkv").await;
+    let root_b =
+        configure_second_movie_root(&fixture, fixture.root.join("Nested Roots/Extras")).await;
+    let (probe, _reads) = two_root_probe(&root_b, Some(150));
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(probe).await;
+    let root_b_path = root_b.join("root-b.mkv");
+    let root_b_file_id = add_movie_file_at(&fixture, &root_b_path).await;
+    arm_storage_title_deletion(&fixture).await;
+
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("run the nested-root deletion");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert_eq!(report.held, 0, "{report:?}");
+    assert_eq!(report.failed, 1, "{report:?}");
+    let runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].status, LifecycleActionRunStatus::Failed, "{runs:?}");
+    let detail: serde_json::Value =
+        serde_json::from_str(&runs[0].detail).expect("parse deletion journal");
+    let files = detail["files"].as_array().expect("journal files");
+    assert_eq!(files.len(), 2, "{detail}");
+    for file_id in [&root_a_file_id, &root_b_file_id] {
+        let saved = files
+            .iter()
+            .find(|file| file["file_id"].as_str() == Some(file_id.as_str()))
+            .unwrap_or_else(|| panic!("{file_id} is journaled: {detail}"));
+        assert_eq!(saved["completed"], false, "{detail}");
+        assert!(saved["plan"].is_null(), "{detail}");
+        assert!(
+            saved["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("is a library root, not a title folder")),
+            "{detail}"
+        );
+    }
+    assert!(root_a_path.exists());
+    assert!(root_b_path.exists());
+    let media_files = &fixture.execution.app.services.library.media_files;
+    for file_id in [&root_a_file_id, &root_b_file_id] {
+        assert!(
+            media_files
+                .get_media_file_by_id(file_id)
+                .await
+                .expect("read kept row")
+                .is_some()
+        );
+    }
+}
+
+/// A rule that does not read storage keeps the established contract: a file
+/// whose deletion cannot be planned is journaled with its error and the
+/// independently authorized siblings are still deleted.
+#[tokio::test]
+async fn a_rule_without_storage_facts_still_deletes_the_files_it_can_plan() {
+    let fixture = title_fixture("Plain Two Root Delete", MediaFacet::Movie).await;
+    let root_b = second_movie_root(&fixture).await;
+    let (root_a_path, root_a_file_id) = add_movie_file(&fixture, "Plain/root-a.mkv").await;
+    let root_b_path = root_b.join("Plain/root-b.mkv");
+    let root_b_file_id = add_movie_file_at(&fixture, &root_b_path).await;
+    arm_storage_title_deletion_with_matcher(
+        &fixture,
+        format!(
+            "match if {{ input.subject.title_id == {:?} }}",
+            fixture.title.id
+        ),
+    )
+    .await;
+
+    let report = fixture
+        .execution
+        .app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("run the plain deletion");
+    assert_eq!(report.executed, 0, "{report:?}");
+    assert_eq!(report.failed, 1, "{report:?}");
+    let runs =
+        crate::lib_tests::deletion_runs(fixture.execution.evaluation.all_action_runs().await);
+    assert_eq!(runs.len(), 1);
+    let detail: serde_json::Value =
+        serde_json::from_str(&runs[0].detail).expect("parse deletion journal");
+    let files = detail["files"].as_array().expect("journal files");
+    let saved = |file_id: &str| {
+        files
+            .iter()
+            .find(|file| file["file_id"].as_str() == Some(file_id))
+            .cloned()
+            .unwrap_or_else(|| panic!("{file_id} is journaled: {detail}"))
+    };
+    assert_eq!(saved(&root_a_file_id)["completed"], true, "{detail}");
+    assert_eq!(saved(&root_b_file_id)["completed"], false, "{detail}");
+    assert!(saved(&root_b_file_id)["error"].is_string(), "{detail}");
+    assert!(!root_a_path.exists(), "the owned file is deleted");
+    assert!(root_b_path.exists(), "the unplanned file is kept");
+}
+
+/// A whole-title delete on a rule that reads storage is serialized with every
+/// other storage-driven deletion and rechecks free space before it runs. Two
+/// titles match while the root is low; deleting either one frees enough, so
+/// the other no longer matches at its recheck and is kept.
+#[tokio::test]
+async fn a_storage_delete_title_rechecks_space_and_keeps_the_title_no_longer_needed() {
+    let fixture = title_fixture("Pressure Fixture First", MediaFacet::Movie).await;
+    let second = fixture
+        .execution
+        .app
+        .add_title(
+            &fixture.execution.user,
+            NewTitle {
+                name: "Pressure Fixture Second".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create second title");
+    let first_path = fixture.root.join("Pressure First/movie.mkv");
+    add_movie_file_at(&fixture, &first_path).await;
+    let second_path = fixture.root.join("Pressure Second/movie.mkv");
+    add_title_file_at(&fixture, &second.id, &second_path).await;
+    // The root is low while both titles' files are on it; removing either
+    // one leaves it with enough room.
+    let watched = [first_path.clone(), second_path.clone()];
+    let _probe = install_lifecycle_storage_capacity_probe_for_test(Arc::new(move |_| {
+        Some(capacity(if watched.iter().all(|path| path.exists()) {
+            100
+        } else {
+            900
+        }))
+    }))
+    .await;
+
+    let app = &fixture.execution.app;
+    let created = app
+        .create_lifecycle_rule_set(
+            &fixture.execution.user,
+            LifecycleRuleDraft {
+                max_titles_per_run: Some(100),
+                name: "Storage pressure titles".into(),
+                description: String::new(),
+                rego_source: crate::lib_tests::legacy_source(
+                    "match if { some root in input.facts.storage_roots; root.available_bytes < 200 }",
+                    crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
+                ),
+                grace_days: 0,
+                library_ids: vec![],
+            },
+        )
+        .await
+        .expect("create storage title rule");
+    super::lifecycle_rules::set_rule_state(
+        app,
+        &fixture.execution.user,
+        &created.rule_set.id,
+        scryer_domain::LifecycleRuleState::DryRun,
+        None,
+    )
+    .await;
+    super::lifecycle_rules::open_lifecycle_gates(app, false, true).await;
+    app.run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("evaluate storage title rule");
+    let open = || async {
+        fixture
+            .execution
+            .evaluation
+            .all_candidates()
+            .await
+            .into_iter()
+            .filter(|candidate| candidate.rule_set_id == created.rule_set.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        open()
+            .await
+            .iter()
+            .filter(|candidate| !candidate.state.is_terminal())
+            .count(),
+        2,
+        "both titles match while the root is low"
+    );
+    super::lifecycle_rules::arm_rule(
+        app,
+        &fixture.execution.user,
+        &created.rule_set.id,
+        LifecycleEffectArming::Destructive,
+        Some(2),
+    )
+    .await;
+
+    // Another storage-driven deletion is running: neither title is touched.
+    let guard = app
+        .runtime
+        .jobs
+        .interactive_operation_guards
+        .try_acquire("maintenance-storage-deletion")
+        .await
+        .expect("hold storage deletion guard");
+    let held = app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("pass while storage deletion is busy");
+    assert_eq!(held.executed, 0, "{held:?}");
+    assert_eq!(held.held, 2, "{held:?}");
+    assert!(first_path.exists() && second_path.exists());
+    let held_steps = fixture.execution.evaluation.all_step_attempts().await;
+    assert!(
+        held_steps
+            .iter()
+            .filter(|step| step.state == LifecycleActionStepState::Held)
+            .all(|step| step.hold_reason.as_deref()
+                == Some(crate::lifecycle_rules::execution_reason::STORAGE_DELETION_IN_PROGRESS)),
+        "{held_steps:?}"
+    );
+    assert!(
+        open().await.iter().all(|candidate| candidate.state_reason
+            == crate::lifecycle_rules::execution_reason::STORAGE_DELETION_IN_PROGRESS),
+        "both candidates wait on the storage deletion"
+    );
+    drop(guard);
+    // The next scheduled evaluation still finds both titles matching.
+    app.run_lifecycle_rule_evaluation_job()
+        .await
+        .expect("re-evaluate after the storage deletion ends");
+
+    let report = app
+        .run_every_rule_action_pass_for_tests()
+        .await
+        .expect("pass with the storage deletion free");
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.failed, 0, "{report:?}");
+    assert!(
+        first_path.exists() != second_path.exists(),
+        "exactly one title's file is deleted"
+    );
+    let (kept_id, deleted_id) = if first_path.exists() {
+        (fixture.title.id.as_str(), second.id.as_str())
+    } else {
+        (second.id.as_str(), fixture.title.id.as_str())
+    };
+    let titles = &app.services.catalog.titles;
+    assert!(
+        titles
+            .get_by_id(kept_id)
+            .await
+            .expect("read kept title")
+            .is_some()
+    );
+    assert!(
+        titles
+            .get_by_id(deleted_id)
+            .await
+            .expect("read deleted title")
+            .is_none()
+    );
+    let candidates = open().await;
+    let kept = candidates
+        .iter()
+        .find(|candidate| candidate.title_id == kept_id)
+        .expect("kept title's candidate");
+    assert_eq!(kept.state, LifecycleCandidateState::Canceled, "{kept:?}");
+    assert_eq!(
+        kept.state_reason,
+        crate::lifecycle_rules::execution_reason::NO_MATCH_AT_EXECUTION,
+        "{kept:?}"
     );
 }
 
@@ -1201,12 +1590,8 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
     .await;
     let fixture = title_fixture("Guarded Retry", MediaFacet::Movie).await;
     let (media_path, media_file_id) = add_movie_file(&fixture, "Guarded/movie.mkv").await;
-    let matcher = format!(
-        "match if {{ input.subject.title_id == {:?}; input.facts.monitored; input.facts.storage_available_bytes < 200 }}",
-        fixture.title.id
-    );
-    arm_storage_title_deletion_with_matcher(&fixture, selected_root_id(&fixture).await, matcher)
-        .await;
+    let matcher = low_space_matcher(&fixture, " input.facts.monitored;");
+    arm_storage_title_deletion_with_matcher(&fixture, matcher).await;
     let guard = fixture
         .execution
         .app
@@ -1275,7 +1660,7 @@ async fn storage_guard_hold_before_mutation_rechecks_live_monitoring_on_retry() 
 }
 
 #[tokio::test]
-async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video_deletion() {
+async fn a_tracked_subtitle_outside_every_root_holds_the_manifest_before_video_deletion() {
     let _probe = install_lifecycle_storage_capacity_probe_for_test(scripted([
         low_readings_before_first_unlink(),
     ]))
@@ -1319,7 +1704,7 @@ async fn tracked_off_root_subtitle_holds_the_selected_root_manifest_before_video
         .await
         .expect("track off-root subtitle");
 
-    arm_storage_title_deletion(&fixture, selected_root_id(&fixture).await).await;
+    arm_storage_title_deletion(&fixture).await;
     let report = fixture
         .execution
         .app
@@ -1363,7 +1748,6 @@ async fn scheduled_storage_pass_from_sampler(
     sampled_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> (u64, usize) {
     add_movie_file(fixture, "Sampled/movie.mkv").await;
-    let storage_root_id = selected_root_id(fixture).await;
     let app = &fixture.execution.app;
     let capacity = &app.runtime.health.storage_capacity;
     if let Some(sampled_at) = sampled_at {
@@ -1378,18 +1762,13 @@ async fn scheduled_storage_pass_from_sampler(
             &fixture.execution.user,
             LifecycleRuleDraft {
                 max_titles_per_run: Some(100),
-                subject_kind: LifecycleRuleSubjectKind::Title,
                 name: "Storage pressure".into(),
                 description: String::new(),
                 rego_source: crate::lib_tests::legacy_source(
-                    format!(
-                        "match if {{ input.subject.title_id == {:?}; input.facts.storage_available_bytes < 200 }}",
-                        fixture.title.id
-                    ),
+                    low_space_matcher(fixture, ""),
                     crate::lifecycle_rules::LifecycleActionKind::UnmonitorTitleDeleteAllFiles,
                 ),
                 grace_days: 0,
-                storage_root_id: Some(storage_root_id),
                 library_ids: vec![],
             },
         )

@@ -4826,6 +4826,23 @@ const ru: LocaleDictionary = {
     "— Библиотека, в которой находится субъект",
   "settings.refLifecycleLibraryId": "Идентификатор библиотеки, содержащей субъект",
   "settings.refLifecycleLibraryName": "Отображаемое имя этой библиотеки",
+  "settings.refLifecycleSectionSeason": "Сезон (только действия для сезона)",
+  "settings.refLifecycleSeasonId": "Id рассматриваемого сезона.",
+  "settings.refLifecycleSeasonFacts": "Собственные факты сезона, которые читают действия для сезона, например delete_season_files.",
+  "settings.refLifecycleSeasonObservations": "Конверты наблюдений для фактов сезона.",
+  "settings.refLifecycleSectionEpisode": "Эпизод (только действия для эпизода)",
+  "settings.refLifecycleEpisodeId": "Id рассматриваемого эпизода.",
+  "settings.refLifecycleEpisodeNumber": "Номер эпизода в сезоне, если известен.",
+  "settings.refLifecycleEpisodeFacts": "Собственные факты эпизода, которые читают действия для эпизода, например delete_episode_files.",
+  "settings.refLifecycleEpisodeObservations": "Конверты наблюдений для фактов эпизода.",
+  "settings.refLifecycleFactsStorageRoots": "По одной записи на каждую настроенную корневую папку, где лежат файлы субъекта, со свободным местом этой папки. Неизвестно, если хотя бы одну из этих папок не удалось прочитать.",
+  "settings.refLifecycleSectionStorageRoots": "Корневая папка хранилища",
+  "settings.refLifecycleStorageRootId": "Id настроенной корневой папки.",
+  "settings.refLifecycleStorageRootPath": "Путь настроенной корневой папки.",
+  "settings.refLifecycleStorageRootAvailableBytes": "Свободные байты на томе корневой папки.",
+  "settings.refLifecycleStorageRootTotalBytes": "Всего байтов на томе корневой папки.",
+  "settings.refLifecycleStorageRootAvailablePercent": "Свободное место на томе корневой папки в процентах от общего объёма.",
+  "settings.refLifecycleFactsStorageRootsValue": "Корневые папки, где лежат файлы субъекта, если известны.",
   "settings.refLifecycleSectionFacts":
     "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
   "settings.refLifecycleFactsMonitored": "Отслеживается ли субъект",
@@ -5137,6 +5154,12 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderJoinAll": "Выполняются все условия",
   "settings.ruleBuilderJoinAny": "Выполняется любое условие",
   "settings.ruleBuilderAddCondition": "Добавить условие",
+  "settings.ruleBuilderActionSubject": "Применяется к",
+  "settings.ruleBuilderAction": "Действие",
+  "settings.ruleBuilderActionPlaceholder": "Выберите действие",
+  "settings.ruleBuilderActionConditions": "Только если",
+  "settings.ruleBuilderAddAction": "Добавить действие",
+  "settings.ruleBuilderProblemActionRequired": "Выберите действие.",
   "settings.ruleBuilderFact": "Факт",
   "settings.ruleBuilderFactPlaceholder": "Выберите факт",
   "settings.ruleBuilderOperator": "Сравнение",
@@ -5144,8 +5167,6 @@ const ru: LocaleDictionary = {
   "settings.ruleBuilderDays": "Дней",
   "settings.lifecycleBuilderActionsHelp":
     "Действия выполняются в указанном порядке. Несовместимые действия становятся недоступны, когда выбрано конфликтующее.",
-  "settings.lifecycleBuilderActionTitleOnly":
-    "Доступно только для правил тайтлов.",
   "settings.ruleBuilderOutputConflict": "Нельзя сочетать с: {{outputs}}.",
   "settings.ruleBuilderQualityProfilePlaceholder": "Выберите профиль качества",
   "settings.lifecycleBuilderLibraryPlaceholder": "Выберите библиотеку",
@@ -6929,8 +6950,6 @@ const ru: LocaleDictionary = {
     "Задайте число тайтлов за запуск. Оно нужно этим действиям правила: {{actions}}.",
   "error.reason.LIFECYCLE_ACTION_HEAD_REQUIRED":
     "Правило не определяет ни одного действия, поэтому никогда ничего не сделает.",
-  "error.reason.LIFECYCLE_ACTION_HEAD_UNSUPPORTED_FOR_SCOPE":
-    "Правило определяет действие, которое его область не может выполнить.",
   "error.reason.LIFECYCLE_MOVE_LIBRARY_FACET_MISMATCH":
     "Библиотека, указанная для перемещения, содержит другой вид тайтлов, чем библиотеки правила.",
   "error.reason.LIFECYCLE_MOVE_LIBRARY_NOT_FOUND":
@@ -12391,17 +12410,6 @@ const ru: LocaleDictionary = {
   "settings.lifecycleSequenceStepRemoveTags": "Удалить теги",
   "settings.lifecycleSequenceStepDeleteTitleAndFiles":
     "Удалить тайтл и файлы",
-  "settings.lifecycleRuleStorageRoot": "Корневая папка хранилища",
-  "settings.lifecycleRuleStorageRootNone":
-    "Корневая папка хранилища не выбрана",
-  "settings.lifecycleRuleStorageRootHelp":
-    "Выберите настроенную корневую папку, чтобы получать сведения о её ёмкости и удалять только файлы, действительно расположенные в ней.",
-  "settings.lifecycleRuleStorageRootUnmonitorHelp":
-    "Выбранная корневая папка ограничивает только удаление файлов. Отключение отслеживания по-прежнему применяется ко всему соответствующему условию объекту, поэтому файлы в других корневых папках сохраняются, но больше не отслеживаются.",
-  "settings.lifecycleRuleStorageRootClear":
-    "Сбросить корневую папку хранилища",
-  "settings.lifecycleStorageRootFileSummary":
-    "Выбранная корневая папка: файлов — {{count}} · {{size}}",
   "settings.lifecycleRuleState": "Состояние",
   "settings.lifecycleRuleStateHelp":
     "Отключённые правила никогда не проверяются. Пробный запуск фиксирует кандидатов без выполнения действий. Включённые правила выполняют действия над кандидатами по окончании периода отсрочки для каждого из них.",
@@ -12454,7 +12462,6 @@ const ru: LocaleDictionary = {
   "settings.lifecyclePreviewDue": "Окончание отсрочки: {{time}}",
   "settings.lifecyclePreviewSubject": "Проверяемый объект",
   "settings.lifecyclePreviewSample": "Выборка из медиатеки",
-  "settings.lifecycleRuleScope": "Область действия правила",
   "settings.lifecycleRuleTemplate": "Шаблон",
   "settings.lifecycleRuleTemplatePlaceholder": "Начать с шаблона",
   "settings.lifecycleScopeSeason": "Сезон",
@@ -14098,6 +14105,19 @@ const ru: LocaleDictionary = {
   "ruleOutput.lifecycle.delete_files": "Удалить файлы",
   "ruleOutput.lifecycle.delete_title": "Удалить тайтл и файлы",
   "ruleOutput.lifecycle.notify": "Уведомить",
+  "ruleOutput.lifecycle.monitor_season": "Отслеживать сезон",
+  "ruleOutput.lifecycle.fetch_season_subtitles": "Загрузить субтитры сезона",
+  "ruleOutput.lifecycle.unmonitor_season": "Отключить отслеживание сезона",
+  "ruleOutput.lifecycle.delete_season_files": "Удалить файлы сезона",
+  "ruleOutput.lifecycle.notify_season": "Уведомить о сезоне",
+  "ruleOutput.lifecycle.monitor_episode": "Отслеживать эпизод",
+  "ruleOutput.lifecycle.fetch_episode_subtitles": "Загрузить субтитры эпизода",
+  "ruleOutput.lifecycle.unmonitor_episode": "Отключить отслеживание эпизода",
+  "ruleOutput.lifecycle.delete_episode_files": "Удалить файлы эпизода",
+  "ruleOutput.lifecycle.notify_episode": "Уведомить об эпизоде",
+  "ruleSubject.lifecycle.title": "Тайтл",
+  "ruleSubject.lifecycle.season": "Сезон",
+  "ruleSubject.lifecycle.episode": "Эпизод",
   "ruleOutput.lifecycle.notify.placeholder": "Текст уведомления",
   "ruleOutput.request.approve": "Одобрить",
   "ruleOutput.request.deny": "Отклонить",

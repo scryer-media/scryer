@@ -118,8 +118,6 @@ export type LifecycleRuleSetRecord = {
   /// deleted. State, grace period and libraries stay editable.
   systemOwned: boolean;
   libraryIds: string[];
-  /// Immutable granularity, separate from an action's supported subjects.
-  subjectKind: LifecycleRuleScope;
   currentRevisionNumber: number;
   /// Grace period and declared actions of the revision in force, carried on
   /// the list payload so rendering badges never needs a per-rule detail fetch.
@@ -149,8 +147,6 @@ export type LifecycleRuleRevision = {
   regoSource: string;
   revisionNumber: number;
   graceDays: number;
-  /// Configured root for storage facts and root-filtered file deletion.
-  storageRootId: string | null;
   matcherContentHash: string;
   createdBy: string | null;
   createdAt: string;
@@ -167,14 +163,11 @@ export type LifecycleRuleSetDetail = {
 };
 
 export type LifecycleRuleSetDraft = {
-  subjectKind: LifecycleRuleScope;
   name: string;
   description: string;
   /// Declares both which subjects match and what happens to them.
   regoSource: string;
   graceDays: number;
-  /// Empty when storage capacity and root-filtered deletion do not apply.
-  storageRootId: string;
   libraryIds: string[];
   schedule: import("./scripts").ScriptSchedule;
   /// Null for no limit; required while the source deletes files or titles.
@@ -206,10 +199,6 @@ export type LifecyclePreviewTitle = {
   subjectLabel: string;
   fileCount: number;
   totalSizeBytes: number;
-  /// File summary restricted to the configured storage root. Null means the
-  /// root could not be resolved for this preview subject.
-  storageRootFileCount: number | null;
-  storageRootTotalSizeBytes: number | null;
   subjectKind: string;
   subjectId: string;
   titleId: string;
@@ -291,10 +280,6 @@ export type LifecycleActionStepProgress = {
 export type LifecycleCandidate = {
   fileCount: number | null;
   totalSizeBytes: number | null;
-  /// File summary restricted to the candidate revision's configured storage
-  /// root. Null means no root was selected or exact ownership is unknown.
-  storageRootFileCount: number | null;
-  storageRootTotalSizeBytes: number | null;
   subjectLabel: string;
   subjectKind: string;
   subjectId: string;

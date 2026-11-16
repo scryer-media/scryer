@@ -43,14 +43,13 @@ use crate::jobs::{JobKey, JobTriggerSource};
 use crate::lifecycle_rules::action_sequence::{ACTION_SEQUENCE_KIND, LifecycleActionSequence};
 use crate::lifecycle_rules::facts::{
     LifecycleLibraryRef, LifecycleTitleClaims, LifecycleTitlePeople, LifecycleTitleWatch,
-    LifecycleWatchContext, WatchSignalFreshness,
-    build_subject_input_with_completed_retention_episodes, unknown_reason,
+    LifecycleWatchContext, WatchSignalFreshness, build_subject_input,
+    build_subject_input_with_completed_retention_episodes, nest_subject_input, unknown_reason,
     watch_signal_sweep_is_fresh,
 };
 use crate::lifecycle_rules::service::LifecycleRuleSetDetail;
 use crate::lifecycle_rules::storage::{
-    LifecycleRootFileSummary, LifecycleStorageFactCache, LifecycleStorageRoot,
-    lifecycle_root_file_summary_on,
+    LifecycleStorageCapacityMemo, LifecycleStorageRead, LifecycleStorageRoots,
 };
 use crate::lifecycle_rules::subjects::{
     LifecycleListingInventories, LifecyclePassFilePresence, LifecycleTitleEpisodeInventory,
@@ -68,24 +67,77 @@ use crate::{AppError, AppResult, AppUseCase};
 /// and query size rather than to go fast.
 pub const LIFECYCLE_EVALUATION_TITLE_CHUNK: usize = 200;
 
-/// One bounded reconciliation page for storage-root sequence memberships.
-/// A completed deletion removes the last selected-root file, so its subject is
-/// deliberately omitted from the normal subject loop below. The page releases
-/// only those exact, completed deletion markers after the root absence is
-/// confirmed again.
-const LIFECYCLE_SEQUENCE_COMPLETION_RECONCILIATION_LIMIT: usize = 100;
-
 /// Per-pass read-through state. Inventories are capped to a title page so a
 /// long evaluation cannot retain its entire catalog, while repeated rules can
-/// reuse a consistent first-page snapshot. Capacity observations are keyed by
-/// root and intentionally live only for this scheduled/manual evaluation pass.
+/// reuse a consistent first-page snapshot. The configured roots are read once
+/// per pass and capacity figures are kept by root for this pass only.
 /// File presence is kept for the whole pass, by path only, so a second rule
 /// past the first page does not probe the share again for the same file.
 #[derive(Default)]
 struct LifecycleEvaluationBatchCache {
     inventories: HashMap<String, Arc<LifecycleTitleEpisodeInventory>>,
     file_presence: LifecyclePassFilePresence,
-    storage_facts: LifecycleStorageFactCache,
+    storage: LifecyclePassStorage,
+}
+
+/// What a pass reads storage facts with: the configured roots, read once,
+/// and each root's capacity, read once.
+#[derive(Default)]
+pub(crate) struct LifecyclePassStorage {
+    roots: Option<LifecycleStorageRoots>,
+    capacities: LifecycleStorageCapacityMemo,
+}
+
+impl AppUseCase {
+    /// Set `facts.storage_roots` for `files`, reading the configured roots
+    /// on the pass's first use. A configuration that cannot be read leaves
+    /// storage unknown for the rest of the pass.
+    pub(crate) async fn lifecycle_pass_storage_facts(
+        &self,
+        storage: &mut LifecyclePassStorage,
+        facts: &mut scryer_rules::lifecycle::LifecycleFactsDoc,
+        files: &[crate::types::TitleMediaFile],
+        read: LifecycleStorageRead,
+    ) {
+        if storage.roots.is_none() {
+            storage.roots = Some(match self.lifecycle_storage_roots_context().await {
+                Ok(roots) => roots,
+                Err(error) => {
+                    warn!(error = %error, "could not read the configured roots; storage facts are unknown");
+                    LifecycleStorageRoots::unavailable()
+                }
+            });
+        }
+        let roots = storage.roots.as_ref().expect("roots are read above");
+        self.populate_lifecycle_storage_roots(facts, files, roots, &mut storage.capacities, read)
+            .await;
+    }
+}
+
+/// The level a stored candidate's subject kind names.
+pub(crate) fn subject_level(
+    subject_kind: &str,
+) -> Option<scryer_rules::lifecycle::LifecycleSubjectKind> {
+    use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
+    match subject_kind {
+        "title" => Some(Level::Title),
+        "season" => Some(Level::Season),
+        "episode" => Some(Level::Episode),
+        _ => None,
+    }
+}
+
+/// The storage kind of a level.
+pub(crate) fn level_scope(
+    level: scryer_rules::lifecycle::LifecycleSubjectKind,
+) -> scryer_domain::LifecycleRuleSubjectKind {
+    use scryer_domain::LifecycleRuleSubjectKind as Scope;
+    use scryer_rules::lifecycle::LifecycleSubjectKind as Level;
+    match level {
+        Level::Title => Scope::Title,
+        Level::Season => Scope::Season,
+        Level::Episode => Scope::Episode,
+    }
 }
 
 /// The candidate states the evaluator is allowed to move a row out of.
@@ -132,6 +184,11 @@ pub mod candidate_reason {
     /// that replaces it carries the reason too when it keeps the old grace
     /// clock.
     pub const ACTIONS_CHANGED: &str = "actions_changed";
+    /// The candidate's deletion began when deletion narrowed to one
+    /// configured root. That journal never resumes, since resuming now would
+    /// reach the subject's other roots, so the candidate closes. A fresh
+    /// match opens a new candidate with a new clock.
+    pub const ROOT_DELETION_JOURNAL_DISCARDED: &str = "root_deletion_journal_discarded";
 }
 
 // ── Instance gates ──────────────────────────────────────────────────────────
@@ -183,13 +240,6 @@ pub struct LifecycleCandidateView {
     pub subject_label: String,
     pub file_count: Option<i64>,
     pub total_size_bytes: Option<i64>,
-    /// Files owned by this subject on the root selected by the candidate's
-    /// pinned rule revision. `None` means that revision has no root or exact
-    /// root ownership cannot be established.
-    pub storage_root_file_count: Option<i64>,
-    /// Bytes owned by this subject on the root selected by the candidate's
-    /// pinned rule revision. The same unknown conditions apply to both totals.
-    pub storage_root_total_size_bytes: Option<i64>,
     pub candidate: LifecycleCandidate,
     pub rule_name: String,
     pub title_name: String,
@@ -563,9 +613,6 @@ impl AppUseCase {
                 &mut inventories,
             )
             .await?;
-        let storage_root_summaries = self
-            .lifecycle_candidate_root_summaries(&visible, &mut inventories)
-            .await?;
         let (sequences, sequence_steps) = self.lifecycle_sequence_projection(&visible).await?;
         Ok(visible
             .into_iter()
@@ -580,12 +627,6 @@ impl AppUseCase {
                 total_size_bytes: summaries
                     .get(&(candidate.subject_kind.clone(), candidate.subject_id.clone()))
                     .map(|summary| summary.2),
-                storage_root_file_count: storage_root_summaries
-                    .get(&candidate.id)
-                    .and_then(|summary| summary.file_count),
-                storage_root_total_size_bytes: storage_root_summaries
-                    .get(&candidate.id)
-                    .and_then(|summary| summary.total_size_bytes),
                 rule_name: rules_by_id
                     .get(&candidate.rule_set_id)
                     .map(|rule_set| rule_set.name.clone())
@@ -599,135 +640,6 @@ impl AppUseCase {
                 candidate,
             })
             .collect())
-    }
-
-    /// Computes selected-root totals from a candidate's immutable revision and
-    /// current, exact subject ownership. A missing revision, root, subject, or
-    /// physical-root proof stays unknown rather than falling back to the
-    /// title's configured destination or all subject files.
-    async fn lifecycle_candidate_root_summaries(
-        &self,
-        candidates: &[LifecycleCandidate],
-        inventories: &mut LifecycleListingInventories,
-    ) -> AppResult<HashMap<String, LifecycleRootFileSummary>> {
-        let mut root_by_revision: HashMap<(String, i64), Option<String>> = HashMap::new();
-        for candidate in candidates {
-            let revision_key = (candidate.rule_set_id.clone(), candidate.revision_number);
-            if root_by_revision.contains_key(&revision_key) {
-                continue;
-            }
-            let storage_root_id = self
-                .services
-                .customization
-                .lifecycle_rule_sets
-                .get_revision(&candidate.rule_set_id, candidate.revision_number)
-                .await?
-                .and_then(|revision| revision.storage_root_id);
-            root_by_revision.insert(revision_key, storage_root_id);
-        }
-
-        let title_ids: Vec<String> = candidates
-            .iter()
-            .map(|candidate| candidate.title_id.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        let titles = self.services.catalog.titles.get_by_ids(&title_ids).await?;
-        let titles_by_id: HashMap<String, Title> = titles
-            .iter()
-            .cloned()
-            .map(|title| (title.id.clone(), title))
-            .collect();
-        let files_by_title = self.lifecycle_files_for_titles(&titles).await?;
-
-        // Candidates of several rules can share a root, a title and a subject:
-        // each root, title manifest and (root, subject) summary is read once.
-        let mut roots: HashMap<String, Option<LifecycleStorageRoot>> = HashMap::new();
-        let mut title_deletion_files: HashMap<String, Option<Vec<crate::types::TitleMediaFile>>> =
-            HashMap::new();
-        let mut subject_summaries: HashMap<
-            (String, String, String, String),
-            Option<LifecycleRootFileSummary>,
-        > = HashMap::new();
-        let mut summaries = HashMap::new();
-        for candidate in candidates {
-            let revision_key = (candidate.rule_set_id.clone(), candidate.revision_number);
-            let Some(storage_root_id) = root_by_revision
-                .get(&revision_key)
-                .and_then(Option::as_deref)
-            else {
-                continue;
-            };
-            let Some(title) = titles_by_id.get(&candidate.title_id) else {
-                continue;
-            };
-            let summary_key = (
-                storage_root_id.to_string(),
-                title.id.clone(),
-                candidate.subject_kind.clone(),
-                candidate.subject_id.clone(),
-            );
-            if let Some(known) = subject_summaries.get(&summary_key) {
-                if let Some(root_summary) = known {
-                    summaries.insert(candidate.id.clone(), root_summary.clone());
-                }
-                continue;
-            }
-            let files = files_by_title
-                .get(&title.id)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let subject = match self
-                .lifecycle_resolve_listing_subject(
-                    &candidate.subject_kind,
-                    &candidate.subject_id,
-                    title,
-                    files,
-                    inventories,
-                )
-                .await
-            {
-                Ok(subject) => subject,
-                Err(
-                    AppError::NotFound(_)
-                    | AppError::NotFoundReason { .. }
-                    | AppError::Validation(_)
-                    | AppError::ValidationRefused { .. }
-                    | AppError::ValidationRefusedWithCount { .. },
-                ) => {
-                    subject_summaries.insert(summary_key, None);
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            let summary_files = if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title {
-                if !title_deletion_files.contains_key(&title.id) {
-                    let files = self.lifecycle_title_deletion_files(title).await.ok();
-                    title_deletion_files.insert(title.id.clone(), files);
-                }
-                title_deletion_files[&title.id].as_deref()
-            } else if subject.ambiguous_files {
-                None
-            } else {
-                Some(subject.files.as_slice())
-            };
-            let root_summary = match summary_files {
-                Some(summary_files) => {
-                    if !roots.contains_key(storage_root_id) {
-                        let root = self.lifecycle_storage_root(Some(storage_root_id)).await?;
-                        roots.insert(storage_root_id.to_string(), root);
-                    }
-                    match &roots[storage_root_id] {
-                        Some(root) => lifecycle_root_file_summary_on(summary_files, root).await,
-                        None => LifecycleRootFileSummary::default(),
-                    }
-                }
-                None => LifecycleRootFileSummary::default(),
-            };
-            subject_summaries.insert(summary_key, Some(root_summary.clone()));
-            summaries.insert(candidate.id.clone(), root_summary);
-        }
-        Ok(summaries)
     }
 
     /// Evaluation runs carry counts and timing, never subjects, so they are not
@@ -1240,7 +1152,16 @@ impl AppUseCase {
         );
 
         let mut counts = RuleCounts::default();
-        let mut storage_roots = super::storage::LifecycleStorageRootMemo::new();
+        // The levels the rule acts at, read off the heads it defines. A rule
+        // with title heads alone never loads a season or an episode.
+        let levels = detail.declared_actions.levels();
+        let narrow_levels: Vec<_> = levels
+            .iter()
+            .copied()
+            .filter(|level| *level != scryer_rules::lifecycle::LifecycleSubjectKind::Title)
+            .collect();
+        let evaluates_titles =
+            levels.contains(&scryer_rules::lifecycle::LifecycleSubjectKind::Title);
         let mut after_id = None;
         loop {
             // The rule's libraries filter in the page read (none means all).
@@ -1321,13 +1242,19 @@ impl AppUseCase {
                         .map(Vec::as_slice),
                     store_readable: claims_by_title.is_some(),
                 };
-                let (subjects, title_inventory) = if title.facet == scryer_domain::MediaFacet::Movie
-                {
-                    (
-                        self.lifecycle_subjects_for_title(rule_set.subject_kind, title, files)
-                            .await?,
-                        None,
-                    )
+                // A movie has no seasons or episodes: only its title is a
+                // subject. A show's subjects come from one episode inventory.
+                let mut subjects = Vec::new();
+                if title.facet == scryer_domain::MediaFacet::Movie {
+                    if evaluates_titles {
+                        subjects = self
+                            .lifecycle_subjects_for_title(
+                                scryer_domain::LifecycleRuleSubjectKind::Title,
+                                title,
+                                files,
+                            )
+                            .await?;
+                    }
                 } else {
                     let inventory = if let Some(inventory) = batch_cache.inventories.get(&title.id)
                     {
@@ -1350,85 +1277,77 @@ impl AppUseCase {
                         }
                         inventory
                     };
-                    (
-                        self.lifecycle_subjects_from_episode_inventory(
-                            rule_set.subject_kind,
+                    // The title subject is built whenever the rule acts at any
+                    // level: a season or episode is evaluated beside it.
+                    let needs_title = evaluates_titles || !narrow_levels.is_empty();
+                    if needs_title {
+                        subjects.extend(self.lifecycle_subjects_from_episode_inventory(
+                            scryer_domain::LifecycleRuleSubjectKind::Title,
                             title,
                             files,
                             &inventory,
-                        )?,
-                        Some(inventory),
+                        )?);
+                    }
+                    for level in &narrow_levels {
+                        subjects.extend(self.lifecycle_subjects_from_episode_inventory(
+                            level_scope(*level),
+                            title,
+                            files,
+                            &inventory,
+                        )?);
+                    }
+                }
+                let series_movies = series_movies_by_title
+                    .get(&title.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let library = libraries
+                    .get(&title.library_id)
+                    .cloned()
+                    .unwrap_or_else(|| LifecycleLibraryRef {
+                        id: title.library_id.clone(),
+                        name: String::new(),
+                    });
+                // The title's own input, beside which its seasons and episodes
+                // are evaluated. Built once per title, and only for a rule that
+                // acts below the title.
+                let mut title_input = None;
+                if !narrow_levels.is_empty()
+                    && let Some(title_subject) = subjects.iter().find(|subject| {
+                        subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title
+                    })
+                {
+                    let mut input = build_subject_input(
+                        evaluation_time,
+                        title,
+                        &library,
+                        title_subject,
+                        people,
+                        watch,
+                        claims,
+                        series_movies,
+                    );
+                    super::list_facts::apply_list_facts(&mut input, &lists_by_title, &title.id);
+                    super::list_facts::apply_watchlist_and_metadata_facts(
+                        &mut input,
+                        &lists_by_title,
+                        &title.id,
+                        people,
+                    );
+                    self.lifecycle_pass_storage_facts(
+                        &mut batch_cache.storage,
+                        &mut input.facts,
+                        &title_subject.files,
+                        LifecycleStorageRead::Sampled(evaluation_time),
                     )
-                };
+                    .await;
+                    title_input = Some(input);
+                }
                 for subject in subjects {
-                    if detail.revision.storage_root_id.is_some() {
-                        let root_files =
-                            if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title {
-                                let owned_files =
-                                    match super::subjects::lifecycle_title_owned_files_in_hand(
-                                        title,
-                                        files,
-                                        title_inventory.as_deref(),
-                                    ) {
-                                        Some(owned_files) => Ok(owned_files),
-                                        None => self.lifecycle_title_deletion_files(title).await,
-                                    };
-                                match owned_files {
-                                    Ok(owned_files) => {
-                                        self.lifecycle_root_file_summary_memo(
-                                            &owned_files,
-                                            detail.revision.storage_root_id.as_deref(),
-                                            &mut storage_roots,
-                                        )
-                                        .await?
-                                    }
-                                    Err(_) => LifecycleRootFileSummary::default(),
-                                }
-                            } else if subject.ambiguous_files {
-                                LifecycleRootFileSummary::default()
-                            } else {
-                                self.lifecycle_root_file_summary_memo(
-                                    &subject.files,
-                                    detail.revision.storage_root_id.as_deref(),
-                                    &mut storage_roots,
-                                )
-                                .await?
-                            };
-                        match root_files.file_count {
-                            Some(count) if count > 0 => {}
-                            Some(_) => continue,
-                            None => {
-                                // Keep an already-live candidate in scope and
-                                // hold it. A root/path probe failure is not a
-                                // confirmed loss of root ownership and must
-                                // not reset a grace clock by cancelling it.
-                                in_scope.insert(subject.id.clone());
-                                if let Some(candidate) = self
-                                    .services
-                                    .customization
-                                    .lifecycle_evaluation
-                                    .get_active_subject_candidate(
-                                        &rule_set.id,
-                                        subject.kind.as_storage_str(),
-                                        &subject.id,
-                                    )
-                                    .await?
-                                {
-                                    self.services
-                                        .customization
-                                        .lifecycle_evaluation
-                                        .hold_candidate(
-                                            &candidate.id,
-                                            evaluation_time,
-                                            evaluation_time,
-                                        )
-                                        .await?;
-                                    counts.unknown += 1;
-                                    counts.held += 1;
-                                }
-                                continue;
-                            }
-                        }
+                    if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title
+                        && !evaluates_titles
+                    {
+                        continue;
                     }
                     in_scope.insert(subject.id.clone());
                     if let Err(error) = self
@@ -1437,18 +1356,16 @@ impl AppUseCase {
                             &mut evaluator,
                             title,
                             &subject,
+                            title_input.as_ref(),
                             people,
                             watch,
                             claims,
                             &lists_by_title,
-                            series_movies_by_title
-                                .get(&title.id)
-                                .map(Vec::as_slice)
-                                .unwrap_or_default(),
+                            series_movies,
                             libraries,
                             &excluded,
                             evaluation_time,
-                            &mut batch_cache.storage_facts,
+                            &mut batch_cache.storage,
                             &mut counts,
                         )
                         .await
@@ -1468,9 +1385,6 @@ impl AppUseCase {
             }
         }
 
-        self.reconcile_storage_sequence_terminal_memberships(detail, evaluation_time)
-            .await?;
-
         self.cancel_out_of_scope_lifecycle_candidates(
             &rule_set.id,
             &in_scope,
@@ -1480,256 +1394,6 @@ impl AppUseCase {
         .await?;
 
         Ok(counts)
-    }
-
-    /// Reconcile terminal sequence memberships that storage-root filtering
-    /// omitted from the ordinary per-subject pass. A completed deletion or an
-    /// external cleanup can make the exact subject have zero selected-root
-    /// files; this is a confirmed out-of-scope result, so release its marker
-    /// and allow a later import to begin a fresh grace period. Every ambiguous
-    /// ownership or unavailable root path retains the marker.
-    async fn reconcile_storage_sequence_terminal_memberships(
-        &self,
-        detail: &LifecycleRuleSetDetail,
-        evaluation_time: DateTime<Utc>,
-    ) -> AppResult<()> {
-        let Some(storage_root_id) = detail.revision.storage_root_id.as_deref() else {
-            return Ok(());
-        };
-        let candidates = &self.services.customization.lifecycle_evaluation;
-        let mut after_id = None;
-        loop {
-            let memberships = candidates
-                .list_active_sequence_completions(
-                    &detail.rule_set.id,
-                    detail.revision.revision_number,
-                    after_id.as_deref(),
-                    LIFECYCLE_SEQUENCE_COMPLETION_RECONCILIATION_LIMIT,
-                )
-                .await?;
-            let Some(next_after_id) = memberships.last().map(|membership| membership.id.clone())
-            else {
-                break;
-            };
-            after_id = Some(next_after_id);
-
-            for membership in memberships {
-                // Declared actions build each subject's steps from what it was
-                // decided, so the membership's own recorded steps are the
-                // identity to check.
-                let sequence_hash = membership.sequence_content_hash.clone();
-                let expected_step_ids = membership.expected_step_ids.clone();
-                let completed_prefix_is_valid = membership.completed_step_ids.len()
-                    <= expected_step_ids.len()
-                    && expected_step_ids
-                        .iter()
-                        .zip(&membership.completed_step_ids)
-                        .all(|(expected, completed)| expected == completed);
-                let terminal_evidence_is_valid = match membership.outcome {
-                    scryer_domain::LifecycleSequenceTerminalOutcome::Succeeded => {
-                        membership.completed_step_ids == expected_step_ids
-                            && membership.terminal_step_id.is_none()
-                    }
-                    scryer_domain::LifecycleSequenceTerminalOutcome::Failed => {
-                        !membership.completed_step_ids.is_empty()
-                            && completed_prefix_is_valid
-                            && membership.terminal_step_id.as_deref()
-                                == membership.completed_step_ids.last().map(String::as_str)
-                    }
-                };
-                let immutable_identity_matches = membership.sequence_content_hash == sequence_hash
-                    && membership.matcher_content_hash == detail.revision.matcher_content_hash
-                    && membership.subject_kind == detail.rule_set.subject_kind.as_storage_str()
-                    && membership.expected_step_ids == expected_step_ids
-                    && terminal_evidence_is_valid;
-                if !immutable_identity_matches {
-                    continue;
-                }
-
-                let title = match self
-                    .services
-                    .catalog
-                    .titles
-                    .get_by_id(&membership.title_id)
-                    .await
-                {
-                    Ok(Some(title)) => title,
-                    Ok(None) => {
-                        self.release_storage_sequence_completion_if_capacity_available(
-                            &membership,
-                            storage_root_id,
-                            evaluation_time,
-                        )
-                        .await?;
-                        continue;
-                    }
-                    Err(error) => {
-                        warn!(
-                            rule_set_id = membership.rule_set_id.as_str(),
-                            title_id = membership.title_id.as_str(),
-                            error = %error,
-                            "could not resolve a storage sequence terminal membership; retaining it"
-                        );
-                        continue;
-                    }
-                };
-
-                if !detail.rule_set.library_ids.is_empty()
-                    && !detail.rule_set.library_ids.contains(&title.library_id)
-                {
-                    self.release_storage_sequence_completion_if_capacity_available(
-                        &membership,
-                        storage_root_id,
-                        evaluation_time,
-                    )
-                    .await?;
-                    continue;
-                }
-
-                let title_files = match self
-                    .services
-                    .library
-                    .media_files
-                    .list_media_files_for_title(&title.id)
-                    .await
-                {
-                    Ok(files) => files,
-                    Err(error) => {
-                        warn!(
-                            rule_set_id = membership.rule_set_id.as_str(),
-                            title_id = title.id.as_str(),
-                            error = %error,
-                            "could not resolve storage sequence file ownership; retaining its membership"
-                        );
-                        continue;
-                    }
-                };
-                let subject = match self
-                    .lifecycle_resolve_subject(
-                        &membership.subject_kind,
-                        &membership.subject_id,
-                        &title,
-                        &title_files,
-                    )
-                    .await
-                {
-                    Ok(subject) => subject,
-                    Err(AppError::NotFound(_) | AppError::NotFoundReason { .. }) => {
-                        self.release_storage_sequence_completion_if_capacity_available(
-                            &membership,
-                            storage_root_id,
-                            evaluation_time,
-                        )
-                        .await?;
-                        continue;
-                    }
-                    Err(error) => {
-                        warn!(
-                            rule_set_id = membership.rule_set_id.as_str(),
-                            title_id = title.id.as_str(),
-                            subject_id = membership.subject_id.as_str(),
-                            error = %error,
-                            "could not resolve an exact storage sequence subject; retaining its membership"
-                        );
-                        continue;
-                    }
-                };
-                let root_files = if subject.kind == scryer_domain::LifecycleRuleSubjectKind::Title {
-                    match self.lifecycle_title_deletion_files(&title).await {
-                        Ok(files) => {
-                            self.lifecycle_root_file_summary(&files, Some(storage_root_id))
-                                .await
-                        }
-                        Err(error) => {
-                            warn!(
-                                rule_set_id = membership.rule_set_id.as_str(),
-                                title_id = title.id.as_str(),
-                                error = %error,
-                                "could not resolve title deletion ownership; retaining storage sequence membership"
-                            );
-                            continue;
-                        }
-                    }
-                } else if subject.ambiguous_files {
-                    Ok(LifecycleRootFileSummary::default())
-                } else {
-                    self.lifecycle_root_file_summary(&subject.files, Some(storage_root_id))
-                        .await
-                };
-                match root_files {
-                    Ok(LifecycleRootFileSummary {
-                        file_count: Some(0),
-                        ..
-                    }) => {
-                        self.release_storage_sequence_completion_if_capacity_available(
-                            &membership,
-                            storage_root_id,
-                            evaluation_time,
-                        )
-                        .await?;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        warn!(
-                            rule_set_id = membership.rule_set_id.as_str(),
-                            title_id = title.id.as_str(),
-                            subject_id = membership.subject_id.as_str(),
-                            error = %error,
-                            "could not resolve the selected root for a storage sequence membership; retaining it"
-                        );
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// A zero-file root summary is authoritative only while the selected root
-    /// also yields a fresh capacity observation. A failed probe is an unknown
-    /// evaluation fact, so it retains the terminal membership.
-    async fn release_storage_sequence_completion_if_capacity_available(
-        &self,
-        membership: &scryer_domain::LifecycleSequenceTerminalMembership,
-        storage_root_id: &str,
-        evaluation_time: DateTime<Utc>,
-    ) -> AppResult<()> {
-        match self
-            .lifecycle_storage_capacity_is_available(
-                Some(storage_root_id),
-                super::storage::LifecycleStorageRead::Sampled(evaluation_time),
-            )
-            .await
-        {
-            Ok(true) => {
-                self.services
-                    .customization
-                    .lifecycle_evaluation
-                    .release_sequence_completion_on_confirmed_non_match(
-                        &membership.rule_set_id,
-                        membership.revision_number,
-                        &membership.subject_kind,
-                        &membership.subject_id,
-                        evaluation_time,
-                    )
-                    .await?;
-            }
-            Ok(false) => {
-                debug!(
-                    rule_set_id = membership.rule_set_id.as_str(),
-                    subject_id = membership.subject_id.as_str(),
-                    "selected-root capacity is unavailable; retaining storage sequence membership"
-                );
-            }
-            Err(error) => {
-                warn!(
-                    rule_set_id = membership.rule_set_id.as_str(),
-                    subject_id = membership.subject_id.as_str(),
-                    error = %error,
-                    "could not read selected-root capacity; retaining storage sequence membership"
-                );
-            }
-        }
-        Ok(())
     }
 
     /// Close the rule's live candidates whose subject is no longer in its
@@ -1793,6 +1457,7 @@ impl AppUseCase {
         evaluator: &mut LifecycleRulesEvaluator,
         title: &Title,
         subject: &super::subjects::LifecycleSubject,
+        title_input: Option<&scryer_rules::lifecycle::LifecycleInput>,
         people: LifecycleTitlePeople<'_>,
         watch: LifecycleTitleWatch<'_>,
         claims: LifecycleTitleClaims<'_>,
@@ -1801,7 +1466,7 @@ impl AppUseCase {
         libraries: &HashMap<String, LifecycleLibraryRef>,
         excluded: &[LifecycleRuleExclusion],
         evaluation_time: DateTime<Utc>,
-        storage_facts: &mut LifecycleStorageFactCache,
+        storage: &mut LifecyclePassStorage,
         counts: &mut RuleCounts,
     ) -> AppResult<()> {
         let rule_set_id = detail.rule_set.id.as_str();
@@ -1886,11 +1551,30 @@ impl AppUseCase {
                 candidate.action_kind.as_str(),
                 "unmonitor_scope_delete_files" | "unmonitor_title_delete_all_files"
             ) {
-            self.lifecycle_deletion_checkpoint(
-                candidate,
-                detail.revision.storage_root_id.as_deref(),
-            )
-            .await?
+            match self
+                .read_lifecycle_deletion_journal(candidate, None)
+                .await?
+            {
+                super::scoped_deletion::LifecycleDeletionJournal::Missing => None,
+                super::scoped_deletion::LifecycleDeletionJournal::Found(checkpoint) => {
+                    Some(checkpoint)
+                }
+                super::scoped_deletion::LifecycleDeletionJournal::WrittenForOneRoot => {
+                    candidates
+                        .transition_candidate_state(
+                            &candidate.id,
+                            LifecycleCandidateState::Canceled,
+                            candidate_reason::ROOT_DELETION_JOURNAL_DISCARDED,
+                            EVALUATOR_WRITABLE_STATES,
+                            evaluation_time,
+                        )
+                        .await?;
+                    // Closed here or moved by another writer: either way it
+                    // is no longer this pass's to continue.
+                    active = None;
+                    None
+                }
+            }
         } else {
             None
         };
@@ -1912,35 +1596,22 @@ impl AppUseCase {
         super::list_facts::apply_watchlist_and_metadata_facts(&mut input, lists, &title.id, people);
         // An evaluation pass samples each configured root once. A deletion
         // checkpoint may restore the action's own monitoring/file facts below,
-        // but it must never restore or overwrite the root capacity snapshot.
-        self.populate_lifecycle_storage_facts_from_cache(
-            &mut input,
-            detail.revision.storage_root_id.as_deref(),
-            storage_facts,
-            super::storage::LifecycleStorageRead::Sampled(evaluation_time),
+        // but it must never restore or overwrite the capacity figures.
+        self.lifecycle_pass_storage_facts(
+            storage,
+            &mut input.facts,
+            &subject.files,
+            LifecycleStorageRead::Sampled(evaluation_time),
         )
-        .await?;
+        .await;
+        // A season or episode is evaluated beside its title's own facts.
+        if let Some(title_input) = title_input
+            && subject.kind != scryer_domain::LifecycleRuleSubjectKind::Title
+        {
+            input = nest_subject_input(title_input.clone(), input, subject);
+        }
         if let Some(checkpoint) = deletion_checkpoint.as_ref() {
             checkpoint.restore_baseline_if_started(&mut input);
-        }
-        // Selecting a root makes this a storage-scoped rule even when the
-        // Rego happens not to compare capacity directly. A missing or stale
-        // root must hold existing membership and must not start a grace clock
-        // for a new candidate that could not safely produce a manifest.
-        if detail.revision.storage_root_id.is_some()
-            && !matches!(
-                input.facts.storage_available_bytes,
-                scryer_rules::lifecycle::Observation::Known { .. }
-            )
-        {
-            counts.unknown += 1;
-            if let Some(candidate) = active {
-                candidates
-                    .hold_candidate(&candidate.id, evaluation_time, evaluation_time)
-                    .await?;
-                counts.held += 1;
-            }
-            return Ok(());
         }
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;
@@ -2093,11 +1764,7 @@ impl AppUseCase {
                                 subject_id: subject.id.clone(),
                                 library_id: title.library_id.clone(),
                                 facet: title.facet.as_str().to_string(),
-                                subject_kind: detail
-                                    .rule_set
-                                    .subject_kind
-                                    .as_storage_str()
-                                    .to_string(),
+                                subject_kind: subject.kind.as_storage_str().to_string(),
                                 match_generation: generation,
                                 state: LifecycleCandidateState::Observing,
                                 state_reason: if carried_clock.is_some() {

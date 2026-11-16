@@ -88,6 +88,14 @@ test("every template declares at least one served action and a non-negative grac
   }
 });
 
+/// Heads that remove media, at every subject.
+const FILE_DELETING_HEADS = new Set([
+  "DELETE_FILES",
+  "DELETE_TITLE",
+  "DELETE_SEASON_FILES",
+  "DELETE_EPISODE_FILES",
+]);
+
 test("each template keeps the action it was written for", () => {
   const headsById = Object.fromEntries(
     LIFECYCLE_RULE_TEMPLATES.map((template) => [
@@ -109,8 +117,8 @@ test("each template keeps the action it was written for", () => {
     "tagged-for-removal": ["DELETE_TITLE"],
     "flag-for-review": ["ADD_TAGS"],
     "no-quality-profile": ["ADD_TAGS"],
-    "keep-newest-three-downloaded-episodes": ["DELETE_FILES"],
-    "keep-newest-two-downloaded-seasons": ["DELETE_FILES"],
+    "keep-newest-three-downloaded-episodes": ["DELETE_EPISODE_FILES"],
+    "keep-newest-two-downloaded-seasons": ["DELETE_SEASON_FILES"],
     "left-every-public-list": ["UNMONITOR"],
     "list-added-never-watched": ["ADD_TAGS"],
   });
@@ -132,8 +140,7 @@ test("a template that sets a quality profile is marked as needing the operator's
 test("every file-deleting template is marked and says so in its copy", () => {
   for (const template of LIFECYCLE_RULE_TEMPLATES) {
     const heads = templateActionHeads(template.regoSource);
-    const deletesFiles =
-      heads.includes("DELETE_FILES") || heads.includes("DELETE_TITLE");
+    const deletesFiles = heads.some((head) => FILE_DELETING_HEADS.has(head));
     assert.equal(
       template.destructive === true,
       deletesFiles,
@@ -162,10 +169,18 @@ test("retention examples use the rank for their exact scope", () => {
   const seasons = LIFECYCLE_RULE_TEMPLATES.find(
     (template) => template.id === "keep-newest-two-downloaded-seasons",
   );
-  assert.equal(episodes?.subjectKind, "EPISODE");
-  assert.match(episodes?.regoSource ?? "", /episode_position_by_air_date > 3/);
-  assert.equal(seasons?.subjectKind, "SEASON");
-  assert.match(seasons?.regoSource ?? "", /season_position_by_air_date > 2/);
+  // The head names the subject the action acts on, and the condition reads
+  // that subject's own facts.
+  assert.match(episodes?.regoSource ?? "", /\bdelete_episode_files if\b/);
+  assert.match(
+    episodes?.regoSource ?? "",
+    /input\.episode\.facts\.episode_position_by_air_date > 3/,
+  );
+  assert.match(seasons?.regoSource ?? "", /\bdelete_season_files if\b/);
+  assert.match(
+    seasons?.regoSource ?? "",
+    /input\.season\.facts\.season_position_by_air_date > 2/,
+  );
 });
 
 test("every template key resolves in the default locale and in Russian", () => {

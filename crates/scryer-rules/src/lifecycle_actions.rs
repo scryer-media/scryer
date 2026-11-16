@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RulesError;
 use crate::diagnostic_codes;
-use crate::lifecycle::{self, USER_PACKAGE_PREFIX};
+use crate::lifecycle::{self, LifecycleSubjectKind, USER_PACKAGE_PREFIX};
 use crate::policy::decode::{MAX_TAGS, check_tag, decode_tag_list};
 use crate::runtime::RuntimeLimits;
 use crate::validation::{parse_module, rule_head_name, static_reference, visit_rule_expr_nodes};
@@ -32,6 +32,11 @@ use crate::validation::{parse_module, rule_head_name, static_reference, visit_ru
 // ── Action heads ────────────────────────────────────────────────────────────
 
 /// One action head a lifecycle rule may define.
+///
+/// A head's name says what it acts on. A bare head (`unmonitor`) acts on the
+/// whole title; `unmonitor_season` acts on one season and
+/// `unmonitor_episode` on one episode. Only the actions that make sense for
+/// part of a show have season and episode heads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleActionHead {
@@ -47,6 +52,16 @@ pub enum LifecycleActionHead {
     MoveToLibrary,
     MoveToRoot,
     Notify,
+    MonitorSeason,
+    UnmonitorSeason,
+    DeleteSeasonFiles,
+    FetchSeasonSubtitles,
+    NotifySeason,
+    MonitorEpisode,
+    UnmonitorEpisode,
+    DeleteEpisodeFiles,
+    FetchEpisodeSubtitles,
+    NotifyEpisode,
 }
 
 /// The longest `notify` message, in bytes.
@@ -54,7 +69,7 @@ pub const MAX_NOTIFY_LEN: usize = 500;
 
 impl LifecycleActionHead {
     /// Every action head, in the order the wrapper projects them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 22] = [
         Self::Unmonitor,
         Self::DeleteFiles,
         Self::DeleteTitle,
@@ -67,23 +82,44 @@ impl LifecycleActionHead {
         Self::MoveToLibrary,
         Self::MoveToRoot,
         Self::Notify,
+        Self::MonitorSeason,
+        Self::UnmonitorSeason,
+        Self::DeleteSeasonFiles,
+        Self::FetchSeasonSubtitles,
+        Self::NotifySeason,
+        Self::MonitorEpisode,
+        Self::UnmonitorEpisode,
+        Self::DeleteEpisodeFiles,
+        Self::FetchEpisodeSubtitles,
+        Self::NotifyEpisode,
     ];
 
-    /// Every action head, in the order the host applies them. The builder
-    /// offers them in this order too.
-    pub const EXECUTION_ORDER: [Self; 12] = [
+    /// Every action head, in the order the host applies them. A season or
+    /// episode head follows the title head it narrows. The builder offers
+    /// them in this order too.
+    pub const EXECUTION_ORDER: [Self; 22] = [
         Self::AddTags,
         Self::RemoveTags,
         Self::SetQualityProfile,
         Self::Monitor,
+        Self::MonitorSeason,
+        Self::MonitorEpisode,
         Self::Search,
         Self::FetchSubtitles,
+        Self::FetchSeasonSubtitles,
+        Self::FetchEpisodeSubtitles,
         Self::MoveToLibrary,
         Self::MoveToRoot,
         Self::Unmonitor,
+        Self::UnmonitorSeason,
+        Self::UnmonitorEpisode,
         Self::DeleteFiles,
+        Self::DeleteSeasonFiles,
+        Self::DeleteEpisodeFiles,
         Self::DeleteTitle,
         Self::Notify,
+        Self::NotifySeason,
+        Self::NotifyEpisode,
     ];
 
     /// The Rego rule name an author writes.
@@ -101,11 +137,60 @@ impl LifecycleActionHead {
             Self::MoveToLibrary => "move_to_library",
             Self::MoveToRoot => "move_to_root",
             Self::Notify => "notify",
+            Self::MonitorSeason => "monitor_season",
+            Self::UnmonitorSeason => "unmonitor_season",
+            Self::DeleteSeasonFiles => "delete_season_files",
+            Self::FetchSeasonSubtitles => "fetch_season_subtitles",
+            Self::NotifySeason => "notify_season",
+            Self::MonitorEpisode => "monitor_episode",
+            Self::UnmonitorEpisode => "unmonitor_episode",
+            Self::DeleteEpisodeFiles => "delete_episode_files",
+            Self::FetchEpisodeSubtitles => "fetch_episode_subtitles",
+            Self::NotifyEpisode => "notify_episode",
         }
     }
 
     pub fn from_rule_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|head| head.rule_name() == name)
+    }
+
+    /// What the head acts on: the whole title, one season, or one episode.
+    pub const fn level(self) -> LifecycleSubjectKind {
+        match self {
+            Self::MonitorSeason
+            | Self::UnmonitorSeason
+            | Self::DeleteSeasonFiles
+            | Self::FetchSeasonSubtitles
+            | Self::NotifySeason => LifecycleSubjectKind::Season,
+            Self::MonitorEpisode
+            | Self::UnmonitorEpisode
+            | Self::DeleteEpisodeFiles
+            | Self::FetchEpisodeSubtitles
+            | Self::NotifyEpisode => LifecycleSubjectKind::Episode,
+            _ => LifecycleSubjectKind::Title,
+        }
+    }
+
+    /// The title head this head narrows; a title head is its own base. The
+    /// host applies a season or episode head as its base action on that
+    /// season or episode.
+    pub const fn base(self) -> Self {
+        match self {
+            Self::MonitorSeason | Self::MonitorEpisode => Self::Monitor,
+            Self::UnmonitorSeason | Self::UnmonitorEpisode => Self::Unmonitor,
+            Self::DeleteSeasonFiles | Self::DeleteEpisodeFiles => Self::DeleteFiles,
+            Self::FetchSeasonSubtitles | Self::FetchEpisodeSubtitles => Self::FetchSubtitles,
+            Self::NotifySeason | Self::NotifyEpisode => Self::Notify,
+            other => other,
+        }
+    }
+
+    /// The head that applies this title head's action at `level`, if the
+    /// action has one there.
+    pub fn at_level(self, level: LifecycleSubjectKind) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|head| head.level() == level && head.base() == self.base())
     }
 
     /// Whether the head carries a value rather than a plain yes.
@@ -117,13 +202,24 @@ impl LifecycleActionHead {
     pub const fn carries_string(self) -> bool {
         matches!(
             self,
-            Self::SetQualityProfile | Self::MoveToLibrary | Self::MoveToRoot | Self::Notify
+            Self::SetQualityProfile
+                | Self::MoveToLibrary
+                | Self::MoveToRoot
+                | Self::Notify
+                | Self::NotifySeason
+                | Self::NotifyEpisode
         )
     }
 
     /// Whether the head removes media.
     pub const fn is_destructive(self) -> bool {
-        matches!(self, Self::DeleteFiles | Self::DeleteTitle)
+        matches!(
+            self,
+            Self::DeleteFiles
+                | Self::DeleteTitle
+                | Self::DeleteSeasonFiles
+                | Self::DeleteEpisodeFiles
+        )
     }
 
     /// The heads that cannot be applied together with this one. Each pair is
@@ -131,6 +227,8 @@ impl LifecycleActionHead {
     pub const fn conflicts_with(self) -> &'static [Self] {
         match self {
             Self::Monitor => &[Self::Unmonitor, Self::DeleteFiles, Self::DeleteTitle],
+            Self::MonitorSeason => &[Self::UnmonitorSeason, Self::DeleteSeasonFiles],
+            Self::MonitorEpisode => &[Self::UnmonitorEpisode, Self::DeleteEpisodeFiles],
             Self::MoveToLibrary => &[Self::MoveToRoot, Self::DeleteFiles, Self::DeleteTitle],
             Self::MoveToRoot => &[Self::DeleteFiles, Self::DeleteTitle],
             _ => &[],
@@ -139,23 +237,18 @@ impl LifecycleActionHead {
 
     /// The Rego literal the wrapper uses when the head is undefined.
     pub(crate) const fn wrapper_default(self) -> &'static str {
-        match self {
-            Self::Unmonitor
-            | Self::DeleteFiles
-            | Self::DeleteTitle
-            | Self::Search
-            | Self::Monitor
-            | Self::FetchSubtitles => "false",
-            Self::SetQualityProfile | Self::MoveToLibrary | Self::MoveToRoot | Self::Notify => {
-                "null"
-            }
-            Self::AddTags | Self::RemoveTags => "[]",
+        if self.carries_string() {
+            "null"
+        } else if matches!(self, Self::AddTags | Self::RemoveTags) {
+            "[]"
+        } else {
+            "false"
         }
     }
 
     /// The example a refusal shows for a value head.
     fn value_example(self) -> &'static str {
-        match self {
+        match self.base() {
             Self::SetQualityProfile => "\"HD-1080p\"",
             Self::MoveToLibrary => "\"Movies\"",
             Self::MoveToRoot => "\"/media/movies\"",
@@ -174,7 +267,7 @@ impl LifecycleActionHead {
         if blank {
             return Some(format!("'{name}' must not be empty"));
         }
-        (self == Self::Notify && value.len() > MAX_NOTIFY_LEN).then(|| {
+        (self.base() == Self::Notify && value.len() > MAX_NOTIFY_LEN).then(|| {
             format!(
                 "'{name}' is {} bytes, at most {MAX_NOTIFY_LEN} are allowed",
                 value.len()
@@ -241,6 +334,9 @@ impl LifecycleActions {
                 LifecycleActionHead::MoveToLibrary => self.move_to_library.is_some(),
                 LifecycleActionHead::MoveToRoot => self.move_to_root.is_some(),
                 LifecycleActionHead::Notify => self.notify.is_some(),
+                // Decoded actions hold title heads only: a season or episode
+                // head is decoded into the title head it narrows.
+                _ => false,
             })
             .collect()
     }
@@ -261,18 +357,32 @@ impl LifecycleActions {
     }
 }
 
-/// Decode the action fields of the wrapper's decision object.
+/// Decode the action fields the wrapper's decision object holds for `level`.
+///
+/// Only the heads that act at that level are read, and each one is decoded
+/// into its title head's field: a season's `unmonitor_season` is the
+/// season's `unmonitor`. A head of another level never reaches the decision.
 ///
 /// Fails closed: a defined head of the wrong type is an error for the rule,
 /// never a coerced value.
-pub(crate) fn decode_actions(value: &Value) -> Result<LifecycleActions, String> {
-    let flag = |head: LifecycleActionHead| -> Result<bool, String> {
+pub(crate) fn decode_actions(
+    value: &Value,
+    level: LifecycleSubjectKind,
+) -> Result<LifecycleActions, String> {
+    let at = |base: LifecycleActionHead| base.at_level(level);
+    let flag = |base: LifecycleActionHead| -> Result<bool, String> {
+        let Some(head) = at(base) else {
+            return Ok(false);
+        };
         value[head.rule_name()]
             .as_bool()
             .copied()
             .map_err(|_| format!("'{}' must be a boolean", head.rule_name()))
     };
-    let string = |head: LifecycleActionHead| -> Result<Option<String>, String> {
+    let string = |base: LifecycleActionHead| -> Result<Option<String>, String> {
+        let Some(head) = at(base) else {
+            return Ok(None);
+        };
         let name = head.rule_name();
         match &value[name] {
             Value::Null => Ok(None),
@@ -287,7 +397,10 @@ pub(crate) fn decode_actions(value: &Value) -> Result<LifecycleActions, String> 
             }
         }
     };
-    let tags = |head: LifecycleActionHead| {
+    let tags = |base: LifecycleActionHead| {
+        let Some(head) = at(base) else {
+            return Ok(Vec::new());
+        };
         let name = head.rule_name();
         // A list, as the contract says: a set would reorder what the author
         // wrote, and the static scan reads arrays only.
@@ -419,7 +532,8 @@ pub struct LifecycleActionScan {
     pub libraries: Vec<LifecycleActionLiteral>,
     /// Every root path written for `move_to_root`, in source order.
     pub roots: Vec<LifecycleActionLiteral>,
-    /// Every message written for `notify`, in source order.
+    /// Every message written for `notify`, `notify_season` or
+    /// `notify_episode`, in source order.
     pub notifications: Vec<LifecycleActionLiteral>,
     /// Conditions that refuse the rule.
     pub errors: Vec<LifecycleActionScanIssue>,
@@ -428,7 +542,14 @@ pub struct LifecycleActionScan {
 }
 
 impl LifecycleActionScan {
-    /// Whether the source defines `delete_files` or `delete_title`.
+    /// The levels the source acts at, read off the heads it defines. The host
+    /// evaluates a rule only at these levels: a rule with title heads alone
+    /// never sees a season or an episode.
+    pub fn levels(&self) -> BTreeSet<LifecycleSubjectKind> {
+        self.defined_heads.iter().map(|head| head.level()).collect()
+    }
+
+    /// Whether the source defines a head that deletes files or the title.
     pub fn defines_destructive_action(&self) -> bool {
         self.defined_heads.iter().any(|head| head.is_destructive())
     }
@@ -439,7 +560,9 @@ impl LifecycleActionScan {
             LifecycleActionHead::AddTags => &mut self.add_tags,
             LifecycleActionHead::MoveToLibrary => &mut self.libraries,
             LifecycleActionHead::MoveToRoot => &mut self.roots,
-            LifecycleActionHead::Notify => &mut self.notifications,
+            LifecycleActionHead::Notify
+            | LifecycleActionHead::NotifySeason
+            | LifecycleActionHead::NotifyEpisode => &mut self.notifications,
             _ => &mut self.remove_tags,
         }
     }
@@ -738,6 +861,8 @@ pub(crate) fn scan_module(module: &Module) -> LifecycleActionScan {
     }
     scan.errors.extend(foreign_data_references(module));
     scan.errors.extend(protected_with_targets(module));
+    let level_errors = level_read_errors(module, &scan);
+    scan.errors.extend(level_errors);
 
     let referenced = referenced_names(module);
     for (name, at) in defined {
@@ -879,6 +1004,15 @@ fn string_literal(expr: &Expr) -> Option<String> {
 /// whether bare (`archive`), called (`helper(x)`), or through the package
 /// document (`data.<package>.archive`).
 fn referenced_names(module: &Module) -> HashSet<String> {
+    references_by_rule(module)
+        .into_iter()
+        .flat_map(|(_, names)| names)
+        .collect()
+}
+
+/// The rule names each rule of the module refers to, keyed by the name the
+/// rule defines (`None` for a rule whose head names nothing).
+fn references_by_rule(module: &Module) -> Vec<(Option<String>, HashSet<String>)> {
     let package = static_reference(&module.package.refr).map(|reference| reference.fields());
     // A name an import binds stands for the path it imports, so a use of
     // `me.helper` after `import data.<own package> as me` uses `helper`.
@@ -894,8 +1028,9 @@ fn referenced_names(module: &Module) -> HashSet<String> {
             Some((alias, target))
         })
         .collect();
-    let mut names = HashSet::new();
+    let mut by_rule = Vec::with_capacity(module.policy.len());
     for rule in &module.policy {
+        let mut names = HashSet::new();
         let head_refr: *const Expr = rule_refr(rule);
         visit_rule_expr_nodes(rule, |expr| {
             if core::ptr::eq(expr, head_refr) {
@@ -925,6 +1060,77 @@ fn referenced_names(module: &Module) -> HashSet<String> {
                 names.insert(name);
             }
         });
+        by_rule.push((rule_head_name(rule_refr(rule)).map(str::to_string), names));
     }
-    names
+    by_rule
+}
+
+/// The input section a level's facts live in, when the level has one.
+fn level_section(level: LifecycleSubjectKind) -> Option<&'static str> {
+    match level {
+        LifecycleSubjectKind::Title => None,
+        LifecycleSubjectKind::Season => Some("season"),
+        LifecycleSubjectKind::Episode => Some("episode"),
+    }
+}
+
+/// Refuse every head that reads, itself or through the rules it uses, the
+/// input section of a level it does not act at.
+///
+/// `input.season` exists only while a season is evaluated and
+/// `input.episode` only while an episode is, so at any other level a read of
+/// one is undefined. A negated read would then be true, and a title head
+/// written as `delete_title if { not input.season.facts.has_file }` would
+/// fire on every title.
+fn level_read_errors(module: &Module, scan: &LifecycleActionScan) -> Vec<LifecycleActionScanIssue> {
+    let by_rule = references_by_rule(module);
+    let mut uses: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut reads: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (rule, (name, names)) in module.policy.iter().zip(by_rule) {
+        let Some(name) = name else {
+            continue;
+        };
+        uses.entry(name.clone()).or_default().extend(names);
+        reads
+            .entry(name)
+            .or_default()
+            .extend(crate::validation::rule_input_sections(rule));
+    }
+
+    let mut errors = Vec::new();
+    for head in &scan.defined_heads {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut pending = vec![head.rule_name()];
+        let mut sections: BTreeSet<&str> = BTreeSet::new();
+        while let Some(name) = pending.pop() {
+            if !seen.insert(name) {
+                continue;
+            }
+            if let Some(read) = reads.get(name) {
+                sections.extend(read.iter().map(String::as_str));
+            }
+            if let Some(used) = uses.get(name) {
+                pending.extend(used.iter().map(String::as_str));
+            }
+        }
+        let own = level_section(head.level());
+        let foreign = ["season", "episode"]
+            .into_iter()
+            .find(|section| sections.contains(section) && Some(*section) != own);
+        if let Some(section) = foreign {
+            let name = head.rule_name();
+            let at = scan.head_positions.get(head).copied().unwrap_or((1, 1));
+            errors.push(issue(
+                diagnostic_codes::RULE_ACTION_READS_OTHER_LEVEL,
+                name,
+                format!(
+                    "'{name}' reads input.{section}, which is missing when '{name}' is \
+                     decided; a title head reads input.facts, a season head also reads \
+                     input.season, and an episode head also reads input.episode"
+                ),
+                at,
+            ));
+        }
+    }
+    errors
 }

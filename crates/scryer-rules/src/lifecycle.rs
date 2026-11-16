@@ -91,26 +91,100 @@ pub struct LifecycleInput {
     pub evaluation_time: DateTime<Utc>,
     pub subject: LifecycleSubjectDoc,
     pub library: LifecycleLibraryDoc,
+    /// The title's own facts, at every level.
     pub facts: LifecycleFactsDoc,
+    /// The season under evaluation, present only while a season is.
+    pub season: Option<LifecycleNarrowSubjectDoc>,
+    /// The episode under evaluation, present only while an episode is.
+    pub episode: Option<LifecycleNarrowSubjectDoc>,
 }
 
 impl Serialize for LifecycleInput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let namespaces =
             serialize_fact_namespaces(&self.facts).map_err(serde::ser::Error::custom)?;
-        let mut state = serializer.serialize_struct("LifecycleInput", 6)?;
+        let mut state = serializer.serialize_struct("LifecycleInput", 8)?;
         state.serialize_field("schema_version", &self.schema_version)?;
         state.serialize_field("evaluation_time", &self.evaluation_time)?;
         state.serialize_field("subject", &self.subject)?;
         state.serialize_field("library", &self.library)?;
         state.serialize_field("facts", &namespaces.facts)?;
         state.serialize_field("observations", &namespaces.observations)?;
+        if let Some(season) = &self.season {
+            state.serialize_field("season", season)?;
+        } else {
+            state.skip_field("season")?;
+        }
+        if let Some(episode) = &self.episode {
+            state.serialize_field("episode", episode)?;
+        } else {
+            state.skip_field("episode")?;
+        }
         state.end()
     }
 }
 
-/// Granularity the rule set is scoped to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+impl LifecycleInput {
+    /// The level this input is evaluated at.
+    pub fn level(&self) -> LifecycleSubjectKind {
+        self.subject.kind
+    }
+
+    /// The facts of the subject under evaluation: the season's or the
+    /// episode's own facts at those levels, the title's otherwise.
+    pub fn subject_facts(&self) -> &LifecycleFactsDoc {
+        match (self.subject.kind, &self.season, &self.episode) {
+            (LifecycleSubjectKind::Season, Some(season), _) => &season.facts,
+            (LifecycleSubjectKind::Episode, _, Some(episode)) => &episode.facts,
+            _ => &self.facts,
+        }
+    }
+
+    /// [`Self::subject_facts`], mutably.
+    pub fn subject_facts_mut(&mut self) -> &mut LifecycleFactsDoc {
+        match (self.subject.kind, &mut self.season, &mut self.episode) {
+            (LifecycleSubjectKind::Season, Some(season), _) => &mut season.facts,
+            (LifecycleSubjectKind::Episode, _, Some(episode)) => &mut episode.facts,
+            _ => &mut self.facts,
+        }
+    }
+}
+
+/// One season or one episode as a rule reads it, beside the title's facts.
+///
+/// Its facts are the same set the title has, described for this season or
+/// episode alone: its files, its monitoring, its watch history. Facts that
+/// belong to the show (tags, requesters, claims) are the show's. They
+/// serialize into `facts` and `observations` exactly as the title's do.
+#[derive(Debug, Clone)]
+pub struct LifecycleNarrowSubjectDoc {
+    /// The season's collection id, or the episode's id.
+    pub id: String,
+    pub collection_id: Option<String>,
+    pub season_number: Option<i32>,
+    /// Set for an episode only.
+    pub episode_number: Option<i32>,
+    pub facts: LifecycleFactsDoc,
+}
+
+impl Serialize for LifecycleNarrowSubjectDoc {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let namespaces =
+            serialize_fact_namespaces(&self.facts).map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("LifecycleNarrowSubjectDoc", 6)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("collection_id", &self.collection_id)?;
+        state.serialize_field("season_number", &self.season_number)?;
+        state.serialize_field("episode_number", &self.episode_number)?;
+        state.serialize_field("facts", &namespaces.facts)?;
+        state.serialize_field("observations", &namespaces.observations)?;
+        state.end()
+    }
+}
+
+/// What a lifecycle subject is: a whole title, one season, or one episode.
+/// It is also the level an action head acts at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleSubjectKind {
     Title,
@@ -260,21 +334,18 @@ pub struct LifecycleFactsDoc {
     /// at all. A rule reading it on a movie therefore sees a missing key rather
     /// than being held.
     pub series_movies: Observation<Vec<LifecycleSeriesMovieDoc>>,
-    /// Storage capacity is exposed only after the host applies a selected
-    /// configured root. Without that root these remain absent; a storage-aware
-    /// rule must be validated with an explicit root selection before it runs.
+    /// The configured roots the subject's files are on, one entry per root,
+    /// with each root's capacity. Known and empty for a subject with no file
+    /// under any configured root.
     ///
-    /// Scheduled evaluation reads the capacity sampler's last figure for the
-    /// root and never calls the disk: a root not yet sampled is unknown with
-    /// `storage_not_sampled`, one sampled more than two sampling intervals ago
-    /// with `storage_sample_stale`, and one whose last sample failed with
-    /// `storage_capacity_unavailable`. Preview and the execution-time guard
-    /// take a figure now, which is unknown only with
-    /// `storage_capacity_unavailable`.
-    pub storage_root_id: Observation<String>,
-    pub storage_available_bytes: Observation<i64>,
-    pub storage_total_bytes: Observation<i64>,
-    pub storage_available_percent: Observation<f64>,
+    /// Scheduled evaluation reads the capacity sampler's last figure for each
+    /// root and never calls the disk. The whole list is unknown when any of
+    /// its roots has no usable figure: `storage_not_sampled` for a root not
+    /// yet sampled, `storage_sample_stale` for one sampled more than two
+    /// sampling intervals ago, and `storage_capacity_unavailable` for one
+    /// whose last sample failed. Preview and the execution-time guard take a
+    /// figure now, which is unknown only with `storage_capacity_unavailable`.
+    pub storage_roots: Observation<Vec<LifecycleStorageRootDoc>>,
     /// Metadata Scryer already stores on the title row. Each is absent when
     /// the metadata provider gave no value, and the movie release dates are
     /// absent for a show. `first_aired` and the release dates are dates as the
@@ -365,6 +436,16 @@ pub struct LifecycleFactsDoc {
     pub favorited_by_usernames: Observation<Vec<String>>,
     pub favorited_by_anyone: Observation<bool>,
     pub favorited_by_any_requester: Observation<bool>,
+}
+
+/// One configured root a subject's files are on, as a rule sees it.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+pub struct LifecycleStorageRootDoc {
+    pub root_id: String,
+    pub path: String,
+    pub available_bytes: i64,
+    pub total_bytes: i64,
+    pub available_percent: f64,
 }
 
 /// One external rating as a rule sees it: the source's own value, its value on
@@ -633,8 +714,11 @@ impl PolicyFamily for LifecycleFamily {
     type Input = LifecycleInput;
     type Decision = LifecycleDecision;
     type RuleExtra = ();
-    type EvalContext = ();
+    /// The level the subject is evaluated at.
+    type EvalContext = LifecycleSubjectKind;
     type EvalError = LifecycleEvalError;
+    const NESTED_FACT_SECTIONS: &'static [&'static str] =
+        validation::LIFECYCLE_NESTED_FACT_SECTIONS;
 
     fn limits() -> RuntimeLimits {
         RuntimeLimits::lifecycle_defaults()
@@ -702,8 +786,9 @@ impl PolicyFamily for LifecycleFamily {
         _rule_id: &str,
         _rule_name: &str,
         _extra: &Self::RuleExtra,
+        level: &Self::EvalContext,
     ) -> Result<Self::Decision, String> {
-        decode_decision(value)
+        decode_decision(value, *level)
     }
 
     /// The same action scan validation runs. A stored source that would no
@@ -759,8 +844,13 @@ impl LifecycleRulesEvaluator {
     /// own — the operator sees *which fact* Scryer could not read, which is the
     /// actionable half. A policy's `reasons` still apply on every path where
     /// the policy is consulted at all, including its own `unknown`.
+    ///
+    /// Each rule decides only through the heads of the input's level: a
+    /// season reads `*_season` heads, an episode `*_episode` heads, and a
+    /// title the bare ones. The caller evaluates a subject only for rules
+    /// that act at its level.
     pub fn evaluate(&mut self, input: &LifecycleInput) -> Result<LifecycleEvalResult, RulesError> {
-        self.evaluate_policies(input, &())
+        self.evaluate_policies(input, &input.level())
     }
 }
 
@@ -770,7 +860,10 @@ impl LifecycleRulesEvaluator {
 ///
 /// Fails closed: anything that is not exactly the declared shape becomes an
 /// error for that rule instead of a coerced decision.
-pub(crate) fn decode_decision(value: &Value) -> Result<LifecycleDecision, String> {
+pub(crate) fn decode_decision(
+    value: &Value,
+    level: LifecycleSubjectKind,
+) -> Result<LifecycleDecision, String> {
     if matches!(value, Value::Undefined) {
         return Err("decision rule produced no value".to_string());
     }
@@ -784,7 +877,7 @@ pub(crate) fn decode_decision(value: &Value) -> Result<LifecycleDecision, String
     let reason_codes = decode_reasons(&value["reasons"])?;
     // Decoded before the outcome is known, so a head of the wrong type is an
     // error for the rule even on a subject the rule holds.
-    let actions = decode_actions(value)?;
+    let actions = decode_actions(value, level)?;
 
     // Unknown wins over every action: a rule that cannot see enough to decide
     // must hold the candidate rather than advance it. Otherwise a subject
@@ -819,6 +912,29 @@ pub(crate) fn decode_decision(value: &Value) -> Result<LifecycleDecision, String
 /// the rule is well-formed, and a rule held for unobservable facts would prove
 /// nothing about that.
 pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
+    let mut input = synthetic_title_input();
+    // Both narrow sections, so a season or episode head dry-runs its real
+    // path too. Validation refuses a head that reads another level's
+    // section, so carrying both never lets one head see the other's facts.
+    input.season = Some(LifecycleNarrowSubjectDoc {
+        id: "season-1".to_string(),
+        collection_id: Some("season-1".to_string()),
+        season_number: Some(1),
+        episode_number: None,
+        facts: input.facts.clone(),
+    });
+    input.episode = Some(LifecycleNarrowSubjectDoc {
+        id: "episode-1".to_string(),
+        collection_id: Some("season-1".to_string()),
+        season_number: Some(1),
+        episode_number: Some(1),
+        facts: input.facts.clone(),
+    });
+    input
+}
+
+/// The synthetic title alone, with no season or episode section.
+pub(crate) fn synthetic_title_input() -> LifecycleInput {
     LifecycleInput {
         schema_version: LIFECYCLE_INPUT_SCHEMA_VERSION,
         evaluation_time: DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
@@ -909,10 +1025,13 @@ pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
             request_list_name: Observation::known("Fixture Picks".to_string()),
             // A movie subject: series movies do not apply to it at all.
             series_movies: Observation::absent(),
-            storage_root_id: Observation::absent(),
-            storage_available_bytes: Observation::absent(),
-            storage_total_bytes: Observation::absent(),
-            storage_available_percent: Observation::absent(),
+            storage_roots: Observation::known(vec![LifecycleStorageRootDoc {
+                root_id: "root-1".to_string(),
+                path: "/media/movies".to_string(),
+                available_bytes: 500_000_000_000,
+                total_bytes: 2_000_000_000_000,
+                available_percent: 25.0,
+            }]),
             runtime_minutes: Observation::known(118),
             original_language: Observation::known("en".to_string()),
             // A movie subject: a show's status does not apply to it.
@@ -955,6 +1074,8 @@ pub(crate) fn synthetic_lifecycle_input() -> LifecycleInput {
             favorited_by_anyone: Observation::known(true),
             favorited_by_any_requester: Observation::absent(),
         },
+        season: None,
+        episode: None,
     }
 }
 
@@ -1179,14 +1300,17 @@ mod tests {
         // These are the editor's scope-specific examples: rank one is newest,
         // so a policy deletes only positions after the retained window.
         const KEEP_NEWEST_TWO_DOWNLOADED_EPISODES: &str =
-            "unmonitor if {\n  input.facts.episode_position_by_air_date > 2\n}\n";
+            "unmonitor_episode if {\n  input.episode.facts.episode_position_by_air_date > 2\n}\n";
         const KEEP_NEWEST_ONE_DOWNLOADED_SEASON: &str =
-            "unmonitor if {\n  input.facts.season_position_by_air_date > 1\n}\n";
+            "unmonitor_season if {\n  input.season.facts.season_position_by_air_date > 1\n}\n";
 
         let mut episode_input = synthetic_lifecycle_input();
         episode_input.subject.kind = LifecycleSubjectKind::Episode;
         episode_input.subject.episode_id = Some("episode-3".to_string());
-        episode_input.facts.episode_position_by_air_date = Observation::known(3);
+        episode_input.season = None;
+        if let Some(episode) = episode_input.episode.as_mut() {
+            episode.facts.episode_position_by_air_date = Observation::known(3);
+        }
         let episode_result = evaluate_against(
             &[policy(
                 "keep_newest_two_downloaded_episodes",
@@ -1199,7 +1323,10 @@ mod tests {
         season_input.subject.kind = LifecycleSubjectKind::Season;
         season_input.subject.collection_id = Some("season-2".to_string());
         season_input.subject.season_number = Some(2);
-        season_input.facts.season_position_by_air_date = Observation::known(2);
+        season_input.episode = None;
+        if let Some(season) = season_input.season.as_mut() {
+            season.facts.season_position_by_air_date = Observation::known(2);
+        }
         let season_result = evaluate_against(
             &[policy(
                 "keep_newest_one_downloaded_season",
@@ -1550,6 +1677,16 @@ mod tests {
              \t\"move_to_library\": object.get(data.scryer.maintenance.user.rule_1, \"move_to_library\", null),\n\
              \t\"move_to_root\": object.get(data.scryer.maintenance.user.rule_1, \"move_to_root\", null),\n\
              \t\"notify\": object.get(data.scryer.maintenance.user.rule_1, \"notify\", null),\n\
+             \t\"monitor_season\": object.get(data.scryer.maintenance.user.rule_1, \"monitor_season\", false),\n\
+             \t\"unmonitor_season\": object.get(data.scryer.maintenance.user.rule_1, \"unmonitor_season\", false),\n\
+             \t\"delete_season_files\": object.get(data.scryer.maintenance.user.rule_1, \"delete_season_files\", false),\n\
+             \t\"fetch_season_subtitles\": object.get(data.scryer.maintenance.user.rule_1, \"fetch_season_subtitles\", false),\n\
+             \t\"notify_season\": object.get(data.scryer.maintenance.user.rule_1, \"notify_season\", null),\n\
+             \t\"monitor_episode\": object.get(data.scryer.maintenance.user.rule_1, \"monitor_episode\", false),\n\
+             \t\"unmonitor_episode\": object.get(data.scryer.maintenance.user.rule_1, \"unmonitor_episode\", false),\n\
+             \t\"delete_episode_files\": object.get(data.scryer.maintenance.user.rule_1, \"delete_episode_files\", false),\n\
+             \t\"fetch_episode_subtitles\": object.get(data.scryer.maintenance.user.rule_1, \"fetch_episode_subtitles\", false),\n\
+             \t\"notify_episode\": object.get(data.scryer.maintenance.user.rule_1, \"notify_episode\", null),\n\
              }\n"
         );
         assert_eq!(

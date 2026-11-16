@@ -200,6 +200,17 @@ impl InMemoryLifecycleEvaluationRepo {
             Some(crate::lifecycle_rules::declared_actions::decided_actions_to_json(actions));
     }
 
+    /// Give a candidate the action kind a row written before rules declared
+    /// their actions carries.
+    pub(super) async fn set_action_kind(&self, id: &str, action_kind: &str) {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .expect("candidate exists");
+        candidate.action_kind = action_kind.to_string();
+    }
+
     /// Record execution attempts already spent on a candidate.
     pub(super) async fn set_action_attempts(&self, id: &str, attempts: i64) {
         let mut rows = self.candidates.lock().await;
@@ -1604,7 +1615,6 @@ fn evaluation_app() -> EvaluationFixture {
 fn draft(rego_source: &str, grace_days: i64) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
         name: "Stale movies".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::legacy_source(
@@ -1612,7 +1622,6 @@ fn draft(rego_source: &str, grace_days: i64) -> LifecycleRuleDraft {
             crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -1920,7 +1929,6 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
                     LifecycleActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 3,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )
@@ -1958,7 +1966,6 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
                     LifecycleActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 4,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )
@@ -2001,7 +2008,6 @@ async fn an_edit_drops_an_enabled_rule_to_dry_run_until_it_is_enabled_again() {
                     LifecycleActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 5,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )
@@ -2209,7 +2215,6 @@ async fn a_matcher_edit_supersedes_the_candidate_and_restarts_the_clock() {
                     crate::lifecycle_rules::LifecycleActionKind::DeleteTitleAndFiles,
                 ),
                 grace_days: 30,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )
@@ -2647,11 +2652,241 @@ async fn swap_matcher_in_place(
             action_spec_json: r#"{"schema_version":3,"heads":["unmonitor"],"destructive":false,"quality_profiles":[],"add_tags":[],"remove_tags":[]}"#
                 .to_string(),
             grace_days: reference.grace_days,
-            storage_root_id: None,
             matcher_content_hash: reference.matcher_content_hash.clone(),
             created_by: None,
             created_at: Utc::now(),
             builder_model_json: None,
         })
         .await;
+}
+
+// ── Levels ──────────────────────────────────────────────────────────────────
+
+/// A monitored series with one season of two episodes.
+async fn seed_series_with_season(fixture: &EvaluationFixture) -> Title {
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Synthetic Levels".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let season = fixture
+        .app
+        .create_collection(
+            &fixture.user,
+            title.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("season");
+    for number in 1..=2 {
+        fixture
+            .app
+            .create_episode(
+                &fixture.user,
+                title.id.clone(),
+                Some(season.id.clone()),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                None,
+                Some(format!("Episode {number}")),
+                Some("2020-01-01".into()),
+                None,
+                false,
+                false,
+            )
+            .await
+            .expect("episode");
+    }
+    title
+}
+
+async fn armed_source(fixture: &EvaluationFixture, rego_source: &str) -> String {
+    let created = fixture
+        .app
+        .create_lifecycle_rule_set(
+            &fixture.user,
+            LifecycleRuleDraft {
+                rego_source: rego_source.to_string(),
+                ..draft(MONITORED_MATCHER, 0)
+            },
+        )
+        .await
+        .expect("create rule set");
+    super::lifecycle_rules::set_rule_state(
+        &fixture.app,
+        &fixture.user,
+        &created.rule_set.id,
+        LifecycleRuleState::DryRun,
+        None,
+    )
+    .await;
+    created.rule_set.id
+}
+
+fn candidate_levels(candidates: &[LifecycleCandidate]) -> Vec<String> {
+    let mut levels: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.subject_kind.clone())
+        .collect();
+    levels.sort();
+    levels
+}
+
+/// A rule whose heads all act on the title decides only the title: its
+/// seasons and episodes are never decided, so none of them opens a
+/// candidate even though the title's facts match.
+#[tokio::test]
+async fn a_title_only_rule_decides_no_season_or_episode() {
+    let fixture = evaluation_app();
+    let title = seed_series_with_season(&fixture).await;
+    armed_source(
+        &fixture,
+        "package rules\nimport rego.v1\n\nunmonitor if input.facts.monitored\n",
+    )
+    .await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(
+        candidate_levels(&candidates),
+        vec!["title"],
+        "{candidates:?}"
+    );
+    assert_eq!(candidates[0].subject_id, title.id);
+}
+
+/// A rule with a title head and a season head decides the title through
+/// the title head and the season through the season head, in one pass; no
+/// episode is decided because no head acts on one.
+#[tokio::test]
+async fn a_mixed_level_rule_opens_a_candidate_at_each_level_it_acts_on() {
+    let fixture = evaluation_app();
+    let title = seed_series_with_season(&fixture).await;
+    armed_source(
+        &fixture,
+        "package rules\nimport rego.v1\n\n\
+         notify := \"Fixture review\" if input.facts.monitored\n\n\
+         unmonitor_season if input.facts.monitored\n",
+    )
+    .await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+
+    let candidates = fixture.evaluation.all_candidates().await;
+    assert_eq!(
+        candidate_levels(&candidates),
+        vec!["season", "title"],
+        "{candidates:?}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.title_id == title.id)
+    );
+}
+
+/// A candidate whose deletion journal was written when deletion narrowed to
+/// one configured root is closed by evaluation, never resumed and never left
+/// failing the pass: the journal stays as it was, and the subject, still
+/// matching, earns a new candidate with its own generation and clock.
+#[tokio::test]
+async fn a_candidate_with_a_root_deletion_journal_is_closed_not_failed_every_pass() {
+    let fixture = evaluation_app();
+    let title = fixture
+        .app
+        .add_title(
+            &fixture.user,
+            NewTitle {
+                name: "Synthetic Root Journal".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    armed_source(
+        &fixture,
+        "package rules\nimport rego.v1\n\nunmonitor if input.facts.monitored\n",
+    )
+    .await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let opened = fixture.evaluation.all_candidates().await;
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    let legacy_kind = "unmonitor_title_delete_all_files";
+    fixture
+        .evaluation
+        .set_action_kind(&opened[0].id, legacy_kind)
+        .await;
+    let candidate = fixture.evaluation.all_candidates().await.remove(0);
+    let journal =
+        crate::lifecycle_rules::scoped_deletion::root_deletion_journal_for_test(&candidate);
+    let now = Utc::now();
+    fixture
+        .evaluation
+        .start_action_run(&LifecycleActionRun {
+            id: scryer_domain::Id::new().0,
+            candidate_id: candidate.id.clone(),
+            rule_set_id: candidate.rule_set_id.clone(),
+            revision_number: candidate.revision_number,
+            title_id: title.id.clone(),
+            subject_kind: candidate.subject_kind.clone(),
+            subject_id: candidate.subject_id.clone(),
+            action_kind: legacy_kind.to_string(),
+            match_generation: candidate.match_generation,
+            idempotency_key: "synthetic-root-journal".to_string(),
+            attempt: 1,
+            status: LifecycleActionRunStatus::Held,
+            hold_reason: Some("synthetic".to_string()),
+            error: None,
+            detail: journal.clone(),
+            started_at: now,
+            finished_at: Some(now),
+            created_at: now,
+        })
+        .await
+        .expect("store the root journal");
+
+    for pass in ["first pass", "second pass"] {
+        fixture.evaluate().await;
+        let candidates = fixture.evaluation.all_candidates().await;
+        let closed = candidates
+            .iter()
+            .find(|row| row.id == candidate.id)
+            .expect("the old candidate stays as history");
+        assert_eq!(closed.state, LifecycleCandidateState::Canceled, "{pass}");
+        assert_eq!(
+            closed.state_reason,
+            crate::lifecycle_rules::candidate_reason::ROOT_DELETION_JOURNAL_DISCARDED,
+            "{pass}"
+        );
+        let open: Vec<_> = candidates
+            .iter()
+            .filter(|row| !row.state.is_terminal())
+            .collect();
+        assert_eq!(open.len(), 1, "{pass}: {candidates:?}");
+        assert!(
+            open[0].match_generation > candidate.match_generation,
+            "{pass}: a new generation, never the journal's"
+        );
+    }
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].detail, journal, "the journal is kept as it was");
 }

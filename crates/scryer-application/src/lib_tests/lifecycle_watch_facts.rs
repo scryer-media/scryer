@@ -203,7 +203,6 @@ async fn record_play(
 fn draft(rego_source: &str) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
         name: "Watched movies".to_string(),
         description: String::new(),
         rego_source: crate::lib_tests::legacy_source(
@@ -211,7 +210,6 @@ fn draft(rego_source: &str) -> LifecycleRuleDraft {
             crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
-        storage_root_id: None,
         library_ids: Vec::new(),
     }
 }
@@ -286,13 +284,11 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
 fn inline_matcher(rego_source: &str) -> LifecyclePreviewMatcher {
     LifecyclePreviewMatcher::Inline {
         library_ids: vec![],
-        subject_kind: scryer_domain::LifecycleRuleSubjectKind::Title,
         rego_source: crate::lib_tests::legacy_source(
             rego_source,
             crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
         ),
         grace_days: 0,
-        storage_root_id: None,
     }
 }
 
@@ -799,7 +795,6 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
                     crate::lifecycle_rules::LifecycleActionKind::UnmonitorScopeKeepFiles,
                 ),
                 grace_days: 0,
-                storage_root_id: None,
                 max_titles_per_run: None,
             },
         )

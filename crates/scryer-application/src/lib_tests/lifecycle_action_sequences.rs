@@ -14,7 +14,7 @@ use crate::lifecycle_rules::{
     LifecycleActionStepParameters, LifecycleDeclaredActions, LifecycleMatcherDraft,
     LifecycleRuleDraft, LifecycleSearchCondition,
 };
-use scryer_domain::{LifecycleEffectArming, LifecycleRuleState, LifecycleRuleSubjectKind, User};
+use scryer_domain::{LifecycleEffectArming, LifecycleRuleState, User};
 use scryer_rules::lifecycle_actions::LifecycleActionHead;
 use std::sync::Arc;
 
@@ -34,13 +34,15 @@ const DELETES_FILES: &str = "package whatever\n\
 const STORAGE_DELETE: &str = "package whatever\n\
     import rego.v1\n\n\
     delete_files if {\n\
-    \tinput.facts.storage_available_percent < 5\n\
+    \tsome root in input.facts.storage_roots\n\
+    \troot.available_percent < 5\n\
     }\n";
 
 const STORAGE_SEARCH: &str = "package whatever\n\
     import rego.v1\n\n\
     search if {\n\
-    \tinput.facts.storage_available_percent < 5\n\
+    \tsome root in input.facts.storage_roots\n\
+    \troot.available_percent < 5\n\
     }\n";
 
 fn authoring_app() -> (AppUseCase, User) {
@@ -51,19 +53,13 @@ fn authoring_app() -> (AppUseCase, User) {
     (app, user)
 }
 
-fn draft(
-    rego_source: &str,
-    grace_days: i64,
-    storage_root_id: Option<String>,
-) -> LifecycleRuleDraft {
+fn draft(rego_source: &str, grace_days: i64) -> LifecycleRuleDraft {
     LifecycleRuleDraft {
         max_titles_per_run: Some(100),
-        subject_kind: LifecycleRuleSubjectKind::Title,
         name: "Declared rule".to_string(),
         description: "A declared-actions fixture".to_string(),
         rego_source: rego_source.to_string(),
         grace_days,
-        storage_root_id,
         library_ids: Vec::new(),
     }
 }
@@ -72,7 +68,6 @@ fn matcher(rego_source: &str, grace_days: i64) -> LifecycleMatcherDraft {
     LifecycleMatcherDraft {
         rego_source: rego_source.to_string(),
         grace_days,
-        storage_root_id: None,
         max_titles_per_run: None,
     }
 }
@@ -88,7 +83,7 @@ fn persisted_heads(action_spec_json: &str) -> Vec<LifecycleActionHead> {
 async fn declared_heads_are_saved_as_an_immutable_revision() {
     let (app, user) = authoring_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(UNMONITOR_AND_SEARCH, 19, None))
+        .create_lifecycle_rule_set(&user, draft(UNMONITOR_AND_SEARCH, 19))
         .await
         .expect("create declared rule");
 
@@ -138,7 +133,7 @@ async fn declared_heads_are_saved_as_an_immutable_revision() {
 async fn only_an_edit_that_can_delete_drops_an_enabled_rule_to_dry_run() {
     let (app, user) = authoring_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(UNMONITOR_AND_SEARCH, 0, None))
+        .create_lifecycle_rule_set(&user, draft(UNMONITOR_AND_SEARCH, 0))
         .await
         .expect("create declared rule");
     super::lifecycle_rules::arm_rule(
@@ -220,37 +215,36 @@ fn a_stored_step_sequence_is_not_read_as_declared_actions() {
     );
 }
 
+fn storage_rule(head: &str) -> String {
+    format!(
+        "package whatever\nimport rego.v1\n\n{head} if {{\n\tsome root in input.facts.storage_roots\n\troot.available_percent < 5\n}}\n"
+    )
+}
+
+/// Storage facts read every root a subject's files are on, so a rule that
+/// reads them names no root and may define any head, deletes included.
 #[tokio::test]
-async fn storage_scoped_rules_require_a_root_and_the_storage_safe_heads() {
+async fn storage_rules_save_without_a_root_and_with_any_head() {
     let (app, user) = authoring_app();
-    let missing_root = app
-        .create_lifecycle_rule_set(&user, draft(STORAGE_DELETE, 3, None))
+    app.create_lifecycle_rule_set(&user, draft(STORAGE_DELETE, 3))
         .await
-        .expect_err("storage facts require a selected root");
-    assert!(
-        missing_root.validation_reason().is_some(),
-        "{missing_root:?}"
-    );
-
-    let root_id = scryer_domain::root_folder_id_for_path("/data/movies");
-    let valid = app
-        .create_lifecycle_rule_set(&user, draft(STORAGE_DELETE, 3, Some(root_id.clone())))
+        .expect("a storage rule names no root");
+    app.create_lifecycle_rule_set(&user, draft(STORAGE_SEARCH, 3))
         .await
-        .expect("a filesystem-safe head can use the configured root");
-    assert_eq!(
-        valid.revision.storage_root_id.as_deref(),
-        Some(root_id.as_str())
-    );
-
-    let unsupported = app
-        .create_lifecycle_rule_set(&user, draft(STORAGE_SEARCH, 3, Some(root_id)))
-        .await
-        .expect_err("acquisition dispatch cannot be attached to a storage root");
-    assert_eq!(
-        unsupported.validation_reason(),
-        Some(crate::error_reasons::lifecycle::ACTION_HEAD_UNSUPPORTED_FOR_SCOPE),
-        "{unsupported:?}"
-    );
+        .expect("a storage rule may search");
+    for head in [
+        "unmonitor",
+        "delete_title",
+        "monitor",
+        "unmonitor_season",
+        "delete_season_files",
+        "delete_episode_files",
+        "fetch_episode_subtitles",
+    ] {
+        app.create_lifecycle_rule_set(&user, draft(&storage_rule(head), 3))
+            .await
+            .unwrap_or_else(|error| panic!("a storage rule may define {head}: {error:?}"));
+    }
 }
 
 /// An edit that removes every delete head leaves nothing armed for deletes:
@@ -260,7 +254,7 @@ async fn storage_scoped_rules_require_a_root_and_the_storage_safe_heads() {
 async fn an_edit_without_delete_heads_drops_destructive_arming() {
     let (app, user) = authoring_app();
     let created = app
-        .create_lifecycle_rule_set(&user, draft(DELETES_FILES, 0, None))
+        .create_lifecycle_rule_set(&user, draft(DELETES_FILES, 0))
         .await
         .expect("create delete rule");
     super::lifecycle_rules::arm_rule(

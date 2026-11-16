@@ -6004,7 +6004,6 @@ pub struct LifecycleRuleSet {
     pub destructive_rearm_required: bool,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
-    pub subject_kind: LifecycleRuleSubjectKind,
     /// Shipped with Scryer: its name, matcher and action are fixed and it
     /// cannot be deleted. Its state, grace period and libraries stay editable.
     #[serde(default)]
@@ -6098,10 +6097,6 @@ pub struct LifecycleRuleRevision {
     /// passing the raw text around.
     pub action_spec_json: String,
     pub grace_days: i64,
-    /// Configured library root whose capacity and owned files this revision
-    /// may read. `None` preserves the legacy root-agnostic behavior.
-    #[serde(default)]
-    pub storage_root_id: Option<String>,
     pub matcher_content_hash: String,
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
