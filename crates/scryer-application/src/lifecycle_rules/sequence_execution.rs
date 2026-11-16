@@ -1292,7 +1292,7 @@ impl AppUseCase {
                     crate::settings::runtime::quality_profile_ids_equal(&profile.id, target)
                 }) {
                     return Err(AppError::validation_refused(
-                        crate::error_reasons::lifecycle::TARGET_QUALITY_PROFILE_DOES_NOT_EXIST,
+                        crate::error_reasons::lifecycle::QUALITY_PROFILE_NOT_FOUND,
                         format!("target quality profile '{target}' does not exist"),
                     ));
                 }
@@ -2264,7 +2264,7 @@ impl AppUseCase {
             .find(|previous| previous.kind == LifecycleActionStepKind::Unmonitor)
         else {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP,
+                crate::error_reasons::lifecycle::DELETE_FILES_UNMONITOR_STEP_MISSING,
                 "DeleteFiles requires an earlier Unmonitor step".to_string(),
             ));
         };
@@ -2273,7 +2273,7 @@ impl AppUseCase {
         } = &unmonitor.parameters
         else {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
+                crate::error_reasons::lifecycle::DELETE_FILES_UNMONITOR_STEP_MISMATCH,
                 "DeleteFiles has an incompatible Unmonitor prerequisite".to_string(),
             ));
         };

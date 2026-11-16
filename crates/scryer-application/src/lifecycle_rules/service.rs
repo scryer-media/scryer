@@ -479,7 +479,7 @@ impl AppUseCase {
                     != scryer_rules::strip_editor_source(&current_revision.rego_source))
         {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::RULE_SHIPS_SCRYER,
+                crate::error_reasons::lifecycle::SYSTEM_RULE_READ_ONLY,
                 "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace \
                  period, libraries and state can.",
             ));
@@ -624,7 +624,7 @@ impl AppUseCase {
         let name = require_non_empty(&name, "name")?;
         if rule_set.system_owned && name != rule_set.name {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::RULE_SHIPS_SCRYER_CANNOT_RENAMED,
+                crate::error_reasons::lifecycle::SYSTEM_RULE_RENAME_REFUSED,
                 "This rule ships with Scryer and cannot be renamed.",
             ));
         }
@@ -726,7 +726,7 @@ impl AppUseCase {
         let rule_set = self.require_lifecycle_rule_set(rule_set_id).await?;
         if rule_set.system_owned {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::RULE_SHIPS_SCRYER_CANNOT_DELETED,
+                crate::error_reasons::lifecycle::SYSTEM_RULE_DELETE_REFUSED,
                 "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.",
             ));
         }
@@ -740,22 +740,28 @@ impl AppUseCase {
             .await?
             .is_empty();
         if has_history {
-            return Err(AppError::validation_refused(crate::error_reasons::lifecycle::ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID, format!(
-                "\"{}\" has already run actions on your library, and deleting it would erase the \
+            return Err(AppError::validation_refused(
+                crate::error_reasons::lifecycle::RULE_DELETE_HAS_ACTION_HISTORY,
+                format!(
+                    "\"{}\" has already run actions on your library, and deleting it would erase the \
                  record of what it did. Set it to Disabled instead: the rule stops \
                  immediately and its history is kept.",
-                rule_set.name
-            )));
+                    rule_set.name
+                ),
+            ));
         }
 
         let active_candidates = self.count_active_lifecycle_candidates(&rule_set.id).await?;
         if active_candidates > 0 {
-            return Err(AppError::validation_refused(crate::error_reasons::lifecycle::CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE, format!(
-                "\"{}\" is currently tracking {active_candidates} title(s), and deleting it would \
+            return Err(AppError::validation_refused(
+                crate::error_reasons::lifecycle::RULE_DELETE_HAS_ACTIVE_CANDIDATES,
+                format!(
+                    "\"{}\" is currently tracking {active_candidates} title(s), and deleting it would \
                  drop them without a trace. Set it to Disabled instead, or clear the \
                  candidates first.",
-                rule_set.name
-            )));
+                    rule_set.name
+                ),
+            ));
         }
 
         self.services
@@ -957,7 +963,10 @@ impl AppUseCase {
             ),
             LifecyclePreviewSelection::Subjects { subject_ids, .. } => {
                 if subject_ids.is_empty() || subject_ids.len() > LIFECYCLE_PREVIEW_MAX_TITLES {
-                    return Err(AppError::validation_refused(crate::error_reasons::lifecycle::PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS, "preview requires between one and fifty subjects"));
+                    return Err(AppError::validation_refused(
+                        crate::error_reasons::lifecycle::PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE,
+                        "preview requires between one and fifty subjects",
+                    ));
                 }
                 (LIFECYCLE_PREVIEW_MAX_TITLES, Some(subject_ids))
             }
@@ -1050,7 +1059,7 @@ impl AppUseCase {
         let rule_set_id = policy.id.clone();
         let engine = LifecycleRulesEngine::build(std::slice::from_ref(&policy)).map_err(|e| {
             AppError::validation_refused(
-                crate::error_reasons::lifecycle::RULE_FAILED_COMPILE,
+                crate::error_reasons::lifecycle::RULE_COMPILE_FAILED,
                 format!("rule failed to compile: {e}"),
             )
         })?;
@@ -1326,7 +1335,7 @@ impl AppUseCase {
                 .any(|id| !results.iter().any(|result| &result.subject_id == id))
         }) {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::PREVIEW_SUBJECT_OUTSIDE_SCOPE,
+                crate::error_reasons::lifecycle::PREVIEW_SUBJECT_OUTSIDE_LIBRARIES,
                 "preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope",
             ));
         }
@@ -1470,7 +1479,7 @@ impl AppUseCase {
             | LifecyclePreviewSelection::Subjects { title_ids, .. } => {
                 if title_ids.len() > LIFECYCLE_PREVIEW_MAX_TITLES {
                     return Err(AppError::validation_refused(
-                        crate::error_reasons::lifecycle::PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED,
+                        crate::error_reasons::lifecycle::PREVIEW_TITLE_LIMIT_EXCEEDED,
                         format!(
                             "preview accepts at most {LIFECYCLE_PREVIEW_MAX_TITLES} titles, {} were requested",
                             title_ids.len()
@@ -1884,7 +1893,7 @@ fn lifecycle_rule_detail(
         Some(declared) => (declared, None),
         None => (
             LifecycleDeclaredActions::none(),
-            Some(crate::error_reasons::lifecycle::RULE_STORED_ACTIONS_NOT_DECLARED),
+            Some(crate::error_reasons::lifecycle::RULE_ACTIONS_UNREADABLE),
         ),
     };
     let action_refusal = action_refusal_for(&rule_set, &declared_actions);
@@ -1901,10 +1910,10 @@ fn lifecycle_rule_detail(
 /// chosen by its reason code.
 pub(crate) fn stored_actions_refused(reason: &'static str) -> AppError {
     use crate::error_reasons::lifecycle::{
-        RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN, RULE_STORED_ACTIONS_NOT_DECLARED,
+        RULE_ACTIONS_UNREADABLE, RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN,
     };
     let message = match reason {
-        RULE_STORED_ACTIONS_NOT_DECLARED => {
+        RULE_ACTIONS_UNREADABLE => {
             "this rule was saved before rules declared their own actions; save its source again to use it"
         }
         RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN => {

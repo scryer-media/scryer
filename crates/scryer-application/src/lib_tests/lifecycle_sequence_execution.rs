@@ -1710,7 +1710,7 @@ async fn a_stored_step_sequence_revision_is_refused_and_deletes_nothing() {
         .expect("rule exists");
     assert_eq!(
         detail.load_refusal,
-        Some(crate::error_reasons::lifecycle::RULE_STORED_ACTIONS_NOT_DECLARED)
+        Some(crate::error_reasons::lifecycle::RULE_ACTIONS_UNREADABLE)
     );
     assert!(detail.declared_actions.heads.is_empty());
     assert!(
@@ -1768,7 +1768,7 @@ async fn a_stored_step_sequence_revision_is_refused_and_deletes_nothing() {
         .expect_err("a refused rule cannot be enabled");
     assert_eq!(
         refused.validation_reason(),
-        Some(crate::error_reasons::lifecycle::RULE_STORED_ACTIONS_NOT_DECLARED),
+        Some(crate::error_reasons::lifecycle::RULE_ACTIONS_UNREADABLE),
         "{refused:?}"
     );
 }

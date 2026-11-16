@@ -1007,7 +1007,7 @@ test("exact subject preview retains its owning title and the draft library scope
 test("a rule's load refusal is said by its code, and an unknown code gets the generic notice", () => {
   const translations = en as Record<string, string>;
   for (const code of [
-    "LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED",
+    "LIFECYCLE_RULE_ACTIONS_UNREADABLE",
     "LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN",
   ]) {
     const key = lifecycleLoadRefusalKey(code);

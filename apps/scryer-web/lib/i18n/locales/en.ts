@@ -2291,59 +2291,59 @@ const en: LocaleDictionary = {
     "Verification of the transferred file failed.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "The destination did not pass verification.",
-  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
     "This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.",
-  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
     "Ambiguous lifecycle file coverage.",
   "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "The candidate count changed. Review the current count before arming.",
-  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
     "Child deletion requires an episode or season.",
-  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
     "This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.",
-  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
     "DeleteFiles has an incompatible Unmonitor prerequisite.",
-  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
     "DeleteFiles requires an earlier Unmonitor step.",
   "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
     "Lifecycle exclusion was not found.",
   "error.reason.LIFECYCLE_FIELD_REQUIRED": "A required field is empty.",
   "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
     "Lifecycle file ownership changed.",
-  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
     "Lifecycle file targets changed; another evaluation is required.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Grace period must be zero or more days.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Grace period must be at most 3650 days (ten years).",
-  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
     "Movie titles do not have an episode inventory.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
-  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
     "Preview accepts at most 50 titles.",
-  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
     "Preview requires between one and fifty subjects.",
-  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
     "Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "The rule changed while confirming; review it again before arming deletion.",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
     "The rule configuration must be reviewed again before arming deletion; reopen the confirmation.",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "Rule evaluation failed.",
-  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE":
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED":
     "The lifecycle rule failed to compile.",
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
     "Lifecycle rule set was not found.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
     "This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
     "This rule ships with Scryer and cannot be renamed.",
   "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
     "The lifecycle rule source is invalid.",
-  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
     "This rule's action never changes anything, so it can only run as a dry run.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "Rule validation failed.",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
@@ -2352,11 +2352,9 @@ const en: LocaleDictionary = {
     "Lifecycle subject ID is required.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Invalid lifecycle subject kind.",
-  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
     "The lifecycle subject was not found, or no longer belongs to this title.",
-  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "The target quality profile does not exist.",
-  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
     "Lifecycle unmonitoring candidate identity does not match its title.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
     "The media analysis result is invalid.",
@@ -12455,7 +12453,7 @@ const en: LocaleDictionary = {
     "Set titles per run: this rule can delete.",
   "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "Another save changed this rule first. Nothing was saved; reload the rule and try again.",
-  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
     "This rule was saved before rules declared their own actions, so it never runs. Replace its source to run it again.",
   "settings.refLifecycleFactsWatchedByAnyone":
     "Whether anyone with an account on a connected media server has played the subject, linked to Scryer or not; it names nobody",

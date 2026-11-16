@@ -679,7 +679,10 @@ impl AppUseCase {
             return Err(super::service::stored_actions_refused(reason));
         }
         if state == LifecycleRuleState::Enabled && arming == LifecycleEffectArming::None {
-            return Err(AppError::validation_refused(crate::error_reasons::lifecycle::RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN, "this rule's action never changes anything, so it can only run as a dry run"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::lifecycle::RULE_HAS_NO_EFFECT,
+                "this rule's action never changes anything, so it can only run as a dry run",
+            ));
         }
 
         if arming == LifecycleEffectArming::Destructive {
@@ -2628,7 +2631,7 @@ impl AppUseCase {
             || (candidate.subject_kind == title_kind && candidate.subject_id != title.id)
         {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE,
+                crate::error_reasons::lifecycle::CANDIDATE_TITLE_MISMATCH,
                 "lifecycle unmonitoring candidate identity does not match its title",
             ));
         }

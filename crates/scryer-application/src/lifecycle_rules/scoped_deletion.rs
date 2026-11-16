@@ -524,7 +524,7 @@ impl AppUseCase {
             .await?;
         if subject.ambiguous_files {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::AMBIGUOUS_LIFECYCLE_FILE_COVERAGE,
+                crate::error_reasons::lifecycle::FILE_COVERAGE_AMBIGUOUS,
                 "ambiguous lifecycle file coverage",
             ));
         }
@@ -551,7 +551,7 @@ impl AppUseCase {
             }
             Scope::Title => {
                 return Err(AppError::validation_refused(
-                    crate::error_reasons::lifecycle::CHILD_DELETION_REQUIRES_EPISODE_SEASON,
+                    crate::error_reasons::lifecycle::CHILD_DELETION_SUBJECT_REQUIRED,
                     "child deletion requires an episode or season",
                 ));
             }
@@ -582,7 +582,10 @@ impl AppUseCase {
             || (candidate.subject_kind == Scope::Title.as_storage_str()
                 && candidate.subject_id != title.id)
         {
-            return Err(AppError::validation_refused(crate::error_reasons::lifecycle::UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE, "lifecycle unmonitoring candidate identity does not match its title"));
+            return Err(AppError::validation_refused(
+                crate::error_reasons::lifecycle::CANDIDATE_TITLE_MISMATCH,
+                "lifecycle unmonitoring candidate identity does not match its title",
+            ));
         }
         if candidate.subject_kind != Scope::Title.as_storage_str() {
             let fresh = self
@@ -737,7 +740,7 @@ impl AppUseCase {
                 .any(|saved| saved.file_id == file.id && saved.catalog_proof == catalog_proof(file))
         }) {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED,
+                crate::error_reasons::lifecycle::FILE_TARGETS_CHANGED,
                 "lifecycle file targets changed; another evaluation is required",
             ));
         }

@@ -6259,64 +6259,62 @@ const zh_TW: LocaleDictionary = {
     "生命週期刪除的指紋已變更。",
   "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
     "生命週期刪除的目標已變更；需要重新評估。",
-  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
     "此規則已在您的媒體庫執行過動作，刪除它會抹去其所做事項的紀錄。請改為設為停用：規則會立即停止，紀錄也會保留。",
-  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
     "生命週期的檔案涵蓋範圍不明確。",
   "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "候選項目數量已變更。啟用前請檢查目前的數量。",
-  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
     "刪除子項目需要指定集或季。",
-  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
     "此規則目前正在追蹤作品，刪除它會讓這些作品不留痕跡地被捨棄。請改為設為停用，或先清除候選項目。",
-  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
     "DeleteFiles 的 Unmonitor 前置條件不相容。",
-  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
     "DeleteFiles 需要先前的 Unmonitor 步驟。",
   "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND": "找不到生命週期排除項目。",
   "error.reason.LIFECYCLE_FIELD_REQUIRED": "必填欄位為空。",
   "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED": "生命週期的檔案擁有權已變更。",
-  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
     "生命週期的目標檔案已變更；需要再次評估。",
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID": "寬限期必須為零天或以上。",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "寬限期最多為 3650 天（十年）。",
-  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
     "電影作品沒有集數清單。",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "此規則會讀取特定人員的事實，因此儲存它需要管理權限的權限。請管理員儲存，或改寫規則不使用這些事實。",
-  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
     "預覽最多接受 50 個作品。",
-  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
     "預覽需要一至五十個主體。",
-  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
     "預覽主體不存在、不在規則的媒體庫中，或不屬於所選的作品與範圍。",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "確認期間規則已變更；啟用刪除前請再次檢查。",
   "error.reason.LIFECYCLE_RULE_CONFIGURATION_INVALID":
     "啟用刪除前必須再次檢查規則設定；請重新開啟確認。",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED": "規則評估失敗。",
-  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE": "生命週期規則編譯失敗。",
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED": "生命週期規則編譯失敗。",
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND": "找不到生命週期規則集。",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
     "此規則隨 Scryer 提供：其條件與動作無法變更，但寬限期、媒體庫與狀態可以。",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "此規則隨 Scryer 提供，無法刪除。請改為設為停用。",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
     "此規則隨 Scryer 提供，無法重新命名。",
   "error.reason.LIFECYCLE_RULE_SOURCE_INVALID": "生命週期規則原始碼無效。",
-  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
     "此規則的動作永遠不會變更任何東西，因此只能以試執行方式執行。",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED": "規則驗證失敗。",
   "error.reason.LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID":
     "生命週期序列步驟參數無效。",
   "error.reason.LIFECYCLE_SUBJECT_ID_REQUIRED": "必須提供生命週期主體 ID。",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID": "生命週期主體類型無效。",
-  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
     "找不到生命週期主體，或它已不屬於此作品。",
-  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "目標品質設定檔不存在。",
-  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
     "取消監控候選項目的身分與其作品不符。",
   "error.reason.MEDIA_LIFECYCLE_CLAIM_NOT_LIVE": "生命週期認領已不再有效。",
   "error.reason.MEDIA_REQUEST_LIFECYCLE_CLAIM_NOT_FOUND":
@@ -6437,7 +6435,7 @@ const zh_TW: LocaleDictionary = {
     "請設定每次執行的作品數：此規則可以刪除。",
   "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "另一次儲存已先變更此規則。未儲存任何內容；請重新載入規則後再試。",
-  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
     "此規則儲存於規則宣告自身動作之前，因此永遠不會執行。請取代其原始碼以再次執行。",
   "settings.refLifecycleFactsWatchedByAnyone":
     "已連線媒體伺服器上的任何帳號是否播放過該項目,無論是否連結 Scryer;不指明具體是誰",

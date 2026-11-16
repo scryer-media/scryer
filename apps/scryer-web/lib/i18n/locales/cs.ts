@@ -7747,40 +7747,40 @@ const cs: LocaleDictionary = {
     "Otisk mazání pravidly životního cyklu se změnil.",
   "error.reason.LIBRARY_LIFECYCLE_DELETION_TARGETS_CHANGED":
     "Cíle mazání pravidly životního cyklu se změnily; je nutné nové vyhodnocení.",
-  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
     "Toto pravidlo už ve vaší knihovně provedlo akce a jeho smazání by vymazalo záznam o tom, co udělalo. Místo toho ho nastavte na Vypnuto: pravidlo se okamžitě zastaví a jeho historie zůstane.",
-  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
     "Nejednoznačné pokrytí souborů pravidly životního cyklu.",
   "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "Počet kandidátů se změnil. Před zapnutím zkontrolujte aktuální počet.",
-  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
     "Mazání podřízených položek vyžaduje epizodu nebo sérii.",
-  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
     "Toto pravidlo právě sleduje tituly a jeho smazání by je beze stopy zahodilo. Místo toho ho nastavte na Vypnuto, nebo nejprve vymažte kandidáty.",
-  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
     "DeleteFiles má nekompatibilní předpoklad Unmonitor.",
-  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
     "DeleteFiles vyžaduje dřívější krok Unmonitor.",
   "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
     "Výjimka z pravidel životního cyklu nebyla nalezena.",
   "error.reason.LIFECYCLE_FIELD_REQUIRED": "Povinné pole je prázdné.",
   "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
     "Vlastnictví souboru pro životní cyklus se změnilo.",
-  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
     "Cílové soubory životního cyklu se změnily; je nutné další vyhodnocení.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Ochranná lhůta musí být nula nebo více dní.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Ochranná lhůta smí být nejvýše 3650 dní (deset let).",
-  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
     "Filmové tituly nemají seznam epizod.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Toto pravidlo čte fakty o konkrétních lidech, takže jeho uložení vyžaduje oprávnění spravovat oprávnění. Požádejte o uložení správce, nebo pravidlo přepište bez těchto faktů.",
-  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
     "Náhled přijímá nejvýše 50 titulů.",
-  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
     "Náhled vyžaduje jeden až padesát subjektů.",
-  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
     "Subjekt náhledu chybí, leží mimo knihovny pravidla, nebo nepatří k vybraným titulům a rozsahu.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Pravidlo se během potvrzování změnilo; před zapnutím mazání ho zkontrolujte znovu.",
@@ -7788,19 +7788,19 @@ const cs: LocaleDictionary = {
     "Konfiguraci pravidla je před zapnutím mazání nutné znovu zkontrolovat; otevřete potvrzení znovu.",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Vyhodnocení pravidla selhalo.",
-  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE":
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED":
     "Pravidlo životního cyklu se nepodařilo zkompilovat.",
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
     "Sada pravidel životního cyklu nebyla nalezena.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
     "Toto pravidlo je součástí Scryeru: jeho podmínku a akce nelze změnit. Jeho ochrannou lhůtu, knihovny a stav ano.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "Toto pravidlo je součástí Scryeru a nelze ho smazat. Místo toho ho nastavte na Vypnuto.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
     "Toto pravidlo je součástí Scryeru a nelze ho přejmenovat.",
   "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
     "Zdroj pravidla životního cyklu je neplatný.",
-  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
     "Akce tohoto pravidla nikdy nic nemění, takže může běžet jen jako zkušební běh.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Ověření pravidla selhalo.",
@@ -7810,11 +7810,9 @@ const cs: LocaleDictionary = {
     "ID subjektu životního cyklu je povinné.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Neplatný druh subjektu životního cyklu.",
-  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
     "Subjekt životního cyklu nebyl nalezen, nebo už k tomuto titulu nepatří.",
-  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "Cílový profil kvality neexistuje.",
-  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
     "Identita kandidáta na zrušení sledování neodpovídá jeho titulu.",
   "error.reason.MEDIA_LIFECYCLE_CLAIM_NOT_LIVE":
     "Nárok životního cyklu už není živý.",
@@ -7942,7 +7940,7 @@ const cs: LocaleDictionary = {
     "Nastavte počet titulů na běh: toto pravidlo může mazat.",
   "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "Pravidlo mezitím změnilo jiné uložení. Nic nebylo uloženo; načtěte pravidlo znovu a zkuste to znovu.",
-  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
     "Toto pravidlo bylo uloženo dříve, než pravidla deklarovala vlastní akce, a proto se nikdy nespustí. Nahraďte jeho zdroj, aby se znovu spouštělo.",
   "settings.refLifecycleFactsWatchedByAnyone":
     "Zda položku přehrál kdokoli s účtem na připojeném mediálním serveru, ať je propojen se Scryerem, nebo ne; nikoho nejmenuje",

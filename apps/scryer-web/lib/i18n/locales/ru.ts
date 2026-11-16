@@ -6959,7 +6959,7 @@ const ru: LocaleDictionary = {
     "Задайте число тайтлов за запуск: это правило может удалять.",
   "error.reason.LIFECYCLE_RULE_REVISION_CONFLICT":
     "Правило уже изменено другим сохранением. Ничего не сохранено; перезагрузите правило и повторите.",
-  "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED":
+  "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE":
     "Это правило сохранено до того, как правила стали объявлять свои действия, поэтому оно никогда не запускается. Замените его исходный код, чтобы оно снова работало.",
   "settings.refLifecycleFactsWatchedByAnyone":
     "Воспроизводил ли субъект кто-либо с учётной записью на подключённом медиасервере, связанной со Scryer или нет; никого не называет",
@@ -9170,40 +9170,40 @@ const ru: LocaleDictionary = {
     "Проверка перенесённого файла не пройдена.",
   "error.reason.LOCATION_VERIFICATION_MISMATCH":
     "Файл в месте назначения не прошёл проверку.",
-  "error.reason.LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY":
     "Это правило уже выполняло действия в библиотеке, и его удаление сотрёт историю этих действий. Вместо этого отключите его: правило немедленно остановится, а история сохранится.",
-  "error.reason.LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE":
+  "error.reason.LIFECYCLE_FILE_COVERAGE_AMBIGUOUS":
     "Неоднозначно определены файлы, охватываемые правилами жизненного цикла.",
   "error.reason.LIFECYCLE_ARM_COUNT_MISMATCH":
     "Количество кандидатов изменилось. Проверьте текущее количество перед разрешением удаления.",
-  "error.reason.LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON":
+  "error.reason.LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED":
     "Для удаления дочернего элемента требуется серия или сезон.",
-  "error.reason.LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE":
+  "error.reason.LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES":
     "Это правило сейчас отслеживает тайтлы, и его удаление бесследно их отбросит. Вместо этого отключите его или сначала очистите список кандидатов.",
-  "error.reason.LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH":
     "У действия DeleteFiles несовместимое предварительное условие Unmonitor.",
-  "error.reason.LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP":
+  "error.reason.LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING":
     "Перед действием DeleteFiles требуется шаг Unmonitor.",
   "error.reason.LIFECYCLE_EXCLUSION_NOT_FOUND":
     "Исключение жизненного цикла не найдено.",
   "error.reason.LIFECYCLE_FIELD_REQUIRED": "Обязательное поле не заполнено.",
   "error.reason.LIFECYCLE_FILE_OWNERSHIP_CHANGED":
     "Принадлежность файла жизненного цикла изменилась.",
-  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED":
+  "error.reason.LIFECYCLE_FILE_TARGETS_CHANGED":
     "Набор файлов для жизненного цикла изменился; требуется повторная оценка.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_INVALID":
     "Период ожидания должен составлять ноль или более дней.",
   "error.reason.LIFECYCLE_GRACE_PERIOD_OUT_OF_RANGE":
     "Период ожидания не должен превышать 3650 дней (десять лет).",
-  "error.reason.LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY":
+  "error.reason.LIFECYCLE_MOVIE_HAS_NO_EPISODES":
     "У фильмов нет списка серий.",
   "error.reason.LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED":
     "Это правило использует сведения о конкретных людях, поэтому для его сохранения требуется право управления разрешениями. Попросите администратора сохранить правило или перепишите его без этих сведений.",
-  "error.reason.LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED":
+  "error.reason.LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED":
     "Предварительный просмотр принимает не более 50 тайтлов.",
-  "error.reason.LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE":
     "Для предварительного просмотра требуется от одного до пятидесяти объектов.",
-  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE":
+  "error.reason.LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES":
     "Объект предварительного просмотра отсутствует, находится вне библиотек правила или не относится к выбранным тайтлам и области действия.",
   "error.reason.LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING":
     "Правило изменилось во время подтверждения; проверьте его ещё раз перед разрешением удаления.",
@@ -9211,19 +9211,19 @@ const ru: LocaleDictionary = {
     "Перед разрешением удаления необходимо повторно проверить конфигурацию правила; откройте подтверждение заново.",
   "error.reason.LIFECYCLE_RULE_EVALUATION_FAILED":
     "Не удалось выполнить оценку правила.",
-  "error.reason.LIFECYCLE_RULE_FAILED_COMPILE":
+  "error.reason.LIFECYCLE_RULE_COMPILE_FAILED":
     "Не удалось скомпилировать правило жизненного цикла.",
   "error.reason.LIFECYCLE_RULE_SET_NOT_FOUND":
     "Набор правил жизненного цикла не найден.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_READ_ONLY":
     "Это правило входит в состав Scryer: его условие и действия изменить нельзя. Можно изменить период ожидания, библиотеки и состояние.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED":
     "Это правило входит в состав Scryer и не может быть удалено. Вместо этого отключите его.",
-  "error.reason.LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED":
+  "error.reason.LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED":
     "Это правило входит в состав Scryer и не может быть переименовано.",
   "error.reason.LIFECYCLE_RULE_SOURCE_INVALID":
     "Недопустимый исходный код правила жизненного цикла.",
-  "error.reason.LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN":
+  "error.reason.LIFECYCLE_RULE_HAS_NO_EFFECT":
     "Действие этого правила ничего не изменяет, поэтому оно доступно только в режиме проверки без применения.",
   "error.reason.LIFECYCLE_RULE_VALIDATION_FAILED":
     "Проверка правила не удалась.",
@@ -9233,11 +9233,9 @@ const ru: LocaleDictionary = {
     "Требуется идентификатор объекта жизненного цикла.",
   "error.reason.LIFECYCLE_SUBJECT_KIND_INVALID":
     "Недопустимый тип объекта жизненного цикла.",
-  "error.reason.LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND":
+  "error.reason.LIFECYCLE_SUBJECT_NOT_FOUND":
     "Объект жизненного цикла не найден или больше не относится к этому тайтлу.",
-  "error.reason.LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST":
-    "Целевой профиль качества не существует.",
-  "error.reason.LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE":
+  "error.reason.LIFECYCLE_CANDIDATE_TITLE_MISMATCH":
     "Идентификатор кандидата на отключение мониторинга не соответствует его тайтлу.",
   "error.reason.MEDIA_ANALYSIS_INVALID":
     "Недопустимый результат анализа медиафайла.",

@@ -541,7 +541,7 @@ impl CustomJobSource for AppUseCase {
                 Some(Ok(Some(_))) => loadable.push(rule),
                 Some(Ok(None)) => info!(
                     rule_set_id = %rule.id,
-                    reason = crate::error_reasons::lifecycle::RULE_STORED_ACTIONS_NOT_DECLARED,
+                    reason = crate::error_reasons::lifecycle::RULE_ACTIONS_UNREADABLE,
                     "lifecycle rule is not scheduled until its source is saved again"
                 ),
                 Some(Err(error)) => warn!(

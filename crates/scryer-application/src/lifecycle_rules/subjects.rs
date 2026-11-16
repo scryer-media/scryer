@@ -653,7 +653,7 @@ impl AppUseCase {
         }
         if title.facet == scryer_domain::MediaFacet::Movie {
             return Err(AppError::validation_refused(
-                crate::error_reasons::lifecycle::MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY,
+                crate::error_reasons::lifecycle::MOVIE_HAS_NO_EPISODES,
                 "movie titles do not have an episode inventory",
             ));
         }
@@ -878,7 +878,7 @@ fn subject_coordinates_kind(kind: &str, subject_id: &str) -> AppResult<Scope> {
 
 fn subject_no_longer_belongs() -> AppError {
     AppError::not_found_reason(
-        crate::error_reasons::lifecycle::SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND,
+        crate::error_reasons::lifecycle::SUBJECT_NOT_FOUND,
         "lifecycle subject no longer belongs to this title",
     )
 }

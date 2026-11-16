@@ -715,8 +715,8 @@ export function excludeLifecycleSubjectInput(options: {
 /// Codes the server reports when a stored rule cannot be loaded for
 /// evaluation. Any other code reads as the generic notice.
 const LIFECYCLE_LOAD_REFUSAL_KEYS: Readonly<Record<string, string>> = {
-  LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED:
-    "error.reason.LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED",
+  LIFECYCLE_RULE_ACTIONS_UNREADABLE:
+    "error.reason.LIFECYCLE_RULE_ACTIONS_UNREADABLE",
   LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN:
     "error.reason.LIFECYCLE_RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN",
 };

@@ -183,7 +183,7 @@ pub struct LifecycleRuleSet {
     /// The actions the source of the revision currently in force declares.
     pub declared_actions: LifecycleDeclaredActions,
     /// Stable reason code when the revision in force cannot be evaluated or
-    /// run, such as `LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED` for a rule
+    /// run, such as `LIFECYCLE_RULE_ACTIONS_UNREADABLE` for a rule
     /// saved before rules declared their own actions. The rule matches nothing
     /// and cannot be enabled until its source is saved again. An armed rule
     /// that deletes with no most titles per run shows

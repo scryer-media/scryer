@@ -1886,50 +1886,45 @@ pub mod lifecycle {
     /// Lifecycle exclusion was not found.
     pub const EXCLUSION_NOT_FOUND: &str = "LIFECYCLE_EXCLUSION_NOT_FOUND";
     /// The lifecycle rule failed to compile.
-    pub const RULE_FAILED_COMPILE: &str = "LIFECYCLE_RULE_FAILED_COMPILE";
+    pub const RULE_COMPILE_FAILED: &str = "LIFECYCLE_RULE_COMPILE_FAILED";
     /// Ambiguous lifecycle file coverage.
-    pub const AMBIGUOUS_LIFECYCLE_FILE_COVERAGE: &str =
-        "LIFECYCLE_AMBIGUOUS_LIFECYCLE_FILE_COVERAGE";
+    pub const FILE_COVERAGE_AMBIGUOUS: &str = "LIFECYCLE_FILE_COVERAGE_AMBIGUOUS";
     /// Child deletion requires an episode or season.
-    pub const CHILD_DELETION_REQUIRES_EPISODE_SEASON: &str =
-        "LIFECYCLE_CHILD_DELETION_REQUIRES_EPISODE_SEASON";
+    pub const CHILD_DELETION_SUBJECT_REQUIRED: &str = "LIFECYCLE_CHILD_DELETION_SUBJECT_REQUIRED";
     /// Lifecycle unmonitoring candidate identity does not match its title.
-    pub const UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE: &str =
-        "LIFECYCLE_UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE";
+    pub const CANDIDATE_TITLE_MISMATCH: &str = "LIFECYCLE_CANDIDATE_TITLE_MISMATCH";
     /// Lifecycle file targets changed; another evaluation is required.
-    pub const FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED: &str =
-        "LIFECYCLE_FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED";
+    pub const FILE_TARGETS_CHANGED: &str = "LIFECYCLE_FILE_TARGETS_CHANGED";
     /// Lifecycle file ownership changed.
     pub const FILE_OWNERSHIP_CHANGED: &str = "LIFECYCLE_FILE_OWNERSHIP_CHANGED";
     /// This rule ships with Scryer: its matcher and actions cannot be changed. Its grace period, libraries and state can.
-    pub const RULE_SHIPS_SCRYER: &str = "LIFECYCLE_RULE_SHIPS_SCRYER";
+    pub const SYSTEM_RULE_READ_ONLY: &str = "LIFECYCLE_SYSTEM_RULE_READ_ONLY";
     /// This rule ships with Scryer and cannot be renamed.
-    pub const RULE_SHIPS_SCRYER_CANNOT_RENAMED: &str = "LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_RENAMED";
+    pub const SYSTEM_RULE_RENAME_REFUSED: &str = "LIFECYCLE_SYSTEM_RULE_RENAME_REFUSED";
     /// This rule ships with Scryer and cannot be deleted. Set it to Disabled instead.
-    pub const RULE_SHIPS_SCRYER_CANNOT_DELETED: &str = "LIFECYCLE_RULE_SHIPS_SCRYER_CANNOT_DELETED";
+    pub const SYSTEM_RULE_DELETE_REFUSED: &str = "LIFECYCLE_SYSTEM_RULE_DELETE_REFUSED";
     /// This rule has already run actions on your library, and deleting it would erase the record of what it did. Set it to Disabled instead: the rule stops immediately and its history is kept.
-    pub const ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID: &str =
-        "LIFECYCLE_ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID";
+    pub const RULE_DELETE_HAS_ACTION_HISTORY: &str = "LIFECYCLE_RULE_DELETE_HAS_ACTION_HISTORY";
     /// This rule is currently tracking titles, and deleting it would drop them without a trace. Set it to Disabled instead, or clear the candidates first.
-    pub const CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE: &str =
-        "LIFECYCLE_CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE";
+    pub const RULE_DELETE_HAS_ACTIVE_CANDIDATES: &str =
+        "LIFECYCLE_RULE_DELETE_HAS_ACTIVE_CANDIDATES";
     /// Rule validation failed.
     pub const RULE_VALIDATION_FAILED: &str = "LIFECYCLE_RULE_VALIDATION_FAILED";
     /// Preview requires between one and fifty subjects.
-    pub const PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS: &str =
-        "LIFECYCLE_PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS";
+    pub const PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE: &str =
+        "LIFECYCLE_PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE";
     /// Rule evaluation failed.
     pub const RULE_EVALUATION_FAILED: &str = "LIFECYCLE_RULE_EVALUATION_FAILED";
     /// Preview subject is missing, outside the rule libraries, or does not belong to the selected titles and scope.
-    pub const PREVIEW_SUBJECT_OUTSIDE_SCOPE: &str = "LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_SCOPE";
+    pub const PREVIEW_SUBJECT_OUTSIDE_LIBRARIES: &str =
+        "LIFECYCLE_PREVIEW_SUBJECT_OUTSIDE_LIBRARIES";
     /// This rule reads facts about specific people, so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.
     pub const PERSON_TARGETING_PERMISSION_REQUIRED: &str =
         "LIFECYCLE_PERSON_TARGETING_PERMISSION_REQUIRED";
     /// Lifecycle rule set was not found.
     pub const RULE_SET_NOT_FOUND: &str = "LIFECYCLE_RULE_SET_NOT_FOUND";
     /// Preview accepts at most 50 titles.
-    pub const PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED: &str =
-        "LIFECYCLE_PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED";
+    pub const PREVIEW_TITLE_LIMIT_EXCEEDED: &str = "LIFECYCLE_PREVIEW_TITLE_LIMIT_EXCEEDED";
     /// Grace period must be zero or more days.
     pub const GRACE_PERIOD_INVALID: &str = "LIFECYCLE_GRACE_PERIOD_INVALID";
     /// Grace period must be at most 3650 days (ten years).
@@ -1937,7 +1932,7 @@ pub mod lifecycle {
     /// The rule's current revision stores its action the way builds before
     /// rules declared their own actions did. It is never evaluated or run
     /// until a revision that declares its actions replaces it.
-    pub const RULE_STORED_ACTIONS_NOT_DECLARED: &str = "LIFECYCLE_RULE_STORED_ACTIONS_NOT_DECLARED";
+    pub const RULE_ACTIONS_UNREADABLE: &str = "LIFECYCLE_RULE_ACTIONS_UNREADABLE";
     /// The rule is armed to run an action that deletes but has no most titles
     /// per run. It still evaluates and previews; its actions do not run until
     /// a maximum is set or the rule is disarmed.
@@ -1951,33 +1946,27 @@ pub mod lifecycle {
     /// A required field is empty.
     pub const FIELD_REQUIRED: &str = "LIFECYCLE_FIELD_REQUIRED";
     /// Movie titles do not have an episode inventory.
-    pub const MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY: &str =
-        "LIFECYCLE_MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY";
+    pub const MOVIE_HAS_NO_EPISODES: &str = "LIFECYCLE_MOVIE_HAS_NO_EPISODES";
     /// Invalid lifecycle subject kind.
     pub const SUBJECT_KIND_INVALID: &str = "LIFECYCLE_SUBJECT_KIND_INVALID";
     /// Lifecycle subject ID is required.
     pub const SUBJECT_ID_REQUIRED: &str = "LIFECYCLE_SUBJECT_ID_REQUIRED";
     /// Lifecycle subject no longer belongs to this title was not found.
-    pub const SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND: &str =
-        "LIFECYCLE_SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND";
+    pub const SUBJECT_NOT_FOUND: &str = "LIFECYCLE_SUBJECT_NOT_FOUND";
     /// This rule's action never changes anything, so it can only run as a dry run.
-    pub const RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN: &str =
-        "LIFECYCLE_RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN";
+    pub const RULE_HAS_NO_EFFECT: &str = "LIFECYCLE_RULE_HAS_NO_EFFECT";
     /// The rule configuration must be reviewed again before arming deletion; reopen the confirmation.
     pub const RULE_CONFIGURATION_INVALID: &str = "LIFECYCLE_RULE_CONFIGURATION_INVALID";
     /// The rule changed while confirming; review it again before arming deletion.
     pub const RULE_CHANGED_WHILE_CONFIRMING: &str = "LIFECYCLE_RULE_CHANGED_WHILE_CONFIRMING";
-    /// The target quality profile does not exist.
-    pub const TARGET_QUALITY_PROFILE_DOES_NOT_EXIST: &str =
-        "LIFECYCLE_TARGET_QUALITY_PROFILE_DOES_NOT_EXIST";
     /// Lifecycle sequence step parameters are invalid.
     pub const SEQUENCE_STEP_PARAMETERS_INVALID: &str = "LIFECYCLE_SEQUENCE_STEP_PARAMETERS_INVALID";
     /// DeleteFiles requires an earlier Unmonitor step.
-    pub const DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP: &str =
-        "LIFECYCLE_DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP";
+    pub const DELETE_FILES_UNMONITOR_STEP_MISSING: &str =
+        "LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISSING";
     /// DeleteFiles has an incompatible Unmonitor prerequisite.
-    pub const DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE: &str =
-        "LIFECYCLE_DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE";
+    pub const DELETE_FILES_UNMONITOR_STEP_MISMATCH: &str =
+        "LIFECYCLE_DELETE_FILES_UNMONITOR_STEP_MISMATCH";
     /// The lifecycle rule source is invalid.
     pub const RULE_SOURCE_INVALID: &str = "LIFECYCLE_RULE_SOURCE_INVALID";
     /// The rule source defines no action head, so it could never do anything.
@@ -2004,42 +1993,41 @@ pub mod lifecycle {
     pub const ALL: &[&str] = &[
         ARM_COUNT_MISMATCH,
         EXCLUSION_NOT_FOUND,
-        RULE_FAILED_COMPILE,
-        AMBIGUOUS_LIFECYCLE_FILE_COVERAGE,
-        CHILD_DELETION_REQUIRES_EPISODE_SEASON,
-        UNMONITORING_CANDIDATE_IDENTITY_DOES_NOT_MATCH_TITLE,
-        FILE_TARGETS_CHANGED_ANOTHER_EVALUATION_REQUIRED,
+        RULE_COMPILE_FAILED,
+        FILE_COVERAGE_AMBIGUOUS,
+        CHILD_DELETION_SUBJECT_REQUIRED,
+        CANDIDATE_TITLE_MISMATCH,
+        FILE_TARGETS_CHANGED,
         FILE_OWNERSHIP_CHANGED,
-        RULE_SHIPS_SCRYER,
-        RULE_SHIPS_SCRYER_CANNOT_RENAMED,
-        RULE_SHIPS_SCRYER_CANNOT_DELETED,
-        ALREADY_RUN_ACTIONS_LIBRARY_DELETING_WOULD_ERASE_RECORD_WHAT_DID,
-        CURRENTLY_TRACKING_TITLE_S_DELETING_WOULD_DROP_THEM_WITHOUT_TRACE,
+        SYSTEM_RULE_READ_ONLY,
+        SYSTEM_RULE_RENAME_REFUSED,
+        SYSTEM_RULE_DELETE_REFUSED,
+        RULE_DELETE_HAS_ACTION_HISTORY,
+        RULE_DELETE_HAS_ACTIVE_CANDIDATES,
         RULE_VALIDATION_FAILED,
-        PREVIEW_REQUIRES_BETWEEN_ONE_FIFTY_SUBJECTS,
+        PREVIEW_SUBJECT_COUNT_OUT_OF_RANGE,
         RULE_EVALUATION_FAILED,
-        PREVIEW_SUBJECT_OUTSIDE_SCOPE,
+        PREVIEW_SUBJECT_OUTSIDE_LIBRARIES,
         PERSON_TARGETING_PERMISSION_REQUIRED,
         RULE_SET_NOT_FOUND,
-        PREVIEW_ACCEPTS_MOST_TITLES_REQUESTED,
+        PREVIEW_TITLE_LIMIT_EXCEEDED,
         GRACE_PERIOD_INVALID,
         GRACE_PERIOD_OUT_OF_RANGE,
-        RULE_STORED_ACTIONS_NOT_DECLARED,
+        RULE_ACTIONS_UNREADABLE,
         RULE_ARMED_WITHOUT_MAX_TITLES_PER_RUN,
         RULE_REVISION_CONFLICT,
         PREVIEW_NO_DECISION,
         FIELD_REQUIRED,
-        MOVIE_TITLES_DO_NOT_EPISODE_INVENTORY,
+        MOVIE_HAS_NO_EPISODES,
         SUBJECT_KIND_INVALID,
         SUBJECT_ID_REQUIRED,
-        SUBJECT_NO_LONGER_BELONGS_TITLE_NOT_FOUND,
-        RULE_S_ACTION_NEVER_CHANGES_ANYTHING_SO_ONLY_RUN_DRY_RUN,
+        SUBJECT_NOT_FOUND,
+        RULE_HAS_NO_EFFECT,
         RULE_CONFIGURATION_INVALID,
         RULE_CHANGED_WHILE_CONFIRMING,
-        TARGET_QUALITY_PROFILE_DOES_NOT_EXIST,
         SEQUENCE_STEP_PARAMETERS_INVALID,
-        DELETEFILES_REQUIRES_EARLIER_UNMONITOR_STEP,
-        DELETEFILES_INCOMPATIBLE_UNMONITOR_PREREQUISITE,
+        DELETE_FILES_UNMONITOR_STEP_MISSING,
+        DELETE_FILES_UNMONITOR_STEP_MISMATCH,
         RULE_SOURCE_INVALID,
         ACTION_HEAD_REQUIRED,
         QUALITY_PROFILE_NOT_FOUND,

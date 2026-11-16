@@ -1145,7 +1145,7 @@ impl AppUseCase {
         }])
         .map_err(|error| {
             AppError::validation_refused(
-                crate::error_reasons::lifecycle::RULE_FAILED_COMPILE,
+                crate::error_reasons::lifecycle::RULE_COMPILE_FAILED,
                 format!("lifecycle rule {} failed to compile: {error}", rule_set.id),
             )
         })?;
