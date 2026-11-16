@@ -20,7 +20,9 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use scryer_application::disk::{Access, Disk, IfPresent, Open, Parents, PathReading, Replace};
+use scryer_application::disk::{
+    Access, Disk, IfPresent, Open, Parents, PathReading, Replace, Staging,
+};
 use scryer_application::{AppError, AppResult};
 use scryer_plugin_sdk::{PluginHttpResource, PluginHttpVerify};
 use serde::{Deserialize, Serialize};
@@ -498,17 +500,22 @@ impl HttpStateStore {
         .map_err(|error| AppError::Repository(error.to_string()))?;
         let disk = Disk::process();
         let write = async {
-            disk.write_atomic(&self.path, bytes, Replace::Allowed, Access::Default)
+            let (replace, access) = (Replace::Allowed, Access::Default);
+            disk.write_staged(&self.path, bytes, replace, access, Staging::Fixed, true)
                 .await?;
             // The rename lives in the directory; without this a crash right
-            // after it could bring the previous document back.
-            disk.sync_dir(parent).await
+            // after it could bring the previous document back. Windows has
+            // no directory sync, so there it is not required.
+            let synced = disk.sync_dir(parent).await?;
+            if cfg!(unix) {
+                synced.required()?;
+            }
+            Ok::<(), std::io::Error>(())
         };
-        write.await.map(|_| ()).map_err(|error| {
+        write.await.map_err(|error| {
             AppError::Repository(format!(
-                "the HTTP downloader could not record its queue at {}: {}",
-                self.path.display(),
-                std::io::Error::from(error)
+                "the HTTP downloader could not record its queue at {}: {error}",
+                self.path.display()
             ))
         })
     }
@@ -524,8 +531,9 @@ impl HttpStateStore {
         let path = self.progress_path(job_id);
         let bytes = serde_json::to_vec(progress)
             .map_err(|error| AppError::Repository(error.to_string()))?;
+        let (replace, access) = (Replace::Allowed, Access::Default);
         Disk::process()
-            .write_atomic(&path, bytes, Replace::Allowed, Access::Default)
+            .write_staged(&path, bytes, replace, access, Staging::Fixed, true)
             .await
             .map(|_| ())
             .map_err(|error| {

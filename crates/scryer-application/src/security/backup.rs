@@ -4,7 +4,7 @@ use super::backup_bundle::{
     LEGACY_BACKUP_PLAINTEXT_EXTENSION,
 };
 use super::*;
-use crate::disk::{Access, Disk, EntryKind, Parents, PathReading, Remove, Replace};
+use crate::disk::{Access, Disk, EntryKind, Parents, PathReading, Remove, Replace, Staging};
 use crate::domain_events::DomainEventActor;
 use crate::scripts::schedule::{
     ScheduleError, parse_local_time_of_day, resolve_local_scheduled_time,
@@ -214,8 +214,9 @@ fn write_backup_metadata(backup_dir: &Path, info: &BackupInfo) -> AppResult<()> 
     let payload = serde_json::to_vec_pretty(info).map_err(|error| {
         AppError::Repository(format!("failed to encode backup metadata: {error}"))
     })?;
+    let (replace, access) = (Replace::Allowed, Access::OwnerOnly);
     Disk::process()
-        .write_atomic_blocking(&path, &payload, Replace::Allowed, Access::OwnerOnly)
+        .write_staged_blocking(&path, &payload, replace, access, Staging::Fixed, false)
         .map_err(|error| {
             AppError::Repository(format!("failed to write backup metadata: {error}"))
         })?;

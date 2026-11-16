@@ -273,11 +273,27 @@ impl Access {
 
 /// What [`Disk::restrict_to_owner_blocking`] narrows: a file loses every
 /// permission but its owner's read and write, a directory keeps its owner's
-/// search permission too.
+/// search permission too, and a program its owner's execute permission.
+/// The result does not depend on the process's umask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnerOnly {
     File,
     Directory,
+    Program,
+}
+
+/// How an atomic write names the hidden sibling it stages into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Staging {
+    /// A new name on every write, created exclusively and removed when the
+    /// write fails.
+    Unique,
+    /// One name per destination, truncated and reused by every write and
+    /// kept when one fails. Only for a destination with a single writer: a
+    /// crash leaves at most this sibling, and the next write takes it over.
+    /// An existing sibling keeps its permissions, except that
+    /// [`Access::OwnerOnly`] narrows them again.
+    Fixed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -830,18 +846,60 @@ impl Disk {
         replace: Replace,
         access: Access,
     ) -> Result<SyncOutcome, DiskError> {
+        self.write_staged_blocking(path, bytes, replace, access, Staging::Unique, false)
+    }
+
+    /// [`Self::write_atomic_blocking`] for contents that must be durable
+    /// before they replace anything: when the sync is unconfirmed, `path` is
+    /// left as it was and the write fails with [`io::ErrorKind::Unsupported`].
+    pub fn write_durable_blocking(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        replace: Replace,
+        access: Access,
+    ) -> Result<(), DiskError> {
+        self.write_staged_blocking(path, bytes, replace, access, Staging::Unique, true)
+            .map(drop)
+    }
+
+    /// [`Self::write_atomic_blocking`] staged as `staging` says, and, when
+    /// `durable`, refused as [`Self::write_durable_blocking`] refuses an
+    /// unconfirmed sync.
+    pub fn write_staged_blocking(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        replace: Replace,
+        access: Access,
+        staging: Staging,
+        durable: bool,
+    ) -> Result<SyncOutcome, DiskError> {
         self.create_parent(path)?;
-        let staged = staging_path_for(path);
-        let written = self.call("write_new", || {
-            self.inner.backend.write_new(&staged, bytes, access)
-        });
+        let staged = match staging {
+            Staging::Unique => staging_path_for(path),
+            Staging::Fixed => fixed_staging_path_for(path),
+        };
+        let written = match staging {
+            Staging::Unique => self.call("write_new", || {
+                self.inner.backend.write_new(&staged, bytes, access)
+            }),
+            Staging::Fixed => self
+                .call("write_fixed", || {
+                    self.overwrite_synced(&staged, bytes, access)
+                })
+                .map_err(backend::WriteFailure::not_created),
+        };
         let placed = written.and_then(|synced| {
+            if durable {
+                synced.required().map_err(backend::WriteFailure::created)?;
+            }
             self.place(&staged, path, replace)
                 .map(|()| synced)
                 .map_err(backend::WriteFailure::created)
         });
         let result = placed.map_err(|failure| {
-            if failure.created {
+            if failure.created && staging == Staging::Unique {
                 // Best effort: an error here, or a sibling already gone,
                 // leaves the caller's error as it is.
                 let _ = self.call("remove_file", || self.inner.backend.remove_file(&staged));
@@ -851,6 +909,37 @@ impl Disk {
         self.inner.cache.evict(&key_of(path));
         self.inner.cache.evict(&key_of(&staged));
         result
+    }
+
+    pub async fn write_staged(
+        &self,
+        path: impl Into<PathBuf>,
+        bytes: Vec<u8>,
+        replace: Replace,
+        access: Access,
+        staging: Staging,
+        durable: bool,
+    ) -> Result<SyncOutcome, DiskError> {
+        self.run(DiskVerb::Write, path.into(), None, move |disk, path| {
+            disk.write_staged_blocking(path, &bytes, replace, access, staging, durable)
+        })
+        .await
+    }
+
+    /// Create or truncate `staged`, write `bytes` and sync them.
+    fn overwrite_synced(
+        &self,
+        staged: &Path,
+        bytes: &[u8],
+        access: Access,
+    ) -> io::Result<SyncOutcome> {
+        let backend = &self.inner.backend;
+        let mut file = backend.open(staged, Open::create().with_access(access))?;
+        if matches!(access, Access::OwnerOnly) {
+            backend.restrict_to_owner(staged, OwnerOnly::File)?;
+        }
+        io::Write::write_all(&mut file, bytes)?;
+        backend.sync_handle(&file)
     }
 
     pub async fn write_atomic(
@@ -1417,7 +1506,19 @@ impl Staged {
     /// says. With [`Replace::Never`] an existing destination is refused
     /// ([`reason::DISK_DESTINATION_EXISTS`]) and kept. On any failure the
     /// staging file is removed and the destination left as it was.
-    pub fn commit_blocking(mut self, replace: Replace) -> Result<SyncOutcome, DiskError> {
+    pub fn commit_blocking(self, replace: Replace) -> Result<SyncOutcome, DiskError> {
+        self.commit_inner(replace, false)
+    }
+
+    /// [`Self::commit_blocking`] for contents that must be durable before
+    /// they replace anything: when the sync is unconfirmed, the destination
+    /// is left as it was and the commit fails with
+    /// [`io::ErrorKind::Unsupported`].
+    pub fn commit_durable_blocking(self, replace: Replace) -> Result<(), DiskError> {
+        self.commit_inner(replace, true).map(drop)
+    }
+
+    fn commit_inner(mut self, replace: Replace, durable: bool) -> Result<SyncOutcome, DiskError> {
         let disk = self.disk.clone();
         let file = self
             .file
@@ -1426,6 +1527,9 @@ impl Staged {
         let synced = disk.call("sync_handle", || disk.inner.backend.sync_handle(&file));
         drop(file);
         let result = synced.and_then(|outcome| {
+            if durable {
+                outcome.required()?;
+            }
             disk.place(&self.staged, &self.dest, replace)
                 .map(|()| outcome)
         });
@@ -1523,6 +1627,13 @@ fn unique_suffix(near: &Path) -> String {
 fn staging_path_for(dest: &Path) -> PathBuf {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     parent.join(format!(".scryer-{}.partial", unique_suffix(dest)))
+}
+
+/// The one hidden sibling [`Staging::Fixed`] reuses for `dest`.
+fn fixed_staging_path_for(dest: &Path) -> PathBuf {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let digest = blake3::hash(dest.as_os_str().as_encoded_bytes()).to_hex();
+    parent.join(format!(".scry-sf-{}.partial", &digest[..9]))
 }
 
 #[cfg(test)]

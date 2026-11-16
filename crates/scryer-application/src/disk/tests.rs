@@ -103,6 +103,14 @@ impl Scripted {
             .unwrap()
             .insert(operation, kind);
     }
+    /// What a sync of a written file reports: unconfirmed once
+    /// `always_fails("unconfirmed_sync", ..)` was called.
+    fn handle_sync_outcome(&self) -> SyncOutcome {
+        match self.any_path_failure("unconfirmed_sync") {
+            Some(_) => SyncOutcome::Unconfirmed,
+            None => SyncOutcome::Durable,
+        }
+    }
     fn any_path_failure(&self, operation: &str) -> Option<io::ErrorKind> {
         self.any_path_failures
             .lock()
@@ -237,7 +245,7 @@ impl DiskBackend for Scripted {
             .map_err(WriteFailure::not_created)?;
         match self.any_path_failure("write_body") {
             Some(kind) => Err(WriteFailure::created(kind.into())),
-            None => Ok(SyncOutcome::Durable),
+            None => Ok(self.handle_sync_outcome()),
         }
     }
     fn sync_file(&self, path: &Path) -> io::Result<SyncOutcome> {
@@ -295,7 +303,7 @@ impl DiskBackend for Scripted {
     }
     fn sync_handle(&self, _file: &std::fs::File) -> io::Result<SyncOutcome> {
         self.record("sync_handle", Path::new(""))
-            .map(|()| SyncOutcome::Durable)
+            .map(|()| self.handle_sync_outcome())
     }
     fn sync_dir(&self, path: &Path) -> io::Result<SyncOutcome> {
         self.record("sync_dir", path).map(|()| SyncOutcome::Durable)
@@ -441,6 +449,16 @@ async fn a_probe_that_does_not_answer_in_time_reads_unreachable_until_it_does() 
         disk.observed(&p("/srv/fixture-media/a.mkv")).kind(),
         Some(EntryKind::File)
     );
+}
+
+#[test]
+fn identities_tell_whether_two_files_share_a_device() {
+    let first = FileIdentity::from_raw(7, 11).unwrap();
+    let beside = FileIdentity::from_raw(7, 12).unwrap();
+    let elsewhere = FileIdentity::from_raw(8, 11).unwrap();
+    assert!(first.same_device(beside));
+    assert!(first.same_device(first));
+    assert!(!first.same_device(elsewhere));
 }
 
 #[test]
@@ -1513,6 +1531,100 @@ async fn async_opens_finish_through_a_tokio_handle() {
 }
 
 #[test]
+fn durable_writes_replace_nothing_when_the_sync_is_unconfirmed() {
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let path = p("/srv/fixture-media/state/queue.json");
+    disk.write_durable_blocking(&path, b"x", Replace::Allowed, Access::Default)
+        .unwrap();
+    disk.stage_blocking(&path, Parents::MustExist, Access::Default)
+        .unwrap()
+        .commit_durable_blocking(Replace::Allowed)
+        .unwrap();
+    assert_eq!(backend.calls_of("rename"), 2);
+
+    backend.always_fails("unconfirmed_sync", io::ErrorKind::Unsupported);
+    // The plain forms still place an unconfirmed write and report it.
+    assert_eq!(
+        disk.write_atomic_blocking(&path, b"x", Replace::Allowed, Access::Default)
+            .unwrap(),
+        SyncOutcome::Unconfirmed
+    );
+    assert_eq!(backend.calls_of("rename"), 3);
+    let refused = disk
+        .write_durable_blocking(&path, b"x", Replace::Allowed, Access::Default)
+        .unwrap_err();
+    assert_eq!(io::Error::from(refused).kind(), io::ErrorKind::Unsupported);
+    let refused = disk
+        .stage_blocking(&path, Parents::MustExist, Access::Default)
+        .unwrap()
+        .commit_durable_blocking(Replace::Allowed)
+        .unwrap_err();
+    assert_eq!(io::Error::from(refused).kind(), io::ErrorKind::Unsupported);
+    // Neither refusal touched the destination, and each removed its own
+    // staging file.
+    assert_eq!(backend.calls_of("rename"), 3);
+    assert_eq!(backend.calls_of("remove_file"), 2);
+}
+
+#[test]
+fn fixed_staging_reuses_one_sibling_and_keeps_it_when_a_write_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let disk = Disk::with_seams(Arc::new(SystemBackend), Arc::new(SystemClock));
+    let dest = dir.path().join("queue.json");
+    let sibling = fixed_staging_path_for(&dest);
+    assert_eq!(sibling, fixed_staging_path_for(&dest));
+    assert_ne!(
+        sibling,
+        fixed_staging_path_for(&dir.path().join("other.json"))
+    );
+    // A sibling a crashed write left behind is taken over, not added to.
+    std::fs::write(&sibling, b"left by an earlier, longer write").unwrap();
+    for bytes in [&b"first"[..], b"second"] {
+        disk.write_staged_blocking(
+            &dest,
+            bytes,
+            Replace::Allowed,
+            Access::OwnerOnly,
+            Staging::Fixed,
+            true,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    }
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, vec![OsString::from("queue.json")]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    // A refused write leaves the destination and keeps its one sibling.
+    let clock = ManualClock::at(at(0));
+    let (disk, backend) = owner(&clock);
+    let path = p("/srv/fixture-media/state/queue.json");
+    backend.always_fails("unconfirmed_sync", io::ErrorKind::Unsupported);
+    let refused = disk
+        .write_staged_blocking(
+            &path,
+            b"x",
+            Replace::Allowed,
+            Access::Default,
+            Staging::Fixed,
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(io::Error::from(refused).kind(), io::ErrorKind::Unsupported);
+    assert_eq!(backend.calls_of("rename"), 0);
+    assert_eq!(backend.calls_of("remove_file"), 0);
+}
+
+#[test]
 fn a_plain_write_evicts_and_classifies_its_failures() {
     let clock = ManualClock::at(at(0));
     let (disk, backend) = owner(&clock);
@@ -2444,6 +2556,12 @@ mod system {
         disk.restrict_to_owner_blocking(&loose_dir, OwnerOnly::Directory)
             .unwrap();
         assert_eq!(mode(&loose_dir), 0o700);
+        let program = temp.path().join("invented-program.sh");
+        std::fs::write(&program, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o400)).unwrap();
+        disk.restrict_to_owner_blocking(&program, OwnerOnly::Program)
+            .unwrap();
+        assert_eq!(mode(&program), 0o700);
         assert_eq!(
             disk.restrict_to_owner_blocking(&temp.path().join("absent"), OwnerOnly::File)
                 .unwrap_err()

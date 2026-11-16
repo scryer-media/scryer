@@ -699,7 +699,7 @@ fn persist_status(path: &Path, status: &RestoreJobStatus) -> AppResult<()> {
         .map_err(|e| AppError::Repository(format!("could not encode restore status: {e}")))?;
     file.flush()
         .map_err(|e| AppError::Repository(format!("could not flush restore status: {e}")))?;
-    file.commit_blocking(Replace::Allowed)
+    file.commit_durable_blocking(Replace::Allowed)
         .map_err(|e| AppError::Repository(format!("could not persist restore status: {e}")))?;
     Ok(())
 }

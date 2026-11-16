@@ -94,6 +94,20 @@ pub enum SyncOutcome {
     Unconfirmed,
 }
 
+impl SyncOutcome {
+    /// For a caller that must not go on without durability: an unconfirmed
+    /// sync is an [`io::ErrorKind::Unsupported`] error.
+    pub fn required(self) -> io::Result<()> {
+        match self {
+            Self::Durable => Ok(()),
+            Self::Unconfirmed => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the filesystem could not confirm the data reached stable storage",
+            )),
+        }
+    }
+}
+
 /// How an exclusive write failed.
 #[derive(Debug)]
 pub(crate) struct WriteFailure {
@@ -459,7 +473,7 @@ impl DiskBackend for SystemBackend {
             use std::os::unix::fs::PermissionsExt;
             let mode = match what {
                 OwnerOnly::File => 0o600,
-                OwnerOnly::Directory => 0o700,
+                OwnerOnly::Directory | OwnerOnly::Program => 0o700,
             };
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         }
@@ -598,7 +612,43 @@ fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+fn exclusive_rename(source: &Path, dest: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+    // Win32 error codes a filesystem returns for an operation it lacks.
+    const ERROR_INVALID_FUNCTION: i32 = 1;
+    const ERROR_NOT_SUPPORTED: i32 = 50;
+
+    let wide = |path: &Path| {
+        let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if value.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains an interior NUL",
+            ));
+        }
+        value.push(0);
+        Ok(value)
+    };
+    let source = wide(source)?;
+    let dest = wide(dest)?;
+    // SAFETY: both UTF-16 buffers are NUL-terminated and outlive the call.
+    // Without MOVEFILE_REPLACE_EXISTING an existing destination is refused.
+    let moved = unsafe { MoveFileExW(source.as_ptr(), dest.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+    if moved != 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(ERROR_INVALID_FUNCTION) | Some(ERROR_NOT_SUPPORTED) => {
+            Err(io::ErrorKind::Unsupported.into())
+        }
+        _ => Err(error),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn exclusive_rename(_source: &Path, _dest: &Path) -> io::Result<()> {
     Err(io::ErrorKind::Unsupported.into())
 }
@@ -655,6 +705,15 @@ mod tests {
     }
 
     #[test]
+    fn only_a_durable_sync_meets_a_requirement_for_one() {
+        assert!(SyncOutcome::Durable.required().is_ok());
+        assert_eq!(
+            SyncOutcome::Unconfirmed.required().unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
+
+    #[test]
     fn exclusive_renames_never_replace() {
         let dir = tempfile::tempdir().expect("temp dir");
         let source = dir.path().join("invented-source.bin");
@@ -671,6 +730,9 @@ mod tests {
             ),
             "{refused:?}"
         );
+        // NTFS has an exclusive rename, so this platform never falls back.
+        #[cfg(windows)]
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
         let claimed = SystemBackend
             .rename_claimed(&source, &dest)
             .expect_err("a claimed rename refuses too");

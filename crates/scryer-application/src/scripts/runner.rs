@@ -5,7 +5,7 @@
 //! file, runs the process in its own process group, enforces the timeout by
 //! killing that whole group, and keeps the tail of each captured stream.
 
-use crate::disk::{Access, Disk, EntryKind, Open, Parents, Replace, reason};
+use crate::disk::{Access, Disk, EntryKind, Open, OwnerOnly, Parents, Replace, reason};
 use chrono::{DateTime, Utc};
 use scryer_domain::ScriptLanguage;
 use std::ffi::OsString;
@@ -683,15 +683,12 @@ fn materialize_inline_script(
     }
 
     // Written aside and renamed into place, so a concurrent run never
-    // executes a partially written file.
-    #[cfg(unix)]
-    let access = {
-        use std::os::unix::fs::PermissionsExt;
-        Access::like(&std::fs::Permissions::from_mode(0o700))
-    };
-    #[cfg(not(unix))]
-    let access = Access::Default;
-    match disk.write_atomic_blocking(&path, content.as_bytes(), Replace::Never, access) {
+    // executes a partially written file. Its owner may run it whatever the
+    // umask, before anyone can see it.
+    let mut staged = disk.stage_blocking(&path, Parents::MustExist, Access::OwnerOnly)?;
+    io::Write::write_all(&mut staged, content.as_bytes())?;
+    disk.restrict_to_owner_blocking(staged.path(), OwnerOnly::Program)?;
+    match staged.commit_durable_blocking(Replace::Never) {
         Ok(_) => Ok(path),
         // A concurrent run installed the same content first.
         Err(error) if error.reason() == reason::DISK_DESTINATION_EXISTS => Ok(path),

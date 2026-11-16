@@ -87,6 +87,11 @@ impl FileIdentity {
     pub(crate) fn from_raw(device: u64, inode: u64) -> Option<Self> {
         (inode != 0).then_some(Self { device, inode })
     }
+
+    /// Whether both files are on the same device, so they share its space.
+    pub fn same_device(self, other: Self) -> bool {
+        self.device == other.device
+    }
 }
 
 /// What may be said about a path at a given instant.

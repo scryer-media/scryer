@@ -246,10 +246,13 @@ fn retire_live_file_without_replacement(target: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Make renames inside `directory` durable. Windows offers no directory
-/// handle to flush; NTFS journals the rename itself.
+/// Make renames inside `directory` durable, or fail. Windows offers no
+/// directory handle to flush; NTFS journals the rename itself.
 fn sync_directory(directory: &Path) -> std::io::Result<()> {
-    Disk::process().sync_dir_blocking(directory)?;
+    let outcome = Disk::process().sync_dir_blocking(directory)?;
+    if cfg!(unix) {
+        outcome.required()?;
+    }
     Ok(())
 }
 
@@ -563,7 +566,7 @@ where
             Replace::Allowed,
             Access::Default,
         )?;
-        disk.sync_blocking(&promoted_marker)?;
+        disk.sync_blocking(&promoted_marker)?.required()?;
         sync_directory(&marker_dir)?;
         cleanup_restore_promotion_artifacts(&promotion_targets)
     })

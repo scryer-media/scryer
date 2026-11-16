@@ -605,7 +605,10 @@ fn rotated_here(archive: &Path) -> bool {
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
-    Disk::process().sync_dir_blocking(path)?;
+    let outcome = Disk::process().sync_dir_blocking(path)?;
+    if cfg!(unix) {
+        outcome.required()?;
+    }
     Ok(())
 }
 

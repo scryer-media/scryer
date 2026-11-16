@@ -45,7 +45,7 @@ pub fn retain_installer(
             .map_err(|e| io_error(e.into()))?;
         std::io::copy(&mut input, staged.file()).map_err(io_error)?;
         verify_artifact_hash(staged.path(), artifact).map_err(super::map_updater_error)?;
-        if let Err(error) = staged.commit_blocking(Replace::Never)
+        if let Err(error) = staged.commit_durable_blocking(Replace::Never)
             && error.reason() != reason::DISK_DESTINATION_EXISTS
         {
             return Err(io_error(error.into()));

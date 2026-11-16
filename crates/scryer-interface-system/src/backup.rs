@@ -981,13 +981,12 @@ fn ensure_owner_only_dir_permissions(path: &Path) -> std::io::Result<()> {
 
 fn write_owner_only_file_atomically(path: &Path, contents: &str) -> Result<(), AppError> {
     Disk::process()
-        .write_atomic_blocking(
+        .write_durable_blocking(
             path,
             contents.as_bytes(),
             Replace::Allowed,
             Access::OwnerOnly,
         )
-        .map(drop)
         .map_err(|error| {
             AppError::Repository(format!(
                 "failed to write restore secrets {}: {}",

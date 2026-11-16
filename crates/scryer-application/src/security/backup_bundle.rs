@@ -143,9 +143,11 @@ impl AtomicOutputWriter {
                 error.error()
             ))
         })?;
-        staged.commit_blocking(Replace::Allowed).map_err(|error| {
-            AppError::Repository(format!("failed to persist staged backup output: {error}"))
-        })?;
+        staged
+            .commit_durable_blocking(Replace::Allowed)
+            .map_err(|error| {
+                AppError::Repository(format!("failed to persist staged backup output: {error}"))
+            })?;
         Ok(())
     }
 }
