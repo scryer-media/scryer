@@ -31,11 +31,21 @@
 //!
 //! Every mutation evicts what it can have changed: the path, its parent, and
 //! for a directory removal or a move the whole subtree. No mutation here adds
-//! deletion of its own: each removes exactly what the caller named, once. The
-//! one exception is [`Disk::write_atomic_blocking`]: when it fails, it removes
-//! the hidden staging file that the same call created, and nothing else.
+//! deletion of its own: each removes exactly what the caller named, once.
+//! The exceptions are files and directories the owner itself created for the
+//! caller and that nobody else holds: [`Disk::write_atomic_blocking`] removes
+//! its hidden staging file when it fails, a [`Staged`] write removes its
+//! staging file when it is dropped without being committed, and a
+//! [`ScratchDir`] removes itself, and everything in it, when it is dropped.
 //! Verified copies are not here yet; the verified copier and the
 //! copy-and-verify move fallback move behind this owner later.
+//!
+//! Contents are read whole ([`Disk::read_blocking`]) or through a handle
+//! ([`Disk::open_blocking`]). Once a handle is open, reads and writes through
+//! it are the caller's: they are not bounded, counted or cached. Opening a
+//! file for writing evicts its readings, and [`Disk::finish_blocking`] syncs
+//! the handle and evicts them again once the writing is done, so no reading
+//! taken while it was written outlives it.
 
 pub(crate) mod backend;
 pub(crate) mod cache;
@@ -47,6 +57,7 @@ mod volume;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 
@@ -208,6 +219,131 @@ pub enum Parents {
 pub enum Replace {
     Allowed,
     Never,
+}
+
+/// Who may read and write a file or directory the owner creates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Access {
+    /// The process's defaults.
+    #[default]
+    Default,
+    /// Only the account Scryer runs as, where the platform has owner
+    /// permissions; elsewhere the defaults. Applied as the file is created,
+    /// so its contents are never readable by anyone else first. An existing
+    /// file keeps its permissions.
+    OwnerOnly,
+}
+
+/// What [`Disk::restrict_to_owner_blocking`] narrows: a file loses every
+/// permission but its owner's read and write, a directory keeps its owner's
+/// search permission too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnerOnly {
+    File,
+    Directory,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpenMode {
+    Read,
+    WriteExisting,
+    CreateNew,
+    Create,
+    CreateOrKeep,
+    Append,
+}
+
+/// How [`Disk::open_blocking`] opens a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Open {
+    pub(crate) mode: OpenMode,
+    pub(crate) follow_links: bool,
+    pub(crate) access: Access,
+}
+
+impl Open {
+    const fn of(mode: OpenMode) -> Self {
+        Self {
+            mode,
+            follow_links: true,
+            access: Access::Default,
+        }
+    }
+
+    /// Read an existing file.
+    pub const fn read() -> Self {
+        Self::of(OpenMode::Read)
+    }
+
+    /// Write an existing file from its start, never creating or emptying it.
+    pub const fn write_existing() -> Self {
+        Self::of(OpenMode::WriteExisting)
+    }
+
+    /// Write a new file; an existing one is refused and kept.
+    pub const fn create_new() -> Self {
+        Self::of(OpenMode::CreateNew)
+    }
+
+    /// Write a file, creating it or emptying an existing one.
+    pub const fn create() -> Self {
+        Self::of(OpenMode::Create)
+    }
+
+    /// Read and write a file, creating it when it is missing and keeping
+    /// whatever it holds: lock and marker files.
+    pub const fn create_or_keep() -> Self {
+        Self::of(OpenMode::CreateOrKeep)
+    }
+
+    /// Append to a file, creating it when it is missing.
+    pub const fn append() -> Self {
+        Self::of(OpenMode::Append)
+    }
+
+    /// Refuse a link at the path instead of following it
+    /// ([`reason::DISK_LINK_NOT_FOLLOWED`]), and anything that is not a
+    /// regular file ([`reason::DISK_WRONG_KIND`]).
+    pub const fn without_following_links(mut self) -> Self {
+        self.follow_links = false;
+        self
+    }
+
+    /// Who may use a file this open creates.
+    pub const fn with_access(mut self, access: Access) -> Self {
+        self.access = access;
+        self
+    }
+
+    fn writes(self) -> bool {
+        self.mode != OpenMode::Read
+    }
+
+    fn verb(self) -> DiskVerb {
+        if self.writes() {
+            DiskVerb::Write
+        } else {
+            DiskVerb::Read
+        }
+    }
+}
+
+/// Turns "the path is not there" into an answer instead of a failure.
+pub trait IfPresent<T> {
+    /// `Ok(None)` when the operation failed only because the path, or a
+    /// directory above it, does not exist ([`reason::DISK_PATH_MISSING`]).
+    /// Every other failure stays a failure.
+    fn if_present(self) -> Result<Option<T>, DiskError>;
+}
+
+impl<T> IfPresent<T> for Result<T, DiskError> {
+    fn if_present(self) -> Result<Option<T>, DiskError> {
+        match self {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.reason() == reason::DISK_PATH_MISSING => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 /// One entry of a listing.
@@ -397,6 +533,7 @@ impl Disk {
                         len: None,
                         modified: None,
                         identity: None,
+                        links: None,
                         observed_at,
                     },
                     (None, None) => PathReading::NotObserved,
@@ -531,6 +668,10 @@ impl Disk {
             Link::Symbolic => self.call("symlink", || backend.symlink(source, dest)),
         };
         self.inner.cache.evict(&key_of(dest));
+        if link == Link::Hard && result.is_ok() {
+            // A new hard link changed the source's link count.
+            self.inner.cache.evict(&key_of(source));
+        }
         match result {
             Ok(()) => Ok(LinkOutcome::Linked),
             Err(error) if link_not_possible(&error) => Ok(LinkOutcome::NotPossible),
@@ -555,7 +696,9 @@ impl Disk {
         let backend = &self.inner.backend;
         let result = match parents {
             Parents::Create => self.call("create_dir_all", || backend.create_dir_all(path)),
-            Parents::MustExist => self.call("create_dir", || backend.create_dir(path)),
+            Parents::MustExist => {
+                self.call("create_dir", || backend.create_dir(path, Access::Default))
+            }
         };
         // Any ancestor may have been created, and a cached "missing" for it
         // would now be wrong.
@@ -578,6 +721,7 @@ impl Disk {
     /// one, never part of either: missing parents are created, the bytes go to
     /// a hidden sibling and are synced, then the sibling is renamed into
     /// place. With [`Replace::Never`] an existing `path` is refused and kept.
+    /// `access` applies to the new file.
     ///
     /// When this call created the hidden sibling and then the write, the
     /// sync or the rename fails, it removes that one sibling, once, best
@@ -589,23 +733,15 @@ impl Disk {
         path: &Path,
         bytes: &[u8],
         replace: Replace,
+        access: Access,
     ) -> Result<SyncOutcome, DiskError> {
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            self.create_dir_blocking(parent, Parents::Create)?;
-        }
+        self.create_parent(path)?;
         let staged = staging_path_for(path);
-        let written = self.call("write_new", || self.inner.backend.write_new(&staged, bytes));
+        let written = self.call("write_new", || {
+            self.inner.backend.write_new(&staged, bytes, access)
+        });
         let placed = written.and_then(|synced| {
-            let renamed = match replace {
-                Replace::Allowed => {
-                    self.call("rename", || self.inner.backend.rename(&staged, path))
-                }
-                Replace::Never => self.rename_exclusive(&staged, path),
-            };
-            renamed
+            self.place(&staged, path, replace)
                 .map(|()| synced)
                 .map_err(backend::WriteFailure::created)
         });
@@ -627,9 +763,10 @@ impl Disk {
         path: impl Into<PathBuf>,
         bytes: Vec<u8>,
         replace: Replace,
+        access: Access,
     ) -> Result<SyncOutcome, DiskError> {
         self.run(DiskVerb::Write, path.into(), None, move |disk, path| {
-            disk.write_atomic_blocking(path, &bytes, replace)
+            disk.write_atomic_blocking(path, &bytes, replace, access)
         })
         .await
     }
@@ -645,6 +782,302 @@ impl Disk {
             disk.sync_blocking(path)
         })
         .await
+    }
+
+    /// The whole contents of `path`, following links.
+    pub fn read_blocking(&self, path: &Path) -> Result<Vec<u8>, DiskError> {
+        self.call("read", || self.inner.backend.read(path))
+            .map_err(|error| DiskError::new(DiskVerb::Read, path, error))
+    }
+
+    /// [`Self::read_blocking`] off the runtime, bounded under a configured
+    /// root as every read is. The bound is the root's, whatever the file's
+    /// size.
+    pub async fn read(&self, path: impl Into<PathBuf>) -> Result<Vec<u8>, DiskError> {
+        let path = path.into();
+        let timeout = self.traits(&path).probe_timeout;
+        self.run(DiskVerb::Read, path, timeout, |disk, path| {
+            disk.read_blocking(path)
+        })
+        .await
+    }
+
+    /// The whole contents of `path` as text. Contents that are not UTF-8 fail
+    /// with [`reason::DISK_OPERATION_FAILED`].
+    pub fn read_to_string_blocking(&self, path: &Path) -> Result<String, DiskError> {
+        String::from_utf8(self.read_blocking(path)?).map_err(|error| {
+            DiskError::new(
+                DiskVerb::Read,
+                path,
+                io::Error::new(io::ErrorKind::InvalidData, error),
+            )
+        })
+    }
+
+    pub async fn read_to_string(&self, path: impl Into<PathBuf>) -> Result<String, DiskError> {
+        let path = path.into();
+        let timeout = self.traits(&path).probe_timeout;
+        self.run(DiskVerb::Read, path, timeout, |disk, path| {
+            disk.read_to_string_blocking(path)
+        })
+        .await
+    }
+
+    /// A handle on `path`, opened as `open` says, for contents too large or
+    /// too long-lived for one buffer. Opening for writing evicts `path` and
+    /// its parent; call [`Self::finish_blocking`] when done writing.
+    pub fn open_blocking(&self, path: &Path, open: Open) -> Result<std::fs::File, DiskError> {
+        let result = self.call("open", || self.inner.backend.open(path, open));
+        if open.writes() {
+            self.inner.cache.evict(&key_of(path));
+        }
+        result.map_err(|error| DiskError::new(open.verb(), path, error))
+    }
+
+    /// [`Self::open_blocking`] off the runtime. Opening to read is bounded
+    /// under a configured root; opening to write never is. Reads and writes
+    /// through the handle afterwards are not bounded.
+    pub async fn open(
+        &self,
+        path: impl Into<PathBuf>,
+        open: Open,
+    ) -> Result<tokio::fs::File, DiskError> {
+        let path = path.into();
+        let timeout = if open.writes() {
+            None
+        } else {
+            self.traits(&path).probe_timeout
+        };
+        self.run(open.verb(), path, timeout, move |disk, path| {
+            disk.open_blocking(path, open)
+        })
+        .await
+        .map(tokio::fs::File::from_std)
+    }
+
+    /// Sync what was written through `file`, a handle on `path`, close it,
+    /// and evict `path` and its parent so no reading taken while it was
+    /// written remains.
+    pub fn finish_blocking(
+        &self,
+        path: &Path,
+        file: std::fs::File,
+    ) -> Result<SyncOutcome, DiskError> {
+        let result = self.call("sync_handle", || self.inner.backend.sync_handle(&file));
+        drop(file);
+        self.inner.cache.evict(&key_of(path));
+        result.map_err(|error| DiskError::new(DiskVerb::Sync, path, error))
+    }
+
+    /// [`Self::finish_blocking`] for a handle from [`Self::open`]. Writes
+    /// still buffered in the handle are flushed first.
+    pub async fn finish(
+        &self,
+        path: impl Into<PathBuf>,
+        mut file: tokio::fs::File,
+    ) -> Result<SyncOutcome, DiskError> {
+        use tokio::io::AsyncWriteExt;
+        let path = path.into();
+        if let Err(error) = file.flush().await {
+            self.inner.cache.evict(&key_of(&path));
+            return Err(DiskError::new(DiskVerb::Write, &path, error));
+        }
+        let file = file.into_std().await;
+        self.run(DiskVerb::Sync, path, None, move |disk, path| {
+            disk.finish_blocking(path, file)
+        })
+        .await
+    }
+
+    /// Write `bytes` to `path` in place: created, or emptied and rewritten
+    /// when `replace` allows. Neither atomic nor synced, and parents are not
+    /// created: for scratch files and files nobody reads while they are
+    /// written. A failure can leave part of the bytes behind.
+    /// [`Self::write_atomic_blocking`] is the write for anything else.
+    pub fn write_blocking(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        replace: Replace,
+        access: Access,
+    ) -> Result<(), DiskError> {
+        let result = self.call("write", || {
+            self.inner.backend.write(path, bytes, replace, access)
+        });
+        self.inner.cache.evict(&key_of(path));
+        result.map_err(|error| DiskError::new(DiskVerb::Write, path, error))
+    }
+
+    pub async fn write(
+        &self,
+        path: impl Into<PathBuf>,
+        bytes: Vec<u8>,
+        replace: Replace,
+        access: Access,
+    ) -> Result<(), DiskError> {
+        self.run(DiskVerb::Write, path.into(), None, move |disk, path| {
+            disk.write_blocking(path, &bytes, replace, access)
+        })
+        .await
+    }
+
+    /// Start a streamed write that replaces `dest` all at once: the caller
+    /// writes into a hidden sibling, then [`Staged::commit_blocking`] syncs
+    /// it and renames it into place. Missing parents are created when
+    /// `parents` says so. The sibling is removed if the write is dropped
+    /// without a commit or the commit fails.
+    pub fn stage_blocking(
+        &self,
+        dest: &Path,
+        parents: Parents,
+        access: Access,
+    ) -> Result<Staged, DiskError> {
+        if parents == Parents::Create {
+            self.create_parent(dest)?;
+        }
+        let staged = staging_path_for(dest);
+        let open = Open::create_new().with_access(access);
+        let result = self.call("open", || self.inner.backend.open(&staged, open));
+        self.inner.cache.evict(&key_of(&staged));
+        let file = result.map_err(|error| DiskError::new(DiskVerb::Write, dest, error))?;
+        Ok(Staged {
+            disk: self.clone(),
+            staged,
+            dest: dest.to_path_buf(),
+            file: Some(file),
+            committed: false,
+        })
+    }
+
+    pub async fn stage(
+        &self,
+        dest: impl Into<PathBuf>,
+        parents: Parents,
+        access: Access,
+    ) -> Result<Staged, DiskError> {
+        self.run(DiskVerb::Write, dest.into(), None, move |disk, dest| {
+            disk.stage_blocking(dest, parents, access)
+        })
+        .await
+    }
+
+    /// Make the entries of `dir` durable, such as a rename into it. Where a
+    /// directory cannot be synced this answers [`SyncOutcome::Unconfirmed`]
+    /// without touching the disk.
+    pub fn sync_dir_blocking(&self, dir: &Path) -> Result<SyncOutcome, DiskError> {
+        self.call("sync_dir", || self.inner.backend.sync_dir(dir))
+            .map_err(|error| DiskError::new(DiskVerb::Sync, dir, error))
+    }
+
+    pub async fn sync_dir(&self, dir: impl Into<PathBuf>) -> Result<SyncOutcome, DiskError> {
+        self.run(DiskVerb::Sync, dir.into(), None, |disk, dir| {
+            disk.sync_dir_blocking(dir)
+        })
+        .await
+    }
+
+    /// A new, empty directory under the system's temporary directory, named
+    /// `prefix` and a random suffix, that only Scryer's account can use. It is
+    /// removed, with everything in it, when the returned handle is dropped.
+    pub fn scratch_dir_blocking(&self, prefix: &str) -> Result<ScratchDir, DiskError> {
+        let base = std::env::temp_dir();
+        let mut taken = None;
+        for _ in 0..SCRATCH_NAME_TRIES {
+            let path = base.join(format!("{prefix}{}", unique_suffix(&base)));
+            let result = self.call("create_dir", || {
+                self.inner.backend.create_dir(&path, Access::OwnerOnly)
+            });
+            self.inner.cache.evict(&key_of(&path));
+            match result {
+                Ok(()) => {
+                    return Ok(ScratchDir {
+                        disk: self.clone(),
+                        path,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => taken = Some(error),
+                Err(error) => return Err(DiskError::new(DiskVerb::CreateDir, &path, error)),
+            }
+        }
+        Err(DiskError::new(
+            DiskVerb::CreateDir,
+            &base,
+            taken.unwrap_or_else(|| io::ErrorKind::AlreadyExists.into()),
+        ))
+    }
+
+    pub async fn scratch_dir(&self, prefix: impl Into<String>) -> Result<ScratchDir, DiskError> {
+        let prefix = prefix.into();
+        self.run(
+            DiskVerb::CreateDir,
+            std::env::temp_dir(),
+            None,
+            move |disk, _| disk.scratch_dir_blocking(&prefix),
+        )
+        .await
+    }
+
+    /// Narrow the permissions of the existing `path` to its owner, following
+    /// a link. Where the platform has no owner permissions, nothing changes.
+    pub fn restrict_to_owner_blocking(
+        &self,
+        path: &Path,
+        what: OwnerOnly,
+    ) -> Result<(), DiskError> {
+        let result = self.call("restrict_to_owner", || {
+            self.inner.backend.restrict_to_owner(path, what)
+        });
+        self.inner.cache.evict(&key_of(path));
+        result.map_err(|error| DiskError::new(DiskVerb::Change, path, error))
+    }
+
+    pub async fn restrict_to_owner(
+        &self,
+        path: impl Into<PathBuf>,
+        what: OwnerOnly,
+    ) -> Result<(), DiskError> {
+        self.run(DiskVerb::Change, path.into(), None, move |disk, path| {
+            disk.restrict_to_owner_blocking(path, what)
+        })
+        .await
+    }
+
+    /// Set the modification time of the existing file at `path`, following a
+    /// link.
+    pub fn set_modified_blocking(&self, path: &Path, at: SystemTime) -> Result<(), DiskError> {
+        let result = self.call("set_modified", || self.inner.backend.set_modified(path, at));
+        self.inner.cache.evict(&key_of(path));
+        result.map_err(|error| DiskError::new(DiskVerb::Change, path, error))
+    }
+
+    pub async fn set_modified(
+        &self,
+        path: impl Into<PathBuf>,
+        at: SystemTime,
+    ) -> Result<(), DiskError> {
+        self.run(DiskVerb::Change, path.into(), None, move |disk, path| {
+            disk.set_modified_blocking(path, at)
+        })
+        .await
+    }
+
+    fn create_parent(&self, path: &Path) -> Result<(), DiskError> {
+        match path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            Some(parent) => self.create_dir_blocking(parent, Parents::Create),
+            None => Ok(()),
+        }
+    }
+
+    /// Rename a staging file this owner created onto `dest`, as `replace`
+    /// says.
+    fn place(&self, staged: &Path, dest: &Path, replace: Replace) -> io::Result<()> {
+        match replace {
+            Replace::Allowed => self.call("rename", || self.inner.backend.rename(staged, dest)),
+            Replace::Never => self.rename_exclusive(staged, dest),
+        }
     }
 
     /// An exclusive rename where the filesystem offers one, else a claim of
@@ -823,15 +1256,146 @@ fn link_not_possible(error: &io::Error) -> bool {
     }
 }
 
+/// A streamed write into a hidden sibling of its destination, from
+/// [`Disk::stage_blocking`]. Write into it through [`std::io::Write`] or
+/// [`Self::file`], then commit it. Dropped without a commit, it removes its
+/// staging file, which nobody else was given, and nothing else; dropping it
+/// blocks on that one removal.
+#[derive(Debug)]
+pub struct Staged {
+    disk: Disk,
+    staged: PathBuf,
+    dest: PathBuf,
+    file: Option<std::fs::File>,
+    committed: bool,
+}
+
+impl Staged {
+    /// The staging file, to read back what was written before committing.
+    pub fn path(&self) -> &Path {
+        &self.staged
+    }
+
+    pub fn destination(&self) -> &Path {
+        &self.dest
+    }
+
+    pub fn file(&mut self) -> &mut std::fs::File {
+        self.file
+            .as_mut()
+            .expect("a staged write holds its file until it is committed")
+    }
+
+    /// Sync the staging file and rename it onto the destination as `replace`
+    /// says. With [`Replace::Never`] an existing destination is refused
+    /// ([`reason::DISK_DESTINATION_EXISTS`]) and kept. On any failure the
+    /// staging file is removed and the destination left as it was.
+    pub fn commit_blocking(mut self, replace: Replace) -> Result<SyncOutcome, DiskError> {
+        let disk = self.disk.clone();
+        let file = self
+            .file
+            .take()
+            .expect("a staged write holds its file until it is committed");
+        let synced = disk.call("sync_handle", || disk.inner.backend.sync_handle(&file));
+        drop(file);
+        let result = synced.and_then(|outcome| {
+            disk.place(&self.staged, &self.dest, replace)
+                .map(|()| outcome)
+        });
+        disk.inner.cache.evict(&key_of(&self.dest));
+        disk.inner.cache.evict(&key_of(&self.staged));
+        match result {
+            Ok(outcome) => {
+                self.committed = true;
+                Ok(outcome)
+            }
+            Err(error) => Err(DiskError::new(DiskVerb::Write, &self.dest, error)),
+        }
+    }
+
+    /// [`Self::commit_blocking`] off the runtime, never timed out.
+    pub async fn commit(self, replace: Replace) -> Result<SyncOutcome, DiskError> {
+        let dest = self.dest.clone();
+        match offload(None, move || self.commit_blocking(replace)).await {
+            Offloaded::Done(result) => result,
+            Offloaded::TimedOut => Err(DiskError::timed_out(
+                DiskVerb::Write,
+                &dest,
+                std::time::Duration::ZERO,
+            )),
+            Offloaded::Failed(message) => Err(DiskError::new(
+                DiskVerb::Write,
+                &dest,
+                io::Error::other(message),
+            )),
+        }
+    }
+}
+
+impl io::Write for Staged {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.file().write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file().flush()
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // Closed first: some platforms refuse to remove an open file.
+        drop(self.file.take());
+        let backend = &self.disk.inner.backend;
+        // Best effort, as the caller has nothing to do about it.
+        let _ = self
+            .disk
+            .call("remove_file", || backend.remove_file(&self.staged));
+        self.disk.inner.cache.evict(&key_of(&self.staged));
+    }
+}
+
+/// A private temporary directory from [`Disk::scratch_dir_blocking`]. When
+/// it is dropped it removes itself and everything in it, best effort,
+/// blocking on that removal; nothing outside it is touched.
+#[derive(Debug)]
+pub struct ScratchDir {
+    disk: Disk,
+    path: PathBuf,
+}
+
+impl ScratchDir {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = self.disk.remove_blocking(&self.path, Remove::Tree);
+    }
+}
+
+/// Names tried for a scratch directory before giving up; a collision of
+/// random names is already unlikely once.
+const SCRATCH_NAME_TRIES: usize = 8;
+
+/// Nine hex digits that differ on every call.
+fn unique_suffix(near: &Path) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(near.as_os_str().as_encoded_bytes());
+    hasher.update(crate::Id::new().0.as_bytes());
+    hasher.finalize().to_hex()[..9].to_string()
+}
+
 /// A hidden sibling of `dest` that no scanner takes for media. A short digest
 /// keeps the name 25 bytes however long the destination's name is.
 fn staging_path_for(dest: &Path) -> PathBuf {
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(dest.as_os_str().as_encoded_bytes());
-    hasher.update(crate::Id::new().0.as_bytes());
-    let digest = hasher.finalize().to_hex();
-    parent.join(format!(".scryer-{}.partial", &digest[..9]))
+    parent.join(format!(".scryer-{}.partial", unique_suffix(dest)))
 }
 
 #[cfg(test)]

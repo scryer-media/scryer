@@ -223,6 +223,7 @@ mod tests {
             len: Some(1),
             modified: None,
             identity: None,
+            links: None,
             observed_at: at(seconds),
         }
     }

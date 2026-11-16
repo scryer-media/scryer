@@ -37,6 +37,11 @@ pub mod reason {
     /// The source and destination cannot be joined by a rename; the move
     /// needs a copy.
     pub const DISK_MOVE_NEEDS_COPY: &str = "DISK_MOVE_NEEDS_COPY";
+    /// The destination has no room left, or the account's quota on it is
+    /// used up.
+    pub const DISK_NO_SPACE: &str = "DISK_NO_SPACE";
+    /// The path is a link, and the operation was asked not to follow links.
+    pub const DISK_LINK_NOT_FOLLOWED: &str = "DISK_LINK_NOT_FOLLOWED";
     /// Any other failure.
     pub const DISK_OPERATION_FAILED: &str = "DISK_OPERATION_FAILED";
 
@@ -52,6 +57,8 @@ pub mod reason {
         DISK_DIRECTORY_NOT_EMPTY,
         DISK_WRONG_KIND,
         DISK_MOVE_NEEDS_COPY,
+        DISK_NO_SPACE,
+        DISK_LINK_NOT_FOLLOWED,
         DISK_OPERATION_FAILED,
     ];
 }
@@ -92,6 +99,9 @@ pub enum PathReading {
         len: Option<u64>,
         modified: Option<SystemTime>,
         identity: Option<FileIdentity>,
+        /// How many names the file has, where the disk reports it. Absent
+        /// when the reading came from a listing or the platform does not say.
+        links: Option<u64>,
         observed_at: DateTime<Utc>,
     },
     Missing {
@@ -127,6 +137,14 @@ impl PathReading {
     pub fn kind(self) -> Option<EntryKind> {
         match self {
             Self::Known { kind, .. } => Some(kind),
+            _ => None,
+        }
+    }
+
+    /// How many names the file has, when the reading carries it.
+    pub fn link_count(self) -> Option<u64> {
+        match self {
+            Self::Known { links, .. } => links,
             _ => None,
         }
     }
@@ -170,6 +188,8 @@ pub enum DiskVerb {
     CreateDir,
     Write,
     Sync,
+    /// Permissions or times of an existing path.
+    Change,
 }
 
 impl DiskVerb {
@@ -184,6 +204,7 @@ impl DiskVerb {
             Self::CreateDir => "could not create directory",
             Self::Write => "could not write",
             Self::Sync => "could not sync",
+            Self::Change => "could not change",
         }
     }
 }
@@ -246,6 +267,12 @@ fn classify(error: &io::Error) -> &'static str {
     if crate::fs_safety::is_cross_device_error(error) {
         return reason::DISK_MOVE_NEEDS_COPY;
     }
+    if let Some(refusal) = super::backend::Refused::of(error) {
+        return match refusal {
+            super::backend::Refused::Link => reason::DISK_LINK_NOT_FOLLOWED,
+            super::backend::Refused::NotAFile => reason::DISK_WRONG_KIND,
+        };
+    }
     match error.kind() {
         K::NotFound => reason::DISK_PATH_MISSING,
         K::PermissionDenied | K::ReadOnlyFilesystem => reason::DISK_PERMISSION_DENIED,
@@ -253,6 +280,7 @@ fn classify(error: &io::Error) -> &'static str {
         K::DirectoryNotEmpty => reason::DISK_DIRECTORY_NOT_EMPTY,
         K::NotADirectory | K::IsADirectory => reason::DISK_WRONG_KIND,
         K::TimedOut => reason::DISK_TIMED_OUT,
+        K::StorageFull | K::QuotaExceeded => reason::DISK_NO_SPACE,
         K::StaleNetworkFileHandle
         | K::NetworkDown
         | K::NetworkUnreachable
@@ -334,6 +362,9 @@ mod tests {
             (io::ErrorKind::IsADirectory, reason::DISK_WRONG_KIND),
             (io::ErrorKind::CrossesDevices, reason::DISK_MOVE_NEEDS_COPY),
             (io::ErrorKind::TimedOut, reason::DISK_TIMED_OUT),
+            (io::ErrorKind::StorageFull, reason::DISK_NO_SPACE),
+            (io::ErrorKind::QuotaExceeded, reason::DISK_NO_SPACE),
+            (io::ErrorKind::InvalidData, reason::DISK_OPERATION_FAILED),
             (io::ErrorKind::Other, reason::DISK_OPERATION_FAILED),
         ];
         for (kind, code) in cases {

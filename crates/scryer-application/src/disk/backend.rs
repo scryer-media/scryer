@@ -18,6 +18,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, Utc};
 
 use super::reading::{EntryKind, FileIdentity, PathReading};
+use super::{Access, Open, OpenMode, OwnerOnly, Replace};
 
 /// What one stat call said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub(crate) struct RawStat {
     pub len: u64,
     pub modified: Option<SystemTime>,
     pub identity: Option<FileIdentity>,
+    pub links: Option<u64>,
 }
 
 impl RawStat {
@@ -35,6 +37,7 @@ impl RawStat {
             len: Some(self.len),
             modified: self.modified,
             identity: self.identity,
+            links: self.links,
             observed_at,
         }
     }
@@ -51,17 +54,21 @@ impl RawStat {
             EntryKind::Other
         };
         #[cfg(unix)]
-        let identity = {
+        let (identity, links) = {
             use std::os::unix::fs::MetadataExt;
-            FileIdentity::from_raw(metadata.dev(), metadata.ino())
+            (
+                FileIdentity::from_raw(metadata.dev(), metadata.ino()),
+                Some(metadata.nlink()),
+            )
         };
         #[cfg(not(unix))]
-        let identity = None;
+        let (identity, links) = (None, None);
         Self {
             kind,
             len: metadata.len(),
             modified: metadata.modified().ok(),
             identity,
+            links,
         }
     }
 }
@@ -113,6 +120,31 @@ impl WriteFailure {
     }
 }
 
+/// Why the backend refused an open itself, carried inside the `io::Error` it
+/// returns so the reason is read from a type, never from text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum Refused {
+    #[error("the path is a link, and links are not followed here")]
+    Link,
+    #[error("the path is not a regular file")]
+    NotAFile,
+}
+
+impl Refused {
+    pub(crate) fn of(error: &io::Error) -> Option<Self> {
+        error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<Self>())
+            .copied()
+    }
+}
+
+impl From<Refused> for io::Error {
+    fn from(refused: Refused) -> Self {
+        io::Error::new(io::ErrorKind::InvalidInput, refused)
+    }
+}
+
 /// The disk seam. One method per platform operation.
 pub(crate) trait DiskBackend: Send + Sync + 'static {
     /// Follows links.
@@ -136,12 +168,34 @@ pub(crate) trait DiskBackend: Send + Sync + 'static {
     fn hard_link(&self, source: &Path, dest: &Path) -> io::Result<()>;
     fn symlink(&self, target: &Path, at: &Path) -> io::Result<()>;
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
-    fn create_dir(&self, path: &Path) -> io::Result<()>;
+    fn create_dir(&self, path: &Path, access: Access) -> io::Result<()>;
     /// Creates `path` exclusively, writes `bytes`, and syncs it. A failure
     /// says whether this call had created the file.
-    fn write_new(&self, path: &Path, bytes: &[u8]) -> Result<SyncOutcome, WriteFailure>;
+    fn write_new(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        access: Access,
+    ) -> Result<SyncOutcome, WriteFailure>;
     /// Syncs an existing file.
     fn sync_file(&self, path: &Path) -> io::Result<SyncOutcome>;
+    /// The whole contents of a file.
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+    /// Opens `path` as `open` says. When links are not followed, a link
+    /// fails with [`Refused::Link`] and anything but a regular file with
+    /// [`Refused::NotAFile`].
+    fn open(&self, path: &Path, open: Open) -> io::Result<std::fs::File>;
+    /// Writes `bytes` to `path` in place, without syncing: created, or
+    /// truncated and rewritten when `replace` allows it.
+    fn write(&self, path: &Path, bytes: &[u8], replace: Replace, access: Access) -> io::Result<()>;
+    /// Syncs a file through a handle the caller wrote with.
+    fn sync_handle(&self, file: &std::fs::File) -> io::Result<SyncOutcome>;
+    /// Makes the entries of a directory durable: renames and creations in it.
+    fn sync_dir(&self, path: &Path) -> io::Result<SyncOutcome>;
+    /// Narrows an existing path's permissions to its owner.
+    fn restrict_to_owner(&self, path: &Path, what: OwnerOnly) -> io::Result<()>;
+    /// Sets a file's modification time, following links.
+    fn set_modified(&self, path: &Path, at: SystemTime) -> io::Result<()>;
 }
 
 /// The real filesystem.
@@ -256,16 +310,27 @@ impl DiskBackend for SystemBackend {
         std::fs::create_dir_all(path)
     }
 
-    fn create_dir(&self, path: &Path) -> io::Result<()> {
-        std::fs::create_dir(path)
+    fn create_dir(&self, path: &Path, access: Access) -> io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        if access == Access::OwnerOnly {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        #[cfg(not(unix))]
+        let _ = access;
+        builder.create(path)
     }
 
-    fn write_new(&self, path: &Path, bytes: &[u8]) -> Result<SyncOutcome, WriteFailure> {
+    fn write_new(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        access: Access,
+    ) -> Result<SyncOutcome, WriteFailure> {
         use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
+        let mut file = self
+            .open(path, Open::create_new().with_access(access))
             .map_err(WriteFailure::not_created)?;
         file.write_all(bytes).map_err(WriteFailure::created)?;
         settled(&file).map_err(WriteFailure::created)
@@ -279,6 +344,125 @@ impl DiskBackend for SystemBackend {
             .write(cfg!(windows))
             .open(path)?;
         settled(&file)
+    }
+
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
+    fn open(&self, path: &Path, open: Open) -> io::Result<std::fs::File> {
+        let mut options = std::fs::OpenOptions::new();
+        match open.mode {
+            OpenMode::Read => options.read(true),
+            OpenMode::WriteExisting => options.write(true),
+            OpenMode::CreateNew => options.write(true).create_new(true),
+            OpenMode::Create => options.write(true).create(true).truncate(true),
+            OpenMode::CreateOrKeep => options.read(true).write(true).create(true).truncate(false),
+            OpenMode::Append => options.append(true).create(true),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            if open.access == Access::OwnerOnly {
+                options.mode(0o600);
+            }
+            if !open.follow_links {
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+        }
+        #[cfg(windows)]
+        if !open.follow_links {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_FLAG_OPEN_REPARSE_POINT: open a link itself, not its target.
+            options.custom_flags(0x0020_0000);
+        }
+        let file = options.open(path).map_err(|error| {
+            if !open.follow_links && is_link_loop(&error) {
+                Refused::Link.into()
+            } else {
+                error
+            }
+        })?;
+        if !open.follow_links {
+            // The handle's own metadata: no further call on the path.
+            let file_type = file.metadata()?.file_type();
+            if file_type.is_symlink() {
+                return Err(Refused::Link.into());
+            }
+            if !file_type.is_file() {
+                return Err(Refused::NotAFile.into());
+            }
+        }
+        Ok(file)
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8], replace: Replace, access: Access) -> io::Result<()> {
+        use std::io::Write;
+        let open = match replace {
+            Replace::Allowed => Open::create(),
+            Replace::Never => Open::create_new(),
+        };
+        self.open(path, open.with_access(access))?.write_all(bytes)
+    }
+
+    fn sync_handle(&self, file: &std::fs::File) -> io::Result<SyncOutcome> {
+        settled(file)
+    }
+
+    fn sync_dir(&self, path: &Path) -> io::Result<SyncOutcome> {
+        #[cfg(unix)]
+        {
+            settled(&std::fs::File::open(path)?)
+        }
+        // A directory cannot be opened as a file here; its entries are not
+        // made durable this way.
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(SyncOutcome::Unconfirmed)
+        }
+    }
+
+    fn restrict_to_owner(&self, path: &Path, what: OwnerOnly) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = match what {
+                OwnerOnly::File => 0o600,
+                OwnerOnly::Directory => 0o700,
+            };
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        }
+        // Permissions here are inherited access lists, not owner modes.
+        #[cfg(not(unix))]
+        {
+            let _ = (path, what);
+            Ok(())
+        }
+    }
+
+    fn set_modified(&self, path: &Path, at: SystemTime) -> io::Result<()> {
+        // Windows changes times only through a handle opened for writing;
+        // elsewhere a read handle is enough and works on files the process
+        // owns but cannot write.
+        std::fs::OpenOptions::new()
+            .read(!cfg!(windows))
+            .write(cfg!(windows))
+            .open(path)?
+            .set_modified(at)
+    }
+}
+
+/// The platform's answer to opening a link it was told not to follow.
+fn is_link_loop(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ELOOP)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
     }
 }
 
@@ -470,7 +654,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("invented-notes.txt");
         backend_write(&path, b"first");
-        let refused = SystemBackend.write_new(&path, b"second").unwrap_err();
+        let refused = SystemBackend
+            .write_new(&path, b"second", Access::Default)
+            .unwrap_err();
         assert_eq!(refused.error.kind(), io::ErrorKind::AlreadyExists);
         assert!(!refused.created, "the existing file was not this call's");
         assert_eq!(std::fs::read(&path).unwrap(), b"first");
@@ -481,7 +667,7 @@ mod tests {
 
     fn backend_write(path: &Path, bytes: &[u8]) {
         SystemBackend
-            .write_new(path, bytes)
+            .write_new(path, bytes, Access::Default)
             .expect("write new file");
     }
 }
